@@ -1,0 +1,69 @@
+key: missing_word
+name: Missing word
+version: 1
+
+detection_prompt: |
+  A word accidentally dropped, leaving the sentence ungrammatical. Usually an
+  article, preposition, auxiliary verb, or the second half of a correlative
+  pair.
+
+  FLAG:
+  - Dropped article: "She went to store.", "He picked up phone."
+  - Dropped preposition: "He was afraid the dark.", "She waited him."
+  - Dropped auxiliary or copula: "He going to leave.", "The door open."
+  - Dropped half of a pair: "not only tired but hungry" missing "also";
+    "between the house the barn" missing "and".
+  - An obviously truncated sentence: "She reached for the and stopped."
+
+  Do NOT flag — this type has the highest false-positive risk in the pipeline,
+  so hold the bar high:
+  - Telegraphic or clipped narration used as style: "Rain. No umbrella. Ran
+    for the bus." Fragments are a legitimate fiction technique.
+  - Intentional sentence fragments for emphasis: "Not a chance." "Which was
+    the whole point."
+  - Dialogue, where dropped words are how people actually speak: "You coming?"
+    "Got a light?" "Been there."
+  - Headlinese, signage, labels, and quoted written artifacts inside the
+    story.
+  - Zero-article constructions that are correct English: "He went to bed",
+    "She was in prison", "by train", "at school".
+  - Zero relative pronouns, which are always optional: "The book I read" needs
+    no "that".
+  - Imperatives, which have no stated subject: "Close the door."
+  - Any sentence you can only "fix" by guessing which word the author meant.
+    If more than one word would fit the gap, do not report it.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the single missing word
+  inserted, and the surrounding spacing correct. Insert the least
+  presumptuous word that makes the sentence grammatical — prefer "the" over
+  "a" only when the paragraph makes the reference definite. Never insert more
+  than one word, and never reword what is already there.
+
+confidence_guidance: |
+  high   — the sentence is ungrammatical as written, exactly one word fits the
+           gap, and it appears in ordinary narration.
+  medium — the gap is real but more than one word could fill it, or the
+           surrounding prose is clipped enough that style is possible.
+  low    — inside dialogue, in a fragment-heavy passage, or anywhere the
+           omission could plausibly be voice.
+
+examples:
+  - text: "She walked to store before it closed."
+    finding:
+      original_text: "She walked to store before it closed."
+      corrected_text: "She walked to the store before it closed."
+      explanation: "Missing article before \"store\"."
+      confidence: high
+  - text: "Rain. No umbrella. A long walk home."
+    finding: null
+  - text: "\"You coming?\" she asked."
+    finding: null
+  - text: "He was afraid the dark long after he stopped admitting it."
+    finding:
+      original_text: "He was afraid the dark long after he stopped admitting it."
+      corrected_text: "He was afraid of the dark long after he stopped admitting it."
+      explanation: "Missing preposition: \"afraid of the dark\"."
+      confidence: high
+  - text: "The book I read last summer stayed with me."
+    finding: null

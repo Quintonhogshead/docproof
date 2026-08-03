@@ -1,0 +1,72 @@
+key: pronoun_agreement
+name: Pronoun agreement
+version: 1
+
+detection_prompt: |
+  A pronoun whose number or form does not match the noun it refers to.
+
+  FLAG:
+  - Plural pronoun for a plainly singular, specific antecedent:
+    "Marcus forgot their keys." when Marcus is the only referent and the
+    paragraph establishes his pronouns.
+  - Singular pronoun for a plural antecedent: "The children lost his way."
+  - Reflexive misuse: "Myself and John went to the store.",
+    "Give it to myself.", "between you and I" (should be "me").
+  - Case errors: "Him and me went.", "Her and her sister left."
+
+  Do NOT flag — read this list carefully, because the classic "rules" here are
+  wrong more often than they are right:
+  - Singular "they" with an indefinite or generic antecedent. "Everyone took
+    their seat", "Somebody left their coat", "A student should bring their
+    book" are all correct English and have been for centuries. Never flag
+    these.
+  - Singular "they" for a named person. A character's pronouns are the
+    author's decision and are not deducible from a name. If a character is
+    referred to as "they", that is correct.
+  - Pronouns whose antecedent lies outside the paragraph you are shown. You
+    cannot see the rest of the scene; do not guess at a referent.
+  - Ambiguous-antecedent complaints ("it is unclear who 'he' refers to").
+    That is a clarity note, not an agreement error, and this pipeline does not
+    make style suggestions.
+  - Collective nouns taking "they": "The team lost their nerve."
+  - Dialogue, where case errors like "me and him" are how people speak.
+  - "It" for animals, ships, or countries; "who" vs. "whom", which is style.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the pronoun changed
+  to agree with its antecedent, or corrected to the right case. Never change
+  the antecedent, and never change a person's pronouns to a different set —
+  only fix number and case within what the paragraph itself establishes.
+
+confidence_guidance: |
+  high   — a case error with no defensible reading ("Him and me went"), or a
+           plural pronoun for an unmistakably singular, non-generic antecedent
+           named in the same sentence.
+  medium — the antecedent's number is arguable, or the sentence reads as
+           informal register rather than error.
+  low    — inside dialogue, or anywhere the antecedent's intended pronouns are
+           not settled by this paragraph alone. When in doubt, do not report.
+
+examples:
+  - text: "Everyone took their seat before the lights went down."
+    finding: null
+  - text: "Him and me walked the whole way back."
+    finding:
+      original_text: "Him and me walked the whole way back."
+      corrected_text: "He and I walked the whole way back."
+      explanation: "Subject pronouns should be \"he and I\"."
+      confidence: high
+  - text: "The children could not find his way home."
+    finding:
+      original_text: "The children could not find his way home."
+      corrected_text: "The children could not find their way home."
+      explanation: "\"Children\" is plural; the pronoun should be \"their\"."
+      confidence: high
+  - text: "She handed the file to myself and walked out."
+    finding:
+      original_text: "She handed the file to myself and walked out."
+      corrected_text: "She handed the file to me and walked out."
+      explanation: "\"Myself\" is reflexive; the object here is \"me\"."
+      confidence: medium
+  - text: "Alex set their bag down and unlaced their boots."
+    finding: null

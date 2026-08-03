@@ -1,0 +1,68 @@
+key: capitalization
+name: Capitalization
+version: 1
+
+detection_prompt: |
+  A letter that should be capitalized and is not, or is capitalized and should
+  not be.
+
+  FLAG:
+  - A sentence beginning with a lowercase letter after a period, question
+    mark, or exclamation point: "He left. the door stayed open."
+  - The pronoun "i" written lowercase: "then i saw her".
+  - A proper noun in lowercase: "we drove through texas in january",
+    "she spoke french".
+  - A random interior capital from a stuck shift key: "the Door swung open",
+    "he WAlked away".
+
+  Do NOT flag:
+  - Stylized lowercase used consistently: a character who texts in lowercase,
+    poetry, a brand name like "iPhone" or "eBay", an author who lowercases a
+    word deliberately. If a word is lowercase in more than one place, treat it
+    as intentional.
+  - The first word after a colon, which may be either case.
+  - Continuation after an ellipsis or em dash, where lowercase is correct:
+    "I thought— no, never mind."
+  - Dialogue resuming after an interrupting attribution: "I know," she said,
+    "and I don't care." — the "and" is correctly lowercase.
+  - Seasons ("summer"), directions used as directions ("we drove north"),
+    common nouns that resemble titles ("the president of the club"), and
+    job titles used generically.
+  - Invented or fantasy proper nouns, however they are cased.
+  - Words in all caps for emphasis or shouting, in narration or dialogue.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the offending
+  letter's case changed. Never change the case of more than one word per
+  finding, and never add or remove punctuation.
+
+confidence_guidance: |
+  high   — sentence-initial lowercase after terminal punctuation, lowercase
+           "i" as a pronoun, or a well-known proper noun in lowercase.
+  medium — the word may be a title or a common noun depending on usage.
+  low    — the casing may be a style choice, appears in dialogue or a quoted
+           artifact, or the word may be an invented name.
+
+examples:
+  - text: "The room was empty. he closed the door behind him."
+    finding:
+      original_text: "The room was empty. he closed the door behind him."
+      corrected_text: "The room was empty. He closed the door behind him."
+      explanation: "New sentence should begin with a capital letter."
+      confidence: high
+  - text: "By then i had stopped counting."
+    finding:
+      original_text: "By then i had stopped counting."
+      corrected_text: "By then I had stopped counting."
+      explanation: "The pronoun \"I\" is always capitalized."
+      confidence: high
+  - text: "\"I know,\" she said, \"and I don't care.\""
+    finding: null
+  - text: "We spent september in paris."
+    finding:
+      original_text: "We spent september in paris."
+      corrected_text: "We spent September in paris."
+      explanation: "Month names are capitalized."
+      confidence: high
+  - text: "The car drove north until the road ended."
+    finding: null

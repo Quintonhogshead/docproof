@@ -1,13 +1,22 @@
-# Copy to <key>.yaml. The pipeline never needs code changes for a new type —
-# if it does, that's a bug in the pipeline, not a limitation of the format.
+# Copy to <key>.yaml, then add the key to a pass in config/default.yaml.
+# The pipeline never needs code changes for a new type — if it does, that's a
+# bug in the pipeline, not a limitation of the format. See docs/error-types.md.
 key: your_error_key            # must match the filename
 name: Human-Readable Name
 version: 1
 detection_prompt: |
   Define the error precisely. Give FLAG examples and Do-NOT-flag examples;
-  the do-not-flag list is where false positives go to die.
+  the do-not-flag list is where false positives go to die — write it first.
+  If another error type could claim the same error, name that type here and
+  say it owns the case, so a combined pass doesn't report it twice.
 fix_guidance: |
-  How corrected_text must be produced. Always: full sentence, minimal change.
+  How corrected_text must be produced. Always: full sentence, minimal change,
+  and only this type's error — a sentence with two errors gets two findings.
 confidence_guidance: |
-  What high / medium / low mean FOR THIS ERROR TYPE.
-examples: []                   # optional but strongly recommended: 3–5 items
+  What high / medium / low mean FOR THIS ERROR TYPE. min_confidence gates which
+  findings become tracked changes, so put anything that might be authorial
+  voice at low.
+examples: []                   # optional but strongly recommended: 3–5 items,
+                               # at least one negative (finding: null).
+                               # A finding's original_text must quote the
+                               # example's `text` verbatim.

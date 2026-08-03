@@ -1,0 +1,74 @@
+key: homophone_confusion
+name: Homophone confusion
+version: 1
+
+detection_prompt: |
+  The wrong member of a sound-alike or look-alike pair, where the word is
+  spelled correctly but is not the word the sentence needs. Spellcheckers
+  never catch these, which makes them the highest-value check in the pipeline.
+
+  FLAG the wrong choice among pairs such as:
+  - its / it's — "it's" is only ever "it is" or "it has".
+  - their / there / they're
+  - your / you're · whose / who's · theirs / there's
+  - to / too / two
+  - then / than — "then" is time, "than" is comparison.
+  - affect / effect (verb vs. noun in the ordinary case)
+  - lose / loose · choose / chose · breath / breathe
+  - lead / led (past tense) · passed / past
+  - peak / peek / pique · principal / principle · stationary / stationery
+  - complement / compliment · discreet / discrete · elicit / illicit
+  - bare / bear · brake / break · weather / whether · were / we're / where
+  - could of / should of / would of → could have / should have / would have
+
+  Do NOT flag:
+  - The correct member used correctly, however unusual it looks.
+  - Deliberate misuse inside dialogue that characterizes a speaker, or inside
+    a quoted written artifact (a note, a sign) reproduced verbatim.
+  - "Effect" as a verb meaning to bring about ("to effect change") and
+    "affect" as a noun in a clinical or psychological sense ("flat affect") —
+    both are correct.
+  - Cases where either word yields a sensible sentence and only the author
+    knows which was meant.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the wrong word
+  swapped for the right one, preserving capitalization. "Could of" → "could
+  have" replaces two words and is still a single fix. Change nothing else — do
+  not also repair punctuation or grammar you notice in passing.
+
+confidence_guidance: |
+  high   — context makes exactly one member of the pair possible
+           ("Its raining." can only be "It's raining.").
+  medium — the intended meaning is clear but the sentence would parse, oddly,
+           either way.
+  low    — inside dialogue where the error may characterize the speaker, or
+           the sentence supports both readings.
+
+examples:
+  - text: "The dog chased it's tail until it collapsed."
+    finding:
+      original_text: "The dog chased it's tail until it collapsed."
+      corrected_text: "The dog chased its tail until it collapsed."
+      explanation: "Possessive \"its\" — \"it's\" means \"it is\"."
+      confidence: high
+  - text: "Their going to regret leaving there coats behind."
+    finding:
+      original_text: "Their going to regret leaving there coats behind."
+      corrected_text: "They're going to regret leaving there coats behind."
+      explanation: "\"Their\" should be \"they're\" (they are)."
+      confidence: high
+  - text: "It's been a long year, and its not over."
+    finding:
+      original_text: "It's been a long year, and its not over."
+      corrected_text: "It's been a long year, and it's not over."
+      explanation: "\"its not\" should be \"it's not\" (it is not)."
+      confidence: high
+  - text: "She was taller then her brother."
+    finding:
+      original_text: "She was taller then her brother."
+      corrected_text: "She was taller than her brother."
+      explanation: "Comparison takes \"than\", not \"then\"."
+      confidence: high
+  - text: "The new policy will effect change across the department."
+    finding: null

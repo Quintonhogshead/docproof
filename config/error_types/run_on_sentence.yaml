@@ -1,0 +1,58 @@
+key: run_on_sentence
+name: Run-on sentence
+version: 1
+
+detection_prompt: |
+  A fused sentence: two independent clauses run together with NO punctuation
+  at all between them.
+
+  FLAG:
+  - "She opened the door the room was empty."
+  - "I called him twice he never answered."
+  - "The engine died we coasted to the shoulder."
+
+  Do NOT flag:
+  - Two independent clauses joined by only a comma. That is a comma splice,
+    and the comma_splice type owns it. Never report it here, even when you are
+    certain it is an error — reporting it twice under two types wastes the
+    author's attention.
+  - Clauses correctly joined by a comma plus a coordinating conjunction
+    (for, and, nor, but, or, yet, so), a semicolon, a colon, or a dash.
+  - Long sentences that are merely long. Length is not an error; a sentence
+    with many correctly coordinated or subordinated clauses is fine, however
+    unwieldy it feels.
+  - Dependent clauses, participial phrases, and appositives, which are not
+    independent clauses no matter how long they run.
+  - Stream-of-consciousness or breathless narration where the fusion is
+    sustained across the passage and clearly deliberate.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the smallest possible
+  fix, chosen in this order of preference:
+  1. Period and a capital letter — the default for a fused sentence.
+  2. Semicolon — when the clauses are tightly linked in thought.
+  3. Comma plus a coordinating conjunction — only when the logical
+     relationship is unmistakable; do not invent causality.
+  Change nothing else: no rewording, no reordering, no other punctuation.
+
+confidence_guidance: |
+  high   — two plainly independent clauses, no punctuation between them, in
+           narration.
+  medium — the boundary between the clauses is arguable, or the second clause
+           may be a fragment rather than an independent clause.
+  low    — inside dialogue, or the passage sustains a deliberate breathless
+           rhythm.
+
+examples:
+  - text: "She opened the door the room was empty."
+    finding:
+      original_text: "She opened the door the room was empty."
+      corrected_text: "She opened the door. The room was empty."
+      explanation: "Two independent clauses fused without punctuation."
+      confidence: high
+  - text: "The manuscript was finished, nobody wanted to read it."
+    finding: null
+  - text: "It was late, so we left."
+    finding: null
+  - text: "Because the engine died before we reached the pass, we coasted down to the shoulder and waited for someone with a radio to come by."
+    finding: null

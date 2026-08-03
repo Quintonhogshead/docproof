@@ -37,7 +37,10 @@ def main(argv=None) -> int:
     rev.add_argument("input")
     rev.add_argument("--config", default="config/default.yaml")
     rev.add_argument("--out", help="output directory (default: from config)")
-    rev.add_argument("--error-types", help="comma-separated override")
+    rev.add_argument("--error-types",
+                     help="override enabled types: comma-separated passes, "
+                          "'+' to combine types into one pass "
+                          "(e.g. spelling+repeated_word,comma_splice)")
     rev.add_argument("--model")
     rev.add_argument("--min-confidence", choices=["low", "medium", "high"])
     rev.add_argument("--max-chunks", type=int,
@@ -55,7 +58,9 @@ def _configure(args):
     if getattr(args, "model", None):
         cfg.api.model = args.model
     if getattr(args, "error_types", None):
-        cfg.error_types = [k.strip() for k in args.error_types.split(",")]
+        cfg.error_types = [[k.strip() for k in group.split("+") if k.strip()]
+                           for group in args.error_types.split(",")
+                           if group.strip()]
     if getattr(args, "min_confidence", None):
         cfg.min_confidence = args.min_confidence
     if getattr(args, "no_comments", False):
@@ -77,8 +82,14 @@ def cmd_inventory(args) -> int:
     doc = build_document_model(pkg, cfg)
     chunks = chunk_document(doc, cfg)
     total = sum(c.est_tokens for c in chunks)
+    passes = cfg.error_type_groups
     print(f"{len(doc.paragraphs)} reviewable paragraphs → {len(chunks)} chunks "
           f"(~{total:,} document tokens)")
+    print(f"{len(cfg.error_type_keys)} error type(s) in {len(passes)} pass(es) "
+          f"→ {len(chunks) * len(passes)} API calls, ~{total * len(passes):,} "
+          f"document tokens sent")
+    for group in passes:
+        print(f"  pass: {' + '.join(group)}")
     for pid, reason in doc.skipped:
         print(f"  skipped {pid:<24} {reason}")
     return 0
@@ -120,15 +131,25 @@ def cmd_review(args) -> int:
                   file=sys.stderr)
             return 2
 
-    registry = load_error_types(error_dir, cfg.error_types)
+    try:
+        registry = load_error_types(error_dir, cfg.error_type_keys)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
+    log.info("%d error type(s) in %d pass(es): %s",
+             len(cfg.error_type_keys), len(groups),
+             "; ".join("+".join(g) for g in cfg.error_type_groups))
+
     ids = itertools.count(1)
     usage = Usage()
     findings = []
-    for et in registry.values():
+    for group in groups:
         if canned is not None:
-            analyzer = MockAnalyzer(et, canned, ids)
+            analyzer = MockAnalyzer(group, canned, ids)
         else:
-            analyzer = Analyzer(cfg, et, ids)
+            analyzer = Analyzer(cfg, group, ids)
         for chunk in chunks:
             findings.extend(analyzer.analyze_chunk(chunk, usage))
 

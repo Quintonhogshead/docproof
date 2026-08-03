@@ -1,0 +1,71 @@
+key: apostrophe_error
+name: Apostrophe error
+version: 1
+
+detection_prompt: |
+  A missing, extra, or misplaced apostrophe in a possessive, contraction, or
+  plural.
+
+  FLAG:
+  - Possessive missing its apostrophe: "the dogs bowl" (one dog's bowl),
+    "his brothers car", "a days work".
+  - Plural given an apostrophe it does not need (the greengrocer's
+    apostrophe): "fresh apple's", "the Smith's arrived", "in the 1990's",
+    "three CD's".
+  - Apostrophe on the wrong side of the s: "the childrens' toys"
+    ("children" is already plural → "children's"), "the boy's coats" when
+    several boys are meant.
+  - Contractions missing the apostrophe: "dont", "isnt", "wont", "shouldnt".
+
+  Do NOT flag:
+  - its / it's, your / you're, whose / who's, theirs / there's. Those are
+    handled by the homophone_confusion type — leave them entirely alone here,
+    even when you are certain they are wrong.
+  - Possessives of singular nouns ending in s, where both "James's" and
+    "James'" are accepted style. Only flag if the document is plainly
+    inconsistent, and then at low confidence.
+  - Apostrophes marking dropped letters in dialect or poetry: "runnin'",
+    "'bout", "o'er", "'tis", "rock 'n' roll".
+  - Decades written without an apostrophe ("the 1990s", "the '90s" — both
+    correct), and plural acronyms without one ("three CDs" is correct).
+  - Straight vs. curly apostrophes. Never flag a finding whose only change is
+    the apostrophe character itself.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the apostrophe added,
+  removed, or moved. Preserve the apostrophe character already used elsewhere
+  in the sentence — if the surrounding text uses a curly apostrophe (’), your
+  inserted one must be curly too; if it uses a straight one ('), match that.
+  Change nothing else.
+
+confidence_guidance: |
+  high   — an unambiguous possessive or contraction with no defensible reading
+           as a plural, in narration.
+  medium — singular-vs-plural possessive depends on context the paragraph does
+           not settle.
+  low    — inside dialogue, dialect, a quoted sign or note, or a style choice
+           (s-ending possessives) rather than an error.
+
+examples:
+  - text: "She borrowed her sisters coat without asking."
+    finding:
+      original_text: "She borrowed her sisters coat without asking."
+      corrected_text: "She borrowed her sister's coat without asking."
+      explanation: "Possessive needs an apostrophe: \"sister's coat\"."
+      confidence: medium
+  - text: "The Smith's have lived here since the 1970's."
+    finding:
+      original_text: "The Smith's have lived here since the 1970's."
+      corrected_text: "The Smiths have lived here since the 1970's."
+      explanation: "\"Smiths\" is a plural, not a possessive."
+      confidence: high
+  - text: "I dont know what he wanted."
+    finding:
+      original_text: "I dont know what he wanted."
+      corrected_text: "I don't know what he wanted."
+      explanation: "Contraction needs an apostrophe: \"don't\"."
+      confidence: high
+  - text: "He was still runnin' when the bell rang."
+    finding: null
+  - text: "It's a shame about its paintwork."
+    finding: null

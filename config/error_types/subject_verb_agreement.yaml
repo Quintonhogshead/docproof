@@ -1,0 +1,66 @@
+key: subject_verb_agreement
+name: Subject-verb agreement
+version: 1
+
+detection_prompt: |
+  A verb whose number does not match its subject.
+
+  FLAG:
+  - Agreement lost across an intervening phrase, the most common case:
+    "The list of items were long." (subject is "list", not "items");
+    "The box of nails sit by the door."
+  - Plain mismatches: "They was waiting.", "She don't care.",
+    "The dogs barks all night."
+  - Compound subjects joined by "and" taking a singular verb:
+    "The cat and the dog is asleep."
+  - Inverted constructions: "There is three reasons for this."
+
+  Do NOT flag:
+  - Dialogue and first-person narration where nonstandard agreement is voice:
+    "she don't know nothing", "we was young then", "they is what they is."
+    Report at low confidence at most, and prefer not to report at all when the
+    speaker's whole register is nonstandard.
+  - The subjunctive: "If I were you", "I wish it were over", "He asked that
+    she be present." All correct.
+  - Collective nouns, which take either number depending on sense and dialect:
+    "The team are arguing" and "The team is winning" are both defensible.
+  - Notional agreement with quantities and measures: "Ten miles is a long
+    walk.", "Half the crew was asleep."
+  - "None", "any", "some", "all", "more" — these take singular or plural
+    depending on what they refer to.
+  - Subjects joined by "or" / "nor", where the verb agrees with the nearer
+    subject: "Neither the boys nor the girl was ready." is correct.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the verb form
+  changed to agree with its subject. Never change the subject to fit the verb
+  — the subject is the author's meaning; the verb is the error. Change nothing
+  else.
+
+confidence_guidance: |
+  high   — an unambiguous singular subject with a plural verb (or the reverse)
+           in narration, with no collective-noun or notional reading.
+  medium — the subject's number is arguable, or an intervening phrase makes
+           the intended subject genuinely unclear.
+  low    — inside dialogue, or in first-person narration with a strong
+           nonstandard voice.
+
+examples:
+  - text: "The list of banned items were three pages long."
+    finding:
+      original_text: "The list of banned items were three pages long."
+      corrected_text: "The list of banned items was three pages long."
+      explanation: "The subject is \"list\" (singular), not \"items\"."
+      confidence: high
+  - text: "If I were taller, this would be easier."
+    finding: null
+  - text: "\"She don't know nothin' about it,\" he muttered."
+    finding: null
+  - text: "There is three reasons I came back."
+    finding:
+      original_text: "There is three reasons I came back."
+      corrected_text: "There are three reasons I came back."
+      explanation: "The subject \"three reasons\" is plural."
+      confidence: high
+  - text: "Ten miles is a long way to walk in the rain."
+    finding: null

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class APIConfig(BaseModel):
@@ -33,16 +33,51 @@ class PricingConfig(BaseModel):
 
 
 class Config(BaseModel):
+    # CLI flags overwrite fields after load; validate those too.
+    model_config = ConfigDict(validate_assignment=True)
+
     api: APIConfig = Field(default_factory=APIConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     skip: SkipConfig = Field(default_factory=SkipConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     min_confidence: Literal["low", "medium", "high"] = "medium"
-    error_types: list[str] = Field(default_factory=list)
+    # Each entry is one API pass over the whole document: a bare key runs alone,
+    # a list of keys runs as a single combined pass. Grouping trades a little
+    # detection focus for a large cut in input tokens — see docs/error-types.md.
+    error_types: list[str | list[str]] = Field(default_factory=list)
     tracked_changes_policy: Literal["abort", "accept_all_first", "ignore"] = "abort"
     output_dir: str = "output"
     comments: bool = True
     revision_author: str = "docproof"
+
+    @field_validator("error_types")
+    @classmethod
+    def _validate_error_types(cls, value):
+        seen: set[str] = set()
+        for entry in value:
+            keys = [entry] if isinstance(entry, str) else entry
+            if not keys:
+                raise ValueError("error_types: a group must list at least one key")
+            for key in keys:
+                if not key or not key.strip():
+                    raise ValueError("error_types: keys must be non-empty")
+                if key in seen:
+                    raise ValueError(
+                        f"error_types: '{key}' appears more than once; a key in "
+                        f"two passes would review the document twice for it")
+                seen.add(key)
+        return value
+
+    @property
+    def error_type_groups(self) -> tuple[tuple[str, ...], ...]:
+        """error_types normalized to one tuple per pass."""
+        return tuple((entry,) if isinstance(entry, str) else tuple(entry)
+                     for entry in self.error_types)
+
+    @property
+    def error_type_keys(self) -> tuple[str, ...]:
+        """Every enabled key, flat, in pass order."""
+        return tuple(k for group in self.error_type_groups for k in group)
 
 
 def load_config(path: str | Path) -> Config:

@@ -1,0 +1,58 @@
+key: repeated_word
+name: Repeated word
+version: 1
+
+detection_prompt: |
+  A word (or short phrase) accidentally typed twice in a row, usually a
+  drafting or copy-paste artifact.
+
+  FLAG:
+  - "He walked to to the door."
+  - "She said that that was enough." (when the second "that" is redundant)
+  - "The the manuscript arrived."
+  - A phrase duplicated across a line break: "at the end of / of the day".
+
+  Do NOT flag:
+  - Legitimate doubles: "had had", "that that" when grammatically required
+    ("I knew that that was wrong" — the second "that" is a demonstrative),
+    "is is" never, but "will will" as in "the will will be read" is correct.
+  - Deliberate repetition for emphasis or rhythm: "very, very old",
+    "No, no, no.", "far, far away", "long, long ago".
+  - Stammering or hesitation in dialogue: "I— I didn't mean to."
+  - Repetition separated by punctuation, which is nearly always intentional.
+  - The same word appearing twice in a sentence in different roles:
+    "The play was a play on words."
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the duplicate removed —
+  including the whitespace that separated the two copies, so exactly one clean
+  space remains. Change nothing else: no capitalization changes, no
+  repunctuation, no reordering.
+
+confidence_guidance: |
+  high   — an obvious accidental double of a common word, no punctuation
+           between the copies, and the sentence reads correctly without it.
+  medium — the double could be grammatical ("that that", "had had") but reads
+           as an error in this context.
+  low    — inside dialogue or clearly rhythmic prose, where the repetition may
+           be voice rather than a typo.
+
+examples:
+  - text: "She opened the the door and stepped through."
+    finding:
+      original_text: "She opened the the door and stepped through."
+      corrected_text: "She opened the door and stepped through."
+      explanation: "\"the\" is typed twice."
+      confidence: high
+  - text: "It was a long, long way down."
+    finding: null
+  - text: "I knew that that was the wrong answer."
+    finding: null
+  - text: "\"I— I don't know,\" he said."
+    finding: null
+  - text: "The report noted that the the figures had been revised."
+    finding:
+      original_text: "The report noted that the the figures had been revised."
+      corrected_text: "The report noted that the figures had been revised."
+      explanation: "\"the\" is typed twice."
+      confidence: high

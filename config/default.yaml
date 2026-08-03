@@ -1,5 +1,5 @@
 api:
-  model: claude-opus-5
+  model: claude-haiku-4-5
   max_retries: 2
   max_output_tokens: 16000
   prompt_caching: true
@@ -23,8 +23,20 @@ pricing:
   output_per_mtok: 25.00
 
 min_confidence: medium      # low | medium | high — gate for applying changes
+
+# Each entry is ONE API pass over the whole document. A bare key runs alone;
+# a list runs as a single combined pass, so the document is sent once for the
+# whole group instead of once per type. Related types are grouped together —
+# defining comma_splice and run_on_sentence side by side sharpens the boundary
+# between them. Precision order matters: the validator keeps the first edit to
+# claim a span, so the most objective types run first.
 error_types:
-  - comma_splice
+  # mechanical — objective, verifiable, low false-positive rate
+  - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]
+  # sentence grammar — needs parsing, still decidable
+  - [comma_splice, run_on_sentence, subject_verb_agreement]
+  # judgment calls — style-sensitive, most likely to fire on deliberate prose
+  - [tense_shift, pronoun_agreement, missing_word]
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
 output_dir: output
 comments: true              # margin comment on every tracked change

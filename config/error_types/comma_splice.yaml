@@ -13,6 +13,9 @@ detection_prompt: |
     after a comma does NOT fix a splice)
 
   Do NOT flag:
+  - Two independent clauses fused with NO punctuation between them. That is a
+    run-on, and the run_on_sentence type owns it. A comma splice always has
+    the comma.
   - Comma + coordinating conjunction (for, and, nor, but, or, yet, so):
     "It was late, so we left." is correct.
   - A dependent clause joined by a comma: "Because it was late, we left."

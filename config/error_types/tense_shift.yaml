@@ -1,0 +1,65 @@
+key: tense_shift
+name: Tense shift
+version: 1
+
+detection_prompt: |
+  An unmotivated switch between past and present tense WITHIN a single
+  sentence, where both verbs describe the same time frame.
+
+  FLAG:
+  - "She opened the door and walks into the hall."
+  - "He was tired, so he sits down on the step."
+  - "They arrived at noon and immediately begin unpacking."
+
+  Do NOT flag:
+  - A shift between sentences or paragraphs. You see one paragraph at a time
+    and cannot tell whether the surrounding narrative is present-tense; a
+    single past-tense sentence in a present-tense chapter is not something you
+    can diagnose. Only report shifts inside one sentence.
+  - Legitimate tense combinations that describe different times:
+    "She knew that he is still out there." (ongoing truth),
+    "He remembered the house as it stands today.",
+    "I learned that water boils at 100 degrees." (general truth).
+  - Flashback, memory, and anticipation within a sentence: "She walks the same
+    road she walked as a child."
+  - Perfect and progressive forms, which are not shifts: "He had been walking
+    when he saw it."
+  - Dialogue, where a speaker naturally moves between tenses.
+  - Historical present used deliberately for immediacy, especially when the
+    passage sustains it.
+  - Conditionals and subjunctives: "If he came now, everything changes."
+    reads as deliberate; leave it.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with ONE verb changed to
+  match the tense of the rest of the sentence. Match the dominant tense — the
+  one used by the majority of the sentence's verbs, and by the first verb when
+  it is a tie. Change nothing else, and never rewrite both verbs.
+
+confidence_guidance: |
+  high   — two verbs in the same clause or tightly coordinated clauses,
+           describing one moment, in clearly mismatched tenses, in narration.
+  medium — the shift could be a general truth, a flashback, or a deliberate
+           move to immediacy.
+  low    — inside dialogue, or the sentence may belong to a present-tense
+           narrative you cannot see the rest of.
+
+examples:
+  - text: "She opened the door and walks into the hall."
+    finding:
+      original_text: "She opened the door and walks into the hall."
+      corrected_text: "She opened the door and walked into the hall."
+      explanation: "Tense shifts from past to present mid-sentence."
+      confidence: high
+  - text: "He learned that light travels faster than sound."
+    finding: null
+  - text: "She walks the same road she walked as a child."
+    finding: null
+  - text: "They arrived at noon and immediately begin unpacking the truck."
+    finding:
+      original_text: "They arrived at noon and immediately begin unpacking the truck."
+      corrected_text: "They arrived at noon and immediately began unpacking the truck."
+      explanation: "\"begin\" should be past tense to match \"arrived\"."
+      confidence: high
+  - text: "He had been walking for an hour when he saw the light."
+    finding: null

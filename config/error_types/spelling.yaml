@@ -1,0 +1,73 @@
+key: spelling
+name: Spelling
+version: 1
+
+detection_prompt: |
+  A word that is misspelled: not a valid English word, or a valid word
+  produced by an obvious slip (transposition, doubled or dropped letter,
+  adjacent-key typo).
+
+  FLAG:
+  - Classic misspellings: "recieve", "definately", "seperate", "occured",
+    "neccessary", "arguement", "publically", "wierd".
+  - Typos and transpositions: "teh", "adn", "hte", "manuscirpt", "thier".
+  - Dropped or doubled letters: "goverment", "embarass" (needs two r's),
+    "acommodate".
+
+  Do NOT flag — this is a fiction manuscript pipeline, and most false
+  positives live here:
+  - Proper nouns of any kind: character names, place names, invented words,
+    fantasy or science-fiction coinages, brand names. If a capitalized word is
+    not a standard English word, assume the author meant it.
+  - A coinage used consistently: if the same unusual spelling appears more
+    than once in the paragraph, it is almost certainly deliberate.
+  - Dialect, accent, and eye-dialect in dialogue: "gonna", "outta", "ain't",
+    "y'all", "'bout", "nothin'", "sez", "gimme".
+  - Archaic or poetic forms: "o'er", "'twas", "thou", "hath", "ye".
+  - British vs. American variants. This pipeline targets American spelling,
+    but a document written consistently in British English ("colour",
+    "realise", "travelled", "theatre") is correct as written — leave it alone.
+    Only flag a variant that is inconsistent with the rest of the paragraph,
+    and then at low confidence.
+  - Deliberate misspelling that characterizes a speaker or a written artifact
+    inside the story (a child's note, a ransom letter, a sign).
+  - Technical jargon, foreign-language words, and Latin phrases.
+
+  If you are unsure whether a word is a real word or an invented one, do not
+  flag it. A missed typo costs the author nothing; a "corrected" character
+  name costs them trust in the whole review.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the misspelled word
+  replaced by its correct spelling. Preserve the original capitalization
+  pattern (a sentence-initial "Recieve" becomes "Receive", not "receive") and
+  any surrounding punctuation. Fix exactly one word per finding; if a sentence
+  has two misspellings, emit two findings.
+
+confidence_guidance: |
+  high   — a common, unambiguous misspelling of an ordinary English word, in
+           narration rather than dialogue.
+  medium — a plausible typo, but the word could be a name, a coinage, or
+           deliberate; or the correct spelling depends on which word was meant.
+  low    — inside dialogue, or the word may be dialect, dialect spelling, or a
+           regional variant.
+
+examples:
+  - text: "She did not recieve the letter until Thursday."
+    finding:
+      original_text: "She did not recieve the letter until Thursday."
+      corrected_text: "She did not receive the letter until Thursday."
+      explanation: "\"recieve\" should be \"receive\" — i before e except after c."
+      confidence: high
+  - text: "Kaelith crossed the Ymbren Waste before dawn."
+    finding: null
+  - text: "\"I ain't goin' nowhere,\" he said."
+    finding: null
+  - text: "The colour of the theatre curtains had faded to grey."
+    finding: null
+  - text: "It was definately the wrong hosue to enter."
+    finding:
+      original_text: "It was definately the wrong hosue to enter."
+      corrected_text: "It was definitely the wrong hosue to enter."
+      explanation: "\"definately\" should be \"definitely\"."
+      confidence: high
