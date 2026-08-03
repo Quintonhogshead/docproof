@@ -4,22 +4,21 @@ import argparse
 import itertools
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
-from .analyzer import Analyzer, MockAnalyzer
-from .chunker import chunk_document
+from . import batch as batchlib
+from .analyzer import MockAnalyzer
 from .config import load_config
-from .error_registry import load_error_types
-from .ingest import IngestError, build_document_model, preflight
+from .ingest import IngestError
 from .logging_setup import setup_logging
 from .models import Usage
-from .reassembler import apply_tracked_changes
-from .reporting import write_findings_json, write_summary_md
-from .validator import validate_findings
+from .pipeline import finish, prepare, run_sync
+from .providers import ProviderError, build_provider, estimate_cost
 
 log = logging.getLogger("docproof.main")
+
+DEFAULT_WORKSPACE = "jobs"
 
 
 def main(argv=None) -> int:
@@ -32,25 +31,50 @@ def main(argv=None) -> int:
                          help="ingest + chunk only (no API): preview a run")
     inv.add_argument("input")
     inv.add_argument("--config", default="config/default.yaml")
+    inv.add_argument("--model")
 
-    rev = sub.add_parser("review", help="run the full pipeline")
-    rev.add_argument("input")
-    rev.add_argument("--config", default="config/default.yaml")
-    rev.add_argument("--out", help="output directory (default: from config)")
-    rev.add_argument("--error-types",
-                     help="override enabled types: comma-separated passes, "
-                          "'+' to combine types into one pass "
-                          "(e.g. spelling+repeated_word,comma_splice)")
-    rev.add_argument("--model")
-    rev.add_argument("--min-confidence", choices=["low", "medium", "high"])
+    rev = sub.add_parser("review", help="run the full pipeline now")
+    _common(rev)
     rev.add_argument("--max-chunks", type=int,
                      help="review only the first N chunks (cheap smoke test)")
     rev.add_argument("--mock-findings",
                      help="JSON file of raw findings; skips the API entirely")
-    rev.add_argument("--no-comments", action="store_true")
+
+    sub_batch = sub.add_parser(
+        "submit", help="queue a review at batch prices (50%% cheaper, "
+                       "results within hours)")
+    _common(sub_batch)
+    sub_batch.add_argument("--max-chunks", type=int)
+    sub_batch.add_argument("--workspace", default=DEFAULT_WORKSPACE)
+
+    st = sub.add_parser("status", help="show queued batch reviews")
+    st.add_argument("job_id", nargs="?")
+    st.add_argument("--config", default="config/default.yaml")
+    st.add_argument("--workspace", default=DEFAULT_WORKSPACE)
+
+    col = sub.add_parser("collect", help="finish a queued review")
+    col.add_argument("job_id")
+    col.add_argument("--config", default="config/default.yaml")
+    col.add_argument("--workspace", default=DEFAULT_WORKSPACE)
+    col.add_argument("--out")
 
     args = ap.parse_args(argv)
-    return {"inventory": cmd_inventory, "review": cmd_review}[args.cmd](args)
+    return {"inventory": cmd_inventory, "review": cmd_review,
+            "submit": cmd_submit, "status": cmd_status,
+            "collect": cmd_collect}[args.cmd](args)
+
+
+def _common(p: argparse.ArgumentParser) -> None:
+    p.add_argument("input")
+    p.add_argument("--config", default="config/default.yaml")
+    p.add_argument("--out", help="output directory (default: from config)")
+    p.add_argument("--error-types",
+                   help="override enabled types: comma-separated passes, "
+                        "'+' to combine types into one pass "
+                        "(e.g. spelling+repeated_word,comma_splice)")
+    p.add_argument("--model")
+    p.add_argument("--min-confidence", choices=["low", "medium", "high"])
+    p.add_argument("--no-comments", action="store_true")
 
 
 def _configure(args):
@@ -72,25 +96,32 @@ def _configure(args):
 
 
 def cmd_inventory(args) -> int:
-    cfg, _ = _configure(args)
+    cfg, error_dir = _configure(args)
     setup_logging(cfg.output_dir)
     try:
-        pkg = preflight(args.input, cfg.tracked_changes_policy)
-    except IngestError as e:
+        prepared = prepare(cfg, args.input, error_dir)
+    except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    doc = build_document_model(pkg, cfg)
-    chunks = chunk_document(doc, cfg)
-    total = sum(c.est_tokens for c in chunks)
-    passes = cfg.error_type_groups
-    print(f"{len(doc.paragraphs)} reviewable paragraphs → {len(chunks)} chunks "
-          f"(~{total:,} document tokens)")
-    print(f"{len(cfg.error_type_keys)} error type(s) in {len(passes)} pass(es) "
-          f"→ {len(chunks) * len(passes)} API calls, ~{total * len(passes):,} "
-          f"document tokens sent")
-    for group in passes:
+
+    doc_tokens = sum(c.est_tokens for c in prepared.chunks)
+    print(f"{len(prepared.doc.paragraphs)} reviewable paragraphs → "
+          f"{len(prepared.chunks)} chunks (~{doc_tokens:,} document tokens)")
+    print(f"{len(cfg.error_type_keys)} error type(s) in "
+          f"{len(prepared.groups)} pass(es) → {prepared.request_count} API "
+          f"calls, ~{prepared.est_document_tokens:,} document tokens sent")
+    for group in cfg.error_type_groups:
         print(f"  pass: {' + '.join(group)}")
-    for pid, reason in doc.skipped:
+
+    # Output tokens are unknowable up front; assume a modest cap per request so
+    # the number is an order-of-magnitude guide, not a quote.
+    out_guess = prepared.request_count * 600
+    now = estimate_cost(cfg.api.model, input_tokens=prepared.est_document_tokens,
+                        output_tokens=out_guess)
+    if now is not None:
+        print(f"\nRough cost on {cfg.api.model}: ~${now:.2f} now, "
+              f"~${now / 2:.2f} as a batch (50% cheaper, results within hours)")
+    for pid, reason in prepared.doc.skipped:
         print(f"  skipped {pid:<24} {reason}")
     return 0
 
@@ -100,74 +131,139 @@ def cmd_review(args) -> int:
     out = Path(cfg.output_dir)
     setup_logging(out)
 
-    if not args.mock_findings and not os.environ.get("ANTHROPIC_API_KEY"):
-        print("error: ANTHROPIC_API_KEY is not set (or use --mock-findings).",
-              file=sys.stderr)
-        return 2
-
-    try:
-        pkg = preflight(args.input, cfg.tracked_changes_policy)
-    except IngestError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-
-    doc = build_document_model(pkg, cfg)
-    chunks = list(chunk_document(doc, cfg))
-    if args.max_chunks:
-        chunks = chunks[:args.max_chunks]
-        log.info("--max-chunks: reviewing only the first %d chunk(s)",
-                 len(chunks))
-
-    canned = None
-    if args.mock_findings:
+    provider = None
+    if not args.mock_findings:
         try:
-            canned = json.loads(Path(args.mock_findings).read_text("utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"error: --mock-findings {args.mock_findings}: {e}",
-                  file=sys.stderr)
-            return 2
-        if not isinstance(canned, list):
-            print(f"error: --mock-findings must be a JSON array of findings.",
-                  file=sys.stderr)
+            provider = build_provider(cfg)
+        except ProviderError as e:
+            print(f"error: {e}", file=sys.stderr)
             return 2
 
     try:
-        registry = load_error_types(error_dir, cfg.error_type_keys)
-    except (FileNotFoundError, ValueError) as e:
+        prepared = prepare(cfg, args.input, error_dir,
+                           max_chunks=args.max_chunks)
+    except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
-    log.info("%d error type(s) in %d pass(es): %s",
-             len(cfg.error_type_keys), len(groups),
-             "; ".join("+".join(g) for g in cfg.error_type_groups))
+    if args.mock_findings:
+        canned = _load_mocks(args.mock_findings)
+        if canned is None:
+            return 2
+        findings, usage = _run_mock(cfg, prepared, canned)
+    else:
+        findings, usage = run_sync(cfg, prepared, provider)
 
-    ids = itertools.count(1)
-    usage = Usage()
-    findings = []
-    for group in groups:
-        if canned is not None:
-            analyzer = MockAnalyzer(group, canned, ids)
-        else:
-            analyzer = Analyzer(cfg, group, ids)
-        for chunk in chunks:
-            findings.extend(analyzer.analyze_chunk(chunk, usage))
-
-    validated = validate_findings(findings, doc, cfg.min_confidence)
-    stats = apply_tracked_changes(pkg, doc, validated, cfg)
-
-    reviewed = out / f"reviewed_{Path(args.input).stem}.docx"
-    pkg.save(reviewed)
-    write_findings_json(out / "findings.json", doc=doc, findings=validated,
-                        usage=usage, cfg=cfg, applied_ids=stats.applied)
-    write_summary_md(out / "summary.md", doc=doc, findings=validated,
-                     usage=usage, cfg=cfg, applied_ids=stats.applied)
-
-    print(f"\n{len(stats.applied)} tracked change(s) applied.")
-    for p in (reviewed, out / "summary.md", out / "findings.json",
+    outputs = finish(prepared, findings, usage, cfg, out_dir=out,
+                     source_path=args.input)
+    print(f"\n{outputs.applied} tracked change(s) applied.")
+    for p in (outputs.reviewed_docx, outputs.summary_md, outputs.findings_json,
               out / "run.log"):
         print(f"  {p}")
     return 0
+
+
+def cmd_submit(args) -> int:
+    cfg, error_dir = _configure(args)
+    setup_logging(cfg.output_dir)
+    try:
+        provider = build_provider(cfg)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    try:
+        job = batchlib.submit(cfg, args.input, error_dir, provider,
+                              args.workspace, max_chunks=args.max_chunks)
+    except (IngestError, batchlib.BatchError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"Queued {job.source_name} as job {job.job_id}")
+    print(f"  {job.request_count} request(s) at batch prices on {job.model}")
+    print(f"  Results usually arrive within a few hours (24h at the outside).")
+    print(f"\nCheck on it:  docproof status {job.job_id}")
+    print(f"Finish it:    docproof collect {job.job_id}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    cfg, _ = _configure(args)
+    setup_logging(cfg.output_dir)
+    jobs = ([batchlib.load(args.workspace, args.job_id)] if args.job_id
+            else batchlib.load_all(args.workspace))
+    if not jobs:
+        print(f"No queued reviews in {args.workspace}/")
+        return 0
+
+    provider = None
+    for job in jobs:
+        if job.active:
+            if provider is None:
+                try:
+                    provider = build_provider(cfg)
+                except ProviderError as e:
+                    print(f"error: {e}", file=sys.stderr)
+                    return 2
+            try:
+                batchlib.poll(job, provider, args.workspace)
+            except Exception as e:            # noqa: BLE001 - report, continue
+                log.warning("Could not refresh %s: %s", job.job_id, e)
+        print(f"{job.job_id:<40} {_plain_state(job):<28} {job.source_name}")
+        if job.error:
+            print(f"    {job.error}")
+    return 0
+
+
+def cmd_collect(args) -> int:
+    cfg, error_dir = _configure(args)
+    setup_logging(cfg.output_dir)
+    try:
+        job = batchlib.load(args.workspace, args.job_id)
+        provider = build_provider(cfg)
+        outputs = batchlib.collect(job, provider, error_dir, args.workspace,
+                                   out_dir=args.out)
+    except (batchlib.BatchError, ProviderError, IngestError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"\n{outputs.applied} tracked change(s) applied.")
+    for p in (outputs.reviewed_docx, outputs.summary_md, outputs.findings_json):
+        print(f"  {p}")
+    return 0
+
+
+# --- helpers ------------------------------------------------------------------
+
+def _plain_state(job) -> str:
+    return {"submitted": "waiting on the provider",
+            "in_progress": "being reviewed",
+            "ready": "ready to collect",
+            "done": "finished",
+            "failed": "needs attention"}.get(job.state, job.state)
+
+
+def _load_mocks(path: str):
+    try:
+        canned = json.loads(Path(path).read_text("utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: --mock-findings {path}: {e}", file=sys.stderr)
+        return None
+    if not isinstance(canned, list):
+        print("error: --mock-findings must be a JSON array of findings.",
+              file=sys.stderr)
+        return None
+    return canned
+
+
+def _run_mock(cfg, prepared, canned):
+    ids = itertools.count(1)
+    usage = Usage()
+    findings = []
+    for group in prepared.groups:
+        analyzer = MockAnalyzer(group, canned, ids)
+        for chunk in prepared.chunks:
+            findings.extend(analyzer.analyze_chunk(chunk, usage))
+    return findings, usage
 
 
 if __name__ == "__main__":

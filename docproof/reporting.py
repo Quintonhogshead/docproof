@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import Config
 from .models import DocumentModel, Finding, Usage, index_paragraphs
+from .providers import estimate_cost
 
 log = logging.getLogger("docproof.reporting")
 
@@ -27,8 +28,9 @@ def _tally_types(findings: list[Finding]) -> dict[str, int]:
 
 
 def write_findings_json(path: Path, *, doc: DocumentModel,
-                        findings: list[Finding], usage: Usage,
-                        cfg: Config, applied_ids: tuple[str, ...]) -> None:
+                        findings: list[Finding], usage: Usage, cfg: Config,
+                        applied_ids: tuple[str, ...],
+                        batch: bool = False) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -40,6 +42,7 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                    "min_confidence": cfg.min_confidence,
                    "revision_author": cfg.revision_author},
         "usage": dataclasses.asdict(usage),
+        "batch": batch,
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
@@ -57,8 +60,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
 
 
 def write_summary_md(path: Path, *, doc: DocumentModel,
-                     findings: list[Finding], usage: Usage,
-                     cfg: Config, applied_ids: tuple[str, ...]) -> None:
+                     findings: list[Finding], usage: Usage, cfg: Config,
+                     applied_ids: tuple[str, ...], batch: bool = False) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -115,11 +118,18 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              f"{usage.input_tokens:,} (+{usage.cache_creation_input_tokens:,} "
              f"cache-write, {usage.cache_read_input_tokens:,} cache-read) · "
              f"output tokens: {usage.output_tokens:,}\n")
-    if cfg.pricing.input_per_mtok and cfg.pricing.output_per_mtok:
+    est = estimate_cost(cfg.api.model,
+                        input_tokens=usage.input_tokens
+                        + usage.cache_creation_input_tokens,
+                        output_tokens=usage.output_tokens,
+                        batch=batch)
+    if est is None and cfg.pricing.input_per_mtok and cfg.pricing.output_per_mtok:
         est = ((usage.input_tokens + usage.cache_creation_input_tokens)
                * cfg.pricing.input_per_mtok
                + usage.output_tokens * cfg.pricing.output_per_mtok) / 1_000_000
-        L.append(f"Estimated cost (upper bound — cache reads bill below the "
+    if est is not None:
+        note = "batch rates" if batch else "upper bound"
+        L.append(f"Estimated cost ({note} — cache reads bill below the "
                  f"input rate): **${est:.4f}**\n")
 
     L.append("---\nOpen the reviewed `.docx` in Word → **Review** tab → walk "

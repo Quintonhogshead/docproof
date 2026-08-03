@@ -5,23 +5,35 @@ description = "LLM-assisted grammar review with native Word tracked changes"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic",
+    "openai>=2.0",
     "lxml>=5.0",
     "pydantic>=2.7",
     "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
+app = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "keyring>=25.0",
+]
 dev = [
     "pytest>=8.0",
     "python-docx>=1.1",   # fixture generation only — never imported at runtime
+    "httpx",              # fastapi TestClient
 ]
 
 [project.scripts]
 docproof = "docproof.__main__:main"
+docproof-app = "app.run:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["docproof"]
+include = ["docproof*", "app*"]
+
+[tool.setuptools.package-data]
+app = ["static/*"]

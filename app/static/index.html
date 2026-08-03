@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocProof</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <h1>DocProof</h1>
+  <nav>
+    <button class="tab" data-screen="drop" aria-current="true">Review documents</button>
+    <button class="tab" data-screen="jobs">My reviews <span id="jobs-badge" hidden></span></button>
+    <button class="tab" data-screen="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ── Drop ─────────────────────────────────────────────────────────── -->
+  <section id="screen-drop" class="screen">
+    <div id="dropzone" tabindex="0" role="button"
+         aria-label="Drop Word documents here, or press Enter to choose files">
+      <p class="big">Drop Word documents here</p>
+      <p class="muted">or <button type="button" id="pick" class="link">choose
+        files</button> — one at a time or a whole stack</p>
+      <input type="file" id="file-input" accept=".docx" multiple hidden>
+    </div>
+
+    <div id="staged" hidden>
+      <h2>Ready to review</h2>
+      <ul id="file-list"></ul>
+
+      <div class="options">
+        <label class="field">
+          <span>Which reviewer?</span>
+          <select id="model"></select>
+          <small id="model-blurb" class="muted"></small>
+        </label>
+
+        <fieldset class="field">
+          <legend>When?</legend>
+          <label class="radio">
+            <input type="radio" name="mode" value="batch" checked>
+            <span><strong>Overnight</strong> — half the cost, ready within a
+              few hours <em id="cost-batch"></em></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="mode" value="now">
+            <span><strong>Right now</strong> — ready in a few minutes, full
+              price <em id="cost-now"></em></span>
+          </label>
+          <label class="sub" id="schedule-wrap">
+            <input type="checkbox" id="schedule-on">
+            Hold until <input type="time" id="schedule-at" value="23:00">
+            <small class="muted">(your computer must be awake and DocProof
+              open at that time)</small>
+          </label>
+        </fieldset>
+
+        <label class="field">
+          <span>How careful should it be?</span>
+          <select id="confidence">
+            <option value="high">Only changes it's sure about</option>
+            <option value="medium" selected>Balanced (recommended)</option>
+            <option value="low">Flag anything questionable</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="start" class="primary big-button">Start review</button>
+      <p id="start-hint" class="muted" hidden></p>
+      <p id="drop-error" class="error" hidden></p>
+    </div>
+  </section>
+
+  <!-- ── Jobs ─────────────────────────────────────────────────────────── -->
+  <section id="screen-jobs" class="screen" hidden>
+    <h2>My reviews</h2>
+    <p id="jobs-empty" class="muted">Nothing here yet. Drop a document on the
+      first tab to get started.</p>
+    <ul id="job-list"></ul>
+  </section>
+
+  <!-- ── Settings ─────────────────────────────────────────────────────── -->
+  <section id="screen-settings" class="screen" hidden>
+    <h2>Settings</h2>
+
+    <div class="card">
+      <h3>Your API keys</h3>
+      <p class="muted">DocProof sends your documents to Claude or ChatGPT to be
+        reviewed, and those services bill you directly. Paste a key below to
+        turn one on. Keys are stored in your Mac's Keychain — never in a file
+        and never shown again.</p>
+
+      <label class="field">
+        <span>Claude key <small class="muted">from console.anthropic.com</small></span>
+        <span class="row">
+          <input type="password" id="key-anthropic" placeholder="sk-ant-…"
+                 autocomplete="off">
+          <button type="button" data-test="anthropic">Test</button>
+        </span>
+        <small class="status" id="status-anthropic"></small>
+      </label>
+
+      <label class="field">
+        <span>ChatGPT key <small class="muted">from platform.openai.com</small></span>
+        <span class="row">
+          <input type="password" id="key-openai" placeholder="sk-…"
+                 autocomplete="off">
+          <button type="button" data-test="openai">Test</button>
+        </span>
+        <small class="status" id="status-openai"></small>
+      </label>
+    </div>
+
+    <div class="card">
+      <h3>Defaults</h3>
+      <label class="field">
+        <span>Where should finished documents go?</span>
+        <input type="text" id="output-dir">
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="comments" checked>
+        Add a margin comment explaining every change
+      </label>
+    </div>
+
+    <button id="save-settings" class="primary">Save settings</button>
+    <p id="settings-saved" class="ok" hidden>Saved.</p>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+from __future__ import annotations
+
+from .base import (BatchRequest, BatchStatus, NormalizedUsage, Provider,
+                   ProviderError, ProviderResult, strict_json_schema)
+from .catalog import MODELS, ModelInfo, estimate_cost, lookup, provider_for
+
+__all__ = ["BatchRequest", "BatchStatus", "MODELS", "ModelInfo",
+           "NormalizedUsage", "Provider", "ProviderError", "ProviderResult",
+           "build_provider", "estimate_cost", "lookup", "provider_for",
+           "strict_json_schema"]
+
+
+def build_provider(cfg, *, api_key: str | None = None) -> Provider:
+    """The one place a vendor SDK is chosen. Imports are deferred so a missing
+    optional SDK only breaks the provider that needs it."""
+    name = provider_for(cfg.api.model, cfg.api.provider)
+    kwargs = {"api_key": api_key, "max_retries": cfg.api.max_retries,
+              "prompt_caching": cfg.api.prompt_caching,
+              "effort": cfg.api.effort}
+    if name == "anthropic":
+        from .anthropic_provider import AnthropicProvider
+        return AnthropicProvider(**kwargs)
+    if name == "openai":
+        from .openai_provider import OpenAIProvider
+        return OpenAIProvider(**kwargs)
+    raise ProviderError(
+        f"Unknown provider {name!r} for model {cfg.api.model!r}. "
+        f"Set api.provider to 'anthropic' or 'openai'.")

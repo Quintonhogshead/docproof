@@ -9,9 +9,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class APIConfig(BaseModel):
     model: str = "claude-opus-5"
+    # Which vendor serves `model`. Only consulted for models the catalog
+    # doesn't recognise — a known model brings its own provider.
+    provider: Literal["anthropic", "openai"] = "anthropic"
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
+    # Reasoning depth. Grammar detection is a precise, well-specified task, so
+    # a low setting is both cheaper and no less accurate here. Ignored on
+    # models that don't accept it. null omits the parameter entirely.
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
 
 
 class ChunkingConfig(BaseModel):

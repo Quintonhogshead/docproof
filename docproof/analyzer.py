@@ -4,13 +4,13 @@ import itertools
 import json
 import logging
 
-import anthropic
 from pydantic import BaseModel, ValidationError, create_model
 from typing import Literal, Sequence
 
 from .config import Config
 from .error_registry import ErrorType
 from .models import Chunk, Finding, Usage
+from .providers import Provider, ProviderResult, strict_json_schema
 
 log = logging.getLogger("docproof.analyzer")
 
@@ -123,7 +123,7 @@ class Analyzer:
     is sent once per pass, not once per type."""
 
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
-                 finding_ids: itertools.count):
+                 provider: Provider, finding_ids: itertools.count):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
@@ -131,56 +131,64 @@ class Analyzer:
         self.keys = tuple(et.key for et in self.types)
         self.label = "+".join(self.keys)
         self.ids = finding_ids           # shared across passes → unique IDs
+        self.provider = provider
         self.system_prompt = build_system_prompt(self.types)
         self.output_model = build_output_model(self.keys)
-        self.client = anthropic.Anthropic(max_retries=cfg.api.max_retries)
+        self.schema = strict_json_schema(self.output_model)
         log.debug("System prompt for [%s]: %d chars", self.label,
                   len(self.system_prompt))
+
+    @property
+    def schema_name(self) -> str:
+        return "findings"
 
     # -- public ---------------------------------------------------------------
 
     def analyze_chunk(self, chunk: Chunk, usage: Usage) -> list[Finding]:
-        result = self._call(render_chunk(chunk), chunk.chunk_id, usage)
-        if result is None:
+        result = self.provider.complete_structured(
+            model=self.cfg.api.model,
+            system=self.system_prompt,
+            user=render_chunk(chunk),
+            schema=self.schema,
+            schema_name=self.schema_name,
+            max_tokens=self.cfg.api.max_output_tokens,
+        )
+        return self.findings_from(result, chunk, usage)
+
+    def findings_from(self, result: ProviderResult, chunk: Chunk,
+                      usage: Usage) -> list[Finding]:
+        """Turn one provider result into findings. Shared by the synchronous
+        path and the batch collector, so both apply the same checks."""
+        usage.add(result.usage)
+        parsed = self._unwrap(result, chunk.chunk_id)
+        if parsed is None:
             return []
-        return self._to_findings(list(result.findings), chunk)
+        return self._to_findings(list(parsed.findings), chunk)
 
     # -- internals ------------------------------------------------------------
 
-    def _call(self, content: str, chunk_id: str,
-              usage: Usage) -> BaseModel | None:
-        system = self.system_prompt
-        if self.cfg.api.prompt_caching:
-            system = [{"type": "text", "text": self.system_prompt,
-                       "cache_control": {"type": "ephemeral"}}]
-        try:
-            resp = self.client.messages.parse(
-                model=self.cfg.api.model,
-                max_tokens=self.cfg.api.max_output_tokens,
-                system=system,
-                messages=[{"role": "user", "content": content}],
-                output_format=self.output_model,
-            )
-        except (ValidationError, ValueError) as e:
-            log.error("%s: structured output failed to parse (often truncation "
-                      "— consider raising api.max_output_tokens): %s",
-                      chunk_id, e)
+    def _unwrap(self, result: ProviderResult, chunk_id: str) -> BaseModel | None:
+        if result.stop_reason == "refusal":
+            log.error("%s [%s]: model refused this chunk; skipping. %s",
+                      chunk_id, self.label, result.error or "")
             return None
-        usage.add(resp.usage)
-        log.debug("API call: in=%s out=%s cache_read=%s",
-                  resp.usage.input_tokens, resp.usage.output_tokens,
-                  getattr(resp.usage, "cache_read_input_tokens", 0))
-        if resp.stop_reason == "refusal":
-            log.error("%s: model refused this chunk; skipping.", chunk_id)
-            return None
-        if resp.stop_reason == "max_tokens":
+        if result.stop_reason == "max_tokens":
             log.error("%s [%s]: output truncated at %d tokens; raise "
                       "api.max_output_tokens, or split this error-type group "
                       "into smaller passes. Skipping chunk — every type in the "
                       "group loses this chunk, not just one.",
                       chunk_id, self.label, self.cfg.api.max_output_tokens)
             return None
-        return resp.parsed_output
+        if result.stop_reason != "ok" or result.parsed is None:
+            log.error("%s [%s]: request failed: %s", chunk_id, self.label,
+                      result.error or "no content returned")
+            return None
+        try:
+            return self.output_model.model_validate(result.parsed)
+        except ValidationError as e:
+            log.error("%s [%s]: response did not match the finding schema: %s",
+                      chunk_id, self.label, e)
+            return None
 
     def _to_findings(self, items: list[RawFinding], chunk: Chunk) -> list[Finding]:
         valid_ids = {p.para_id for p in chunk.paragraphs}
