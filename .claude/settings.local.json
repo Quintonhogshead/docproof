@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python -c \"import anthropic; print\\('anthropic', anthropic.__version__\\); import docproof.__main__; print\\('imports OK'\\)\")",
+      "Bash(.venv/bin/python -m pytest tests -q)",
+      "Bash(.venv/bin/python -)",
+      "Bash(.venv/bin/python -m docproof review SomeDocument.docx --mock-findings /dev/null)",
+      "Bash(echo \"rc=$?\")",
+      "Bash(.venv/bin/python -m docproof review SomeDocument.docx --mock-findings /tmp/empty.json)",
+      "Bash(.venv/bin/python -m docproof inventory SomeDocument.docx)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

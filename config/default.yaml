@@ -1,0 +1,31 @@
+api:
+  model: claude-opus-5
+  max_retries: 2
+  max_output_tokens: 16000
+  prompt_caching: true
+
+chunking:
+  token_budget: 2500        # soft target per chunk (attention quality, not capacity)
+  hard_cap_tokens: 8000     # oversized paragraphs split at sentence boundaries beyond this
+  min_paragraph_chars: 20
+
+skip:
+  styles:                   # Word style IDs, fnmatch patterns
+    - "Heading*"
+    - "Title"
+    - "Subtitle"
+    - "TOC*"
+    - "Caption"
+
+# claude-opus-5 rates; used only for the cost estimate in summary.md
+pricing:
+  input_per_mtok: 5.00
+  output_per_mtok: 25.00
+
+min_confidence: medium      # low | medium | high — gate for applying changes
+error_types:
+  - comma_splice
+tracked_changes_policy: abort   # abort | accept_all_first | ignore
+output_dir: output
+comments: true              # margin comment on every tracked change
+revision_author: docproof

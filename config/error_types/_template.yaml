@@ -1,0 +1,13 @@
+# Copy to <key>.yaml. The pipeline never needs code changes for a new type —
+# if it does, that's a bug in the pipeline, not a limitation of the format.
+key: your_error_key            # must match the filename
+name: Human-Readable Name
+version: 1
+detection_prompt: |
+  Define the error precisely. Give FLAG examples and Do-NOT-flag examples;
+  the do-not-flag list is where false positives go to die.
+fix_guidance: |
+  How corrected_text must be produced. Always: full sentence, minimal change.
+confidence_guidance: |
+  What high / medium / low mean FOR THIS ERROR TYPE.
+examples: []                   # optional but strongly recommended: 3–5 items

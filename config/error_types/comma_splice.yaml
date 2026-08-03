@@ -1,0 +1,63 @@
+key: comma_splice
+name: Comma splice
+version: 1
+
+detection_prompt: |
+  A comma splice joins two independent clauses (each could stand alone as a
+  complete sentence) with only a comma.
+
+  FLAG sentences like:
+  - "I went to the store, they were out of bread."
+  - "The results were clear, however the committee ignored them."
+    (a conjunctive adverb like "however", "therefore", "then", "moreover"
+    after a comma does NOT fix a splice)
+
+  Do NOT flag:
+  - Comma + coordinating conjunction (for, and, nor, but, or, yet, so):
+    "It was late, so we left." is correct.
+  - A dependent clause joined by a comma: "Because it was late, we left."
+  - Items in a series, appositives, or parenthetical phrases.
+  - Dialogue punctuation and attribution: "I'm done," she said.
+  - Comparative or elliptical constructions where the second clause is not
+    independent.
+
+  Stylistic splices exist, especially in fiction: short parallel clauses
+  ("I came, I saw, I conquered"), rhythmic first-person narration, and
+  dialogue rendering natural speech. Report them, but mark them low
+  confidence per the confidence guidance — the pipeline decides whether to
+  surface them, not you.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the smallest possible
+  fix, chosen in this order of preference:
+  1. Semicolon — when the clauses are tightly linked in thought.
+  2. Period and a capital letter — when they read as separate statements.
+  3. Comma plus a coordinating conjunction — only when the logical
+     relationship is unmistakable (do not invent causality).
+  Change nothing else: no rewording, no added words beyond a conjunction,
+  no punctuation changes elsewhere in the sentence.
+
+confidence_guidance: |
+  high   — unambiguous: both clauses independent, no stylistic signal.
+  medium — clause independence is arguable, or the sentence is long enough
+           that parsing is uncertain.
+  low    — likely intentional style: inside quoted dialogue, very short
+           parallel clauses, aphoristic rhythm, or strong narrative voice.
+
+examples:
+  - text: "The manuscript was finished, nobody wanted to read it."
+    finding:
+      original_text: "The manuscript was finished, nobody wanted to read it."
+      corrected_text: "The manuscript was finished; nobody wanted to read it."
+      explanation: "Two independent clauses joined by only a comma."
+      confidence: high
+  - text: "Although the manuscript was finished, nobody wanted to read it."
+    finding: null
+  - text: "It was late, but the road went on."
+    finding: null
+  - text: "\"I knocked, no one answered,\" she said."
+    finding:
+      original_text: "\"I knocked, no one answered,\" she said."
+      corrected_text: "\"I knocked; no one answered,\" she said."
+      explanation: "Splice inside dialogue; plausibly intentional speech rhythm."
+      confidence: low
