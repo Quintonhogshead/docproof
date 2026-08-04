@@ -40,6 +40,7 @@ from .prompts import (PromptError, assembled_passes, clear_override,
 from .report import build_report
 from .settings import (Paths, Settings, default_root, delete_api_key,
                        get_api_key, key_status, resource_root, set_api_key)
+from .update import UpdateError, perform_update
 from .version import build_info, check_for_update, download_release
 
 log = logging.getLogger("docproof.app")
@@ -381,6 +382,19 @@ def _register(app: FastAPI) -> None:
         called because somebody pressed the button; nothing here runs on its
         own."""
         return check_for_update()
+
+    @app.post("/api/version/update")
+    def version_update() -> dict:
+        """Install the newest release over this one and reopen.
+
+        Only ever runs because somebody pressed the button the launch-time
+        banner shows. It refuses — before downloading anything — while a
+        document is being worked on, when running from the source, and when
+        running straight off a disk image."""
+        try:
+            return perform_update(app.state.runner)
+        except UpdateError as e:
+            raise HTTPException(400, str(e))
 
     @app.post("/api/version/download")
     def version_download() -> dict:

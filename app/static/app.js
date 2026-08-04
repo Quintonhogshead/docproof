@@ -1183,6 +1183,49 @@ document.querySelectorAll('[data-test]').forEach((button) => {
   });
 });
 
+// ── a newer version is ready ──────────────────────────────────────────────
+
+// Asked once, quietly, at launch — and only when this is a packaged build,
+// because the source has nothing to install over. Failure of any kind is
+// silence: no token, no internet, no releases. The banner is the only output,
+// and nothing installs without its button being pressed.
+async function offerUpdateIfBehind() {
+  try {
+    const v = await api('/api/version');
+    if (!v.frozen) return;
+    const r = await api('/api/version/check');
+    if (!(r.ok && !r.current && r.asset)) return;
+    $('update-banner-text').textContent =
+      `${r.release_name || r.tag} is ready.`;
+    $('update-banner').hidden = false;
+  } catch (_) { /* the manual check in Settings still exists */ }
+}
+
+$('update-later').addEventListener('click', () => {
+  $('update-banner').hidden = true;          // until the next launch
+});
+
+$('update-now').addEventListener('click', async () => {
+  const button = $('update-now');
+  const text = $('update-banner-text');
+  button.disabled = true;
+  $('update-later').hidden = true;
+  text.textContent = 'Downloading and installing — DocProof will reopen '
+    + 'itself in a moment…';
+  try {
+    const r = await api('/api/version/update', { method: 'POST' });
+    text.textContent = r.message;
+    // The server exits right after replying; the window going away IS the
+    // success path. Nothing more to do here.
+  } catch (err) {
+    // A refusal (mid-review, running from a disk image) or a real failure.
+    // Either way the installed app is untouched and says why.
+    text.textContent = err.message;
+    button.disabled = false;
+    $('update-later').hidden = false;
+  }
+});
+
 // ── which build this is ───────────────────────────────────────────────────
 
 // A build is identified by more than its version number: two .apps can both
@@ -1563,6 +1606,7 @@ loadFormats().catch(() => {});
 loadModels().catch(() => {});
 loadStyleSheet().catch(() => {});
 applyDefaults().catch(() => {});
+offerUpdateIfBehind();
 renderKind();
 refreshJobs();
 state.pollTimer = setInterval(() => {

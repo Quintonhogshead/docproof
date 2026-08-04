@@ -159,6 +159,25 @@ def test_a_download_that_could_not_happen_says_why(client, monkeypatch):
     assert "would not accept that token" in resp.json()["detail"]
 
 
+def test_update_route_installs_and_reports(client, monkeypatch):
+    monkeypatch.setattr("app.main.perform_update", lambda runner: {
+        "ok": True, "message": "DocProof 0.2.0 is installed — reopening now."})
+    body = client.post("/api/version/update").json()
+    assert body["ok"] and "reopening" in body["message"]
+
+
+def test_update_route_passes_refusals_through_verbatim(client, monkeypatch):
+    from app.update import UpdateError
+
+    def refuse(runner):
+        raise UpdateError("A document is being worked on right now.")
+
+    monkeypatch.setattr("app.main.perform_update", refuse)
+    resp = client.post("/api/version/update")
+    assert resp.status_code == 400
+    assert "being worked on" in resp.json()["detail"]
+
+
 def test_the_github_token_is_stored_like_every_other_secret(client,
                                                             monkeypatch):
     """Not an AI key and nothing bills for it, but it is still a secret: the
