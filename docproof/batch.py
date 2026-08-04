@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import secrets
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,9 +74,16 @@ def _now() -> str:
 
 
 def new_job_id(name: str) -> str:
+    """A readable, sortable, unique id for one review.
+
+    The timestamp is only accurate to the second, and a job id is a directory
+    name — so submitting one document twice in the same second used to
+    produce two jobs that shared a folder, and the second silently replaced
+    the first. The random tail is what makes it a distinct review rather than
+    an overwrite."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe = "".join(c if c.isalnum() else "-" for c in Path(name).stem)[:40]
-    return f"{stamp}-{safe.strip('-') or 'document'}"
+    return f"{stamp}-{safe.strip('-') or 'document'}-{secrets.token_hex(2)}"
 
 
 def job_dir(workspace: str | Path, job_id: str) -> Path:

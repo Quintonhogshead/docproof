@@ -368,11 +368,18 @@ function renderJobs(jobs) {
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
       actions.append(doc, read);
+      const bits = [];
       if (typeof job.applied === 'number') {
-        const count = document.createElement('span');
-        count.className = 'file-meta';
-        count.textContent = `${job.applied} change${job.applied === 1 ? '' : 's'} suggested`;
-        actions.append(count);
+        bits.push(`${job.applied} change${job.applied === 1 ? '' : 's'} suggested`);
+      }
+      // Reviewing one document twice leaves two entries that read alike; the
+      // folder name is what tells them apart on disk.
+      if (job.results_name) bits.push(`saved in “${job.results_name}”`);
+      if (bits.length) {
+        const meta = document.createElement('span');
+        meta.className = 'file-meta';
+        meta.textContent = bits.join(' · ');
+        actions.append(meta);
       }
       li.append(actions);
     }

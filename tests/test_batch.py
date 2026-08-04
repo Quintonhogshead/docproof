@@ -3,6 +3,7 @@ the middle and the guard against the source document changing underneath."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -207,6 +208,24 @@ def test_the_manifest_records_the_prompt_it_sent(tmp_path):
     assert list(job.prompts) == ["comma_splice"]
     assert "ERROR TYPE: comma_splice" in job.prompts["comma_splice"]
     assert batchlib.load(tmp_path, job.job_id).prompts == job.prompts
+
+
+def test_two_reviews_of_one_document_are_two_jobs(tmp_path):
+    """A job id is a directory name. Submitting the same document twice in
+    the same second used to hand both reviews the same folder, and the second
+    replaced the first."""
+    provider = ScriptedBatchProvider()
+    a = batchlib.submit(_cfg(), FIXTURES / "simple.docx", ERROR_DIR, provider,
+                        tmp_path)
+    b = batchlib.submit(_cfg(), FIXTURES / "simple.docx", ERROR_DIR, provider,
+                        tmp_path)
+
+    assert a.job_id != b.job_id
+    assert len(batchlib.load_all(tmp_path)) == 2
+    assert batchlib.load(tmp_path, a.job_id).job_id == a.job_id
+    # Still readable and still sorts by when it was made.
+    assert a.job_id.startswith(datetime.now(timezone.utc).strftime("%Y%m%d"))
+    assert "simple" in a.job_id
 
 
 def test_load_all_skips_an_unreadable_manifest(tmp_path):

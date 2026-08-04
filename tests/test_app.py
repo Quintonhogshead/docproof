@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -246,6 +247,103 @@ def test_a_restarted_app_resumes_an_in_flight_batch(client, provider, tmp_path):
                       config_path=client.app_state.runner.config_path)
     fresh.tick_once()
     assert fresh.store.get(job["id"]).state == "done"
+
+
+# --- results folders ----------------------------------------------------------
+
+def _runner(tmp_path):
+    return JobRunner(JobStore(Paths(tmp_path)),
+                     Settings(output_dir=str(tmp_path / "out")),
+                     config_path=tmp_path / "config.yaml")
+
+
+def _job(**over):
+    fields = dict(id="j1", filename="Novel.docx", source_path="/Novel.docx",
+                  model="m", mode="now", created_at="2026-08-04T10:00:00+00:00")
+    fields.update(over)
+    return Job(**fields)
+
+
+def test_reviewing_one_document_twice_keeps_both_results(tmp_path):
+    runner = _runner(tmp_path)
+    first = runner._claim_results_dir(runner.store.save(_job(id="j1")))
+    second = runner._claim_results_dir(runner.store.save(_job(id="j2")))
+
+    assert first.name == "Novel"
+    assert second.name == "Novel (2)"
+    assert first != second and first.is_dir() and second.is_dir()
+
+    third = runner._claim_results_dir(runner.store.save(_job(id="j3")))
+    assert third.name == "Novel (3)"
+
+
+def test_a_folder_already_on_disk_is_not_written_into(tmp_path):
+    """Something the user put there by hand counts as taken, too."""
+    runner = _runner(tmp_path)
+    (tmp_path / "out" / "Novel").mkdir(parents=True)
+    (tmp_path / "out" / "Novel" / "mine.txt").write_text("keep me")
+
+    claimed = runner._claim_results_dir(runner.store.save(_job()))
+    assert claimed.name == "Novel (2)"
+    assert (tmp_path / "out" / "Novel" / "mine.txt").read_text() == "keep me"
+
+
+def test_a_rerun_returns_to_its_own_folder(tmp_path):
+    """A job that is retried must not claim a second folder and strand the
+    first — the ticker re-runs collection after a crash."""
+    runner = _runner(tmp_path)
+    job = runner.store.save(_job())
+    first = runner._claim_results_dir(job)
+    again = runner._claim_results_dir(runner.store.get(job.id))
+
+    assert first == again
+    assert runner.store.get(job.id).results_dir == str(first)
+
+
+def test_a_failed_run_gives_its_folder_back(tmp_path):
+    runner = _runner(tmp_path)
+    job = runner.store.save(_job())
+    claimed = runner._claim_results_dir(job)
+    runner._release_results_dir(job.id)
+
+    assert not claimed.exists()
+    assert runner.store.get(job.id).results_dir is None
+    # The name is free again, so the next review is not pushed to (2).
+    assert runner._claim_results_dir(runner.store.save(_job(id="j2"))).name \
+        == "Novel"
+
+
+def test_a_folder_with_results_in_it_is_never_released(tmp_path):
+    runner = _runner(tmp_path)
+    job = runner.store.save(_job())
+    claimed = runner._claim_results_dir(job)
+    (claimed / "findings.json").write_text("{}")
+
+    runner._release_results_dir(job.id)
+    assert claimed.is_dir()
+    assert runner.store.get(job.id).results_dir == str(claimed)
+
+
+def test_the_same_document_reviewed_twice_downloads_twice(client, provider):
+    """End to end: the earlier review's download must not start serving the
+    later review's document."""
+    jobs = []
+    for _ in range(2):
+        staged = _upload(client)                  # same filename each time
+        jobs.append(_run(client, staged["id"]))
+        client.app_state.runner.wait_idle()
+
+    assert jobs[0]["id"] != jobs[1]["id"]      # same document, same second
+    dirs = [client.app_state.store.get(j["id"]).results_dir for j in jobs]
+    assert dirs[0] != dirs[1]
+    assert Path(dirs[1]).name == "simple (2)"
+
+    # Two entries that read alike need something that tells them apart.
+    named = [client.get(f"/api/jobs/{j['id']}").json()["results_name"]
+             for j in jobs]
+    assert named == ["simple", "simple (2)"]
+    for job in jobs:
+        assert client.get(f"/api/jobs/{job['id']}/file/docx").status_code == 200
 
 
 # --- picking sections ---------------------------------------------------------

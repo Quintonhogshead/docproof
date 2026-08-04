@@ -44,7 +44,11 @@
       "Bash(.venv/bin/pyinstaller DocProof.spec --noconfirm --distpath dist --workpath build)",
       "Bash(echo \"exit=$?\")",
       "Bash(.venv/bin/pyinstaller DocProof.spec --noconfirm)",
-      "Bash(echo \"build exit=$?\")"
+      "Bash(echo \"build exit=$?\")",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/collide.py)",
+      "Bash(sed 's|/var/folders/.*/out/|.../out/|')",
+      "Bash(curl -s http://localhost:8766/api/jobs)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

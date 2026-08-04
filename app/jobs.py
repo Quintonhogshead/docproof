@@ -73,6 +73,10 @@ class Job:
         d = asdict(self)
         d["plain_state"] = self.plain_state()
         d["ready"] = self.state == "done"
+        # Two reviews of one document are now two entries that look alike, so
+        # each says which folder its results went to.
+        d["results_name"] = (Path(self.results_dir).name
+                             if self.results_dir else None)
         return d
 
 
@@ -209,8 +213,50 @@ class JobRunner:
         return build_provider(cfg, api_key=get_api_key(name))
 
     def results_dir(self, job: Job) -> Path:
+        """Where this job's finished files go, claimed as it is chosen.
+
+        Two reviews of one document must not share a folder. The second would
+        overwrite the first, and — worse — the first review's download button
+        would quietly start serving the second review's document. A name
+        already taken gets a numbered suffix, the way a browser handles
+        downloading the same file twice.
+
+        The folder is created here rather than merely picked: the worker
+        thread and the ticker can be finishing two jobs at the same moment,
+        and looking before creating would let both settle on the same name."""
+        if job.results_dir:
+            return Path(job.results_dir)   # already claimed; a retry reuses it
         base = Path(self.settings.output_dir).expanduser()
-        return base / Path(job.filename).stem
+        stem = Path(job.filename).stem or "document"
+        n = 1
+        while True:
+            candidate = base / (stem if n == 1 else f"{stem} ({n})")
+            try:
+                candidate.mkdir(parents=True)
+                return candidate
+            except FileExistsError:
+                n += 1
+
+    def _claim_results_dir(self, job: Job) -> Path:
+        """Claim the folder and record it, so a job interrupted between here
+        and its last write comes back to the same place instead of claiming a
+        second one and orphaning the first."""
+        out = self.results_dir(job)
+        self.store.update(job.id, results_dir=str(out))
+        return out
+
+    def _release_results_dir(self, job_id: str) -> None:
+        """Give an unused claim back after a failure, so a run that never
+        wrote anything doesn't leave an empty folder — or push the next
+        review's name to (2)."""
+        job = self.store.get(job_id)
+        if job is None or not job.results_dir:
+            return
+        try:
+            Path(job.results_dir).rmdir()      # refuses if anything is in it
+        except OSError:
+            return                             # it has results, or is gone
+        self.store.update(job_id, results_dir=None)
 
     # -- worker ---------------------------------------------------------------
 
@@ -261,9 +307,13 @@ class JobRunner:
             self.store.update(job_id, done=done, total=total)
 
         findings, usage = run_sync(cfg, prepared, provider, progress=progress)
-        out = self.results_dir(job)
-        outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                         source_path=job.source_path)
+        out = self._claim_results_dir(job)
+        try:
+            outputs = finish(prepared, findings, usage, cfg, out_dir=out,
+                             source_path=job.source_path)
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
 
@@ -358,7 +408,7 @@ class JobRunner:
             return
 
         self.store.update(job.id, state="collecting")
-        out = self.results_dir(job)
+        out = self._claim_results_dir(job)
         try:
             outputs = batchlib.collect(batch_job, provider, self.error_dir,
                                        self.store.paths.jobs, out_dir=out)
@@ -367,6 +417,7 @@ class JobRunner:
             # `collecting`, which the ticker now retries — so a permanent
             # failure has to become a state the user can see and retry.
             log.exception("Collecting %s failed", job.id)
+            self._release_results_dir(job.id)
             self.store.update(job.id, state="failed", error=str(e))
             return
         self.store.update(job.id, state="done", applied=outputs.applied,
