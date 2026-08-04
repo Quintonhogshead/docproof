@@ -173,7 +173,11 @@ class Analyzer:
 
     # -- public ---------------------------------------------------------------
 
-    def analyze_chunk(self, chunk: Chunk, usage: Usage) -> list[Finding]:
+    def analyze_chunk(self, chunk: Chunk, usage: Usage
+                      ) -> tuple[list[Finding], bool]:
+        """One call. The bool is whether the provider actually answered —
+        a run that checkpoints its results needs to tell a failed call from a
+        chunk with nothing wrong in it, because `[]` alone means both."""
         result = self.provider.complete_structured(
             model=self.cfg.api.model,
             system=self.system_prompt,
@@ -182,7 +186,11 @@ class Analyzer:
             schema_name=self.schema_name,
             max_tokens=self.cfg.api.max_output_tokens,
         )
-        return self.findings_from(result, chunk, usage)
+        usage.add(result.usage)
+        parsed = self._unwrap(result, chunk.chunk_id)
+        if parsed is None:
+            return [], False
+        return self._to_findings(list(parsed.findings), chunk), True
 
     def findings_from(self, result: ProviderResult, chunk: Chunk,
                       usage: Usage) -> list[Finding]:
@@ -264,7 +272,8 @@ class MockAnalyzer:
         self.canned = canned
         self.ids = finding_ids
 
-    def analyze_chunk(self, chunk: Chunk, usage: Usage) -> list[Finding]:
+    def analyze_chunk(self, chunk: Chunk, usage: Usage
+                      ) -> tuple[list[Finding], bool]:
         valid = {p.para_id for p in chunk.paragraphs}
         out = []
         for item in self.canned:
@@ -286,4 +295,4 @@ class MockAnalyzer:
                     original_text=rf.original_text, occurrence=rf.occurrence,
                     corrected_text=rf.corrected_text,
                     explanation=rf.explanation, confidence=rf.confidence))
-        return out
+        return out, True

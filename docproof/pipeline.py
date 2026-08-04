@@ -132,19 +132,43 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
 
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
-             progress=None) -> tuple[list, Usage]:
+             progress=None, checkpoint=None) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk).
 
     `progress` is called with (done, total) after each call so a UI can show
-    movement; it is the only reason this loop isn't a comprehension."""
-    ids = itertools.count(1)
+    movement; it is the only reason this loop isn't a comprehension.
+
+    `checkpoint` (a docproof.checkpoint.Checkpoint, already loaded) makes the
+    run resumable: each completed call's findings land in it as they arrive,
+    and calls it already holds are replayed instead of paid for again. The
+    replay happens *in loop order* — the validator gives earlier findings
+    first claim on a span, so order is part of the result, not presentation."""
+    from .batch import custom_id
+    from .checkpoint import (add_usage, finding_from_dict, finding_to_dict,
+                             snapshot, usage_delta)
+
+    start = (checkpoint.max_finding_id() + 1) if checkpoint else 1
+    ids = itertools.count(start)
     usage = Usage()
     findings: list = []
     total = prepared.request_count
     done = 0
-    for analyzer in build_analyzers(cfg, prepared.groups, provider, ids):
+    for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
+                                                 provider, ids)):
         for chunk in prepared.chunks:
-            findings.extend(analyzer.analyze_chunk(chunk, usage))
+            key = custom_id(i, chunk.chunk_id)
+            cached = checkpoint.get(key) if checkpoint else None
+            if cached is not None:
+                findings.extend(finding_from_dict(d) for d in cached.items)
+                add_usage(usage, cached.usage)
+            else:
+                before = snapshot(usage)
+                found, ok = analyzer.analyze_chunk(chunk, usage)
+                findings.extend(found)
+                if checkpoint:
+                    checkpoint.put(
+                        key, items=[finding_to_dict(f) for f in found],
+                        usage=usage_delta(before, usage), ok=ok)
             done += 1
             if progress:
                 progress(done, total)

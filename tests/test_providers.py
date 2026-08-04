@@ -77,10 +77,10 @@ def test_analyzer_without_explanations_still_produces_findings():
         "occurrence": 1,
         "corrected_text": "The manuscript was finished; nobody wanted it.",
         "confidence": "high"}]}, usage=USAGE)])
-    findings = Analyzer(cfg, list(registry.values()), provider,
-                        ids()).analyze_chunk(_chunk(), Usage())
+    findings, ok = Analyzer(cfg, list(registry.values()), provider,
+                            ids()).analyze_chunk(_chunk(), Usage())
 
-    assert [f.error_type for f in findings] == ["comma_splice"]
+    assert ok and [f.error_type for f in findings] == ["comma_splice"]
     assert findings[0].explanation == ""      # nothing asked for, nothing lost
 
 
@@ -165,9 +165,9 @@ def test_analyzer_happy_path_and_usage_accounting():
         original="The manuscript was finished, nobody wanted it.",
         corrected="The manuscript was finished; nobody wanted it.")])
     usage = Usage()
-    findings = _analyzer(provider).analyze_chunk(_chunk(), usage)
+    findings, ok = _analyzer(provider).analyze_chunk(_chunk(), usage)
 
-    assert [f.error_type for f in findings] == ["comma_splice"]
+    assert ok and [f.error_type for f in findings] == ["comma_splice"]
     assert usage.api_calls == 1
     assert usage.input_tokens == USAGE.input_tokens
     assert usage.cache_read_input_tokens == USAGE.cache_read_input_tokens
@@ -181,7 +181,10 @@ def test_analyzer_happy_path_and_usage_accounting():
 ])
 def test_analyzer_drops_bad_results_without_raising(result):
     usage = Usage()
-    assert _analyzer(FakeProvider([result])).analyze_chunk(_chunk(), usage) == []
+    findings, ok = _analyzer(FakeProvider([result])).analyze_chunk(_chunk(), usage)
+    # Empty AND marked failed: a checkpointed run retries these rather than
+    # caching "nothing wrong here" for a chunk the model never actually read.
+    assert findings == [] and ok is False
     assert usage.api_calls == 1      # the attempt is still counted
 
 

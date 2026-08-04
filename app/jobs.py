@@ -19,10 +19,12 @@ from pathlib import Path
 
 from docproof import batch as batchlib
 from docproof import prep as preplib
+from docproof.batch import pass_prompts
+from docproof.checkpoint import Checkpoint
 from docproof.config import Config, load_config
 from docproof.formats import get_format
 from docproof.ingest import IngestError
-from docproof.pipeline import finish, prepare, run_sync
+from docproof.pipeline import content_hash, finish, prepare, run_sync
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
@@ -241,9 +243,15 @@ class JobRunner:
         self._stop.set()
 
     def resume_interrupted(self) -> None:
-        """A sync job that was mid-flight when the app closed cannot be
-        resumed — it has no vendor-side state to reconnect to. Re-queue it.
-        Batch jobs need nothing: the ticker finds them by their manifest."""
+        """A sync job that was mid-flight when the app closed is re-queued.
+
+        It is not started over: the run left a checkpoint of every call it
+        completed, and the re-run replays that and pays only for the rest.
+        `done` is deliberately left alone — the resumed run races back through
+        the cached part in moments, and resetting the bar to zero used to be
+        the visible face of resetting the *spend* to zero, which is the thing
+        that no longer happens. Batch jobs need nothing: the ticker finds them
+        by their manifest."""
         for job in self.store.all():
             # Prep is included at "collecting" too: it has no vendor-side state
             # either way, and it claimed its results folder before writing, so
@@ -252,7 +260,7 @@ class JobRunner:
                 job.is_prep and job.state == "collecting")
             if interrupted:
                 log.info("Re-queueing %s, interrupted by a restart", job.id)
-                self.store.update(job.id, state="queued", done=0)
+                self.store.update(job.id, state="queued")
                 self.queue.put(job.id)
             elif job.state == "queued":
                 self.queue.put(job.id)
@@ -291,6 +299,37 @@ class JobRunner:
         if job.is_prep:
             cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["indesign"])
         return cfg
+
+    def _checkpoint(self, job: Job, cfg: Config, prepared) -> "Checkpoint":
+        """The record of what this job has already paid for.
+
+        Fingerprinted the way the batch manifest is — document text, full
+        config, the exact prompts — because cached answers are only reusable
+        while all of those are unchanged. `load()` wipes a stale one itself."""
+        if job.is_prep:
+            fingerprint = {
+                "kind": "prep",
+                "content_hash": content_hash(prepared.structure),
+                "config": cfg.model_dump(mode="json"),
+                "prompts": {"tagging":
+                            prepared.prompt.render(prepared.sheet)},
+                "selection": None,
+            }
+        else:
+            fingerprint = {
+                "kind": "review",
+                "content_hash": prepared.content_hash,
+                "config": cfg.model_dump(mode="json"),
+                "prompts": pass_prompts(cfg, prepared),
+                "selection": job.selection,
+            }
+        checkpoint = Checkpoint(self.store.dir(job.id) / "checkpoint.json",
+                                fingerprint=fingerprint)
+        checkpoint.load()
+        return checkpoint
+
+    def discard_checkpoint(self, job_id: str) -> None:
+        (self.store.dir(job_id) / "checkpoint.json").unlink(missing_ok=True)
 
     def _provider(self, cfg: Config):
         name = provider_for(cfg.api.model, cfg.api.provider)
@@ -392,7 +431,12 @@ class JobRunner:
         def progress(done: int, total: int) -> None:
             self.store.update(job_id, done=done, total=total)
 
-        findings, usage = run_sync(cfg, prepared, provider, progress=progress)
+        # The checkpoint outlives any failure below on purpose: a retry after
+        # a crash or a mid-run exception resumes instead of paying again. Only
+        # a finished job deletes it.
+        checkpoint = self._checkpoint(job, cfg, prepared)
+        findings, usage = run_sync(cfg, prepared, provider, progress=progress,
+                                   checkpoint=checkpoint)
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
@@ -400,6 +444,7 @@ class JobRunner:
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise
+        checkpoint.delete()
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
@@ -430,8 +475,11 @@ class JobRunner:
                           total=prepared.request_count,
                           words=prepared.structure.word_count)
 
+        # Kept through failures — including a failed verification — so a retry
+        # replays the windows already paid for rather than re-tagging the book.
+        checkpoint = self._checkpoint(job, cfg, prepared)
         tags, usage = preplib.run(
-            cfg, prepared, provider,
+            cfg, prepared, provider, checkpoint=checkpoint,
             progress=lambda done, total: self.store.update(job_id, done=done,
                                                            total=total))
         self.store.update(job_id, state="collecting")
@@ -444,6 +492,12 @@ class JobRunner:
             # The notes were still written, and they are the most useful thing
             # here: they say what prep intended and where the text diverged. So
             # the folder stays and the job points at it.
+            #
+            # The checkpoint, though, goes: it holds the exact tags that just
+            # produced the failing file, and a retry that replays them is a
+            # retry that deterministically fails the same way. Verification
+            # failure is the one failure where the cache is the problem.
+            checkpoint.delete()
             log.error("Prep for %s failed verification: %s", job.id, e)
             self.store.update(job_id, state="failed", error=str(e),
                               results_dir=str(out), verified=False)
@@ -453,6 +507,7 @@ class JobRunner:
             self._release_results_dir(job_id)
             raise
 
+        checkpoint.delete()
         self.store.update(job_id, state="done", results_dir=str(out),
                           error=None, tagged=outputs.tagged,
                           applied=outputs.tagged, flags=outputs.flags,

@@ -8,6 +8,7 @@ Python downstream of here.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,12 +157,37 @@ class Tagger:
                        preview_chars=self.preview_chars)
 
     def tag(self, structure: Structure, usage: Usage, *,
-            progress=None) -> list[Tag]:
+            progress=None, checkpoint=None) -> list[Tag]:
+        """Label every window, in order.
+
+        `checkpoint` (docproof.checkpoint.Checkpoint, loaded) makes the pass
+        resumable: each finished window's tags are saved as they land, and a
+        restart replays them instead of paying for them again. The replay
+        also rebuilds `assigned`, so the first live window still gets its
+        context — the same labels it would have seen in an unbroken run."""
+        from ..checkpoint import add_usage, snapshot, usage_delta
+
         planned = self.plan_windows(structure)
         assigned: dict[str, str] = {}
         tags: list[Tag] = []
         for done, window in enumerate(planned, start=1):
-            tags.extend(self._tag_window(window, assigned, usage))
+            key = f"w{window.index}"
+            cached = checkpoint.get(key) if checkpoint else None
+            if cached is not None:
+                for item in cached.items:
+                    tag = Tag(**item)
+                    tags.append(tag)
+                    assigned[tag.para_id] = tag.role
+                add_usage(usage, cached.usage)
+            else:
+                before = snapshot(usage)
+                fresh = self._tag_window(window, assigned, usage)
+                tags.extend(fresh)
+                if checkpoint:
+                    checkpoint.put(
+                        key,
+                        items=[dataclasses.asdict(t) for t in fresh],
+                        usage=usage_delta(before, usage), ok=True)
             if progress:
                 progress(done, len(planned))
         return self._order(tags, structure)
@@ -268,7 +294,8 @@ class MockTagger:
     def plan_windows(self, structure: Structure) -> list[Window]:
         return [Window(0, structure.taggable)]
 
-    def tag(self, structure: Structure, usage: Usage, *, progress=None):
+    def tag(self, structure: Structure, usage: Usage, *, progress=None,
+            checkpoint=None):
         if progress:
             progress(1, 1)
         return [Tag(para_id=p.para_id,

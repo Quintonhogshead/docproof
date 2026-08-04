@@ -551,6 +551,9 @@ def _register(app: FastAPI) -> None:
             raise HTTPException(
                 400, "This one just started, so there is nothing left to "
                      "cancel.")
+        # A cancelled job never runs again, so any checkpoint a failed earlier
+        # attempt left behind is just clutter in the job folder now.
+        app.state.runner.discard_checkpoint(job_id)
         return updated.to_api()
 
     @app.get("/api/jobs/{job_id}/file/{which}")

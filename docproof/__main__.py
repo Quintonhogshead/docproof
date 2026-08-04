@@ -383,7 +383,8 @@ def _run_mock(cfg, prepared, canned):
     for group in prepared.groups:
         analyzer = MockAnalyzer(group, canned, ids)
         for chunk in prepared.chunks:
-            findings.extend(analyzer.analyze_chunk(chunk, usage))
+            found, _ = analyzer.analyze_chunk(chunk, usage)
+            findings.extend(found)
     return findings, usage
 
 

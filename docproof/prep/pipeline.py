@@ -119,12 +119,13 @@ def _tagger(cfg: Config, sheet: StyleSheet, prompt: TaggingPrompt,
 
 
 def run(cfg: Config, prepared: PreparedPrep, provider: Provider, *,
-        progress=None) -> tuple[list[Tag], Usage]:
+        progress=None, checkpoint=None) -> tuple[list[Tag], Usage]:
     """Label the manuscript. Windows run in order: what a paragraph is depends
     on what came before it."""
     usage = Usage()
     tagger = _tagger(cfg, prepared.sheet, prepared.prompt, provider)
-    tags = tagger.tag(prepared.structure, usage, progress=progress)
+    tags = tagger.tag(prepared.structure, usage, progress=progress,
+                      checkpoint=checkpoint)
     return tags, usage
 
 
