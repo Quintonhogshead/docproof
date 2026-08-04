@@ -12,6 +12,7 @@ finds it by its manifest.
 from __future__ import annotations
 
 import argparse
+import html
 import logging
 import socket
 import threading
@@ -22,6 +23,7 @@ from pathlib import Path
 
 import uvicorn
 
+from .lock import FolderInUse, describe_owner
 from .main import create_app
 from .settings import Paths, default_root
 
@@ -80,6 +82,32 @@ def wait_until_serving(url: str, timeout: float = STARTUP_TIMEOUT) -> bool:
     return False
 
 
+def _in_use_html(error: FolderInUse) -> str:
+    """The refusal, as a page — a double-clicked .app has no terminal, and a
+    window that never appears is indistinguishable from a broken app."""
+    detail = html.escape(describe_owner(error.owner))
+    return f"""
+<style>
+  body {{ font: 15px/1.6 -apple-system, sans-serif; margin: 0;
+          padding: 2rem; color: #1c1a17; background: #fbf9f6; }}
+  h1 {{ font-size: 1.2rem; margin: 0 0 .8rem; }}
+  code {{ background: #f5ece1; padding: .1rem .35rem; border-radius: 5px; }}
+  p {{ margin: 0 0 .9rem; }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ color: #ece7e0; background: #171513; }}
+    code {{ background: #2b2520; }}
+  }}
+</style>
+<h1>DocProof is already running</h1>
+<p>{detail}, using the folder DocProof keeps its work in:</p>
+<p><code>{html.escape(str(error.owner.get("root", "")
+                         or "~/Library/Application Support/DocProof"))}</code></p>
+<p>Two copies sharing that folder review the same documents twice and write
+over each other's results, so this one stopped instead.</p>
+<p>Quit the other copy, then open DocProof again.</p>
+"""
+
+
 def serve(app, port: int) -> uvicorn.Server:
     """Run uvicorn on a daemon thread and hand back the server object."""
     config = uvicorn.Config(app, host="127.0.0.1", port=port,
@@ -117,7 +145,19 @@ def main(argv=None) -> int:
 
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}"
-    server = serve(create_app(root), port)
+    try:
+        app = create_app(root)
+    except FolderInUse as e:
+        # The port file said nobody was here, but the folder is claimed — so
+        # the holder is something this launch cannot attach a window to,
+        # usually a copy started from a checkout. Nothing has a terminal to
+        # print to, so it has to be said on screen.
+        log.error("%s", e)
+        webview.create_window(TITLE, html=_in_use_html(e), width=560,
+                              height=320)
+        webview.start()
+        return 1
+    server = serve(app, port)
     _port_file(root).write_text(str(port), encoding="utf-8")
 
     try:

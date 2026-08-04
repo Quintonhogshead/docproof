@@ -8,12 +8,14 @@ from __future__ import annotations
 import argparse
 import logging
 import socket
+import sys
 import threading
 import webbrowser
 from pathlib import Path
 
 import uvicorn
 
+from .lock import FolderInUse
 from .main import create_app
 
 
@@ -36,7 +38,12 @@ def main(argv=None) -> int:
                         format="%(levelname)-7s %(name)s: %(message)s")
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}"
-    app = create_app(Path(args.home).expanduser() if args.home else None)
+    try:
+        app = create_app(Path(args.home).expanduser() if args.home else None)
+    except FolderInUse as e:
+        # A terminal is looking at this, so the message is the whole handling.
+        print(f"\n{e}\n", file=sys.stderr)
+        return 2
 
     if not args.no_browser:
         threading.Timer(0.8, webbrowser.open, args=(url,)).start()
