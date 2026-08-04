@@ -46,6 +46,7 @@ PLAIN_STATE = {
     "collecting": "Almost done — writing your document",
     "done": "Ready",
     "failed": "Needs attention",
+    "cancelled": "Cancelled",
 }
 
 # Prep does a different job, so it says so. Only the states that differ.
@@ -186,6 +187,21 @@ class JobStore:
         with self._lock:
             job = self.get(job_id)
             if job is None:
+                return None
+            for k, v in fields.items():
+                setattr(job, k, v)
+            return self.save(job)
+
+    def update_if(self, job_id: str, *, expect: str, **fields) -> Job | None:
+        """`update`, but only if the job is still in the state the caller last
+        saw it in. Cancelling reads a job's state and then, a moment later,
+        writes a new one — without this, the worker thread submitting a batch
+        or the ticker promoting a scheduled job could land in that gap and the
+        cancellation would be silently lost. Returns None, changing nothing, if
+        the state moved on first."""
+        with self._lock:
+            job = self.get(job_id)
+            if job is None or job.state != expect:
                 return None
             for k, v in fields.items():
                 setattr(job, k, v)
@@ -475,7 +491,10 @@ class JobRunner:
 
     def _submit_batch(self, job_id: str) -> None:
         job = self.store.get(job_id)
-        if job is None:
+        # Same guard _run_now and _run_prep already have: a job cancelled while
+        # its id was still sitting in the queue must not be submitted the
+        # instant the worker gets to it.
+        if job is None or job.state not in ("queued", "running"):
             return
         cfg = self.config_for(job)
         try:
@@ -509,8 +528,12 @@ class JobRunner:
         tests can drive it without waiting on a timer."""
         for job in self.store.all():
             if job.state == "scheduled" and self._due(job):
-                self.store.update(job.id, state="queued")
-                self.queue.put(job.id)
+                # Guards against a cancellation landing between this read and
+                # the write below: only queue it if it was still scheduled at
+                # the moment of the update, not just at the moment of this read.
+                if self.store.update_if(job.id, expect="scheduled",
+                                        state="queued"):
+                    self.queue.put(job.id)
             # `collecting` is included so a job interrupted partway through
             # collection is picked up again: the results are still at the
             # vendor, and both poll and collect can be re-run. Prep is never

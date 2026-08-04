@@ -454,7 +454,8 @@ function renderJobs(jobs) {
   list.innerHTML = '';
   $('jobs-empty').hidden = jobs.length > 0;
 
-  const active = jobs.filter((j) => !['done', 'failed'].includes(j.state)).length;
+  const active = jobs.filter(
+    (j) => !['done', 'failed', 'cancelled'].includes(j.state)).length;
   const badge = $('jobs-badge');
   badge.hidden = active === 0;
   badge.textContent = String(active);
@@ -482,6 +483,34 @@ function renderJobs(jobs) {
       fill.style.width = `${Math.round((job.done / job.total) * 100)}%`;
       bar.append(fill);
       li.append(bar);
+    }
+
+    // Only offered before anything has actually started: once a review is
+    // running, waiting overnight, or writing its files, there is nothing
+    // local left to pull back — the work is billed or already in progress.
+    if (job.state === 'queued' || job.state === 'scheduled') {
+      const actions = document.createElement('div');
+      actions.className = 'job-actions';
+      const note = actionNote();
+      const cancel = document.createElement('button');
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', async () => {
+        cancel.disabled = true;
+        note.hidden = true;
+        try {
+          await api(`/api/jobs/${job.id}/cancel`, { method: 'POST' });
+          refreshJobs();
+        } catch (err) {
+          // The one way this fails: it started in the moment between opening
+          // this screen and the click landing. Say so where it happened,
+          // not on a screen the user isn't looking at.
+          note.textContent = err.message;
+          note.hidden = false;
+          cancel.disabled = false;
+        }
+      });
+      actions.append(cancel, note);
+      li.append(actions);
     }
 
     if (job.ready && job.is_prep) {
