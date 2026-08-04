@@ -75,7 +75,28 @@
       "Bash(.venv/bin/python -m pyflakes docproof/formats/ docproof/utils/package.py tests/test_idml.py)",
       "Bash(.venv/bin/python -m pyflakes docproof/formats/ docproof/utils/package.py docproof/pipeline.py docproof/reporting.py app/main.py app/jobs.py tests/test_idml.py)",
       "Bash(rm -f \"/tmp/Book Three.idml\"; git status --short; echo \"=== DIFFSTAT ===\"; git diff --stat | tail -20)",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(mkdir -p /Users/quintonjohnson/Desktop/docproof-idml-sample)",
+      "Bash(cp '/private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c40ada88-14ae-478d-841a-164fa2825d11/scratchpad/cliout/reviewed_Book Three.idml' /Users/quintonjohnson/Desktop/docproof-idml-sample/)",
+      "Bash(cp /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c40ada88-14ae-478d-841a-164fa2825d11/scratchpad/cliout/summary.md /Users/quintonjohnson/Desktop/docproof-idml-sample/)",
+      "Bash(cp '/private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c40ada88-14ae-478d-841a-164fa2825d11/scratchpad/Book Three.idml' /Users/quintonjohnson/Desktop/docproof-idml-sample/original.idml)",
+      "Bash(/usr/bin/python3 -c \"import Quartz, AppKit; print\\('pyobjc ok'\\)\")",
+      "Bash(.venv/bin/python -V)",
+      "Bash(.venv/bin/python tests/fixtures/make_fixtures.py)",
+      "Bash(.venv/bin/python -m docproof prep tests/fixtures/googledoc.docx --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep1 --output both --mock-tags)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/try_prep.py /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep2)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/try_prep.py /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep3)",
+      "Bash(.venv/bin/python tools/make_icon.py)",
+      "Bash(sips -s format png build/DocProof.iconset/icon_256x256.png --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/icon_preview.png)",
+      "Bash(.venv/bin/python -m pytest tests/test_prep.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_prep_app.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_app.py::test_upload_rejects_an_unreadable_kind_of_file -q)",
+      "Bash(curl -s localhost:8765/api/usage)",
+      "Bash(.venv/bin/pyinstaller DocProof.spec --noconfirm --distpath dist --workpath build/pyi)",
+      "Bash(rm -rf \"$HOME/Library/Application Support/DocProof/jobs/20260801-101500-wildflower-a1\" \"$HOME/Library/Application Support/DocProof/jobs/20260731-224000-wildflower-b2\" \"$HOME/Library/Application Support/DocProof/jobs/20260714-090000-saltmarsh-c3\" && echo \"demo jobs removed\" && .venv/bin/python -m pytest -q 2>&1 | tail -3)",
+      "Bash(.venv/bin/python -m docproof prep tests/fixtures/googledoc.docx --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep4 --output both --mock-tags)",
+      "Bash(.venv/bin/python -m docproof prep tests/fixtures/googledoc.docx --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep5 --output both --mock-tags)",
+      "Bash(/usr/libexec/PlistBuddy -c \"Print :CFBundleIconFile\" dist/DocProof.app/Contents/Info.plist)"
     ]
   }
 }
