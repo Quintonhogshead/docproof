@@ -26,8 +26,13 @@ def resource_root() -> Path:
     return Path(bundled) if bundled else Path(__file__).resolve().parent.parent
 
 KEYCHAIN_SERVICE = "docproof"
+# The AI providers, plus one that is not a provider at all: a read-only GitHub
+# token, so a build somebody was sent can ask whether a newer one has been
+# released. It lives here because it is a secret and this is where secrets go —
+# the Keychain, never a file, never returned to the browser.
 ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY"}
+            "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN"}
+PROVIDERS = ("anthropic", "openai", "gemini")
 
 
 @dataclass(frozen=True)

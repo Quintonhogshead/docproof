@@ -39,7 +39,7 @@ from .prompts import (PromptError, assembled_passes, clear_override,
 from .report import build_report
 from .settings import (Paths, Settings, default_root, delete_api_key,
                        get_api_key, key_status, resource_root, set_api_key)
-from .version import build_info, check_for_update
+from .version import build_info, check_for_update, download_release
 
 log = logging.getLogger("docproof.app")
 
@@ -107,6 +107,8 @@ class SettingsUpdate(BaseModel):
     anthropic_key: str | None = None
     openai_key: str | None = None
     gemini_key: str | None = None
+    # Not an AI key: a read-only token for checking published releases.
+    github_token: str | None = None
 
 
 def create_app(root: Path | None = None, *, start_runner: bool = True,
@@ -364,10 +366,25 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/api/version/check")
     def version_check() -> dict:
-        """Whether the source this build came from has moved on. Only ever
-        called because somebody pressed the button: nothing here runs on its
-        own, and it reads a local checkout rather than the network."""
+        """Whether a newer DocProof exists — the local checkout on the machine
+        this was built on, the published releases anywhere else. Only ever
+        called because somebody pressed the button; nothing here runs on its
+        own."""
         return check_for_update()
+
+    @app.post("/api/version/download")
+    def version_download() -> dict:
+        """Fetch the newest release's disk image into ~/Downloads and show it.
+
+        It is not installed. DocProof is unsigned, and an app that replaced
+        itself with code pulled off the network would be asking to be trusted
+        with exactly what macOS is right to refuse."""
+        result = download_release()
+        if not result["ok"]:
+            raise HTTPException(400, result["message"])
+        if sys.platform == "darwin":
+            _open_path(Path(result["path"]), reveal=True)
+        return result
 
     @app.get("/api/formats")
     def formats() -> dict:
@@ -737,7 +754,8 @@ def _register(app: FastAPI) -> None:
                 setattr(s, field_name, value)
         for provider, value in (("anthropic", update.anthropic_key),
                                 ("openai", update.openai_key),
-                                ("gemini", update.gemini_key)):
+                                ("gemini", update.gemini_key),
+                                ("github", update.github_token)):
             if value is None:
                 continue
             if value.strip():

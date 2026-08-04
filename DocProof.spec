@@ -39,6 +39,17 @@ def _git(*args: str) -> str:
         return ""                        # a source tarball is not a checkout
 
 
+def _repo_slug(url: str) -> str:
+    """"owner/name" from a git remote URL. Kept in step with the same helper in
+    app/version.py, which the running app uses when there is no stamp."""
+    url = url.strip().removesuffix(".git")
+    for prefix in ("git@github.com:", "ssh://git@github.com/",
+                   "https://github.com/", "http://github.com/"):
+        if url.startswith(prefix):
+            return url[len(prefix):]
+    return ""
+
+
 VERSION = _version()
 
 # Stamped into the bundle so the running app can say exactly what it is and,
@@ -54,6 +65,9 @@ BUILD_INFO.write_text(json.dumps({
     # Absolute, so a bundle dragged to /Applications can still find the repo
     # it came from when asked whether there is anything newer.
     "source": str(Path.cwd()),
+    # Where releases are published. A build sent to somebody else has no
+    # checkout to compare against, so this is the only thing it can ask.
+    "repo": _repo_slug(_git("remote", "get-url", "origin")),
 }, indent=2), encoding="utf-8")
 
 # The Dock, the Finder and ⌘-Tab all read this. It is checked in rather than

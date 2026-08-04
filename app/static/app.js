@@ -1118,13 +1118,16 @@ $('save-settings').addEventListener('click', async () => {
    ['gemini', 'key-gemini']].forEach(([provider, field]) => {
     if ($(field).value) payload[`${provider}_key`] = $(field).value;
   });
+  // Not an AI key and not billed for, but it is still a secret, so it goes the
+  // same way: to the Keychain, and never back to this page.
+  if ($('key-github').value) payload.github_token = $('key-github').value;
 
   await api('/api/settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  ['key-anthropic', 'key-openai', 'key-gemini'].forEach((f) => {
+  ['key-anthropic', 'key-openai', 'key-gemini', 'key-github'].forEach((f) => {
     $(f).value = '';
   });
   $('settings-saved').hidden = false;
@@ -1167,23 +1170,55 @@ async function loadVersion() {
   if (v.commit) bits.push(`commit ${v.commit}`);
   if (v.branch && v.branch !== 'main') bits.push(`on ${v.branch}`);
   $('version-summary').textContent = `${bits.join(' · ')}.`;
+  // The token is only ever used to read published releases, which is only how
+  // a build somebody was *sent* can check. Run from the source there is a
+  // checkout to ask instead, and the field would be a puzzle.
+  $('version-token-field').hidden = !v.frozen;
+}
+
+function versionNote(message, kind) {
+  const note = $('version-status');
+  note.className = `action-note ${kind}`;
+  note.textContent = message;
+  note.hidden = false;
 }
 
 $('version-check').addEventListener('click', async () => {
   const button = $('version-check');
-  const note = $('version-status');
+  const download = $('version-download');
   button.disabled = true;
-  note.className = 'action-note muted';
-  note.textContent = 'Looking…';
-  note.hidden = false;
+  download.hidden = true;
+  versionNote('Looking…', 'muted');
   try {
     const r = await api('/api/version/check');
-    note.className = `action-note ${r.ok && r.current ? 'ok'
-                                  : r.ok ? '' : 'error'}`;
-    note.textContent = r.message;
+    versionNote(r.message, r.ok && r.current ? 'ok' : r.ok ? '' : 'error');
+    // Only offered when there is actually a disk image to fetch — a release
+    // published without one, or a build sitting behind its own checkout, has
+    // nothing for this button to do.
+    if (r.ok && !r.current && r.asset) {
+      const mb = r.asset.size ? ` (${Math.round(r.asset.size / 1e6)} MB)` : '';
+      download.textContent = `Download ${r.release_name || r.tag}${mb}`;
+      download.hidden = false;
+    }
+    if (r.needs_token) $('key-github').focus();
   } catch (err) {
-    note.className = 'action-note error';
-    note.textContent = err.message;
+    versionNote(err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('version-download').addEventListener('click', async () => {
+  const button = $('version-download');
+  button.disabled = true;
+  versionNote('Downloading — this is a large file, so give it a moment.',
+              'muted');
+  try {
+    const r = await api('/api/version/download', { method: 'POST' });
+    versionNote(r.message, 'ok');
+    button.hidden = true;
+  } catch (err) {
+    versionNote(err.message, 'error');
   } finally {
     button.disabled = false;
   }

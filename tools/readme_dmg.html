@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DocProof — read me first</title>
+<style>
+  :root {
+    --ink: #1c1a17; --muted: #6b655d; --line: #e2ddd4; --bg: #fbf9f6;
+    --panel: #fff; --accent: #8a5a2b; --accent-soft: #f5ece1; --warn: #9a3412;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #ece7e0; --muted: #a49c92; --line: #3a352f; --bg: #17151300;
+      --bg: #171513; --panel: #201d1a; --accent: #d9a066;
+      --accent-soft: #2b2520; --warn: #f0a882;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2.5rem 1.25rem 4rem;
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    color: var(--ink); background: var(--bg);
+  }
+  main { max-width: 42rem; margin: 0 auto; }
+  h1 { font-size: 1.9rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1.15rem; margin: 2.2rem 0 .6rem; }
+  .lede { color: var(--muted); margin: 0 0 2rem; }
+  ol, ul { padding-left: 1.3rem; }
+  li { margin: .4rem 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 1rem 1.2rem; margin: 1.2rem 0;
+  }
+  .card.flag { background: var(--accent-soft); border-color: var(--accent); }
+  .card h2 { margin-top: 0; }
+  code {
+    background: var(--accent-soft); padding: .1rem .35rem;
+    border-radius: 5px; font-size: .9em;
+  }
+  .step { font-weight: 600; }
+  .muted { color: var(--muted); }
+  footer {
+    margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
+    color: var(--muted); font-size: .88rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<h1>DocProof</h1>
+<p class="lede">Version @VERSION@ · built @BUILT@</p>
+
+<p>DocProof reads a manuscript and marks up grammar and typing mistakes as
+tracked changes you accept or reject in Word — or in InDesign, if you work in
+layouts. It also prepares a manuscript for layout, tagging every paragraph with
+the house style names so it drops into your InDesign template.</p>
+
+<div class="card">
+  <h2>What you need</h2>
+  <ul>
+    <li>A Mac from <strong>2021 or later</strong> (Apple Silicon — M1, M2, M3,
+      M4). This build will not run on an older Intel Mac.</li>
+    <li>macOS 11 Big Sur or newer.</li>
+    <li>An API key from Anthropic, OpenAI or Google — see below.</li>
+  </ul>
+</div>
+
+<h2>1. Install it</h2>
+<p>Drag <strong>DocProof</strong> onto the <strong>Applications</strong>
+shortcut in this window. If you are replacing an older DocProof, say yes to
+replacing it.</p>
+
+<div class="card flag">
+  <h2>2. The first time you open it</h2>
+  <p>DocProof is not signed with Apple, so macOS stops it once. This is
+  expected and it only happens the first time.</p>
+  <ol>
+    <li><span class="step">Double-click DocProof</span> in Applications. macOS
+      will refuse to open it. Click <strong>Done</strong> — do not move it to
+      the Trash.</li>
+    <li>Open <span class="step">System Settings → Privacy &amp; Security</span>
+      and scroll down. There will be a line saying DocProof was blocked, with
+      an <strong>Open Anyway</strong> button. Click it.</li>
+    <li>Confirm with your password or Touch ID. DocProof opens, and every time
+      after this it opens normally.</li>
+  </ol>
+  <p class="muted">On older versions of macOS there is no Privacy &amp;
+  Security prompt — instead, right-click DocProof in Applications, choose
+  <strong>Open</strong>, and click <strong>Open</strong> in the dialog.</p>
+</div>
+
+<h2>3. Add your AI key</h2>
+<p>Go to <strong>Settings</strong> in DocProof and paste a key from
+<a href="https://console.anthropic.com">Anthropic</a>, OpenAI or Google. The
+<strong>Test</strong> button next to it makes one cheap call so a wrong key
+fails there rather than in the middle of a job.</p>
+<p>DocProof sends your documents to whichever of those services the key belongs
+to, and <strong>they bill the owner of that key directly</strong>. Nothing goes
+to us. Keys are stored in your Mac's Keychain — never in a file, never shown
+back to the screen.</p>
+
+<h2>4. Checking for new versions</h2>
+<p>Settings → <strong>This version</strong> shows exactly which build you have.
+If whoever sent you DocProof also gave you a <strong>GitHub token</strong>,
+paste it there and <strong>Check for a newer version</strong> will tell you when
+a new one is out and offer to download it.</p>
+<p>DocProof never updates itself. It downloads the new disk image to your
+Downloads folder and shows it to you; you install it the same way you did the
+first time. (Because it is unsigned, the <strong>Open Anyway</strong> step above
+happens again for each new version.)</p>
+<p class="muted">No token? Nothing breaks — just ask whoever sent you DocProof
+when there is a newer build.</p>
+
+<h2>Optional extras</h2>
+<ul>
+  <li><strong>LibreOffice</strong> — only if you want to drop <code>.doc</code>,
+    <code>.rtf</code>, <code>.odt</code> or <code>.txt</code> manuscripts in.
+    DocProof converts them at drop time. <code>.docx</code> and
+    <code>.idml</code> need nothing.</li>
+  <li><strong>Adobe InDesign</strong> — only for the <em>Place into the
+    InDesign template</em> button. Point Settings at your template first. macOS
+    will ask once for permission to let DocProof control InDesign.</li>
+</ul>
+
+<h2>Where things end up</h2>
+<p>Finished documents go to <code>~/Documents/DocProof/</code>, in a folder
+named after each document. DocProof runs entirely on your Mac — the only thing
+that leaves it is the text of the documents you ask it to review, which goes to
+the AI service whose key you set up.</p>
+
+<footer>
+  DocProof @VERSION@ (@COMMIT@), built @BUILT@.<br>
+  Something wrong? Send whoever gave you this the version line above — it says
+  exactly which build you are running.
+</footer>
+
+</main>
+</body>
+</html>

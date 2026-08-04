@@ -130,6 +130,48 @@ def test_checking_for_a_newer_build_answers_in_a_sentence(client, monkeypatch):
     assert body["current"] is False and body["message"].startswith("There are")
 
 
+def test_a_new_version_is_downloaded_and_shown_never_installed(client,
+                                                               monkeypatch,
+                                                               tmp_path):
+    """DocProof is unsigned. Replacing itself with code pulled off the network
+    is the exact thing macOS is right to refuse, so the disk image lands in
+    Downloads and the person installs it."""
+    dmg = tmp_path / "DocProof-0.2.0.dmg"
+    dmg.write_bytes(b"disk image")
+    revealed = []
+    monkeypatch.setattr("app.main.download_release", lambda: {
+        "ok": True, "path": str(dmg), "filename": dmg.name,
+        "message": f"{dmg.name} is in your Downloads folder."})
+    monkeypatch.setattr("app.main._open_path",
+                        lambda path, *, reveal=False: revealed.append((path, reveal)))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    body = client.post("/api/version/download").json()
+    assert body["ok"] and body["filename"] == dmg.name
+    assert revealed == [(dmg, True)]        # shown in the Finder, not opened
+
+
+def test_a_download_that_could_not_happen_says_why(client, monkeypatch):
+    monkeypatch.setattr("app.main.download_release", lambda: {
+        "ok": False, "message": "GitHub would not accept that token."})
+    resp = client.post("/api/version/download")
+    assert resp.status_code == 400
+    assert "would not accept that token" in resp.json()["detail"]
+
+
+def test_the_github_token_is_stored_like_every_other_secret(client,
+                                                            monkeypatch):
+    """Not an AI key and nothing bills for it, but it is still a secret: the
+    Keychain, never a file, never returned to the page."""
+    saved = {}
+    monkeypatch.setattr("app.main.set_api_key",
+                        lambda provider, key: saved.update({provider: key}))
+    body = client.put("/api/settings",
+                      json={"github_token": "github_pat_abc"}).json()
+    assert saved == {"github": "github_pat_abc"}
+    assert "github_pat_abc" not in json.dumps(body)
+
+
 def test_formats_endpoint_lists_what_can_be_read(client):
     body = client.get("/api/formats").json()
     assert body["suffixes"] == [".docx", ".idml"]

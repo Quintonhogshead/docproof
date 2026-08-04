@@ -76,30 +76,105 @@ identical. So the spec also stamps the commit, the branch, the build time and
 the path of the source folder it was built from, into `build_info.json` inside
 the bundle.
 
-**Check for a newer build** uses that last field. There is no update server to
-ask — this app is built on the machine it runs on — so the question is put to
-the local checkout instead: has `HEAD` moved since the commit this build was
-made from, and by how much. It answers in a sentence, and only ever runs
-because you pressed it. Nothing is downloaded and nothing checks on its own,
-which is deliberate: the bundle is unsigned, and an app that fetched and ran
-new code on your behalf would be a worse idea than a script you can read.
+**Check for a newer version** asks whichever source of truth the machine
+actually has, in this order:
 
-Updating is that script:
+1. **Running from a checkout** — the source *is* what is running, so it is
+   current by definition. It mentions uncommitted changes.
+2. **A build on the Mac that built it** (the stamped source folder is still a
+   git checkout) — has `HEAD` moved since the commit this build was made from,
+   and by how many changes. Updating is `tools/update.sh --install`, below.
+3. **A build somebody was sent** — no checkout to ask, so it asks the
+   [published releases](#sending-docproof-to-someone) instead.
+
+It only ever runs because you pressed it. Nothing checks on its own.
+
+### Updating on the machine that builds it
 
 ```bash
 tools/update.sh --install
 ```
 
-It prints where you are, pulls if there is a remote to pull from, runs the
-tests, rebuilds, and replaces `/Applications/DocProof.app`. Without
-`--install` it stops at `dist/` so you can look first; `--skip-tests` skips the
-suite. It refuses to install while DocProof is running — macOS will let you
-swap a bundle out from under an open app, and it misbehaves later rather than
-immediately, which is the worst time to find out.
+Prints where you are, pulls if there is a remote to pull from, runs the tests,
+rebuilds, and replaces `/Applications/DocProof.app`. Without `--install` it
+stops at `dist/` so you can look first; `--skip-tests` skips the suite. It
+refuses to install while DocProof is running — macOS will let you swap a bundle
+out from under an open app, and it misbehaves later rather than immediately,
+which is the worst time to find out.
 
-Running from a checkout (`.venv/bin/docproof-app`) there is nothing to update:
-the source *is* what is running, and the check says so — mentioning
-uncommitted changes if there are any.
+## Sending DocProof to someone
+
+```bash
+tools/package.sh
+```
+
+Builds `dist/DocProof-<version>-<commit>.dmg` (~38 MB): the app, a shortcut to
+`/Applications` to drag it onto, and a **Read me first** page generated from
+[`tools/readme_dmg.html`](../tools/readme_dmg.html) with this build's version,
+date and commit substituted in — a stale read me is worse than none. Send that
+one file.
+
+### The unsigned-app problem
+
+DocProof is **not signed with an Apple Developer ID**, so a copy that arrives
+over email or Drive is quarantined. The recipient double-clicks, macOS refuses,
+and they have to go to **System Settings → Privacy & Security** and press
+**Open Anyway** — once per Mac, and again for each new version. The read me
+walks them through it with the exact wording of the buttons, because the
+alternative is that it reads like malware and they bin it.
+
+The fix, when it's worth $99/yr: an Apple Developer ID, `codesign --deep
+--options runtime`, then `xcrun notarytool submit --wait` and `xcrun stapler
+staple`. That slots into `package.sh` between the PyInstaller step and
+`hdiutil`, and the Open Anyway paragraph comes out of the read me.
+
+### Publishing a release
+
+```bash
+# 1. bump __version__ in docproof/__init__.py, commit
+# 2.
+tools/release.sh
+```
+
+Refuses to run on a dirty tree or over an existing tag, builds the image, tags
+`v<version>`, pushes, and creates the GitHub release with the image attached
+and the commit subjects since the last tag as notes. `--draft` to look before
+it is public.
+
+That release is what a sent copy checks against.
+
+### How a sent copy checks
+
+The repo is private, so the GitHub API needs a token. Make a **fine-grained
+personal access token** scoped to that one repository with **Contents:
+read-only**, and hand it out with the DMG — one token does for every recipient,
+and read-only on one private repo is about as small as a credential gets.
+
+They paste it into Settings → This version. It goes into the Keychain like the
+AI keys ([`app/settings.py`](../app/settings.py)), never into a file and never
+back to the page. `GITHUB_TOKEN` in the environment works too.
+
+Then **Check for a newer version** reads
+`/repos/<owner>/<repo>/releases/latest`, compares the tag against this build's
+version, and offers **Download** if there is a `.dmg` attached. Which repo to
+ask is stamped into the build at packaging time from `git remote get-url
+origin`, not hardcoded.
+
+**It downloads; it does not install.** The disk image lands in `~/Downloads` and
+is revealed in the Finder. An unsigned app that replaced itself with code
+fetched over the network would be asking to be trusted with exactly what macOS
+is right to refuse — and one drag is not much to ask.
+
+Without a token nothing breaks: the check says to ask whoever sent it. Every
+other way it can fail — expired token, repo not visible, no release yet, no
+internet — gets its own sentence.
+
+### Who can run it
+
+Apple Silicon only (M1 or later, 2021+), macOS 11+. PyInstaller builds for the
+architecture it runs on; an Intel-compatible build needs a `universal2` Python
+and a rebuilt virtualenv. Windows is a separate project — see
+[windows.md](windows.md).
 
 ## What are you starting with?
 
@@ -289,8 +364,10 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-239 tests, none of which touch a network, and none of which start InDesign or
-run git against the real checkout. Every vendor call goes through the
+263 tests, none of which touch a network — GitHub included, whose releases API
+is driven through an injected opener the same way vendors go through a fake
+provider — and none of which start InDesign or run git against the real
+checkout. Every vendor call goes through the
 `Provider` protocol, so `tests/fakes.py` covers both the synchronous and batch
 paths — including a scripted batch provider that reports in-progress polls so
 restart and resume behaviour is exercised without sleeping. Response parsing
