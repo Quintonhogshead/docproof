@@ -75,25 +75,38 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              f"type(s) in {len(passes)} pass(es) · gate: {cfg.min_confidence}*\n")
     L.append("Passes: " + "; ".join(" + ".join(g) for g in passes) + "\n")
 
+    # Lead with the sentence a writer actually wants: how much changed, and
+    # what kind of mistake it mostly was.
+    by_type = _tally_types(applied)
+    headline = (f"**{len(applied)} change(s) applied** as tracked revisions "
+                f"across {len({f.para_id for f in applied})} paragraph(s)")
+    if by_type:
+        top, count = max(by_type.items(), key=lambda kv: kv[1])
+        headline += f", most often {top} ({count})"
+    L.append(headline + f". Author of the revisions: *{cfg.revision_author}*.\n")
+
     stats = _tally(findings)
-    L.append(f"**{len(applied)} change(s) applied** as tracked revisions "
-             f"(author *{cfg.revision_author}*). Findings by status: " +
+    L.append(f"Findings by status: " +
              ", ".join(f"{k} {v}" for k, v in stats.items()) +
              f". Paragraphs reviewed: {len(doc.paragraphs)}; "
              f"skipped: {len(doc.skipped)}.\n")
 
-    by_type = _tally_types(findings)
     if by_type:
-        L.append("Findings by error type: " +
+        L.append("Applied changes by error type: " +
                  ", ".join(f"{k} {v}" for k, v in by_type.items()) + "\n")
 
     if applied:
+        # Grouped by kind rather than by document order: reading twenty
+        # comma splices together is how you notice a habit.
         L.append("## Applied changes\n")
-        for f in applied:
-            loc = paras[f.para_id].location
-            L.append(f"**{f.para_id}** ({loc}, {f.error_type}, "
-                     f"{f.confidence} confidence) — {f.explanation}\n")
-            L.append(f"> {f.original_text}\n>\n> → {f.corrected_text}\n")
+        for error_type in sorted(by_type, key=lambda k: (-by_type[k], k)):
+            L.append(f"### {error_type} — {by_type[error_type]}\n")
+            for f in (x for x in applied if x.error_type == error_type):
+                loc = paras[f.para_id].location
+                detail = f" — {f.explanation}" if f.explanation else ""
+                L.append(f"**{f.para_id}** ({loc}, "
+                         f"{f.confidence} confidence){detail}\n")
+                L.append(f"> {f.original_text}\n>\n> → {f.corrected_text}\n")
 
     if low:
         L.append("## Possibly intentional — for your judgment\n")
