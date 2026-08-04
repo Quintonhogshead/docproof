@@ -240,9 +240,25 @@ jobs and the server pins them to "right now" regardless of what was asked for.
 
 A batch review survives quitting the app. Everything needed to finish sits in
 `~/Library/Application Support/DocProof/jobs/<id>/`, so reopening DocProof picks
-up where it left off. A sync ("right now") review interrupted mid-flight is
-re-queued from the start instead, because there's no vendor-side state to
-reconnect to.
+up where it left off.
+
+A "right now" review — and a prep run — survives quitting too, a different way.
+There's no vendor-side state to reconnect to, so each completed call's results
+are checkpointed into the job folder as they land
+([`docproof/checkpoint.py`](../docproof/checkpoint.py)). Reopening DocProof
+re-queues the job, replays the checkpoint, and pays only for the calls that
+never happened; a run that failed and is retried resumes the same way. It used
+to start over from call one — the afternoon a 192-section review was
+interrupted four times and billed four times is why this exists.
+
+The checkpoint is only trusted while its world is unchanged: edit the
+manuscript, switch the model, change a prompt or the section selection, and
+every cached answer is stale — the file wipes itself and the run starts clean.
+A call that *failed* (a refusal, a truncation, a 5xx) is recorded but never
+replayed; the resume asks again. Prep keeps its end-of-run word-for-word
+verification either way, and a prep run that fails *that* check discards its
+checkpoint on purpose — replaying the same tags would fail the same way. The
+file is deleted the moment a job finishes.
 
 ## Choosing a reviewer
 
@@ -387,7 +403,7 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-276 tests, none of which touch a network — GitHub included, whose releases API
+292 tests, none of which touch a network — GitHub included, whose releases API
 is driven through an injected opener the same way vendors go through a fake
 provider — and none of which start InDesign or run git against the real
 checkout. Every vendor call goes through the

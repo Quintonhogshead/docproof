@@ -64,6 +64,22 @@ class ScriptedBatchProvider(FakeProvider):
         return BatchStatus(state="completed", total=n, succeeded=n)
 
 
+class DyingProvider(FakeProvider):
+    """Answers `survive` calls, then raises — the app quitting, the network
+    vanishing, the SDK throwing something unhandled. Nothing in the real
+    provider stack raises mid-run in an orderly way, which is exactly why the
+    resumable-progress path needs a fake that does."""
+
+    def __init__(self, results=None, *, survive: int):
+        super().__init__(results)
+        self.survive = survive
+
+    def complete_structured(self, **kwargs) -> ProviderResult:
+        if len(self.calls) >= self.survive:
+            raise RuntimeError("the process died here")
+        return super().complete_structured(**kwargs)
+
+
 def finding_result(*, para_id: str, error_type: str, original: str,
                    corrected: str, confidence: str = "high") -> ProviderResult:
     return ProviderResult(parsed={"findings": [{

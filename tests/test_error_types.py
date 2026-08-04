@@ -108,7 +108,7 @@ def test_mock_analyzer_labels_and_filters_by_pass():
         {"para_id": "body-0000", "error_type": "comma_splice",
          "original_text": "e", "corrected_text": "f"},
     ]
-    out = MockAnalyzer(group, canned, itertools.count(1)).analyze_chunk(
+    out, _ = MockAnalyzer(group, canned, itertools.count(1)).analyze_chunk(
         _chunk(), Usage())
     assert [f.error_type for f in out] == ["spelling", "repeated_word"]
 
