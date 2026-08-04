@@ -18,11 +18,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from docproof import batch as batchlib
+from docproof import prep as preplib
 from docproof.config import Config, load_config
 from docproof.formats import get_format
 from docproof.ingest import IngestError
 from docproof.pipeline import finish, prepare, run_sync
-from docproof.providers import ProviderError, build_provider, provider_for
+from docproof.prep.convert import ConversionError
+from docproof.prep.styles import StyleSheetError
+from docproof.prep.verify import VerificationFailed
+from docproof.providers import ProviderError, build_provider, estimate_cost, \
+    provider_for
 
 from .settings import Paths, Settings, get_api_key
 
@@ -42,6 +47,15 @@ PLAIN_STATE = {
     "done": "Ready",
     "failed": "Needs attention",
 }
+
+# Prep does a different job, so it says so. Only the states that differ.
+PREP_STATE = {
+    "running": "Reading your manuscript ({done} of {total})",
+    "collecting": "Almost done — writing your files",
+}
+
+PREP_OUTPUTS = {"indesign": ["indesign"], "tracked": ["tracked"],
+                "both": ["indesign", "tracked"]}
 
 
 @dataclass
@@ -64,9 +78,30 @@ class Job:
     selection: list[str] | None = None
     created_at: str = ""
     updated_at: str = ""
+    # What this job is: a grammar review, or manuscript prep for the house
+    # InDesign template. Older records have no `kind` and are reviews.
+    kind: str = "review"
+    prep_output: str = "indesign"      # indesign | tracked | both
+    tagged: int | None = None          # paragraphs given a style
+    flags: int | None = None           # things prep wants a human to decide
+    verified: bool | None = None       # the author's words came through intact
+    words: int | None = None
+    # What this job actually cost, recorded when it finishes so the dashboard
+    # doesn't have to re-read every results folder to add it up.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    api_calls: int = 0
+    cost: float | None = None
+
+    @property
+    def is_prep(self) -> bool:
+        return self.kind == "prep"
 
     def plain_state(self) -> str:
-        template = PLAIN_STATE.get(self.state, self.state)
+        states = {**PLAIN_STATE, **(PREP_STATE if self.is_prep else {})}
+        template = states.get(self.state, self.state)
         return template.format(done=self.done, total=self.total,
                                when=self.schedule_at or "later")
 
@@ -74,6 +109,7 @@ class Job:
         d = asdict(self)
         d["plain_state"] = self.plain_state()
         d["ready"] = self.state == "done"
+        d["is_prep"] = self.is_prep
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -89,6 +125,24 @@ class Job:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def read_usage(results_dir: Path | str) -> tuple[dict, float | None] | None:
+    """The token counts a finished job left behind, whichever pipeline wrote
+    them. Shared with the dashboard, which uses it to fill in jobs that
+    finished before job records carried their own usage."""
+    folder = Path(results_dir)
+    for name in ("findings.json", "prep.json"):
+        path = folder / name
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("Unreadable usage in %s: %s", path, e)
+            return None
+        return (data.get("usage") or {}), data.get("cost")
+    return None
 
 
 class JobStore:
@@ -175,7 +229,12 @@ class JobRunner:
         resumed — it has no vendor-side state to reconnect to. Re-queue it.
         Batch jobs need nothing: the ticker finds them by their manifest."""
         for job in self.store.all():
-            if job.state == "running" and job.mode == "now":
+            # Prep is included at "collecting" too: it has no vendor-side state
+            # either way, and it claimed its results folder before writing, so
+            # starting again lands in the same place rather than orphaning it.
+            interrupted = (job.state == "running" and job.mode == "now") or (
+                job.is_prep and job.state == "collecting")
+            if interrupted:
                 log.info("Re-queueing %s, interrupted by a restart", job.id)
                 self.store.update(job.id, state="queued", done=0)
                 self.queue.put(job.id)
@@ -213,6 +272,8 @@ class JobRunner:
         cfg.report_explanations = self.settings.explanations
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
+        if job.is_prep:
+            cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["indesign"])
         return cfg
 
     def _provider(self, cfg: Config):
@@ -284,12 +345,14 @@ class JobRunner:
                 self.queue.task_done()
 
     def run_one(self, job_id: str) -> None:
-        """Dispatch by mode. Public so a test can drive the worker's body
-        without a thread."""
+        """Dispatch by what the job is, then by when. Public so a test can
+        drive the worker's body without a thread."""
         job = self.store.get(job_id)
         if job is None:
             return
-        if job.mode == "batch":
+        if job.is_prep:
+            self._run_prep(job_id)
+        elif job.mode == "batch":
             self._submit_batch(job_id)
         else:
             self._run_now(job_id)
@@ -323,6 +386,90 @@ class JobRunner:
             raise
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
+        self._record_usage(job_id, out, cfg.api.model, batch=False)
+
+    # -- prep -----------------------------------------------------------------
+
+    def _run_prep(self, job_id: str) -> None:
+        """Tag a manuscript into the house style set.
+
+        Always synchronous: the windows have to be read in order, since what a
+        paragraph is depends on what came before it, and a batch API answers
+        out of order by design."""
+        job = self.store.get(job_id)
+        if job is None or job.state not in ("queued", "running"):
+            return
+        cfg = self.config_for(job)
+        try:
+            provider = self._provider(cfg)
+            prepared = preplib.prepare(
+                cfg, job.source_path, config_dir=self.config_path.parent,
+                override_dir=self.store.paths.prep)
+        except (ProviderError, IngestError, StyleSheetError, ConversionError,
+                FileNotFoundError, ValueError) as e:
+            self.store.update(job_id, state="failed", error=str(e))
+            return
+
+        self.store.update(job_id, state="running", done=0,
+                          total=prepared.request_count,
+                          words=prepared.structure.word_count)
+
+        tags, usage = preplib.run(
+            cfg, prepared, provider,
+            progress=lambda done, total: self.store.update(job_id, done=done,
+                                                           total=total))
+        self.store.update(job_id, state="collecting")
+        out = self._claim_results_dir(job)
+        try:
+            outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=out,
+                                     source_path=job.source_path,
+                                     outputs=cfg.prep.outputs)
+        except VerificationFailed as e:
+            # The notes were still written, and they are the most useful thing
+            # here: they say what prep intended and where the text diverged. So
+            # the folder stays and the job points at it.
+            log.error("Prep for %s failed verification: %s", job.id, e)
+            self.store.update(job_id, state="failed", error=str(e),
+                              results_dir=str(out), verified=False)
+            self._record_usage(job_id, out, cfg.api.model, batch=False)
+            return
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+
+        self.store.update(job_id, state="done", results_dir=str(out),
+                          error=None, tagged=outputs.tagged,
+                          applied=outputs.tagged, flags=outputs.flags,
+                          verified=all(c.ok for c in outputs.verifications),
+                          words=outputs.words)
+        self._record_usage(job_id, out, cfg.api.model, batch=False)
+
+    # -- what it cost ---------------------------------------------------------
+
+    def _record_usage(self, job_id: str, out: Path, model: str, *,
+                      batch: bool) -> None:
+        """Copy the token counts onto the job record.
+
+        They are already in findings.json / prep.json, but the dashboard adds
+        up every job the user has ever run, and re-reading a folder per job to
+        do that gets slower every week."""
+        totals = read_usage(out)
+        if totals is None:
+            return
+        usage, cost = totals
+        if cost is None:
+            cost = estimate_cost(
+                model,
+                input_tokens=usage.get("input_tokens", 0)
+                + usage.get("cache_creation_input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0), batch=batch)
+        self.store.update(
+            job_id,
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
+            api_calls=usage.get("api_calls", 0), cost=cost)
 
     # -- batch ----------------------------------------------------------------
 
@@ -366,8 +513,10 @@ class JobRunner:
                 self.queue.put(job.id)
             # `collecting` is included so a job interrupted partway through
             # collection is picked up again: the results are still at the
-            # vendor, and both poll and collect can be re-run.
-            elif job.state in ("waiting", "collecting"):
+            # vendor, and both poll and collect can be re-run. Prep is never
+            # at a vendor — the worker owns it start to finish — so the ticker
+            # leaves it alone rather than looking for a batch that isn't there.
+            elif job.state in ("waiting", "collecting") and not job.is_prep:
                 self._advance_batch(job)
 
     def _due(self, job: Job) -> bool:
@@ -429,3 +578,4 @@ class JobRunner:
             return
         self.store.update(job.id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
+        self._record_usage(job.id, out, cfg.api.model, batch=True)

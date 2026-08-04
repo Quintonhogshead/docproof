@@ -83,11 +83,22 @@ def test_upload_preflights_at_drop_time(client):
 
 def test_upload_rejects_an_unreadable_kind_of_file(client):
     resp = client.post("/api/files",
-                       files={"files": ("notes.txt", b"hello")})
+                       files={"files": ("notes.pdf", b"hello")})
     entry = resp.json()["files"][0]
     assert entry["ok"] is False
     # The error names every format docproof reads, not just the first one.
     assert ".docx" in entry["error"] and ".idml" in entry["error"]
+
+
+def test_upload_of_a_manuscript_format_asks_for_the_converter(client):
+    """.txt, .doc, .rtf and .odt are prep inputs rather than DocProof formats:
+    they are converted at drop time, so the failure to name is the missing
+    converter, not the file."""
+    resp = client.post("/api/files",
+                       files={"files": ("notes.txt", b"hello")})
+    entry = resp.json()["files"][0]
+    assert entry["ok"] is False
+    assert "LibreOffice" in entry["error"]
 
 
 def test_upload_accepts_an_indesign_layout(client):

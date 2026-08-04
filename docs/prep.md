@@ -1,0 +1,186 @@
+# Manuscript prep — Word in, InDesign-ready out
+
+DocProof does two jobs. **Review** finds errors and writes tracked changes.
+**Prep** answers a different question — what *is* each paragraph — and tags a
+manuscript into a house InDesign style set, so it loads cleanly into the
+template on Place.
+
+A prep run hands back either or both of:
+
+- **`tagged_<name>.docx`** — one clean style sheet whose paragraph style *names*
+  are the template's own, blank lines resolved, export artifacts gone. This is
+  the file a designer places.
+- **`tracked_<name>.docx`** — the same decisions as Word revisions. Accept them
+  all and you have the clean file; reject them all and you have the manuscript
+  exactly as it arrived.
+
+…plus `prep_notes.md` and `prep.json`: the mapping with counts, how scene breaks
+were handled, what was cleaned up, the word-for-word result, and the flags for
+the designer.
+
+Asking for both files costs nothing extra. The cost of a run is reading the
+manuscript; writing the second file is free.
+
+## The one rule
+
+**Prep does not change the author's words.** Not as an instruction to the model
+— as a check on the finished file:
+
+- The author's word stream is extracted from the manuscript and from the file
+  that was actually written, and compared token for token.
+- The tracked file is checked twice: accepting every change must give the clean
+  text, and rejecting every change must give the manuscript back.
+- The only permitted difference is a scene-break glyph prep inserted.
+- **A file that fails is deleted, not shipped.** The job fails, and the notes
+  still get written so you can see where it diverged.
+
+This is what makes the rest safe. The model classifies; every mutation is
+deterministic Python.
+
+## What the model decides, and what it doesn't
+
+The model reads paragraphs in order and answers with one label each, from an
+enum built out of the style sheet — an off-template style name is impossible on
+the wire, not something a validator catches afterwards. It never returns text.
+
+Everything mechanical is [rules.py](../docproof/prep/rules.py):
+
+- **body first vs body para.** The first body paragraph after any heading, part
+  title, chapter subtitle, subhead or scene break takes the no-indent style.
+- **Scene breaks.** A blank line the model read as a genuine scene shift becomes
+  a paragraph containing the house glyph; the paragraph after it opens a block.
+  A break glyph the author typed themselves is kept exactly as they typed it.
+- **Blank lines.** Everything else blank is removed — InDesign takes vertical
+  spacing from the styles.
+- **Sanity.** A page of prose labelled "scene break", a blank line labelled
+  "chapter", a blank under a heading: each is corrected in the safe direction
+  and flagged. Nothing is corrected quietly.
+
+Flags are raised, never fixed: bylines, front matter in an unusual place, a
+centered "The end" with no home style, lists (the style set has none), and
+anything the model itself was unsure about.
+
+## Swapping in your own style guide
+
+**Nothing about Atmosphere Press is in the code.** The style set is
+[config/prep/house_styles.yaml](../config/prep/house_styles.yaml) and it drives
+the tagger's allowed answers, the Word style sheet, and the notes. To prep for a
+different template, replace that file. Three ways, in order of convenience:
+
+1. **In the app** — drop a `house_styles.yaml` into
+   `~/Library/Application Support/DocProof/prep/`. It replaces the shipped one
+   from the next document onwards. Settings → *The house style guide* shows
+   which file is in force and lists every style in it.
+2. **From the terminal** — `docproof prep book.docx --style-sheet mine.yaml`.
+3. **For good** — point `prep.style_sheet` in `config/default.yaml` somewhere else.
+
+Each style needs:
+
+```yaml
+- name: "chapter # / title"     # EXACTLY as the InDesign template spells it —
+                                # this is what InDesign matches on Place
+  id: ChapterTitle              # the Word styleId: letters and digits only
+  describe: >-                  # goes into the prompt verbatim; this is also
+    A chapter heading …         # how you tune what gets tagged as what
+  assign: model                 # model = the model may pick it
+                                # derived = only the rules apply it
+  opens: true                   # a body paragraph after this one is "body first"
+  format: {size: 18, bold: true, align: center}   # light; InDesign overrides it
+```
+
+The `roles:` block at the bottom binds the deterministic rules to names in
+*your* sheet (`body`, `body_first`, `scene_break`, `table`), so renaming a style
+means renaming it in one more place, not editing Python. `pseudo_roles:` holds
+the two answers that are not styles — running text and a blank line.
+
+The prompt is data too:
+[config/prep/tagging.yaml](../config/prep/tagging.yaml), with `{sheet}`,
+`{trim}`, `{glyph}` and `{choices}` filled in from the sheet. A
+`tagging.yaml` in the same override folder replaces it.
+
+A malformed sheet fails loudly and specifically — a duplicate name, a styleId
+with a space in it, a role pointing at a style that isn't there.
+
+## Running it
+
+**In the app.** Drop the manuscript, choose *Prepare for layout*, pick which
+file you want back, start. Prep is always immediate: the windows have to be read
+in order, because what a paragraph is depends on what came before it, so there
+is no overnight form of it.
+
+**From the terminal:**
+
+```bash
+docproof prep book.docx --output both --out ~/Documents/DocProof/book
+```
+
+`--mock-tags` labels everything as running text and runs the whole thing — both
+writers, the verifier, the notes — with no API call, which is the cheap way to
+check a new style sheet loads and produces the document you expect.
+
+## What it costs
+
+One request per window of paragraphs (120 by default, or 6,000 tokens, whichever
+comes first). Long paragraphs are truncated to their first 400 characters before
+being sent: the model answers with ids and labels, never text, so the tail of a
+300-word paragraph would be billed for nothing. On a novel that truncation is
+most of the difference in what prep costs.
+
+The Spending tab adds up every run — tokens, requests and estimated cost, by
+model and by document.
+
+## What it doesn't do
+
+- **Headers, footers and notes are left alone.** A house template supplies its
+  own running heads. They are counted in the notes so you can see they were
+  seen.
+- **Tracked changes are refused outright.** Prep restyles every paragraph and
+  deletes blank lines; doing that around somebody's unresolved edit would bury
+  it. Accept or reject them in Word first. (Review has a policy for this; prep
+  deliberately does not.)
+- **`.doc`, `.rtf`, `.odt`, `.txt`** are converted with LibreOffice if it is
+  installed, and refused with a clear message if it isn't. A `.txt` source has
+  no italics to recover, and the notes say so.
+- **It does not write `.idml`.** The deliverable is the tagged `.docx` — that is
+  what InDesign maps on Place. Generating a native layout would need the house
+  template to inject stories into; the [IDML walker and
+  reassembler](../docproof/formats/idml/) already exist if that is ever wanted.
+- **The tracked file keeps the author's direct formatting.** Stripping a Google
+  Docs export's fonts and sizes there would be hundreds more revisions to click
+  through. The placed file is the one that gets cleaned.
+
+## The shape of it
+
+```
+docproof/prep/
+├── convert.py      .doc/.rtf/.odt/.txt → .docx, via LibreOffice
+├── ingest.py       every w:p, blanks included; refuses tracked changes
+├── chunker.py      ordered windows, with the tail of the previous one
+├── tagger.py       the one model call; enum schema from the style sheet
+├── rules.py        body first, scene breaks, sanity checks, flags
+├── styles.py       the style sheet, and the Word style sheet built from it
+├── verify.py       the word-for-word gate
+├── notes.py        prep_notes.md + prep.json
+├── pipeline.py     prepare → run → finish
+└── writers/
+    ├── clean.py    the InDesign-ready file
+    └── tracked.py  pPrChange, deleted paragraph marks, inserted runs
+```
+
+Everything below the model is shared with review: the zip package wrapper, the
+paragraph walker (so a `para_id` means the same thing in both pipelines), the
+providers, the job queue, the Keychain, the app shell.
+
+## Testing
+
+[tests/test_prep.py](../tests/test_prep.py) and
+[tests/test_prep_app.py](../tests/test_prep_app.py) run against
+`googledoc.docx` — a fixture written as raw XML because a real Google Docs
+export is styleless, full of `goog_rdk` content controls and typed whitespace,
+and python-docx would tidy all of that away.
+
+The load-bearing tests are the ones that corrupt a word on purpose and assert no
+file was written, and the pair that check the tracked file's accept and reject
+views. What they cannot cover is InDesign actually placing the result — verify
+that by hand when the emitted markup changes, the same way
+[idml-notes.md](idml-notes.md) is verified.

@@ -32,6 +32,34 @@ class SkipConfig(BaseModel):
         "Heading*", "Title", "Subtitle", "TOC*", "Caption"])
 
 
+class PrepConfig(BaseModel):
+    """Manuscript prep: tagging a Word manuscript into a house InDesign style
+    set. The style set and the prompt are both files, so a different publisher
+    is a different YAML rather than a different build."""
+    style_sheet: str = "prep/house_styles.yaml"
+    tagging_prompt: str = "prep/tagging.yaml"
+    # A window is one request. The paragraph cap is what keeps the model from
+    # skipping entries in a long list; the token budget is what keeps a window
+    # of dense prose from being far bigger than a window of dialogue.
+    max_paragraphs_per_window: int = Field(default=120, ge=1)
+    token_budget: int = Field(default=6000, ge=1)
+    context_paragraphs: int = Field(default=8, ge=0)
+    # How much of a long paragraph the model sees. It answers with ids and
+    # labels, never text, so the tail of a 300-word paragraph would be billed
+    # for nothing. 0 sends everything.
+    preview_chars: int = Field(default=400, ge=0)
+    # Which files a run writes when the caller doesn't say.
+    outputs: list[Literal["indesign", "tracked"]] = Field(
+        default_factory=lambda: ["indesign"])
+    # Clear the export's fonts, sizes and colours from the placed file. Italics
+    # and other meaningful run marks are always kept. Never applied to the
+    # tracked file, where it would be hundreds of extra revisions to click.
+    strip_direct_formatting: bool = True
+    # Compare the author's words before and after, and refuse to ship a file
+    # that fails. Turning this off is not recommended and says so in the notes.
+    verify: bool = True
+
+
 class PricingConfig(BaseModel):
     """Optional $/MTok rates for the cost estimate in summary.md.
     Leave unset to omit the estimate."""
@@ -46,6 +74,7 @@ class Config(BaseModel):
     api: APIConfig = Field(default_factory=APIConfig)
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     skip: SkipConfig = Field(default_factory=SkipConfig)
+    prep: PrepConfig = Field(default_factory=PrepConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     min_confidence: Literal["low", "medium", "high"] = "medium"
     # Each entry is one API pass over the whole document: a bare key runs alone,

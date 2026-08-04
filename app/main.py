@@ -5,6 +5,7 @@ job store, and returns JSON. The pipeline itself lives in docproof/.
 """
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from contextlib import asynccontextmanager
@@ -17,13 +18,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from docproof import batch as batchlib
+from docproof import prep as preplib
 from docproof.config import load_config
 from docproof.formats import SUFFIXES, describe, get_format
 from docproof.ingest import IngestError
 from docproof.pipeline import chunk_outline, prepare
+from docproof.prep import convert as prep_convert
+from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
 
-from .jobs import Job, JobRunner, JobStore
+from .jobs import Job, JobRunner, JobStore, read_usage
+from .usage import build_usage
 from .prompts import (PromptError, assembled_passes, clear_override,
                       list_prompts, sample_user_turn, save_override)
 from .report import build_report
@@ -48,6 +53,10 @@ class JobRequest(BaseModel):
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
+    # What to do with these documents: review them for errors, or prepare them
+    # for the house InDesign template.
+    kind: str = "review"                      # "review" | "prep"
+    prep_output: str = "indesign"             # "indesign" | "tracked" | "both"
 
 
 class PromptUpdate(BaseModel):
@@ -61,6 +70,7 @@ class SettingsUpdate(BaseModel):
     default_mode: str | None = None
     comments: bool | None = None
     explanations: bool | None = None
+    prep_output: str | None = None
     anthropic_key: str | None = None
     openai_key: str | None = None
     gemini_key: str | None = None
@@ -111,19 +121,20 @@ def _register(app: FastAPI) -> None:
     @app.post("/api/files")
     async def upload(files: list[UploadFile]) -> dict:
         """Stage documents and preflight them immediately, so a file docproof
-        refuses to touch says so at drop time rather than at 11pm."""
+        refuses to touch says so at drop time rather than at 11pm.
+
+        Both pipelines are preflighted, because the user has not chosen yet:
+        an .idml can be reviewed but never prepped, a manuscript with tracked
+        changes in it is refused by both, and a .doc can be prepped only once
+        LibreOffice has turned it into a .docx. All of that is local parsing,
+        so answering both questions costs one extra read of the file."""
         paths: Paths = app.state.paths
         cfg = load_config(CONFIG_PATH)
         staged = []
         for upload_file in files:
             name = Path(upload_file.filename or "document.docx").name
-            try:
-                fmt = get_format(name)
-            except IngestError as e:
-                staged.append({"filename": name, "ok": False, "error": str(e)})
-                continue
             # Each upload gets its own folder so the document keeps its real
-            # name — that name ends up on the reviewed file the user opens.
+            # name — that name ends up on the file the user opens.
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
             folder = paths.uploads / stamp
             folder.mkdir(parents=True, exist_ok=True)
@@ -131,27 +142,75 @@ def _register(app: FastAPI) -> None:
             with dest.open("wb") as fh:
                 shutil.copyfileobj(upload_file.file, fh)
 
-            try:
-                prepared = prepare(cfg, dest, ERROR_DIR)
-            except (IngestError, ValueError) as e:
+            entry = _stage(cfg, paths, stamp, dest)
+            if not entry["ok"]:
                 shutil.rmtree(folder, ignore_errors=True)
-                staged.append({"filename": name, "ok": False, "error": str(e)})
-                continue
-            staged.append({
-                "id": f"{stamp}/{name}", "filename": name, "ok": True,
-                # Which application this came from, so a mixed stack of
-                # manuscripts and layouts is legible at a glance.
-                "format": fmt.to_api(),
-                "sections": len(prepared.chunks),
-                "paragraphs": len(prepared.doc.paragraphs),
-                "requests": prepared.request_count,
-                "input_tokens": prepared.est_document_tokens,
-                "passes": len(prepared.groups),
-                # The section list is what the picker is built from: the user
-                # chooses by reading their own prose, not by chunk id.
-                "chunks": chunk_outline(prepared),
-            })
+            staged.append(entry)
         return {"files": staged}
+
+    def _stage(cfg, paths: Paths, stamp: str, dest: Path) -> dict:
+        name = dest.name
+        note = None
+        if prep_convert.needs_conversion(dest):
+            # .doc/.rtf/.odt/.txt are prep inputs, not DocProof formats. Convert
+            # at drop time so everything after this point is a .docx.
+            try:
+                converted, note = prep_convert.ensure_docx(dest, dest.parent)
+            except prep_convert.ConversionError as e:
+                return {"filename": name, "ok": False, "error": str(e)}
+            dest = converted
+
+        entry: dict = {"id": f"{stamp}/{dest.name}", "filename": dest.name,
+                       "original_filename": name, "converted": dest.name != name,
+                       "note": note}
+        try:
+            entry["format"] = get_format(dest.name).to_api()
+        except IngestError as e:
+            return {**entry, "ok": False, "error": str(e)}
+
+        review, review_error = _review_preflight(cfg, dest)
+        prep, prep_error = _prep_preflight(cfg, paths, dest)
+        entry.update(review or {}, review_error=review_error,
+                     prep=prep, prep_error=prep_error,
+                     can_review=review is not None, can_prep=prep is not None)
+        entry["ok"] = review is not None or prep is not None
+        if not entry["ok"]:
+            entry["error"] = review_error or prep_error
+        return entry
+
+    def _review_preflight(cfg, path: Path) -> tuple[dict | None, str | None]:
+        try:
+            prepared = prepare(cfg, path, ERROR_DIR)
+        except (IngestError, ValueError) as e:
+            return None, str(e)
+        return {
+            "sections": len(prepared.chunks),
+            "paragraphs": len(prepared.doc.paragraphs),
+            "requests": prepared.request_count,
+            "input_tokens": prepared.est_document_tokens,
+            "passes": len(prepared.groups),
+            # The section list is what the picker is built from: the user
+            # chooses by reading their own prose, not by chunk id.
+            "chunks": chunk_outline(prepared),
+        }, None
+
+    def _prep_preflight(cfg, paths: Paths,
+                        path: Path) -> tuple[dict | None, str | None]:
+        try:
+            prepared = preplib.prepare(cfg, path, config_dir=CONFIG_PATH.parent,
+                                       override_dir=paths.prep)
+        except (IngestError, StyleSheetError, ValueError) as e:
+            return None, str(e)
+        structure = prepared.structure
+        return {
+            "paragraphs": prepared.paragraph_count,
+            "blank_lines": sum(1 for p in structure.paragraphs if p.is_blank),
+            "words": structure.word_count,
+            "requests": prepared.request_count,
+            "input_tokens": prepared.est_document_tokens,
+            "output_tokens": prepared.est_output_tokens,
+            "style_sheet": prepared.sheet.name,
+        }, None
 
     @app.get("/api/formats")
     def formats() -> dict:
@@ -218,6 +277,14 @@ def _register(app: FastAPI) -> None:
         runner: JobRunner = app.state.runner
         if req.mode not in ("now", "batch"):
             raise HTTPException(400, "mode must be 'now' or 'batch'")
+        if req.kind not in ("review", "prep"):
+            raise HTTPException(400, "kind must be 'review' or 'prep'")
+        if req.prep_output not in ("indesign", "tracked", "both"):
+            raise HTTPException(
+                400, "prep_output must be 'indesign', 'tracked' or 'both'")
+        # Prep reads its windows in order — a paragraph's meaning depends on
+        # what came before it — so there is no batch form of it to offer.
+        mode = "now" if req.kind == "prep" else req.mode
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -237,12 +304,14 @@ def _register(app: FastAPI) -> None:
                 filename=source.name,
                 source_path=str(source),
                 model=req.model,
-                mode=req.mode,
+                mode=mode,
                 group_id=group_id,
-                schedule_at=req.schedule_at if req.mode == "batch" else None,
+                schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
+                kind=req.kind,
+                prep_output=req.prep_output,
             )
             created.append(runner.enqueue(job).to_api())
         return {"jobs": created, "group_id": group_id}
@@ -276,6 +345,7 @@ def _register(app: FastAPI) -> None:
         job = app.state.store.get(job_id)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
+        stem = Path(job.filename).stem or "document"
         names = {
             # "docx" is the old name for this route, kept so a page left open
             # across an upgrade keeps working.
@@ -283,13 +353,77 @@ def _register(app: FastAPI) -> None:
             "docx": get_format(job.filename).reviewed_name(job.filename),
             "summary": "summary.md",
             "findings": "findings.json",
+            "indesign": f"tagged_{stem}.docx",
+            "tracked": f"tracked_{stem}.docx",
+            "notes": "prep_notes.md",
+            "prep": "prep.json",
         }
+        if job.is_prep and which in ("document", "docx"):
+            # Whatever this job actually wrote, so one "open it" button works
+            # for either output choice.
+            names[which] = next(
+                (n for n in (names["indesign"], names["tracked"])
+                 if (Path(job.results_dir) / n).is_file()), names["indesign"])
         if which not in names:
             raise HTTPException(404, "Unknown file")
         path = Path(job.results_dir) / names[which]
         if not path.is_file():
             raise HTTPException(404, f"{names[which]} is missing")
         return FileResponse(path, filename=path.name)
+
+    @app.get("/api/jobs/{job_id}/prep")
+    def prep_notes(job_id: str) -> dict:
+        """What prep did, read back for the results screen."""
+        job = app.state.store.get(job_id)
+        if job is None or not job.results_dir:
+            raise HTTPException(404, "No results for this job yet")
+        path = Path(job.results_dir) / "prep.json"
+        if not path.is_file():
+            raise HTTPException(404, "This job has no prep notes")
+        data = json.loads(path.read_text("utf-8"))
+        data["files"] = {kind: (Path(job.results_dir) / name).is_file()
+                         for kind, name in
+                         (("indesign", f"tagged_{Path(job.filename).stem}.docx"),
+                          ("tracked", f"tracked_{Path(job.filename).stem}.docx"))}
+        return data
+
+    # -- the style guide ------------------------------------------------------
+
+    @app.get("/api/prep/styles")
+    def prep_styles() -> dict:
+        """The house style set as loaded, and where to put a replacement.
+
+        The point of this route is that the style guide is data: it shows the
+        publisher exactly which file is in force and what is in it."""
+        paths: Paths = app.state.paths
+        cfg = load_config(CONFIG_PATH)
+        shipped = preplib.pipeline.resolve(CONFIG_PATH.parent,
+                                           cfg.prep.style_sheet)
+        try:
+            sheet = preplib.load_style_sheet(shipped, override_dir=paths.prep)
+        except StyleSheetError as e:
+            return {"ok": False, "error": str(e),
+                    "override_path": str(paths.prep / Path(shipped).name)}
+        return {
+            "ok": True,
+            "name": sheet.name, "version": sheet.version, "trim": sheet.trim,
+            "glyph": sheet.scene_break_glyph,
+            "path": sheet.path,
+            "shipped_path": str(shipped),
+            "override_path": str(paths.prep / Path(shipped).name),
+            "using_override": Path(sheet.path).parent == paths.prep,
+            "styles": [{"name": s.name, "id": s.id, "describe": s.describe,
+                        "assign": s.assign} for s in sheet.styles],
+            "character_styles": [{"name": s.name, "id": s.id}
+                                 for s in sheet.character_styles],
+        }
+
+    # -- what it has cost -----------------------------------------------------
+
+    @app.get("/api/usage")
+    def usage() -> dict:
+        """Tokens, calls and estimated spend across every job on this machine."""
+        return build_usage(app.state.store.all(), read_usage)
 
     @app.get("/api/jobs/{job_id}/report")
     def report(job_id: str) -> dict:
@@ -354,7 +488,8 @@ def _register(app: FastAPI) -> None:
     def write_settings(update: SettingsUpdate) -> dict:
         s: Settings = app.state.settings
         for field_name in ("model", "min_confidence", "output_dir",
-                           "default_mode", "comments", "explanations"):
+                           "default_mode", "prep_output", "comments",
+                           "explanations"):
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)

@@ -19,6 +19,20 @@ skip:
     - "TOC*"
     - "Caption"
 
+# Manuscript prep: tagging a Word manuscript into a house InDesign style set.
+# Both paths are relative to this file. THE STYLE SET IS house_styles.yaml —
+# point these at another pair of files to prep for a different template.
+prep:
+  style_sheet: prep/house_styles.yaml
+  tagging_prompt: prep/tagging.yaml
+  max_paragraphs_per_window: 120   # one request per window
+  token_budget: 6000               # ...whichever limit comes first
+  context_paragraphs: 8            # already-labelled paragraphs sent for continuity
+  preview_chars: 400               # how much of a long paragraph the model sees
+  outputs: [indesign]              # indesign | tracked — the app overrides this
+  strip_direct_formatting: true    # in the placed file only; italics always kept
+  verify: true                     # refuse to ship a file whose words drifted
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

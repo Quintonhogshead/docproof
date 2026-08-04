@@ -1,9 +1,16 @@
 # DocProof, the app
 
-Drop in a stack of manuscripts, pick a reviewer, get back files with native
-tracked changes — Word `.docx` and InDesign `.idml` alike. No terminal, no
-config files, no environment variables. See [indesign.md](indesign.md) for what
-IDML support does and does not cover.
+Drop in a stack of manuscripts and pick what to do with them. No terminal, no
+config files, no environment variables.
+
+- **Review for errors** — get the files back with native tracked changes, Word
+  `.docx` and InDesign `.idml` alike. See [indesign.md](indesign.md) for what
+  IDML support does and does not cover.
+- **Prepare for layout** — tag every paragraph into a house InDesign style set
+  and get back a file that maps on Place, a tracked-changes version, or both.
+  See [prep.md](prep.md), including how to drop in your own style guide.
+
+The Spending tab adds up what either has cost.
 
 ## Running it
 
@@ -13,6 +20,12 @@ terminal. To build it:
 ```bash
 .venv/bin/pyinstaller DocProof.spec
 ```
+
+The Dock icon comes from `app/DocProof.icns`, which is checked in so a build
+needs nothing but PyInstaller. To change it, edit the values in
+`tools/make_icon.py` and run it — it draws every size with Core Graphics and
+packs them with `iconutil`, carrying the wordmark at large sizes and a `DP`
+monogram below 64px where a wordmark would just be a smudge.
 
 That produces `dist/DocProof.app` (~43 MB). It is **unsigned**, so the very
 first launch needs right-click → **Open** once; double-clicking works from
@@ -148,6 +161,7 @@ docproof review draft.docx         # review now
 docproof submit draft.docx         # queue at batch prices → prints a job id
 docproof status                    # what's queued and how far along
 docproof collect <job-id>          # finish it
+docproof prep draft.docx --output both   # tag it for the house template
 ```
 
 ## How it fits together
@@ -158,14 +172,16 @@ docproof_desktop.py  the packaged app's entry script (see its docstring)
 app/            FastAPI + static frontend. Job queue, scheduler, settings.
   desktop.py      native window + uvicorn on a thread; single-instance guard
   run.py          browser entry point: picks a port, opens a tab
-  jobs.py         worker thread (sync reviews) + ticker (scheduled, batch)
+  jobs.py         worker thread (sync reviews + prep) + ticker (scheduled, batch)
   main.py         HTTP routes
   prompts.py      reading and editing the shipped prompts
   report.py       findings.json → the reading view
-  static/         the five screens — no build step, no framework
+  usage.py        every job's tokens and cost, added up for the Spending tab
+  static/         the six screens — no build step, no framework
 docproof/       the pipeline. Knows nothing about the app.
   pipeline.py     prepare → run → finish, shared by CLI, batch, and app
   batch.py        submit/poll/collect + job manifests
+  prep/           manuscript prep: the second pipeline (see prep.md)
   providers/      the only code that imports a vendor SDK
     base.py         Provider protocol, schema normalization (strict + inlined)
     catalog.py      models, prices, capabilities
@@ -183,7 +199,7 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-91 tests, none of which touch a network. Every vendor call goes through the
+176 tests, none of which touch a network. Every vendor call goes through the
 `Provider` protocol, so `tests/fakes.py` covers both the synchronous and batch
 paths — including a scripted batch provider that reports in-progress polls so
 restart and resume behaviour is exercised without sleeping. Response parsing
@@ -196,6 +212,8 @@ own SDK types.
   change it — that still happens in Word's Review tab, or InDesign's Track
   Changes panel. A screen that lets you drop individual findings and re-write
   the reviewed file is the obvious next step.
-- **A custom app icon.** The bundle ships with the default one.
+- **A native `.idml` out of prep.** Prep's deliverable is the tagged `.docx`,
+  which is what InDesign maps on Place. Building the layout itself would need
+  the house template to inject stories into.
 - **Re-review reuse.** Re-running a document pays for every section again, even
   ones whose text and prompt haven't moved since the last run.

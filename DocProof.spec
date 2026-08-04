@@ -13,6 +13,11 @@
 # is deliberately not in here.
 from PyInstaller.utils.hooks import collect_submodules
 
+# The Dock, the Finder and ⌘-Tab all read this. It is checked in rather than
+# generated at build time so a build needs nothing but PyInstaller; to change
+# it, edit tools/make_icon.py and run it.
+ICON = "app/DocProof.icns"
+
 datas = [
     ("config", "config"),
     ("app/static", "app/static"),
@@ -51,6 +56,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=ICON,
 )
 
 coll = COLLECT(
@@ -65,7 +71,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="DocProof.app",
-    icon=None,
+    icon=ICON,
     bundle_identifier="com.docproof.app",
     info_plist={
         "CFBundleName": "DocProof",

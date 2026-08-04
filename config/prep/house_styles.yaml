@@ -1,0 +1,232 @@
+# The house style set manuscript prep tags to.
+#
+# THIS FILE IS THE STYLE GUIDE. Nothing about the Atmosphere Press style set is
+# written into the code — the tagger's list of allowed styles, the Word style
+# sheet it builds, and the prep notes all read this file. To move to a different
+# house style set, edit this file (or point `prep.style_sheet` in
+# config/default.yaml at another one, or drop a replacement into
+# ~/Library/Application Support/DocProof/prep/house_styles.yaml, which wins over
+# the shipped copy). No code changes.
+#
+# Each style needs:
+#   name      the paragraph style name EXACTLY as the InDesign template spells
+#             it. This is what InDesign matches on Place — it is the whole
+#             point of the file, so it must match character for character.
+#   id        the Word styleId. Latin letters and digits only: styleIds cannot
+#             hold spaces, "/" or "#", which several house names do.
+#   describe  one line telling the model what belongs in this style. This text
+#             goes into the prompt verbatim, so it is also how you tune tagging.
+#   assign    who may apply it:
+#               model    the model picks it while reading the manuscript
+#               derived  only the deterministic rules apply it
+#   opens     true when a body paragraph directly after this one is the first
+#             paragraph of a block, and so takes the no-indent "body first"
+#             style.
+#   format    light Word formatting, so the .docx is readable before it is
+#             placed. InDesign overrides all of it on import.
+#
+# `format` keys: size (points), bold, italic, align (left|center|right),
+# space_before / space_after (points), page_break_before, keep_next, indent
+# (first-line, points).
+
+version: 1
+name: Atmosphere Press prose template
+trim: 5.5 x 8.5
+# What gets typed into an inserted scene break. Author-typed break glyphs are
+# left exactly as the author wrote them; only breaks that were a blank line
+# become this.
+scene_break_glyph: "***"
+
+styles:
+  - name: "title page"
+    id: TitlePage
+    describe: >-
+      The book title on the title page. Not the author's name — a byline is
+      left as body and flagged, because the house title page comes from the
+      cover art.
+    assign: model
+    opens: true
+    format: {size: 26, bold: true, align: center, space_after: 18, keep_next: true}
+
+  - name: "front/backmatter title"
+    id: FrontBackmatterTitle
+    describe: >-
+      The title of a front- or back-matter section — Acknowledgments, About the
+      Author, Contents, Dedication, Foreword, Preface, Author's Note.
+    assign: model
+    opens: true
+    format: {size: 18, bold: true, align: center, space_before: 24, space_after: 12,
+             page_break_before: true, keep_next: true}
+
+  - name: "copyright"
+    id: Copyright
+    describe: >-
+      The copyright page: the copyright line, ISBN, publisher, edition notice,
+      and the disclaimer paragraphs that sit with them.
+    assign: model
+    opens: true
+    format: {size: 9, align: left, space_after: 6}
+
+  - name: "part #"
+    id: PartNumber
+    describe: >-
+      The number of a Part divider — "Part One", "Part I", "II". Only for parts
+      that group chapters, never for a chapter heading.
+    assign: model
+    opens: true
+    format: {size: 16, align: center, space_before: 48, space_after: 6,
+             page_break_before: true, keep_next: true}
+
+  - name: "part title"
+    id: PartTitle
+    describe: The title of a Part divider, on the line under the part number.
+    assign: model
+    opens: true
+    format: {size: 20, bold: true, align: center, space_after: 24, keep_next: true}
+
+  - name: "chapter # / title"
+    id: ChapterTitle
+    describe: >-
+      A chapter heading — "Chapter One", "Chapter 12", "Prologue", "Epilogue",
+      or a chapter's title standing alone. Chapters may be number-only, and a
+      number-only line at the top of a new chapter is this style, not a subhead.
+    assign: model
+    opens: true
+    format: {size: 18, bold: true, align: center, space_before: 48, space_after: 18,
+             page_break_before: true, keep_next: true}
+
+  - name: "chapter subtitle"
+    id: ChapterSubtitle
+    describe: >-
+      A subtitle sitting directly under a chapter heading — a date, a place, a
+      point-of-view name, or a second title line.
+    assign: model
+    opens: true
+    format: {size: 12, italic: true, align: center, space_after: 18, keep_next: true}
+
+  - name: "Subhead A"
+    id: SubheadA
+    describe: >-
+      A primary subhead WITHIN a chapter — a short line that titles a section
+      of the chapter, not a chapter of its own.
+    assign: model
+    opens: true
+    format: {size: 13, bold: true, space_before: 18, space_after: 6, keep_next: true}
+
+  - name: "Subhead B"
+    id: SubheadB
+    describe: A secondary subhead, subordinate to a Subhead A.
+    assign: model
+    opens: true
+    format: {size: 11, bold: true, space_before: 12, space_after: 6, keep_next: true}
+
+  - name: "epigraph"
+    id: Epigraph
+    describe: >-
+      A quotation set at the opening of the book or a chapter. Only a genuine
+      epigraph — an incidental centered line such as "The end" is NOT this.
+    assign: model
+    opens: false
+    format: {size: 10, italic: true, align: center, space_before: 12, space_after: 3}
+
+  - name: "epigraph source"
+    id: EpigraphSource
+    describe: The attribution line under an epigraph — the author, work, or both.
+    assign: model
+    opens: true
+    format: {size: 10, align: center, space_after: 18}
+
+  - name: "captions"
+    id: Captions
+    describe: An image or figure caption.
+    assign: model
+    opens: true
+    format: {size: 9, align: center, space_before: 6, space_after: 12}
+
+  - name: "tables"
+    id: Tables
+    describe: Tabular content — anything sitting inside a table.
+    assign: model
+    opens: true
+    format: {size: 10, space_after: 3}
+
+  - name: "endnotes"
+    id: Endnotes
+    describe: Note text, whether gathered at the end of a chapter or the book.
+    assign: model
+    opens: false
+    format: {size: 9, space_after: 3}
+
+  - name: "references"
+    id: References
+    describe: A reference list or works-cited entry.
+    assign: model
+    opens: false
+    format: {size: 9, space_after: 3, indent: -18}
+
+  - name: "bibliography"
+    id: Bibliography
+    describe: A bibliography entry.
+    assign: model
+    opens: false
+    format: {size: 9, space_after: 3, indent: -18}
+
+  - name: "scene break"
+    id: SceneBreak
+    describe: >-
+      A scene, time or place shift inside a chapter. In the manuscript this is
+      either a blank line the author left between two scenes, or a line the
+      author typed as a glyph — "***", "* * *", "#", "~".
+    assign: model
+    opens: true
+    format: {align: center, space_before: 12, space_after: 12}
+
+  - name: "body first"
+    id: BodyFirst
+    describe: >-
+      The first body paragraph after any heading, part title, chapter subtitle,
+      subhead or scene break. No first-line indent.
+    assign: derived
+    opens: false
+    format: {space_after: 0}
+
+  - name: "body para"
+    id: BodyPara
+    describe: Every other running body paragraph.
+    assign: derived
+    opens: false
+    format: {space_after: 0, indent: 18}
+
+# Which style plays which part in the deterministic rules. The rules talk about
+# roles, never about house names, so renaming a style above only means renaming
+# it here too.
+roles:
+  body: "body para"           # an ordinary running paragraph
+  body_first: "body first"    # the same paragraph when it opens a block
+  scene_break: "scene break"  # what an inserted or author-typed break becomes
+  table: "tables"             # anything found inside a table
+
+# The two answers the model can give that are not house styles. Their text goes
+# into the prompt exactly as written, so this is where to tune how the model
+# reads running text and blank lines.
+pseudo_roles:
+  - key: body
+    describe: >-
+      Running body text: an ordinary paragraph of the manuscript. Use this for
+      every narrative or expository paragraph. Whether it is the first
+      paragraph of a section is decided afterwards, not by you.
+  - key: spacing
+    describe: >-
+      A blank line that is only vertical spacing — a gap before a heading, a
+      double-spaced run of empty lines, padding at the top of a page. Only for
+      blank lines, and only where the author gave no sign of a scene shift.
+
+# Character styles. Inline italics are left as the author's own local
+# formatting; only styles listed here are applied as named character styles.
+character_styles:
+  - name: "hyperlink"
+    id: Hyperlink
+    describe: >-
+      Any URL or link. It looks identical to body text — invisible in print,
+      but it is what lets EPUB export emit a real link.
+    format: {}

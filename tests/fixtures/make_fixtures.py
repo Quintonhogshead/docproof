@@ -89,6 +89,72 @@ def footnotes() -> None:
         z.writestr("word/footnotes.xml", _FOOTNOTES)
 
 
+_GOOGLE_CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"""
+
+# A Google Docs export as they actually arrive: no styles.xml at all, every
+# paragraph "Normal" with direct formatting, blank lines doing the work of
+# scene breaks and spacing, typed leading whitespace, a leftover goog_rdk
+# content control, one italic run, one URL, one tab indent.
+_GOOGLE_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="48"/><w:rFonts w:ascii="Arial"/></w:rPr><w:t>Wildflower</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:rPr><w:sz w:val="18"/></w:rPr><w:t>Copyright 2026 by A. Author. All rights reserved.</w:t></w:r></w:p>
+    <w:p/>
+    <w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent/></w:sdt>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Chapter One</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:t xml:space="preserve">   The road out of town was longer than she remembered, and </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>much</w:t></w:r><w:r><w:t xml:space="preserve"> darker.  </w:t></w:r></w:p>
+    <w:p><w:r><w:tab/></w:r><w:r><w:t>She had not driven it since the winter her mother died.</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:t>Morning came grey and slow over the fields.</w:t></w:r></w:p>
+    <w:p><w:r><w:t xml:space="preserve">Her notes are still online at www.example.com/wildflower for anyone who wants them.</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Acknowledgments</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Thanks to everyone who read this before it was any good.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+_GOOGLE_ROOT_RELS = _ROOT_RELS
+
+
+def googledoc() -> None:
+    """The manuscript-prep fixture: a styleless export, the shape prep exists
+    for. Written as raw XML rather than through python-docx so the content
+    control, the typed whitespace and the missing styles.xml are all exactly
+    what a real export contains."""
+    with zipfile.ZipFile(HERE / "googledoc.docx", "w",
+                         zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _GOOGLE_CONTENT_TYPES)
+        z.writestr("_rels/.rels", _GOOGLE_ROOT_RELS)
+        z.writestr("word/document.xml", _GOOGLE_DOC)
+
+
+def tracked() -> None:
+    """A manuscript that still has an unresolved edit in it. Prep refuses this
+    outright — it restyles every paragraph, and doing that around somebody
+    else's undecided change would bury it."""
+    d = docx.Document()
+    d.add_paragraph("A perfectly ordinary paragraph of manuscript text.")
+    p = d.add_paragraph()
+    run = p.add_run("An inserted phrase.")
+    ins = run._r.makeelement(
+        "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}ins",
+        {"{http://schemas.openxmlformats.org/wordprocessingml/2006/main}id": "1",
+         "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}author": "Someone",
+         "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}date":
+             "2026-01-01T00:00:00Z"})
+    run._r.addprevious(ins)
+    ins.append(run._r)
+    d.save(HERE / "tracked.docx")
+
+
 if __name__ == "__main__":
-    simple(); styled(); table(); footnotes()
+    simple(); styled(); table(); footnotes(); googledoc(); tracked()
     print("fixtures written to", HERE)

@@ -67,10 +67,34 @@ def main(argv=None) -> int:
     col.add_argument("--workspace", default=DEFAULT_WORKSPACE)
     col.add_argument("--out")
 
+    prp = sub.add_parser(
+        "prep", help="tag a manuscript into the house InDesign style set")
+    prp.add_argument("input", help="a .docx manuscript (.doc/.rtf/.odt/.txt "
+                                   "are converted first, if LibreOffice is "
+                                   "installed)")
+    prp.add_argument("--config", default="config/default.yaml")
+    prp.add_argument("--out", help="output directory (default: from config)")
+    prp.add_argument("--output", default=None,
+                     choices=["indesign", "tracked", "both"],
+                     help="which file(s) to write: the InDesign-ready .docx, "
+                          "the tracked-changes .docx, or both "
+                          "(default: from config)")
+    prp.add_argument("--style-sheet",
+                     help="a different house style set (YAML). This is how you "
+                          "prep for another template without touching code.")
+    prp.add_argument("--model")
+    prp.add_argument("--no-verify", action="store_true",
+                     help="skip the word-for-word check. Not recommended: it "
+                          "is the only thing standing between a mis-tagged "
+                          "run and a changed manuscript.")
+    prp.add_argument("--mock-tags", action="store_true",
+                     help="label everything as running text; exercises the "
+                          "writers and the verifier with no API call")
+
     args = ap.parse_args(argv)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
-            "collect": cmd_collect}[args.cmd](args)
+            "collect": cmd_collect, "prep": cmd_prep}[args.cmd](args)
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -251,6 +275,78 @@ def cmd_collect(args) -> int:
     print(f"\n{outputs.applied} tracked change(s) applied.")
     for p in (outputs.reviewed_path, outputs.summary_md, outputs.findings_json):
         print(f"  {p}")
+    return 0
+
+
+def cmd_prep(args) -> int:
+    """Tag a manuscript for the house template.
+
+    Deliberately its own command rather than a flag on `review`: prep answers
+    what each paragraph IS, review answers what is wrong inside one, and a run
+    that tried to do both would have to choose which of two very different
+    documents to hand back."""
+    from . import prep as preplib
+    from .prep.convert import ConversionError, ensure_docx
+
+    cfg = load_config(args.config)
+    if args.model:
+        cfg.api.model = args.model
+    if args.out:
+        cfg.output_dir = args.out
+    if args.style_sheet:
+        cfg.prep.style_sheet = args.style_sheet
+    if args.no_verify:
+        cfg.prep.verify = False
+    kinds = (list(preplib.OUTPUT_KINDS) if args.output == "both"
+             else [args.output] if args.output else list(cfg.prep.outputs))
+
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+    config_dir = Path(args.config).parent
+
+    try:
+        source, note = ensure_docx(args.input, out)
+        prepared = preplib.prepare(cfg, source, config_dir=config_dir)
+    except (ConversionError, IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if note:
+        print(f"note: {note}")
+
+    print(f"{prepared.paragraph_count} paragraphs → {prepared.request_count} "
+          f"request(s) on {cfg.api.model}, ~"
+          f"{prepared.est_document_tokens:,} tokens sent")
+
+    if args.mock_tags:
+        tags, usage = preplib.run_mock(prepared)
+    else:
+        try:
+            provider = build_provider(cfg)
+        except ProviderError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        tags, usage = preplib.run(
+            cfg, prepared, provider,
+            progress=lambda done, total: print(
+                f"  labelled window {done} of {total}", flush=True))
+
+    try:
+        outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=out,
+                                 source_path=args.input, outputs=kinds)
+    except preplib.VerificationFailed as e:
+        print(f"error: {e}", file=sys.stderr)
+        print(f"  see {out / 'prep_notes.md'} for what prep intended to do.",
+              file=sys.stderr)
+        return 3
+
+    print(f"\n{outputs.tagged} paragraph(s) tagged, "
+          f"{outputs.plan.inserted_breaks} scene break(s) written, "
+          f"{outputs.flags} flag(s) for the designer.")
+    for check in outputs.verifications:
+        print(f"  ✓ {check.describe()}")
+    for path in list(outputs.documents.values()) + [outputs.notes_md,
+                                                    outputs.notes_json]:
+        print(f"  {path}")
     return 0
 
 

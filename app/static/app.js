@@ -17,7 +17,7 @@ const api = async (path, options) => {
 // selected: file id → Set of section ids the user kept. A file starts with
 // every section in it, so "do nothing" means "review the whole document".
 const state = { files: [], models: [], pollTimer: null, selected: new Map(),
-                outputGuess: 600 };
+                outputGuess: 600, sheet: null };
 
 // ── navigation ────────────────────────────────────────────────────────────
 
@@ -29,13 +29,57 @@ function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
   });
-  ['drop', 'jobs', 'report', 'prompts', 'settings'].forEach((s) => {
+  ['drop', 'jobs', 'report', 'spending', 'prompts', 'settings'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
   if (name === 'jobs') refreshJobs({ tick: true });
   if (name === 'settings') loadSettings();
   if (name === 'prompts') loadPrompts();
+  if (name === 'spending') loadSpending();
 }
+
+// ── what we're doing with these documents ─────────────────────────────────
+
+const kind = () => document.querySelector('input[name="kind"]:checked').value;
+const prepOutput = () =>
+  document.querySelector('input[name="prep-output"]:checked').value;
+const isPrep = () => kind() === 'prep';
+
+document.querySelectorAll('input[name="kind"]').forEach((r) =>
+  r.addEventListener('change', () => { renderFiles(); renderKind(); }));
+document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
+  r.addEventListener('change', renderCost));
+
+// Everything the two jobs disagree about: which options are on screen, what
+// the button says, and which files can go at all.
+function renderKind() {
+  const prep = isPrep();
+  document.querySelectorAll('.review-only').forEach((el) => {
+    el.hidden = prep;
+  });
+  $('prep-options').hidden = !prep;
+  $('prep-cost').hidden = !prep;
+  $('model-label').textContent = prep ? 'Which model should read it?'
+                                      : 'Which reviewer?';
+  $('start').textContent = prep ? 'Prepare for layout' : 'Start review';
+  $('staged-title').textContent = prep ? 'Ready to prepare' : 'Ready to review';
+  document.querySelectorAll('details.sections').forEach((el) => {
+    el.hidden = prep;                 // prep always reads the whole manuscript
+  });
+
+  const blocked = usableFiles().filter((f) => !canRun(f));
+  const warning = $('kind-warning');
+  warning.hidden = blocked.length === 0;
+  if (blocked.length) {
+    warning.textContent = blocked
+      .map((f) => `${f.filename}: ${reasonBlocked(f)}`).join(' · ');
+  }
+  renderCost();
+}
+
+const canRun = (f) => (isPrep() ? f.can_prep !== false : f.can_review !== false);
+const reasonBlocked = (f) =>
+  (isPrep() ? f.prep_error : f.review_error) || 'cannot be used for this.';
 
 // ── dropping files ────────────────────────────────────────────────────────
 
@@ -92,7 +136,15 @@ function renderFiles() {
       state.files.splice(i, 1); renderFiles(); loadModels();
     });
     li.append(name, meta, drop);
-    if (f.ok && f.chunks && f.chunks.length > 1) li.append(sectionPicker(f));
+    if (f.ok && !isPrep() && f.chunks && f.chunks.length > 1) {
+      li.append(sectionPicker(f));
+    }
+    if (f.note) {
+      const note = document.createElement('p');
+      note.className = 'where';
+      note.textContent = f.note;
+      li.append(note);
+    }
     list.append(li);
   });
   $('staged').hidden = state.files.length === 0;
@@ -100,6 +152,13 @@ function renderFiles() {
 }
 
 function fileSummary(f) {
+  if (isPrep()) {
+    if (!f.prep) return f.prep_error || 'cannot be prepared.';
+    const p = f.prep;
+    return `${p.paragraphs} paragraphs, ${p.words.toLocaleString()} words`
+      + `, ${p.blank_lines} blank line${p.blank_lines === 1 ? '' : 's'} to sort out`;
+  }
+  if (!f.can_review) return f.review_error || 'cannot be reviewed.';
   const kept = keptFor(f).size;
   const all = f.chunks ? f.chunks.length : f.sections;
   const sections = kept === all
@@ -184,8 +243,10 @@ function formatBadge(text) {
 const usableFiles = () => state.files.filter((f) => f.ok);
 const usableIds = () => usableFiles().map((f) => f.id);
 
-// Files with nothing ticked are simply left out of the run.
-const filesToRun = () => usableFiles().filter((f) => keptFor(f).size > 0);
+// Files with nothing ticked are simply left out of the run — as are files this
+// job can't be done to at all, like an InDesign layout you asked to prep.
+const filesToRun = () => usableFiles().filter(
+  (f) => canRun(f) && (isPrep() || keptFor(f).size > 0));
 
 function selectionPayload() {
   const out = {};
@@ -248,20 +309,50 @@ function priceSelection(m) {
   return { now: full, batch: full * m.batch_discount };
 }
 
+// Prep sends the whole manuscript once, so its price is simply what the files
+// add up to on this model.
+function pricePrep(m) {
+  let cost = 0;
+  filesToRun().forEach((f) => {
+    if (!f.prep) return;
+    cost += (f.prep.input_tokens * m.input_per_mtok
+      + f.prep.output_tokens * m.output_per_mtok) / 1e6;
+  });
+  return cost;
+}
+
 function renderCost() {
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
   const money = (v) => (typeof v === 'number'
     ? `about $${v < 0.01 ? v.toFixed(3) : v.toFixed(2)}` : '');
+
+  if (isPrep()) {
+    const files = filesToRun();
+    const note = $('prep-cost');
+    note.textContent = m && files.length
+      ? `Reading ${files.length} manuscript${files.length === 1 ? '' : 's'} on `
+        + `${m.display} costs ${money(pricePrep(m))}. Asking for both files `
+        + `costs no more than asking for one.`
+      : '';
+    const ready = m && m.available && files.length > 0;
+    $('start').disabled = !ready;
+    modelHint(m);
+    return;
+  }
+
   const price = m ? priceSelection(m) : { now: null, batch: null };
   $('cost-now').textContent = money(price.now);
   $('cost-batch').textContent = money(price.batch);
 
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
+  modelHint(m);
+}
 
-  // A disabled button with no explanation is the worst first-run experience
-  // there is. Say what's missing and where to fix it.
+// A disabled button with no explanation is the worst first-run experience
+// there is. Say what's missing and where to fix it.
+function modelHint(m) {
   const hint = $('start-hint');
   if (m && !m.available) {
     hint.innerHTML = '';
@@ -291,6 +382,7 @@ const mode = () => document.querySelector('input[name="mode"]:checked').value;
 
 $('start').addEventListener('click', async () => {
   const button = $('start');
+  const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Starting…';
   try {
@@ -300,11 +392,13 @@ $('start').addEventListener('click', async () => {
       body: JSON.stringify({
         file_ids: filesToRun().map((f) => f.id),
         model: $('model').value,
-        mode: mode(),
-        schedule_at: (mode() === 'batch' && $('schedule-on').checked)
+        kind: kind(),
+        prep_output: prepOutput(),
+        mode: isPrep() ? 'now' : mode(),
+        schedule_at: (!isPrep() && mode() === 'batch' && $('schedule-on').checked)
           ? $('schedule-at').value : null,
         min_confidence: $('confidence').value,
-        selections: selectionPayload(),
+        selections: isPrep() ? {} : selectionPayload(),
       }),
     });
     state.files = [];
@@ -315,7 +409,7 @@ $('start').addEventListener('click', async () => {
     fail(err.message);
   } finally {
     button.disabled = false;
-    button.textContent = 'Start review';
+    button.textContent = label;
   }
 });
 
@@ -371,7 +465,9 @@ function renderJobs(jobs) {
       li.append(bar);
     }
 
-    if (job.ready) {
+    if (job.ready && job.is_prep) {
+      li.append(prepActions(job));
+    } else if (job.ready) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
       const doc = link(`/api/jobs/${job.id}/file/document`,
@@ -429,6 +525,49 @@ function link(href, text) {
   button.textContent = text;
   button.addEventListener('click', () => { window.location.href = href; });
   return button;
+}
+
+// A finished prep job: whichever files it wrote, the notes, and the one number
+// that matters — whether the author's words came through untouched.
+function prepActions(job) {
+  const wrap = document.createElement('div');
+  const actions = document.createElement('div');
+  actions.className = 'job-actions';
+  if (job.prep_output !== 'tracked') {
+    actions.append(link(`/api/jobs/${job.id}/file/indesign`,
+      'Open the file for InDesign'));
+  }
+  if (job.prep_output !== 'indesign') {
+    actions.append(link(`/api/jobs/${job.id}/file/tracked`,
+      'Open the tracked-changes file'));
+  }
+  const read = document.createElement('button');
+  read.textContent = 'Read the prep notes';
+  read.addEventListener('click', () => openPrepReport(job));
+  actions.append(read);
+
+  const bits = [];
+  if (typeof job.tagged === 'number') bits.push(`${job.tagged} paragraphs tagged`);
+  if (job.flags) bits.push(`${job.flags} flag${job.flags === 1 ? '' : 's'} for the designer`);
+  if (job.results_name) bits.push(`saved in “${job.results_name}”`);
+  if (bits.length) {
+    const meta = document.createElement('span');
+    meta.className = 'file-meta';
+    meta.textContent = bits.join(' · ');
+    actions.append(meta);
+  }
+  wrap.append(actions);
+
+  const where = document.createElement('p');
+  where.className = 'where';
+  where.textContent = job.verified
+    ? 'Checked word for word against your manuscript: nothing the author '
+      + 'wrote was changed. Place the tagged file in InDesign — the paragraph '
+      + 'style names in it are the template\'s own.'
+    : 'Heads up: this file has not been confirmed word-for-word against the '
+      + 'manuscript. Read the prep notes before placing it.';
+  wrap.append(where);
+  return wrap;
 }
 
 // ── the report ────────────────────────────────────────────────────────────
@@ -536,6 +675,239 @@ function addAside(parent, title, findings, blurb) {
   parent.append(box);
 }
 
+// ── the prep notes ────────────────────────────────────────────────────────
+
+async function openPrepReport(job) {
+  show('report');
+  $('report-title').textContent = job.filename;
+  $('report-headline').textContent = 'Reading the notes…';
+  $('report-groups').innerHTML = '';
+  $('report-aside').innerHTML = '';
+  try {
+    renderPrepReport(await api(`/api/jobs/${job.id}/prep`));
+  } catch (err) {
+    $('report-headline').textContent = err.message;
+  }
+}
+
+function renderPrepReport(d) {
+  const c = d.counts;
+  $('report-headline').textContent =
+    `${c.tagged.toLocaleString()} paragraphs tagged · `
+    + `${c.words.toLocaleString()} words · `
+    + `${c.scene_breaks_inserted} scene break${c.scene_breaks_inserted === 1 ? '' : 's'} written · `
+    + `${d.flags.length} flag${d.flags.length === 1 ? '' : 's'}`
+    + (typeof d.cost === 'number'
+      ? ` · cost ${d.cost < 0.01 ? '<$0.01' : '$' + d.cost.toFixed(2)}` : '');
+
+  const groups = $('report-groups');
+  groups.innerHTML = '';
+
+  const check = document.createElement('p');
+  check.className = d.verified ? 'where ok-line' : 'error';
+  check.textContent = d.verified
+    ? `Word for word, this says exactly what the manuscript said — checked on `
+      + `the finished ${d.verification.length > 1 ? 'files' : 'file'}, not `
+      + `assumed. Style set: ${d.style_sheet.name}.`
+    : 'The check against the author\'s text did not pass. Nothing was handed '
+      + 'over.';
+  groups.append(check);
+
+  groups.append(prepTable('Style mapping', ['InDesign paragraph style', 'Paragraphs'],
+    Object.entries(d.styles).map(([name, n]) => [name, String(n)])));
+
+  const cleanup = [
+    [`${c.blank_lines_removed} blank line(s) removed`,
+      'InDesign takes its vertical spacing from the styles, not from empty paragraphs.'],
+    [`${c.paragraphs_trimmed} paragraph(s) trimmed`,
+      'Typed spaces and tabs at the ends of paragraphs. First-line indents were left alone — those come from the style.'],
+    [`${c.scene_breaks_inserted} scene break(s) written, ${c.scene_breaks_from_author} the author had typed`,
+      'Only where the author signalled one. None were invented.'],
+    [`${c.italic_paragraphs} paragraph(s) keep their italics`,
+      'Inline emphasis is left exactly where it was.'],
+  ];
+  const card = document.createElement('section');
+  card.className = 'card';
+  const h = document.createElement('h3');
+  h.textContent = 'What it did';
+  card.append(h);
+  cleanup.forEach(([title, blurb]) => {
+    const p = document.createElement('p');
+    const strong = document.createElement('strong');
+    strong.textContent = title;
+    const small = document.createElement('small');
+    small.className = 'muted';
+    small.textContent = ` ${blurb}`;
+    p.append(strong, small);
+    card.append(p);
+  });
+  groups.append(card);
+
+  const aside = $('report-aside');
+  aside.innerHTML = '';
+  if (d.flags.length) {
+    const box = document.createElement('section');
+    box.className = 'card';
+    const head = document.createElement('h3');
+    head.textContent = `For the designer — ${d.flags.length}`;
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = 'These are raised, not fixed. Each one is a judgment a '
+      + 'person should make.';
+    box.append(head, note);
+    d.flags.forEach((f) => {
+      const p = document.createElement('p');
+      p.className = 'finding-foot';
+      const where = document.createElement('code');
+      where.textContent = f.para_id;
+      p.append(where, ` ${f.message}`);
+      if (f.preview) {
+        const em = document.createElement('em');
+        em.className = 'muted';
+        em.textContent = ` “${f.preview}”`;
+        p.append(em);
+      }
+      box.append(p);
+    });
+    aside.append(box);
+  }
+}
+
+function prepTable(title, headers, rows) {
+  const card = document.createElement('section');
+  card.className = 'card';
+  const h = document.createElement('h3');
+  h.textContent = title;
+  const table = document.createElement('table');
+  table.className = 'table';
+  table.append(headRow(headers));
+  rows.forEach((cells) => table.append(bodyRow(cells)));
+  card.append(h, table);
+  return card;
+}
+
+function headRow(cells) {
+  const tr = document.createElement('tr');
+  cells.forEach((text) => {
+    const th = document.createElement('th');
+    th.textContent = text;
+    tr.append(th);
+  });
+  return tr;
+}
+
+function bodyRow(cells) {
+  const tr = document.createElement('tr');
+  cells.forEach((text) => {
+    const td = document.createElement('td');
+    td.textContent = text;
+    tr.append(td);
+  });
+  return tr;
+}
+
+// ── spending ──────────────────────────────────────────────────────────────
+
+const money = (v) => (typeof v !== 'number' ? '—'
+  : v === 0 ? '$0.00' : v < 0.01 ? '<$0.01' : `$${v.toFixed(2)}`);
+const count = (v) => (v || 0).toLocaleString();
+
+async function loadSpending() {
+  let d;
+  try {
+    d = await api('/api/usage');
+  } catch (err) {
+    $('spend-tiles').textContent = err.message;
+    return;
+  }
+  const t = d.totals;
+  const tiles = [
+    ['Spent, all time', money(t.cost), `${count(t.jobs)} document${t.jobs === 1 ? '' : 's'}`],
+    [`Last ${d.window.days} days`, money(d.window.cost),
+      `${count(d.window.api_calls)} request${d.window.api_calls === 1 ? '' : 's'}`],
+    ['Words processed', count(t.words), 'across every finished document'],
+    ['Tokens in', count(t.input_tokens),
+      `${count(t.cache_read_tokens)} read from cache`],
+    ['Tokens out', count(t.output_tokens), 'what the model wrote back'],
+    ['Requests', count(t.api_calls), d.unfinished ? `${d.unfinished} still running` : 'all finished'],
+  ];
+  const box = $('spend-tiles');
+  box.innerHTML = '';
+  tiles.forEach(([label, value, sub]) => {
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+    const l = document.createElement('small');
+    l.className = 'muted';
+    l.textContent = label;
+    const v = document.createElement('strong');
+    v.textContent = value;
+    const s = document.createElement('small');
+    s.className = 'muted';
+    s.textContent = sub;
+    tile.append(l, v, s);
+    box.append(tile);
+  });
+
+  renderMonths(d.by_month);
+
+  const models = $('spend-models');
+  models.innerHTML = '';
+  models.append(headRow(['Reviewer', 'Documents', 'Tokens in', 'Tokens out', 'Cost']));
+  d.by_model.forEach((m) => models.append(bodyRow([
+    m.display, count(m.api_calls) + ' requests', count(m.input_tokens),
+    count(m.output_tokens), money(m.cost)])));
+  if (!d.by_model.length) {
+    models.append(bodyRow(['Nothing yet', '', '', '', '']));
+  }
+
+  const recent = $('spend-recent');
+  recent.innerHTML = '';
+  recent.append(headRow(['Document', 'What for', 'Reviewer', 'Words', 'Cost']));
+  d.recent.forEach((r) => recent.append(bodyRow([
+    r.filename, r.kind === 'prep' ? 'Prepared for layout' : 'Reviewed',
+    r.display, count(r.words), money(r.cost)])));
+  if (!d.recent.length) {
+    recent.append(bodyRow(['Nothing yet', '', '', '', '']));
+  }
+
+  let note = $('spend-note');
+  if (!note) {
+    note = document.createElement('p');
+    note.id = 'spend-note';
+    note.className = 'muted small';
+    $('screen-spending').append(note);
+  }
+  note.textContent = d.note;
+}
+
+function renderMonths(months) {
+  const box = $('spend-months');
+  box.innerHTML = '';
+  if (!months.length) {
+    box.className = 'muted';
+    box.textContent = 'Nothing spent yet.';
+    return;
+  }
+  box.className = 'months';
+  const top = Math.max(...months.map((m) => m.cost), 0.0001);
+  months.forEach((m) => {
+    const row = document.createElement('div');
+    row.className = 'month';
+    const label = document.createElement('small');
+    label.className = 'muted';
+    label.textContent = m.month;
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const fill = document.createElement('i');
+    fill.style.width = `${Math.max(2, Math.round((m.cost / top) * 100))}%`;
+    bar.append(fill);
+    const value = document.createElement('small');
+    value.textContent = money(m.cost);
+    row.append(label, bar, value);
+    box.append(row);
+  });
+}
+
 // ── prompts ───────────────────────────────────────────────────────────────
 
 async function loadPrompts() {
@@ -628,6 +1000,8 @@ async function loadSettings() {
   $('output-dir').value = settings.output_dir;
   $('comments').checked = settings.comments;
   $('explanations').checked = settings.explanations;
+  $('prep-output-default').value = settings.prep_output || 'indesign';
+  loadStyleSheet().catch(() => {});
   Object.entries(keys).forEach(([provider, info]) => {
     const el = $(`status-${provider}`);
     if (!el) return;
@@ -645,6 +1019,7 @@ $('save-settings').addEventListener('click', async () => {
     output_dir: $('output-dir').value,
     comments: $('comments').checked,
     explanations: $('explanations').checked,
+    prep_output: $('prep-output-default').value,
   };
   [['anthropic', 'key-anthropic'], ['openai', 'key-openai'],
    ['gemini', 'key-gemini']].forEach(([provider, field]) => {
@@ -683,21 +1058,67 @@ document.querySelectorAll('[data-test]').forEach((button) => {
   });
 });
 
+// ── the house style guide ─────────────────────────────────────────────────
+
+// Shown in Settings, and named on the drop screen, because which style set is
+// in force is the single most important thing about a prep run.
+async function loadStyleSheet() {
+  const d = await api('/api/prep/styles');
+  state.sheet = d;
+  $('sheet-override').textContent = d.override_path;
+  $('prep-sheet-note').textContent = d.ok ? `— ${d.name}` : '';
+  if (!d.ok) {
+    $('sheet-summary').textContent = d.error;
+    $('sheet-summary').className = 'error';
+    return;
+  }
+  $('sheet-summary').className = 'muted';
+  $('sheet-summary').textContent =
+    `In force: ${d.name}, version ${d.version}`
+    + (d.trim ? `, trim ${d.trim}` : '')
+    + ` — ${d.styles.length} paragraph styles, scene breaks written as `
+    + `${d.glyph}. ${d.using_override
+      ? 'This is your own file.' : 'This is the one DocProof ships with.'}`;
+
+  const table = $('sheet-table');
+  table.innerHTML = '';
+  table.append(headRow(['InDesign style name', 'Word style', 'Chosen by']));
+  d.styles.forEach((s) => table.append(bodyRow([
+    s.name, s.id, s.assign === 'model' ? 'reading the manuscript' : 'the rules'])));
+  d.character_styles.forEach((s) => table.append(bodyRow([
+    s.name, s.id, 'links'])));
+}
+
 // ── boot ──────────────────────────────────────────────────────────────────
 
 // The drop zone advertises whatever the server can actually read, so adding a
 // format server-side never leaves the front door describing the old list.
 async function loadFormats() {
   const { formats, suffixes } = await api('/api/formats');
-  input.accept = suffixes.join(',');
+  input.accept = [...suffixes, '.doc', '.rtf', '.odt', '.txt'].join(',');
   const names = formats.map((f) => `${f.kind}s (${f.suffix})`);
-  $('drop-formats').textContent = names.length > 1
-    ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-    : names[0];
+  $('drop-formats').textContent =
+    (names.length > 1
+      ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+      : names[0])
+    + ' — plus .doc, .rtf, .odt and .txt manuscripts, if LibreOffice is installed';
+}
+
+// Which output the user last chose is a preference, so it comes from Settings
+// rather than resetting to the default on every launch.
+async function applyDefaults() {
+  const { settings } = await api('/api/settings');
+  const choice = settings.prep_output || 'indesign';
+  const radio = document.querySelector(
+    `input[name="prep-output"][value="${choice}"]`);
+  if (radio) radio.checked = true;
 }
 
 loadFormats().catch(() => {});
 loadModels().catch(() => {});
+loadStyleSheet().catch(() => {});
+applyDefaults().catch(() => {});
+renderKind();
 refreshJobs();
 state.pollTimer = setInterval(() => {
   if (!$('screen-jobs').hidden) refreshJobs();

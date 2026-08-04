@@ -10,8 +10,9 @@
 <header>
   <h1>DocProof</h1>
   <nav>
-    <button class="tab" data-screen="drop" aria-current="true">Review documents</button>
-    <button class="tab" data-screen="jobs">My reviews <span id="jobs-badge" hidden></span></button>
+    <button class="tab" data-screen="drop" aria-current="true">Drop documents</button>
+    <button class="tab" data-screen="jobs">Results <span id="jobs-badge" hidden></span></button>
+    <button class="tab" data-screen="spending">Spending</button>
     <button class="tab" data-screen="prompts">What it looks for</button>
     <button class="tab" data-screen="settings">Settings</button>
   </nav>
@@ -31,17 +32,54 @@
     </div>
 
     <div id="staged" hidden>
-      <h2>Ready to review</h2>
+      <h2 id="staged-title">Ready to go</h2>
       <ul id="file-list"></ul>
+
+      <fieldset class="field kinds">
+        <legend>What should DocProof do with these?</legend>
+        <label class="radio">
+          <input type="radio" name="kind" value="review" checked>
+          <span><strong>Review for errors</strong> — grammar and typos, marked
+            up as tracked changes you accept or reject</span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="kind" value="prep">
+          <span><strong>Prepare for layout</strong> — tag every paragraph with
+            a house InDesign style, ready to place
+            <em id="prep-sheet-note" class="muted"></em></span>
+        </label>
+        <p id="kind-warning" class="muted small" hidden></p>
+      </fieldset>
 
       <div class="options">
         <label class="field">
-          <span>Which reviewer?</span>
+          <span id="model-label">Which reviewer?</span>
           <select id="model"></select>
           <small id="model-blurb" class="muted"></small>
         </label>
 
-        <fieldset class="field">
+        <fieldset class="field" id="prep-options" hidden>
+          <legend>What should it hand back?</legend>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="indesign" checked>
+            <span><strong>A file ready for InDesign</strong> — a clean Word
+              document whose paragraph styles are the template's own, so they
+              map when you place it</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="tracked">
+            <span><strong>A tracked-changes Word file</strong> — the same
+              tagging as revisions, to walk in Word before anyone places
+              anything</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="both">
+            <span><strong>Both</strong> — one costs no more than the other;
+              the work is in reading the manuscript</span>
+          </label>
+        </fieldset>
+
+        <fieldset class="field review-only">
           <legend>When?</legend>
           <label class="radio">
             <input type="radio" name="mode" value="batch" checked>
@@ -61,7 +99,7 @@
           </label>
         </fieldset>
 
-        <label class="field">
+        <label class="field review-only">
           <span>How careful should it be?</span>
           <select id="confidence">
             <option value="high">Only changes it's sure about</option>
@@ -69,6 +107,8 @@
             <option value="low">Flag anything questionable</option>
           </select>
         </label>
+
+        <p class="field muted small" id="prep-cost" hidden></p>
       </div>
 
       <button id="start" class="primary big-button">Start review</button>
@@ -79,7 +119,7 @@
 
   <!-- ── Jobs ─────────────────────────────────────────────────────────── -->
   <section id="screen-jobs" class="screen" hidden>
-    <h2>My reviews</h2>
+    <h2>Your documents</h2>
     <p id="jobs-empty" class="muted">Nothing here yet. Drop a document on the
       first tab to get started.</p>
     <ul id="job-list"></ul>
@@ -87,11 +127,37 @@
 
   <!-- ── Report ───────────────────────────────────────────────────────── -->
   <section id="screen-report" class="screen" hidden>
-    <button type="button" id="report-back" class="link">← Back to my reviews</button>
+    <button type="button" id="report-back" class="link">← Back to your documents</button>
     <h2 id="report-title">What changed</h2>
     <p id="report-headline" class="headline"></p>
     <div id="report-groups"></div>
     <div id="report-aside"></div>
+  </section>
+
+  <!-- ── Spending ─────────────────────────────────────────────────────── -->
+  <section id="screen-spending" class="screen" hidden>
+    <h2>Spending</h2>
+    <p class="muted">What DocProof has cost you, worked out from each
+      provider's published rates — including the overnight discount where it
+      applied. Their bill is the last word; this is here so a run that costs
+      ten times the last one is obvious.</p>
+
+    <div class="tiles" id="spend-tiles"></div>
+
+    <div class="card">
+      <h3>Month by month</h3>
+      <div id="spend-months"></div>
+    </div>
+
+    <div class="card">
+      <h3>By reviewer</h3>
+      <table class="table" id="spend-models"></table>
+    </div>
+
+    <div class="card">
+      <h3>Document by document</h3>
+      <table class="table" id="spend-recent"></table>
+    </div>
   </section>
 
   <!-- ── Prompts ──────────────────────────────────────────────────────── -->
@@ -162,6 +228,14 @@
         <span>Where should finished documents go?</span>
         <input type="text" id="output-dir">
       </label>
+      <label class="field">
+        <span>When preparing for layout, hand back</span>
+        <select id="prep-output-default">
+          <option value="indesign">A file ready for InDesign</option>
+          <option value="tracked">A tracked-changes Word file</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
       <label class="checkbox">
         <input type="checkbox" id="comments" checked>
         Explain every change in the document itself
@@ -174,6 +248,23 @@
           cheaper — the reasons are most of what gets written back. Your
           corrections are unaffected.</small>
       </label>
+    </div>
+
+    <div class="card">
+      <h3>The house style guide</h3>
+      <p class="muted">Manuscript prep tags paragraphs into this style set. It
+        is a file, not something built into DocProof — put your own
+        <code>house_styles.yaml</code> in the folder below and prep uses it
+        from the next document onwards. The <strong>name</strong> of each style
+        is what InDesign matches when you place the file, so it has to match
+        the template character for character.</p>
+      <p id="sheet-summary" class="muted"></p>
+      <p class="muted small">Replacement goes here:
+        <code id="sheet-override"></code></p>
+      <details class="card" id="sheet-styles">
+        <summary>The styles it will use</summary>
+        <table class="table" id="sheet-table"></table>
+      </details>
     </div>
 
     <button id="save-settings" class="primary">Save settings</button>

@@ -1,0 +1,432 @@
+"""Manuscript prep, from a styleless export to two finished files.
+
+The load-bearing test in here is `test_author_text_survives_*`: prep is allowed
+to restyle, remove blank lines and insert scene-break glyphs, and it is allowed
+to do nothing else to the author's text. Everything else is detail.
+"""
+from __future__ import annotations
+
+import pytest
+from lxml import etree
+
+from docproof import prep as preplib
+from docproof.config import load_config
+from docproof.ingest import IngestError
+from docproof.models import Usage
+from docproof.prep import rules, verify
+from docproof.prep.chunker import preview, split, windows
+from docproof.prep.ingest import BODY_PART, build_structure, preflight
+from docproof.prep.styles import (BODY, SPACING, StyleSheetError,
+                                  build_styles_xml, load_style_sheet)
+from docproof.prep.tagger import (Tagger, load_tagging_prompt, render_window)
+from docproof.prep.model import Tag
+from docproof.providers import ProviderResult
+from docproof.utils.xml_helpers import DocxPackage, paragraph_text, qn, walk_package
+
+from .conftest import FIXTURES
+from .fakes import FakeProvider, USAGE
+
+CONFIG = FIXTURES.parent.parent / "config" / "default.yaml"
+CONFIG_DIR = CONFIG.parent
+
+# The fixture's paragraphs, by position. Written out because every rules test
+# below is really a claim about one of these.
+TITLE, COPYRIGHT, CHAPTER = "body-0000", "body-0002", "body-0004"
+FIRST_BODY, SECOND_BODY = "body-0006", "body-0007"
+BREAK, AFTER_BREAK, LINK = "body-0008", "body-0009", "body-0010"
+ACKS = "body-0012"
+
+REALISTIC = {TITLE: "title page", COPYRIGHT: "copyright",
+             CHAPTER: "chapter # / title", BREAK: "scene break",
+             ACKS: "front/backmatter title"}
+
+
+@pytest.fixture
+def cfg():
+    return load_config(CONFIG)
+
+
+@pytest.fixture
+def sheet(cfg):
+    return load_style_sheet(CONFIG_DIR / cfg.prep.style_sheet)
+
+
+@pytest.fixture
+def prepared(cfg):
+    return preplib.prepare(cfg, FIXTURES / "googledoc.docx",
+                           config_dir=CONFIG_DIR)
+
+
+def run(cfg, prepared, tmp_path, canned=None, outputs=("indesign",)):
+    tags, usage = preplib.run_mock(prepared, canned)
+    return preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                          source_path=FIXTURES / "googledoc.docx",
+                          outputs=list(outputs))
+
+
+def styles_in(path) -> dict[str, str]:
+    """para_id → the style name applied, resolved through styles.xml."""
+    pkg = DocxPackage(path)
+    names = {s.get(qn("w:styleId")): s.find(qn("w:name")).get(qn("w:val"))
+             for s in pkg.tree("word/styles.xml").findall(qn("w:style"))}
+    out = {}
+    for wp in walk_package(pkg):
+        if wp.part != BODY_PART:
+            continue
+        el = wp.element.find(f"{qn('w:pPr')}/{qn('w:pStyle')}")
+        out[wp.para_id] = names.get(el.get(qn("w:val"))) if el is not None else None
+    return out
+
+
+# --- reading ------------------------------------------------------------------
+
+def test_every_paragraph_is_read_including_the_blank_ones(prepared):
+    """The review pipeline drops blanks, short lines and headings. Prep cannot:
+    a blank line is how an author writes a scene break."""
+    ids = [p.para_id for p in prepared.structure.paragraphs]
+    assert len(ids) == 14
+    assert ids == [f"body-{i:04d}" for i in range(14)]
+    assert sum(1 for p in prepared.structure.paragraphs if p.is_blank) == 5
+    # "Chapter One" is eleven characters — under the review pipeline's floor.
+    chapter = prepared.structure.paragraphs[4]
+    assert chapter.text == "Chapter One"
+
+
+def test_ids_match_the_shared_walker(prepared):
+    pkg = DocxPackage(FIXTURES / "googledoc.docx")
+    walked = [wp.para_id for wp in walk_package(pkg) if wp.part == BODY_PART]
+    assert [p.para_id for p in prepared.structure.paragraphs] == walked
+
+
+def test_typed_whitespace_and_italics_are_noticed(prepared):
+    body = prepared.structure.paragraphs[6]
+    assert body.leading_ws == 3
+    assert body.trailing_ws == 2
+    assert body.has_italics
+    assert prepared.structure.paragraphs[10].has_link
+
+
+def test_tracked_changes_are_refused_outright():
+    """Prep restyles every paragraph and deletes blank lines. Doing that on top
+    of somebody's unresolved edit would bury it."""
+    with pytest.raises(IngestError, match="tracked changes"):
+        preflight(FIXTURES / "tracked.docx")
+
+
+def test_an_idml_is_refused_with_the_reason():
+    with pytest.raises(IngestError, match="gets a manuscript INTO InDesign"):
+        preflight(FIXTURES / "layout.idml")
+
+
+# --- the style sheet ----------------------------------------------------------
+
+def test_the_style_sheet_is_the_only_source_of_style_names(sheet):
+    assert sheet.role("body_first").name == "body first"
+    assert sheet.role("scene_break").name == "scene break"
+    # The names the model may answer with are the sheet's, plus the two
+    # pseudo-roles that are not styles at all.
+    assert "chapter # / title" in sheet.model_choices
+    assert BODY in sheet.model_choices and SPACING in sheet.model_choices
+    assert "body first" not in sheet.model_choices    # only the rules apply it
+
+
+def test_word_style_ids_carry_the_house_names_verbatim(sheet):
+    """InDesign matches on the NAME when you place the file, and Word cannot
+    put "chapter # / title" in a styleId. Both have to be right."""
+    root = build_styles_xml(sheet)
+    names = {s.get(qn("w:styleId")): s.find(qn("w:name")).get(qn("w:val"))
+             for s in root.findall(qn("w:style"))}
+    assert names["ChapterTitle"] == "chapter # / title"
+    assert names["PartNumber"] == "part #"
+    assert names["FrontBackmatterTitle"] == "front/backmatter title"
+    assert len(set(names.values())) == len(names)     # no two styles collide
+
+
+def test_a_broken_style_sheet_says_what_to_fix(tmp_path):
+    bad = tmp_path / "house_styles.yaml"
+    bad.write_text("styles:\n  - name: body para\n    id: 'body para'\n",
+                   encoding="utf-8")
+    with pytest.raises(StyleSheetError, match="not a usable Word style id"):
+        load_style_sheet(bad)
+
+
+def test_a_replacement_sheet_wins_over_the_shipped_one(cfg, tmp_path):
+    """Dropping in another publisher's style set is a file, not a code change."""
+    (tmp_path / "house_styles.yaml").write_text(
+        (CONFIG_DIR / cfg.prep.style_sheet).read_text("utf-8")
+        .replace("Atmosphere Press prose template", "Some Other Press"),
+        encoding="utf-8")
+    sheet = load_style_sheet(CONFIG_DIR / cfg.prep.style_sheet,
+                             override_dir=tmp_path)
+    assert sheet.name == "Some Other Press"
+
+
+# --- the rules ----------------------------------------------------------------
+
+def plan_for(structure, sheet, canned):
+    tags = [Tag(p.para_id, canned.get(p.para_id,
+                                      SPACING if p.is_blank else BODY))
+            for p in structure.paragraphs]
+    return rules.build_plan(structure, tags, sheet)
+
+
+def test_the_first_paragraph_after_a_heading_is_body_first(prepared, sheet):
+    plan = plan_for(prepared.structure, sheet, REALISTIC).by_id()
+    assert plan[FIRST_BODY].style == "body first"
+    assert plan[SECOND_BODY].style == "body para"
+    assert plan[AFTER_BREAK].style == "body first"     # a break opens a block
+
+
+def test_a_scene_break_replaces_the_blank_line_it_was(prepared, sheet):
+    plan = plan_for(prepared.structure, sheet, REALISTIC).by_id()
+    assert plan[BREAK].insert_glyph and plan[BREAK].style == "scene break"
+    # Every other blank line is spacing, and spacing goes.
+    assert plan["body-0001"].drop and plan["body-0011"].drop
+
+
+def test_a_blank_under_a_heading_is_not_a_scene_break(prepared, sheet):
+    """The gap under "Chapter One" is the gap under a heading. Putting a glyph
+    there would open the chapter with a scene break."""
+    plan = plan_for(prepared.structure, sheet,
+                    {**REALISTIC, "body-0005": "scene break"})
+    by_id = plan.by_id()
+    assert by_id["body-0005"].drop and not by_id["body-0005"].insert_glyph
+    assert any(f.kind == "break_after_heading" for f in plan.flags)
+
+
+def test_a_paragraph_labelled_a_scene_break_but_full_of_prose_is_body(
+        prepared, sheet):
+    plan = plan_for(prepared.structure, sheet, {FIRST_BODY: "scene break"})
+    by_id = plan.by_id()
+    assert by_id[FIRST_BODY].style in ("body first", "body para")
+    assert any(f.kind == "long_scene_break" for f in plan.flags)
+
+
+def test_two_blank_lines_at_one_break_make_one_break(prepared, sheet):
+    plan = plan_for(prepared.structure, sheet,
+                    {**REALISTIC, "body-0011": "scene break"}).by_id()
+    # body-0008 is the break; body-0011 follows a body paragraph, so it is a
+    # real second break — the collapsing case is two blanks in a row, which
+    # this fixture expresses through the pair at 0001/0003.
+    assert plan[BREAK].insert_glyph
+    assert plan["body-0011"].insert_glyph
+
+
+# --- the InDesign-ready file --------------------------------------------------
+
+def test_the_clean_file_is_tagged_end_to_end(cfg, prepared, tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC)
+    applied = styles_in(outputs.documents["indesign"])
+    assert list(applied.values()) == [
+        "title page", "copyright", "chapter # / title", "body first",
+        "body para", "scene break", "body first", "body para",
+        "front/backmatter title", "body first"]
+    approved = {s.name for s in prepared.sheet.styles}
+    assert set(applied.values()) <= approved       # no stray styles at all
+
+
+def test_the_clean_file_is_cleaned_up(cfg, prepared, tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC)
+    pkg = DocxPackage(outputs.documents["indesign"])
+    body = pkg.tree(BODY_PART)
+    texts = [paragraph_text(p) for p in body.iter(qn("w:p"))]
+    assert not any(t.strip() == "" for t in texts)          # blanks gone
+    assert texts[3].startswith("The road")                  # typed spaces gone
+    assert texts[3].endswith("darker.")                     # and at the end
+    assert not list(body.iter(qn("w:sdt")))                 # goog_rdk gone
+    assert "***" in texts                                   # the break glyph
+
+
+def test_italics_and_links_survive_the_cleanup(cfg, prepared, tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC)
+    pkg = DocxPackage(outputs.documents["indesign"])
+    body = pkg.tree(BODY_PART)
+    italics = [t.text for t in body.iter(qn("w:t"))
+               if t.getparent().find(f"{qn('w:rPr')}/{qn('w:i')}") is not None]
+    assert italics == ["much"]
+    # The URL carries the hyperlink character style; nothing else does.
+    linked = [t.text for t in body.iter(qn("w:t"))
+              if t.getparent().find(f"{qn('w:rPr')}/{qn('w:rStyle')}") is not None]
+    assert linked == ["www.example.com/wildflower"]
+    # ...and the export's fonts and sizes are gone, so InDesign gets no
+    # local overrides to clear.
+    assert not list(body.iter(qn("w:rFonts")))
+    assert not list(body.iter(qn("w:sz")))
+
+
+def test_author_text_survives_the_clean_file(cfg, prepared, tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC)
+    check, = outputs.verifications
+    assert check.ok and check.view == "clean"
+    assert check.output_words == prepared.structure.word_count
+
+
+# --- the tracked-changes file -------------------------------------------------
+
+def test_the_tracked_file_says_both_things_at_once(cfg, prepared, tmp_path):
+    """Accept every change and you have the clean file; reject every change and
+    you have the manuscript back. Both are checked on the written file."""
+    outputs = run(cfg, prepared, tmp_path, REALISTIC, outputs=("tracked",))
+    views = {c.view: c for c in outputs.verifications}
+    assert set(views) == {"accept", "reject"}
+    assert all(c.ok for c in views.values())
+
+
+def test_the_tracked_file_records_what_each_style_was(cfg, prepared, tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC, outputs=("tracked",))
+    pkg = DocxPackage(outputs.documents["tracked"])
+    body = pkg.tree(BODY_PART)
+    changes = list(body.iter(qn("w:pPrChange")))
+    assert len(changes) == 10                       # every tagged paragraph
+    # A rejected change has to land on a style that still exists, so the
+    # tracked file keeps the document's own styles alongside the house set.
+    assert all(c.find(qn("w:pPr")) is not None for c in changes)
+
+    # A removed blank line is a deleted paragraph mark, not a vanished
+    # paragraph: nothing disappears without someone accepting it.
+    marks = [p for p in body.iter(qn("w:p"))
+             if p.find(f"{qn('w:pPr')}/{qn('w:rPr')}/{qn('w:del')}") is not None]
+    assert len(marks) == 4
+
+
+def test_the_tracked_file_inserts_the_break_as_a_revision(cfg, prepared,
+                                                          tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC, outputs=("tracked",))
+    pkg = DocxPackage(outputs.documents["tracked"])
+    inserted = [t.text for ins in pkg.tree(BODY_PART).iter(qn("w:ins"))
+                for t in ins.iter(qn("w:t"))]
+    assert inserted == ["***"]
+
+
+def test_the_tracked_file_keeps_the_authors_formatting(cfg, prepared, tmp_path):
+    """Stripping a Google export's fonts here would be hundreds of extra
+    revisions to click through. The placed file is the one that gets cleaned."""
+    outputs = run(cfg, prepared, tmp_path, REALISTIC, outputs=("tracked",))
+    pkg = DocxPackage(outputs.documents["tracked"])
+    assert list(pkg.tree(BODY_PART).iter(qn("w:rFonts")))
+
+
+# --- the gate -----------------------------------------------------------------
+
+def test_a_file_whose_words_drifted_is_not_shipped(cfg, prepared, tmp_path,
+                                                   monkeypatch):
+    """The one failure mode that matters. A writer that eats a word must not
+    produce a file, however plausible everything else looks."""
+    from docproof.prep.writers import clean as clean_writer
+    real = clean_writer.write_clean
+
+    def eats_a_word(pkg, structure, plan, sheet, **kw):
+        stats = real(pkg, structure, plan, sheet, **kw)
+        for t in pkg.tree(BODY_PART).iter(qn("w:t")):
+            if "remembered" in (t.text or ""):
+                t.text = t.text.replace("remembered", "")
+        return stats
+
+    monkeypatch.setattr(clean_writer, "write_clean", eats_a_word)
+    monkeypatch.setattr("docproof.prep.pipeline.write_clean", eats_a_word)
+
+    with pytest.raises(preplib.VerificationFailed, match="word 2[0-9]"):
+        run(cfg, prepared, tmp_path, REALISTIC)
+    assert not (tmp_path / "tagged_googledoc.docx").exists()
+    # The notes are still written: they are how anyone finds out what happened.
+    assert "Nothing was shipped" in (tmp_path / "prep_notes.md").read_text("utf-8")
+
+
+def test_the_glyph_is_not_counted_as_a_word_on_either_side():
+    source = verify.stream(["A scene ends.", "Another begins."], "***")
+    output = verify.stream(["A scene ends.", "***", "Another begins."], "***")
+    assert verify.compare(source, output, view="clean").ok
+
+
+def test_a_swapped_word_is_reported_with_its_place():
+    result = verify.compare(["the", "road", "was", "long"],
+                            ["the", "street", "was", "long"], view="clean")
+    assert not result.ok
+    assert "word 2" in result.detail and "'road'" in result.detail.replace('"', "'")
+
+
+# --- talking to the model -----------------------------------------------------
+
+def test_blank_lines_are_offered_as_blank_lines(prepared):
+    window = prepared.windows[0]
+    rendered = render_window(window, {}, header="Already labelled:",
+                             preview_chars=400)
+    assert '<blank id="body-0001"/>' in rendered
+    assert '<p id="body-0004" words="2">Chapter One</p>' in rendered
+
+
+def test_long_paragraphs_are_truncated_before_they_are_billed(prepared):
+    long_one = prepared.structure.paragraphs[6]
+    assert preview(long_one, 20).endswith("…")
+    assert len(preview(long_one, 20)) < len(long_one.text)
+
+
+def test_windows_carry_the_tail_of_the_one_before(prepared):
+    made = windows(prepared.structure.paragraphs, max_paragraphs=5,
+                   token_budget=10_000, context=2, preview_chars=400)
+    assert [len(w.paragraphs) for w in made] == [5, 5, 4]
+    assert [p.para_id for p in made[1].context] == ["body-0003", "body-0004"]
+
+
+def test_a_window_the_model_cannot_answer_is_retried_smaller(prepared, sheet,
+                                                              cfg):
+    """A failed window costs every paragraph in it, so it is halved and retried
+    before anything is given up on."""
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    ok = ProviderResult(parsed={"paragraphs": [
+        {"para_id": f"body-{i:04d}", "role": "body", "flag": ""}
+        for i in range(7)]}, usage=USAGE)
+    provider = FakeProvider([ProviderResult(stop_reason="max_tokens",
+                                            error="too long"), ok, ok])
+    tagger = Tagger(sheet, prompt, provider, model="test", max_paragraphs=14)
+    usage = Usage()
+    tags = tagger.tag(prepared.structure, usage)
+    assert len(provider.calls) == 3                 # one failure, two halves
+    assert len(tags) == 14
+
+
+def test_paragraphs_the_model_skipped_are_flagged_not_guessed(prepared, sheet,
+                                                              cfg):
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    partial = ProviderResult(parsed={"paragraphs": [
+        {"para_id": "body-0000", "role": "title page", "flag": ""}]},
+        usage=USAGE)
+    tagger = Tagger(sheet, prompt, FakeProvider([partial]), model="test")
+    tags = {t.para_id: t for t in tagger.tag(prepared.structure, Usage())}
+    assert tags["body-0000"].source == "model"
+    assert tags["body-0003"].source == "unanswered"
+    assert "by hand" in tags["body-0003"].flag
+
+
+def test_the_schema_only_admits_styles_the_template_has(sheet, cfg):
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    tagger = Tagger(sheet, prompt, FakeProvider(), model="test")
+    role = tagger.schema["$defs"]["RawTag"]["properties"]["role"]
+    assert set(role["enum"]) == set(sheet.model_choices)
+    assert "Heading 1" not in role["enum"]
+
+
+def test_the_prompt_names_the_style_set_it_was_built_from(sheet, cfg):
+    prompt = load_tagging_prompt(CONFIG_DIR / cfg.prep.tagging_prompt)
+    rendered = prompt.render(sheet)
+    assert sheet.name in rendered
+    assert "chapter # / title —" in rendered        # the sheet's own wording
+    assert "{choices}" not in rendered
+
+
+# --- the notes ----------------------------------------------------------------
+
+def test_the_notes_say_what_happened_and_what_to_decide(cfg, prepared,
+                                                        tmp_path):
+    outputs = run(cfg, prepared, tmp_path, REALISTIC, outputs=("indesign",
+                                                               "tracked"))
+    notes = outputs.notes_md.read_text("utf-8")
+    assert "chapter # / title" in notes            # the mapping, with counts
+    assert "identical to the manuscript" in notes  # the word-for-word result
+    assert "For the designer" in notes
+    import json
+    payload = json.loads(outputs.notes_json.read_text("utf-8"))
+    assert payload["verified"] is True
+    assert payload["counts"]["scene_breaks_inserted"] == 1
+    assert payload["counts"]["blank_lines_removed"] == 4
+    assert payload["style_sheet"]["name"] == prepared.sheet.name

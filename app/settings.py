@@ -49,11 +49,18 @@ class Paths:
         return self.root / "error_types"
 
     @property
+    def prep(self) -> Path:
+        """A house style set the publisher dropped in themselves. A
+        house_styles.yaml here replaces the shipped one wholesale, which is how
+        a different template gets prepped for without a new build."""
+        return self.root / "prep"
+
+    @property
     def settings_file(self) -> Path:
         return self.root / "settings.json"
 
     def ensure(self) -> "Paths":
-        for d in (self.root, self.uploads, self.jobs, self.prompts):
+        for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep):
             d.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -76,6 +83,9 @@ class Settings:
     min_confidence: str = "medium"
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
+    # Which file manuscript prep hands back by default: the InDesign-ready
+    # .docx, the tracked-changes .docx, or both.
+    prep_output: str = "indesign"
     comments: bool = True
     # Ask the model why each change was made. Off is materially cheaper —
     # the reasons are most of what the model writes back.
