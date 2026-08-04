@@ -35,7 +35,16 @@
       "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/probe.py)",
       "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/probe2.py)",
       "Bash(.venv/bin/python -m pytest tests/test_app.py -q -k \"crash_midway or keeps_failing or clock_face\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(echo \"exit:$?\")",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(.venv/bin/python -m pytest tests/test_providers.py -q)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/measure.py)",
+      "Bash(python3 -)",
+      "Bash(.venv/bin/pyinstaller DocProof.spec --noconfirm --distpath dist --workpath build)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(.venv/bin/pyinstaller DocProof.spec --noconfirm)",
+      "Bash(echo \"build exit=$?\")"
     ]
   }
 }
