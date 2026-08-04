@@ -9,13 +9,25 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger("docproof.app.settings")
 
+
+def resource_root() -> Path:
+    """Where the shipped config and frontend live.
+
+    Inside a PyInstaller bundle that is the unpacked bundle directory; from a
+    source checkout it is the repository root. Nothing writable belongs here —
+    a packaged .app is read-only, and user state goes to `default_root()`."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    return Path(bundled) if bundled else Path(__file__).resolve().parent.parent
+
 KEYCHAIN_SERVICE = "docproof"
-ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY"}
 
 
 @dataclass(frozen=True)
@@ -31,11 +43,17 @@ class Paths:
         return self.root / "jobs"
 
     @property
+    def prompts(self) -> Path:
+        """Edited error-type prompts. Shadows the shipped config/error_types
+        per key, so it lives outside the app bundle and survives updates."""
+        return self.root / "error_types"
+
+    @property
     def settings_file(self) -> Path:
         return self.root / "settings.json"
 
     def ensure(self) -> "Paths":
-        for d in (self.root, self.uploads, self.jobs):
+        for d in (self.root, self.uploads, self.jobs, self.prompts):
             d.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -59,6 +77,9 @@ class Settings:
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     comments: bool = True
+    # Ask the model why each change was made. Off is materially cheaper —
+    # the reasons are most of what the model writes back.
+    explanations: bool = True
 
     @classmethod
     def load(cls, paths: Paths) -> "Settings":

@@ -6,3 +6,5 @@ output/
 .DS_Store
 tests/fixtures/*.docx
 jobs/
+build/
+dist/
