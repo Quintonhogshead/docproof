@@ -11,7 +11,31 @@
       "Bash(.venv/bin/python -m docproof inventory SomeDocument.docx)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -m pytest tests/ -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_error_types.py -q)",
+      "Bash(.venv/bin/python -m docproof inventory tests/fixtures/simple.docx)",
+      "Bash(.venv/bin/python -m docproof review tests/fixtures/simple.docx --error-types spelling+repeated_word,comma_splice --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/af61b727-7088-4346-baea-d2248a5c3ad6/scratchpad/mocks.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/af61b727-7088-4346-baea-d2248a5c3ad6/scratchpad/out2)",
+      "Bash(git -C /Users/quintonjohnson/Desktop/Atmosphere/docproof status --short)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git branch *)",
+      "Bash(.venv/bin/python -c \"import docproof, sys; print\\(docproof.__file__\\); print\\(sys.version\\)\")",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(.venv/bin/pip list *)",
+      "WebSearch",
+      "Bash(.venv/bin/python -m docproof inventory \"Bonesaw Joes Hack Test.docx\")",
+      "Bash(.venv/bin/python -m docproof review tests/fixtures/simple.docx)",
+      "Bash(.venv/bin/python -m pytest tests/test_app.py -q)",
+      "Bash(rm -f app/static/_tmp_fixture.docx *)",
+      "Bash(ps -o pid,stat,etime,time,%cpu,command -p 95606)",
+      "Bash(pmset -g log)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/probe.py)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/39e67ce5-ec96-4a20-9f73-1e2c6c15e98f/scratchpad/probe2.py)",
+      "Bash(.venv/bin/python -m pytest tests/test_app.py -q -k \"crash_midway or keeps_failing or clock_face\")",
+      "Bash(git commit *)"
     ]
   }
 }
