@@ -21,6 +21,9 @@ terminal. To build it:
 .venv/bin/pyinstaller DocProof.spec
 ```
 
+Or `tools/update.sh --install`, which does that plus the tests and the copy
+into `/Applications` — see [below](#which-version-am-i-running-and-how-do-i-update).
+
 The Dock icon comes from `app/DocProof.icns`, which is checked in so a build
 needs nothing but PyInstaller. To change it, edit the values in
 `tools/make_icon.py` and run it — it draws every size with Core Graphics and
@@ -55,6 +58,48 @@ rather than at 11pm. If `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
 automatically and take precedence.
 
 Finished documents land in `~/Documents/DocProof/<document name>/`.
+
+## Which version am I running, and how do I update?
+
+**Settings → This version** prints it: version, build date, the commit it was
+built from, and the branch. `docproof --version` answers from the same place
+in the terminal.
+
+The version number lives in
+[`docproof/__init__.py`](../docproof/__init__.py) and nowhere else — pyproject
+reads it, `DocProof.spec` stamps it into the bundle's `Info.plist`, and the app
+shows it. Releasing is editing one line.
+
+A version alone doesn't identify a build, though: `0.1.0` covers every commit
+until it doesn't, and two `DocProof.app`s a month apart otherwise look
+identical. So the spec also stamps the commit, the branch, the build time and
+the path of the source folder it was built from, into `build_info.json` inside
+the bundle.
+
+**Check for a newer build** uses that last field. There is no update server to
+ask — this app is built on the machine it runs on — so the question is put to
+the local checkout instead: has `HEAD` moved since the commit this build was
+made from, and by how much. It answers in a sentence, and only ever runs
+because you pressed it. Nothing is downloaded and nothing checks on its own,
+which is deliberate: the bundle is unsigned, and an app that fetched and ran
+new code on your behalf would be a worse idea than a script you can read.
+
+Updating is that script:
+
+```bash
+tools/update.sh --install
+```
+
+It prints where you are, pulls if there is a remote to pull from, runs the
+tests, rebuilds, and replaces `/Applications/DocProof.app`. Without
+`--install` it stops at `dist/` so you can look first; `--skip-tests` skips the
+suite. It refuses to install while DocProof is running — macOS will let you
+swap a bundle out from under an open app, and it misbehaves later rather than
+immediately, which is the worst time to find out.
+
+Running from a checkout (`.venv/bin/docproof-app`) there is nothing to update:
+the source *is* what is running, and the check says so — mentioning
+uncommitted changes if there are any.
 
 ## What are you starting with?
 
@@ -244,8 +289,8 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-224 tests, none of which touch a network, and none of which start InDesign.
-Every vendor call goes through the
+239 tests, none of which touch a network, and none of which start InDesign or
+run git against the real checkout. Every vendor call goes through the
 `Provider` protocol, so `tests/fakes.py` covers both the synchronous and batch
 paths — including a scripted batch provider that reports in-progress polls so
 restart and resume behaviour is exercised without sleeping. Response parsing
