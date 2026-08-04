@@ -202,8 +202,100 @@ button:hover { border-color: var(--accent); }
 .job-actions a { text-decoration: none; }
 .job-error { margin-top: 0.5rem; font-size: 0.88rem; }
 
+/* ── picking sections ──────────────────────────────────────────────────── */
+
+details.sections { grid-column: 1 / -1; margin-top: 0.6rem; }
+details.sections > summary {
+  cursor: pointer;
+  font-size: 0.88rem;
+  color: var(--accent);
+}
+.section-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0 0 0 0.2rem;
+  display: grid;
+  gap: 0.45rem;
+  max-height: 17rem;
+  overflow-y: auto;
+}
+.section-list .checkbox { align-items: start; gap: 0.5rem; font-size: 0.9rem; }
+.section-list em { font-style: normal; }
+
+/* ── the report ────────────────────────────────────────────────────────── */
+
+.headline {
+  font-size: 1.05rem;
+  margin: 0 0 1.2rem;
+  color: var(--ink);
+}
+
+.finding {
+  border-left: 3px solid var(--line);
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  margin: 0 0 0.2rem;
+}
+.finding + .finding { margin-top: 1rem; }
+
+.diff { margin: 0.15rem 0; line-height: 1.55; }
+.diff-before { color: var(--muted); }
+.diff-before mark {
+  background: none;
+  color: var(--warn);
+  text-decoration: line-through;
+}
+.diff-after mark {
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 0 0.15em;
+  font-weight: 600;
+}
+.diff mark { color: inherit; }
+.finding-foot { font-size: 0.86rem; margin: 0.35rem 0 0; }
+
+/* ── prompts ───────────────────────────────────────────────────────────── */
+
+.tag {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  vertical-align: 0.1em;
+}
+
+.prompt-edit {
+  width: 100%;
+  font: 0.86rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.8rem;
+  resize: vertical;
+}
+
+.prompt-preview {
+  font: 0.8rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.8rem;
+  margin: 0.6rem 0 0;
+  max-height: 26rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.card > summary { cursor: pointer; font-weight: 600; }
+
 @media (max-width: 34rem) {
   header { padding: 0.9rem 1rem; }
   main { padding: 1.25rem 1rem 4rem; }
   .job-head { flex-direction: column; gap: 0.25rem; }
+  .section-list { max-height: 12rem; }
 }

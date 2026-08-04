@@ -33,7 +33,8 @@ def client(tmp_path, provider, monkeypatch):
     monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
     monkeypatch.setattr("app.main.key_status", lambda: {
         "anthropic": {"configured": True, "source": "environment"},
-        "openai": {"configured": True, "source": "environment"}})
+        "openai": {"configured": True, "source": "environment"},
+        "gemini": {"configured": True, "source": "environment"}})
 
     # Run a single error-type pass so a scripted finding is unambiguous about
     # which pass it belongs to. Uploads still preflight against the real config.
@@ -247,6 +248,105 @@ def test_a_restarted_app_resumes_an_in_flight_batch(client, provider, tmp_path):
     assert fresh.store.get(job["id"]).state == "done"
 
 
+# --- picking sections ---------------------------------------------------------
+
+def test_upload_lists_the_sections_a_user_can_pick(client):
+    staged = _upload(client)
+    assert len(staged["chunks"]) == staged["sections"]
+    section = staged["chunks"][0]
+    # The picker is built from the user's own prose, not from chunk ids.
+    assert SPLICE in section["preview"]
+    assert section["paragraphs"] >= 1 and section["est_tokens"] > 0
+    # Uploads preflight against the real config, so the picker prices a
+    # section at the full three passes even though this test runs one.
+    assert staged["passes"] == 3
+    assert staged["requests"] == staged["sections"] * staged["passes"]
+
+
+def test_a_review_can_be_limited_to_chosen_sections(client, provider):
+    staged = _upload(client)
+    picked = [staged["chunks"][0]["chunk_id"]]
+    job = _run(client, staged["id"], mode="batch",
+               selections={staged["id"]: picked})
+    client.app_state.runner.wait_idle()
+
+    assert client.app_state.store.get(job["id"]).selection == picked
+    # The batch that went out covers only the picked section.
+    assert len(provider.calls[0]["requests"]) == len(picked)
+
+    client.post("/api/tick")
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
+
+
+def test_a_null_selection_means_the_whole_document(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], selections={staged["id"]: None})
+    assert client.app_state.store.get(job["id"]).selection is None
+
+
+# --- prompts ------------------------------------------------------------------
+
+def test_prompts_screen_shows_what_will_be_sent(client):
+    body = client.get("/api/prompts").json()
+    assert len(body["types"]) == 11
+    assert all(t["detection_prompt"] for t in body["types"])
+    assert not any(t["edited"] for t in body["types"])
+    # The assembled message is the real one, not a description of it.
+    joined = " ".join(p["system_prompt"] for p in body["passes"])
+    assert "ERROR TYPE: comma_splice" in joined
+    assert body["sample_user_turn"].startswith('<paragraph id=')
+
+
+def test_an_edited_prompt_is_used_by_the_next_review(client, provider):
+    saved = client.put("/api/prompts/comma_splice",
+                       json={"detection_prompt": "ZZZ-SENTINEL-ZZZ"})
+    assert saved.status_code == 200
+    edited = [t for t in saved.json()["types"]
+              if t["key"] == "comma_splice"][0]
+    assert edited["edited"] is True
+
+    staged = _upload(client)
+    _run(client, staged["id"])
+    client.app_state.runner.wait_idle()
+    assert "ZZZ-SENTINEL-ZZZ" in provider.calls[0]["system"]
+
+    reset = client.delete("/api/prompts/comma_splice").json()
+    assert not any(t["edited"] for t in reset["types"])
+
+
+def test_an_empty_prompt_is_refused(client):
+    assert client.put("/api/prompts/comma_splice",
+                      json={"detection_prompt": "   "}).status_code == 400
+    assert client.put("/api/prompts/not_a_type",
+                      json={"detection_prompt": "x"}).status_code == 400
+
+
+# --- the report ---------------------------------------------------------------
+
+def test_report_reads_back_the_finished_review(client, provider):
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    staged = _upload(client)
+    job = _run(client, staged["id"])
+    client.app_state.runner.wait_idle()
+
+    report = client.get(f"/api/jobs/{job['id']}/report").json()
+    assert report["headline"]["applied"] == 1
+    group = report["groups"][0]
+    # Error types are named, not keyed, and the fix is shown as a diff.
+    assert group["error_name"] == "Comma splice"
+    finding = group["findings"][0]
+    assert [s["text"] for s in finding["after"] if s["changed"]] == ["finished;"]
+    assert finding["confidence_word"] == "Confident"
+
+
+def test_report_is_absent_until_there_are_results(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch")
+    assert client.get(f"/api/jobs/{job['id']}/report").status_code == 404
+
+
 # --- models and settings ------------------------------------------------------
 
 def test_models_endpoint_prices_the_staged_files(client):
@@ -254,7 +354,8 @@ def test_models_endpoint_prices_the_staged_files(client):
     body = client.get(f"/api/models?file_ids={staged['id']}").json()
     by_id = {m["id"]: m for m in body["models"]}
 
-    assert {m["provider"] for m in body["models"]} == {"anthropic", "openai"}
+    assert {m["provider"] for m in body["models"]} == {"anthropic", "openai",
+                                                       "gemini"}
     opus = by_id["claude-opus-5"]
     assert opus["cost_now"] > opus["cost_batch"] > 0
     # Batch is exactly half, at any hour — the UI copy depends on this.

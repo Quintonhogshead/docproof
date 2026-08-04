@@ -59,6 +59,8 @@ class Job:
     applied: int | None = None
     results_dir: str | None = None
     min_confidence: str = "medium"
+    # Which sections the user picked, or None for the whole document.
+    selection: list[str] | None = None
     created_at: str = ""
     updated_at: str = ""
 
@@ -197,6 +199,9 @@ class JobRunner:
         cfg.api.model = job.model
         cfg.min_confidence = job.min_confidence
         cfg.comments = self.settings.comments
+        cfg.report_explanations = self.settings.explanations
+        # Prompts the user has edited win over the shipped ones, per key.
+        cfg.error_type_override_dir = str(self.store.paths.prompts)
         return cfg
 
     def _provider(self, cfg: Config):
@@ -243,7 +248,8 @@ class JobRunner:
         cfg = self.config_for(job)
         try:
             provider = self._provider(cfg)
-            prepared = prepare(cfg, job.source_path, self.error_dir)
+            prepared = prepare(cfg, job.source_path, self.error_dir,
+                               selection=job.selection)
         except (ProviderError, IngestError, FileNotFoundError, ValueError) as e:
             self.store.update(job_id, state="failed", error=str(e))
             return
@@ -271,7 +277,8 @@ class JobRunner:
         try:
             provider = self._provider(cfg)
             batch_job = batchlib.submit(cfg, job.source_path, self.error_dir,
-                                        provider, self.store.paths.jobs)
+                                        provider, self.store.paths.jobs,
+                                        selection=job.selection)
         except (ProviderError, IngestError, batchlib.BatchError,
                 FileNotFoundError, ValueError) as e:
             self.store.update(job_id, state="failed", error=str(e))

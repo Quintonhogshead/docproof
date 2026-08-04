@@ -12,6 +12,7 @@
   <nav>
     <button class="tab" data-screen="drop" aria-current="true">Review documents</button>
     <button class="tab" data-screen="jobs">My reviews <span id="jobs-badge" hidden></span></button>
+    <button class="tab" data-screen="prompts">What it looks for</button>
     <button class="tab" data-screen="settings">Settings</button>
   </nav>
 </header>
@@ -82,6 +83,35 @@
     <ul id="job-list"></ul>
   </section>
 
+  <!-- ── Report ───────────────────────────────────────────────────────── -->
+  <section id="screen-report" class="screen" hidden>
+    <button type="button" id="report-back" class="link">← Back to my reviews</button>
+    <h2 id="report-title">What changed</h2>
+    <p id="report-headline" class="headline"></p>
+    <div id="report-groups"></div>
+    <div id="report-aside"></div>
+  </section>
+
+  <!-- ── Prompts ──────────────────────────────────────────────────────── -->
+  <section id="screen-prompts" class="screen" hidden>
+    <h2>What it looks for</h2>
+    <p class="muted">These are the instructions DocProof sends with your
+      document — one section per kind of mistake. Edit any of them to change
+      what gets flagged. Your edits are yours: the originals are never
+      overwritten, and <strong>Reset</strong> puts one back.</p>
+
+    <div id="prompt-list"></div>
+
+    <details class="card" id="assembled">
+      <summary>See exactly what gets sent</summary>
+      <p class="muted">Every review sends one of these, plus your paragraphs.
+        This is the whole message, verbatim.</p>
+      <div id="assembled-passes"></div>
+      <h4>…followed by your document, in this shape:</h4>
+      <pre id="assembled-sample" class="prompt-preview"></pre>
+    </details>
+  </section>
+
   <!-- ── Settings ─────────────────────────────────────────────────────── -->
   <section id="screen-settings" class="screen" hidden>
     <h2>Settings</h2>
@@ -112,6 +142,16 @@
         </span>
         <small class="status" id="status-openai"></small>
       </label>
+
+      <label class="field">
+        <span>Gemini key <small class="muted">from aistudio.google.com</small></span>
+        <span class="row">
+          <input type="password" id="key-gemini" placeholder="AIza…"
+                 autocomplete="off">
+          <button type="button" data-test="gemini">Test</button>
+        </span>
+        <small class="status" id="status-gemini"></small>
+      </label>
     </div>
 
     <div class="card">
@@ -123,6 +163,13 @@
       <label class="checkbox">
         <input type="checkbox" id="comments" checked>
         Add a margin comment explaining every change
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="explanations" checked>
+        Ask for a reason with every change
+        <small class="muted">Turning this off makes reviews noticeably
+          cheaper — the reasons are most of what gets written back. Your
+          corrections are unaffected.</small>
       </label>
     </div>
 
