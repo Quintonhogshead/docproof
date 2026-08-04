@@ -39,6 +39,7 @@ from .prompts import (PromptError, assembled_passes, clear_override,
 from .report import build_report
 from .settings import (Paths, Settings, default_root, delete_api_key,
                        get_api_key, key_status, resource_root, set_api_key)
+from .version import build_info, check_for_update
 
 log = logging.getLogger("docproof.app")
 
@@ -354,6 +355,19 @@ def _register(app: FastAPI) -> None:
             "output_tokens": prepared.est_output_tokens,
             "style_sheet": prepared.sheet.name,
         }, None
+
+    # -- which build is this --------------------------------------------------
+
+    @app.get("/api/version")
+    def version() -> dict:
+        return build_info()
+
+    @app.get("/api/version/check")
+    def version_check() -> dict:
+        """Whether the source this build came from has moved on. Only ever
+        called because somebody pressed the button: nothing here runs on its
+        own, and it reads a local checkout rather than the network."""
+        return check_for_update()
 
     @app.get("/api/formats")
     def formats() -> dict:

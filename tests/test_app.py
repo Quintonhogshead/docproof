@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.jobs import Job, JobRunner, JobStore  # noqa: F401 - JobRunner patched
 from app.main import create_app
+from docproof import __version__ as docproof_version
 from app.settings import Paths, Settings
 from .conftest import FIXTURES
 from .fakes import ScriptedBatchProvider, finding_result
@@ -111,6 +112,22 @@ def test_upload_accepts_an_indesign_layout(client):
 
 def test_staged_file_says_which_application_it_came_from(client):
     assert _upload(client)["format"]["name"] == "Word"
+
+
+def test_the_app_can_say_which_build_it_is(client):
+    body = client.get("/api/version").json()
+    assert body["version"] == docproof_version
+    assert set(body) >= {"version", "built", "commit", "source", "frozen"}
+
+
+def test_checking_for_a_newer_build_answers_in_a_sentence(client, monkeypatch):
+    """However it goes — up to date, behind, or the source folder gone — the
+    button has something to print. Nothing here reaches a network."""
+    monkeypatch.setattr("app.main.check_for_update",
+                        lambda: {"ok": True, "current": False,
+                                 "message": "There are 3 changes …"})
+    body = client.get("/api/version/check").json()
+    assert body["current"] is False and body["message"].startswith("There are")
 
 
 def test_formats_endpoint_lists_what_can_be_read(client):

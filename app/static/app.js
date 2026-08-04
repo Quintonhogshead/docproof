@@ -1093,6 +1093,7 @@ async function loadSettings() {
   $('explanations').checked = settings.explanations;
   $('prep-output-default').value = settings.prep_output || 'indesign';
   loadStyleSheet().catch(() => {});
+  loadVersion().catch(() => {});
   Object.entries(keys).forEach(([provider, info]) => {
     const el = $(`status-${provider}`);
     if (!el) return;
@@ -1148,6 +1149,44 @@ document.querySelectorAll('[data-test]').forEach((button) => {
       el.className = 'status error';
     }
   });
+});
+
+// ── which build this is ───────────────────────────────────────────────────
+
+// A build is identified by more than its version number: two .apps can both
+// say 0.1.0 and be a month apart, and the commit is what tells them apart.
+async function loadVersion() {
+  const v = await api('/api/version');
+  const bits = [`Version ${v.version}`];
+  if (v.built) {
+    bits.push(`built ${new Date(v.built).toLocaleDateString(undefined,
+      { year: 'numeric', month: 'short', day: 'numeric' })}`);
+  } else {
+    bits.push('running from the source');
+  }
+  if (v.commit) bits.push(`commit ${v.commit}`);
+  if (v.branch && v.branch !== 'main') bits.push(`on ${v.branch}`);
+  $('version-summary').textContent = `${bits.join(' · ')}.`;
+}
+
+$('version-check').addEventListener('click', async () => {
+  const button = $('version-check');
+  const note = $('version-status');
+  button.disabled = true;
+  note.className = 'action-note muted';
+  note.textContent = 'Looking…';
+  note.hidden = false;
+  try {
+    const r = await api('/api/version/check');
+    note.className = `action-note ${r.ok && r.current ? 'ok'
+                                  : r.ok ? '' : 'error'}`;
+    note.textContent = r.message;
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
 });
 
 // ── the house style guide ─────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 [project]
 name = "docproof"
-version = "0.1.0"
+# Read from docproof/__init__.py — see [tool.setuptools.dynamic] below.
+dynamic = ["version"]
 description = "LLM-assisted grammar review with native Word tracked changes"
 requires-python = ">=3.11"
 dependencies = [
@@ -40,6 +41,9 @@ docproof-desktop = "app.desktop:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "docproof.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["docproof*", "app*"]

@@ -11,7 +11,50 @@
 # them through sys._MEIPASS once frozen. Everything the user creates —
 # settings, jobs, edited prompts — lives in ~/Library/Application Support and
 # is deliberately not in here.
+import ast
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
+
+
+def _version() -> str:
+    """Read docproof.__version__ without importing the package — at build time
+    the dependencies may not be importable, and the answer is one line of
+    text."""
+    for line in Path("docproof/__init__.py").read_text("utf-8").splitlines():
+        if line.startswith("__version__"):
+            return ast.literal_eval(line.split("=", 1)[1].strip())
+    raise SystemExit("docproof/__init__.py has no __version__")
+
+
+def _git(*args: str) -> str:
+    try:
+        done = subprocess.run(["git", *args], capture_output=True, text=True,
+                              timeout=10)
+        return done.stdout.strip() if done.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""                        # a source tarball is not a checkout
+
+
+VERSION = _version()
+
+# Stamped into the bundle so the running app can say exactly what it is and,
+# because it remembers where it was built from, whether that source has moved
+# on since. Written under build/ rather than into the source tree.
+BUILD_INFO = Path("build/build_info.json")
+BUILD_INFO.parent.mkdir(parents=True, exist_ok=True)
+BUILD_INFO.write_text(json.dumps({
+    "version": VERSION,
+    "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    "commit": _git("rev-parse", "--short", "HEAD"),
+    "branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+    # Absolute, so a bundle dragged to /Applications can still find the repo
+    # it came from when asked whether there is anything newer.
+    "source": str(Path.cwd()),
+}, indent=2), encoding="utf-8")
 
 # The Dock, the Finder and ⌘-Tab all read this. It is checked in rather than
 # generated at build time so a build needs nothing but PyInstaller; to change
@@ -21,6 +64,7 @@ ICON = "app/DocProof.icns"
 datas = [
     ("config", "config"),
     ("app/static", "app/static"),
+    (str(BUILD_INFO), "."),
 ]
 
 hiddenimports = [
@@ -76,7 +120,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "DocProof",
         "CFBundleDisplayName": "DocProof",
-        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": VERSION,
         "NSHighResolutionCapable": True,
         # No document types are declared: files come in by drag-and-drop onto
         # the window, not by DocProof claiming .docx from Word.

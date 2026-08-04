@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+from . import __version__
 from . import batch as batchlib
 from .analyzer import MockAnalyzer
 from .config import load_config
@@ -26,6 +27,8 @@ def main(argv=None) -> int:
         prog="docproof",
         description="LLM-assisted grammar review with native tracked changes, "
                     "in Word (.docx) and InDesign (.idml) files.")
+    ap.add_argument("--version", action="version",
+                    version=f"docproof {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     inv = sub.add_parser("inventory",
