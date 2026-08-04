@@ -4,6 +4,7 @@ is called directly."""
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -168,6 +169,68 @@ def test_scheduled_job_holds_until_its_time(client, monkeypatch):
     client.post("/api/tick")
     client.app_state.runner.wait_idle()
     assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "waiting"
+
+
+def test_a_crash_midway_through_collection_is_picked_up_again(client, provider):
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch")
+    client.app_state.runner.wait_idle()
+
+    # The app died after the results landed but before the document was
+    # written. They are still at the vendor and already paid for, so the next
+    # tick has to finish the job rather than leave it saying "almost done".
+    client.app_state.store.update(job["id"], state="collecting")
+
+    client.post("/api/tick")
+    done = client.get(f"/api/jobs/{job['id']}").json()
+    assert done["state"] == "done", done.get("error")
+    assert client.get(f"/api/jobs/{job['id']}/file/docx").status_code == 200
+
+
+def test_collection_that_keeps_failing_asks_for_attention(client, monkeypatch):
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch")
+    client.app_state.runner.wait_idle()
+
+    def boom(*a, **k):
+        raise RuntimeError("disk is full")
+
+    monkeypatch.setattr("app.jobs.batchlib.collect", boom)
+    client.post("/api/tick")
+
+    failed = client.get(f"/api/jobs/{job['id']}").json()
+    # Not left in `collecting`, which the ticker would now retry forever.
+    assert failed["state"] == "failed"
+    assert "disk is full" in failed["error"]
+    assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
+
+
+def test_a_schedule_names_a_time_on_a_day_not_just_a_clock_face(tmp_path):
+    runner = JobRunner(JobStore(Paths(tmp_path)), Settings(),
+                       config_path=tmp_path / "config.yaml")
+    created = datetime.now().astimezone().replace(hour=12, minute=0, second=0,
+                                                  microsecond=0)
+
+    def job(at):
+        return Job(id="j", filename="f.docx", source_path="/f.docx", model="m",
+                   mode="batch", state="scheduled", schedule_at=at,
+                   created_at=created.isoformat())
+
+    # 02:00 has already gone by for a job made at midday: it belongs to
+    # tomorrow morning, not to right now.
+    assert runner._scheduled_for(job("02:00")) == (
+        created + timedelta(days=1)).replace(hour=2)
+    assert runner._due(job("02:00")) is False
+
+    # A time still ahead on the same day is left where it is.
+    assert runner._scheduled_for(job("23:00")) == created.replace(hour=23)
+
+    # Nothing unparseable is allowed to strand a job forever.
+    assert runner._scheduled_for(job("half past nine")) is None
+    assert runner._due(job("half past nine")) is True
 
 
 def test_a_restarted_app_resumes_an_in_flight_batch(client, provider, tmp_path):

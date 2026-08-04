@@ -14,7 +14,7 @@ import queue
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, time as dtime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from docproof import batch as batchlib
@@ -300,18 +300,32 @@ class JobRunner:
             if job.state == "scheduled" and self._due(job):
                 self.store.update(job.id, state="queued")
                 self.queue.put(job.id)
-            elif job.state == "waiting":
+            # `collecting` is included so a job interrupted partway through
+            # collection is picked up again: the results are still at the
+            # vendor, and both poll and collect can be re-run.
+            elif job.state in ("waiting", "collecting"):
                 self._advance_batch(job)
 
     def _due(self, job: Job) -> bool:
+        target = self._scheduled_for(job)
+        return target is None or datetime.now().astimezone() >= target
+
+    def _scheduled_for(self, job: Job) -> datetime | None:
+        """When a scheduled job should actually go, or None for "right now".
+
+        The time is the first HH:MM on or after the moment the job was made,
+        which is the difference between "tonight at 2 AM" and "2 AM already
+        happened today, go immediately"."""
         if not job.schedule_at:
-            return True
+            return None
         try:
             hh, mm = (int(p) for p in job.schedule_at.split(":", 1))
-            target = dtime(hour=hh, minute=mm)
-        except (TypeError, ValueError):
-            return True                       # unparseable: don't strand it
-        return datetime.now().time() >= target
+            created = datetime.fromisoformat(job.created_at).astimezone()
+            target = created.replace(hour=hh, minute=mm, second=0,
+                                     microsecond=0)
+        except (AttributeError, TypeError, ValueError):
+            return None                       # unparseable: don't strand it
+        return target if target >= created else target + timedelta(days=1)
 
     def _advance_batch(self, job: Job) -> None:
         batch_id = self._batch_job_id(job)
@@ -341,7 +355,11 @@ class JobRunner:
         try:
             outputs = batchlib.collect(batch_job, provider, self.error_dir,
                                        self.store.paths.jobs, out_dir=out)
-        except (batchlib.BatchError, IngestError, ValueError) as e:
+        except Exception as e:                # noqa: BLE001
+            # Anything uncaught here would otherwise leave the job in
+            # `collecting`, which the ticker now retries — so a permanent
+            # failure has to become a state the user can see and retry.
+            log.exception("Collecting %s failed", job.id)
             self.store.update(job.id, state="failed", error=str(e))
             return
         self.store.update(job.id, state="done", applied=outputs.applied,
