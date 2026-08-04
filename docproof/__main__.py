@@ -13,7 +13,7 @@ from .config import load_config
 from .ingest import IngestError
 from .logging_setup import setup_logging
 from .models import Usage
-from .pipeline import finish, prepare, run_sync
+from .pipeline import chunk_outline, finish, prepare, run_sync
 from .providers import ProviderError, build_provider, estimate_cost
 
 log = logging.getLogger("docproof.main")
@@ -37,6 +37,10 @@ def main(argv=None) -> int:
     _common(rev)
     rev.add_argument("--max-chunks", type=int,
                      help="review only the first N chunks (cheap smoke test)")
+    rev.add_argument("--only", help="review only these sections: "
+                                    "comma-separated chunk ids from "
+                                    "`docproof inventory` "
+                                    "(e.g. chunk-003,chunk-007)")
     rev.add_argument("--mock-findings",
                      help="JSON file of raw findings; skips the API entirely")
 
@@ -45,6 +49,10 @@ def main(argv=None) -> int:
                        "results within hours)")
     _common(sub_batch)
     sub_batch.add_argument("--max-chunks", type=int)
+    sub_batch.add_argument("--only", help="review only these sections: "
+                                          "comma-separated chunk ids from "
+                                          "`docproof inventory` "
+                                          "(e.g. chunk-003,chunk-007)")
     sub_batch.add_argument("--workspace", default=DEFAULT_WORKSPACE)
 
     st = sub.add_parser("status", help="show queued batch reviews")
@@ -75,6 +83,13 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model")
     p.add_argument("--min-confidence", choices=["low", "medium", "high"])
     p.add_argument("--no-comments", action="store_true")
+
+
+def _selection(args) -> list[str] | None:
+    raw = getattr(args, "only", None)
+    if not raw:
+        return None
+    return [c.strip() for c in raw.split(",") if c.strip()]
 
 
 def _configure(args):
@@ -121,6 +136,10 @@ def cmd_inventory(args) -> int:
     if now is not None:
         print(f"\nRough cost on {cfg.api.model}: ~${now:.2f} now, "
               f"~${now / 2:.2f} as a batch (50% cheaper, results within hours)")
+    print("\nSections (pass any of these to --only):")
+    for row in chunk_outline(prepared):
+        print(f"  {row['chunk_id']:<12} {row['paragraphs']:>3} para "
+              f"~{row['est_tokens']:>5,}tok  {row['preview'][:60]}")
     for pid, reason in prepared.doc.skipped:
         print(f"  skipped {pid:<24} {reason}")
     return 0
@@ -141,7 +160,8 @@ def cmd_review(args) -> int:
 
     try:
         prepared = prepare(cfg, args.input, error_dir,
-                           max_chunks=args.max_chunks)
+                           max_chunks=args.max_chunks,
+                           selection=_selection(args))
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -173,7 +193,8 @@ def cmd_submit(args) -> int:
         return 2
     try:
         job = batchlib.submit(cfg, args.input, error_dir, provider,
-                              args.workspace, max_chunks=args.max_chunks)
+                              args.workspace, max_chunks=args.max_chunks,
+                              selection=_selection(args))
     except (IngestError, batchlib.BatchError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

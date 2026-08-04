@@ -137,6 +137,78 @@ def test_content_hash_tracks_text_not_bytes():
         prepare(cfg, FIXTURES / "table.docx", ERROR_DIR).doc)
 
 
+# --- reviewing part of a document ---------------------------------------------
+
+def _split_cfg(**over):
+    """A config that puts every paragraph in its own section, so selection has
+    something to select. The fixtures are far too small to chunk otherwise."""
+    cfg = _cfg(**over)
+    cfg.chunking.token_budget = 5
+    return cfg
+
+
+def test_selection_narrows_the_run_without_moving_anchors():
+    cfg = _split_cfg()
+    whole = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    assert len(whole.chunks) > 1, "fixture must split for this test to mean anything"
+
+    picked = whole.chunks[1].chunk_id
+    part = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR, selection=[picked])
+    assert [c.chunk_id for c in part.chunks] == [picked]
+    # Paragraph ids and the content hash describe the whole document either
+    # way — that is what lets a partial batch still validate at collect time.
+    assert part.content_hash == whole.content_hash
+    assert len(part.doc.paragraphs) == len(whole.doc.paragraphs)
+
+
+def test_selection_rejects_a_section_that_is_not_there():
+    with pytest.raises(ValueError, match="No such section"):
+        prepare(_split_cfg(), FIXTURES / "simple.docx", ERROR_DIR,
+                selection=["chunk-404"])
+
+
+def test_a_partial_review_stays_partial_when_it_is_collected(tmp_path):
+    """The manifest pins the sections, so collection hours later reviews the
+    same ones rather than quietly expanding to the whole document."""
+    cfg = _split_cfg()
+    whole = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    picked = [whole.chunks[0].chunk_id]
+
+    provider = ScriptedBatchProvider([_splice_result()], pending_polls=0)
+    job = batchlib.submit(cfg, FIXTURES / "simple.docx", ERROR_DIR, provider,
+                          tmp_path, selection=picked)
+    assert job.selection == picked
+    assert job.request_count == 1                 # one pass, one section
+
+    reloaded = batchlib.load(tmp_path, job.job_id)
+    assert reloaded.selection == picked
+    outputs = batchlib.collect(reloaded, provider, ERROR_DIR, tmp_path)
+    assert outputs.applied == 1
+
+
+def test_max_chunks_is_recorded_as_the_sections_it_resolved_to(tmp_path):
+    """--max-chunks used to be forgotten at collect time, which turned a
+    two-section smoke test into a whole-document review."""
+    cfg = _split_cfg()
+    provider = ScriptedBatchProvider(pending_polls=0)
+    job = batchlib.submit(cfg, FIXTURES / "simple.docx", ERROR_DIR, provider,
+                          tmp_path, max_chunks=1)
+
+    assert len(job.selection) == 1
+    assert job.request_count == 1
+
+
+def test_the_manifest_records_the_prompt_it_sent(tmp_path):
+    provider = ScriptedBatchProvider()
+    job = batchlib.submit(_cfg(), FIXTURES / "simple.docx", ERROR_DIR,
+                          provider, tmp_path)
+    # Prompts are editable, so a collected review has to be able to say what
+    # it actually asked for.
+    assert list(job.prompts) == ["comma_splice"]
+    assert "ERROR TYPE: comma_splice" in job.prompts["comma_splice"]
+    assert batchlib.load(tmp_path, job.job_id).prompts == job.prompts
+
+
 def test_load_all_skips_an_unreadable_manifest(tmp_path):
     provider = ScriptedBatchProvider()
     batchlib.submit(_cfg(), FIXTURES / "simple.docx", ERROR_DIR, provider,

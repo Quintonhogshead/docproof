@@ -15,6 +15,7 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from .config import Config
 from .models import Usage
@@ -51,6 +52,15 @@ class Job:
     updated_at: str = ""
     error: str | None = None
     config: dict = field(default_factory=dict)
+    # The exact chunk ids this batch was built from. Collection re-derives the
+    # chunk list from the file on disk, so pinning the ids here is what keeps
+    # a partial review (a picked subset, or --max-chunks) from silently
+    # becoming a whole-document review hours later. None means "all of them",
+    # which is what every manifest written before this field existed meant.
+    selection: list[str] | None = None
+    # The system prompts as actually sent, per pass. Prompts are editable, so
+    # without this a collected review could not say what it had asked for.
+    prompts: dict[str, str] = field(default_factory=dict)
     manifest_version: int = MANIFEST_VERSION
 
     @property
@@ -124,8 +134,10 @@ def load_all(workspace: str | Path) -> list[Job]:
 
 def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
            provider: Provider, workspace: str | Path, *,
-           max_chunks: int | None = None) -> Job:
-    prepared = prepare(cfg, input_path, error_dir, max_chunks=max_chunks)
+           max_chunks: int | None = None,
+           selection: Sequence[str] | None = None) -> Job:
+    prepared = prepare(cfg, input_path, error_dir, max_chunks=max_chunks,
+                       selection=selection)
     requests = build_requests(cfg, prepared)
     if not requests:
         raise BatchError(
@@ -144,11 +156,21 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
         request_count=len(requests),
         created_at=_now(),
         config=cfg.model_dump(mode="json"),
+        # Resolved rather than echoed: whatever narrowed the run, the manifest
+        # records the chunk ids that actually went out.
+        selection=[c.chunk_id for c in prepared.chunks],
+        prompts=pass_prompts(cfg, prepared),
     )
     save(job, workspace)
     log.info("Job %s submitted: %d request(s) as batch %s",
              job.job_id, len(requests), batch_id)
     return job
+
+
+def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
+    """The system prompt each pass will send, keyed by the pass label."""
+    analyzers = build_analyzers(cfg, prepared.groups, None, itertools.count(1))
+    return {a.label: a.system_prompt for a in analyzers}
 
 
 def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
@@ -182,8 +204,8 @@ def poll(job: Job, provider: Provider, workspace: str | Path) -> BatchStatus:
 
 
 def collect(job: Job, provider: Provider, error_dir: str | Path,
-            workspace: str | Path, *, out_dir: str | Path | None = None,
-            max_chunks: int | None = None) -> Outputs:
+            workspace: str | Path, *,
+            out_dir: str | Path | None = None) -> Outputs:
     """Fetch results and run the rest of the pipeline.
 
     The source document is re-ingested here: the walker is deterministic, so
@@ -196,7 +218,7 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
             f"{job.source_name} is no longer at {source}. Put the file back, "
             f"or start a new review.")
 
-    prepared = prepare(cfg, source, error_dir, max_chunks=max_chunks)
+    prepared = prepare(cfg, source, error_dir, selection=job.selection)
     if prepared.content_hash != job.content_hash:
         raise BatchError(
             f"{job.source_name} has been edited since this review was "

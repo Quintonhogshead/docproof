@@ -11,6 +11,7 @@ import itertools
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from .analyzer import Analyzer
 from .chunker import chunk_document
@@ -73,20 +74,55 @@ def content_hash(doc: DocumentModel) -> str:
 
 
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
-            max_chunks: int | None = None) -> Prepared:
+            max_chunks: int | None = None,
+            selection: Sequence[str] | None = None) -> Prepared:
     """Ingest, chunk, and resolve error types. Raises IngestError on a document
-    docproof refuses to touch (tracked changes, corruption)."""
+    docproof refuses to touch (tracked changes, corruption).
+
+    `selection` narrows the run to specific chunk ids. Chunking itself always
+    runs over the whole document, so ids and paragraph offsets mean the same
+    thing whether or not a subset was picked — that is what lets a batch job
+    reproduce its own chunk list at collection time."""
     pkg = preflight(str(input_path), cfg.tracked_changes_policy)
     doc = build_document_model(pkg, cfg)
     chunks = list(chunk_document(doc, cfg))
+    if selection is not None:
+        wanted = set(selection)
+        unknown = wanted - {c.chunk_id for c in chunks}
+        if unknown:
+            raise ValueError(
+                f"No such section(s) in this document: "
+                f"{', '.join(sorted(unknown))}")
+        chunks = [c for c in chunks if c.chunk_id in wanted]
+        log.info("Reviewing %d selected section(s)", len(chunks))
     if max_chunks:
         chunks = chunks[:max_chunks]
         log.info("Reviewing only the first %d chunk(s)", len(chunks))
-    registry = load_error_types(error_dir, cfg.error_type_keys)
+    registry = load_error_types(error_dir, cfg.error_type_keys,
+                                override_dir=cfg.error_type_override_dir)
     groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
     log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
              len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups)
+
+
+def chunk_outline(prepared: Prepared) -> list[dict]:
+    """One row per chunk for a picker UI: what the section is, and what it
+    would cost to review. Preview text comes from the document itself, so it
+    is the user's own prose, not an id they have no way to recognise."""
+    rows = []
+    for chunk in prepared.chunks:
+        first = chunk.paragraphs[0]
+        preview = " ".join(first.text.split())
+        rows.append({
+            "chunk_id": chunk.chunk_id,
+            "paragraphs": len(chunk.paragraphs),
+            "est_tokens": chunk.est_tokens,
+            "style": first.style,
+            "location": first.location,
+            "preview": preview[:160] + ("…" if len(preview) > 160 else ""),
+        })
+    return rows
 
 
 def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
