@@ -24,12 +24,13 @@ DEFAULT_WORKSPACE = "jobs"
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="docproof",
-        description="LLM-assisted grammar review with native Word tracked changes.")
+        description="LLM-assisted grammar review with native tracked changes, "
+                    "in Word (.docx) and InDesign (.idml) files.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     inv = sub.add_parser("inventory",
                          help="ingest + chunk only (no API): preview a run")
-    inv.add_argument("input")
+    inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
 
@@ -73,7 +74,7 @@ def main(argv=None) -> int:
 
 
 def _common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("input")
+    p.add_argument("input", help="a .docx or .idml file")
     p.add_argument("--config", default="config/default.yaml")
     p.add_argument("--out", help="output directory (default: from config)")
     p.add_argument("--error-types",
@@ -177,7 +178,7 @@ def cmd_review(args) -> int:
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=args.input)
     print(f"\n{outputs.applied} tracked change(s) applied.")
-    for p in (outputs.reviewed_docx, outputs.summary_md, outputs.findings_json,
+    for p in (outputs.reviewed_path, outputs.summary_md, outputs.findings_json,
               out / "run.log"):
         print(f"  {p}")
     return 0
@@ -248,7 +249,7 @@ def cmd_collect(args) -> int:
         return 2
 
     print(f"\n{outputs.applied} tracked change(s) applied.")
-    for p in (outputs.reviewed_docx, outputs.summary_md, outputs.findings_json):
+    for p in (outputs.reviewed_path, outputs.summary_md, outputs.findings_json):
         print(f"  {p}")
     return 0
 

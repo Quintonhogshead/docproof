@@ -17,12 +17,10 @@ from .analyzer import Analyzer
 from .chunker import chunk_document
 from .config import Config
 from .error_registry import ErrorType, load_error_types
-from .ingest import build_document_model, preflight
+from .formats import DocumentFormat, get_format
 from .models import Chunk, DocumentModel, Usage
 from .providers import Provider
-from .reassembler import apply_tracked_changes
 from .reporting import write_findings_json, write_summary_md
-from .utils.xml_helpers import DocxPackage
 from .validator import validate_findings
 
 log = logging.getLogger("docproof.pipeline")
@@ -30,10 +28,11 @@ log = logging.getLogger("docproof.pipeline")
 
 @dataclass
 class Prepared:
-    pkg: DocxPackage
+    pkg: object                  # the format's package wrapper
     doc: DocumentModel
     chunks: list[Chunk]
     groups: list[list[ErrorType]]
+    fmt: DocumentFormat
 
     @property
     def content_hash(self) -> str:
@@ -50,7 +49,7 @@ class Prepared:
 
 @dataclass(frozen=True)
 class Outputs:
-    reviewed_docx: Path
+    reviewed_path: Path
     summary_md: Path
     findings_json: Path
     applied: int
@@ -83,8 +82,9 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     runs over the whole document, so ids and paragraph offsets mean the same
     thing whether or not a subset was picked — that is what lets a batch job
     reproduce its own chunk list at collection time."""
-    pkg = preflight(str(input_path), cfg.tracked_changes_policy)
-    doc = build_document_model(pkg, cfg)
+    fmt = get_format(input_path)
+    pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
+    doc = fmt.build_document_model(pkg, cfg)
     chunks = list(chunk_document(doc, cfg))
     if selection is not None:
         wanted = set(selection)
@@ -103,7 +103,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
     log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
              len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
-    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups)
+    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -158,16 +158,17 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     validated = validate_findings(findings, prepared.doc, cfg.min_confidence)
-    stats = apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
+    fmt = prepared.fmt
+    stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
-    reviewed = out / f"reviewed_{Path(source_path).stem}.docx"
+    reviewed = out / fmt.reviewed_name(source_path)
     prepared.pkg.save(reviewed)
     write_findings_json(out / "findings.json", doc=prepared.doc,
                         findings=validated, usage=usage, cfg=cfg,
                         applied_ids=stats.applied, batch=batch)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
-                     batch=batch)
-    return Outputs(reviewed_docx=reviewed, summary_md=out / "summary.md",
+                     batch=batch, fmt=fmt)
+    return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated))

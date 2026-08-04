@@ -79,6 +79,9 @@ function renderFiles() {
     const name = document.createElement('div');
     name.className = 'file-name';
     name.textContent = f.filename;
+    // A stack can mix manuscripts and layouts; the badge says which is which
+    // without making the reader parse file extensions.
+    if (f.format) name.append(' ', formatBadge(f.format.name));
     const meta = document.createElement('div');
     meta.className = 'file-meta';
     meta.textContent = f.ok ? fileSummary(f) : f.error;
@@ -169,6 +172,13 @@ function sectionPicker(f) {
   });
   box.append(ul);
   return box;
+}
+
+function formatBadge(text) {
+  const el = document.createElement('span');
+  el.className = 'tag';
+  el.textContent = text;
+  return el;
 }
 
 const usableFiles = () => state.files.filter((f) => f.ok);
@@ -344,6 +354,7 @@ function renderJobs(jobs) {
     const name = document.createElement('span');
     name.className = 'file-name';
     name.textContent = job.filename;
+    if (job.format) name.append(' ', formatBadge(job.format.name));
     const status = document.createElement('span');
     status.className = 'job-state'
       + (job.state === 'done' ? ' is-done' : job.state === 'failed' ? ' is-failed' : '');
@@ -363,7 +374,8 @@ function renderJobs(jobs) {
     if (job.ready) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
-      const doc = link(`/api/jobs/${job.id}/file/docx`, 'Open reviewed document');
+      const doc = link(`/api/jobs/${job.id}/file/document`,
+        job.format ? `Open in ${job.format.app}` : 'Open reviewed document');
       const read = document.createElement('button');
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
@@ -382,6 +394,14 @@ function renderJobs(jobs) {
         actions.append(meta);
       }
       li.append(actions);
+      // Tracked changes are invisible until you know which panel shows them,
+      // and that panel is in a different place in each application.
+      if (job.format) {
+        const where = document.createElement('p');
+        where.className = 'where';
+        where.textContent = job.format.where_to_look;
+        li.append(where);
+      }
     }
 
     if (job.state === 'failed') {
@@ -422,7 +442,7 @@ async function openReport(job) {
   $('report-groups').innerHTML = '';
   $('report-aside').innerHTML = '';
   try {
-    renderReport(await api(`/api/jobs/${job.id}/report`));
+    renderReport(await api(`/api/jobs/${job.id}/report`), job.format);
   } catch (err) {
     $('report-headline').textContent = err.message;
   }
@@ -458,7 +478,7 @@ function findingCard(f, { showStatus = false } = {}) {
   return card;
 }
 
-function renderReport(r) {
+function renderReport(r, format) {
   const h = r.headline;
   const parts = [];
   if (h.applied) {
@@ -475,6 +495,14 @@ function renderReport(r) {
 
   const groups = $('report-groups');
   groups.innerHTML = '';
+  // Nothing below is applied to the document by this screen — it is a reading
+  // of what is waiting in the file — so say where that file is reviewed first.
+  if (format && h.applied) {
+    const where = document.createElement('p');
+    where.className = 'where';
+    where.textContent = format.where_to_look;
+    groups.append(where);
+  }
   r.groups.forEach((g) => {
     const section = document.createElement('section');
     section.className = 'card';
@@ -657,6 +685,18 @@ document.querySelectorAll('[data-test]').forEach((button) => {
 
 // ── boot ──────────────────────────────────────────────────────────────────
 
+// The drop zone advertises whatever the server can actually read, so adding a
+// format server-side never leaves the front door describing the old list.
+async function loadFormats() {
+  const { formats, suffixes } = await api('/api/formats');
+  input.accept = suffixes.join(',');
+  const names = formats.map((f) => `${f.kind}s (${f.suffix})`);
+  $('drop-formats').textContent = names.length > 1
+    ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+    : names[0];
+}
+
+loadFormats().catch(() => {});
 loadModels().catch(() => {});
 refreshJobs();
 state.pollTimer = setInterval(() => {

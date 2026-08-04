@@ -4,11 +4,12 @@ this module — that single-source-of-truth is what makes text anchors safe.
 """
 from __future__ import annotations
 
-import zipfile
 from pathlib import Path
 from typing import Iterator, NamedTuple
 
 from lxml import etree
+
+from .package import ZipPackage
 
 # --- Namespaces -------------------------------------------------------------
 
@@ -203,46 +204,9 @@ def _last_t(run):
 
 # --- The package wrapper ------------------------------------------------------
 
-class DocxPackage:
-    """A .docx opened as a zip held in memory. Parts are parsed lazily; only
-    parts explicitly marked modified are re-serialized on save — everything
-    else is written back byte-for-byte. That is the fidelity guarantee."""
-
-    def __init__(self, path: str | Path):
-        self.path = Path(path)
-        with zipfile.ZipFile(self.path) as z:
-            self._order = [i.filename for i in z.infolist()]
-            self._raw = {n: z.read(n) for n in self._order}
-        self._trees: dict[str, etree._Element] = {}
-        self._dirty: set[str] = set()
-        self._new: dict[str, etree._Element] = {}
-
-    def has(self, name: str) -> bool:
-        return name in self._raw or name in self._new
-
-    def tree(self, name: str) -> etree._Element:
-        if name in self._new:
-            return self._new[name]
-        if name not in self._trees:
-            self._trees[name] = etree.fromstring(self._raw[name])
-        return self._trees[name]
-
-    def mark_modified(self, name: str) -> None:
-        self._dirty.add(name)
-
-    def add_part(self, name: str, root: etree._Element) -> None:
-        self._new[name] = root
-        self._dirty.add(name)
-
-    def save(self, out_path: str | Path) -> None:
-        def serialize(name):
-            return etree.tostring(self.tree(name), xml_declaration=True,
-                                  encoding="UTF-8", standalone=True)
-        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-            for name in self._order:
-                z.writestr(name, serialize(name) if name in self._dirty
-                           else self._raw[name])
-            for name in self._new:
-                z.writestr(name, serialize(name))
+class DocxPackage(ZipPackage):
+    """A .docx opened as a zip held in memory. Everything it does is the
+    format-neutral behaviour in ZipPackage; the .docx part names live in the
+    walker above."""
 
     

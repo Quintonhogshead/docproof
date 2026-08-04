@@ -21,11 +21,13 @@
   <!-- ── Drop ─────────────────────────────────────────────────────────── -->
   <section id="screen-drop" class="screen">
     <div id="dropzone" tabindex="0" role="button"
-         aria-label="Drop Word documents here, or press Enter to choose files">
-      <p class="big">Drop Word documents here</p>
+         aria-label="Drop documents here, or press Enter to choose files">
+      <p class="big">Drop your documents here</p>
       <p class="muted">or <button type="button" id="pick" class="link">choose
         files</button> — one at a time or a whole stack</p>
-      <input type="file" id="file-input" accept=".docx" multiple hidden>
+      <p class="muted small" id="drop-formats">Word manuscripts and InDesign
+        layouts</p>
+      <input type="file" id="file-input" accept=".docx,.idml" multiple hidden>
     </div>
 
     <div id="staged" hidden>
@@ -162,7 +164,8 @@
       </label>
       <label class="checkbox">
         <input type="checkbox" id="comments" checked>
-        Add a margin comment explaining every change
+        Explain every change in the document itself
+        <small class="muted">A margin comment in Word, a note in InDesign.</small>
       </label>
       <label class="checkbox">
         <input type="checkbox" id="explanations" checked>

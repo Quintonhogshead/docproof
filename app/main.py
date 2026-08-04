@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from docproof import batch as batchlib
 from docproof.config import load_config
+from docproof.formats import SUFFIXES, describe, get_format
 from docproof.ingest import IngestError
 from docproof.pipeline import chunk_outline, prepare
 from docproof.providers import MODELS, estimate_cost, lookup
@@ -116,9 +117,10 @@ def _register(app: FastAPI) -> None:
         staged = []
         for upload_file in files:
             name = Path(upload_file.filename or "document.docx").name
-            if not name.lower().endswith(".docx"):
-                staged.append({"filename": name, "ok": False,
-                               "error": "Only Word .docx files can be reviewed."})
+            try:
+                fmt = get_format(name)
+            except IngestError as e:
+                staged.append({"filename": name, "ok": False, "error": str(e)})
                 continue
             # Each upload gets its own folder so the document keeps its real
             # name — that name ends up on the reviewed file the user opens.
@@ -137,6 +139,9 @@ def _register(app: FastAPI) -> None:
                 continue
             staged.append({
                 "id": f"{stamp}/{name}", "filename": name, "ok": True,
+                # Which application this came from, so a mixed stack of
+                # manuscripts and layouts is legible at a glance.
+                "format": fmt.to_api(),
                 "sections": len(prepared.chunks),
                 "paragraphs": len(prepared.doc.paragraphs),
                 "requests": prepared.request_count,
@@ -147,6 +152,13 @@ def _register(app: FastAPI) -> None:
                 "chunks": chunk_outline(prepared),
             })
         return {"files": staged}
+
+    @app.get("/api/formats")
+    def formats() -> dict:
+        """What docproof can read, so the drop zone and the file picker are
+        driven by the format registry rather than a hardcoded list that drifts
+        the next time one is added."""
+        return {"formats": describe(), "suffixes": list(SUFFIXES)}
 
     # -- models ---------------------------------------------------------------
 
@@ -265,7 +277,10 @@ def _register(app: FastAPI) -> None:
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
         names = {
-            "docx": f"reviewed_{Path(job.filename).stem}.docx",
+            # "docx" is the old name for this route, kept so a page left open
+            # across an upgrade keeps working.
+            "document": get_format(job.filename).reviewed_name(job.filename),
+            "docx": get_format(job.filename).reviewed_name(job.filename),
             "summary": "summary.md",
             "findings": "findings.json",
         }

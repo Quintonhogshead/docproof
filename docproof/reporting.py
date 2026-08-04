@@ -61,7 +61,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
 
 def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
-                     applied_ids: tuple[str, ...], batch: bool = False) -> None:
+                     applied_ids: tuple[str, ...], batch: bool = False,
+                     fmt=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -145,8 +146,11 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         L.append(f"Estimated cost ({note} — cache reads bill below the "
                  f"input rate): **${est:.4f}**\n")
 
-    L.append("---\nOpen the reviewed `.docx` in Word → **Review** tab → walk "
-             "the changes with Accept/Reject. Every change carries a margin "
-             "comment explaining itself.\n")
+    if fmt is None:                       # callers that predate format support
+        from .formats import DOCX as fmt
+    closing = fmt.review_instructions
+    if cfg.comments:
+        closing += f" Every change carries a {fmt.comment_noun} explaining itself."
+    L.append(f"---\n{closing}\n")
     path.write_text("\n".join(L), encoding="utf-8")
     log.info("Wrote %s", path)

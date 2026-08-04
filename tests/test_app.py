@@ -81,11 +81,31 @@ def test_upload_preflights_at_drop_time(client):
     assert staged["requests"] == staged["sections"] * 3   # three passes
 
 
-def test_upload_rejects_non_docx(client):
+def test_upload_rejects_an_unreadable_kind_of_file(client):
     resp = client.post("/api/files",
                        files={"files": ("notes.txt", b"hello")})
     entry = resp.json()["files"][0]
-    assert entry["ok"] is False and ".docx" in entry["error"]
+    assert entry["ok"] is False
+    # The error names every format docproof reads, not just the first one.
+    assert ".docx" in entry["error"] and ".idml" in entry["error"]
+
+
+def test_upload_accepts_an_indesign_layout(client):
+    staged = _upload(client, "layout.idml")
+    assert staged["ok"] is True
+    assert staged["format"]["name"] == "InDesign"
+    assert staged["format"]["app"] == "InDesign"
+    assert staged["paragraphs"] >= 1
+
+
+def test_staged_file_says_which_application_it_came_from(client):
+    assert _upload(client)["format"]["name"] == "Word"
+
+
+def test_formats_endpoint_lists_what_can_be_read(client):
+    body = client.get("/api/formats").json()
+    assert body["suffixes"] == [".docx", ".idml"]
+    assert {f["name"] for f in body["formats"]} == {"Word", "InDesign"}
 
 
 # --- run now ------------------------------------------------------------------

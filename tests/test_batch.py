@@ -75,7 +75,7 @@ def test_manifest_survives_a_process_restart(tmp_path):
     assert outputs.applied == 1
     assert batchlib.load(tmp_path, job.job_id).state == "done"
 
-    pkg = DocxPackage(outputs.reviewed_docx)
+    pkg = DocxPackage(outputs.reviewed_path)
     para = {wp.para_id: wp.element for wp in walk_package(pkg)}["body-0000"]
     assert paragraph_view_text(para, "reject") == SPLICE       # fidelity
     assert ";" in paragraph_view_text(para, "accept")

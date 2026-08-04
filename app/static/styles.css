@@ -102,6 +102,11 @@ main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 5rem; }
 #dropzone.hot { border-color: var(--accent); background: var(--accent-soft); }
 #dropzone p { margin: 0.3rem 0; }
 .big { font-size: 1.3rem; font-weight: 600; }
+.small { font-size: 0.85rem; }
+#drop-formats { margin-top: 0.8rem; }
+
+/* The badge is inline in a bold filename; keep it from inheriting the weight. */
+.file-name .tag { font-weight: 600; }
 
 .link {
   border: 0; background: none; padding: 0;
@@ -199,6 +204,17 @@ button:hover { border-color: var(--accent); }
 .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 
 .job-actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
+
+/* Where the tracked changes are once the file is open — different panel in
+   Word and InDesign, so it is worth saying rather than assuming. */
+.where {
+  margin: 0.7rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.86rem;
+}
 .job-actions a { text-decoration: none; }
 .job-error { margin-top: 0.5rem; font-size: 0.88rem; }
 

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from docproof import batch as batchlib
 from docproof.config import Config, load_config
+from docproof.formats import get_format
 from docproof.ingest import IngestError
 from docproof.pipeline import finish, prepare, run_sync
 from docproof.providers import ProviderError, build_provider, provider_for
@@ -73,6 +74,12 @@ class Job:
         d = asdict(self)
         d["plain_state"] = self.plain_state()
         d["ready"] = self.state == "done"
+        # Which application the reviewed file opens in, so the results card can
+        # say where the changes are instead of assuming Word.
+        try:
+            d["format"] = get_format(self.filename).to_api()
+        except IngestError:
+            d["format"] = None            # a record from before formats existed
         # Two reviews of one document are now two entries that look alike, so
         # each says which folder its results went to.
         d["results_name"] = (Path(self.results_dir).name

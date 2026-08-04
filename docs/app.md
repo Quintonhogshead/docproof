@@ -1,7 +1,9 @@
 # DocProof, the app
 
-Drop in a stack of manuscripts, pick a reviewer, get back tracked-changes Word
-files. No terminal, no config files, no environment variables.
+Drop in a stack of manuscripts, pick a reviewer, get back files with native
+tracked changes — Word `.docx` and InDesign `.idml` alike. No terminal, no
+config files, no environment variables. See [indesign.md](indesign.md) for what
+IDML support does and does not cover.
 
 ## Running it
 
@@ -105,7 +107,7 @@ docproof submit draft.docx --only chunk-003
 ## Seeing what changed
 
 A finished review has **See what changed** next to it. That's a reading view of
-the same findings that are in the `.docx`: grouped by kind of mistake,
+the same findings that are in the reviewed file: grouped by kind of mistake,
 commonest first, each one shown as before → after with only the altered words
 marked. Confidence is a phrase rather than a score, and anything the model
 found but didn't apply is kept in a separate panel rather than dropped.
@@ -191,8 +193,9 @@ own SDK types.
 ## Not built yet
 
 - **Accept/reject in the app.** The reading view shows what changed but can't
-  change it — that still happens in Word's Review tab. A screen that lets you
-  drop individual findings and re-write the `.docx` is the obvious next step.
+  change it — that still happens in Word's Review tab, or InDesign's Track
+  Changes panel. A screen that lets you drop individual findings and re-write
+  the reviewed file is the obvious next step.
 - **A custom app icon.** The bundle ships with the default one.
 - **Re-review reuse.** Re-running a document pays for every section again, even
   ones whose text and prompt haven't moved since the last run.
