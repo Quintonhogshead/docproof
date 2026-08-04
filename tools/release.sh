@@ -65,7 +65,9 @@ say "Releasing $TAG"
 echo "  commit    $COMMIT"
 echo "  previous  ${PREVIOUS:-none — this is the first release}"
 
-tools/package.sh "${package_args[@]}"
+# The braces are not decoration: macOS ships bash 3.2, where expanding an empty
+# array under `set -u` is an error rather than nothing.
+tools/package.sh ${package_args[@]+"${package_args[@]}"}
 [ -f "$DMG" ] || die "package.sh did not produce $DMG"
 
 say "Tagging and pushing"
