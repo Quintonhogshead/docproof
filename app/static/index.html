@@ -18,6 +18,12 @@
   </nav>
 </header>
 
+<div id="update-banner" hidden>
+  <span id="update-banner-text"></span>
+  <button type="button" id="update-now" class="primary">Update now</button>
+  <button type="button" id="update-later" class="quiet">Later</button>
+</div>
+
 <main>
   <!-- ── Drop ─────────────────────────────────────────────────────────── -->
   <section id="screen-drop" class="screen">
@@ -313,9 +319,11 @@
                autocomplete="off">
         <small class="status" id="status-github"></small>
       </label>
-      <p class="muted small">DocProof never replaces itself: it is not signed
-        with Apple, so new versions are downloaded and you install them —
-        one drag. Nothing checks on its own.</p>
+      <p class="muted small">The app checks quietly when it opens and offers
+        new versions in a bar at the top — nothing installs without you
+        pressing its button, and never while a document is being worked on.
+        The Download button here is the by-hand alternative: it puts the disk
+        image in your Downloads folder and you do the drag.</p>
     </div>
 
     <button id="save-settings" class="primary">Save settings</button>

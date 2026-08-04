@@ -182,14 +182,37 @@ version, and offers **Download** if there is a `.dmg` attached. Which repo to
 ask is stamped into the build at packaging time from `git remote get-url
 origin`, not hardcoded.
 
-**It downloads; it does not install.** The disk image lands in `~/Downloads` and
-is revealed in the Finder. An unsigned app that replaced itself with code
-fetched over the network would be asking to be trusted with exactly what macOS
-is right to refuse — and one drag is not much to ask.
+### Updating in one click
 
-Without a token nothing breaks: the check says to ask whoever sent it. Every
-other way it can fail — expired token, repo not visible, no release yet, no
-internet — gets its own sentence.
+A packaged build also checks quietly once at launch (never from a checkout,
+and any failure is silence — no token, no internet, no release yet). When a
+newer release exists, a banner appears: *"DocProof 0.1.2 is ready — Update
+now / Later"*. **Nothing installs without that click.**
+
+The click does what a person would: downloads the release's disk image, copies
+the new DocProof out of it, checks the copy's own build stamp says the version
+the release promised, moves the old app **to the Trash** (not to nowhere — a
+bad build is a drag away from undone), puts the new one in its place, and
+reopens itself. A tiny detached script does the reopening once the old process
+has exited; the folder lock lifts with the process, so the new copy starts
+clean. If the install step fails, the old bundle is put straight back and the
+banner says nothing was changed.
+
+It refuses, before downloading anything, in three cases, each with its own
+sentence: **a document is being worked on** (an interrupted review would
+resume from its checkpoint now, but an update should still never be the thing
+that interrupts it); **running from the source** (pull and rebuild instead);
+**running straight off the disk image** (macOS runs those from a randomized
+read-only mirror — drag it to Applications first, which the read me already
+says).
+
+The manual path still exists in Settings — **Check for a newer version** and
+**Download** put the disk image in `~/Downloads` for anyone who prefers to
+install by hand.
+
+Without a token nothing breaks: the launch check is silent and the manual
+check says to ask whoever sent it. Every other way it can fail — expired
+token, repo not visible, no release yet, no internet — gets its own sentence.
 
 ### Who can run it
 
