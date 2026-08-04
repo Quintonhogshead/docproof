@@ -99,6 +99,42 @@ def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     return _normalize(copy.deepcopy(model.model_json_schema()))
 
 
+def inlined_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """The same schema with `$defs`/`$ref` resolved away and `const` widened
+    to a one-value `enum`.
+
+    Gemini's structured-output dialect is narrower than the one the other two
+    vendors take: it reads a self-contained schema, not a document with a
+    definitions section. Our schemas are shallow and non-recursive, so
+    inlining is a substitution rather than a graph problem."""
+    defs = schema.get("$defs", {})
+
+    def resolve(node: Any, seen: frozenset[str] = frozenset()) -> Any:
+        if isinstance(node, list):
+            return [resolve(n, seen) for n in node]
+        if not isinstance(node, dict):
+            return node
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.removeprefix("#/$defs/")
+            if name in seen:
+                raise ValueError(
+                    f"Schema definition {name!r} refers to itself; Gemini "
+                    f"cannot express a recursive schema.")
+            target = defs.get(name)
+            if target is None:
+                raise ValueError(f"Schema references missing definition {name!r}")
+            merged = {**resolve(target, seen | {name}),
+                      **{k: v for k, v in node.items() if k != "$ref"}}
+            return merged
+        out = {k: resolve(v, seen) for k, v in node.items() if k != "$defs"}
+        if "const" in out:
+            out["enum"] = [out.pop("const")]
+        return out
+
+    return resolve(schema)
+
+
 _STRIP = ("default", "title", "minimum", "maximum", "exclusiveMinimum",
           "exclusiveMaximum", "multipleOf", "minLength", "maxLength",
           "minItems", "maxItems", "pattern", "format")

@@ -49,11 +49,47 @@ def test_strict_schema_satisfies_both_vendors():
     assert "default" not in json.dumps(schema)
 
 
+def test_dropping_explanations_removes_them_from_schema_and_prompt():
+    from docproof.analyzer import build_system_prompt
+    from docproof.error_registry import load_error_types
+
+    types = list(load_error_types(ERROR_DIR, ["comma_splice"]).values())
+    lean = strict_json_schema(build_output_model(("comma_splice",),
+                                                 explanations=False))
+    finding = next(iter(lean["$defs"].values()))
+    # Asking for an explanation and discarding it would cost the same, so the
+    # field has to leave the schema, not just the report.
+    assert "explanation" not in finding["properties"]
+    assert "explanation" not in finding["required"]
+    assert "corrected_text" in finding["properties"]
+
+    prompt = build_system_prompt(types, explanations=False)
+    assert "explanation" not in prompt
+    assert "explanation" in build_system_prompt(types, explanations=True)
+
+
+def test_analyzer_without_explanations_still_produces_findings():
+    cfg = Config(report_explanations=False)
+    registry = load_error_types(ERROR_DIR, ["comma_splice"])
+    provider = FakeProvider([ProviderResult(parsed={"findings": [{
+        "para_id": "body-0000", "error_type": "comma_splice",
+        "original_text": "The manuscript was finished, nobody wanted it.",
+        "occurrence": 1,
+        "corrected_text": "The manuscript was finished; nobody wanted it.",
+        "confidence": "high"}]}, usage=USAGE)])
+    findings = Analyzer(cfg, list(registry.values()), provider,
+                        ids()).analyze_chunk(_chunk(), Usage())
+
+    assert [f.error_type for f in findings] == ["comma_splice"]
+    assert findings[0].explanation == ""      # nothing asked for, nothing lost
+
+
 # --- provider selection -------------------------------------------------------
 
 def test_catalog_drives_provider_selection():
     assert provider_for("claude-opus-5", "openai") == "anthropic"
     assert provider_for("gpt-5.6-terra", "anthropic") == "openai"
+    assert provider_for("gemini-3.6-flash", "openai") == "gemini"
     # Unknown model falls back to the configured provider.
     assert provider_for("some-future-model", "openai") == "openai"
 
@@ -61,6 +97,7 @@ def test_catalog_drives_provider_selection():
 @pytest.mark.parametrize("model,var,name", [
     ("claude-opus-5", "ANTHROPIC_API_KEY", "Claude"),
     ("gpt-5.6-terra", "OPENAI_API_KEY", "ChatGPT"),
+    ("gemini-3.6-flash", "GEMINI_API_KEY", "Gemini"),
 ])
 def test_build_provider_reports_missing_key(monkeypatch, model, var, name):
     monkeypatch.delenv(var, raising=False)
@@ -82,7 +119,7 @@ def test_cost_estimate_uses_catalog_and_batch_discount():
 
 def test_every_catalog_model_has_sane_pricing():
     from docproof.providers.catalog import MODELS
-    assert {m.provider for m in MODELS} == {"anthropic", "openai"}
+    assert {m.provider for m in MODELS} == {"anthropic", "openai", "gemini"}
     for m in MODELS:
         assert m.input_per_mtok > 0 and m.output_per_mtok > m.input_per_mtok
         assert lookup(m.id) is m
@@ -164,6 +201,86 @@ def test_openai_truncation_and_refusal_map_to_stop_reasons():
 
     empty = result_from_response(_openai_body(output=[]))
     assert empty.stop_reason == "error"
+
+
+# --- Gemini schema and response parsing (no network) --------------------------
+
+def test_gemini_schema_is_self_contained():
+    from docproof.providers import inlined_json_schema
+
+    schema = inlined_json_schema(
+        strict_json_schema(build_output_model(("spelling", "comma_splice"))))
+    # Gemini reads one schema, not a document with a definitions section.
+    text = json.dumps(schema)
+    assert "$defs" not in text and "$ref" not in text
+    finding = schema["properties"]["findings"]["items"]
+    assert finding["properties"]["para_id"]["type"] == "string"
+    assert finding["additionalProperties"] is False
+
+
+def test_gemini_schema_widens_const_to_enum():
+    from docproof.providers import inlined_json_schema
+
+    # A one-key pass makes pydantic emit `const`, which Gemini does not take.
+    schema = inlined_json_schema(
+        strict_json_schema(build_output_model(("spelling",))))
+    error_type = schema["properties"]["findings"]["items"]["properties"][
+        "error_type"]
+    assert error_type["enum"] == ["spelling"]
+    assert "const" not in error_type
+
+
+def _gemini_response(text='{"findings": []}', finish="STOP", usage=True):
+    from google.genai import types
+
+    return types.GenerateContentResponse(
+        candidates=[types.Candidate(
+            content=types.Content(parts=[types.Part(text=text)]),
+            finish_reason=getattr(types.FinishReason, finish))],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=300, cached_content_token_count=200,
+            candidates_token_count=30, thoughts_token_count=10)
+        if usage else None)
+
+
+def test_gemini_usage_splits_cache_and_counts_thinking_as_output():
+    from docproof.providers.gemini_provider import _to_result
+
+    result = _to_result(_gemini_response())
+    assert result.stop_reason == "ok"
+    assert result.parsed == {"findings": []}
+    # prompt_token_count includes the cached tokens; docproof reports them apart.
+    assert result.usage.input_tokens == 100
+    assert result.usage.cache_read_input_tokens == 200
+    # Thinking tokens bill as output, so they are counted as output.
+    assert result.usage.output_tokens == 40
+
+
+def test_gemini_truncation_and_refusal_map_to_stop_reasons():
+    from docproof.providers.gemini_provider import _to_result
+
+    assert _to_result(
+        _gemini_response(finish="MAX_TOKENS")).stop_reason == "max_tokens"
+    assert _to_result(
+        _gemini_response(finish="SAFETY")).stop_reason == "refusal"
+    assert _to_result(_gemini_response(text="")).stop_reason == "error"
+    assert _to_result(_gemini_response(text="not json")).stop_reason == "error"
+    assert _to_result(None).stop_reason == "error"
+
+
+def test_gemini_batch_results_are_matched_by_request_id():
+    """Order is how Gemini returns inlined responses, but the id is what the
+    collector trusts — it runs in a process that never saw the submission."""
+    from google.genai import types
+    from docproof.providers.gemini_provider import _CUSTOM_ID, _custom_id
+
+    responses = [types.InlinedResponse(metadata={_CUSTOM_ID: "p0-chunk-001"})]
+    assert _custom_id(responses[0], [], 0) == "p0-chunk-001"
+
+    # Metadata missing on the way back: fall back to the submitted request.
+    submitted = [types.InlinedRequest(metadata={_CUSTOM_ID: "p1-chunk-002"})]
+    assert _custom_id(types.InlinedResponse(), submitted, 0) == "p1-chunk-002"
+    assert _custom_id(types.InlinedResponse(), [], 0) is None
 
 
 def test_output_model_rejects_off_pass_error_type():

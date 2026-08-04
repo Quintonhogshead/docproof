@@ -11,7 +11,7 @@ class APIConfig(BaseModel):
     model: str = "claude-opus-5"
     # Which vendor serves `model`. Only consulted for models the catalog
     # doesn't recognise — a known model brings its own provider.
-    provider: Literal["anthropic", "openai"] = "anthropic"
+    provider: Literal["anthropic", "openai", "gemini"] = "anthropic"
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
@@ -56,6 +56,15 @@ class Config(BaseModel):
     output_dir: str = "output"
     comments: bool = True
     revision_author: str = "docproof"
+    # Ask the model to justify each finding. The explanations become Word
+    # margin comments, but they are also the bulk of the output tokens — and
+    # output bills at roughly 5x input. Turn this off for a cheaper pass that
+    # still applies every correction, just without the marginalia.
+    report_explanations: bool = True
+    # Where edited error-type prompts live. Files here shadow the shipped
+    # config/error_types/*.yaml by key; missing keys fall through to the
+    # originals, so an override directory only has to hold what changed.
+    error_type_override_dir: str | None = None
 
     @field_validator("error_types")
     @classmethod
