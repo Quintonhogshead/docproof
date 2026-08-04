@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from .base import (BatchRequest, BatchStatus, NormalizedUsage, Provider,
-                   ProviderError, ProviderResult, strict_json_schema)
+                   ProviderError, ProviderResult, inlined_json_schema,
+                   strict_json_schema)
 from .catalog import MODELS, ModelInfo, estimate_cost, lookup, provider_for
 
 __all__ = ["BatchRequest", "BatchStatus", "MODELS", "ModelInfo",
            "NormalizedUsage", "Provider", "ProviderError", "ProviderResult",
-           "build_provider", "estimate_cost", "lookup", "provider_for",
-           "strict_json_schema"]
+           "build_provider", "estimate_cost", "inlined_json_schema", "lookup",
+           "provider_for", "strict_json_schema"]
 
 
 def build_provider(cfg, *, api_key: str | None = None) -> Provider:
@@ -23,6 +24,9 @@ def build_provider(cfg, *, api_key: str | None = None) -> Provider:
     if name == "openai":
         from .openai_provider import OpenAIProvider
         return OpenAIProvider(**kwargs)
+    if name == "gemini":
+        from .gemini_provider import GeminiProvider
+        return GeminiProvider(**kwargs)
     raise ProviderError(
         f"Unknown provider {name!r} for model {cfg.api.model!r}. "
-        f"Set api.provider to 'anthropic' or 'openai'.")
+        f"Set api.provider to 'anthropic', 'openai', or 'gemini'.")

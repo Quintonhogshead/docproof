@@ -1,7 +1,7 @@
 """Which models docproof offers, what they cost, and what they accept.
 
 Prices are $/million tokens, verified against each vendor's published pricing
-on 2026-08-03. They drive both the cost estimate in summary.md and the "about
+on 2026-08-04. They drive both the cost estimate in summary.md and the "about
 $X for these files" hint in the app, so a stale number here is a number the
 user sees. Re-check them when a model is added.
 """
@@ -13,7 +13,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class ModelInfo:
     id: str
-    provider: str                 # "anthropic" | "openai"
+    provider: str                 # "anthropic" | "openai" | "gemini"
     display: str                  # what a non-technical user reads
     blurb: str                    # one line of plain-language guidance
     input_per_mtok: float
@@ -46,6 +46,19 @@ MODELS: tuple[ModelInfo, ...] = (
     ModelInfo("gpt-5.6-luna", "openai", "ChatGPT 5.6 Luna",
               "Fastest and cheapest ChatGPT option.",
               0.20, 1.20),
+    # --- Google --------------------------------------------------------------
+    # Gemini prices two of these by context length. A docproof request is one
+    # chunk against a token budget of a few thousand, so the sub-200k tier is
+    # the one that ever applies — those are the rates listed here.
+    ModelInfo("gemini-3.1-pro-preview", "gemini", "Gemini 3.1 Pro",
+              "Most thorough of the Gemini models.",
+              2.00, 12.00),
+    ModelInfo("gemini-3.6-flash", "gemini", "Gemini 3.6 Flash",
+              "Balanced Gemini option.",
+              1.50, 7.50),
+    ModelInfo("gemini-3.1-flash-lite", "gemini", "Gemini 3.1 Flash Lite",
+              "Fastest and cheapest Gemini option.",
+              0.25, 1.50),
 )
 
 BY_ID = {m.id: m for m in MODELS}
