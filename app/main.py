@@ -518,6 +518,31 @@ def _register(app: FastAPI) -> None:
         store.update(job_id, state="queued", error=None, done=0)
         return runner.enqueue(store.get(job_id)).to_api()
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel(job_id: str) -> dict:
+        """Stop a review before it has started spending anything.
+
+        Once a job is running, waiting overnight on a vendor, or writing its
+        files, there is nothing local left to cancel — the work is either
+        already billed or already being written. Only a job that has not
+        started can be pulled back, so that is all this offers."""
+        store: JobStore = app.state.store
+        job = store.get(job_id)
+        if job is None:
+            raise HTTPException(404, "No such review")
+        if job.state not in ("queued", "scheduled"):
+            raise HTTPException(
+                400, "This one has already started, so there is nothing left "
+                     "to cancel.")
+        updated = store.update_if(job_id, expect=job.state, state="cancelled",
+                                  error=None)
+        if updated is None:
+            # It started in the instant between the check above and this one.
+            raise HTTPException(
+                400, "This one just started, so there is nothing left to "
+                     "cancel.")
+        return updated.to_api()
+
     @app.get("/api/jobs/{job_id}/file/{which}")
     def download(job_id: str, which: str):
         """Serve a result over HTTP — the browser build's way of handing a file

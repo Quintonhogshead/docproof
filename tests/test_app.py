@@ -366,6 +366,46 @@ def test_scheduled_job_holds_until_its_time(client, monkeypatch):
     assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "waiting"
 
 
+# --- cancelling -----------------------------------------------------------
+
+def test_a_scheduled_job_can_be_cancelled_before_its_time_comes(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch", schedule_at="23:59")
+
+    resp = client.post(f"/api/jobs/{job['id']}/cancel")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["state"] == "cancelled"
+
+    # A tick that would otherwise have promoted it must not un-cancel it.
+    client.post("/api/tick")
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "cancelled"
+
+
+def test_a_job_that_has_already_started_cannot_be_cancelled(client, provider):
+    job = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
+
+    resp = client.post(f"/api/jobs/{job['id']}/cancel")
+    assert resp.status_code == 400
+    assert "nothing left to cancel" in resp.json()["detail"]
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
+
+
+def test_cancelling_an_unknown_job_says_so(client):
+    resp = client.post("/api/jobs/does-not-exist/cancel")
+    assert resp.status_code == 404
+
+
+def test_a_cancelled_job_reports_ready_false(client):
+    """Cancelled is a dead end, not a result — nothing should offer to open
+    files for it the way a finished job does."""
+    job = _run(client, _upload(client)["id"], mode="batch", schedule_at="23:59")
+    client.post(f"/api/jobs/{job['id']}/cancel")
+    body = client.get(f"/api/jobs/{job['id']}").json()
+    assert body["state"] == "cancelled" and body["ready"] is False
+
+
 def test_a_crash_midway_through_collection_is_picked_up_again(client, provider):
     provider.results = [finding_result(
         para_id="body-0000", error_type="comma_splice", original=SPLICE,
@@ -688,7 +728,7 @@ def test_staged_file_id_cannot_escape_the_uploads_folder(client, tmp_path):
 def test_plain_state_never_leaks_jargon():
     words = ("batch", "API", "chunk", "token", "provider")
     for state in ("scheduled", "queued", "running", "waiting", "collecting",
-                  "done", "failed"):
+                  "done", "failed", "cancelled"):
         text = Job(id="j", filename="f.docx", source_path="/f.docx",
                    model="m", mode="batch", state=state,
                    schedule_at="23:00").plain_state()
