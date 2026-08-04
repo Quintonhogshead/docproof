@@ -64,15 +64,22 @@ reconnect to.
 
 ## Choosing a reviewer
 
-Nine models — three tiers each from Anthropic, OpenAI, and Google. The dropdown
-shows a live cost estimate for the exact files you dropped, both now and at
-batch rates. Prices live in `docproof/providers/catalog.py` — **re-verify them
-when adding a model**, since that table is what the user sees.
+Ten models from Anthropic, OpenAI, and Google. The dropdown shows a live cost
+estimate for the exact files you dropped, both now and at batch rates. Prices
+live in `docproof/providers/catalog.py` — **re-verify them when adding a
+model**, since that table is what the user sees.
 
 For manuscript work, Sonnet 5, Terra, or Gemini 3.6 Flash is the sensible
 default. Haiku, Luna, and Flash Lite are good for a spelling-and-typos pass.
 Opus, Sol, and Gemini 3.1 Pro earn their price on the judgment-call error types
 (tense shifts, pronoun agreement).
+
+Claude Fable 5 is listed but is not a recommendation: at $10/$50 per million
+tokens it costs twice Opus for a task that is precise and well-specified, where
+the ceiling is mostly reached already. It also needs an account with 30-day
+data retention — zero-retention organizations get an error on every request.
+Reach for it only when the judgment-call types are still coming back wrong on
+Opus.
 
 All three vendors discount batch work by exactly 50%.
 

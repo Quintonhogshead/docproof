@@ -107,6 +107,23 @@ def test_build_provider_reports_missing_key(monkeypatch, model, var, name):
         build_provider(Config(api={"model": model}))
 
 
+def test_anthropic_requests_omit_what_fable_rejects(monkeypatch):
+    """Fable 5 always thinks and takes no sampling parameters: sending a
+    `thinking` config, `temperature`, `top_p`, or `top_k` is a 400 on it.
+    docproof sends none of them, and this pins that so a future edit that
+    adds one fails here rather than at the vendor."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from docproof.providers.anthropic_provider import AnthropicProvider
+
+    params = AnthropicProvider(effort="low")._params(
+        model="claude-fable-5", system="s", user="u", schema={"type": "object"},
+        max_tokens=16000, cache=True)
+
+    assert not {"thinking", "temperature", "top_p", "top_k"} & set(params)
+    # Depth is asked for the way that model accepts.
+    assert params["output_config"]["effort"] == "low"
+
+
 def test_cost_estimate_uses_catalog_and_batch_discount():
     full = estimate_cost("claude-opus-5", input_tokens=1_000_000,
                          output_tokens=1_000_000)
@@ -114,6 +131,9 @@ def test_cost_estimate_uses_catalog_and_batch_discount():
     half = estimate_cost("claude-opus-5", input_tokens=1_000_000,
                          output_tokens=1_000_000, batch=True)
     assert half == pytest.approx(15.0)
+    # Fable is the priciest row in the catalog — twice Opus.
+    assert estimate_cost("claude-fable-5", input_tokens=1_000_000,
+                         output_tokens=1_000_000) == pytest.approx(60.0)
     assert estimate_cost("not-a-model", input_tokens=1, output_tokens=1) is None
 
 

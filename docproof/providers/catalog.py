@@ -25,6 +25,17 @@ class ModelInfo:
 
 MODELS: tuple[ModelInfo, ...] = (
     # --- Anthropic -----------------------------------------------------------
+    # Fable is the most capable model available and priced accordingly — twice
+    # Opus, ten times Haiku. Grammar detection is a precise, well-specified
+    # task, so it is listed for the judgment-call error types rather than
+    # recommended: the blurb says so plainly because this row is what a user
+    # picks from. It also requires 30-day data retention (no zero-retention
+    # orgs) and always thinks — docproof sends no `thinking` parameter, which
+    # is what that model requires.
+    ModelInfo("claude-fable-5", "anthropic", "Claude Fable 5",
+              "The most capable reviewer there is, at twice the price of "
+              "Opus. Overkill for most manuscripts.",
+              10.00, 50.00),
     ModelInfo("claude-opus-5", "anthropic", "Claude Opus 5",
               "Most thorough. Best on subtle grammar and style calls.",
               5.00, 25.00),
