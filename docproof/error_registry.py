@@ -20,11 +20,20 @@ class ErrorType:
 REQUIRED = ("key", "name", "version", "detection_prompt", "fix_guidance")
 
 
-def load_error_types(dir_path: str | Path, enabled: list[str]) -> dict[str, ErrorType]:
+def load_error_types(dir_path: str | Path, enabled: list[str], *,
+                     override_dir: str | Path | None = None) -> dict[str, ErrorType]:
+    """Read the enabled error types, preferring an edited copy where one exists.
+
+    `override_dir` is where the app writes prompts the user has edited. It
+    shadows per key rather than wholesale, so editing one prompt does not
+    freeze the other twenty at the version shipped that day."""
     dir_path = Path(dir_path)
+    overrides = Path(override_dir) if override_dir else None
     registry: dict[str, ErrorType] = {}
     for key in enabled:
         path = dir_path / f"{key}.yaml"
+        if overrides is not None and (overrides / f"{key}.yaml").is_file():
+            path = overrides / f"{key}.yaml"
         if not path.exists():
             raise FileNotFoundError(
                 f"Error type '{key}' is enabled but {path} does not exist. "
