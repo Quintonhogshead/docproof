@@ -34,9 +34,31 @@ That produces `dist/DocProof.app` (~43 MB). It is **unsigned**, so the very
 first launch needs right-click → **Open** once; double-clicking works from
 then on. Drag it to `/Applications` if you like.
 
-Launching a second copy doesn't start a second server — it opens another
-window onto the one already running, because two copies sharing a job folder
-would poll the same batches and race over the same files.
+### One DocProof per folder
+
+Launching a second copy of the app doesn't start a second server — it opens
+another window onto the one already running, found through the port it left in
+`desktop.port`.
+
+That covers two launches of the *app*. It does not cover a copy started from a
+checkout, which shares the same default home and used to start happily
+alongside it. Two runners over one job folder is expensive, not untidy:
+`resume_interrupted` treats any job left in `running` as one *it* abandoned in
+a crash, so the second copy adopts the first's in-flight review, resets its
+progress and runs it again — the same manuscript reviewed twice, billed twice,
+with both writing to the same results folder. The visible symptom is a
+progress bar that jumps between two numbers.
+
+So the real claim is on the folder, in [`app/lock.py`](../app/lock.py): every
+entry point that starts a runner takes an exclusive `flock` on
+`owner.lock` in the app home first, and says who has it if it can't. `flock`
+rather than a PID in a file because the kernel drops it when the holder dies
+however it dies — a `kill -9` leaves nothing to clean up and nothing stale to
+reason about. Read-only uses (`create_app(..., start_runner=False)`, which is
+what the tests build) don't claim anything.
+
+Two homes never collide, so `--home` is the escape hatch if you genuinely want
+two running at once.
 
 There's still a browser mode if you prefer it:
 
@@ -335,8 +357,9 @@ docproof prep draft.docx --output both   # tag it for the house template
 DocProof.spec     PyInstaller recipe for the Mac app
 docproof_desktop.py  the packaged app's entry script (see its docstring)
 app/            FastAPI + static frontend. Job queue, scheduler, settings.
-  desktop.py      native window + uvicorn on a thread; single-instance guard
+  desktop.py      native window + uvicorn on a thread; attaches to a running copy
   run.py          browser entry point: picks a port, opens a tab
+  lock.py         one DocProof per app home, enforced with flock
   jobs.py         worker thread (sync reviews + prep) + ticker (scheduled, batch)
   main.py         HTTP routes
   prompts.py      reading and editing the shipped prompts
@@ -364,7 +387,7 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-263 tests, none of which touch a network — GitHub included, whose releases API
+276 tests, none of which touch a network — GitHub included, whose releases API
 is driven through an injected opener the same way vendors go through a fake
 provider — and none of which start InDesign or run git against the real
 checkout. Every vendor call goes through the

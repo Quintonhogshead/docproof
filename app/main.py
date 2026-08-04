@@ -33,6 +33,7 @@ from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
 
 from .jobs import Job, JobRunner, JobStore, read_usage
+from .lock import FolderInUse, FolderLock
 from .usage import build_usage
 from .prompts import (PromptError, assembled_passes, clear_override,
                       list_prompts, sample_user_turn, save_override)
@@ -113,7 +114,13 @@ class SettingsUpdate(BaseModel):
 
 def create_app(root: Path | None = None, *, start_runner: bool = True,
                poll_seconds: int = 120) -> FastAPI:
+    """Build the app. Raises FolderInUse when another DocProof owns this home.
+
+    The claim is tied to `start_runner` because the runner is what does the
+    damage: a second worker thread over one job folder adopts the first's
+    in-flight review and runs it again. An app built without one only reads."""
     paths = Paths(root or default_root()).ensure()
+    lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
     store = JobStore(paths)
     runner = JobRunner(store, settings, config_path=CONFIG_PATH,
@@ -125,12 +132,15 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
             runner.start()
         yield
         runner.stop()
+        if lock:
+            lock.release()
 
     app = FastAPI(title="DocProof", lifespan=lifespan)
     app.state.paths = paths
     app.state.settings = settings
     app.state.store = store
     app.state.runner = runner
+    app.state.lock = lock
 
     _register(app)
     static = resource_root() / "app" / "static"
@@ -796,4 +806,15 @@ def _register(app: FastAPI) -> None:
         return {"ok": True}
 
 
-app = create_app()
+def __getattr__(name: str):
+    """`uvicorn app.main:app` still works, but only for whoever actually asks.
+
+    This used to be a plain `app = create_app()`, which meant importing this
+    module for any reason built a second app against the *default* home —
+    creating its folders, ignoring any --home the caller had in mind, and now
+    claiming the lock on a folder the caller never intended to touch. Built on
+    demand, `uvicorn app.main:app` resolves it through here and nothing else
+    pays for it."""
+    if name == "app":
+        return create_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
