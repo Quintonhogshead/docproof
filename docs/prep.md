@@ -52,6 +52,8 @@ Everything mechanical is [rules.py](../docproof/prep/rules.py):
   A break glyph the author typed themselves is kept exactly as they typed it.
 - **Blank lines.** Everything else blank is removed — InDesign takes vertical
   spacing from the styles.
+- **The table of contents.** Read from the file, never from the words, and
+  applied over whatever the model answered — see below.
 - **Sanity.** A page of prose labelled "scene break", a blank line labelled
   "chapter", a blank under a heading: each is corrected in the safe direction
   and flagged. Nothing is corrected quietly.
@@ -60,6 +62,40 @@ Flags are raised, never fixed: bylines, front matter in an unusual place, a
 centered "The end" with no home style, lists (the style set has none), and
 anything the model itself was unsure about.
 
+## The manuscript's own table of contents
+
+A contents entry reading "Chapter One" is character-for-character the chapter
+heading it points at. Nothing reading only the text can tell them apart — so
+the model, asked what "Chapter One" is, answered "chapter # / title", which
+carries `page_break_before`. A twenty-line contents page became twenty chapter
+openers.
+
+So prep asks the file instead. [`_is_toc`](../docproof/prep/ingest.py) reads
+three signals, any one of which is enough:
+
+- the entry's own paragraph style — `TOC1`…`TOC9`, or LibreOffice's
+  `Contents1`. **Not** `TOCHeading`: the word "Contents" is a front-matter
+  title, and the required digit is what keeps it one;
+- a `TOC` or `PAGEREF _Toc` field instruction, in a `w:fldSimple` or a
+  `w:instrText`;
+- a hyperlink to a `_Toc…` bookmark.
+
+Those paragraphs get the sheet's `toc` role — `toc entry` in the shipped set —
+whatever the model said about them, and the contents list is flagged once for
+the designer. A style sheet that names no `toc` role sends them to body
+instead: it looks wrong and reads fine, where a forced page break under every
+line does not.
+
+The text itself is untouched, page numbers included, so the file still passes
+the word-for-word check. **InDesign generates its own contents from the styles
+you place**, so the flag asks whether to keep these lines at all — it does not
+answer that for you.
+
+A contents list the author typed by hand carries none of those three signals.
+For those, `toc entry` is also one of the labels the model may answer with, and
+the prompt tells it that entries in a contents list are pointers rather than
+headings.
+
 ## Swapping in your own style guide
 
 **Nothing about Atmosphere Press is in the code.** The style set is
@@ -67,12 +103,38 @@ anything the model itself was unsure about.
 the tagger's allowed answers, the Word style sheet, and the notes. To prep for a
 different template, replace that file. Three ways, in order of convenience:
 
-1. **In the app** — drop a `house_styles.yaml` into
-   `~/Library/Application Support/DocProof/prep/`. It replaces the shipped one
-   from the next document onwards. Settings → *The house style guide* shows
-   which file is in force and lists every style in it.
+1. **In the app** — Settings → *The house style guide* → **Use a different
+   style guide…**. The file is checked before it is installed: a duplicate
+   name or a role pointing at nothing is refused there and then, with the
+   reason, and the sheet you were using stays in force. **Go back to the one
+   DocProof ships with** undoes it. (Dropping a `house_styles.yaml` into
+   `~/Library/Application Support/DocProof/prep/` yourself still works and
+   does the same thing — the app writes to that path.)
 2. **From the terminal** — `docproof prep book.docx --style-sheet mine.yaml`.
 3. **For good** — point `prep.style_sheet` in `config/default.yaml` somewhere else.
+
+## Adjusting how the styles look
+
+Settings → *The styles it will use, and how they look* opens an editor over
+whichever sheet is in force: point size, space above and below, first-line
+indent, alignment, bold, italic, starts-a-page, stays-with-what-follows — per
+style, chosen from the values a template is actually drawn around rather than
+typed as free numbers. Trim size and the scene-break glyph are there too.
+
+**Names and ids are not editable, by design.** A style's name is what InDesign
+matches when the file is placed *and* what the model is allowed to answer, so
+it is a contract with two other things, not a preference. `PUT
+/api/prep/styles/format` only accepts `format` keys and the two sheet-level
+settings; everything else in the file is copied through untouched.
+
+Edits are written to the same override file an uploaded sheet goes to, so the
+shipped copy is never modified and one **Go back to the one DocProof ships
+with** undoes everything. Being machine-written, that file loses the comments a
+hand-edited one would keep.
+
+This is formatting for the Word file a designer reads before placing it —
+InDesign overrides all of it on import. What it does *not* change is the thing
+that matters on Place: the names.
 
 Each style needs:
 
@@ -141,10 +203,11 @@ model and by document.
 - **`.doc`, `.rtf`, `.odt`, `.txt`** are converted with LibreOffice if it is
   installed, and refused with a clear message if it isn't. A `.txt` source has
   no italics to recover, and the notes say so.
-- **It does not write `.idml`.** The deliverable is the tagged `.docx` — that is
-  what InDesign maps on Place. Generating a native layout would need the house
-  template to inject stories into; the [IDML walker and
-  reassembler](../docproof/formats/idml/) already exist if that is ever wanted.
+- **It does not write `.idml` from nothing.** The deliverable is the tagged
+  `.docx`. Given a template, DocProof can place it for you — see
+  [Placing it for you](indesign.md#placing-it-for-you) — which produces a real
+  `.indd`, but by flowing the manuscript into *your* template rather than
+  inventing a layout.
 - **The tracked file keeps the author's direct formatting.** Stripping a Google
   Docs export's fonts and sizes there would be hundreds more revisions to click
   through. The placed file is the one that gets cleaned.

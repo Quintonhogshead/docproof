@@ -9,7 +9,9 @@ const api = async (path, options) => {
   if (!res.ok) {
     let detail = `Something went wrong (${res.status}).`;
     try { detail = (await res.json()).detail || detail; } catch (_) {}
-    throw new Error(detail);
+    const err = new Error(detail);
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 };
@@ -17,7 +19,10 @@ const api = async (path, options) => {
 // selected: file id → Set of section ids the user kept. A file starts with
 // every section in it, so "do nothing" means "review the whole document".
 const state = { files: [], models: [], pollTimer: null, selected: new Map(),
-                outputGuess: 600, sheet: null };
+                outputGuess: 600, sheet: null,
+                // Which kind of document the user said they were starting
+                // with: a format suffix, or "all" for both.
+                formatChoice: 'all', formats: [], extraSuffixes: [] };
 
 // ── navigation ────────────────────────────────────────────────────────────
 
@@ -101,9 +106,23 @@ zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
 async function upload(files) {
   if (!files.length) return;
+  $('drop-error').hidden = true;
+
+  // A drop ignores the picker's filter, so the choice above the drop zone is
+  // applied here as well. Only what the user asked for; the server still
+  // preflights whatever gets through.
+  const allowed = allowedSuffixes();
+  const suffix = (f) => f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+  const skipped = files.filter((f) => !allowed.includes(suffix(f)));
+  files = files.filter((f) => allowed.includes(suffix(f)));
+  if (skipped.length) {
+    fail(`Not what you asked for, so left alone: `
+         + `${skipped.map((f) => f.name).join(', ')}.`);
+  }
+  if (!files.length) return;
+
   const body = new FormData();
   files.forEach((f) => body.append('files', f));
-  $('drop-error').hidden = true;
   try {
     const { files: staged } = await api('/api/files', { method: 'POST', body });
     state.files = state.files.concat(staged);
@@ -470,12 +489,15 @@ function renderJobs(jobs) {
     } else if (job.ready) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
-      const doc = link(`/api/jobs/${job.id}/file/document`,
-        job.format ? `Open in ${job.format.app}` : 'Open reviewed document');
+      const note = actionNote();
+      const doc = openButton(job, 'document',
+        job.format ? `Open in ${job.format.app}` : 'Open reviewed document',
+        note);
       const read = document.createElement('button');
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
-      actions.append(doc, read);
+      actions.append(doc, read,
+        openButton(job, 'document', 'Show in Finder', note, { reveal: true }));
       const bits = [];
       if (typeof job.applied === 'number') {
         bits.push(`${job.applied} change${job.applied === 1 ? '' : 's'} suggested`);
@@ -489,7 +511,7 @@ function renderJobs(jobs) {
         meta.textContent = bits.join(' · ');
         actions.append(meta);
       }
-      li.append(actions);
+      li.append(actions, note);
       // Tracked changes are invisible until you know which panel shows them,
       // and that panel is in a different place in each application.
       if (job.format) {
@@ -520,10 +542,74 @@ function renderJobs(jobs) {
   });
 }
 
-function link(href, text) {
+// Where a result button says why it couldn't do what it said.
+function actionNote() {
+  const p = document.createElement('p');
+  p.className = 'action-note error';
+  p.hidden = true;
+  return p;
+}
+
+// The window this app runs in cannot display a Word file and will not download
+// one, so "Open in Word" asks the app to hand the file to Word — it is sitting
+// in the user's own Documents folder already. Run in an ordinary browser, the
+// app says so and the file is downloaded instead.
+function openButton(job, which, text, note, { reveal = false } = {}) {
   const button = document.createElement('button');
   button.textContent = text;
-  button.addEventListener('click', () => { window.location.href = href; });
+  if (reveal) button.className = 'quiet';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    if (note) note.hidden = true;
+    const query = reveal ? '?reveal=true' : '';
+    try {
+      await api(`/api/jobs/${job.id}/open/${which}${query}`, { method: 'POST' });
+    } catch (err) {
+      if (err.status === 501) {
+        window.location.href = `/api/jobs/${job.id}/file/${which}`;
+      } else if (note) {
+        note.textContent = err.message;
+        note.hidden = false;
+      }
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return button;
+}
+
+// The last manual step, done for you: open the house template, flow the tagged
+// manuscript in, save the result beside everything else this job wrote.
+function placeButton(job, note) {
+  const button = document.createElement('button');
+  button.textContent = 'Place into the InDesign template';
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    note.className = 'action-note muted';
+    note.textContent = 'Placing — this takes a minute, longer if InDesign is '
+      + 'still starting up. InDesign will open.';
+    note.hidden = false;
+    try {
+      const { filename } = await api(`/api/jobs/${job.id}/place`,
+                                     { method: 'POST' });
+      note.className = 'action-note ok';
+      note.textContent = `Placed. ${filename} is in the same folder, and it is `
+        + 'showing in the Finder.';
+    } catch (err) {
+      note.className = 'action-note error';
+      note.textContent = err.message;
+      // The one failure with somewhere to go: no template chosen yet.
+      if (/Settings/.test(err.message)) {
+        const go = document.createElement('button');
+        go.textContent = 'Open Settings';
+        go.className = 'link';
+        go.addEventListener('click', () => show('settings'));
+        note.append(' ', go);
+      }
+    } finally {
+      button.disabled = false;
+    }
+  });
   return button;
 }
 
@@ -533,18 +619,22 @@ function prepActions(job) {
   const wrap = document.createElement('div');
   const actions = document.createElement('div');
   actions.className = 'job-actions';
+  const note = actionNote();
+  const first = job.prep_output === 'tracked' ? 'tracked' : 'indesign';
   if (job.prep_output !== 'tracked') {
-    actions.append(link(`/api/jobs/${job.id}/file/indesign`,
-      'Open the file for InDesign'));
+    actions.append(openButton(job, 'indesign', 'Open the file for InDesign',
+                              note));
   }
   if (job.prep_output !== 'indesign') {
-    actions.append(link(`/api/jobs/${job.id}/file/tracked`,
-      'Open the tracked-changes file'));
+    actions.append(openButton(job, 'tracked', 'Open the tracked-changes file',
+                              note));
   }
   const read = document.createElement('button');
   read.textContent = 'Read the prep notes';
   read.addEventListener('click', () => openPrepReport(job));
-  actions.append(read);
+  actions.append(read,
+    openButton(job, first, 'Show in Finder', note, { reveal: true }));
+  if (job.prep_output !== 'tracked') actions.append(placeButton(job, note));
 
   const bits = [];
   if (typeof job.tagged === 'number') bits.push(`${job.tagged} paragraphs tagged`);
@@ -556,7 +646,7 @@ function prepActions(job) {
     meta.textContent = bits.join(' · ');
     actions.append(meta);
   }
-  wrap.append(actions);
+  wrap.append(actions, note);
 
   const where = document.createElement('p');
   where.className = 'where';
@@ -998,6 +1088,7 @@ function promptCard(t) {
 async function loadSettings() {
   const { settings, keys } = await api('/api/settings');
   $('output-dir').value = settings.output_dir;
+  $('indesign-template').value = settings.indesign_template || '';
   $('comments').checked = settings.comments;
   $('explanations').checked = settings.explanations;
   $('prep-output-default').value = settings.prep_output || 'indesign';
@@ -1017,6 +1108,7 @@ async function loadSettings() {
 $('save-settings').addEventListener('click', async () => {
   const payload = {
     output_dir: $('output-dir').value,
+    indesign_template: $('indesign-template').value.trim(),
     comments: $('comments').checked,
     explanations: $('explanations').checked,
     prep_output: $('prep-output-default').value,
@@ -1080,28 +1172,278 @@ async function loadStyleSheet() {
     + `${d.glyph}. ${d.using_override
       ? 'This is your own file.' : 'This is the one DocProof ships with.'}`;
 
-  const table = $('sheet-table');
-  table.innerHTML = '';
-  table.append(headRow(['InDesign style name', 'Word style', 'Chosen by']));
-  d.styles.forEach((s) => table.append(bodyRow([
-    s.name, s.id, s.assign === 'model' ? 'reading the manuscript' : 'the rules'])));
-  d.character_styles.forEach((s) => table.append(bodyRow([
-    s.name, s.id, 'links'])));
+  $('sheet-reset').hidden = !d.using_override;
+  renderStyleEditor(d);
 }
+
+// The values a designer actually picks between. Offered as a fixed list rather
+// than a free number, because "18 or 20 point" is a decision and "18.3" is a
+// typo — and because these are the sizes the template was drawn around.
+const SIZES = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24, 26, 28];
+const SPACES = [0, 3, 6, 12, 18, 24, 36, 48];
+const INDENTS = [-18, 0, 12, 18, 24];
+const SWITCHES = [['bold', 'Bold'], ['italic', 'Italic'],
+                  ['page_break_before', 'Starts a page'],
+                  ['keep_next', 'Stays with what follows']];
+
+function choice(key, values, current, format) {
+  const select = document.createElement('select');
+  select.dataset.key = key;
+  select.append(new Option('—', ''));
+  // A sheet may name a value that is not on the list. Keep it rather than
+  // quietly snapping somebody's own file to the nearest option we offer.
+  const all = current == null || values.includes(current)
+    ? values : [...values, current].sort((a, b) => a - b);
+  all.forEach((v) => select.append(new Option(format(v), String(v))));
+  select.value = current == null ? '' : String(current);
+  return select;
+}
+
+function labelled(text, control) {
+  const label = document.createElement('label');
+  label.className = 'style-knob';
+  const span = document.createElement('span');
+  span.textContent = text;
+  label.append(span, control);
+  return label;
+}
+
+const points = (v) => `${v} pt`;
+
+function renderStyleEditor(d) {
+  const editor = $('sheet-editor');
+  editor.innerHTML = '';
+
+  const sheetLevel = document.createElement('div');
+  sheetLevel.className = 'style-row';
+  const trim = document.createElement('input');
+  trim.type = 'text';
+  trim.id = 'sheet-trim';
+  trim.value = d.trim || '';
+  const glyph = document.createElement('input');
+  glyph.type = 'text';
+  glyph.id = 'sheet-glyph';
+  glyph.value = d.glyph || '';
+  sheetLevel.append(labelled('Trim size', trim),
+                    labelled('Scene breaks are written as', glyph));
+  editor.append(sheetLevel);
+
+  d.styles.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = 'style-row';
+    row.dataset.style = String(i);
+
+    const head = document.createElement('p');
+    head.className = 'style-name';
+    head.textContent = s.name;
+    const who = document.createElement('small');
+    who.className = 'muted';
+    who.textContent = ` · Word style ${s.id} · applied by `
+      + (s.assign === 'model' ? 'reading the manuscript' : 'the rules');
+    head.append(who);
+    row.append(head);
+
+    const knobs = document.createElement('div');
+    knobs.className = 'style-knobs';
+    knobs.append(
+      labelled('Size', choice('size', SIZES, s.format.size ?? null, points)),
+      labelled('Space above',
+               choice('space_before', SPACES, s.format.space_before ?? null,
+                      points)),
+      labelled('Space below',
+               choice('space_after', SPACES, s.format.space_after ?? null,
+                      points)),
+      labelled('First line',
+               choice('indent', INDENTS, s.format.indent ?? null,
+                      (v) => (v < 0 ? `${-v} pt hanging` : `${v} pt`))));
+
+    const align = document.createElement('select');
+    align.dataset.key = 'align';
+    [['', '—'], ['left', 'Left'], ['center', 'Centred'], ['right', 'Right']]
+      .forEach(([v, text]) => align.append(new Option(text, v)));
+    align.value = s.format.align || '';
+    knobs.append(labelled('Aligned', align));
+
+    SWITCHES.forEach(([key, text]) => {
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.dataset.key = key;
+      box.checked = Boolean(s.format[key]);
+      knobs.append(labelled(text, box));
+    });
+
+    row.append(knobs);
+    editor.append(row);
+  });
+}
+
+// Only what the user actually moved. Sending the whole sheet back would work
+// too, but it would rewrite values nobody touched — and this file is somebody
+// else's, not ours.
+function collectStyleChanges() {
+  const styles = {};
+  state.sheet.styles.forEach((s, i) => {
+    const row = $('sheet-editor').querySelector(`[data-style="${i}"]`);
+    if (!row) return;
+    const update = {};
+    const clear = [];
+    row.querySelectorAll('[data-key]').forEach((control) => {
+      const key = control.dataset.key;
+      if (control.type === 'checkbox') {
+        const was = Boolean(s.format[key]);
+        if (control.checked === was) return;
+        if (control.checked) update[key] = true; else clear.push(key);
+        return;
+      }
+      const raw = control.value;
+      const now = raw === '' ? null : (key === 'align' ? raw : Number(raw));
+      const was = s.format[key] ?? null;
+      if (now === was) return;
+      if (now === null) clear.push(key); else update[key] = now;
+    });
+    if (Object.keys(update).length || clear.length) {
+      styles[s.name] = clear.length ? { ...update, clear } : update;
+    }
+  });
+
+  const body = { styles };
+  if ($('sheet-trim').value !== (state.sheet.trim || '')) {
+    body.trim = $('sheet-trim').value;
+  }
+  if ($('sheet-glyph').value !== (state.sheet.glyph || '')) {
+    body.scene_break_glyph = $('sheet-glyph').value;
+  }
+  return body;
+}
+
+function sheetStatus(message, ok = false) {
+  const note = $('sheet-status');
+  note.textContent = message;
+  note.className = `action-note ${ok ? 'ok' : 'error'}`;
+  note.hidden = !message;
+}
+
+$('sheet-pick').addEventListener('click', () => $('sheet-file').click());
+
+$('sheet-file').addEventListener('change', async () => {
+  const file = $('sheet-file').files[0];
+  if (!file) return;
+  const body = new FormData();
+  body.append('file', file);
+  sheetStatus('');
+  try {
+    await api('/api/prep/styles/sheet', { method: 'POST', body });
+    await loadStyleSheet();
+    sheetStatus(`Now using ${state.sheet.name}. Any adjustments you had made `
+                + 'to the previous style guide went with it.', true);
+  } catch (err) {
+    // The style sheet loader's messages are written for whoever is editing the
+    // YAML, so they are worth showing exactly as they came.
+    sheetStatus(err.message);
+  }
+  $('sheet-file').value = '';
+});
+
+$('sheet-reset').addEventListener('click', async () => {
+  sheetStatus('');
+  try {
+    await api('/api/prep/styles/sheet', { method: 'DELETE' });
+    await loadStyleSheet();
+    sheetStatus('Back to the style guide DocProof ships with.', true);
+  } catch (err) {
+    sheetStatus(err.message);
+  }
+});
+
+$('sheet-save').addEventListener('click', async () => {
+  const body = collectStyleChanges();
+  const saved = $('sheet-saved');
+  saved.hidden = true;
+  sheetStatus('');
+  if (!Object.keys(body.styles).length && body.trim === undefined
+      && body.scene_break_glyph === undefined) {
+    sheetStatus('Nothing has been changed yet.', true);
+    return;
+  }
+  try {
+    await api('/api/prep/styles/format',
+              { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body) });
+    await loadStyleSheet();
+    saved.hidden = false;
+  } catch (err) {
+    sheetStatus(err.message);
+  }
+});
 
 // ── boot ──────────────────────────────────────────────────────────────────
 
 // The drop zone advertises whatever the server can actually read, so adding a
 // format server-side never leaves the front door describing the old list.
 async function loadFormats() {
-  const { formats, suffixes } = await api('/api/formats');
-  input.accept = [...suffixes, '.doc', '.rtf', '.odt', '.txt'].join(',');
-  const names = formats.map((f) => `${f.kind}s (${f.suffix})`);
-  $('drop-formats').textContent =
-    (names.length > 1
-      ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
-      : names[0])
-    + ' — plus .doc, .rtf, .odt and .txt manuscripts, if LibreOffice is installed';
+  const d = await api('/api/formats');
+  state.formats = d.formats;
+  state.extraSuffixes = d.prep_extra_suffixes || [];
+
+  const choices = $('format-choice');
+  choices.innerHTML = '';
+  // One button per format the server reads, plus the answer most people want,
+  // which is "I have both and I would rather not sort them".
+  [...d.formats.map((f) => ({ value: f.suffix, label: `${f.kind}s` })),
+   { value: 'all', label: 'Both' }]
+    .forEach(({ value, label }) => {
+      const wrap = document.createElement('label');
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'format-choice';
+      radio.value = value;
+      radio.checked = value === 'all';
+      radio.addEventListener('change', () => applyFormatChoice(value));
+      const span = document.createElement('span');
+      span.textContent = label;
+      wrap.append(radio, span);
+      choices.append(wrap);
+    });
+  applyFormatChoice('all');
+}
+
+// Which suffixes the picker and the drop zone accept right now. The convertible
+// manuscript formats ride with Word: a .rtf becomes a .docx at drop time, and
+// there is no sense in which it is an InDesign file.
+function allowedSuffixes() {
+  const choice = state.formatChoice;
+  if (choice === '.idml') return ['.idml'];
+  if (choice === 'all') {
+    return [...state.formats.map((f) => f.suffix), ...state.extraSuffixes];
+  }
+  return [choice, ...state.extraSuffixes];
+}
+
+function applyFormatChoice(choice) {
+  state.formatChoice = choice;
+  input.accept = allowedSuffixes().join(',');
+
+  const format = state.formats.find((f) => f.suffix === choice);
+  const converts = ` — plus ${state.extraSuffixes.slice(0, -1).join(', ')} and `
+    + `${state.extraSuffixes.slice(-1)} manuscripts, if LibreOffice is installed`;
+  if (format) {
+    $('drop-formats').textContent = `${format.kind}s (${format.suffix})`
+      + (choice === '.idml' ? '' : converts);
+  } else {
+    const names = state.formats.map((f) => `${f.kind}s (${f.suffix})`);
+    $('drop-formats').textContent =
+      (names.length > 1
+        ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+        : names[0]) + converts;
+  }
+
+  // A layout cannot be prepped — prep is the step that gets a manuscript INTO
+  // InDesign — so choosing one answers the next question too.
+  if (choice === '.idml' && isPrep()) {
+    document.querySelector('input[name="kind"][value="review"]').checked = true;
+    renderKind();
+  }
+  renderFiles();
 }
 
 // Which output the user last chose is a preference, so it comes from Settings

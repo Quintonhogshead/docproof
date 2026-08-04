@@ -58,6 +58,19 @@ styles:
     format: {size: 18, bold: true, align: center, space_before: 24, space_after: 12,
              page_break_before: true, keep_next: true}
 
+  - name: "toc entry"
+    id: TocEntry
+    describe: >-
+      One line of the book's own table of contents — a chapter name, often with
+      a page number after it, sitting in the list under a "Contents" heading.
+      An entry reading "Chapter One" is a pointer to that chapter, NOT the
+      chapter heading itself: the heading is the one that has the chapter's
+      text under it. Everything between a Contents title and the end of that
+      list is this style.
+    assign: model
+    opens: false
+    format: {size: 10, space_after: 3}
+
   - name: "copyright"
     id: Copyright
     describe: >-
@@ -205,6 +218,9 @@ roles:
   body_first: "body first"    # the same paragraph when it opens a block
   scene_break: "scene break"  # what an inserted or author-typed break becomes
   table: "tables"             # anything found inside a table
+  # Optional. Where a contents list the file itself identifies as one ends up,
+  # whatever the model called it. Leave it out and those lines become body.
+  toc: "toc entry"
 
 # The two answers the model can give that are not house styles. Their text goes
 # into the prompt exactly as written, so this is where to tune how the model

@@ -11,7 +11,7 @@ from docproof.config import load_config
 FIXTURES = Path(__file__).parent / "fixtures"
 _CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
 _NEEDED = ("simple.docx", "styled.docx", "table.docx", "footnotes.docx",
-           "googledoc.docx", "tracked.docx")
+           "googledoc.docx", "toc.docx", "tracked.docx")
 
 
 def _ensure_fixtures() -> None:
@@ -25,6 +25,7 @@ def _ensure_fixtures() -> None:
         make_fixtures.table()
         make_fixtures.footnotes()
         make_fixtures.googledoc()
+        make_fixtures.toc()
         make_fixtures.tracked()
     finally:
         sys.path.remove(str(FIXTURES))

@@ -180,6 +180,12 @@ button:hover { border-color: var(--accent); }
 
 .big-button { padding: 0.7rem 1.6rem; font-size: 1.02rem; }
 
+/* A second way to reach the same file — worth offering, not worth competing
+   with the button that opens it. */
+button.quiet { color: var(--muted); background: transparent; }
+button.quiet:hover { color: var(--ink); }
+button:disabled { opacity: 0.55; cursor: default; }
+
 #start-hint { margin: 0.7rem 0 0; font-size: 0.9rem; }
 #start-hint .link { font-size: inherit; }
 
@@ -217,6 +223,57 @@ button:hover { border-color: var(--accent); }
 }
 .job-actions a { text-decoration: none; }
 .job-error { margin-top: 0.5rem; font-size: 0.88rem; }
+.action-note { margin: 0.5rem 0 0; font-size: 0.88rem; }
+
+/* ── what kind of document are we starting with ────────────────────────── */
+
+.segmented {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin: 0 auto 1rem;
+  padding: 0.25rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+}
+.segmented label {
+  padding: 0.4rem 0.95rem;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label:has(:checked) {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+.segmented label:focus-within { outline: 2px solid var(--accent); }
+#screen-drop { text-align: center; }
+#screen-drop #staged { text-align: left; }
+
+/* ── adjusting the house styles ────────────────────────────────────────── */
+
+.style-row {
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--line);
+}
+.style-row:first-child { border-top: 0; }
+.style-name { margin: 0 0 0.5rem; font-weight: 600; }
+.style-name small { font-weight: 400; }
+
+.style-knobs, .style-row > .style-knob {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: end;
+}
+.style-knob { display: grid; gap: 0.2rem; font-size: 0.82rem; }
+.style-knob > span { color: var(--muted); }
+.style-knob select, .style-knob input[type="text"] { padding: 0.3rem 0.4rem; }
+.style-knob input[type="checkbox"] { justify-self: start; margin: 0.35rem 0; }
+.style-row:first-child { display: flex; gap: 1rem; flex-wrap: wrap; }
 
 /* ── picking sections ──────────────────────────────────────────────────── */
 

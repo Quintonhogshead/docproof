@@ -87,7 +87,69 @@ relationships the way Word comments are.
 deletions — to a fixed point; `ignore` proceeds with a logged warning that new
 edits near existing revisions may nest.
 
+## Placing it for you
+
+Prep hands back a `.docx` whose paragraph style *names* are the template's own.
+Flowing it in is mechanical, so DocProof will do it: set **your InDesign
+template** in Settings, and a finished prep job grows a **Place into the
+InDesign template** button. It writes `placed_<name>.indd` beside the job's
+other files and reveals it in the Finder.
+
+[`docproof/prep/place.py`](../docproof/prep/place.py) writes an ExtendScript
+file and hands it to InDesign by Apple events — the same route
+`tests/fixtures/make_idml.jsx` uses. The script:
+
+1. opens the template and **immediately saves it under the output name**, so
+   every edit after that lands on the copy. The file the designer maintains is
+   never written to;
+2. sets Word import preferences — unused styles not imported, style clashes
+   resolved to the template's existing definitions, local overrides preserved
+   so the author's italics survive;
+3. places the manuscript at the start of page 1's text frame, creating one at
+   the margins if the template has none;
+4. **merges the styles the importer invents** (see below);
+5. threads new pages until nothing is overset, then saves and closes.
+
+### The capitalisation trap
+
+Verified against InDesign 2026: **the Word importer capitalises the first
+letter of every incoming style name.** A file tagged `chapter # / title`
+arrives as `Chapter # / title`, which does not match the template's own style,
+so "use existing" never fires and InDesign creates a *new* style carrying
+Word's formatting. The manuscript then looks placed and is not — every
+paragraph sits in a near-duplicate style, which is the one outcome this whole
+pipeline exists to prevent.
+
+So the script records the template's styles before placing, and afterwards
+merges anything the import created that matches an existing style
+case-insensitively — `style.remove(target)`, which reassigns every paragraph
+using it and then deletes it. The reply line reports how many were merged.
+
+A style with no counterpart in the template (`Normal`, and anything your sheet
+names that the template doesn't) is left alone: that is a real mismatch and
+worth seeing.
+
+### What it needs, and what it will say
+
+macOS asks for permission the first time — **System Settings → Privacy &
+Security → Automation** — and the button reports that in those words if it is
+refused. Missing-font and style-clash dialogs are suppressed
+(`NEVER_INTERACT`) rather than left to hang the run at 11pm. A template that
+has moved, an InDesign that will not start, and a run that outlasts its ten
+minutes each get their own sentence.
+
+The manuscript's own table of contents is **not** regenerated — InDesign builds
+its own from the placed styles, and prep flags the contents list for exactly
+that decision. See [prep.md](prep.md#the-manuscripts-own-table-of-contents).
+
 ## Testing
+
+`tests/test_place.py` covers the script docproof writes and everything it makes
+of InDesign's replies, with the `osascript` boundary passed in — no test starts
+an application. What it cannot cover is InDesign actually doing it; that was
+verified by hand against InDesign 2026, placing a tagged fixture into a
+template and reading the applied styles back out, which is how the
+capitalisation trap above was found.
 
 `tests/test_idml.py` covers walker determinism, paragraphs spanning style
 ranges, `<Br/>` boundary semantics, table reading order, style-name resolution,

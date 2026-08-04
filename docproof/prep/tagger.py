@@ -93,6 +93,13 @@ def build_output_model(choices: tuple[str, ...]) -> type[BaseModel]:
     return create_model("TagList", paragraphs=(list[row], ...))
 
 
+def _attr(value: str) -> str:
+    """A style name that will sit inside the pseudo-XML the model reads without
+    closing a tag early. The paragraph text is not escaped either — this is a
+    prompt, not a document."""
+    return value.replace('"', "'").replace("<", "(").replace(">", ")")
+
+
 def render_window(window: Window, assigned: dict[str, str], *,
                   header: str, preview_chars: int) -> str:
     """The user turn: a little already-decided context, then the paragraphs to
@@ -109,7 +116,13 @@ def render_window(window: Window, assigned: dict[str, str], *,
         if p.is_blank:
             blocks.append(f'<blank id="{p.para_id}"/>')
         else:
-            blocks.append(f'<p id="{p.para_id}" words="{p.words}">'
+            # What the manuscript already called this paragraph, when it called
+            # it anything. Most are "Normal" and worth no tokens, but a
+            # "Heading 1" or a "TOC 2" is the author telling us what they meant.
+            named = ""
+            if p.style and p.style.lower() not in ("normal", "body text"):
+                named = f' style="{_attr(p.style)}"'
+            blocks.append(f'<p id="{p.para_id}" words="{p.words}"{named}>'
                           f'{preview(p, preview_chars)}</p>')
     parts.append("\n".join(blocks))
     return "\n\n".join(parts)

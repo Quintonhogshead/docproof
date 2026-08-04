@@ -6,6 +6,8 @@ to do nothing else to the author's text. Everything else is detail.
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from lxml import etree
 
@@ -212,6 +214,111 @@ def test_two_blank_lines_at_one_break_make_one_break(prepared, sheet):
     assert plan["body-0011"].insert_glyph
 
 
+# --- the manuscript's own table of contents -----------------------------------
+
+# toc.docx: a Contents title, then four entries written the three ways Word
+# writes them, then the real chapter the first entry points at.
+TOC_TITLE = "body-0000"
+TOC_STYLED, TOC_LINKED = "body-0001", "body-0002"
+TOC_PAGEREF, TOC_LIBRE = "body-0003", "body-0004"
+REAL_CHAPTER = "body-0006"
+
+
+@pytest.fixture
+def toc_structure():
+    return build_structure(preflight(FIXTURES / "toc.docx"))
+
+
+def test_a_contents_list_is_read_from_the_file_not_the_words(toc_structure):
+    """Every way a contents entry is marked up, and nothing else. The title
+    above the list is front matter, and the chapter heading forty pages down is
+    character-for-character identical to the entry pointing at it."""
+    toc = {p.para_id for p in toc_structure.paragraphs if p.is_toc}
+    assert toc == {TOC_STYLED, TOC_LINKED, TOC_PAGEREF, TOC_LIBRE}
+    assert TOC_TITLE not in toc          # "Contents" is a front-matter title
+    assert REAL_CHAPTER not in toc       # the heading, not the pointer
+
+
+def test_contents_entries_are_not_chapter_headings(toc_structure, sheet):
+    """The bug this exists for: the model reads "Chapter One" in the contents
+    and answers "chapter # / title", which carries a forced page break — so a
+    twenty-line contents page became twenty chapter openers."""
+    plan = plan_for(toc_structure, sheet,
+                    {TOC_TITLE: "front/backmatter title",
+                     TOC_STYLED: "chapter # / title",
+                     TOC_LINKED: "chapter # / title",
+                     TOC_PAGEREF: "chapter # / title",
+                     TOC_LIBRE: "front/backmatter title",
+                     REAL_CHAPTER: "chapter # / title"})
+    by_id = plan.by_id()
+    for para_id in (TOC_STYLED, TOC_LINKED, TOC_PAGEREF, TOC_LIBRE):
+        assert by_id[para_id].style == "toc entry"
+    # What sits either side of the list is untouched by any of this.
+    assert by_id[TOC_TITLE].style == "front/backmatter title"
+    assert by_id[REAL_CHAPTER].style == "chapter # / title"
+
+
+def test_the_contents_is_flagged_once_for_the_designer(toc_structure, sheet):
+    """InDesign generates its own contents from the placed styles, so whether
+    to keep these lines is the designer's call — asked once, not per line."""
+    plan = plan_for(toc_structure, sheet, {})
+    toc_flags = [f for f in plan.flags if f.kind == "toc_detected"]
+    assert len(toc_flags) == 1
+    assert toc_flags[0].para_id == TOC_STYLED
+    assert "InDesign" in toc_flags[0].message
+
+
+def test_a_contents_entry_never_opens_a_block(toc_structure, sheet):
+    """A contents entry is not a heading, so nothing after the list is "the
+    first paragraph of a chapter" on its account."""
+    plan = plan_for(toc_structure, sheet, {}).by_id()
+    assert plan[REAL_CHAPTER].style == "body para"
+    # A real chapter heading still opens one, of course.
+    with_heading = plan_for(toc_structure, sheet,
+                            {REAL_CHAPTER: "chapter # / title"}).by_id()
+    assert with_heading["body-0008"].style == "body first"
+    assert with_heading["body-0009"].style == "body para"
+
+
+def test_a_style_sheet_with_no_contents_style_falls_back_to_body(
+        toc_structure, sheet, tmp_path):
+    """An older or bespoke sheet names no toc style. Those lines become body,
+    which looks wrong and reads fine — the failure that matters is a page break
+    under every one of them, and that does not happen."""
+    bare = replace(sheet, roles={k: v for k, v in sheet.roles.items()
+                                 if k != "toc"})
+    plan = plan_for(toc_structure, bare, {TOC_STYLED: "chapter # / title"})
+    by_id = plan.by_id()
+    assert by_id[TOC_STYLED].style in ("body first", "body para")
+    assert any(f.kind == "toc_detected" for f in plan.flags)
+
+
+def test_the_manuscripts_own_style_is_shown_to_the_model(toc_structure):
+    """The style Word gave a paragraph is the strongest signal in the file, and
+    prep used to read it and throw it away before the model ever saw it."""
+    window = windows(toc_structure.paragraphs, max_paragraphs=120,
+                     token_budget=6000, context=8, preview_chars=400)[0]
+    turn = render_window(window, {}, header="Already labelled:",
+                         preview_chars=400)
+    assert 'style="TOC1"' in turn
+    assert 'style="TOCHeading"' in turn
+    assert 'style="Normal"' not in turn      # true of nearly every paragraph
+
+
+def test_a_tagged_contents_survives_verification(cfg, tmp_path):
+    """Restyling is the only thing that happened to those lines: the page
+    numbers and the entry text come through word for word, so the file still
+    ships."""
+    prepared = preplib.prepare(cfg, FIXTURES / "toc.docx",
+                               config_dir=CONFIG_DIR)
+    tags, usage = preplib.run_mock(prepared, {TOC_STYLED: "chapter # / title"})
+    outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                             source_path=FIXTURES / "toc.docx",
+                             outputs=["indesign"])
+    assert all(check.ok for check in outputs.verifications)
+    assert styles_in(outputs.documents["indesign"])[TOC_STYLED] == "toc entry"
+
+
 # --- the InDesign-ready file --------------------------------------------------
 
 def test_the_clean_file_is_tagged_end_to_end(cfg, prepared, tmp_path):
@@ -335,6 +442,16 @@ def test_a_file_whose_words_drifted_is_not_shipped(cfg, prepared, tmp_path,
 def test_the_glyph_is_not_counted_as_a_word_on_either_side():
     source = verify.stream(["A scene ends.", "Another begins."], "***")
     output = verify.stream(["A scene ends.", "***", "Another begins."], "***")
+    assert verify.compare(source, output, view="clean").ok
+
+
+def test_a_glyph_written_with_spaces_in_it_is_still_one_break():
+    """"* * *" is three tokens to anything that counts words. A house set that
+    writes its breaks that way must not fail verification for every break the
+    manuscript has."""
+    source = verify.stream(["A scene ends.", "Another begins."], "* * *")
+    output = verify.stream(["A scene ends.", "* * *", "Another begins."],
+                           "* * *")
     assert verify.compare(source, output, view="clean").ok
 
 

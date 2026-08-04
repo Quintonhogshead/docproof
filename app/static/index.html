@@ -21,6 +21,9 @@
 <main>
   <!-- ── Drop ─────────────────────────────────────────────────────────── -->
   <section id="screen-drop" class="screen">
+    <div class="segmented" id="format-choice" role="radiogroup"
+         aria-label="What kind of document are you starting with?"></div>
+
     <div id="dropzone" tabindex="0" role="button"
          aria-label="Drop documents here, or press Enter to choose files">
       <p class="big">Drop your documents here</p>
@@ -84,7 +87,9 @@
           <label class="radio">
             <input type="radio" name="mode" value="batch" checked>
             <span><strong>Overnight</strong> — half the cost, ready within a
-              few hours <em id="cost-batch"></em></span>
+              few hours <em id="cost-batch"></em>
+              <small class="muted">Word manuscripts and InDesign layouts
+                alike.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="mode" value="now">
@@ -229,6 +234,13 @@
         <input type="text" id="output-dir">
       </label>
       <label class="field">
+        <span>Your InDesign template
+          <small class="muted">— the .indd a designer places manuscripts into.
+            DocProof opens a copy of it, never this file.</small></span>
+        <input type="text" id="indesign-template"
+               placeholder="/Users/you/Templates/House prose.indd">
+      </label>
+      <label class="field">
         <span>When preparing for layout, hand back</span>
         <select id="prep-output-default">
           <option value="indesign">A file ready for InDesign</option>
@@ -253,17 +265,36 @@
     <div class="card">
       <h3>The house style guide</h3>
       <p class="muted">Manuscript prep tags paragraphs into this style set. It
-        is a file, not something built into DocProof — put your own
-        <code>house_styles.yaml</code> in the folder below and prep uses it
-        from the next document onwards. The <strong>name</strong> of each style
-        is what InDesign matches when you place the file, so it has to match
-        the template character for character.</p>
+        is a file, not something built into DocProof — hand DocProof your own
+        and prep uses it from the next document onwards. The
+        <strong>name</strong> of each style is what InDesign matches when you
+        place the file, so it has to match the template character for
+        character.</p>
       <p id="sheet-summary" class="muted"></p>
-      <p class="muted small">Replacement goes here:
+
+      <div class="job-actions">
+        <button type="button" id="sheet-pick">Use a different style guide…</button>
+        <button type="button" id="sheet-reset" class="quiet" hidden>
+          Go back to the one DocProof ships with</button>
+        <input type="file" id="sheet-file" accept=".yaml,.yml" hidden>
+      </div>
+      <p id="sheet-status" class="action-note" hidden></p>
+      <p class="muted small">Or put the file here yourself:
         <code id="sheet-override"></code></p>
+
       <details class="card" id="sheet-styles">
-        <summary>The styles it will use</summary>
-        <table class="table" id="sheet-table"></table>
+        <summary>The styles it will use, and how they look</summary>
+        <p class="muted small">The name of each style is the contract with your
+          InDesign template, so it cannot be edited here. Everything below is
+          how the tagged Word file looks before it is placed — InDesign
+          overrides all of it on import, but a designer reads the manuscript
+          first.</p>
+        <div id="sheet-editor"></div>
+        <div class="job-actions">
+          <button type="button" id="sheet-save" class="primary">Save style
+            changes</button>
+          <span id="sheet-saved" class="ok" hidden>Saved.</span>
+        </div>
       </details>
     </div>
 

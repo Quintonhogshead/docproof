@@ -8,10 +8,14 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
+import yaml
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,6 +28,7 @@ from docproof.formats import SUFFIXES, describe, get_format
 from docproof.ingest import IngestError
 from docproof.pipeline import chunk_outline, prepare
 from docproof.prep import convert as prep_convert
+from docproof.prep.place import PlaceError, find_indesign, place_into_template
 from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
 
@@ -42,6 +47,8 @@ ERROR_DIR = CONFIG_PATH.parent / "error_types"
 # Output tokens can't be known in advance; this is a per-request allowance used
 # only to turn the estimate into a number with the right order of magnitude.
 OUTPUT_TOKEN_GUESS = 600
+# A style sheet is a page of YAML. Anything this size is the wrong file.
+MAX_SHEET_BYTES = 1_000_000
 
 
 class JobRequest(BaseModel):
@@ -63,6 +70,30 @@ class PromptUpdate(BaseModel):
     detection_prompt: str = Field(min_length=1)
 
 
+class StyleFormatUpdate(BaseModel):
+    """How one house style looks in the tagged .docx. Points throughout, the
+    same units the style sheet is written in. Bounds are here so a slip in the
+    UI cannot write a 400-point chapter heading into somebody's style set."""
+    size: float | None = Field(default=None, ge=4, le=96)
+    bold: bool | None = None
+    italic: bool | None = None
+    align: Literal["left", "center", "right"] | None = None
+    space_before: float | None = Field(default=None, ge=0, le=200)
+    space_after: float | None = Field(default=None, ge=0, le=200)
+    page_break_before: bool | None = None
+    keep_next: bool | None = None
+    indent: float | None = Field(default=None, ge=-100, le=200)
+    # Format keys to drop entirely, which is not the same as setting them to
+    # zero: an unset size inherits the template's.
+    clear: list[str] = []
+
+
+class SheetFormatUpdate(BaseModel):
+    styles: dict[str, StyleFormatUpdate] = {}
+    trim: str | None = Field(default=None, max_length=40)
+    scene_break_glyph: str | None = Field(default=None, max_length=20)
+
+
 class SettingsUpdate(BaseModel):
     model: str | None = None
     min_confidence: str | None = None
@@ -71,6 +102,7 @@ class SettingsUpdate(BaseModel):
     comments: bool | None = None
     explanations: bool | None = None
     prep_output: str | None = None
+    indesign_template: str | None = None
     anthropic_key: str | None = None
     openai_key: str | None = None
     gemini_key: str | None = None
@@ -112,6 +144,117 @@ def _resolve_upload(paths: Paths, file_id: str) -> Path | None:
     if not candidate.is_relative_to(uploads) or not candidate.is_file():
         return None
     return candidate
+
+
+def _result_name(job: Job, which: str) -> str | None:
+    """What a job called the file the user is asking for."""
+    stem = Path(job.filename).stem or "document"
+    names = {
+        # "docx" is the old name for this route, kept so a page left open
+        # across an upgrade keeps working.
+        "document": get_format(job.filename).reviewed_name(job.filename),
+        "docx": get_format(job.filename).reviewed_name(job.filename),
+        "summary": "summary.md",
+        "findings": "findings.json",
+        "indesign": f"tagged_{stem}.docx",
+        "tracked": f"tracked_{stem}.docx",
+        "notes": "prep_notes.md",
+        "prep": "prep.json",
+        "placed": f"placed_{stem}.indd",
+    }
+    if job.is_prep and which in ("document", "docx"):
+        # Whatever this job actually wrote, so one "open it" button works
+        # for either output choice.
+        return next(
+            (n for n in (names["indesign"], names["tracked"])
+             if (Path(job.results_dir) / n).is_file()), names["indesign"])
+    return names.get(which)
+
+
+def _result_path(job: Job, which: str) -> Path:
+    """The file on disk behind one of the result buttons.
+
+    Raises the same 404s the download route has always raised: an unknown name
+    and a name whose file was moved or deleted are different problems, and the
+    person reading the message is looking at their own Documents folder."""
+    name = _result_name(job, which)
+    if name is None:
+        raise HTTPException(404, "Unknown file")
+    path = Path(job.results_dir) / name
+    if not path.is_file():
+        raise HTTPException(404, f"{name} is missing")
+    return path
+
+
+def _open_path(path: Path, *, reveal: bool = False) -> None:
+    """Hand a finished file to whichever application owns it.
+
+    The app runs inside a WKWebView that cannot display a .docx and refuses to
+    download one, so serving the bytes over HTTP does nothing visible. The file
+    is already on this Mac; `open` is what the user would do themselves."""
+    args = ["open", "-R", str(path)] if reveal else ["open", str(path)]
+    subprocess.Popen(args)
+
+
+def _shipped_sheet() -> Path:
+    cfg = load_config(CONFIG_PATH)
+    return preplib.pipeline.resolve(CONFIG_PATH.parent, cfg.prep.style_sheet)
+
+
+def _override_path(paths: Paths) -> Path:
+    """Where a replacement style set lives. The name is the one the config
+    asks for, because that is what `load_style_sheet` looks for."""
+    return paths.prep / _shipped_sheet().name
+
+
+def _style_payload(paths: Paths) -> dict:
+    """The style set in force, as the Settings screen reads it."""
+    shipped = _shipped_sheet()
+    override = paths.prep / shipped.name
+    try:
+        sheet = preplib.load_style_sheet(shipped, override_dir=paths.prep)
+    except StyleSheetError as e:
+        return {"ok": False, "error": str(e), "override_path": str(override),
+                "shipped_path": str(shipped), "using_override": override.is_file()}
+    return {
+        "ok": True,
+        "name": sheet.name, "version": sheet.version, "trim": sheet.trim,
+        "glyph": sheet.scene_break_glyph,
+        "path": sheet.path,
+        "shipped_path": str(shipped),
+        "override_path": str(override),
+        "using_override": Path(sheet.path).parent == paths.prep,
+        "styles": [{"name": s.name, "id": s.id, "describe": s.describe,
+                    "assign": s.assign, "opens": s.opens,
+                    "format": dict(s.format)} for s in sheet.styles],
+        "character_styles": [{"name": s.name, "id": s.id}
+                             for s in sheet.character_styles],
+    }
+
+
+def _install_sheet(paths: Paths, body: bytes, override: Path) -> dict:
+    """Put a style sheet in force, but only once it loads.
+
+    Written beside its destination and moved onto it, so a sheet that fails to
+    parse never becomes the one prep reads, and a half-written file never
+    exists under the name prep looks for."""
+    override.parent.mkdir(parents=True, exist_ok=True)
+    staging = override.with_name(override.name + ".uploading")
+    staging.write_bytes(body)
+    try:
+        preplib.load_style_sheet(staging)
+    except StyleSheetError as e:
+        # The message names the file and the problem, and was written for
+        # somebody editing YAML — but the staging path is ours, not theirs.
+        raise HTTPException(400, str(e).replace(f"{staging}: ", "")
+                                       .replace(str(staging), "that file"))
+    except Exception as e:                    # noqa: BLE001 - any bad YAML
+        raise HTTPException(400, f"That file could not be read: {e}")
+    else:
+        staging.replace(override)
+        return _style_payload(paths)
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def _register(app: FastAPI) -> None:
@@ -217,7 +360,11 @@ def _register(app: FastAPI) -> None:
         """What docproof can read, so the drop zone and the file picker are
         driven by the format registry rather than a hardcoded list that drifts
         the next time one is added."""
-        return {"formats": describe(), "suffixes": list(SUFFIXES)}
+        return {"formats": describe(), "suffixes": list(SUFFIXES),
+                # Not formats docproof reads: manuscripts LibreOffice turns
+                # into a .docx at drop time. They belong with Word in the
+                # picker, and the list belongs here rather than in the page.
+                "prep_extra_suffixes": list(prep_convert.CONVERTIBLE)}
 
     # -- models ---------------------------------------------------------------
 
@@ -342,34 +489,70 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/api/jobs/{job_id}/file/{which}")
     def download(job_id: str, which: str):
+        """Serve a result over HTTP — the browser build's way of handing a file
+        over, and the fallback when the desktop window cannot open one."""
         job = app.state.store.get(job_id)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
-        stem = Path(job.filename).stem or "document"
-        names = {
-            # "docx" is the old name for this route, kept so a page left open
-            # across an upgrade keeps working.
-            "document": get_format(job.filename).reviewed_name(job.filename),
-            "docx": get_format(job.filename).reviewed_name(job.filename),
-            "summary": "summary.md",
-            "findings": "findings.json",
-            "indesign": f"tagged_{stem}.docx",
-            "tracked": f"tracked_{stem}.docx",
-            "notes": "prep_notes.md",
-            "prep": "prep.json",
-        }
-        if job.is_prep and which in ("document", "docx"):
-            # Whatever this job actually wrote, so one "open it" button works
-            # for either output choice.
-            names[which] = next(
-                (n for n in (names["indesign"], names["tracked"])
-                 if (Path(job.results_dir) / n).is_file()), names["indesign"])
-        if which not in names:
-            raise HTTPException(404, "Unknown file")
-        path = Path(job.results_dir) / names[which]
-        if not path.is_file():
-            raise HTTPException(404, f"{names[which]} is missing")
+        path = _result_path(job, which)
         return FileResponse(path, filename=path.name)
+
+    @app.post("/api/jobs/{job_id}/open/{which}")
+    def open_result(job_id: str, which: str, reveal: bool = False) -> dict:
+        """Open a result in Word, InDesign, or the Finder.
+
+        This is the desktop window's version of the download route: the file
+        already exists in the user's own Documents folder, so the honest thing
+        to do with "Open in Word" is open it in Word."""
+        job = app.state.store.get(job_id)
+        if job is None or not job.results_dir:
+            raise HTTPException(404, "No results for this review yet")
+        path = _result_path(job, which)
+        if sys.platform != "darwin":
+            # Nothing to hand the file to; the page falls back to downloading.
+            raise HTTPException(501, "This build can only open files on a Mac.")
+        _open_path(path, reveal=reveal)
+        return {"ok": True, "opened": path.name}
+
+    @app.post("/api/jobs/{job_id}/place")
+    def place_in_indesign(job_id: str) -> dict:
+        """Flow a finished prep job into the house template.
+
+        Synchronous on purpose. This takes a minute and the user is watching
+        InDesign do it — a job that reported back later would be stranger than
+        a button that waits."""
+        job = app.state.store.get(job_id)
+        if job is None or not job.results_dir:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_prep:
+            raise HTTPException(
+                400, "Only a manuscript prepared for layout can be placed.")
+        if job.state != "done":
+            raise HTTPException(400, "This one is not finished yet.")
+        tagged = _result_path(job, "indesign")
+
+        template = (app.state.settings.indesign_template or "").strip()
+        if not template:
+            raise HTTPException(
+                400, "Choose your InDesign template in Settings first — "
+                     "DocProof places the manuscript into a copy of it.")
+        if not Path(template).is_file():
+            raise HTTPException(
+                400, f"The template is not at {template} any more. Set it "
+                     f"again in Settings.")
+        if sys.platform != "darwin":
+            raise HTTPException(501, "Placing needs InDesign on a Mac.")
+        if find_indesign() is None:
+            raise HTTPException(
+                400, "InDesign does not appear to be installed on this Mac.")
+
+        out = Path(job.results_dir) / _result_name(job, "placed")
+        try:
+            placed = place_into_template(template, tagged, out)
+        except PlaceError as e:
+            raise HTTPException(400, str(e))
+        _open_path(placed, reveal=True)
+        return {"ok": True, "filename": placed.name, "path": str(placed)}
 
     @app.get("/api/jobs/{job_id}/prep")
     def prep_notes(job_id: str) -> dict:
@@ -395,28 +578,73 @@ def _register(app: FastAPI) -> None:
 
         The point of this route is that the style guide is data: it shows the
         publisher exactly which file is in force and what is in it."""
+        return _style_payload(app.state.paths)
+
+    @app.post("/api/prep/styles/sheet")
+    async def upload_style_sheet(file: UploadFile) -> dict:
+        """Take a replacement style set from the Settings screen.
+
+        It is written under the name the config asks for, whatever the file was
+        called on the way in, because `load_style_sheet` finds a replacement by
+        filename. Nothing is installed until it has been loaded successfully:
+        a sheet with two styles sharing a name would otherwise take prep down
+        at the next run, hours after the mistake was made."""
+        override = _override_path(app.state.paths)
+        raw = await file.read()
+        if len(raw) > MAX_SHEET_BYTES:
+            raise HTTPException(
+                400, f"{file.filename} is larger than a style sheet can "
+                     f"sensibly be. Is it the right file?")
+        return _install_sheet(app.state.paths, raw, override)
+
+    @app.delete("/api/prep/styles/sheet")
+    def reset_style_sheet() -> dict:
+        """Go back to the style set DocProof ships with. This also discards any
+        adjustments made below — there is one file, so there is one undo."""
+        _override_path(app.state.paths).unlink(missing_ok=True)
+        return _style_payload(app.state.paths)
+
+    @app.put("/api/prep/styles/format")
+    def set_style_formats(req: SheetFormatUpdate) -> dict:
+        """Adjust how the styles look, and nothing else.
+
+        Only `format` values and the two sheet-level settings can be reached
+        from here. Names, ids, descriptions and roles are copied through
+        untouched: the name of a style is what InDesign matches when the file
+        is placed and what the model is allowed to answer, so it is not a knob.
+
+        The edited sheet is written to the same override file an uploaded one
+        goes to, leaving the shipped copy alone."""
         paths: Paths = app.state.paths
-        cfg = load_config(CONFIG_PATH)
-        shipped = preplib.pipeline.resolve(CONFIG_PATH.parent,
-                                           cfg.prep.style_sheet)
-        try:
-            sheet = preplib.load_style_sheet(shipped, override_dir=paths.prep)
-        except StyleSheetError as e:
-            return {"ok": False, "error": str(e),
-                    "override_path": str(paths.prep / Path(shipped).name)}
-        return {
-            "ok": True,
-            "name": sheet.name, "version": sheet.version, "trim": sheet.trim,
-            "glyph": sheet.scene_break_glyph,
-            "path": sheet.path,
-            "shipped_path": str(shipped),
-            "override_path": str(paths.prep / Path(shipped).name),
-            "using_override": Path(sheet.path).parent == paths.prep,
-            "styles": [{"name": s.name, "id": s.id, "describe": s.describe,
-                        "assign": s.assign} for s in sheet.styles],
-            "character_styles": [{"name": s.name, "id": s.id}
-                                 for s in sheet.character_styles],
-        }
+        payload = _style_payload(paths)
+        if not payload["ok"]:
+            raise HTTPException(400, payload["error"])
+
+        raw = yaml.safe_load(Path(payload["path"]).read_text("utf-8")) or {}
+        entries = {str(e.get("name")): e for e in raw.get("styles") or []}
+        unknown = [name for name in req.styles if name not in entries]
+        if unknown:
+            raise HTTPException(
+                400, f"This style set has no style called "
+                     f"'{unknown[0]}'. It has: "
+                     f"{', '.join(sorted(entries))}.")
+
+        for name, update in req.styles.items():
+            fmt = dict(entries[name].get("format") or {})
+            for key, value in update.model_dump(exclude_none=True).items():
+                if key != "clear":
+                    fmt[key] = value
+            for key in update.clear:
+                fmt.pop(key, None)
+            entries[name]["format"] = fmt
+        if req.trim is not None:
+            raw["trim"] = req.trim
+        if req.scene_break_glyph is not None:
+            raw["scene_break_glyph"] = req.scene_break_glyph
+
+        body = yaml.safe_dump(raw, sort_keys=False, allow_unicode=True,
+                              width=88).encode("utf-8")
+        return _install_sheet(paths, body, _override_path(paths))
 
     # -- what it has cost -----------------------------------------------------
 
@@ -489,7 +717,7 @@ def _register(app: FastAPI) -> None:
         s: Settings = app.state.settings
         for field_name in ("model", "min_confidence", "output_dir",
                            "default_mode", "prep_output", "comments",
-                           "explanations"):
+                           "explanations", "indesign_template"):
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)

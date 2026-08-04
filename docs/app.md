@@ -56,6 +56,20 @@ automatically and take precedence.
 
 Finished documents land in `~/Documents/DocProof/<document name>/`.
 
+## What are you starting with?
+
+Above the drop zone: **Word documents**, **InDesign layouts**, or **Both**
+(the default). It narrows the file picker and the drop zone to the suffixes
+that answer, names anything dropped that doesn't match rather than silently
+ignoring it, and — because prep is the step that gets a manuscript *into*
+InDesign — choosing layouts also switches the job to "review for errors".
+
+The buttons are built from `GET /api/formats`, including the `.doc`/`.rtf`/
+`.odt`/`.txt`-and-friends list that LibreOffice converts at drop time, so
+adding a format server-side never leaves the front door describing the old
+one. The client filter is a convenience, not a gate: every file is still
+preflighted on the server when it lands.
+
 ## Now vs. overnight
 
 **Batch pricing is a flat 50% discount at any hour** — both vendors, all day.
@@ -66,10 +80,21 @@ Finished documents land in `~/Documents/DocProof/<document name>/`.
 | Right now | full price | minutes |
 | Overnight | **half** | usually under an hour; 24h at the outside |
 
+Either kind of document can go either way: nothing between submit and collect
+knows whether it is carrying a Word manuscript or an InDesign layout, so an
+`.idml` review takes the overnight discount exactly as a `.docx` does. (Prep is
+the exception — see below.)
+
 Overnight submits immediately by default. The optional "hold until 11:00 PM" is
 for deferring the *submission*, and it carries a real caveat the UI states
 plainly: **your Mac must be awake with DocProof open at that time.** If you just
 want the discount, leave the hold unchecked — you get it either way.
+
+**Preparing for layout has no overnight form.** Prep reads its windows in
+order — what a paragraph is depends on what came before it, and each window is
+sent the previous window's answers — so it cannot be split into a pile of
+independent requests answered out of order. The app hides the choice for prep
+jobs and the server pins them to "right now" regardless of what was asked for.
 
 A batch review survives quitting the app. Everything needed to finish sits in
 `~/Library/Application Support/DocProof/jobs/<id>/`, so reopening DocProof picks
@@ -116,6 +141,26 @@ docproof inventory draft.docx              # lists section ids
 docproof review draft.docx --only chunk-003,chunk-007
 docproof submit draft.docx --only chunk-003
 ```
+
+## Opening what came out
+
+A finished job has **Open in Word** (or **Open in InDesign**, or for prep
+**Open the file for InDesign**) next to it, plus a quieter **Show in Finder**.
+
+Those buttons hand the file to the application on this Mac rather than
+downloading a second copy of it: the window DocProof runs in is a WebView,
+which cannot display a `.docx` or an `.idml` and refuses to download one, so
+a link to the file would do nothing at all. `POST /api/jobs/{id}/open/{which}`
+runs `open` (or `open -R` to reveal) on the file already sitting in your
+output folder. Run in an ordinary browser instead — `python -m app.run` — the
+route answers `501` and the page falls back to downloading the file.
+
+If the file has been moved or renamed since the run, the button says which
+file it went looking for rather than failing silently.
+
+A finished prep job also offers **Place into the InDesign template**, once
+Settings knows where your template is —
+[indesign.md](indesign.md#placing-it-for-you).
 
 ## Seeing what changed
 
@@ -199,7 +244,8 @@ Gemini needs a narrower schema dialect than the other two, which is what
 pytest -q
 ```
 
-176 tests, none of which touch a network. Every vendor call goes through the
+224 tests, none of which touch a network, and none of which start InDesign.
+Every vendor call goes through the
 `Provider` protocol, so `tests/fakes.py` covers both the synchronous and batch
 paths — including a scripted batch provider that reports in-progress polls so
 restart and resume behaviour is exercised without sleeping. Response parsing
@@ -212,8 +258,12 @@ own SDK types.
   change it — that still happens in Word's Review tab, or InDesign's Track
   Changes panel. A screen that lets you drop individual findings and re-write
   the reviewed file is the obvious next step.
-- **A native `.idml` out of prep.** Prep's deliverable is the tagged `.docx`,
-  which is what InDesign maps on Place. Building the layout itself would need
-  the house template to inject stories into.
+- **A layout built from nothing.** Prep's deliverable is the tagged `.docx`.
+  Point Settings at your template and **Place into the InDesign template** now
+  produces a real `.indd` from it — see
+  [indesign.md](indesign.md#placing-it-for-you) — but by flowing the manuscript
+  into a copy of *your* template, not by designing one. It also places into
+  page 1's first text frame; a template whose story starts elsewhere needs a
+  hand.
 - **Re-review reuse.** Re-running a document pays for every section again, even
   ones whose text and prompt haven't moved since the last run.

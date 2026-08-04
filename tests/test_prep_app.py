@@ -5,6 +5,7 @@ Same rules as test_app.py: nothing here reaches a vendor and nothing sleeps.
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -223,6 +224,241 @@ def test_dropping_in_your_own_style_guide_replaces_the_shipped_one(client):
     job = start_prep(client, upload(client)["id"])
     notes = client.get(f"/api/jobs/{job['id']}/prep").json()
     assert notes["style_sheet"]["name"] == "Riverbend Books"
+
+
+# --- placing into the InDesign template ----------------------------------------
+
+@pytest.fixture
+def indesign(client, monkeypatch, tmp_path):
+    """A Mac with InDesign on it, and a placer that writes the file it claims
+    to have written. No application is started."""
+    template = tmp_path / "House prose.indd"
+    template.write_bytes(b"template")
+    client.app_state.settings.indesign_template = str(template)
+
+    calls = []
+    monkeypatch.setattr("app.main.find_indesign", lambda: "/Applications/ID.app")
+    monkeypatch.setattr("app.main._open_path",
+                        lambda path, *, reveal=False: None)
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    def fake_place(tpl, tagged, out):
+        calls.append({"template": Path(tpl), "tagged": Path(tagged),
+                      "out": Path(out)})
+        Path(out).write_bytes(b"an InDesign document")
+        return Path(out)
+
+    monkeypatch.setattr("app.main.place_into_template", fake_place)
+    return calls
+
+
+def test_placing_hands_indesign_the_template_and_the_tagged_file(client,
+                                                                 indesign):
+    job = start_prep(client, upload(client)["id"])
+    resp = client.post(f"/api/jobs/{job['id']}/place")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["filename"] == "placed_googledoc.indd"
+
+    call, = indesign
+    assert call["template"].name == "House prose.indd"
+    assert call["tagged"].name == "tagged_googledoc.docx"
+    # It lands beside everything else this job wrote, not in a temp folder.
+    assert call["out"].parent == Path(job["results_dir"])
+    assert call["out"].is_file()
+
+
+def test_placing_without_a_template_points_at_settings(client, indesign):
+    client.app_state.settings.indesign_template = ""
+    job = start_prep(client, upload(client)["id"])
+    resp = client.post(f"/api/jobs/{job['id']}/place")
+    assert resp.status_code == 400
+    assert "Settings" in resp.json()["detail"]
+    assert not indesign
+
+
+def test_a_template_that_has_moved_says_so(client, indesign):
+    client.app_state.settings.indesign_template = "/nowhere/House.indd"
+    job = start_prep(client, upload(client)["id"])
+    resp = client.post(f"/api/jobs/{job['id']}/place")
+    assert resp.status_code == 400 and "/nowhere/House.indd" in resp.json()["detail"]
+
+
+def test_a_review_job_cannot_be_placed(client, indesign):
+    """Placing is the end of prep. A reviewed document has nothing to flow."""
+    staged = upload(client)
+    job = client.post("/api/jobs", json={"file_ids": [staged["id"]],
+                                         "model": "claude-haiku-4-5",
+                                         "mode": "now"}).json()["jobs"][0]
+    client.app_state.runner.wait_idle()
+    resp = client.post(f"/api/jobs/{job['id']}/place")
+    assert resp.status_code == 400 and "prepared for layout" in resp.json()["detail"]
+
+
+def test_what_indesign_said_went_wrong_reaches_the_user(client, indesign,
+                                                        monkeypatch):
+    from docproof.prep.place import PlaceError
+
+    def boom(*a, **k):
+        raise PlaceError("InDesign reported: The template is locked.")
+
+    monkeypatch.setattr("app.main.place_into_template", boom)
+    job = start_prep(client, upload(client)["id"])
+    resp = client.post(f"/api/jobs/{job['id']}/place")
+    assert resp.status_code == 400
+    assert "The template is locked." in resp.json()["detail"]
+
+
+def test_the_template_is_remembered_between_launches(client, tmp_path):
+    template = tmp_path / "House prose.indd"
+    template.write_bytes(b"template")
+    client.put("/api/settings", json={"indesign_template": str(template)})
+    assert client.get("/api/settings").json()["settings"]["indesign_template"] \
+        == str(template)
+    saved = json.loads((client.app_state.paths.settings_file).read_text("utf-8"))
+    assert saved["indesign_template"] == str(template)
+
+
+# --- submitting a style guide from the app -------------------------------------
+
+def _shipped_text(client) -> str:
+    return Path(client.get("/api/prep/styles").json()["shipped_path"]).read_text(
+        "utf-8")
+
+
+def _submit_sheet(client, text, name="mine.yaml"):
+    return client.post("/api/prep/styles/sheet",
+                       files={"file": (name, text.encode("utf-8"),
+                                       "application/x-yaml")})
+
+
+def test_a_style_guide_can_be_handed_over_in_the_app(client):
+    """Same effect as dropping the file into the folder, without asking anyone
+    to find the folder."""
+    resp = _submit_sheet(client, _shipped_text(client).replace(
+        "Atmosphere Press prose template", "Riverbend Books"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Riverbend Books"
+    assert resp.json()["using_override"] is True
+
+    # Whatever it was called on the way in, it lands under the name prep looks
+    # for — and the next manuscript is tagged with it.
+    paths = client.app_state.paths
+    assert (paths.prep / "house_styles.yaml").is_file()
+    job = start_prep(client, upload(client)["id"])
+    notes = client.get(f"/api/jobs/{job['id']}/prep").json()
+    assert notes["style_sheet"]["name"] == "Riverbend Books"
+
+
+def test_a_broken_style_guide_is_refused_and_changes_nothing(client):
+    """It has to fail here, in front of the person who chose the file, rather
+    than at 11pm in the middle of a run."""
+    _submit_sheet(client, _shipped_text(client).replace(
+        "Atmosphere Press prose template", "Riverbend Books"))
+
+    doubled = _shipped_text(client).replace('id: Copyright', 'id: TitlePage')
+    resp = _submit_sheet(client, doubled)
+    assert resp.status_code == 400
+    assert "TitlePage" in resp.json()["detail"]
+    # The sheet that was working a moment ago is still the one in force, and
+    # no half-written file was left behind under a name prep might read.
+    assert client.get("/api/prep/styles").json()["name"] == "Riverbend Books"
+    assert not list(client.app_state.paths.prep.glob("*.uploading"))
+
+
+def test_a_file_that_is_not_a_style_guide_at_all_is_refused(client):
+    resp = _submit_sheet(client, "just: some\n  broken: yaml\n")
+    assert resp.status_code == 400
+    assert client.get("/api/prep/styles").json()["using_override"] is False
+
+
+def test_going_back_to_the_shipped_style_guide(client):
+    _submit_sheet(client, _shipped_text(client).replace(
+        "Atmosphere Press prose template", "Riverbend Books"))
+    body = client.delete("/api/prep/styles/sheet").json()
+    assert body["name"] == "Atmosphere Press prose template"
+    assert body["using_override"] is False
+    assert not (client.app_state.paths.prep / "house_styles.yaml").exists()
+
+
+# --- adjusting how the styles look ---------------------------------------------
+
+def _formats(client) -> dict:
+    return {s["name"]: s["format"]
+            for s in client.get("/api/prep/styles").json()["styles"]}
+
+
+def test_the_styles_come_back_with_the_formatting_to_adjust(client):
+    chapter = _formats(client)["chapter # / title"]
+    assert chapter["size"] == 18 and chapter["page_break_before"] is True
+
+
+def test_adjusting_a_style_reaches_the_tagged_document(client):
+    """The point of the sliders: a change made in Settings is in the .docx the
+    designer places, not just in a preference file."""
+    resp = client.put("/api/prep/styles/format", json={
+        "styles": {"chapter # / title": {"size": 24, "space_before": 36}},
+        "scene_break_glyph": "# # #"})
+    assert resp.status_code == 200, resp.text
+    assert _formats(client)["chapter # / title"]["size"] == 24
+    assert client.get("/api/prep/styles").json()["glyph"] == "# # #"
+
+    job = start_prep(client, upload(client)["id"])
+    tagged = Path(job["results_dir"]) / "tagged_googledoc.docx"
+    with zipfile.ZipFile(tagged) as z:
+        styles_xml = z.read("word/styles.xml").decode("utf-8")
+    # Word measures type in half-points.
+    assert 'w:styleId="ChapterTitle"' in styles_xml
+    assert '<w:sz w:val="48"/>' in styles_xml
+
+
+def test_adjusting_styles_never_touches_what_indesign_matches_on(client):
+    """Names and ids are the contract with the template and with the model, so
+    the editor cannot reach them however the request is phrased."""
+    before = client.get("/api/prep/styles").json()["styles"]
+    client.put("/api/prep/styles/format",
+               json={"styles": {"body para": {"indent": 24}},
+                     "trim": "6 x 9"})
+    after = client.get("/api/prep/styles").json()["styles"]
+
+    assert [(s["name"], s["id"], s["assign"], s["describe"]) for s in before] \
+        == [(s["name"], s["id"], s["assign"], s["describe"]) for s in after]
+    assert _formats(client)["body para"]["indent"] == 24
+    assert client.get("/api/prep/styles").json()["trim"] == "6 x 9"
+
+
+def test_clearing_a_format_value_is_not_the_same_as_zeroing_it(client):
+    client.put("/api/prep/styles/format",
+               json={"styles": {"body para": {"clear": ["indent"]}}})
+    assert "indent" not in _formats(client)["body para"]
+
+
+def test_adjusting_a_style_that_is_not_in_the_sheet_says_so(client):
+    resp = client.put("/api/prep/styles/format",
+                      json={"styles": {"drop cap": {"size": 30}}})
+    assert resp.status_code == 400
+    assert "drop cap" in resp.json()["detail"]
+
+
+def test_a_size_no_template_would_want_is_refused(client):
+    resp = client.put("/api/prep/styles/format",
+                      json={"styles": {"body para": {"size": 400}}})
+    assert resp.status_code == 422
+
+
+def test_adjustments_apply_to_whichever_sheet_is_in_force(client):
+    """Edits land on the style set the user actually submitted, and reverting
+    to the shipped one throws the edits away with it — one file, one undo."""
+    _submit_sheet(client, _shipped_text(client).replace(
+        "Atmosphere Press prose template", "Riverbend Books"))
+    client.put("/api/prep/styles/format",
+               json={"styles": {"body para": {"size": 11}}})
+
+    body = client.get("/api/prep/styles").json()
+    assert body["name"] == "Riverbend Books"
+    assert _formats(client)["body para"]["size"] == 11
+
+    client.delete("/api/prep/styles/sheet")
+    assert "size" not in _formats(client)["body para"]
 
 
 # --- spending -----------------------------------------------------------------

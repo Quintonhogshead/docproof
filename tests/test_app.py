@@ -117,6 +117,10 @@ def test_formats_endpoint_lists_what_can_be_read(client):
     body = client.get("/api/formats").json()
     assert body["suffixes"] == [".docx", ".idml"]
     assert {f["name"] for f in body["formats"]} == {"Word", "InDesign"}
+    # The picker offers these alongside Word, so the page must not be keeping
+    # its own copy of the list — this one grew by three without it noticing.
+    assert ".rtf" in body["prep_extra_suffixes"]
+    assert ".docx" not in body["prep_extra_suffixes"]
 
 
 # --- run now ------------------------------------------------------------------
@@ -168,6 +172,81 @@ def test_failed_job_reports_plainly_and_can_be_retried(client, monkeypatch):
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
 
 
+# --- opening what came out ----------------------------------------------------
+
+@pytest.fixture
+def opened(monkeypatch):
+    """Every file the app hands to the desktop, without handing it anywhere."""
+    calls: list[tuple[Path, bool]] = []
+    monkeypatch.setattr("app.main._open_path",
+                        lambda path, *, reveal=False: calls.append((path, reveal)))
+    monkeypatch.setattr("sys.platform", "darwin")
+    return calls
+
+
+def _finished_review(client, provider):
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    job = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
+    return job
+
+
+def test_open_hands_the_reviewed_document_to_its_application(
+        client, provider, opened):
+    """The window this app lives in cannot display a .docx and will not
+    download one, so the button has to open the file on the Mac itself."""
+    job = _finished_review(client, provider)
+
+    resp = client.post(f"/api/jobs/{job['id']}/open/document")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["opened"] == "reviewed_simple.docx"
+
+    path, reveal = opened[0]
+    assert path.name == "reviewed_simple.docx" and path.is_file()
+    assert reveal is False
+
+
+def test_show_in_finder_reveals_the_file_instead_of_opening_it(
+        client, provider, opened):
+    job = _finished_review(client, provider)
+    assert client.post(
+        f"/api/jobs/{job['id']}/open/document?reveal=true").status_code == 200
+    assert opened[0][1] is True
+
+
+def test_opening_a_result_that_was_moved_says_which_file_is_gone(
+        client, provider, opened):
+    job = _finished_review(client, provider)
+    results = Path(client.get(f"/api/jobs/{job['id']}").json()["results_dir"])
+    (results / "reviewed_simple.docx").unlink()
+
+    resp = client.post(f"/api/jobs/{job['id']}/open/document")
+    assert resp.status_code == 404
+    assert "reviewed_simple.docx" in resp.json()["detail"]
+    assert not opened
+
+
+def test_opening_a_name_the_app_does_not_write_is_refused(
+        client, provider, opened):
+    job = _finished_review(client, provider)
+    resp = client.post(f"/api/jobs/{job['id']}/open/passwords")
+    assert resp.status_code == 404 and not opened
+
+
+def test_a_plain_browser_is_told_to_download_instead(client, provider,
+                                                     monkeypatch):
+    """Run outside the desktop window there is nothing to hand a file to, and
+    the page falls back to the download route on this exact status."""
+    job = _finished_review(client, provider)
+    monkeypatch.setattr("sys.platform", "linux")
+    resp = client.post(f"/api/jobs/{job['id']}/open/document")
+    assert resp.status_code == 501
+    assert client.get(f"/api/jobs/{job['id']}/file/document").status_code == 200
+
+
 # --- batch --------------------------------------------------------------------
 
 def test_batch_job_waits_then_collects_on_a_tick(client, provider):
@@ -186,6 +265,30 @@ def test_batch_job_waits_then_collects_on_a_tick(client, provider):
     done = client.get(f"/api/jobs/{job['id']}").json()
     assert done["state"] == "done", done.get("error")
     assert client.get(f"/api/jobs/{job['id']}/file/docx").status_code == 200
+
+
+def test_an_indesign_layout_can_go_overnight_too(client, provider):
+    """Nothing between submit and collect knows what format it is carrying, and
+    the cheap overnight run is worth as much to a layout as to a manuscript.
+    This pins that: an .idml goes through the same three stages and comes back
+    as a reviewed .idml."""
+    idml_splice = "It was late, we were tired and the road went on forever."
+    provider.results = [finding_result(
+        para_id="story-ue0-p0001", error_type="comma_splice",
+        original=idml_splice, corrected=idml_splice.replace("late,", "late;"))]
+    staged = _upload(client, "layout.idml")
+    job = _run(client, staged["id"], mode="batch")
+    client.app_state.runner.wait_idle()
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "waiting"
+
+    client.post("/api/tick")
+    done = client.get(f"/api/jobs/{job['id']}").json()
+    assert done["state"] == "done", done.get("error")
+    assert done["applied"] == 1
+
+    reviewed = client.get(f"/api/jobs/{job['id']}/file/document")
+    assert reviewed.status_code == 200 and reviewed.content[:2] == b"PK"
+    assert "reviewed_layout.idml" in reviewed.headers["content-disposition"]
 
 
 def test_scheduled_job_holds_until_its_time(client, monkeypatch):

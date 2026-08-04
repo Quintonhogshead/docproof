@@ -90,6 +90,9 @@ class Settings:
     # Ask the model why each change was made. Off is materially cheaper —
     # the reasons are most of what the model writes back.
     explanations: bool = True
+    # The .indd a designer places manuscripts into. Empty until somebody says
+    # where it is: there is no sensible default for another house's template.
+    indesign_template: str = ""
 
     @classmethod
     def load(cls, paths: Paths) -> "Settings":

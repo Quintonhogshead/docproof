@@ -27,6 +27,10 @@ class StructureParagraph:
     has_italics: bool
     has_link: bool
     is_list: bool = False   # a numbered or bulleted item
+    # A line of the manuscript's own table of contents. Read from the file
+    # rather than from the words, because "Chapter One" in a contents list and
+    # "Chapter One" forty pages later are the same eleven characters.
+    is_toc: bool = False
 
     @property
     def words(self) -> int:

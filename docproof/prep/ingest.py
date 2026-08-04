@@ -30,6 +30,20 @@ _URL = re.compile(r"(https?://|www\.)\S", re.IGNORECASE)
 _HYPERLINK = qn("w:hyperlink")
 _ITALIC = qn("w:i")
 
+# The styles Word and LibreOffice give the *entries* of a generated contents
+# list. "TOCHeading"/"Contents Heading" is the word "Contents" itself, which is
+# a front-matter title and must not match: hence the required digit.
+_TOC_STYLE = re.compile(r"^(toc|contents|inhaltsverzeichnis)\s*\d+$",
+                        re.IGNORECASE)
+# Field instructions inside one. The whole contents list is usually a single
+# TOC field spanning many paragraphs, but each entry carries its own page
+# reference, so per-paragraph detection has something to find either way.
+_TOC_FIELD = re.compile(r"\bTOC\b|PAGEREF\s+_Toc", re.IGNORECASE)
+_FLD_SIMPLE = qn("w:fldSimple")
+_INSTR_TEXT = qn("w:instrText")
+_INSTR_ATTR = qn("w:instr")
+_ANCHOR = qn("w:anchor")
+
 
 def preflight(path: str | Path) -> DocxPackage:
     """Open a manuscript, or refuse it with a sentence the author can act on.
@@ -117,6 +131,7 @@ def build_structure(pkg: DocxPackage) -> Structure:
             has_italics=_has_italics(wp.element),
             has_link=_has_link(wp.element, text),
             is_list=wp.element.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is not None,
+            is_toc=_is_toc(wp.element, style),
         ))
 
     blanks = sum(1 for p in paragraphs if p.is_blank)
@@ -125,6 +140,28 @@ def build_structure(pkg: DocxPackage) -> Structure:
              len(untouched))
     return Structure(source_path=str(pkg.path), paragraphs=tuple(paragraphs),
                      untouched=tuple(untouched))
+
+
+def _is_toc(p: etree._Element, style: str) -> bool:
+    """Is this paragraph a line of the document's own table of contents?
+
+    Asked of the file, never of the words: a contents entry reading "Chapter
+    One" is character-for-character the chapter heading it points at, so the
+    text cannot tell them apart and neither can anything reading only the text.
+    Three signals, any one of which is enough — the entry's own style, a TOC or
+    PAGEREF field instruction, or a link to a _Toc bookmark."""
+    if _TOC_STYLE.match(style or ""):
+        return True
+    for field in p.iter(_FLD_SIMPLE):
+        if _TOC_FIELD.search(field.get(_INSTR_ATTR) or ""):
+            return True
+    for instr in p.iter(_INSTR_TEXT):
+        if _TOC_FIELD.search(instr.text or ""):
+            return True
+    for link in p.iter(_HYPERLINK):
+        if (link.get(_ANCHOR) or "").startswith("_Toc"):
+            return True
+    return False
 
 
 def _has_italics(p: etree._Element) -> bool:

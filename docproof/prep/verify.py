@@ -50,11 +50,17 @@ def stream(texts, glyph: str) -> list[str]:
     allowed to remove a blank line. Scene-break glyphs are dropped from both
     sides: an inserted one is the single change the spec permits, and dropping
     the token by value keeps a break the author typed themselves from being
-    counted on one side only."""
+    counted on one side only.
+
+    A glyph is dropped token by token, because a house set is as likely to
+    write a break as "* * *" as "***" — one of those is three words to anything
+    counting words, and counting an inserted break as three new words would
+    fail every manuscript that has one."""
+    skip = set(glyph.split())
     out: list[str] = []
     for text in texts:
         for token in text.split():
-            if token != glyph:
+            if token not in skip:
                 out.append(token)
     return out
 

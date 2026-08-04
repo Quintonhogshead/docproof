@@ -136,6 +136,38 @@ def googledoc() -> None:
         z.writestr("word/document.xml", _GOOGLE_DOC)
 
 
+# A manuscript whose front matter carries a real Word-generated table of
+# contents, written the three ways Word and its imitators actually write one:
+# entries styled TOC1/TOC2, entries linked to a _Toc bookmark, and entries
+# carrying their own PAGEREF field. The "Contents" title above them is
+# TOCHeading, which is a front-matter title and must NOT be read as an entry —
+# and "Chapter One" appears twice, once as a pointer and once as the heading it
+# points at, which is the whole difficulty this fixture exists for.
+_TOC_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:hyperlink w:anchor="_Toc0001"><w:r><w:t>Chapter One</w:t></w:r><w:r><w:tab/><w:t>1</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:hyperlink w:anchor="_Toc0002"><w:r><w:t>Chapter Two</w:t></w:r><w:r><w:tab/><w:t>14</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:hyperlink w:anchor="_Toc0003"><w:r><w:t>Chapter Three</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:r><w:instrText xml:space="preserve"> PAGEREF _Toc0003 \\h </w:instrText></w:r><w:r><w:t>27</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="Contents2"/></w:pPr><w:r><w:t>Acknowledgments</w:t></w:r><w:r><w:tab/><w:t>40</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Chapter One</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:t>The road out of town was longer than she remembered.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>She had not driven it since the winter her mother died.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+
+def toc() -> None:
+    """A manuscript with a generated table of contents in its front matter."""
+    with zipfile.ZipFile(HERE / "toc.docx", "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _GOOGLE_CONTENT_TYPES)
+        z.writestr("_rels/.rels", _GOOGLE_ROOT_RELS)
+        z.writestr("word/document.xml", _TOC_DOC)
+
+
 def tracked() -> None:
     """A manuscript that still has an unresolved edit in it. Prep refuses this
     outright — it restyles every paragraph, and doing that around somebody
@@ -156,5 +188,5 @@ def tracked() -> None:
 
 
 if __name__ == "__main__":
-    simple(); styled(); table(); footnotes(); googledoc(); tracked()
+    simple(); styled(); table(); footnotes(); googledoc(); toc(); tracked()
     print("fixtures written to", HERE)

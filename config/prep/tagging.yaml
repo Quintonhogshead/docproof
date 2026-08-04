@@ -36,6 +36,15 @@ system_prompt: |
     scene break or a one-line paragraph.
   - Front matter and back matter keep their own titles: Acknowledgments, About
     the Author, Contents, Dedication.
+  - A "Contents" title is followed by the contents list itself. Every line of
+    that list is "toc entry" — including the ones reading "Chapter One" or
+    "Prologue", which are pointers to chapters, not the chapter headings. The
+    real heading is the one with the chapter's text under it. The list ends
+    where the next front-matter title or the body of the book begins.
+  - Some paragraphs carry a style="..." attribute: what the manuscript itself
+    already called them. Trust it when it is specific — a "TOC 2" is a contents
+    entry, a "Heading 1" is a heading of some kind — and use it alongside the
+    text rather than instead of it.
   - Long paragraphs are shown truncated, with their real word count. A truncated
     paragraph is body text; that is why it is long.
 

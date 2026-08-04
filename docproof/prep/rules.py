@@ -30,12 +30,22 @@ def build_plan(structure: Structure, tags: list[Tag],
     scene_break = sheet.role("scene_break").name
     table_style = sheet.role("table").name
 
+    # Optional: a sheet that names no toc style sends contents lines to body,
+    # which is wrong-looking but harmless. Being a chapter opener is not.
+    toc_style = sheet.roles.get("toc")
+    if toc_style and not sheet.has(toc_style):
+        log.warning("The style sheet's toc role names %r, which is not one of "
+                    "its styles; contents lines will be treated as body.",
+                    toc_style)
+        toc_style = None
+
     plans: list[ParagraphPlan] = []
     flags: list[Flag] = []
     # The first body paragraph of a manuscript opens its block: there is no
     # preceding paragraph for it to be a continuation of.
     opens = True
     last_was_break = False
+    in_toc = False
 
     for p in structure.taggable:
         tag = by_id.get(p.para_id) or Tag(p.para_id,
@@ -50,6 +60,33 @@ def build_plan(structure: Structure, tags: list[Tag],
                 p, role, scene_break, plans, flags, opens, last_was_break)
             plans.append(plan)
             continue
+
+        if p.is_toc:
+            # The file itself says this line belongs to a contents list, and
+            # the file is not guessing. A model reading only the words cannot
+            # be right here: an entry reading "Chapter One" is the same eleven
+            # characters as the heading it points at, and calling it a heading
+            # puts a forced page break under every line of the contents.
+            if not in_toc:
+                flags.append(Flag(
+                    p.para_id, "toc_detected",
+                    "The manuscript's own table of contents. These lines were "
+                    "styled as contents entries, not as chapter headings. "
+                    "InDesign builds its own contents from the styles you "
+                    "place, so decide whether to keep them or delete them.",
+                    _preview(p.text)))
+                in_toc = True
+            if toc_style:
+                style = toc_style
+            else:
+                style = body_first if opens else body_para
+                opens = False
+            plans.append(ParagraphPlan(
+                para_id=p.para_id, role=toc_style or BODY, style=style,
+                strip_leading=p.leading_ws, strip_trailing=p.trailing_ws))
+            last_was_break = False
+            continue
+        in_toc = False
 
         role, extra = _sane_role(p, role, scene_break, sheet)
         if extra:
