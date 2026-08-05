@@ -104,7 +104,9 @@
       "Bash(.venv/bin/python -c \"import spylls; print\\('spylls', spylls.__file__\\)\")",
       "Bash(.venv/bin/python -c \"import symspellpy; print\\('symspell ok'\\)\")",
       "Bash(.venv/bin/python -m pytest tests/test_sweeps.py -q)",
-      "Bash(.venv/bin/python -m pytest tests/test_spellscan.py -q)"
+      "Bash(.venv/bin/python -m pytest tests/test_spellscan.py -q)",
+      "Bash(gh pr *)",
+      "Bash(git push *)"
     ]
   }
 }
