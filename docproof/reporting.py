@@ -27,10 +27,32 @@ def _tally_types(findings: list[Finding]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def scripted_check_rows(sweeps, findings: list[Finding],
+                        applied_ids) -> list[dict]:
+    """The scripted-check report: for each sweep, what it flagged, how much of
+    that actually reached the document, and what its patterns still match.
+
+    `flagged` and `applied` can differ legitimately — a sweep edit that
+    overlaps an earlier one is rejected — so both are reported rather than one
+    standing in for the other."""
+    applied = set(applied_ids)
+    rows = []
+    for report in sweeps or ():
+        mine = [f for f in findings if f.error_type == report.key]
+        rows.append({
+            "key": report.key,
+            "name": report.name,
+            "flagged": report.flagged,
+            "applied": sum(1 for f in mine if f.finding_id in applied),
+            "remaining": report.remaining,
+        })
+    return rows
+
+
 def write_findings_json(path: Path, *, doc: DocumentModel,
                         findings: list[Finding], usage: Usage, cfg: Config,
                         applied_ids: tuple[str, ...],
-                        batch: bool = False) -> None:
+                        batch: bool = False, sweeps=None, spell=None) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -39,8 +61,15 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "config": {"model": cfg.api.model,
                    "error_types": list(cfg.error_type_keys),
                    "error_type_passes": [list(g) for g in cfg.error_type_groups],
+                   "sweeps": list(cfg.sweeps),
                    "min_confidence": cfg.min_confidence,
                    "revision_author": cfg.revision_author},
+        "scripted_checks": scripted_check_rows(sweeps, findings, applied_ids),
+        "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
+                        "unique": spell.unique, "unknown": spell.unknown,
+                        "lexicon": list(spell.lexicon),
+                        "candidates": [c.word for c in spell.candidates]}
+                       if spell is not None else None),
         "usage": dataclasses.asdict(usage),
         "batch": batch,
         "stats": _tally(findings),
@@ -62,7 +91,7 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
 def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
-                     fmt=None) -> None:
+                     fmt=None, sweeps=None, spell=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -95,6 +124,44 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     if by_type:
         L.append("Applied changes by error type: " +
                  ", ".join(f"{k} {v}" for k, v in by_type.items()) + "\n")
+
+    rows = scripted_check_rows(sweeps, findings, applied_ids)
+    if rows:
+        L.append("## Scripted checks\n")
+        L.append("Each rule below ran as a pattern sweep over every paragraph "
+                 "rather than as a read, so these counts are exact rather than "
+                 "an impression. *Remaining* is what the sweep's own patterns "
+                 "still match after its fixes are applied: zero means the rule "
+                 "is fully executed, and nothing of that kind is left in the "
+                 "manuscript.\n")
+        for r in rows:
+            line = (f"- **{r['name']}** (`{r['key']}`): {r['flagged']} flagged, "
+                    f"{r['applied']} applied, {r['remaining']} remaining")
+            if r["applied"] < r["flagged"]:
+                line += (f" — {r['flagged'] - r['applied']} overlapped an "
+                         f"earlier change and were left to it")
+            L.append(line)
+        L.append("")
+
+    if spell is not None and spell.available:
+        L.append("## Dictionary scan\n")
+        L.append(f"{spell.tokens:,} words read, {spell.unique:,} distinct, "
+                 f"{spell.unknown:,} not in the dictionary. Nothing here was "
+                 f"changed — the scan classifies, it does not correct.\n")
+        if spell.lexicon:
+            shown = ", ".join(spell.lexicon[:40])
+            more = (f" …and {len(spell.lexicon) - 40} more"
+                    if len(spell.lexicon) > 40 else "")
+            L.append(f"**Treated as this author's own** ({len(spell.lexicon)}) "
+                     f"— sent to every pass as words never to flag or "
+                     f"'correct': {shown}{more}\n")
+        if spell.candidates:
+            shown = ", ".join(c.word for c in spell.candidates[:40])
+            more = (f" …and {len(spell.candidates) - 40} more"
+                    if len(spell.candidates) > 40 else "")
+            L.append(f"**Given to the model to look at** "
+                     f"({len(spell.candidates)}) — used once, not written as "
+                     f"a name, and unknown: {shown}{more}\n")
 
     if applied:
         # Grouped by kind rather than by document order: reading twenty

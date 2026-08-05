@@ -28,6 +28,8 @@ detection_prompt: |
     "'bout", "o'er", "'tis", "rock 'n' roll".
   - Decades written without an apostrophe ("the 1990s", "the '90s" — both
     correct), and plural acronyms without one ("three CDs" is correct).
+  - Whether a number should be digits or words at all. The number_style type
+    owns that; this type only ever touches the apostrophe.
   - Straight vs. curly apostrophes. Never flag a finding whose only change is
     the apostrophe character itself.
 

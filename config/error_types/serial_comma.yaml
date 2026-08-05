@@ -1,0 +1,61 @@
+key: serial_comma
+name: Serial comma
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide requires the serial (Oxford) comma: in a list of
+  three or more items, a comma goes before the final coordinating conjunction.
+
+  FLAG:
+  - A three-or-more-item list missing the final comma: "apples, oranges and
+    bananas", "He packed a coat, two books and a map."
+  - Lists joined by "or": "by train, by bus or on foot".
+  - Lists of phrases or clauses: "She locked the door, checked the windows and
+    turned off the light."
+
+  Do NOT flag:
+  - Two-item lists. "salt and pepper" never takes a comma, and this is the
+    most common way to get this rule wrong.
+  - A compound predicate, which is not a list at all: "He opened the door and
+    walked out." Two or three verbs sharing one subject are not list items.
+    Only flag when the items are genuinely coordinate.
+  - Lists that already carry the serial comma.
+  - A firm, band, or work whose own name contains "and": "Smith, Jones and
+    Brown, LLP" is spelled the way its owner spells it.
+  - Lists whose items themselves contain commas. Those need semicolons, not
+    another comma, and the complex_list_semicolon type owns them.
+  - Verbatim quoted material from a real published source, where the
+    punctuation is the source's.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one comma
+  inserted, immediately before the final coordinating conjunction. Do not add,
+  remove, or move any other punctuation, and do not reorder the list.
+
+confidence_guidance: |
+  high   — three or more plainly coordinate items in narration.
+  medium — the final element could also be read as a compound predicate or an
+           appositive rather than a list item, or the list is long enough that
+           its boundaries are arguable.
+  low    — the "list" reading is doubtful, or the sentence is a quoted artifact
+           (a sign, a letter, an epigraph) whose punctuation may be deliberate.
+
+examples:
+  - text: "She packed a notebook, two pens and a spare charger."
+    finding:
+      original_text: "She packed a notebook, two pens and a spare charger."
+      corrected_text: "She packed a notebook, two pens, and a spare charger."
+      explanation: "House style takes the serial comma before the final \"and\"."
+      confidence: high
+  - text: "He opened the door and walked into the rain."
+    finding: null
+  - text: "The kit held bandages, a torch, and a whistle."
+    finding: null
+  - text: "\"We need bread, milk and eggs,\" she said."
+    finding:
+      original_text: "\"We need bread, milk and eggs,\" she said."
+      corrected_text: "\"We need bread, milk, and eggs,\" she said."
+      explanation: "House style takes the serial comma, in dialogue as well."
+      confidence: medium
+  - text: "She invited Maria, her sister, Tom, her neighbour and Priya."
+    finding: null

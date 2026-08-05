@@ -1,0 +1,59 @@
+key: complex_list_semicolon
+name: Complex list needing semicolons
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide calls for semicolons between the items of a list
+  when the items themselves contain commas. Comma-separated items that each
+  hold an internal comma leave the reader unable to see where one item ends.
+
+  FLAG:
+  - Items with internal appositives: "She invited Maria, her sister, Tom, her
+    neighbour, and Priya, her oldest friend."
+  - City-and-state or city-and-country items: "We stopped in Austin, Texas,
+    Boise, Idaho, and Reno, Nevada."
+  - Items with internal dates or internal modifying phrases: "The file held a
+    letter, dated June 3, a receipt, torn in half, and a photograph."
+
+  Do NOT flag:
+  - Lists whose items contain no internal commas. A plain list takes commas,
+    and the serial_comma type owns anything missing from it.
+  - A single appositive that is not part of a list: "She invited Maria, her
+    sister, and then left."
+  - Lists already separated by semicolons.
+  - Two-item lists, however complex the items are.
+  - A sentence where only one item carries an internal comma and the reading
+    is genuinely unambiguous — report it only at low confidence, if at all.
+  - Verbatim quoted material from a real published source.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the item-separating
+  commas replaced by semicolons, including the one before the final
+  conjunction. Leave every comma that is internal to an item exactly as it is.
+  Do not reorder or reword the items.
+
+confidence_guidance: |
+  high   — two or more items carry internal commas and the item boundaries are
+           genuinely unreadable as written.
+  medium — one item carries an internal comma and the list is long enough that
+           a reader could mis-parse it.
+  low    — the ambiguity is theoretical, the passage is dialogue where the
+           rhythm may be deliberate, or the list may not be a list.
+
+examples:
+  - text: "She invited Maria, her sister, Tom, her neighbour, and Priya, her oldest friend."
+    finding:
+      original_text: "She invited Maria, her sister, Tom, her neighbour, and Priya, her oldest friend."
+      corrected_text: "She invited Maria, her sister; Tom, her neighbour; and Priya, her oldest friend."
+      explanation: "List items contain commas, so house style separates them with semicolons."
+      confidence: high
+  - text: "The kit held bandages, a torch, and a whistle."
+    finding: null
+  - text: "We stopped in Austin, Texas, Boise, Idaho, and Reno, Nevada."
+    finding:
+      original_text: "We stopped in Austin, Texas, Boise, Idaho, and Reno, Nevada."
+      corrected_text: "We stopped in Austin, Texas; Boise, Idaho; and Reno, Nevada."
+      explanation: "City-and-state items carry internal commas; semicolons separate them."
+      confidence: high
+  - text: "She invited Maria, her sister, and then left."
+    finding: null

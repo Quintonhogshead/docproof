@@ -13,6 +13,7 @@ from docproof.analyzer import (MockAnalyzer, RawFinding, build_output_model,
 from docproof.config import Config, load_config
 from docproof.error_registry import load_error_types
 from docproof.models import Chunk, ParagraphRef, Usage
+from docproof.validator import find_nth, shrink
 
 ERROR_DIR = Path(__file__).parent.parent / "config" / "error_types"
 DEFAULT_CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
@@ -38,6 +39,28 @@ def test_every_error_type_file_loads():
                 assert ex["finding"]["original_text"] == ex["text"], (
                     f"{key}: example original_text must quote the whole "
                     f"paragraph text verbatim")
+
+
+def test_every_calibration_example_survives_the_validator():
+    """An example teaches the model what a good finding looks like, so every
+    example must be one the validator would actually accept: it has to anchor
+    in its own paragraph and shrink to a real edit. A corrected_text that
+    changes nothing (rejected_noop) or that quotes text the paragraph doesn't
+    contain (rejected_no_anchor) teaches the model to produce findings the
+    pipeline throws away."""
+    for key, et in load_error_types(ERROR_DIR, _keys()).items():
+        for i, ex in enumerate(et.examples):
+            finding = ex.get("finding")
+            if not finding:
+                continue
+            where = f"{key} example {i}"
+            occurrence = finding.get("occurrence", 1)
+            assert find_nth(ex["text"], finding["original_text"],
+                            occurrence) != -1, f"{where}: quote does not anchor"
+            _, deleted, inserted = shrink(finding["original_text"],
+                                          finding["corrected_text"])
+            assert deleted or inserted, (
+                f"{where}: corrected_text is identical to original_text")
 
 
 def test_default_config_enables_existing_types():

@@ -1,0 +1,60 @@
+key: ly_adverb_hyphen
+name: Hyphen after an -ly adverb
+version: 1
+
+detection_prompt: |
+  A compound modifier whose first word is an adverb ending in -ly takes NO
+  hyphen: "a highly regarded author", not "a highly-regarded author". The
+  adverb can only modify the word that follows it, so the hyphen adds nothing.
+
+  FLAG a hyphen joining an -ly ADVERB to the adjective or participle after it:
+  - "a highly-regarded author", "a beautifully-written novel",
+    "a carefully-worded reply", "a rapidly-growing town",
+    "an entirely-new problem", "a widely-held belief".
+
+  Do NOT flag — the whole risk in this type is words that end in -ly but are
+  NOT adverbs, where the hyphen is correct and removing it is an error:
+  - Adjectives ending in -ly: friendly, lonely, early, likely, holy, ugly,
+    silly, deadly, costly, lively, timely, orderly, scholarly, homely,
+    elderly, kindly, lowly, surly, burly, stately, ghastly, courtly, worldly.
+    "a friendly-looking dog", "early-morning light", "a deadly-quiet room" all
+    keep their hyphens.
+  - Nouns ending in -ly: "a family-owned shop", "a belly-first landing".
+  - Compound modifiers whose first word is an adverb NOT ending in -ly:
+    "well-known author", "best-loved story", "fast-moving current",
+    "hard-won victory". Those hyphens are correct.
+  - Suspensive hyphenation: "first-, second-, and third-round winners".
+  - An -ly word inside a coined term, a proper name, or a title.
+  - Compounds that are already unhyphenated.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the single hyphen
+  replaced by a space. Change no other hyphen in the sentence, and change no
+  words.
+
+confidence_guidance: |
+  high   — the first element is unmistakably an adverb (it answers "how") and
+           the second is an adjective or participle.
+  medium — the -ly word could be read as an adjective in this position.
+  low    — the compound may be a coined term, a proper name, or a deliberate
+           construction the author uses consistently.
+
+examples:
+  - text: "She was a highly-regarded author before the accident."
+    finding:
+      original_text: "She was a highly-regarded author before the accident."
+      corrected_text: "She was a highly regarded author before the accident."
+      explanation: "A compound modifier led by an -ly adverb takes no hyphen."
+      confidence: high
+  - text: "A friendly-looking dog waited at the gate."
+    finding: null
+  - text: "The early-morning light came through the blinds."
+    finding: null
+  - text: "It was a beautifully-written first chapter."
+    finding:
+      original_text: "It was a beautifully-written first chapter."
+      corrected_text: "It was a beautifully written first chapter."
+      explanation: "A compound modifier led by an -ly adverb takes no hyphen."
+      confidence: high
+  - text: "He was a well-known figure in the town."
+    finding: null

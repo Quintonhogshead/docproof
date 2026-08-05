@@ -156,6 +156,14 @@ def cmd_inventory(args) -> int:
     for group in cfg.error_type_groups:
         print(f"  pass: {' + '.join(group)}")
 
+    swept = sum(r.flagged for r in prepared.sweep_reports)
+    if prepared.sweep_reports:
+        print(f"\n{len(prepared.sweep_reports)} scripted sweep(s) → "
+              f"{swept} correction(s), already found, no API call:")
+        for r in prepared.sweep_reports:
+            print(f"  {r.key:<28} {r.flagged:>4} flagged, "
+                  f"{r.remaining} remaining")
+
     # Output tokens are unknowable up front; assume a modest cap per request so
     # the number is an order-of-magnitude guide, not a quote.
     out_guess = prepared.request_count * 600

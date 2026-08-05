@@ -1,0 +1,70 @@
+key: direct_address_comma
+name: Comma in direct address
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide requires a comma setting off a name or title used
+  to address someone directly (a vocative): "Hey, Sarah." — including when the
+  name comes mid-sentence: "Layla, that means you."
+
+  FLAG, in dialogue or direct speech:
+  - Vocative at the start: "Hey Sarah.", "Thanks Dad.", "Look Mom, I tried."
+  - Vocative at the end: "You're late Sarah.", "Get down from there boy."
+  - Vocative in the middle: "Layla that means you.", "I told you Tom it won't
+    work."
+  - Titles used as address: "Yes sir.", "No ma'am.", "Come along Captain."
+
+  Do NOT flag — the whole risk in this type is treating an ordinary name as a
+  vocative:
+  - A name used as the subject or object of its sentence: "Sarah left." —
+    "I told Sarah the truth." — "She waited for Dad."
+  - An appositive naming someone: "my sister Sarah", "the captain, Rodriguez,
+    said nothing."
+  - Possessives: "Sarah's coat."
+  - Names in narration. Direct address happens in speech; a name outside
+    quoted dialogue is almost never a vocative.
+  - Vocatives that already carry their comma.
+  - Salutations in quoted letters, notes, and inscriptions, which follow their
+    own convention: "Dear Sarah" needs nothing added here.
+  - Names inside a stylized or dialect voice where the run-on rhythm is
+    plainly deliberate — report at low confidence rather than as a correction.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the comma or commas that
+  set off the vocative inserted, and nothing else changed. A vocative at the
+  start or end takes one comma; a vocative in the middle takes one on each
+  side. Never change the name itself, its capitalization, or the surrounding
+  words.
+
+confidence_guidance: |
+  high   — an unmistakable vocative in dialogue: a greeting, a command, or a
+           thanks addressed to a named person.
+  medium — the word could be a vocative or an object depending on the reading,
+           or it is a title ("sir", "boss") that could be either.
+  low    — dialect or clipped speech where the missing comma may be the
+           author's rendering of how the character talks, or the name may not
+           be a vocative at all.
+
+examples:
+  - text: "\"Hey Sarah, wait up,\" he called."
+    finding:
+      original_text: "\"Hey Sarah, wait up,\" he called."
+      corrected_text: "\"Hey, Sarah, wait up,\" he called."
+      explanation: "A name used in direct address is set off by a comma."
+      confidence: high
+  - text: "Sarah left before anyone could stop her."
+    finding: null
+  - text: "\"You're late Marcus.\""
+    finding:
+      original_text: "\"You're late Marcus.\""
+      corrected_text: "\"You're late, Marcus.\""
+      explanation: "A vocative at the end of a sentence takes a comma before it."
+      confidence: high
+  - text: "She waited for Dad by the gate."
+    finding: null
+  - text: "\"I told you Tom it wouldn't hold,\" she said."
+    finding:
+      original_text: "\"I told you Tom it wouldn't hold,\" she said."
+      corrected_text: "\"I told you, Tom, it wouldn't hold,\" she said."
+      explanation: "A mid-sentence vocative is set off on both sides."
+      confidence: high

@@ -1,0 +1,79 @@
+key: number_style
+name: Number style
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide spells out one through one hundred in prose and
+  uses numerals from 101 up. Centuries are always spelled out. Simple
+  fractions are spelled out and hyphenated when adjectival. Thousands take a
+  comma.
+
+  FLAG:
+  - A bare integer from 1 to 100 in ordinary prose: "She waited 20 minutes.",
+    "There were 8 of them."
+  - Ages: "a 50-year-old woman", "over 50 years old".
+  - Centuries written with an ordinal numeral: "20th century",
+    "21st-century medicine".
+  - Simple fractions as digits in prose: "2/3 of the class".
+  - A four-digit-or-larger quantity missing its thousands comma: "1000 people",
+    "12500 miles". (Years are exempt — see below.)
+
+  Do NOT flag — these are legitimate numeral contexts and the house guide
+  leaves them alone:
+  - Dates and years: "July 14, 1989", "in 1997", "the 1990s".
+  - Times: "8:30 a.m.", "at 5:00".
+  - Money, which the currency_style type owns entirely.
+  - Percentages: "40 percent".
+  - Addresses, house and room numbers: "12 Oak Street", "room 4".
+  - Chapter, page, verse, section, and figure numbers.
+  - Measurements and data with units: "10 kg", "30°C", "a 9mm round".
+  - Phone numbers, serial numbers, ID numbers, scores, and statistics.
+  - Form fields, dossiers, tables, inventories, and any quoted document where
+    the numerals are part of the artifact.
+  - Decades: "the '60s", "the 1990s". The apostrophe there belongs to the
+    apostrophe_error type; the numerals are correct.
+  - Numerals of 101 and above in prose — those are already house style.
+  - Numbers already spelled out.
+  - A character reciting digits aloud — a phone number, a combination, a
+    countdown — where the numerals are the point.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the number spelled out
+  and nothing else changed. Hyphenate compound numbers from twenty-one through
+  ninety-nine. Hyphenate an age used attributively before a noun ("a
+  fifty-year-old woman") and leave it open in the predicate ("over fifty years
+  old"). Spell centuries as ordinals in words ("twentieth century"). Hyphenate
+  a fraction used adjectivally ("a two-thirds majority"). For a missing
+  thousands comma, insert only the comma.
+
+confidence_guidance: |
+  high   — a bare integer 1–100 in plain narration with no numeral context in
+           sight, or an ordinal-numeral century.
+  medium — the context could be a legitimate-numeral one (a measurement, a
+           tally, a form) depending on how the surrounding scene reads.
+  low    — the numerals appear in dialogue, a quoted document, or a passage
+           where the digit form looks deliberate.
+
+examples:
+  - text: "She waited 20 minutes before anyone came to the door."
+    finding:
+      original_text: "She waited 20 minutes before anyone came to the door."
+      corrected_text: "She waited twenty minutes before anyone came to the door."
+      explanation: "House style spells out numbers one through one hundred in prose."
+      confidence: high
+  - text: "The letter was postmarked July 14, 1989."
+    finding: null
+  - text: "He collected 20th century pulp magazines."
+    finding:
+      original_text: "He collected 20th century pulp magazines."
+      corrected_text: "He collected twentieth century pulp magazines."
+      explanation: "House style spells out centuries."
+      confidence: high
+  - text: "A 50-year-old woman answered the door."
+    finding:
+      original_text: "A 50-year-old woman answered the door."
+      corrected_text: "A fifty-year-old woman answered the door."
+      explanation: "Ages are spelled out and hyphenated before the noun."
+      confidence: high
+  - text: "The recipe called for 250 grams of flour."
+    finding: null

@@ -17,7 +17,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 def _version() -> str:
@@ -79,6 +79,10 @@ datas = [
     ("config", "config"),
     ("app/static", "app/static"),
     (str(BUILD_INFO), "."),
+    # The Hunspell dictionary the spell scan reads. It is data, not code, so
+    # the import graph never sees it and a build without this line ships an
+    # app whose scan silently finds nothing.
+    *collect_data_files("spylls"),
 ]
 
 hiddenimports = [

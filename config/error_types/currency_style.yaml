@@ -1,0 +1,62 @@
+key: currency_style
+name: Currency style
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide sets money as symbol plus numerals in narration
+  ($5.00) and spells it out in dialogue ("five dollars").
+
+  FLAG:
+  - A currency symbol inside quoted dialogue: "That'll be $5.00." — a
+    character speaking says the words, not the symbol.
+  - A plain monetary amount written out in words in narration where the symbol
+    form is clearly meant: "The ticket cost twelve dollars." → "$12.00".
+
+  Do NOT flag:
+  - Idiomatic or hyperbolic money, which is language rather than an amount: "a
+    million dollars", "not worth two cents", "a dime a dozen", "his two cents",
+    "felt like a million bucks".
+  - Attributive compounds, where the words are a modifier: "a five-dollar
+    bill", "a ten-dollar haircut", "twenty-dollar words". Never convert these
+    to a symbol.
+  - Large round sums in narration where numerals would read worse than words,
+    and the author's choice is plainly stylistic.
+  - Prices in tables, receipts, menus, ledgers, price tags, and any quoted
+    document where the artifact's own formatting is the point.
+  - Amounts already in the right form for where they sit.
+  - A character reading a price aloud off a sign or a bill, where the symbol
+    is being described rather than spoken — report at low confidence at most.
+  - Historical, invented, or foreign currencies with no symbol available.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the monetary amount
+  restyled. Converting for dialogue, write the words a speaker would actually
+  say ("five dollars", "twelve fifty"), never the symbol. Converting for
+  narration, use the symbol plus numerals, adding the decimal only when the
+  original stated cents. Change nothing else in the sentence.
+
+confidence_guidance: |
+  high   — a currency symbol inside dialogue, where the house rule is
+           unambiguous.
+  medium — a written-out amount in narration that is a real price rather than
+           an idiom.
+  low    — the amount may be idiomatic, attributive, or deliberately stylized,
+           or the passage is a quoted artifact.
+
+examples:
+  - text: "“That'll be $5.00,” the clerk said."
+    finding:
+      original_text: "“That'll be $5.00,” the clerk said."
+      corrected_text: "“That'll be five dollars,” the clerk said."
+      explanation: "House style spells out currency in dialogue."
+      confidence: high
+  - text: "The ticket cost twelve dollars and she paid in coins."
+    finding:
+      original_text: "The ticket cost twelve dollars and she paid in coins."
+      corrected_text: "The ticket cost $12 and she paid in coins."
+      explanation: "House style uses symbol and numerals for currency in narration."
+      confidence: medium
+  - text: "He pulled a five-dollar bill from his coat."
+    finding: null
+  - text: "“It's not worth two cents to me,” she said."
+    finding: null
