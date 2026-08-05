@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import itertools
 import json
+import re
 import urllib.error
 import urllib.parse
 from typing import Any, Sequence
@@ -84,6 +85,33 @@ class DyingProvider(FakeProvider):
         if len(self.calls) >= self.survive:
             raise RuntimeError("the process died here")
         return super().complete_structured(**kwargs)
+
+
+# Enough labels to make the shared fixture a real manuscript: a title, a
+# copyright line, a chapter, a scene break and a back-matter title.
+LABELS = {"body-0000": "title page", "body-0002": "copyright",
+          "body-0004": "chapter # / title", "body-0008": "scene break",
+          "body-0012": "front/backmatter title"}
+
+
+class TaggingProvider:
+    """Answers the one question prep asks, for whatever ids it was sent."""
+
+    name = "fake-tagger"
+
+    def __init__(self):
+        self.calls: list[dict[str, Any]] = []
+
+    def complete_structured(self, *, user, **kwargs):
+        ids = re.findall(r'id="([^"]+)"', user)
+        blanks = set(re.findall(r'<blank id="([^"]+)"/>', user))
+        self.calls.append({"user": user, **kwargs})
+        rows = [{"para_id": pid,
+                 "role": LABELS.get(pid, "spacing" if pid in blanks else "body"),
+                 "flag": "Byline — the house title page comes from the cover."
+                         if pid == "body-0000" else ""}
+                for pid in ids]
+        return ProviderResult(parsed={"paragraphs": rows}, usage=USAGE)
 
 
 def finding_result(*, para_id: str, error_type: str, original: str,

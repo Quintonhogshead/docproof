@@ -13,37 +13,9 @@ from fastapi.testclient import TestClient
 
 from app.jobs import JobRunner
 from app.main import create_app
-from docproof.providers import ProviderResult
 
 from .conftest import FIXTURES
-from .fakes import USAGE
-
-# Enough labels to make the fixture a real manuscript: a title, a copyright
-# line, a chapter, a scene break and a back-matter title.
-LABELS = {"body-0000": "title page", "body-0002": "copyright",
-          "body-0004": "chapter # / title", "body-0008": "scene break",
-          "body-0012": "front/backmatter title"}
-
-
-class TaggingProvider:
-    """Answers the one question prep asks, for whatever ids it was sent."""
-
-    name = "fake-tagger"
-
-    def __init__(self):
-        self.calls = []
-
-    def complete_structured(self, *, user, **kwargs):
-        import re
-        ids = re.findall(r'id="([^"]+)"', user)
-        blanks = set(re.findall(r'<blank id="([^"]+)"/>', user))
-        self.calls.append({"user": user, **kwargs})
-        rows = [{"para_id": pid,
-                 "role": LABELS.get(pid, "spacing" if pid in blanks else "body"),
-                 "flag": "Byline — the house title page comes from the cover."
-                         if pid == "body-0000" else ""}
-                for pid in ids]
-        return ProviderResult(parsed={"paragraphs": rows}, usage=USAGE)
+from .fakes import LABELS, USAGE, TaggingProvider
 
 
 @pytest.fixture
