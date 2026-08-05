@@ -21,11 +21,13 @@ import time
 import urllib.parse
 import urllib.request
 import webbrowser
+from pathlib import Path
 
-from app.settings import ENV_VARS
+from app.settings import ENV_VARS, set_api_key
 
 from . import drive
 from .drive import AuthExpired, DriveError
+from .settings import GOOGLE_KEY, WatchSettings
 
 log = logging.getLogger("docproof.app.watch.auth")
 
@@ -206,6 +208,24 @@ def run_flow(client_id: str, client_secret: str, *,
                          opener=opener)
 
 
+def sign_in(home: str | Path, client_id: str, client_secret: str, *,
+            open_browser=webbrowser.open, opener=drive._open_url,
+            listen=Loopback, timeout: float = DEFAULT_TIMEOUT) -> None:
+    """Sign in, and keep it: the token to the Keychain, the client beside the
+    rest of the watcher's settings.
+
+    The order is the point, and is why this is one function rather than three
+    lines repeated at each front door. Nothing is written until Google has
+    actually answered — a half-saved sign-in, with a client recorded and no
+    token, is a watcher that looks configured and fails every night."""
+    token = run_flow(client_id, client_secret, open_browser=open_browser,
+                     opener=opener, listen=listen, timeout=timeout)
+    set_api_key(GOOGLE_KEY, token)
+    ws = WatchSettings.load(home)
+    ws.client_id, ws.client_secret = client_id, client_secret
+    ws.save(home)
+
+
 def token_source(get_key, has_client: bool) -> dict:
     """What `auth --status` reports: whether there is a sign-in and where it
     came from, never the token itself."""
@@ -220,4 +240,4 @@ def token_source(get_key, has_client: bool) -> dict:
 
 __all__ = ["AUTH_URL", "SCOPE", "AuthError", "AuthExpired", "Loopback",
            "consent_url", "exchange_code", "parse_redirect", "run_flow",
-           "token_source"]
+           "sign_in", "token_source"]

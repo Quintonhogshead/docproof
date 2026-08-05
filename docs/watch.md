@@ -22,6 +22,22 @@ stops.
 editing joins are named at the [end of this page](#what-comes-next), and they
 are seams in the code rather than a rewrite.
 
+## From inside the app, or from a terminal
+
+There is a **DocWatch** tab in DocProof that does all of this: signing in,
+choosing the folder, looking now, seeing what a pass would do, and turning
+automatic passes on. If you would rather click than type, open that and skip to
+[the Google Cloud part](#1-make-an-oauth-client), which you need either way —
+everything after it has a button.
+
+The two are one watcher. Same folder, same settings file, same markers; a
+sign-in from the tab works in the terminal and the other way round. Only one
+pass runs at a time whichever door it came in by, because they claim the same
+folder.
+
+The rest of this page is written for the terminal, because that is where the
+commands need naming. The panel says the same things with cards instead.
+
 ## Setting it up
 
 Three commands, once. The first needs about five minutes in the Google Cloud
@@ -148,7 +164,19 @@ docproof-watch schedule
 
 Installs a launch agent that runs a pass at 06:00, 11:00, 16:00 and 21:00.
 `--times 07:30,19:00` chooses your own. `docproof-watch unschedule` removes
-it, and `docproof-watch status` says what is currently set.
+it, and `docproof-watch status` says what is currently set. In the app it is
+the **Look even when DocProof is closed** switch, which writes the same agent.
+
+What gets scheduled depends on which DocProof you are running. From a checkout
+it is the `docproof-watch` command; from the packaged app there is no such
+command anywhere on the machine, so the agent runs **the app's own binary with
+`--watch-once`** — one pass, no window, no server. Either way the plist is the
+same shape, and `docproof-watch status` reads it back.
+
+There is a second clock in the app: **Look while DocProof is open**, off by
+default. It exists because of the caveat below — it is what picks up a time the
+Mac slept through. The two cannot collide; whichever starts first claims the
+folder and the other stands aside.
 
 **A sleeping Mac runs nothing.** macOS does not start a calendar job while the
 machine is asleep, and does not go back for the one it missed — it runs at the
@@ -256,9 +284,11 @@ The same as preparing the same manuscripts by hand in the app — the watcher
 does not change what prep costs, only who starts it. `docproof-watch status`
 totals what each book cost.
 
-One caveat: the watcher keeps its own home, so **its spending does not appear
-in the app's Spending tab**. The two are separate job stores. Nothing is lost;
-they are just added up separately for now.
+It shows up in the app's **Spending** tab too, alongside everything you
+prepared by hand. Two job stores — a separate folder is a separate lock, which
+is what lets a pass and the window run at the same moment — but the money comes
+off the same card, so it is added up as one figure. The "Started by" column
+says which half a line came from.
 
 ## Where things live
 
@@ -359,9 +389,17 @@ app/watch/
 ├── auth.py       signing in once, from a browser
 ├── prep.py       one manuscript: fetch, prepare, upload, mark
 ├── tick.py       one pass: collect → submit → prepare
+├── status.py     what it has done, for whichever front end is asking
+├── runner.py     the pass held open inside the app: a thread and a lock
 ├── schedule.py   the launchd agent
 └── cli.py        docproof-watch
 ```
+
+`status.py` and `runner.py` are what make one watcher answer to two front
+doors. The terminal and the panel read the same account out of `status`, so
+they cannot drift into saying different things about the same file; `runner`
+exists only for the app, because a pass that takes an afternoon cannot happen
+inside a click.
 
 Everything below `prep.py` is the app's own machinery, unchanged: the job
 store, the checkpoint, the providers, the Keychain. The watcher is a second

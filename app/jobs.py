@@ -85,6 +85,11 @@ class Job:
     # InDesign template. Older records have no `kind` and are reviews.
     kind: str = "review"
     prep_output: str = "indesign"      # indesign | tracked | both
+    # Which door this job came in by: somebody dropping a file on the window,
+    # or the watcher finding one in a Drive folder. Two job stores adding up to
+    # one bill, and a spending figure that cannot say which is a figure nobody
+    # trusts. Older records have no `source` and were all the app.
+    source: str = "app"                # app | watch
     tagged: int | None = None          # paragraphs given a style
     flags: int | None = None           # things prep wants a human to decide
     verified: bool | None = None       # the author's words came through intact

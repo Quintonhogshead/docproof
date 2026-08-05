@@ -4,7 +4,8 @@
     {
       "name": "docproof-app",
       "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "app.run", "--port", "8765", "--no-browser"],
+      "runtimeArgs": ["-m", "app.run", "--port", "8765", "--no-browser",
+                      "--home", "/tmp/docproof-preview"],
       "port": 8765
     }
   ]
