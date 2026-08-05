@@ -151,6 +151,60 @@ legend { font-weight: 600; font-size: 0.92rem; padding: 0 0.35rem; }
 .sub { display: block; margin: 0.5rem 0 0 1.7rem; font-size: 0.88rem; color: var(--muted); }
 .sub small { display: block; margin-left: 1.6rem; }
 .checkbox { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.6rem; }
+
+/* A switch, for the settings that decide what a run hands back. The control
+   is still a checkbox — it keeps the keyboard behaviour, the label click and
+   the form value, and only the appearance is ours. */
+.switch {
+  display: grid;
+  grid-template-columns: 2.4rem 1fr;
+  gap: 0.5rem 0.7rem;
+  align-items: center;
+  margin-top: 0.9rem;
+  cursor: pointer;
+}
+.switch small { grid-column: 2; margin-top: -0.35rem; }
+.switch input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 2.4rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.switch input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.18rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateY(-50%);
+  transition: left 0.15s ease, background 0.15s ease;
+}
+.switch input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch input[type="checkbox"]:checked::after {
+  left: calc(100% - 1.13rem);
+  background: var(--panel);
+}
+.switch input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Nothing here should animate for somebody who asked it not to. */
+@media (prefers-reduced-motion: reduce) {
+  .switch input[type="checkbox"],
+  .switch input[type="checkbox"]::after { transition: none; }
+}
 .row { display: flex; gap: 0.5rem; }
 .row input { flex: 1; }
 

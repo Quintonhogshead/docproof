@@ -111,6 +111,14 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model")
     p.add_argument("--min-confidence", choices=["low", "medium", "high"])
     p.add_argument("--no-comments", action="store_true")
+    p.add_argument("--no-spellcheck", action="store_true",
+                   help="skip the dictionary scan for this run: no do-not-flag "
+                        "list, no words raised to look at, no coined-term "
+                        "protection. The model passes run as before.")
+    p.add_argument("--dictionary",
+                   help="an .aff/.dic pair to scan against for this run, "
+                        "without the extension (e.g. dicts/en_GB). Overrides "
+                        "whatever the variant would have chosen.")
 
 
 def _selection(args) -> list[str] | None:
@@ -132,6 +140,13 @@ def _configure(args):
         cfg.min_confidence = args.min_confidence
     if getattr(args, "no_comments", False):
         cfg.comments = False
+    # Per run, because the dictionary is a property of the manuscript rather
+    # than of the press: one book is British, the next has a glossary of its
+    # own, and the third wants no dictionary in the loop at all.
+    if getattr(args, "no_spellcheck", False):
+        cfg.spellcheck.enabled = False
+    if getattr(args, "dictionary", None):
+        cfg.spellcheck.dictionary = args.dictionary
     if getattr(args, "out", None):
         cfg.output_dir = args.out
     error_dir = Path(args.config).parent / "error_types"

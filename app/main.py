@@ -71,6 +71,10 @@ class JobRequest(BaseModel):
     mode: str = "batch"                       # "now" | "batch"
     schedule_at: str | None = None            # "HH:MM" local
     min_confidence: str = "medium"
+    # The dictionary scan, per submission. Null means whatever the config
+    # says, which is what a caller that does not know about these means.
+    spellcheck: bool | None = None
+    dictionary: str | None = Field(default=None, max_length=500)
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
@@ -115,6 +119,7 @@ class SettingsUpdate(BaseModel):
     default_mode: str | None = None
     comments: bool | None = None
     explanations: bool | None = None
+    change_log: bool | None = None
     prep_output: str | None = None
     indesign_template: str | None = None
     anthropic_key: str | None = None
@@ -593,6 +598,8 @@ def _register(app: FastAPI) -> None:
                 group_id=group_id,
                 schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
+                spellcheck=req.spellcheck,
+                dictionary=req.dictionary,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -1044,7 +1051,7 @@ def _register(app: FastAPI) -> None:
         s: Settings = app.state.settings
         for field_name in ("model", "min_confidence", "output_dir",
                            "default_mode", "prep_output", "comments",
-                           "explanations", "indesign_template"):
+                           "explanations", "change_log", "indesign_template"):
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)

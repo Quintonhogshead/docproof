@@ -98,6 +98,11 @@ class Settings:
     # Ask the model why each change was made. Off is materially cheaper —
     # the reasons are most of what the model writes back.
     explanations: bool = True
+    # The second deliverable: a Word change log naming every correction, the
+    # scripted-check counts, the queries, and what this pass did not reach.
+    # Costs no API call — it is written from findings already paid for — so
+    # turning it off buys tidiness, not money.
+    change_log: bool = True
     # The .indd a designer places manuscripts into. Empty until somebody says
     # where it is: there is no sensible default for another house's template.
     indesign_template: str = ""

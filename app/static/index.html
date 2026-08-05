@@ -384,17 +384,25 @@
           <option value="both">Both</option>
         </select>
       </label>
-      <label class="checkbox">
+      <label class="switch">
         <input type="checkbox" id="comments" checked>
-        Explain every change in the document itself
+        <span>Explain every change in the document itself</span>
         <small class="muted">A margin comment in Word, a note in InDesign.</small>
       </label>
-      <label class="checkbox">
+      <label class="switch">
         <input type="checkbox" id="explanations" checked>
-        Ask for a reason with every change
+        <span>Ask for a reason with every change</span>
         <small class="muted">Turning this off makes reviews noticeably
           cheaper — the reasons are most of what gets written back. Your
           corrections are unaffected.</small>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="change-log" checked>
+        <span>Write a change log for the author</span>
+        <small class="muted">A second Word file naming every correction and
+          why, the scripted-check counts, the queries, and what the pass did
+          not reach. It costs nothing to produce — the review is already paid
+          for — so turn it off only if you do not want the file.</small>
       </label>
     </div>
 
