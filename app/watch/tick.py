@@ -241,7 +241,7 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
 
 def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
          mock: bool = False, opener=drive._open_url,
-         get_key=get_api_key) -> TickReport:
+         get_key=None) -> TickReport:
     """Look once, do what is there, and hand back what happened.
 
     The folder lock is the caller's job, not this function's: `once` takes it
@@ -257,7 +257,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         raise NotConfigured("There is no Google sign-in set up yet. Run "
                             "`docproof-watch auth` — docs/watch.md walks "
                             "through making the OAuth client it asks for.")
-    refresh = get_key(GOOGLE_KEY)
+    # Looked up here rather than defaulted in the signature, so that patching
+    # the name reaches it — a default argument binds the function it was
+    # written next to, once, at import.
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
     if not refresh:
         raise NotConfigured("DocProof is not signed in to Google. Run "
                             "`docproof-watch auth`.")
