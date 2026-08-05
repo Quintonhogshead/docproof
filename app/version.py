@@ -208,9 +208,12 @@ def _check_against_checkout(info: dict, source: Path, *, runner) -> dict:
         what = "changes"
     return {"ok": True, "current": False, "info": info, "head": head,
             "behind": behind, "source": "checkout",
+            # This machine has the source, so the app can rebuild itself from
+            # it — no release to publish and nothing to type. `tools/update.sh`
+            # still does the same job for anyone who prefers a terminal.
+            "can_rebuild": True,
             "message": f"There {'is' if what.startswith('1 ') else 'are'} "
-                       f"{what} in {source} that this build does not have. "
-                       f"Run tools/update.sh there to rebuild."}
+                       f"{what} in {source} that this build does not have."}
 
 
 def _check_against_releases(info: dict, *, opener, token: str | None) -> dict:

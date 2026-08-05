@@ -50,7 +50,8 @@ from .prompts import (PromptError, assembled_passes, clear_override,
 from .report import build_report
 from .settings import (Paths, Settings, default_root, delete_api_key,
                        get_api_key, key_status, resource_root, set_api_key)
-from .update import UpdateError, perform_update
+from .update import (Rebuilder, UpdateError, perform_update,
+                     refuse_reason)
 from .version import build_info, check_for_update, download_release
 
 log = logging.getLogger("docproof.app")
@@ -200,6 +201,7 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     app.state.store = store
     app.state.runner = runner
     app.state.watch = watch
+    app.state.rebuild = Rebuilder()
     app.state.lock = lock
 
     _register(app)
@@ -454,6 +456,28 @@ def _register(app: FastAPI) -> None:
             return perform_update(app.state.runner)
         except UpdateError as e:
             raise HTTPException(400, str(e))
+
+    @app.post("/api/version/rebuild")
+    def version_rebuild() -> dict:
+        """Rebuild this app from the checkout it came from, and install it.
+
+        The machine DocProof is written on has no release to install — the
+        newest DocProof there is whatever is in the checkout. It used to be
+        told to go and run `tools/update.sh` in a terminal, which is a strange
+        thing for an application to say when it knows where its own source is.
+
+        A minute of work, so it answers immediately and the page asks how it is
+        going. The three refusals an update makes are made here first, before
+        the thread exists — somebody who clicks this mid-review should be told
+        so now rather than a second later, in a progress line."""
+        reason = refuse_reason(app.state.runner)
+        if reason:
+            raise HTTPException(400, reason)
+        return asdict(app.state.rebuild.start(app.state.runner))
+
+    @app.get("/api/version/rebuild")
+    def version_rebuild_state() -> dict:
+        return asdict(app.state.rebuild.state())
 
     @app.post("/api/version/download")
     def version_download() -> dict:

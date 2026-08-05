@@ -105,13 +105,35 @@ actually has, in this order:
    current by definition. It mentions uncommitted changes.
 2. **A build on the Mac that built it** (the stamped source folder is still a
    git checkout) — has `HEAD` moved since the commit this build was made from,
-   and by how many changes. Updating is `tools/update.sh --install`, below.
+   and by how many changes. **Rebuild and update** builds the answer from that
+   checkout; [below](#updating-on-the-machine-that-builds-it).
 3. **A build somebody was sent** — no checkout to ask, so it asks the
-   [published releases](#sending-docproof-to-someone) instead.
+   [published releases](#sending-docproof-to-someone) instead, and offers to
+   install one.
 
-It only ever runs because you pressed it. Nothing checks on its own.
+Only the launch-time banner runs on its own, and only to *ask*. Nothing is
+built, downloaded or replaced without a click.
 
 ### Updating on the machine that builds it
+
+**In the app.** A build made from a checkout that has moved on says so at
+launch — *"3 changes since this build"* — with a **Rebuild and update** button,
+and Settings → *This version* has the same one. It does what the script below
+does, in the same order and for the same reasons: pull, run the tests, build,
+put the result in place of the running app, and reopen. About a minute, with
+the stage it is on written on the button.
+
+The tests are the part worth keeping. Installing a build that does not work
+over your only copy is the failure this prevents, so a failing suite stops
+before anything is replaced and says which test — the app you have is still the
+one that works. A pull that cannot fast-forward stops it too: a dirty tree or a
+diverged branch is a decision, and a decision needs a person.
+
+It refuses for the same three reasons a release update does — mid-review,
+running from the source, running off a disk image — and it refuses *before*
+starting, so a click at the wrong moment costs nothing.
+
+**From a terminal**, unchanged:
 
 ```bash
 tools/update.sh --install
@@ -122,7 +144,8 @@ rebuilds, and replaces `/Applications/DocProof.app`. Without `--install` it
 stops at `dist/` so you can look first; `--skip-tests` skips the suite. It
 refuses to install while DocProof is running — macOS will let you swap a bundle
 out from under an open app, and it misbehaves later rather than immediately,
-which is the worst time to find out.
+which is the worst time to find out. (The in-app button has no such problem: it
+is the running app, and it replaces itself the way the release update does.)
 
 ## Sending DocProof to someone
 
@@ -188,6 +211,11 @@ A packaged build also checks quietly once at launch (never from a checkout,
 and any failure is silence — no token, no internet, no release yet). When a
 newer release exists, a banner appears: *"DocProof 0.1.2 is ready — Update
 now / Later"*. **Nothing installs without that click.**
+
+On the Mac that built it the banner says the other thing it found — *"3 changes
+since this build — Rebuild and update"* — and the button builds rather than
+downloads. Same banner, same click, different source of truth; see
+[Updating on the machine that builds it](#updating-on-the-machine-that-builds-it).
 
 The click does what a person would: downloads the release's disk image, copies
 the new DocProof out of it, checks the copy's own build stamp says the version

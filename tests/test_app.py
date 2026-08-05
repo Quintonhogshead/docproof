@@ -4,6 +4,7 @@ is called directly."""
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -176,6 +177,60 @@ def test_update_route_passes_refusals_through_verbatim(client, monkeypatch):
     resp = client.post("/api/version/update")
     assert resp.status_code == 400
     assert "being worked on" in resp.json()["detail"]
+
+
+def test_rebuild_route_starts_and_reports_its_progress(client, monkeypatch):
+    """A minute of work, so the route answers at once and the page asks how it
+    is going."""
+    monkeypatch.setattr("app.main.refuse_reason", lambda runner: None)
+    monkeypatch.setattr("app.update.rebuild_from_checkout",
+                        lambda runner, progress=None, **kw: "0.3.0")
+
+    started = client.post("/api/version/rebuild").json()
+    assert started["state"] == "pulling"
+
+    for _ in range(500):
+        body = client.get("/api/version/rebuild").json()
+        if body["state"] in ("done", "failed"):
+            break
+        time.sleep(0.01)
+    assert body["state"] == "done" and "0.3.0" in body["message"]
+
+
+def test_rebuild_route_refuses_before_it_starts_anything(client, monkeypatch):
+    """Somebody who clicks this mid-review is told now, not a second later in
+    a progress line."""
+    monkeypatch.setattr("app.main.refuse_reason",
+                        lambda runner: "A document is being worked on right now.")
+    started = []
+    monkeypatch.setattr("app.update.rebuild_from_checkout",
+                        lambda *a, **kw: started.append(1))
+
+    resp = client.post("/api/version/rebuild")
+
+    assert resp.status_code == 400
+    assert "being worked on" in resp.json()["detail"]
+    assert started == []
+
+
+def test_a_rebuild_that_fails_is_reported_through_the_progress_route(
+        client, monkeypatch):
+    from app.update import UpdateError
+
+    monkeypatch.setattr("app.main.refuse_reason", lambda runner: None)
+
+    def explode(runner, progress=None, **kw):
+        raise UpdateError("The tests do not pass, so nothing was installed.")
+
+    monkeypatch.setattr("app.update.rebuild_from_checkout", explode)
+    client.post("/api/version/rebuild")
+
+    for _ in range(500):
+        body = client.get("/api/version/rebuild").json()
+        if body["state"] in ("done", "failed"):
+            break
+        time.sleep(0.01)
+    assert body["state"] == "failed" and "tests do not pass" in body["message"]
 
 
 def test_the_github_token_is_stored_like_every_other_secret(client,

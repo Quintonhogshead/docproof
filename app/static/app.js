@@ -1515,9 +1515,24 @@ async function offerUpdateIfBehind() {
     const v = await api('/api/version');
     if (!v.frozen) return;
     const r = await api('/api/version/check');
-    if (!(r.ok && !r.current && r.asset)) return;
-    $('update-banner-text').textContent =
-      `${r.release_name || r.tag} is ready.`;
+    if (!(r.ok && !r.current)) return;
+    // Two ways to be behind, and the banner offers whichever this machine
+    // actually has: a published release to install, or a checkout to rebuild
+    // from. Anything else — a release with no disk image attached — has
+    // nothing for the button to do, so there is no banner.
+    if (r.asset) {
+      $('update-banner-text').textContent =
+        `${r.release_name || r.tag} is ready.`;
+    } else if (r.can_rebuild) {
+      state.rebuildOffered = true;
+      const n = Number(r.behind);
+      $('update-banner-text').textContent = n
+        ? `${n} change${n === 1 ? '' : 's'} since this build.`
+        : 'There are changes since this build.';
+      $('update-now').textContent = 'Rebuild and update';
+    } else {
+      return;
+    }
     $('update-banner').hidden = false;
   } catch (_) { /* the manual check in Settings still exists */ }
 }
@@ -1531,6 +1546,15 @@ $('update-now').addEventListener('click', async () => {
   const text = $('update-banner-text');
   button.disabled = true;
   $('update-later').hidden = true;
+
+  // Behind its own checkout: build it here rather than fetching a release
+  // that does not exist yet.
+  if (state.rebuildOffered) {
+    await startRebuild(button, (message) => { text.textContent = message; });
+    $('update-later').hidden = false;
+    return;
+  }
+
   text.textContent = 'Downloading and installing — DocProof will reopen '
     + 'itself in a moment…';
   try {
@@ -1576,6 +1600,40 @@ function versionNote(message, kind) {
   note.hidden = false;
 }
 
+// Rebuilding from the checkout takes about a minute, so the server answers at
+// once and this asks how it is going. The window disappearing is the success
+// path: the app replaces itself and reopens.
+async function watchRebuild(say) {
+  for (;;) {
+    let r;
+    try {
+      r = await api('/api/version/rebuild');
+    } catch (_) {
+      return;                    // the server is already going away
+    }
+    say(r.message, r.state === 'failed' ? 'error' : 'muted');
+    if (r.state === 'failed' || r.state === 'done' || r.state === 'idle') return;
+    await new Promise((done) => setTimeout(done, 1000));
+  }
+}
+
+async function startRebuild(button, say) {
+  button.disabled = true;
+  say('Starting…', 'muted');
+  try {
+    await api('/api/version/rebuild', { method: 'POST' });
+    await watchRebuild(say);
+  } catch (err) {
+    say(err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$('version-rebuild').addEventListener('click', () => {
+  startRebuild($('version-rebuild'), versionNote);
+});
+
 $('version-check').addEventListener('click', async () => {
   const button = $('version-check');
   const download = $('version-download');
@@ -1593,6 +1651,9 @@ $('version-check').addEventListener('click', async () => {
       download.textContent = `Download ${r.release_name || r.tag}${mb}`;
       download.hidden = false;
     }
+    // On the machine DocProof is written on there is no release to fetch —
+    // the newest DocProof is the checkout, and the app can build it itself.
+    $('version-rebuild').hidden = !(r.ok && !r.current && r.can_rebuild);
     if (r.needs_token) $('key-github').focus();
   } catch (err) {
     versionNote(err.message, 'error');

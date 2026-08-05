@@ -156,11 +156,15 @@ def test_a_build_made_from_the_current_commit_is_up_to_date(frozen):
     assert "Up to date" in r["message"]
 
 
-def test_a_build_left_behind_says_how_far_and_what_to_run(frozen):
+def test_a_build_left_behind_says_how_far_and_offers_to_rebuild(frozen):
+    """The machine with the source can build the answer itself, so it says how
+    far behind it is and nothing about typing a command."""
     r = versionlib.check_for_update(
         runner=fake_git({"rev-parse": "999ffff", "rev-list": "3"}))
     assert r["ok"] and not r["current"]
-    assert "3 changes" in r["message"] and "tools/update.sh" in r["message"]
+    assert "3 changes" in r["message"]
+    assert r["can_rebuild"] is True
+    assert "tools/update.sh" not in r["message"]
 
 
 def test_one_change_is_not_reported_as_1_changes(frozen):
