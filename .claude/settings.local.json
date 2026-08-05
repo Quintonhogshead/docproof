@@ -106,7 +106,12 @@
       "Bash(.venv/bin/python -m pytest tests/test_sweeps.py -q)",
       "Bash(.venv/bin/python -m pytest tests/test_spellscan.py -q)",
       "Bash(gh pr *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git fetch *)",
+      "Bash(.venv/bin/python -m pytest tests/test_normalize.py -q)",
+      "Bash(.venv/bin/python -m docproof review /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/norm.docx --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/none.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/out4)",
+      "Bash(sed -n '/## Applied without tracked changes/,/## Scripted checks/p' /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/out4/summary.md)",
+      "Bash(.venv/bin/python -m docproof review tests/fixtures/footnotes.docx --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/none.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/fn)"
     ]
   }
 }
