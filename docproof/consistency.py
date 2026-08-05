@@ -8,7 +8,11 @@ document at once, which is exactly what a deterministic scan is for.
 
 It **asks and never corrects**, for a reason worth stating. Detection here is
 mechanical: strip the hyphens and spaces, and two spellings of one term
-collapse to the same key. But that same test cannot tell an inconsistency from
+collapse to the same key. Only those two — capitalization and the shape of the
+apostrophe are set aside, because *Her mother* against *her mother* and
+*brothers* against *brother's* are not one term written two ways, and a query
+channel fails by asking about things nobody wanted asked. But that same test
+cannot tell an inconsistency from
 a distinction — *awhile* and *a while* mean different things, as do *everyday*
 and *every day*. The known pairs are excluded by name, and the rest go to the
 author as a question, because which form a book uses is the author's to settle
@@ -56,13 +60,10 @@ class Occurrence:
 @dataclass(frozen=True)
 class Inconsistency:
     key: str
-    counts: Counter                       # surface form -> times seen
+    counts: Counter                       # spelling -> times seen, any casing
     dominant: str
+    minority_forms: tuple[str, ...]
     outliers: tuple[Occurrence, ...]
-
-    @property
-    def minority_forms(self) -> tuple[str, ...]:
-        return tuple(sorted({o.form for o in self.outliers}))
 
 
 @dataclass(frozen=True)
@@ -76,13 +77,36 @@ class ConsistencyReport:
 
 
 def _key(form: str) -> str:
-    return re.sub(r"[-\s’']", "", form).lower()
+    """Every way of writing one term collapses to one key.
+
+    Hyphens and spaces go, because that is the variation being looked for. The
+    apostrophe is only normalized to one shape — deleting it would collapse
+    *brothers* into *brother's*, which is a plural and a possessive, not a term
+    written two ways."""
+    return re.sub(r"[-\s]", "", form.replace("’", "'")).lower()
+
+
+def _variant(form: str) -> str:
+    """The spelling, with capitalization set aside.
+
+    Case is not one of the variations this scan is about. *Her mother* opening
+    a sentence and *her mother* inside one are the same spelling, and a scan
+    that called them two would file a query against every common noun that ever
+    starts a sentence."""
+    return form.lower()
 
 
 @dataclass
 class _Group:
-    counts: Counter = field(default_factory=Counter)
+    counts: Counter = field(default_factory=Counter)      # variant -> times seen
+    spellings: dict[str, Counter] = field(
+        default_factory=lambda: defaultdict(Counter))     # variant -> as written
     where: list[Occurrence] = field(default_factory=list)
+
+    def display(self, variant: str) -> str:
+        """The variant as the manuscript most often capitalizes it."""
+        (form, _), = self.spellings[variant].most_common(1)
+        return form
 
 
 def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
@@ -116,7 +140,8 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                 if len(key) < min_length or key in _LEGITIMATE:
                     continue
                 g = groups[key]
-                g.counts[form] += 1
+                g.counts[_variant(form)] += 1
+                g.spellings[_variant(form)][form] += 1
                 g.where.append(Occurrence(para.para_id, start, end, form))
 
     terms: list[Inconsistency] = []
@@ -124,15 +149,18 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
         if len(g.counts) < 2:
             continue
         (dominant, top), = g.counts.most_common(1)
-        minority = [f for f, n in g.counts.items()
-                    if f != dominant and top >= n * min_dominance]
+        minority = {v for v, n in g.counts.items()
+                    if v != dominant and top >= n * min_dominance}
         if not minority:
             # No form clearly dominates, so this is two deliberate choices or
             # a word this scan should not be guessing about.
             continue
-        outliers = tuple(o for o in g.where if o.form in minority)
+        outliers = tuple(o for o in g.where if _variant(o.form) in minority)
         if outliers:
-            terms.append(Inconsistency(key, g.counts, dominant, outliers))
+            counts = Counter({g.display(v): n for v, n in g.counts.items()})
+            terms.append(Inconsistency(
+                key, counts, g.display(dominant),
+                tuple(sorted(g.display(v) for v in minority)), outliers))
 
     report = ConsistencyReport(ran=True, terms=tuple(terms))
     log.info("Consistency scan: %d term(s) written more than one way, "
@@ -157,7 +185,7 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             window, _, occurrence = sentence_window(para.text, o.start, o.end)
             others = ", ".join(
                 f"“{f}” ({c})" for f, c in term.counts.most_common()
-                if f != o.form)
+                if _variant(f) != _variant(o.form))
             findings.append(Finding(
                 finding_id=f"c-{n:04d}",
                 chunk_id="consistency",
