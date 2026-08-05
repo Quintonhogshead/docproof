@@ -74,7 +74,11 @@ class SpellcheckConfig(BaseModel):
     context for the model passes — the manuscript's own vocabulary as a
     do-not-flag list — never an edit. See docproof/spellscan.py."""
     enabled: bool = True
-    dictionary: str = "en_US"
+    # Which Hunspell set to read. Unset means "whatever the variant asks for",
+    # which is almost always right. Set it to a name or a path to override —
+    # useful when a variant's dictionary is not bundled and the press has its
+    # own copy.
+    dictionary: str | None = None
     # Seen this often, or written as a name, and an unknown word is the
     # author's coined term rather than a typo.
     min_occurrences: int = Field(default=2, ge=1)
@@ -104,6 +108,13 @@ class Config(BaseModel):
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
+    # Which English this manuscript is written in. A handful of conventions
+    # flip on it — which mark opens dialogue, decade apostrophes, percent
+    # versus per cent, the that/which rule — and it selects the spell-scan
+    # dictionary. Stated, never inferred: guessing the variant and then
+    # applying its rules silently is how a U.K. manuscript comes back
+    # Americanized. See docproof/variants.py.
+    variant: Literal["us", "uk", "ca", "au"] = "us"
     min_confidence: Literal["low", "medium", "high"] = "medium"
     # Each entry is one API pass over the whole document: a bare key runs alone,
     # a list of keys runs as a single combined pass. Grouping trades a little

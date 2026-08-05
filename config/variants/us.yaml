@@ -1,0 +1,25 @@
+key: us
+name: U.S. English
+dictionary: en_US
+primary_quote: double
+authorities:
+  - The Chicago Manual of Style, 17th edition
+  - Merriam-Webster, for spelling
+  - The Atmosphere Press House Style Guide, which overrides Chicago where they differ
+
+conventions: |
+  Quotation marks: double (“…”) for primary dialogue, single (‘…’) for a
+  quotation nested inside one.
+  Short-work titles: double quotes — “The Tell-Tale Heart”, “Hey Jude”.
+  Times: 8:30 a.m. / 5:00 p.m. — lowercase, with periods, colon separator.
+  Ranges take an unspaced en dash: 9:00–5:00 p.m.
+  Dates: July 14, 1989 — comma after the day, and after the year if the
+  sentence continues. No ordinals in a formal date: 24 July, never 24th July.
+  Decades: ’60s — apostrophe before, no apostrophe before the s.
+  That / which: the strict Chicago distinction. "that" introduces a
+  restrictive clause and takes no comma; "which" introduces a nonrestrictive
+  one and is set off by commas.
+  Percent: one word, "percent". The % symbol belongs in data tables only.
+  Punctuation with quotation marks: periods and commas go INSIDE the closing
+  quote, whether or not they belong to the quoted material.
+  Spelling: Merriam-Webster — color, organize, traveled, center.

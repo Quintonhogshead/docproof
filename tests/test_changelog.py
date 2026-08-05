@@ -109,14 +109,38 @@ def test_every_section_the_brief_asks_for_is_present(tmp_path):
         assert heading in text, heading
 
 
-def test_the_style_basis_discloses_the_variant_assumption(tmp_path):
-    """The brief asks for the variant to be stated so the press can confirm
-    it. Since variants are not configurable yet, saying so is the honest
-    version of that."""
+def test_the_style_basis_states_the_variant_and_its_authorities(tmp_path):
+    """The brief asks for the variant to be stated, with its authorities, so
+    the press can check the pass was made against the right rules."""
     text, _ = _read(_run(tmp_path, [SPLICE]).change_log)
-    assert "U.S. English" in text
-    assert "not yet configurable" in text
-    assert "confirm the variant" in text
+    assert "proofread as U.S. English" in text
+    assert "Chicago Manual of Style" in text
+    assert "Merriam-Webster" in text
+
+
+def test_a_hybrid_variant_asks_the_press_to_confirm(tmp_path):
+    """Canadian is U.S. punctuation with Canadian spelling, so choosing it is
+    a judgment the press should ratify — the brief asks for this by name."""
+    text, _ = _read(_run(tmp_path, [SPLICE], variant="ca").change_log)
+    assert "proofread as Canadian English" in text
+    assert "Canadian Oxford Dictionary" in text
+    assert "please confirm" in text
+
+
+def test_a_non_hybrid_variant_does_not_ask(tmp_path):
+    text, _ = _read(_run(tmp_path, [SPLICE], variant="uk").change_log)
+    assert "proofread as U.K. English" in text
+    assert "Oxford Style Manual" in text
+    assert "please confirm" not in text
+
+
+def test_an_unavailable_dictionary_is_disclosed_as_a_limit(tmp_path):
+    """spylls ships en_US only. A U.K. run therefore has no dictionary scan,
+    and the change log has to say so rather than letting the reader assume the
+    manuscript's vocabulary was protected."""
+    text, _ = _read(_run(tmp_path, [SPLICE], variant="uk").change_log)
+    assert "dictionary scan did not run" in text
+    assert "en_GB is not installed" in text
 
 
 def test_corrections_are_tabled_with_a_reason(tmp_path):

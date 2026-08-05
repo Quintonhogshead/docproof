@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Sequence
 
 from .models import Finding, ParagraphRef
@@ -31,7 +32,10 @@ log = logging.getLogger("docproof.sweeps")
 # Spaces a sweep treats as "the gap between things": ASCII space, tab, and the
 # non-breaking space the ellipsis rule itself installs.
 _SP = " \t\u00a0"
-_CLOSING_QUOTES = "\"”"
+# Any mark that can end quoted speech, in any variant. Only used to decide
+# whether an ellipsis takes a non-breaking space before it, which is true
+# after a closing quote whichever kind it is.
+_CLOSING_QUOTES = "\"”'’"
 
 
 @dataclass(frozen=True)
@@ -47,7 +51,7 @@ class Hit:
 class Sweep:
     key: str
     name: str
-    scan: Callable[[str], list[Hit]]
+    scan: Callable[..., list[Hit]]   # (text, variant) -> hits
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,7 @@ def _sentence_starts_at(text: str, pos: int) -> bool:
 _ELLIPSIS = re.compile(r"\.(?:[ \t\u00a0]*\.){2,}|…")
 
 
-def _sweep_ellipsis(text: str) -> list[Hit]:
+def _sweep_ellipsis(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     for m in _ELLIPSIS.finditer(text):
         lo, hi = m.start(), m.end()
@@ -154,7 +158,7 @@ def _sweep_ellipsis(text: str) -> list[Hit]:
 _DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–)(?P<post>[ \t\u00a0]*)")
 
 
-def _sweep_dash(text: str) -> list[Hit]:
+def _sweep_dash(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     stripped = text.strip()
     for m in _DASHES.finditer(text):
@@ -189,7 +193,7 @@ def _sweep_dash(text: str) -> list[Hit]:
 _STACKED = re.compile(r"[!?]{2,}|‽")
 
 
-def _sweep_stacked_punctuation(text: str) -> list[Hit]:
+def _sweep_stacked_punctuation(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     for m in _STACKED.finditer(text):
         run = m.group(0)
@@ -213,7 +217,7 @@ _LEGITIMATE_DOUBLES = frozenset({
 })
 
 
-def _sweep_doubled_word(text: str) -> list[Hit]:
+def _sweep_doubled_word(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     for m in _DOUBLED.finditer(text):
         word = m.group(1)
@@ -257,7 +261,7 @@ def ordinal_word(n: int) -> str | None:
     return f"{_TENS_CARDINAL[tens]}-{_ONES[ones]}"
 
 
-def _sweep_century(text: str) -> list[Hit]:
+def _sweep_century(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     for m in _CENTURY.finditer(text):
         word = ordinal_word(int(m.group("num")))
@@ -278,15 +282,25 @@ def _sweep_century(text: str) -> list[Hit]:
 # capitalized pronoun. So the pattern below finds every candidate and the
 # decision is made by building the correct form and comparing — there is no
 # per-row regex to forget.
-_DIALOGUE_TAG = re.compile(
+_DIALOGUE_TAG_TEMPLATE = (
     r"(?P<inner>[.,!?…])?"
-    r"(?P<quote>[\"”])"
+    r"(?P<quote>[{quotes}])"
     r"(?P<outer>[.,!?])?"
     r"(?P<gap>[ \t\u00a0]+)"
     r"(?P<subject>[A-Za-z][\w'’]*)"
     r"[ \t\u00a0]+"
     r"(?P<verb>[A-Za-z][\w'’]*)"
     r"(?:[ \t\u00a0]+(?P<nxt>[A-Za-z][\w'’]*))?")
+
+
+@lru_cache(maxsize=4)
+def _dialogue_tag_re(quotes: str):
+    """The tag pattern for one variant's closing quotation marks.
+
+    U.K. and Australian manuscripts open dialogue with a single quote, so a
+    pattern hard-coded to double quotes would run over such a book and report
+    zero matches — which reads exactly like a clean manuscript."""
+    return re.compile(_DIALOGUE_TAG_TEMPLATE.format(quotes=re.escape(quotes)))
 
 # Deliberately the house brief's list, borderline verbs included.
 REPORTING_VERBS = frozenset("""
@@ -311,9 +325,10 @@ _TAKES_OBJECT = frozenset({
 })
 
 
-def _sweep_dialogue_tag(text: str) -> list[Hit]:
+def _sweep_dialogue_tag(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
-    for m in _DIALOGUE_TAG.finditer(text):
+    quotes = variant.closing_quotes if variant else "\"”"
+    for m in _dialogue_tag_re(quotes).finditer(text):
         if m.group("verb").lower() not in REPORTING_VERBS:
             continue
         nxt = m.group("nxt")
@@ -375,7 +390,7 @@ def resolve(keys: Sequence[str]) -> list[Sweep]:
 
 
 def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
-               ) -> tuple[list[Finding], list[SweepReport]]:
+               variant=None) -> tuple[list[Finding], list[SweepReport]]:
     """Every enabled sweep over every paragraph, as findings plus the counts
     the change log has to quote.
 
@@ -387,7 +402,7 @@ def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
     for sweep in resolve(keys):
         flagged = remaining = 0
         for para in paragraphs:
-            hits = sweep.scan(para.text)
+            hits = sweep.scan(para.text, variant)
             if not hits:
                 continue
             flagged += len(hits)
@@ -408,7 +423,8 @@ def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
                     explanation=hit.explanation,
                     confidence="high",
                 ))
-            remaining += len(sweep.scan(apply_hits(para.text, hits)))
+            remaining += len(sweep.scan(apply_hits(para.text, hits),
+                                              variant))
         reports.append(SweepReport(sweep.key, sweep.name, flagged, remaining))
         if remaining:
             log.error("%s: %d match(es) still present after its own fixes — "

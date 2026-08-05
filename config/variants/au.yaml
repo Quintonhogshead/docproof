@@ -1,0 +1,29 @@
+key: au
+name: Australian English
+dictionary: en_AU
+primary_quote: single
+confirm: true
+authorities:
+  - The Oxford Style Manual, including the Oxford Guide to Style
+  - The Macquarie Dictionary, for spelling
+  - The Atmosphere Press House Style Guide, for everything not variant-specific
+
+conventions: |
+  Australian English follows Oxford style with Macquarie spellings, which are
+  close to U.K. usage but not identical.
+
+  Quotation marks: single (‘…’) for primary dialogue, double (“…”) nested — the
+  U.K. pattern.
+  Short-work titles: single quotes.
+  Times: 8.30 am / 5.00 pm — lowercase, no periods on am/pm.
+  Dates: 14 July 1989 — day, month, year, no commas.
+  Decades: 60s — no leading apostrophe.
+  That / which: as Oxford — either is permitted in a restrictive clause if the
+  author is consistent. Preserve the author's habit.
+  Percent: two words, "per cent".
+  Punctuation with quotation marks: follow the manuscript's existing pattern,
+  as in U.K. usage. Do not silently convert.
+  Spelling: the Macquarie Dictionary. Broadly U.K. — colour, centre, travelled
+  — but with Australian preferences that differ from Oxford, notably -ise
+  endings (organise, realise) rather than -ize, and program rather than
+  programme. Where a word could be either, keep the author's choice.
