@@ -82,6 +82,14 @@ things, as do *everyday* and *every day*. Those are excluded by name, and
 everything else goes to the author as a margin question naming both forms and
 which is used more. Which form a book uses is the author's to settle.
 
+Two things deliberately do *not* count as spelling. Capitalization is one: a
+noun that opens a sentence is not a second form of itself, and counting it as
+one would file a query against *Her mother* every time *her mother* appears
+mid-sentence. The shape of the apostrophe is the other — the typographic and
+straight marks are normalized to one, but the apostrophe is kept, because
+deleting it would match *brothers* against *brother's*, a plural and a
+possessive rather than one term written two ways.
+
 Three filters keep it quiet. Keys shorter than `min_length` are dropped,
 because short forms collide by accident. A term written one way is not an
 inconsistency. And a form must be clearly outnumbered before it reads as a slip

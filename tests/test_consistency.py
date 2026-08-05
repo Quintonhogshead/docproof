@@ -75,6 +75,50 @@ def test_real_english_distinctions_are_not_flagged(texts):
     assert find_inconsistencies(_paras(*texts)).terms == ()
 
 
+def test_a_capital_at_the_start_of_a_sentence_is_not_a_second_spelling():
+    """The noisiest false positive this scan can make: every common noun that
+    ever opens a sentence appears "two ways" if capitalization counts as
+    spelling. It does not."""
+    r = find_inconsistencies(_paras(
+        "Her mother had never once spoken of the war to anyone at all.",
+        "She thought of her mother and the way she folded the linen.",
+        "Later her mother came in from the garden with her hands full."))
+    assert r.terms == ()
+
+
+def test_case_is_set_aside_but_the_spelling_underneath_is_still_read():
+    """Setting case aside must not hide a real slip that happens to sit at the
+    start of a sentence — and the query quotes the book's own capitalization."""
+    r = find_inconsistencies(_paras(
+        "Safekeeping was all she asked of him that winter, nothing more.",
+        "The safekeeping of the archive was her only remaining duty.",
+        "Safe keeping was a phrase he had never once used in his life."))
+    assert _keys(r) == {"safekeeping": "Safekeeping"}
+    assert r.terms[0].minority_forms == ("Safe keeping",)
+
+
+def test_a_plural_is_not_a_possessive_written_differently():
+    """Deleting the apostrophe to match “wolf's-bane” against “wolf’s bane”
+    would also match “brothers” against “brother's” — two words, not one term
+    written two ways."""
+    assert find_inconsistencies(_paras(
+        "The brothers went down to the river before the sun had risen.",
+        "The brothers argued the whole way there about nothing at all.",
+        "Her brother's coat was still hanging on the hook by the door.",
+    )).terms == ()
+
+
+def test_the_two_apostrophes_are_still_one_apostrophe():
+    """Typographic and straight apostrophes are the same character as far as
+    spelling goes, so this is one term written two ways."""
+    r = find_inconsistencies(_paras(
+        "The wolf’s-bane grew thick along the wall behind the old chapel.",
+        "He gathered wolf’s-bane in the dark without a lamp to see by.",
+        "The wolf's bane he carried had dried to nothing in his pocket."))
+    assert r.terms[0].dominant == "wolf’s-bane"
+    assert r.terms[0].minority_forms == ("wolf's bane",)
+
+
 def test_a_term_written_one_way_is_not_flagged():
     r = find_inconsistencies(_paras(
         "The blood-cursed rider never returns from the northern marches.",
