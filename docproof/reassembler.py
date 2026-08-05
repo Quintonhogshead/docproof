@@ -25,6 +25,10 @@ class ReassemblyStats:
     skipped: tuple[str, ...]   # finding_ids refused by defense-in-depth checks
     queried: tuple[str, ...] = ()    # finding_ids written as comments only
     unplaced: tuple[str, ...] = ()   # queries with nowhere to hang a comment
+    # Formatting findings whose text was already set that way. Not a failure:
+    # the model reads plain text and cannot see italics, so it reports every
+    # title it finds and this is where the correct ones land.
+    already_set: tuple[str, ...] = ()
 
 
 # --- offset map and run splitting --------------------------------------------
@@ -183,6 +187,88 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
     first = dels[0] if dels else ins
     last = ins if ins is not None else dels[-1]
     return first, last
+
+
+# --- tracked formatting changes ----------------------------------------------
+
+# w:rPr's children are a schema-enforced sequence, so a mark cannot simply be
+# appended. These are the elements that legally precede w:i; the new mark goes
+# in front of the first child that is not one of them. w:rPrChange is last in
+# the sequence, so appending it is always right.
+_BEFORE_ITALIC = {qn(t) for t in ("w:rStyle", "w:rFonts", "w:b", "w:bCs")}
+# (primary mark, complex-script companion). Only the primary decides whether a
+# run is already set: Word writes w:iCs alongside w:i for complex scripts, but
+# plenty of documents carry w:i alone, and treating those as "not italic yet"
+# would mark every correctly-italicised title as a change to click through.
+_MARKS = {"italic": ("w:i", "w:iCs")}
+
+
+def _is_set(rpr, tag: str) -> bool:
+    """Whether a run property is on. A toggle present with w:val="0" is the
+    document explicitly turning it OFF, which is not the same as absent."""
+    el = rpr.find(qn(tag))
+    return el is not None and (el.get(qn("w:val"))
+                               not in ("0", "false", "off"))
+
+
+def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
+                        ) -> tuple[etree._Element, etree._Element] | None:
+    """Mark [a.start, a.end) with a run property, as a tracked revision.
+
+    A long-work title set in roman is a house-style error that changes no
+    text, so it cannot be expressed as an insertion and a deletion. Word
+    records it instead as w:rPrChange: the run carries its NEW properties, and
+    the change element holds the OLD ones, which is what "reject" restores.
+
+    Returns the runs to hang a comment between, or None when every run in the
+    span already carries the mark — re-marking italic text would be a revision
+    the author has to click through for no reason."""
+    tags = _MARKS.get(mark)
+    if tags is None:
+        log.error("Unknown run formatting %r; skipping.", mark)
+        return None
+
+    _ensure_boundary(p, a.start)
+    _ensure_boundary(p, a.end)
+    covered = [t for (t, s, e) in _text_spans(p)
+               if s >= a.start and e <= a.end and e > s]
+    runs = list(dict.fromkeys(t.getparent() for t in covered))
+    touched: list[etree._Element] = []
+
+    for r in runs:
+        rpr = r.find(RPR_TAG)
+        if rpr is None:
+            rpr = etree.Element(RPR_TAG)
+            r.insert(0, rpr)
+        if _is_set(rpr, tags[0]):
+            continue                              # already set the right way
+
+        # The old properties, minus any revision record of their own: a
+        # rPrChange nested inside a rPrChange is not a thing.
+        old = copy.deepcopy(rpr)
+        for nested in old.findall(qn("w:rPrChange")):
+            old.remove(nested)
+
+        # One insertion point, then step forward: computing it afresh per tag
+        # would put w:iCs in front of w:i, which the schema forbids.
+        at = len(rpr)
+        for i, child in enumerate(rpr):
+            if child.tag not in _BEFORE_ITALIC:
+                at = i
+                break
+        for tag in tags:
+            if rpr.find(qn(tag)) is None:
+                rpr.insert(at, etree.Element(qn(tag)))
+                at += 1
+
+        change = _rev_el("w:rPrChange", ids, author, date)
+        change.append(old)
+        rpr.append(change)                        # always last in the sequence
+        touched.append(r)
+
+    if not touched:
+        return None
+    return touched[0], touched[-1]
 
 
 # --- accept / reject views (the invariant checkers) ---------------------------
@@ -362,6 +448,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     skipped: list[str] = []
     queried: list[str] = []
     unplaced: list[str] = []
+    already: list[str] = []
     comments: _Comments | None = None
 
     by_part: dict[str, list[Finding]] = {}
@@ -417,8 +504,16 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                               "skipping.", f.finding_id)   # defense-in-depth 2
                     skipped.append(f.finding_id)
                     continue
-                first, last = apply_replacement(p, a, cfg.revision_author,
-                                                date, ids)
+                if f.format:
+                    marked = apply_format_change(p, a, f.format,
+                                                 cfg.revision_author, date, ids)
+                    if marked is None:
+                        already.append(f.finding_id)
+                        continue
+                    first, last = marked
+                else:
+                    first, last = apply_replacement(p, a, cfg.revision_author,
+                                                    date, ids)
                 applied.append(f.finding_id)
                 if cfg.comments and part == "word/document.xml":
                     if comments is None:
@@ -433,5 +528,9 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                  len(queried), "y" if len(queried) == 1 else "ies",
                  f"; {len(unplaced)} had nowhere to hang (Word keeps comments "
                  f"in the body only)" if unplaced else "")
+    if already:
+        log.info("%d title(s) were already set the way house style wants; "
+                 "left alone rather than marked as a change to click through.",
+                 len(already))
     return ReassemblyStats(tuple(applied), tuple(skipped), tuple(queried),
-                           tuple(unplaced))
+                           tuple(unplaced), tuple(already))

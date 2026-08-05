@@ -15,16 +15,26 @@ class ErrorType:
     fix_guidance: str              # how corrected_text should be produced
     confidence_guidance: str
     examples: tuple[dict, ...]     # {"text": ..., "finding": {...} | None}
-    # Which channel this type's findings go down. "change" is a tracked
-    # change the author accepts or rejects; "query" is a margin comment that
-    # asks and edits nothing. A type is a query when the right answer is the
-    # author's to make — two speakers in one paragraph is a real problem, but
-    # restructuring the paragraph is not docproof's call.
+    # Which channel this type's findings go down, and with it what
+    # corrected_text means:
+    #   change — a tracked change; corrected_text is the fixed sentence.
+    #   query  — a margin comment that edits nothing; corrected_text repeats
+    #            the sentence unchanged, because the answer is the author's to
+    #            make.
+    #   format — a tracked formatting revision; corrected_text is the exact
+    #            span to mark, because the text itself does not change at all.
     channel: str = "change"
+    # What a format channel applies. Only "italic" today; the field exists so
+    # the reassembler is told rather than assuming.
+    format: str = "italic"
 
     @property
     def is_query(self) -> bool:
         return self.channel == "query"
+
+    @property
+    def is_format(self) -> bool:
+        return self.channel == "format"
 
 
 REQUIRED = ("key", "name", "version", "detection_prompt", "fix_guidance")
@@ -55,15 +65,16 @@ def load_error_types(dir_path: str | Path, enabled: list[str], *,
         if data["key"] != key:
             raise ValueError(f"{path}: key '{data['key']}' must match filename '{key}'")
         channel = data.get("channel", "change")
-        if channel not in ("change", "query"):
+        if channel not in ("change", "query", "format"):
             raise ValueError(
-                f"{path}: channel must be 'change' or 'query', not {channel!r}")
+                f"{path}: channel must be 'change', 'query' or 'format', "
+                f"not {channel!r}")
         registry[key] = ErrorType(
             key=data["key"], name=data["name"], version=int(data["version"]),
             detection_prompt=data["detection_prompt"].strip(),
             fix_guidance=data["fix_guidance"].strip(),
             confidence_guidance=data.get("confidence_guidance", "").strip(),
             examples=tuple(data.get("examples", [])),
-            channel=channel,
+            channel=channel, format=data.get("format", "italic"),
         )
     return registry

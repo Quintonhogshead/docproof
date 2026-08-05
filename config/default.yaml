@@ -61,6 +61,18 @@ spellcheck:
   suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
   allowlist: []             # always correct for this house, whatever the dictionary says
 
+# One term written more than one way — blood-cursed against bloodcursed, safe
+# keeping against safekeeping. The rule per-paragraph review structurally
+# cannot do: a model reading chapter 4 has no idea what chapter 40 said. It
+# asks and never corrects, because the same test that finds an inconsistency
+# cannot tell one from a distinction (awhile and a while differ in meaning),
+# and which form a book uses is the author's to settle. Whole-document runs
+# only. Free: no API call.
+consistency:
+  enabled: true
+  min_length: 7             # shorter keys collide by accident
+  min_dominance: 2          # how far the majority must lead; 1 flags even splits
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.
@@ -96,8 +108,9 @@ error_types:
   # it reads the same paragraphs for the same reason, and asks rather than
   # corrects.
   - [dialogue_tag, speaker_change]
-  # house mechanics — numbers, money, hyphenation
-  - [number_style, currency_style, ly_adverb_hyphen]
+  # house mechanics — numbers, money, hyphenation, and the one rule that
+  # changes how text is set rather than what it says
+  - [number_style, currency_style, ly_adverb_hyphen, title_italics]
   # sentence grammar — needs parsing, still decidable
   - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose

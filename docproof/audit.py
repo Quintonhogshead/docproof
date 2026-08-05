@@ -19,6 +19,15 @@ view looks perfectly correct.
 
 The audit runs before the file is written. A run that fails it produces no
 output document at all, which is the only honest meaning of "refuse to ship".
+
+One thing it does not cover, stated here because a check whose limits are
+unwritten gets trusted past them: this compares TEXT. A tracked formatting
+revision (`title_italics` marking a book title italic) changes no characters,
+so it passes the audit trivially — correctly, since rejecting it restores the
+old run properties and the text was never in question. But formatting applied
+*without* a revision around it would also pass unnoticed. Nothing does that
+today; if something ever should, the baseline needs to carry run properties
+too, not just text.
 """
 from __future__ import annotations
 

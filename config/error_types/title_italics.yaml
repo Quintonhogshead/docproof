@@ -1,0 +1,86 @@
+key: title_italics
+name: Long-work titles in italics
+version: 1
+# Changes how the text is set, not what it says, so it cannot be expressed as
+# an insertion and a deletion. corrected_text carries the span to italicise and
+# the reassembler records it as a tracked formatting revision.
+channel: format
+format: italic
+
+detection_prompt: |
+  House style sets the title of a long or standalone work in italics: books,
+  films, plays, albums, television series, newspapers, magazines, paintings,
+  and video games. Book titles in particular must be italicised.
+
+  IMPORTANT — you are reading plain text and CANNOT see which words are
+  already italic. Report every long-work title you find. docproof checks the
+  formatting itself and quietly leaves alone the ones already set correctly,
+  so reporting a title that turns out to be fine costs nothing. Missing one
+  costs a house-style error in a printed book.
+
+  FLAG the title of:
+  - A book: "She had never finished Moby-Dick."
+  - A film, play, opera or ballet: "They saw Hamlet on the Thursday."
+  - An album, a television series, a newspaper or magazine, a painting, a
+    long poem published on its own, a video game.
+
+  Do NOT flag:
+  - Short works, which take quotation marks instead and are a different rule:
+    a short story, a song, a single poem in a collection, an article, a
+    chapter, an episode of a series.
+  - The name of a person, place, company, ship, product, or building, however
+    title-like it looks.
+  - A book of the Bible, or the Bible, Torah or Quran themselves — scripture
+    is set in roman.
+  - A series name used generically rather than as a published title: "he read
+    fantasy novels", "the Sunday papers".
+  - A title inside dialogue that a character is only naming in passing — still
+    a title, still flag it; but if you cannot tell whether the words are a
+    title at all, leave it.
+  - Words you are guessing about. An invented in-world book is still a book
+    and should be flagged; a phrase that merely resembles a title is not.
+  - Anything where the title's exact extent is unclear. You must be able to
+    quote the title exactly, and only the title.
+
+fix_guidance: |
+  This type changes formatting, never text. Set corrected_text to the TITLE
+  ALONE, exactly as it appears — not the sentence, not a corrected version,
+  and with no added quotation marks or punctuation. It must appear verbatim
+  inside original_text, which stays the full sentence as usual.
+
+  Include the leading article only when it is part of the title as published:
+  The Great Gatsby, but "the film Casablanca". Never include a possessive,
+  a following comma, or the word "the" when it belongs to the sentence rather
+  than the work.
+
+confidence_guidance: |
+  high   — an unmistakable published long work, named as a title.
+  medium — plausibly a title, or an in-world work whose exact extent is a
+           little uncertain.
+  low    — it may be a short work, a proper name, or not a title at all.
+           Below the confidence gate this becomes a query rather than a
+           formatting change, which is the right place for a doubtful one.
+
+examples:
+  - text: "She had never finished Moby-Dick, and never would."
+    finding:
+      original_text: "She had never finished Moby-Dick, and never would."
+      corrected_text: "Moby-Dick"
+      explanation: "A book title is set in italics."
+      confidence: high
+  - text: "He read “The Tell-Tale Heart” twice that night."
+    finding: null
+  - text: "They went to see Hamlet at the little theatre on Grove Street."
+    finding:
+      original_text: "They went to see Hamlet at the little theatre on Grove Street."
+      corrected_text: "Hamlet"
+      explanation: "A play title is set in italics."
+      confidence: high
+  - text: "She worked at the Grove Street Theatre for eleven years."
+    finding: null
+  - text: "The Great Gatsby sat unopened on the nightstand."
+    finding:
+      original_text: "The Great Gatsby sat unopened on the nightstand."
+      corrected_text: "The Great Gatsby"
+      explanation: "A book title, with its leading article, is set in italics."
+      confidence: high

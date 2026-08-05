@@ -193,11 +193,28 @@ passes skip the short ones, so the cost is unchanged and the count is true.
 **Done when:** a run's two output files match what the team currently produces
 by hand, and queries appear as margin comments in Word.
 
-## Phase 5 — Variants and the two hard problems — **variants done**
+## Phase 5 — Variants and the two hard problems — **done**
 
-Item 1 is shipped: `docproof/variants.py` and `config/variants/*.yaml`, wired
-into the model prompts, the dialogue-tag sweep, the normalizer, the spell scan
-and the change log. See `docs/variants.md`. Items 2 and 3 are still open.
+All three shipped. Variants are `docproof/variants.py` and
+`config/variants/*.yaml`, wired into the model prompts, the dialogue-tag sweep,
+the normalizer, the spell scan and the change log (`docs/variants.md`). Title
+italics and term consistency are `config/error_types/title_italics.yaml` with
+`apply_format_change` in the reassembler, and `docproof/consistency.py`
+(`docs/whole-document.md`).
+
+Both hard problems came out as new *channels* rather than new machinery. An
+error type declares whether its findings are changes, questions or formatting,
+and the channel decides what `corrected_text` means — the fixed sentence, the
+sentence repeated unchanged, or the span to mark. Term consistency needed no
+error type at all: there is no prompt to write, because the whole thing is
+decided before any model sees the document.
+
+Two limits worth carrying forward. The reject-all audit compares text, so a
+formatting revision passes it trivially — correct, but it means formatting
+applied *without* a revision would pass unnoticed; the baseline would need to
+carry run properties to close that. And consistency runs on whole-document
+reviews only, because "you write this three ways" is not a claim a review of
+two chapters can make.
 
 It came out lighter than the sketch below. Variants are **one small file of
 conventions each**, injected into every pass the way the manuscript's own
