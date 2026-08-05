@@ -126,7 +126,11 @@
       "Bash(.venv/bin/pytest tests/test_error_types.py tests/test_prompts.py -q)",
       "Bash(.venv/bin/pytest tests/test_jobs.py -q)",
       "Bash(.venv/bin/pytest tests/test_integration.py -q)",
-      "Bash(git cherry-pick *)"
+      "Bash(git cherry-pick *)",
+      "Read(//Users/quintonjohnson/Desktop/Atmosphere/Lighthouse at Gull Point\\\\ /**)",
+      "Bash(.venv/bin/python -m docproof inventory '/Users/quintonjohnson/Desktop/Atmosphere/Lighthouse at Gull Point /V.2 The Lighthouse at Gull Point \\(with errors\\) copy.docx')",
+      "Bash(.venv/bin/pytest tests/test_voice.py -q)",
+      "Bash(.venv/bin/python -m docproof inventory \"/Users/quintonjohnson/Desktop/Atmosphere/Lighthouse at Gull Point /V.2 The Lighthouse at Gull Point \\(with errors\\) copy.docx\")"
     ]
   }
 }
