@@ -26,12 +26,15 @@ def resource_root() -> Path:
     return Path(bundled) if bundled else Path(__file__).resolve().parent.parent
 
 KEYCHAIN_SERVICE = "docproof"
-# The AI providers, plus one that is not a provider at all: a read-only GitHub
+# The AI providers, plus two that are not providers at all: a read-only GitHub
 # token, so a build somebody was sent can ask whether a newer one has been
-# released. It lives here because it is a secret and this is where secrets go —
-# the Keychain, never a file, never returned to the browser.
+# released, and the watcher's Google refresh token. They live here because they
+# are secrets and this is where secrets go — the Keychain, never a file, never
+# returned to the browser. `PROVIDERS` stays the list of vendors that review
+# documents, so nothing offers to review one with a Drive token.
 ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN"}
+            "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN",
+            "google": "GOOGLE_REFRESH_TOKEN"}
 PROVIDERS = ("anthropic", "openai", "gemini")
 
 
