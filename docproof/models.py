@@ -9,6 +9,9 @@ CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 STATUSES = (
     "pending",
     "validated",
+    # A question rather than a correction: anchored, and written into the
+    # document as a margin comment with no revision around it.
+    "query",
     "rejected_no_anchor",
     "rejected_overlap",
     "rejected_duplicate",
@@ -24,6 +27,13 @@ class ParagraphRef:
     location: str     # "body" | "table" | "header" | "footer" | "footnote" | "endnote"
     text: str         # canonical text — THE text Claude sees and anchors quote from
     style: str        # Word style ID, e.g. "Heading1", "Normal"
+    # Whether this paragraph is worth spending a model pass on. Short ones are
+    # not: a two-word line costs a request and rarely holds a grammar error.
+    # They are still docproof's to edit, though — in fiction a short paragraph
+    # is usually a line of dialogue, which is exactly where a stray "?!" or a
+    # mispunctuated tag lives. So the scripted sweeps read every paragraph and
+    # only the model passes skip these.
+    reviewable: bool = True
 
 
 @dataclass(frozen=True)

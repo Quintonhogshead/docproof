@@ -35,11 +35,19 @@ def shrink(original: str, corrected: str) -> tuple[int, str, str]:
 
 
 def validate_findings(findings: list[Finding], doc: DocumentModel,
-                      min_confidence: str) -> list[Finding]:
+                      min_confidence: str,
+                      query_types: frozenset[str] = frozenset()) -> list[Finding]:
+    """Anchor every finding, and decide which channel it goes down.
+
+    `query_types` are error types that ask rather than correct. They skip the
+    edit machinery entirely: there is no minimal diff to compute, no confidence
+    gate to pass (a question is the output, not a fallback from one), and no
+    span to claim — a query may sit on text a tracked change also touches,
+    because a comment and an edit are different things to a reader."""
     paras = index_paragraphs(doc)
     threshold = CONFIDENCE_RANK[min_confidence]
     accepted_spans: dict[str, list[tuple[int, int]]] = {}
-    seen: set[tuple[str, int, int, str]] = set()
+    seen: set[tuple] = set()
     out: list[Finding] = []
 
     for f in findings:
@@ -55,6 +63,19 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             out.append(_status(f, "rejected_no_anchor"))
             log.debug("%s: quote not found in %s (occurrence %d): %r",
                       f.finding_id, f.para_id, f.occurrence, f.original_text[:80])
+            continue
+
+        if f.error_type in query_types:
+            # The whole quoted sentence is the anchor: a question is about a
+            # passage, not about the characters someone would have changed.
+            key = (f.para_id, s, "query")
+            if key in seen:
+                out.append(_status(f, "rejected_duplicate"))
+                continue
+            seen.add(key)
+            out.append(_status(f, "query", Anchor(
+                start=s, end=s + len(f.original_text),
+                delete_text=f.original_text, insert_text="")))
             continue
 
         # 2 — shrink to the minimal edit

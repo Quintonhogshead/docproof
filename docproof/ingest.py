@@ -129,15 +129,23 @@ def build_document_model(pkg: DocxPackage, cfg: Config) -> DocumentModel:
             skipped.append((wp.para_id, "empty"))
         elif any(fnmatch.fnmatchcase(style, pat) for pat in cfg.skip.styles):
             skipped.append((wp.para_id, f"style:{style}"))
-        elif len(text) < cfg.chunking.min_paragraph_chars:
-            skipped.append((wp.para_id, f"short:{len(text)}"))
         else:
+            # Too short to be worth a model pass, but still ours to sweep:
+            # "“Who?” he asked." is sixteen characters and carries a dialogue
+            # tag. Dropping it here would make every sweep's "zero remaining"
+            # mean "zero remaining in the long paragraphs", which is not what
+            # anyone reading that number would take it to mean.
+            short = len(text) < cfg.chunking.min_paragraph_chars
             paragraphs.append(ParagraphRef(
                 para_id=wp.para_id, part=wp.part, location=wp.location,
-                text=text, style=style))
-            log.debug("para %s [%s/%s] %d chars", wp.para_id, wp.location, style, len(text))
+                text=text, style=style, reviewable=not short))
+            log.debug("para %s [%s/%s] %d chars%s", wp.para_id, wp.location,
+                      style, len(text), " (sweeps only)" if short else "")
 
-    log.info("Ingested %d reviewable paragraphs (%d skipped) from %s",
-             len(paragraphs), len(skipped), pkg.path.name)
+    n_short = sum(1 for p in paragraphs if not p.reviewable)
+    log.info("Ingested %d paragraph(s) from %s: %d for the model, %d swept "
+             "only (too short), %d skipped entirely",
+             len(paragraphs), pkg.path.name, len(paragraphs) - n_short,
+             n_short, len(skipped))
     return DocumentModel(source_path=str(pkg.path),
                          paragraphs=tuple(paragraphs), skipped=tuple(skipped))

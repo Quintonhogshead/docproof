@@ -99,8 +99,15 @@ SCOPE
 
 def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
     parts = [f"=== ERROR TYPE: {et.key} — {et.name} (v{et.version}) ===",
-             et.detection_prompt,
-             "FIX GUIDANCE:\n" + et.fix_guidance]
+             et.detection_prompt]
+    if et.is_query:
+        parts.append(
+            "CHANNEL: QUERY. This type asks; it never corrects. Its findings "
+            "become margin comments and change nothing in the document, so "
+            "the right answer stays the author's to make. Set corrected_text "
+            "to the sentence exactly as written — repeat it unchanged — and "
+            "put the question itself in explanation.")
+    parts.append("FIX GUIDANCE:\n" + et.fix_guidance)
     if et.confidence_guidance:
         parts.append("CONFIDENCE GUIDANCE:\n" + et.confidence_guidance)
     if et.examples:
