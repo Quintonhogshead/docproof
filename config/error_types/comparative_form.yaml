@@ -1,0 +1,85 @@
+key: comparative_form
+name: Comparative and superlative forms
+version: 1
+
+detection_prompt: |
+  A comparative or superlative built two ways at once, or built the way
+  English does not build that word.
+
+  English marks degree once: either the ending (-er, -est) or the word
+  (more, most), never both. It is the doubling that makes this decidable —
+  no dictionary can help, because both halves are ordinary words and a
+  spell check accepts "patienter" as readily as "patient".
+
+  FLAG:
+  - Double comparatives: "more patienter", "more better", "more faster",
+    "more easier", "more worse".
+  - Double superlatives: "most fastest", "most brightest", "most nearest".
+  - An ending on a word that takes the word instead: "beautifuller",
+    "carefullest", "expensiveer", "difficulter".
+  - Irregular forms made regular: "gooder", "worser", "baddest", "furtherest",
+    "more worser". These are the ones that also read as voice — see below.
+
+  Do NOT flag:
+  - Dialogue, and first-person narration in a nonstandard register. "The
+    bestest day ever", "he were the goodest dog", "I ain't never been no
+    happier" — these are how a person talks, and a proofreader who levels them
+    is rewriting the character. Report at low confidence at most, and prefer
+    not to report at all when the speaker's whole register is nonstandard.
+  - A deliberate quotation or archaism: "the most unkindest cut of all" is
+    Shakespeare, not an error.
+  - Absolute adjectives — "more unique", "most perfect", "more complete".
+    Whether these are errors at all is a usage argument, not a question of
+    form, and this pipeline does not settle usage arguments.
+  - Correctly formed degree of any kind: "more careful", "most beautiful",
+    "better", "furthest", "more well-known", "more often", "most likely".
+  - "more" and "most" as plain quantifiers, where they count a noun rather
+    than grade an adjective: "more careful drivers than last year", "most
+    people left early", "she wanted more butter".
+  - A comparative with no second term stated. "She was quieter now" is
+    complete English; the comparison is to how she was before.
+  - A plain misspelling of the base word ("beautifull", "carefull"). That is
+    the spelling type's, and it owns the case — do not report it here as well.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the degree marked once.
+  Take whichever route is the smaller change: drop the redundant "more" or
+  "most" ("more patienter" → "more patient" only if the ending is the odd part,
+  otherwise "patienter" → "more patient"), or replace a regularized irregular
+  with the standard form ("worser" → "worse"). Never rewrite the comparison
+  itself, add a second term to it, or swap the author's adjective for another
+  one. Fix exactly one comparison per finding.
+
+confidence_guidance: |
+  high   — a double comparative or superlative in narration, where both the
+           word and the ending are present and neither can be read another way.
+  medium — a regularized irregular in narration ("worser", "gooder"), or a
+           sentence where dropping the word and correcting the ending are
+           equally defensible fixes.
+  low    — inside dialogue, or in narration whose voice is nonstandard
+           throughout. Voice is the author's, and this is the type most likely
+           to fire on it.
+
+examples:
+  - text: "Somebody more patienter than me would have waited out the storm."
+    finding:
+      original_text: "Somebody more patienter than me would have waited out the storm."
+      corrected_text: "Somebody more patient than me would have waited out the storm."
+      explanation: "\"more patienter\" marks the comparative twice; one of \"more\" or \"-er\" has to go."
+      confidence: high
+  - text: "It was the most fastest boat anybody had ever seen in that harbour."
+    finding:
+      original_text: "It was the most fastest boat anybody had ever seen in that harbour."
+      corrected_text: "It was the fastest boat anybody had ever seen in that harbour."
+      explanation: "\"most fastest\" marks the superlative twice; \"fastest\" already carries it."
+      confidence: high
+  - text: "The second night was worser than the first had been."
+    finding:
+      original_text: "The second night was worser than the first had been."
+      corrected_text: "The second night was worse than the first had been."
+      explanation: "\"bad\" is irregular: the comparative is \"worse\", not \"worser\"."
+      confidence: medium
+  - text: "\"He were the bestest dog what ever lived,\" the boy said."
+    finding: null
+  - text: "She wanted more careful work from the crew than she had been getting."
+    finding: null

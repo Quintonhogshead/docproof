@@ -12,7 +12,7 @@ import pytest
 from docproof.analyzer import build_system_prompt
 from docproof.error_registry import load_error_types
 from docproof.models import ParagraphRef
-from docproof.spellscan import SpellScan, scan
+from docproof.spellscan import (SpellScan, _dictionary, _regular_form, scan)
 
 from .test_error_types import ERROR_DIR
 
@@ -75,12 +75,71 @@ def test_the_allowlist_wins_over_the_dictionary():
     assert not result.lexicon and not result.candidates
 
 
-def test_min_occurrences_moves_the_line():
+def test_repeating_a_word_does_not_protect_it():
+    """Repetition is evidence of vocabulary, not proof of it. A coinage
+    repeats because the author invented it; a misspelling repeats because the
+    author believes in it, and the two look identical to a counter."""
     texts = ("the wibble broke", "the wibble broke again")
-    assert [w.lower() for w in run(*texts).lexicon] == ["wibble"]
-    # Demand three sightings and twice is no longer enough to be protected.
+    result = run(*texts)
+    assert not result.lexicon
+    assert [c.word for c in result.recurring] == ["wibble"]
+
+
+def test_min_occurrences_moves_the_line():
+    """It decides which of the two things the model is told about a word, now
+    that neither of them is "leave this alone"."""
+    texts = ("the wibble broke", "the wibble broke again")
+    assert [c.word for c in run(*texts).recurring] == ["wibble"]
     strict = run(*texts, min_occurrences=3)
-    assert not strict.lexicon and [c.word for c in strict.candidates] == ["wibble"]
+    assert not strict.recurring
+    assert [c.word for c in strict.candidates] == ["wibble"]
+
+
+def test_a_regular_ending_on_an_ordinary_word_is_never_protected():
+    """The misspelling a count cannot argue with: used on every page, so
+    repetition reads it as vocabulary. Taking it apart is what tells it from a
+    coinage — strip "growed" and "grow" is left."""
+    result = run("The corn had growed tall that summer, taller than before.",
+                 "He saw how the boy had growed since they last met.",
+                 "Everything on that farm had growed except the boy.")
+    assert not result.lexicon and not result.recurring
+    assert [(c.word, c.stem) for c in result.candidates] == [("growed", "grow")]
+
+
+@pytest.mark.parametrize("word,stem", [
+    ("layed", "lay"), ("teached", "teach"), ("photographes", "photograph"),
+    ("rised", "rise"), ("tooken", "took"), ("partys", "party"),
+    ("messyer", "messy"), ("runned", "run"), ("makeing", "make"),
+])
+def test_words_that_come_apart_into_an_ordinary_word(word, stem):
+    result = run(f"They said the {word} thing was done.",
+                 f"Again the {word} thing was done.")
+    assert not result.lexicon
+    assert [(c.word, c.stem) for c in result.candidates] == [(word, stem)]
+
+
+@pytest.mark.parametrize("word", ["bloodcursed", "starship", "Kaelith",
+                                  "Vorrenth", "aetherium"])
+def test_a_coinage_does_not_come_apart(word):
+    """The gate must not reach the words the lexicon exists to protect: no
+    English word is left when you strip a coined one."""
+    assert not _regular_form(word, _dictionary("en_US"))
+
+
+def test_a_word_opening_dialogue_is_not_a_name():
+    """`he said, "Growed like a weed"` is a sentence start, and reading its
+    capital as a name protected a misspelling on a single sighting."""
+    result = run('He said, "Growed like a weed, that one has."')
+    assert not result.lexicon
+    assert [c.word for c in result.candidates] == ["Growed"]
+
+
+def test_a_name_that_only_ever_opens_a_sentence_is_still_a_name():
+    """Weaker evidence than a mid-sentence capital, but evidence: the word is
+    never once written in lower case."""
+    result = run("Kaelith rode on through the night.",
+                 "Kaelith did not look back at any point.")
+    assert [w.lower() for w in result.lexicon] == ["kaelith"]
 
 
 def test_suggestions_are_offered_only_for_candidates():

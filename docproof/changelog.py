@@ -261,9 +261,9 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"None of them changed anything.")
     if spell is not None and spell.available and spell.lexicon:
         d.add_paragraph(
-            f"{len(spell.lexicon)} word(s) not in the dictionary were treated "
-            f"as this author's own — coined terms, invented places, character "
-            f"names — and protected from correction: "
+            f"{len(spell.lexicon)} word(s) not in the dictionary were written "
+            f"as names — coined terms, invented places, characters — and so "
+            f"treated as this author's own and protected from correction: "
             f"{', '.join(spell.lexicon[:30])}"
             + ("…" if len(spell.lexicon) > 30 else "") + ".")
 
@@ -303,7 +303,8 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
         d.add_paragraph(
             f"Dictionary scan: {spell.tokens:,} words read, {spell.unknown:,} "
             f"not in the dictionary, {len(spell.lexicon)} treated as the "
-            f"author's own and {len(spell.candidates)} raised for a look.")
+            f"author's own, {len(spell.candidates)} raised for a look and "
+            f"{len(spell.recurring)} noted as repeated.")
 
     d.save(path)
     log.info("Wrote %s", path)

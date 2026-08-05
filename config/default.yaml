@@ -43,12 +43,15 @@ normalize:
   quotes: true
   spaces: true
 
-# A dictionary scan that never corrects anything. Unknown words that repeat,
-# or that are written as names, are the author's own — they become a
-# do-not-flag list sent to every pass, which is what stops a coined name being
-# "corrected" into the standard word it resembles. Unknown words used once, in
-# lower case, are handed to the model to look at. Needs the optional `spylls`
-# package; without it the scan is skipped and the passes run as before.
+# A dictionary scan that never corrects anything. Unknown words written as
+# names are the author's own — they become a do-not-flag list sent to every
+# pass, which is what stops a coined name being "corrected" into the standard
+# word it resembles. Everything else unknown is handed to the model to read:
+# seldom-used words and words that come apart into an ordinary word plus an
+# ending English does not give it ("growed", "teached", "partys") as things to
+# look at, repeated words as evidence of vocabulary rather than proof of it.
+# Needs the optional `spylls` package; without it the scan is skipped and the
+# passes run as before.
 spellcheck:
   enabled: true
   # Unset means "whatever `variant` asks for", which is almost always right.
@@ -57,7 +60,8 @@ spellcheck:
   # extension). Checking British spelling against a U.S. word list would file
   # every correct "colour" as unknown, so the scan declines instead.
   dictionary:
-  min_occurrences: 2        # seen this often → a coined term, not a typo
+  min_occurrences: 2        # seen this often → said to be the book's vocabulary,
+                            # which is evidence for the model, not protection
   suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
   allowlist: []             # always correct for this house, whatever the dictionary says
 
@@ -112,7 +116,8 @@ error_types:
   # changes how text is set rather than what it says
   - [number_style, currency_style, ly_adverb_hyphen, title_italics]
   # sentence grammar — needs parsing, still decidable
-  - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
+  - [comma_splice, run_on_sentence, subject_verb_agreement, that_which,
+     comparative_form]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 # Deterministic sweeps, run before any model pass so their edits get first

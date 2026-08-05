@@ -94,21 +94,47 @@ checker that acted on that would quietly rename a character — which is the
 brief's own worst case. So the scan classifies and hands the evidence to the
 model:
 
-- **Words the author owns** — repeated, or capitalized mid-sentence. These
+- **Words the author owns** — written as names: capitalized where no rule of
+  English would capitalize them, or never once written in lower case. These
   become a do-not-flag list sent to every pass. This is the half that pays for
   itself: it attacks the exact false positive every error type is written to
   avoid, using document-specific evidence no static list could carry.
-- **Words to look at** — used exactly once, not written as a name, not in the
-  dictionary. Handed over as things to read, never as things to change.
+- **Words to look at** — not written as names, and either seldom used or
+  coming apart into an ordinary word plus an ending English does not give it.
+  Handed over as things to read, never as things to change.
+- **Words used throughout** — unknown and repeated. Handed over as evidence of
+  the book's vocabulary rather than as a licence to leave them alone.
 
 ```yaml
 spellcheck:
   enabled: true
   dictionary: en_US
-  min_occurrences: 2        # seen this often → a coined term, not a typo
+  min_occurrences: 2        # seen this often → said to be the book's vocabulary
   suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
   allowlist: []
 ```
+
+**Protection takes the strong signal, and repetition is not one.** Counting
+occurrences was the original test — a word seen twice was the author's — and it
+is the wrong way round for the words it matters most on. A coinage repeats
+because the author invented it; *growed* repeats because the author believes
+in it, and there is no manuscript where a misspelling like that appears once.
+Protecting it made the systematic misspelling the one error this pipeline
+structurally could not find, which is the opposite of what a scan is for.
+
+Two things replace it. Name-casing decides protection, because renaming a
+character is the one error an author cannot undo by reading the change log —
+and a quotation now counts as a sentence start, so the capital in `he said,
+"Growed like a weed"` no longer reads as a name. And a word that comes apart
+into a known word plus a regular ending is never protected at all: strip
+*growed*, *teached*, *layed*, *tooken*, *partys*, *messyer* and an ordinary
+English word is left, while stripping *bloodcursed* or *Kaelith* leaves
+nothing. That decomposition is what tells a misspelling from a coinage, and it
+costs a handful of dictionary lookups rather than a `suggest()` call.
+
+The dictionary is not the last word on any of this. `patienter` is in `en_US`
+as a comparative of *patient*, so no scan will raise *more patienter* — that is
+a double comparative, and it needs an error type of its own.
 
 The scan reads the **whole** document even when the run covers a few selected
 sections. It changes nothing, so reading more costs nothing — and a coined
