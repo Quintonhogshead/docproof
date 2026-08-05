@@ -16,6 +16,8 @@ from typing import Sequence
 from .analyzer import Analyzer
 from .chunker import chunk_document
 from .config import Config
+from .consistency import (CONSISTENCY_KEY, ConsistencyReport,
+                          find_inconsistencies, to_findings)
 from .error_registry import ErrorType, load_error_types
 from .formats import DocumentFormat, get_format
 from .audit import AuditReport, enforce, run_audit
@@ -54,6 +56,10 @@ class Prepared:
     # a body paragraph the model edited.
     baseline: dict = field(default_factory=dict)
     variant: Variant | None = None
+    # Terms the manuscript writes more than one way. Document-wide, so it
+    # belongs here rather than to any chunk, and it costs no API call.
+    consistency: ConsistencyReport = field(default_factory=ConsistencyReport)
+    consistency_findings: list = field(default_factory=list)
 
     @property
     def conventions(self) -> str:
@@ -65,8 +71,17 @@ class Prepared:
         """Error types that ask rather than correct, taken from the types this
         run actually loaded — so an override that changes a type's channel is
         honoured without anything else needing to know."""
-        return frozenset(et.key for group in self.groups for et in group
-                         if et.is_query)
+        # The consistency scan has no error type — there is no prompt to
+        # write, since it is decided before any model sees the document — but
+        # its findings go down the same channel.
+        return frozenset([CONSISTENCY_KEY]) | frozenset(
+            et.key for group in self.groups for et in group if et.is_query)
+
+    @property
+    def format_types(self) -> dict[str, str]:
+        """Error types that change how text is set, and what they set it to."""
+        return {et.key: et.format for group in self.groups for et in group
+                if et.is_format}
 
     @property
     def vocabulary(self) -> str:
@@ -192,10 +207,20 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                        # An explicit dictionary wins; otherwise the variant
                        # picks one, which is the whole point of stating it.
                        dictionary=cfg.spellcheck.dictionary or variant.dictionary)
+
+    # Whole-document, and only on a whole-document run: "you write this three
+    # ways" is not a claim a review of two chapters can make.
+    consistency = find_inconsistencies(
+        doc.paragraphs if whole else [],
+        enabled=cfg.consistency.enabled and whole,
+        min_length=cfg.consistency.min_length,
+        min_dominance=cfg.consistency.min_dominance)
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
-                    variant=variant)
+                    variant=variant, consistency=consistency,
+                    consistency_findings=to_findings(consistency,
+                                                     doc.paragraphs))
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -281,9 +306,12 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # Sweep findings go first: the validator gives the earliest finding to
     # claim a span the right to it, and a scripted rule is more certain than
     # anything the model reports about the same characters.
-    validated = validate_findings(list(prepared.sweep_findings) + list(findings),
+    validated = validate_findings(list(prepared.sweep_findings)
+                                  + list(prepared.consistency_findings)
+                                  + list(findings),
                                   prepared.doc, cfg.min_confidence,
-                                  query_types=prepared.query_types)
+                                  query_types=prepared.query_types,
+                                  format_types=prepared.format_types)
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
@@ -302,12 +330,13 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         applied_ids=stats.applied, batch=batch,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
-                        audit=audit_report)
+                        audit=audit_report, consistency=prepared.consistency)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
-                     normalization=prepared.normalization, audit=audit_report)
+                     normalization=prepared.normalization, audit=audit_report,
+                     consistency=prepared.consistency)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)

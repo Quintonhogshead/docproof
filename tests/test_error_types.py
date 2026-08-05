@@ -59,7 +59,13 @@ def test_every_calibration_example_survives_the_validator():
                             occurrence) != -1, f"{where}: quote does not anchor"
             _, deleted, inserted = shrink(finding["original_text"],
                                           finding["corrected_text"])
-            if et.is_query:
+            if et.is_format:
+                # corrected_text is the span to mark, not a rewritten
+                # sentence, so the contract is containment rather than a diff.
+                assert finding["corrected_text"] in ex["text"], (
+                    f"{where}: a format type's corrected_text must be a span "
+                    f"of the paragraph, verbatim")
+            elif et.is_query:
                 # A query type's examples must be the other way round: it asks
                 # and never edits, so an example that changed the text would
                 # teach it to do the one thing it must not.

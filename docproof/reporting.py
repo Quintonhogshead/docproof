@@ -53,7 +53,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         findings: list[Finding], usage: Usage, cfg: Config,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
-                        normalization=None, audit=None) -> None:
+                        normalization=None, audit=None, consistency=None
+                        ) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -77,6 +78,12 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                    "mismatches": [m.para_id for m in audit.mismatches],
                    "missing": list(audit.missing)}
                   if audit is not None else None),
+        "consistency": ({"ran": consistency.ran,
+                         "terms": [{"key": t.key, "dominant": t.dominant,
+                                    "forms": dict(t.counts),
+                                    "outliers": len(t.outliers)}
+                                   for t in consistency.terms]}
+                        if consistency is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
                         "lexicon": list(spell.lexicon),
@@ -104,7 +111,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
-                     audit=None) -> None:
+                     audit=None, consistency=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -180,6 +187,18 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                 L.append(f"```\n{m.describe()}\n```\n")
             for para_id in audit.missing[:10]:
                 L.append(f"- `{para_id}` is missing from the output entirely\n")
+
+    if consistency is not None and consistency.terms:
+        L.append("## Terms written more than one way\n")
+        L.append(f"{len(consistency.terms)} term(s) appear in more than one "
+                 f"form across the whole manuscript — the check a "
+                 f"paragraph-by-paragraph read cannot make. Each is a question, "
+                 f"not a correction: which form the book uses is the author's "
+                 f"to settle.\n")
+        for t in consistency.terms:
+            forms = ", ".join(f"`{f}` ({n})" for f, n in t.counts.most_common())
+            L.append(f"- {forms} — most often **{t.dominant}**")
+        L.append("")
 
     rows = scripted_check_rows(sweeps, findings, applied_ids)
     if rows:

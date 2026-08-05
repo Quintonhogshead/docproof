@@ -90,6 +90,20 @@ class SpellcheckConfig(BaseModel):
     allowlist: list[str] = Field(default_factory=list)
 
 
+class ConsistencyConfig(BaseModel):
+    """One term written more than one way — the rule per-paragraph review
+    cannot do, because it needs the whole book at once. Asks, never corrects.
+    See docproof/consistency.py."""
+    enabled: bool = True
+    # Short keys collide by accident; the shorter the term, the more likely
+    # two forms are unrelated English rather than one word spelled two ways.
+    min_length: int = Field(default=7, ge=3)
+    # How far the majority form must outnumber a minority one before the
+    # minority reads as a slip rather than a second deliberate choice. 1 also
+    # flags an even split, where there is no dominant form to recommend.
+    min_dominance: int = Field(default=2, ge=1)
+
+
 class PricingConfig(BaseModel):
     """Optional $/MTok rates for the cost estimate in summary.md.
     Leave unset to omit the estimate."""
@@ -107,6 +121,7 @@ class Config(BaseModel):
     prep: PrepConfig = Field(default_factory=PrepConfig)
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
+    consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent

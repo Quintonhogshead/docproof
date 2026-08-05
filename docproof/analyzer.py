@@ -107,6 +107,15 @@ def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
             "the right answer stays the author's to make. Set corrected_text "
             "to the sentence exactly as written — repeat it unchanged — and "
             "put the question itself in explanation.")
+    if et.is_format:
+        parts.append(
+            f"CHANNEL: FORMAT. This type changes how text is SET, not what it "
+            f"says — it marks a span {et.format} and alters no characters. So "
+            f"corrected_text does not hold a corrected sentence: it holds the "
+            f"exact span to mark, copied verbatim and appearing inside "
+            f"original_text. You cannot see existing formatting in what you "
+            f"are given; report the span regardless and docproof will leave "
+            f"alone anything already set that way.")
     parts.append("FIX GUIDANCE:\n" + et.fix_guidance)
     if et.confidence_guidance:
         parts.append("CONFIDENCE GUIDANCE:\n" + et.confidence_guidance)

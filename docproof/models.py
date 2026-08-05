@@ -69,6 +69,10 @@ class Finding:
     confidence: str            # "high" | "medium" | "low"
     status: str = "pending"
     anchor: Anchor | None = None   # set by the validator when status == "validated"
+    # Set by the validator, never by the model: the run formatting this
+    # finding applies ("italic"), for a finding that changes how text is set
+    # rather than what it says.
+    format: str = ""
 
 
 @dataclass(frozen=True)

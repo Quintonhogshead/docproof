@@ -36,17 +36,25 @@ def shrink(original: str, corrected: str) -> tuple[int, str, str]:
 
 def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
-                      query_types: frozenset[str] = frozenset()) -> list[Finding]:
+                      query_types: frozenset[str] = frozenset(),
+                      format_types: dict[str, str] | None = None) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
 
     `query_types` are error types that ask rather than correct. They skip the
     edit machinery entirely: there is no minimal diff to compute, no confidence
     gate to pass (a question is the output, not a fallback from one), and no
     span to claim — a query may sit on text a tracked change also touches,
-    because a comment and an edit are different things to a reader."""
+    because a comment and an edit are different things to a reader.
+
+    `format_types` maps an error type to the run formatting it applies. Those
+    findings change how text is set rather than what it says, so there is no
+    diff to shrink either, and they claim spans in a register of their own —
+    italicising a title and fixing a typo inside it are not in conflict."""
+    format_types = format_types or {}
     paras = index_paragraphs(doc)
     threshold = CONFIDENCE_RANK[min_confidence]
     accepted_spans: dict[str, list[tuple[int, int]]] = {}
+    formatted_spans: dict[str, list[tuple[int, int]]] = {}
     seen: set[tuple] = set()
     out: list[Finding] = []
 
@@ -63,6 +71,38 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             out.append(_status(f, "rejected_no_anchor"))
             log.debug("%s: quote not found in %s (occurrence %d): %r",
                       f.finding_id, f.para_id, f.occurrence, f.original_text[:80])
+            continue
+
+        if f.error_type in format_types:
+            # The text does not change at all, so there is no diff to shrink.
+            # corrected_text is the span to mark — a title set in roman that
+            # should be italic — and it has to be inside the quoted sentence.
+            off = f.original_text.find(f.corrected_text)
+            if not f.corrected_text or off == -1:
+                out.append(_status(f, "rejected_no_anchor"))
+                log.debug("%s: %r is not inside the quoted sentence",
+                          f.finding_id, f.corrected_text[:60])
+                continue
+            start = s + off
+            end = start + len(f.corrected_text)
+            # Formatting claims its own register: marking a title italic and
+            # correcting a typo inside it are not in conflict, but marking the
+            # same title twice is.
+            spans = formatted_spans.setdefault(f.para_id, [])
+            if any(_overlaps(start, end, a, b) for a, b in spans):
+                out.append(_status(f, "rejected_duplicate"))
+                continue
+            if CONFIDENCE_RANK[f.confidence] < threshold:
+                out.append(_status(f, "skipped_low_confidence", Anchor(
+                    start=start, end=end, delete_text=f.corrected_text,
+                    insert_text=f.corrected_text)))
+                continue
+            spans.append((start, end))
+            out.append(dataclasses.replace(
+                f, status="validated", format=format_types[f.error_type],
+                anchor=Anchor(start=start, end=end,
+                              delete_text=f.corrected_text,
+                              insert_text=f.corrected_text)))
             continue
 
         if f.error_type in query_types:
