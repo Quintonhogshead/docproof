@@ -240,8 +240,7 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
 # --- one pass -----------------------------------------------------------------
 
 def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
-         mock: bool = False, opener=drive._open_url,
-         get_key=None) -> TickReport:
+         mock: bool = False, opener=None, get_key=None) -> TickReport:
     """Look once, do what is there, and hand back what happened.
 
     The folder lock is the caller's job, not this function's: `once` takes it
@@ -249,6 +248,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     rather than doubled, and the tests drive `tick` without one."""
     root = Path(home)
     report = TickReport(dry_run=dry_run)
+    # Both of these resolve here rather than in the signature. A default
+    # argument binds once, at import, to the function it was written next to —
+    # so a caller that swaps the name gets the old one anyway, and the way you
+    # find that out is a test quietly reaching Google.
+    opener = opener or drive._open_url
 
     if not ws.folder_id:
         raise NotConfigured("No folder is being watched yet. Run "
@@ -257,9 +261,6 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         raise NotConfigured("There is no Google sign-in set up yet. Run "
                             "`docproof-watch auth` — docs/watch.md walks "
                             "through making the OAuth client it asks for.")
-    # Looked up here rather than defaulted in the signature, so that patching
-    # the name reaches it — a default argument binds the function it was
-    # written next to, once, at import.
     refresh = (get_key or get_api_key)(GOOGLE_KEY)
     if not refresh:
         raise NotConfigured("DocProof is not signed in to Google. Run "

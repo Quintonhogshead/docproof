@@ -1,6 +1,8 @@
-"""Shared test plumbing: fixture .docx generation and a default config."""
+"""Shared test plumbing: fixture .docx generation, a default config, and the
+guarantee that none of this reaches the internet."""
 from __future__ import annotations
 
+import socket
 import sys
 from pathlib import Path
 
@@ -32,6 +34,29 @@ def _ensure_fixtures() -> None:
 
 
 _ensure_fixtures()
+
+
+@pytest.fixture(autouse=True)
+def no_internet(monkeypatch):
+    """Nothing in this suite may leave the machine.
+
+    Every network seam is injected — a fake provider, a fake opener — so this
+    should never fire. It exists because the way you find out that one of
+    those seams was missed is a default argument that bound the real function
+    at import, a test that looks like it passes, and a vendor invoice. The
+    loopback address stays open: the sign-in listener genuinely needs one, and
+    127.0.0.1 goes nowhere."""
+    real = socket.socket.connect
+
+    def guard(self, address, *args, **kwargs):
+        host = address[0] if isinstance(address, tuple) else ""
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            raise AssertionError(
+                f"a test tried to reach {host} — every network call in "
+                f"DocProof takes an injected opener or provider; pass one")
+        return real(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guard)
 
 
 @pytest.fixture
