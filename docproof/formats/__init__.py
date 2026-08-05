@@ -23,6 +23,8 @@ DOCX = DocumentFormat(
     preflight=_docx.preflight,
     build_document_model=_docx.build_document_model,
     apply_tracked_changes=_docx.apply_tracked_changes,
+    normalize=_docx.normalize,
+    snapshot=_docx.snapshot,
 )
 
 IDML = DocumentFormat(

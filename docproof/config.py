@@ -60,6 +60,15 @@ class PrepConfig(BaseModel):
     verify: bool = True
 
 
+class NormalizeConfig(BaseModel):
+    """The two edits the house brief allows outside the tracked-changes
+    system. They are applied before ingest, so everything downstream measures
+    against normalized text. Both are silent by design and neither is logged
+    line by line — only counted. See docproof/normalize.py."""
+    quotes: bool = True       # straight " and ' become curly, where certain
+    spaces: bool = True       # runs of two or more spaces collapse to one
+
+
 class SpellcheckConfig(BaseModel):
     """A dictionary scan that classifies rather than corrects. Its output is
     context for the model passes — the manuscript's own vocabulary as a
@@ -92,6 +101,7 @@ class Config(BaseModel):
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     skip: SkipConfig = Field(default_factory=SkipConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
+    normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     min_confidence: Literal["low", "medium", "high"] = "medium"
@@ -104,6 +114,11 @@ class Config(BaseModel):
     # can report their own final match count. An empty list turns them off.
     sweeps: list[str] = Field(default_factory=list)
     tracked_changes_policy: Literal["abort", "accept_all_first", "ignore"] = "abort"
+    # Whether rejecting every tracked change must reproduce the ingested text.
+    # strict refuses to write a file that fails; warn writes it and says so.
+    # Turning this off removes the only check that would catch an edit made
+    # without a revision mark around it.
+    audit: Literal["strict", "warn", "off"] = "strict"
     output_dir: str = "output"
     comments: bool = True
     revision_author: str = "docproof"

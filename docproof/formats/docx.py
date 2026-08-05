@@ -8,6 +8,23 @@ gain. The seam is what mattered; this file is the seam.
 from __future__ import annotations
 
 from ..ingest import build_document_model, preflight
-from ..reassembler import apply_tracked_changes
+from ..normalize import normalize_package as normalize
+from ..reassembler import apply_tracked_changes, paragraph_view_text
+from ..utils.xml_helpers import paragraph_text, walk_package
 
-__all__ = ["preflight", "build_document_model", "apply_tracked_changes"]
+
+def snapshot(pkg, mode: str = "current") -> dict[str, str]:
+    """Every paragraph's text, keyed by para_id.
+
+    "current" is what the paragraph says now; "reject" is what it would say
+    with every tracked change rejected. The audit compares the second against
+    a "current" taken before any change was applied."""
+    return {
+        wp.para_id: (paragraph_text(wp.element) if mode == "current"
+                     else paragraph_view_text(wp.element, "reject"))
+        for wp in walk_package(pkg)
+    }
+
+
+__all__ = ["preflight", "build_document_model", "apply_tracked_changes",
+           "normalize", "snapshot"]

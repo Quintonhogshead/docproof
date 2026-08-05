@@ -30,6 +30,15 @@ class DocumentFormat:
     build_document_model: Callable
     apply_tracked_changes: Callable
 
+    # Optional, because they are the only two things a format has to implement
+    # in OOXML-shaped terms. A format that provides neither still reviews
+    # documents; it just does not normalize quotes or audit itself, and both
+    # facts are reported rather than assumed.
+    #   normalize(pkg, quotes=, spaces=) -> NormalizationReport
+    #   snapshot(pkg, mode) -> {para_id: text}, mode "current" | "reject"
+    normalize: Callable | None = None
+    snapshot: Callable | None = None
+
     def reviewed_name(self, source_path: str | Path) -> str:
         return f"reviewed_{Path(source_path).stem}{self.suffix}"
 

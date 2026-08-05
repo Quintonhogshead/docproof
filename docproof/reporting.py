@@ -52,7 +52,8 @@ def scripted_check_rows(sweeps, findings: list[Finding],
 def write_findings_json(path: Path, *, doc: DocumentModel,
                         findings: list[Finding], usage: Usage, cfg: Config,
                         applied_ids: tuple[str, ...],
-                        batch: bool = False, sweeps=None, spell=None) -> None:
+                        batch: bool = False, sweeps=None, spell=None,
+                        normalization=None, audit=None) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -65,6 +66,17 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                    "min_confidence": cfg.min_confidence,
                    "revision_author": cfg.revision_author},
         "scripted_checks": scripted_check_rows(sweeps, findings, applied_ids),
+        "normalization": ({"ran": normalization.ran,
+                           "quotes": normalization.quotes,
+                           "spaces": normalization.spaces,
+                           "paragraphs": normalization.paragraphs,
+                           "left_straight": normalization.ambiguous}
+                          if normalization is not None else None),
+        "audit": ({"ran": audit.ran, "passed": audit.passed,
+                   "checked": audit.checked,
+                   "mismatches": [m.para_id for m in audit.mismatches],
+                   "missing": list(audit.missing)}
+                  if audit is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
                         "lexicon": list(spell.lexicon),
@@ -91,7 +103,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
 def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
-                     fmt=None, sweeps=None, spell=None) -> None:
+                     fmt=None, sweeps=None, spell=None, normalization=None,
+                     audit=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -124,6 +137,46 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     if by_type:
         L.append("Applied changes by error type: " +
                  ", ".join(f"{k} {v}" for k, v in by_type.items()) + "\n")
+
+    if normalization is not None and normalization.ran and normalization.total:
+        L.append("## Applied without tracked changes\n")
+        L.append(f"House style allows exactly two edits outside the "
+                 f"tracked-changes system, because neither changes what the "
+                 f"book says: **{normalization.quotes} straight quote(s) "
+                 f"curled** and **{normalization.spaces} run(s) of spaces "
+                 f"collapsed**, across {normalization.paragraphs} paragraph(s). "
+                 f"These are not in the change list below and cannot be "
+                 f"rejected in Word.\n")
+        if normalization.ambiguous:
+            L.append(f"{normalization.ambiguous} straight mark(s) were **left "
+                     f"alone** because the text does not settle which way they "
+                     f"curl — usually a single quote that could be a nested "
+                     f"quotation or a dialect elision. Curling one the wrong "
+                     f"way would ship silently, so they are left for a human "
+                     f"to set.\n")
+
+    if audit is not None and audit.ran:
+        L.append("## Reject-all audit\n")
+        if audit.passed:
+            L.append(f"**Passed.** Rejecting every tracked change reproduces "
+                     f"all {audit.checked} ingested paragraph(s) exactly, so "
+                     f"nothing reached the manuscript without a revision mark "
+                     f"around it. The two normalizations above are applied "
+                     f"before this baseline is taken and are counted "
+                     f"separately.\n")
+        else:
+            L.append(f"**FAILED.** {audit.summary()}.\n")
+            if cfg.audit == "strict":
+                L.append("**No reviewed document was written.** Something "
+                         "changed the manuscript without wrapping it in a "
+                         "tracked change, so accepting or rejecting the "
+                         "revisions would not return the author's text. This "
+                         "file and `findings.json` are the diagnosis; ignore "
+                         "the instructions at the end of this report.\n")
+            for m in audit.mismatches[:10]:
+                L.append(f"```\n{m.describe()}\n```\n")
+            for para_id in audit.missing[:10]:
+                L.append(f"- `{para_id}` is missing from the output entirely\n")
 
     rows = scripted_check_rows(sweeps, findings, applied_ids)
     if rows:
