@@ -162,7 +162,20 @@ blemish a proofreader will catch.
 **Done when:** the audit passes on real runs, and a deliberately injected
 untracked edit makes it fail.
 
-## Phase 4 — Two channels and the team's deliverables
+## Phase 4 — Two channels and the team's deliverables — **done**
+
+Shipped as the query channel (`channel: query` on an error type, plus
+below-gate findings), `docproof/changelog.py`, and the house filenames on
+`DocumentFormat`. See `docs/deliverables.md`.
+
+Building it surfaced a bug in Phases 2–3 that had nothing to do with Phase 4.
+`min_paragraph_chars` was dropping short paragraphs at *ingest*, so the sweeps
+never saw them — and in fiction a short paragraph is a line of dialogue, which
+is exactly where a stray `?!` or a mispunctuated tag lives. Every sweep's "zero
+remaining" therefore meant "zero remaining in the long paragraphs". Paragraphs
+now carry a `reviewable` flag: the sweeps read all of them and only the model
+passes skip the short ones, so the cost is unchanged and the count is true.
+
 
 1. **Comment-only queries.** Findings below `min_confidence`, and flag-only
    types like `speaker_change`, become Word comments anchored to their text

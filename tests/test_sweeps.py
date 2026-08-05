@@ -267,6 +267,40 @@ def test_a_repeated_sentence_anchors_by_occurrence():
     assert len({f.anchor.start for f in validated}) == 3
 
 
+def test_sweeps_reach_paragraphs_too_short_for_a_model_pass(tmp_path):
+    """A paragraph under min_paragraph_chars costs too much to send to a model
+    and rarely holds a grammar error — but in fiction it is usually a line of
+    dialogue, which is exactly where a stray "?!" or a mispunctuated tag
+    lives. If the sweeps could not see those, every "zero remaining" would
+    quietly mean "zero remaining in the long paragraphs"."""
+    import docx
+    from docproof.config import load_config
+    from docproof.models import Usage
+    from docproof.pipeline import finish, prepare
+    from docproof.reassembler import paragraph_view_text
+    from docproof.utils.xml_helpers import DocxPackage, walk_package
+
+    d = docx.Document()
+    for t in ['"Stop!!"', "He waited...",
+              "A paragraph comfortably over the minimum length, for contrast."]:
+        d.add_paragraph(t)
+    src = tmp_path / "s.docx"
+    d.save(src)
+
+    cfg = load_config("config/default.yaml")
+    prepared = prepare(cfg, src, "config/error_types")
+    # The model still only pays for the long one.
+    assert sum(len(c.paragraphs) for c in prepared.chunks) == 1
+    assert len(prepared.doc.paragraphs) == 3
+
+    out = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "out",
+                 source_path=src)
+    accepted = [paragraph_view_text(wp.element, "accept")
+                for wp in walk_package(DocxPackage(out.reviewed_path))]
+    assert "“Stop!”" in accepted
+    assert any("He waited …" == t for t in accepted)
+
+
 def test_sweep_findings_use_their_own_id_series():
     """`s-` not `f-`: the model's findings are numbered independently, and a
     collision would make two different edits look like one."""

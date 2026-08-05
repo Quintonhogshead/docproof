@@ -16,6 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
+from docproof.formats.base import DocumentFormat
 from docproof.prep.convert import CONVERTIBLE
 
 from .drive import DriveFile, GOOGLE_DOC_MIME
@@ -31,6 +32,13 @@ MANUSCRIPT_SUFFIXES = (".docx",) + CONVERTIBLE
 # manuscript is the one mistake here that costs money.
 OUTPUT_PREFIXES = ("tagged_", "tracked_", "reviewed_", "prep_notes",
                    "prep_failed")
+
+# Review outputs are named by suffix rather than prefix, because that is what
+# the press hands to an author: "<book> - Pre-Proofread.docx" sorts next to the
+# book. Taken from the format so the two cannot drift.
+OUTPUT_STEM_SUFFIXES = tuple(
+    s.lower() for s in (DocumentFormat.REVIEWED_SUFFIX,
+                        DocumentFormat.CHANGE_LOG_SUFFIX))
 
 # Written by the watcher onto the files it touches.
 STATE_PROP = "docproof.state"
@@ -75,7 +83,9 @@ def classify(file: DriveFile) -> Stage:
 
 
 def _looks_like_output(name: str) -> bool:
-    return name.lower().startswith(OUTPUT_PREFIXES)
+    lowered = name.lower()
+    return (lowered.startswith(OUTPUT_PREFIXES)
+            or Path(lowered).stem.endswith(OUTPUT_STEM_SUFFIXES))
 
 
 def _is_manuscript(name: str) -> bool:

@@ -26,6 +26,10 @@ def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
             cur, cur_tokens = [], 0
 
     for p in doc.paragraphs:
+        # Short paragraphs are ingested so the sweeps can reach them, but a
+        # model pass over a two-word line is not worth the request.
+        if not p.reviewable:
+            continue
         t = estimate_tokens(p.text)
         if t > budget:                       # oversized paragraph: its own chunk(s)
             flush()
@@ -39,7 +43,8 @@ def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
         cur_tokens += t
     flush()
 
-    log.info("Packed %d paragraphs into %d chunks (budget %d tokens)",
+    log.info("Packed %d of %d paragraphs into %d chunks (budget %d tokens)",
+             sum(1 for p in doc.paragraphs if p.reviewable),
              len(doc.paragraphs), len(chunks), budget)
     return tuple(chunks)
 

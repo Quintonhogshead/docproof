@@ -19,6 +19,7 @@ from .config import Config
 from .error_registry import ErrorType, load_error_types
 from .formats import DocumentFormat, get_format
 from .audit import AuditReport, enforce, run_audit
+from .changelog import write_change_log
 from .models import Chunk, DocumentModel, Usage
 from .normalize import NormalizationReport
 from .providers import Provider
@@ -53,6 +54,14 @@ class Prepared:
     baseline: dict = field(default_factory=dict)
 
     @property
+    def query_types(self) -> frozenset[str]:
+        """Error types that ask rather than correct, taken from the types this
+        run actually loaded — so an override that changes a type's channel is
+        honoured without anything else needing to know."""
+        return frozenset(et.key for group in self.groups for et in group
+                         if et.is_query)
+
+    @property
     def vocabulary(self) -> str:
         """The manuscript's own vocabulary, as a system-prompt section."""
         return self.spell.prompt_section()
@@ -77,6 +86,7 @@ class Outputs:
     findings_json: Path
     applied: int
     findings: int
+    change_log: Path | None = None
 
 
 def content_hash(doc: DocumentModel) -> str:
@@ -150,8 +160,15 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     # still only touch paragraphs the run actually covers: a selected-sections
     # run must not edit the rest of the manuscript.
     covered = {p.para_id for c in chunks for p in c.paragraphs}
-    sweep_findings, sweep_reports = run_sweeps(
-        [p for p in doc.paragraphs if p.para_id in covered], cfg.sweeps)
+    whole = selection is None and not max_chunks
+    swept = [p for p in doc.paragraphs
+             # On a whole-document run the sweeps also reach the paragraphs
+             # too short for a model pass — in fiction those are lines of
+             # dialogue, and a "?!" or a mispunctuated tag is exactly what
+             # lives there. A partial run stays inside its selection, because
+             # editing the rest of the book is not what was asked for.
+             if p.para_id in covered or (whole and not p.reviewable)]
+    sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps)
 
     # The spell scan reads the WHOLE document even when the run covers a few
     # sections. It changes nothing, so reading more costs nothing — and a
@@ -250,7 +267,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # claim a span the right to it, and a scripted rule is more certain than
     # anything the model reports about the same characters.
     validated = validate_findings(list(prepared.sweep_findings) + list(findings),
-                                  prepared.doc, cfg.min_confidence)
+                                  prepared.doc, cfg.min_confidence,
+                                  query_types=prepared.query_types)
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
@@ -275,8 +293,18 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report)
+    change_log = None
+    if cfg.change_log:
+        change_log = out / fmt.change_log_name(source_path)
+        write_change_log(change_log, doc=prepared.doc, findings=validated,
+                         cfg=cfg, applied_ids=stats.applied,
+                         sweeps=prepared.sweep_reports, spell=prepared.spell,
+                         normalization=prepared.normalization,
+                         audit=audit_report, usage=usage, stats=stats)
+
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
-                   applied=len(stats.applied), findings=len(validated))
+                   applied=len(stats.applied), findings=len(validated),
+                   change_log=change_log)

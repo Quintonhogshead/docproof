@@ -39,8 +39,21 @@ class DocumentFormat:
     normalize: Callable | None = None
     snapshot: Callable | None = None
 
+    # What the press appends to a manuscript it has proofread. The name is the
+    # deliverable's identity — the team hands "<book> - Pre-Proofread.docx" to
+    # an author — so it lives here rather than in whoever happens to save the
+    # file. Anything that has to recognise docproof's own output matches on
+    # these (see app/watch/stages.py).
+    REVIEWED_SUFFIX = " - Pre-Proofread"
+    CHANGE_LOG_SUFFIX = " - Pre-Proofread Change Log"
+
     def reviewed_name(self, source_path: str | Path) -> str:
-        return f"reviewed_{Path(source_path).stem}{self.suffix}"
+        return f"{Path(source_path).stem}{self.REVIEWED_SUFFIX}{self.suffix}"
+
+    def change_log_name(self, source_path: str | Path) -> str:
+        """Always .docx: the change log is prose the press reads, whatever
+        format the manuscript arrived in."""
+        return f"{Path(source_path).stem}{self.CHANGE_LOG_SUFFIX}.docx"
 
     def to_api(self) -> dict:
         """The subset the frontend needs to label a file and tell the user

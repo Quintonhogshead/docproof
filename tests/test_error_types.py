@@ -59,8 +59,16 @@ def test_every_calibration_example_survives_the_validator():
                             occurrence) != -1, f"{where}: quote does not anchor"
             _, deleted, inserted = shrink(finding["original_text"],
                                           finding["corrected_text"])
-            assert deleted or inserted, (
-                f"{where}: corrected_text is identical to original_text")
+            if et.is_query:
+                # A query type's examples must be the other way round: it asks
+                # and never edits, so an example that changed the text would
+                # teach it to do the one thing it must not.
+                assert not deleted and not inserted, (
+                    f"{where}: a query type's corrected_text must repeat "
+                    f"original_text unchanged")
+            else:
+                assert deleted or inserted, (
+                    f"{where}: corrected_text is identical to original_text")
 
 
 def test_default_config_enables_existing_types():

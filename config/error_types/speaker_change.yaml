@@ -1,0 +1,74 @@
+key: speaker_change
+name: Two speakers in one paragraph
+version: 1
+# Asks, never corrects. The house brief is explicit: flag it, do not
+# restructure. Where a speaker's line belongs is the author's decision, and a
+# paragraph break is not a punctuation fix.
+channel: query
+
+detection_prompt: |
+  Convention gives each speaker their own paragraph. When two people's spoken
+  lines share one, a reader loses track of who is talking — and the fix is a
+  paragraph break, which is the author's to make, not yours.
+
+  FLAG, as a question:
+  - Two closing-and-opening quote pairs with no narration between them:
+    "“I won't go.” “You will.”" — two people, one paragraph.
+  - A paragraph whose dialogue tags change subject: one line tagged "I said"
+    and another tagged "he said", or two different named speakers tagged in
+    the same paragraph.
+  - A reply that plainly answers the line before it, inside the same
+    paragraph, with nothing but a comma or a dash between them.
+
+  Do NOT flag — the distinction that matters here is between a second SPEAKER
+  and a second PERSON:
+  - One speaker's dialogue with another character's silent reaction narrated
+    between the lines: "“I won't go.” She looked at the floor. “You can't make
+    me.”" That is one speaker and one listener, correctly set.
+  - A speaker quoting someone else inside their own line: "“He told me ‘go
+    home’ and hung up,” she said." One speaker throughout.
+  - Interrupted or resumed speech by the same person, however it is broken up.
+  - Multi-paragraph speech by one character, where the opening quote repeats
+    and the closing one does not.
+  - Narration that describes speech without quoting it: "They argued about
+    the money until midnight."
+  - A crowd, a chorus, or an unattributed line the author clearly means to
+    float: "“Fire!” someone shouted, and then everyone was shouting."
+  - Any paragraph where you are guessing. A wrong query costs a moment of the
+    author's attention; a wrong edit costs their trust. When it is genuinely
+    ambiguous, ask — but say in the explanation that it is ambiguous.
+
+fix_guidance: |
+  This type never edits. Set corrected_text to the sentence exactly as it
+  appears — repeat original_text unchanged — and put the question in
+  explanation, phrased for the author: name the two speakers you think you see
+  and ask whether the second line wants its own paragraph. Never write a
+  corrected version with a paragraph break in it; there is no way to express
+  one here, and it is not yours to make.
+
+confidence_guidance: |
+  Every finding of this type becomes a comment, whatever its confidence, so
+  confidence describes how sure you are rather than gating anything.
+  high   — two tagged speakers, or two quoted lines with nothing between them.
+  medium — the second line reads as a reply but the attribution is implied.
+  low    — it may well be one speaker and a narrated reaction; say so.
+
+examples:
+  - text: "“I won't go.” “You will, and you'll thank me.”"
+    finding:
+      original_text: "“I won't go.” “You will, and you'll thank me.”"
+      corrected_text: "“I won't go.” “You will, and you'll thank me.”"
+      explanation: "Two speakers share this paragraph — should the reply start a new one?"
+      confidence: high
+  - text: "“I won't go.” She looked at the floor. “You can't make me.”"
+    finding: null
+  - text: "“He told me ‘go home’ and hung up,” she said."
+    finding: null
+  - text: "I said we should wait, and he said we'd already waited long enough."
+    finding: null
+  - text: "“Where were you?” I asked, and “None of your business,” he said."
+    finding:
+      original_text: "“Where were you?” I asked, and “None of your business,” he said."
+      corrected_text: "“Where were you?” I asked, and “None of your business,” he said."
+      explanation: "Two tagged speakers in one paragraph — does the reply want its own?"
+      confidence: high

@@ -78,8 +78,10 @@ error_types:
   - [serial_comma, complex_list_semicolon, introductory_comma,
      direct_address_comma, tag_question_comma]
   # dialogue mechanics — the highest-volume error class in fiction, and the
-  # one with the most detailed rule table, so it gets a pass to itself
-  - dialogue_tag
+  # one with the most detailed rule table. speaker_change rides along because
+  # it reads the same paragraphs for the same reason, and asks rather than
+  # corrects.
+  - [dialogue_tag, speaker_change]
   # house mechanics — numbers, money, hyphenation
   - [number_style, currency_style, ly_adverb_hyphen]
   # sentence grammar — needs parsing, still decidable
@@ -107,4 +109,15 @@ tracked_changes_policy: abort   # abort | accept_all_first | ignore
 audit: strict               # strict | warn | off
 output_dir: output
 comments: true              # margin comment on every tracked change
+# Two channels, never blurred: a tracked change is a correction the author
+# accepts or rejects, a comment is a question that edits nothing. Query-only
+# error types always land as comments; this decides whether findings below
+# min_confidence join them in the manuscript, or stay in summary.md where only
+# an editor sees them.
+query_comments: true
+
+# The second deliverable: a Word change log for the author, naming every
+# correction and reason, the scripted-check counts, the queries, what was
+# deliberately left alone, and what this pass did not reach.
+change_log: true
 revision_author: Atmosphere Press Proofreader

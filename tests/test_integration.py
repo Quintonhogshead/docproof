@@ -21,7 +21,7 @@ def test_end_to_end_mock(tmp_path):
     rc = main(["review", str(FIXTURES / "simple.docx"),
                "--mock-findings", str(mocks), "--out", str(tmp_path)])
     assert rc == 0
-    for name in ("reviewed_simple.docx", "summary.md",
+    for name in ("simple - Pre-Proofread.docx", "summary.md",
                  "findings.json", "run.log"):
         assert (tmp_path / name).exists(), name
 
@@ -29,7 +29,7 @@ def test_end_to_end_mock(tmp_path):
     by_status = {f["status"] for f in data["findings"]}
     assert {"validated", "rejected_no_anchor"} <= by_status
 
-    pkg = DocxPackage(tmp_path / "reviewed_simple.docx")
+    pkg = DocxPackage(tmp_path / "simple - Pre-Proofread.docx")
     p = {wp.para_id: wp.element for wp in walk_package(pkg)}["body-0000"]
     assert paragraph_view_text(p, "reject") == SPLICE_A      # fidelity
     assert ";" in paragraph_view_text(p, "accept")

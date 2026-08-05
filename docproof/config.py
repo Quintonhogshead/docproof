@@ -121,6 +121,15 @@ class Config(BaseModel):
     audit: Literal["strict", "warn", "off"] = "strict"
     output_dir: str = "output"
     comments: bool = True
+    # The other half of the two-channel model: findings that ask rather than
+    # correct become margin comments with no revision around them. Query-only
+    # error types always do; this decides whether below-gate findings join
+    # them, or stay in summary.md where only an editor will see them.
+    query_comments: bool = True
+    # The Word change log the press hands to an author alongside the
+    # manuscript: what changed, what was only asked about, and — the part the
+    # house brief insists on — what this pass did not cover.
+    change_log: bool = True
     revision_author: str = "docproof"
     # Ask the model to justify each finding. The explanations become Word
     # margin comments, but they are also the bulk of the output tokens — and

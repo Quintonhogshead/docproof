@@ -108,7 +108,10 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
+    queries = [f for f in findings if f.status == "query"]
     rejected = [f for f in findings if f.status.startswith("rejected")]
+    in_margin = (f", and each is a margin {fmt.comment_noun} in the reviewed "
+                 f"file" if cfg.query_comments else "")
 
     L: list[str] = []
     L.append(f"# docproof review — {Path(doc.source_path).name}\n")
@@ -229,12 +232,29 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                          f"{f.confidence} confidence){detail}\n")
                 L.append(f"> {f.original_text}\n>\n> → {f.corrected_text}\n")
 
+    if queries:
+        L.append("## Queries — questions, not corrections\n")
+        L.append(f"{len(queries)} finding(s) from types that ask rather than "
+                 f"correct, because the answer is the author's to make — "
+                 f"where a line of dialogue belongs is not a punctuation fix. "
+                 f"Nothing here changed the document, and each is a margin "
+                 f"{fmt.comment_noun} in the reviewed file.\n"
+                 if cfg.query_comments else
+                 f"{len(queries)} finding(s) from types that ask rather than "
+                 f"correct. They appear here only — `query_comments` is off, "
+                 f"so they were not written into the manuscript.\n")
+        for f in queries:
+            L.append(f"- **{f.para_id}** ({f.error_type}): "
+                     f"{f.original_text!r} — {f.explanation}")
+        L.append("")
+
     if low:
         L.append("## Possibly intentional — for your judgment\n")
-        L.append("These anchored cleanly but sat below the confidence gate. In "
-                 "fiction that usually means the model read the passage as "
-                 "deliberate: dialogue rhythm, dialect, voice, a name that only "
-                 "looks misspelled. Nothing was changed in the document.\n")
+        L.append(f"These anchored cleanly but sat below the confidence gate. "
+                 f"In fiction that usually means the model read the passage as "
+                 f"deliberate: dialogue rhythm, dialect, voice, a name that "
+                 f"only looks misspelled. Nothing was changed in the "
+                 f"document{in_margin}.\n")
         for f in low:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")

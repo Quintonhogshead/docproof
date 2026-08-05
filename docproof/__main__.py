@@ -213,9 +213,10 @@ def cmd_review(args) -> int:
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=args.input)
     print(f"\n{outputs.applied} tracked change(s) applied.")
-    for p in (outputs.reviewed_path, outputs.summary_md, outputs.findings_json,
-              out / "run.log"):
-        print(f"  {p}")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json, out / "run.log"):
+        if p is not None:
+            print(f"  {p}")
     return 0
 
 
@@ -284,8 +285,10 @@ def cmd_collect(args) -> int:
         return 2
 
     print(f"\n{outputs.applied} tracked change(s) applied.")
-    for p in (outputs.reviewed_path, outputs.summary_md, outputs.findings_json):
-        print(f"  {p}")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json):
+        if p is not None:
+            print(f"  {p}")
     return 0
 
 

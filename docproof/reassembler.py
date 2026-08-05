@@ -23,6 +23,8 @@ log = logging.getLogger("docproof.reassembler")
 class ReassemblyStats:
     applied: tuple[str, ...]   # finding_ids written into the document
     skipped: tuple[str, ...]   # finding_ids refused by defense-in-depth checks
+    queried: tuple[str, ...] = ()    # finding_ids written as comments only
+    unplaced: tuple[str, ...] = ()   # queries with nowhere to hang a comment
 
 
 # --- offset map and run splitting --------------------------------------------
@@ -251,6 +253,24 @@ class _Comments:
                          {"Id": f"rId{n}", "Type": _REL_COMMENTS,
                           "Target": "comments.xml"})
 
+    def attach_to_span(self, p, start: int, end: int, text: str) -> bool:
+        """Anchor a comment to a range of the paragraph's text, with no
+        revision around it — the query channel: this asks, and changes
+        nothing.
+
+        Must run before any tracked change is applied to the paragraph, because
+        it works in canonical-text offsets and applying a deletion moves text
+        out of w:t. Splitting runs and inserting range markers does not shift
+        those offsets, so the edits that follow still land correctly."""
+        _ensure_boundary(p, start)
+        _ensure_boundary(p, end)
+        covered = [t for (t, s, e) in _text_spans(p)
+                   if s >= start and e <= end and e > s]
+        if not covered:
+            return False
+        self.attach(p, covered[0].getparent(), covered[-1].getparent(), text)
+        return True
+
     def attach(self, p, first_el, last_el, text: str) -> None:
         cid = str(next(self.ids))
         af, al = _p_level(first_el, p), _p_level(last_el, p)
@@ -290,11 +310,48 @@ def _next_rev_id(pkg: DocxPackage) -> int:
     return mx + 1
 
 
+def _query_span(f: Finding, para_text: str) -> tuple[int, int]:
+    """What a query's comment should highlight: the sentence it is asking
+    about, not the characters an edit would have touched.
+
+    A below-gate finding carries the shrunk anchor of the change that was not
+    made, which for a comma splice is one comma. A comment hanging off a
+    single comma tells the author nothing about what is being questioned."""
+    from .validator import find_nth
+    s = find_nth(para_text, f.original_text, f.occurrence)
+    if s == -1:                                  # cannot happen after the
+        return f.anchor.start, f.anchor.end      # validator, but cheap to keep
+    return s, s + len(f.original_text)
+
+
+def _query_text(f: Finding) -> str:
+    """What a query says in the margin. A question has to read as one — an
+    author who cannot tell a query from a correction has lost the distinction
+    the two channels exist to draw."""
+    if f.status == "query":
+        return f.explanation or f"{f.error_type.replace('_', ' ')}: worth a look."
+    kind = f.error_type.replace("_", " ")
+    parts = [f"Possibly {kind} — left as written, because it may be deliberate."]
+    if f.explanation:
+        parts.append(f.explanation)
+    if f.corrected_text and f.corrected_text != f.original_text:
+        parts.append(f"Suggested: {f.corrected_text}")
+    return " ".join(parts)
+
+
 def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                           findings: list[Finding], cfg: Config
                           ) -> ReassemblyStats:
     validated = [f for f in findings if f.status == "validated"]
-    if not validated:
+    # Two channels, never blurred: a correction the author accepts or rejects,
+    # and a question that edits nothing. Below-gate findings join the second —
+    # the model thought something was wrong but not confidently enough to
+    # touch it, which is exactly what a margin query is for.
+    wanted = {"query"}
+    if cfg.query_comments:
+        wanted.add("skipped_low_confidence")
+    queries = [f for f in findings if f.status in wanted and f.anchor]
+    if not validated and not queries:
         log.info("No validated findings; document untouched.")
         return ReassemblyStats((), ())
 
@@ -303,10 +360,12 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     ids = itertools.count(_next_rev_id(pkg))
     applied: list[str] = []
     skipped: list[str] = []
+    queried: list[str] = []
+    unplaced: list[str] = []
     comments: _Comments | None = None
 
     by_part: dict[str, list[Finding]] = {}
-    for f in validated:
+    for f in validated + queries:
         by_part.setdefault(paras[f.para_id].part, []).append(f)
 
     for part, fs in by_part.items():
@@ -333,7 +392,25 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 skipped += [f.finding_id for f in plist]
                 continue
 
-            for f in sorted(plist, key=lambda x: x.anchor.start, reverse=True):
+            # Queries go on first. They insert range markers rather than text,
+            # so the offsets the edits below rely on are unchanged — whereas
+            # applying a deletion first would move text out of w:t and leave
+            # every later offset pointing at the wrong place.
+            for f in sorted((x for x in plist if x.status != "validated"),
+                            key=lambda x: x.anchor.start):
+                if part != "word/document.xml":
+                    unplaced.append(f.finding_id)
+                    continue
+                if comments is None:
+                    comments = _Comments(pkg, cfg.revision_author, date)
+                lo, hi = _query_span(f, paras[para_id].text)
+                if comments.attach_to_span(p, lo, hi, _query_text(f)):
+                    queried.append(f.finding_id)
+                else:
+                    unplaced.append(f.finding_id)
+
+            for f in sorted((x for x in plist if x.status == "validated"),
+                            key=lambda x: x.anchor.start, reverse=True):
                 a = f.anchor
                 if paragraph_text(p)[a.start:a.end] != a.delete_text:
                     log.error("%s: anchor slice mismatch at apply time — "
@@ -351,4 +428,10 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
 
     log.info("Applied %d tracked change(s); %d skipped by safety checks.",
              len(applied), len(skipped))
-    return ReassemblyStats(tuple(applied), tuple(skipped))
+    if queried or unplaced:
+        log.info("Wrote %d margin quer%s, which change nothing%s.",
+                 len(queried), "y" if len(queried) == 1 else "ies",
+                 f"; {len(unplaced)} had nowhere to hang (Word keeps comments "
+                 f"in the body only)" if unplaced else "")
+    return ReassemblyStats(tuple(applied), tuple(skipped), tuple(queried),
+                           tuple(unplaced))
