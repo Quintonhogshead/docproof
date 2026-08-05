@@ -27,6 +27,7 @@ from .reporting import write_findings_json, write_summary_md
 from .spellscan import SpellScan, scan as spell_scan
 from .sweeps import SweepReport, run_sweeps
 from .validator import validate_findings
+from .variants import Variant, load_variant
 
 log = logging.getLogger("docproof.pipeline")
 
@@ -52,6 +53,12 @@ class Prepared:
     # the audit has to cover a heading the normalizer touched just as much as
     # a body paragraph the model edited.
     baseline: dict = field(default_factory=dict)
+    variant: Variant | None = None
+
+    @property
+    def conventions(self) -> str:
+        """The variant's rules, as a system-prompt section."""
+        return self.variant.prompt_section() if self.variant else ""
 
     @property
     def query_types(self) -> frozenset[str]:
@@ -116,6 +123,9 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     thing whether or not a subset was picked — that is what lets a batch job
     reproduce its own chunk list at collection time."""
     fmt = get_format(input_path)
+    variant = load_variant(cfg.variant)
+    log.info("Proofreading as %s (%s)", variant.name,
+             "; ".join(variant.authorities) or variant.dictionary)
     pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
 
     # The two silent edits happen here, before anything reads the text, so no
@@ -124,7 +134,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     norm = NormalizationReport()
     if fmt.normalize is not None:
         norm = fmt.normalize(pkg, quotes=cfg.normalize.quotes,
-                             spaces=cfg.normalize.spaces)
+                             spaces=cfg.normalize.spaces, variant=variant)
     elif cfg.normalize.quotes or cfg.normalize.spaces:
         log.info("%s files are not normalized; quotes and spacing are left as "
                  "the author's application wrote them.", fmt.suffix)
@@ -168,7 +178,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
              # lives there. A partial run stays inside its selection, because
              # editing the rest of the book is not what was asked for.
              if p.para_id in covered or (whole and not p.reviewable)]
-    sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps)
+    sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps, variant)
 
     # The spell scan reads the WHOLE document even when the run covers a few
     # sections. It changes nothing, so reading more costs nothing — and a
@@ -179,10 +189,13 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                        min_occurrences=cfg.spellcheck.min_occurrences,
                        suggestion_limit=cfg.spellcheck.suggestion_limit,
                        allowlist=cfg.spellcheck.allowlist,
-                       dictionary=cfg.spellcheck.dictionary)
+                       # An explicit dictionary wins; otherwise the variant
+                       # picks one, which is the whole point of stating it.
+                       dictionary=cfg.spellcheck.dictionary or variant.dictionary)
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
-                    spell=spell, normalization=norm, baseline=baseline)
+                    spell=spell, normalization=norm, baseline=baseline,
+                    variant=variant)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -207,8 +220,9 @@ def chunk_outline(prepared: Prepared) -> list[dict]:
 def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     provider: Provider | None,
                     finding_ids: itertools.count,
-                    vocabulary: str = "") -> list[Analyzer]:
-    return [Analyzer(cfg, group, provider, finding_ids, vocabulary)
+                    vocabulary: str = "",
+                    conventions: str = "") -> list[Analyzer]:
+    return [Analyzer(cfg, group, provider, finding_ids, vocabulary, conventions)
             for group in groups]
 
 
@@ -236,7 +250,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
     done = 0
     for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
                                                  provider, ids,
-                                                 prepared.vocabulary)):
+                                                 prepared.vocabulary,
+                                                 prepared.conventions)):
         for chunk in prepared.chunks:
             key = custom_id(i, chunk.chunk_id)
             cached = checkpoint.get(key) if checkpoint else None
@@ -300,7 +315,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          cfg=cfg, applied_ids=stats.applied,
                          sweeps=prepared.sweep_reports, spell=prepared.spell,
                          normalization=prepared.normalization,
-                         audit=audit_report, usage=usage, stats=stats)
+                         audit=audit_report, usage=usage, stats=stats,
+                         variant=prepared.variant)
 
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)

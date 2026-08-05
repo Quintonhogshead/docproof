@@ -128,7 +128,8 @@ def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
 
 def build_system_prompt(types: Sequence[ErrorType], *,
                         explanations: bool = True,
-                        vocabulary: str = "") -> str:
+                        vocabulary: str = "",
+                        conventions: str = "") -> str:
     parts = [base_rules(explanations=explanations)]
     if len(types) > 1:
         index = "\n".join(f"- {et.key}: {et.name}" for et in types)
@@ -137,6 +138,11 @@ def build_system_prompt(types: Sequence[ErrorType], *,
             f"against all of them:\n{index}\n\nEach type is defined in its own "
             f"section below. A section's do-not-flag list applies only to that "
             f"section — it never licenses ignoring a different type's error.")
+    if conventions:
+        # Before the vocabulary and before the type sections: a rule that
+        # differs by variant has to be settled before the model reads a type
+        # that states one of them, and the section says so itself.
+        parts.append(conventions)
     if vocabulary:
         # Document-specific, but identical for every chunk of this document,
         # so it caches with the rest of the system prompt and is billed once.
@@ -164,7 +170,7 @@ class Analyzer:
 
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
                  provider: Provider, finding_ids: itertools.count,
-                 vocabulary: str = ""):
+                 vocabulary: str = "", conventions: str = ""):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
@@ -176,7 +182,8 @@ class Analyzer:
         explanations = cfg.report_explanations
         self.system_prompt = build_system_prompt(self.types,
                                                  explanations=explanations,
-                                                 vocabulary=vocabulary)
+                                                 vocabulary=vocabulary,
+                                                 conventions=conventions)
         self.output_model = build_output_model(self.keys,
                                                explanations=explanations)
         self.schema = strict_json_schema(self.output_model)

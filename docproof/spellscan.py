@@ -58,6 +58,7 @@ class SpellScan:
     unique: int = 0
     unknown: int = 0
     available: bool = True               # False when no dictionary was loadable
+    dictionary: str = ""                 # which set actually answered
 
     def prompt_section(self) -> str:
         """The document vocabulary, as the model should read it. Empty when
@@ -90,13 +91,17 @@ class SpellScan:
         return "\n\n".join(parts)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _dictionary(name: str):
-    """The bundled Hunspell dictionary, or None if spylls is not installed.
+    """A Hunspell dictionary by name or path, or None if none can be loaded.
 
     Offline on purpose: the tests must not reach the network and the watcher
     runs unattended, so a dictionary that needs downloading is no dictionary
-    at all."""
+    at all. Only `en_US` ships with spylls, so a U.K., Canadian or Australian
+    run needs the press to supply its own .aff/.dic pair and point
+    `spellcheck.dictionary` at it. Rather than quietly checking British
+    spelling against an American word list — which would file *colour* and
+    *organise* as unknown words — the scan declines to run and says why."""
     try:
         import spylls
         from spylls.hunspell import Dictionary
@@ -105,13 +110,24 @@ def _dictionary(name: str):
                     "The model passes still run; they simply do not get the "
                     "manuscript's own vocabulary as a do-not-flag list.")
         return None
-    path = Path(spylls.__file__).parent / "hunspell" / "data" / "en" / name
-    try:
-        return Dictionary.from_files(str(path))
-    except Exception as e:                       # a missing or broken data file
-        log.warning("Could not load the %s dictionary (%s); skipping the "
-                    "spell scan.", name, e)
-        return None
+
+    candidate = Path(name)
+    if candidate.parent != Path("."):            # an explicit path
+        paths = [candidate]
+    else:
+        paths = [Path(spylls.__file__).parent / "hunspell" / "data" / "en" / name]
+    for path in paths:
+        try:
+            return Dictionary.from_files(str(path))
+        except Exception:                        # missing or broken data files
+            continue
+    log.warning(
+        "No %s dictionary available, so the spell scan is skipped for this "
+        "run. spylls ships en_US only; put an .aff/.dic pair somewhere and "
+        "set spellcheck.dictionary to its path (without the extension) to "
+        "scan this variant. Checking it against en_US instead would file "
+        "every correct non-U.S. spelling as an unknown word.", name)
+    return None
 
 
 def _sentence_initial(text: str, pos: int) -> bool:
@@ -144,7 +160,7 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
         return SpellScan(available=False)
     dic = _dictionary(dictionary)
     if dic is None:
-        return SpellScan(available=False)
+        return SpellScan(available=False, dictionary=dictionary)
 
     allowed = {w.lower() for w in allowlist}
     seen: dict[str, _Seen] = {}
@@ -197,7 +213,8 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
 
     result = SpellScan(lexicon=tuple(lexicon), candidates=tuple(candidates),
                        tokens=tokens, unique=len(seen),
-                       unknown=len(lexicon) + len(candidates))
+                       unknown=len(lexicon) + len(candidates),
+                       dictionary=dictionary)
     log.info("Spell scan: %d tokens, %d unique, %d unknown → %d protected as "
              "the author's own, %d to look at", result.tokens, result.unique,
              result.unknown, len(result.lexicon), len(result.candidates))

@@ -51,7 +51,12 @@ normalize:
 # package; without it the scan is skipped and the passes run as before.
 spellcheck:
   enabled: true
-  dictionary: en_US         # the bundled Hunspell set; variants arrive with Phase 5
+  # Unset means "whatever `variant` asks for", which is almost always right.
+  # spylls bundles en_US only, so a uk/ca/au run has no dictionary unless you
+  # point this at an .aff/.dic pair of your own (a path, without the
+  # extension). Checking British spelling against a U.S. word list would file
+  # every correct "colour" as unknown, so the scan declines instead.
+  dictionary:
   min_occurrences: 2        # seen this often → a coined term, not a typo
   suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
   allowlist: []             # always correct for this house, whatever the dictionary says
@@ -62,6 +67,15 @@ spellcheck:
 pricing:
   input_per_mtok: null
   output_per_mtok: null
+
+# Which English this manuscript is written in: us | uk | ca | au. It flips the
+# conventions that differ by variant — which mark opens dialogue, decade
+# apostrophes, percent vs per cent, date and time formats, the that/which rule
+# — and picks the spell-scan dictionary. Stated, never inferred: guessing and
+# then applying the guess silently is how a U.K. book comes back Americanized.
+# Canadian and Australian are hybrids, so their change logs ask the press to
+# confirm. See config/variants/ and docs/variants.md.
+variant: us
 
 min_confidence: medium      # low | medium | high — gate for applying changes
 

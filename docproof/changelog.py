@@ -28,20 +28,28 @@ log = logging.getLogger("docproof.changelog")
 _MAX_TABLE_ROWS = 600
 
 
-def _style_basis(cfg) -> list[str]:
-    return [
-        "Chicago Manual of Style, 17th edition, with Merriam-Webster spellings.",
-        "The Atmosphere Press House Style Guide, which overrides Chicago where "
-        "the two differ: serial comma always, spelled-out numbers to one "
-        "hundred, spelled-out centuries, unspaced em dashes, and the ellipsis "
-        "character with a non-breaking space before it.",
-        "English variant: treated as U.S. English. Variant selection is not "
-        "yet configurable, so if this manuscript is U.K., Canadian or "
-        "Australian, the conventions that differ by variant — quotation-mark "
-        "nesting, date and time formats, decade apostrophes, percent versus "
-        "per cent, and the that/which rule — were applied in their U.S. form. "
-        "Please confirm the variant before this pass is treated as final.",
-    ]
+def _style_basis(cfg, variant) -> list[str]:
+    lines = [f"This manuscript was proofread as {variant.name}."]
+    lines += list(variant.authorities)
+    lines.append(
+        "The Atmosphere Press House Style Guide applies throughout, and "
+        "overrides the above where they differ: serial comma always, "
+        "spelled-out numbers to one hundred, spelled-out centuries, unspaced "
+        "em dashes, and the ellipsis character with a non-breaking space "
+        "before it.")
+    if variant.confirm:
+        # The brief asks for this by name. Canadian and Australian English are
+        # hybrids — Canadian takes U.S. punctuation with Canadian spelling —
+        # so the choice is a judgment the press should ratify, not an
+        # assumption buried in a config file.
+        lines.append(
+            f"{variant.name} is a hybrid of conventions, so please confirm "
+            f"this was the right choice before treating the pass as final. "
+            f"If the manuscript is meant to be a different variant, the rules "
+            f"that differ — quotation-mark nesting, date and time formats, "
+            f"decade apostrophes, percent versus per cent, and the that/which "
+            f"distinction — were applied in the wrong form throughout.")
+    return lines
 
 
 def _covered_locations(doc) -> set[str]:
@@ -81,11 +89,12 @@ def _limits(cfg, doc, findings, spell) -> list[str]:
         "questions with no answer attached.",
     ]
     if spell is not None and not spell.available:
+        which = f" ({spell.dictionary} is not installed)" if spell.dictionary else ""
         lines.append(
-            "The dictionary scan did not run for this pass, so the model was "
-            "not given this manuscript's own vocabulary as a do-not-flag "
-            "list. Invented names may be flagged as misspellings more often "
-            "than they otherwise would be.")
+            f"The dictionary scan did not run for this pass{which}, so the "
+            f"model was not given this manuscript's own vocabulary as a "
+            f"do-not-flag list. Invented names and place names may be flagged "
+            f"as misspellings more often than they otherwise would be.")
     if cfg.min_confidence != "low":
         lines.append(
             f"Only findings of {cfg.min_confidence} confidence or better were "
@@ -104,7 +113,8 @@ def _reason(f: Finding) -> str:
 
 def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                      applied_ids, sweeps=None, spell=None, normalization=None,
-                     audit=None, usage=None, stats=None) -> None:
+                     audit=None, usage=None, stats=None,
+                     variant=None) -> None:
     """Write the change log. Imports python-docx lazily so that a run which
     does not want one never pays for the import."""
     import docx
@@ -145,7 +155,7 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
 
     # --- style basis ---------------------------------------------------------
     d.add_heading("Style basis", level=1)
-    for line in _style_basis(cfg):
+    for line in _style_basis(cfg, variant):
         d.add_paragraph(line, style="List Bullet")
 
     # --- corrections ---------------------------------------------------------

@@ -178,7 +178,8 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
 def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
     """The system prompt each pass will send, keyed by the pass label."""
     analyzers = build_analyzers(cfg, prepared.groups, None,
-                                itertools.count(1), prepared.vocabulary)
+                                itertools.count(1), prepared.vocabulary,
+                                prepared.conventions)
     return {a.label: a.system_prompt for a in analyzers}
 
 
@@ -188,7 +189,8 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
     from .analyzer import render_chunk
 
     analyzers = build_analyzers(cfg, prepared.groups, None,
-                                itertools.count(1), prepared.vocabulary)
+                                itertools.count(1), prepared.vocabulary,
+                                prepared.conventions)
     return [
         BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
                      system=analyzer.system_prompt,
@@ -254,7 +256,7 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict) -> tuple[list, Usa
     ids = itertools.count(1)
     usage = Usage()
     analyzers = build_analyzers(cfg, prepared.groups, None, ids,
-                                prepared.vocabulary)
+                                prepared.vocabulary, prepared.conventions)
     findings: list = []
     missing = 0
 

@@ -1,0 +1,27 @@
+key: ca
+name: Canadian English
+dictionary: en_CA
+primary_quote: double
+confirm: true
+authorities:
+  - The Chicago Manual of Style, 17th edition, for punctuation and grammar
+  - The Canadian Oxford Dictionary, for spelling
+  - The Atmosphere Press House Style Guide, for everything not variant-specific
+
+conventions: |
+  Canadian English is a hybrid, and mixing the halves is the usual way to get
+  it wrong: U.S.-style punctuation with Canadian spelling.
+
+  Quotation marks: double (“…”) for primary dialogue, single (‘…’) nested —
+  the U.S. pattern.
+  Short-work titles: double quotes.
+  Times: 8:30 a.m. / 5:00 p.m. — the U.S. pattern.
+  Dates: July 14, 1989 — the U.S. pattern.
+  Decades: ’60s — apostrophe before, as in U.S. usage.
+  That / which: the Chicago distinction, as in U.S. usage.
+  Percent: one word, "percent".
+  Punctuation with quotation marks: INSIDE the closing quote, as in U.S. usage.
+  Spelling: the Canadian Oxford Dictionary — colour, centre, labour, defence,
+  travelled. But abbreviations keep their periods as in U.S. usage: Mr., Dr.,
+  St. Do not "correct" a Canadian spelling to its U.S. form, and do not carry
+  U.K. punctuation across with the U.K.-looking spellings.

@@ -1,0 +1,33 @@
+key: uk
+name: U.K. English
+dictionary: en_GB
+primary_quote: single
+authorities:
+  - The Oxford Style Manual, including the Oxford Guide to Style
+  - The Oxford Dictionary for Writers and Editors, for spelling
+  - The Atmosphere Press House Style Guide, for everything not variant-specific
+
+conventions: |
+  Quotation marks: single (‘…’) for primary dialogue, double (“…”) for a
+  quotation nested inside one. This is the reverse of the U.S. convention, and
+  it is the one most often got wrong — a line of dialogue opening with a
+  double quote in a U.K. manuscript is the error, not the single quote.
+  Short-work titles: single quotes — ‘The Tell-Tale Heart’, ‘Hey Jude’.
+  Times: 8.30 am / 5.00 pm — lowercase, no periods on am/pm. The separator may
+  be a point or a colon; keep whichever the author uses, and keep it
+  consistent.
+  Dates: 14 July 1989 — day, month, year, no commas. No ordinals in a formal
+  date.
+  Decades: 60s — no leading apostrophe.
+  That / which: Oxford permits either in a restrictive clause provided the
+  author is consistent. Preserve the author's habit rather than enforcing the
+  U.S. rule. Only raise it where the author is plainly inconsistent, and then
+  as a query.
+  Percent: two words, "per cent".
+  Punctuation with quotation marks: follow the manuscript's existing pattern.
+  Oxford places punctuation outside the closing quote when it does not belong
+  to the quoted material — "logical" quotation. Do NOT silently convert to the
+  U.S. pattern; if the manuscript is inconsistent, query it.
+  Spelling: Oxford — colour, organise, travelled, centre. Note that Oxford
+  itself prefers -ize (organize) while much U.K. publishing uses -ise; whichever
+  the author uses, keep it consistent rather than converting.

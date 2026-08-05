@@ -76,21 +76,33 @@ def _word_after(text: str, i: int) -> str:
 
 def _closes_nearby(text: str, i: int) -> bool:
     """Whether a straight mark within reach of `i` looks like the close of a
-    nested quotation: preceded by a letter or digit, and not followed by one.
-    A contraction fails the second test ("don't"), a possessive passes it
-    ("the dogs' bark") — which is the residual risk, bounded by the window."""
+    quotation: preceded by a letter, digit or sentence punctuation, and not
+    followed by a letter or digit.
+
+    The punctuation half matters more than it looks. Dialogue almost always
+    closes on a comma — "'Hello,' she said" — and a rule that only accepted a
+    letter before the mark would leave that pair mismatched, one straight and
+    one curled, which is worse than leaving both alone. A contraction fails
+    the second test ("don't"); a possessive passes both ("the dogs' bark"),
+    which is the residual risk, bounded by the window."""
     for j in range(i + 1, min(len(text), i + 1 + _PAIR_WINDOW)):
         if text[j] != "'":
             continue
-        if text[j - 1].isalnum() and (j + 1 >= len(text)
-                                      or not text[j + 1].isalnum()):
+        if ((text[j - 1].isalnum() or text[j - 1] in ",.!?;:")
+                and (j + 1 >= len(text) or not text[j + 1].isalnum())):
             return True
     return False
 
 
-def _quote_edits(text: str) -> tuple[list[tuple[int, int, str]], int]:
+def _quote_edits(text: str, *, single_primary: bool = False
+                 ) -> tuple[list[tuple[int, int, str]], int]:
     """Straight marks that can be curled with confidence, and a count of the
-    ones that cannot."""
+    ones that cannot.
+
+    `single_primary` is the U.K./Australian convention, where a single quote
+    opens dialogue. It flips the default for a word-initial mark: in a U.S.
+    manuscript that is more likely a dialect elision, and in a U.K. one it is
+    more likely a line of dialogue starting."""
     edits: list[tuple[int, int, str]] = []
     ambiguous = 0
     for i, ch in enumerate(text):
@@ -117,12 +129,17 @@ def _quote_edits(text: str) -> tuple[list[tuple[int, int, str]], int]:
         elif ((not before) or before in _OPENS_AFTER) and after.isalpha() \
                 and _word_after(text, i) in _ELISIONS:
             edits.append((i, i + 1, RIGHT_SINGLE))
-        # A nested quotation: "He said 'hello' and left." The closing mark is
-        # already handled above by following a letter, so finding one nearby
-        # is what tells us this mark opens a pair. Without this the pair would
-        # come out mismatched — one straight, one curled — which reads worse
-        # than leaving both alone.
-        elif ((not before) or before in _OPENS_AFTER) and _closes_nearby(text, i):
+        # A closing mark after sentence punctuation: "…and left,' she said."
+        # Nothing else it can be — an apostrophe never follows a comma.
+        elif before in ",.!?;:" and (not after or after in " \t \"”)]"):
+            edits.append((i, i + 1, RIGHT_SINGLE))
+        # A quotation opening. In a single-quote variant that is simply what a
+        # word-initial mark usually is; in a double-quote one it has to be
+        # earning its place, so look for the closing half nearby. Without that
+        # check a U.S. pair would come out mismatched — one straight, one
+        # curled — which reads worse than leaving both alone.
+        elif ((not before) or before in _OPENS_AFTER) and (
+                single_primary or _closes_nearby(text, i)):
             edits.append((i, i + 1, LEFT_SINGLE))
         else:
             # Could be a nested quotation, could be dialect this list does not
@@ -145,11 +162,13 @@ def _space_edits(text: str) -> list[tuple[int, int, str]]:
     return [(m.start(), m.end(), " ") for m in _SPACE_RUN.finditer(text)]
 
 
-def normalize_text(text: str, *, quotes: bool = True, spaces: bool = True
-                   ) -> str:
+def normalize_text(text: str, *, quotes: bool = True, spaces: bool = True,
+                   variant=None) -> str:
     """The text as this module would leave it. The readable statement of what
     normalization does, and what the tests assert against."""
-    edits, _ = _quote_edits(text) if quotes else ([], 0)
+    single = bool(variant and variant.opens_dialogue_with_single)
+    edits, _ = (_quote_edits(text, single_primary=single) if quotes
+                else ([], 0))
     if spaces:
         edits = edits + _space_edits(text)
     out, last = [], 0
@@ -184,8 +203,8 @@ def _apply_untracked(p, edits: list[tuple[int, int, str]]) -> None:
             set_text(t, text[:a] + (replacement if i == 0 else "") + text[b:])
 
 
-def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True
-                      ) -> NormalizationReport:
+def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True,
+                      variant=None) -> NormalizationReport:
     """Apply the two silent edits to every paragraph in the document.
 
     Runs before ingest, so everything downstream — the document model, the
@@ -196,6 +215,7 @@ def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True
     if not (quotes or spaces):
         return NormalizationReport(ran=False)
 
+    single = bool(variant and variant.opens_dialogue_with_single)
     n_quotes = n_spaces = n_paras = ambiguous = 0
     parts: set[str] = set()
     for wp in walk_package(pkg):
@@ -204,7 +224,7 @@ def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True
             continue
         edits: list[tuple[int, int, str]] = []
         if quotes:
-            found, amb = _quote_edits(text)
+            found, amb = _quote_edits(text, single_primary=single)
             ambiguous += amb
             edits += found
             n_quotes += len(found)

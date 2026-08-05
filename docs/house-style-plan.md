@@ -193,7 +193,26 @@ passes skip the short ones, so the cost is unchanged and the count is true.
 **Done when:** a run's two output files match what the team currently produces
 by hand, and queries appear as margin comments in Word.
 
-## Phase 5 — Variants and the two hard problems
+## Phase 5 — Variants and the two hard problems — **variants done**
+
+Item 1 is shipped: `docproof/variants.py` and `config/variants/*.yaml`, wired
+into the model prompts, the dialogue-tag sweep, the normalizer, the spell scan
+and the change log. See `docs/variants.md`. Items 2 and 3 are still open.
+
+It came out lighter than the sketch below. Variants are **one small file of
+conventions each**, injected into every pass the way the manuscript's own
+vocabulary is, rather than four shadowed copies of every error type — four
+copies drift, and a do-not-flag list fixed in the U.S. file would quietly stay
+broken in the other three. `error_type_override_dir` remains the escape hatch
+for a variant that needs a genuinely different type rather than a different
+convention.
+
+One limitation worth stating plainly: `spylls` bundles `en_US` only, so a
+U.K., Canadian or Australian run has no dictionary scan unless the press points
+`spellcheck.dictionary` at its own Hunspell files. Checking British spelling
+against an American word list would file every correct `colour` as unknown, so
+the scan declines, says why, and the change log records it as a limit.
+
 
 1. **English variants.** A `variant: us | uk | ca | au` config field resolving
    to `config/variants/<v>/`, which shadows base error types through the
