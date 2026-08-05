@@ -37,6 +37,7 @@ dev = [
 docproof = "docproof.__main__:main"
 docproof-app = "app.run:main"
 docproof-desktop = "app.desktop:main"
+docproof-watch = "app.watch.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
