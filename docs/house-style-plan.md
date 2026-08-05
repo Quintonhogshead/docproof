@@ -134,9 +134,20 @@ in `DocProof.spec` datas so PyInstaller builds keep working.
 **Done when:** a mock-provider run produces correct tracked changes for every
 sweep category with exact match counts, at no API cost.
 
-## Phase 3 — Silent normalizations and the reject-all audit
+## Phase 3 — Silent normalizations and the reject-all audit — **done**
 
 These ship together: the audit's definition depends on the normalizations.
+Shipped as `docproof/normalize.py` and `docproof/audit.py`; see
+`docs/audit.md`.
+
+Two things came out differently from the sketch below, both for the better.
+The audit does **not** need to know about the two exceptions: because
+normalization runs before ingest, the invariant is simply "rejecting every
+tracked change reproduces the document as ingested", with no exceptions at
+all. And quote curling **does not convert everything** — a single mark whose
+direction the text does not settle is left straight and counted, because a
+mark curled the wrong way ships silently while a straight one is merely a
+blemish a proofreader will catch.
 
 1. Package-level normalization before ingest — straight→curly quotes and
    apostrophes, multi-space collapse (preserving leading indentation and

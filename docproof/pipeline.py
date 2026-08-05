@@ -18,7 +18,9 @@ from .chunker import chunk_document
 from .config import Config
 from .error_registry import ErrorType, load_error_types
 from .formats import DocumentFormat, get_format
+from .audit import AuditReport, enforce, run_audit
 from .models import Chunk, DocumentModel, Usage
+from .normalize import NormalizationReport
 from .providers import Provider
 from .reporting import write_findings_json, write_summary_md
 from .spellscan import SpellScan, scan as spell_scan
@@ -43,6 +45,12 @@ class Prepared:
     # The dictionary scan, for the same reason: it makes no API call, and its
     # result is the same for every chunk, so it belongs to the document.
     spell: SpellScan = field(default_factory=SpellScan)
+    normalization: NormalizationReport = field(
+        default_factory=NormalizationReport)
+    # Every paragraph's text as ingested, including the ones no pass reviews:
+    # the audit has to cover a heading the normalizer touched just as much as
+    # a body paragraph the model edited.
+    baseline: dict = field(default_factory=dict)
 
     @property
     def vocabulary(self) -> str:
@@ -99,6 +107,22 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     reproduce its own chunk list at collection time."""
     fmt = get_format(input_path)
     pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
+
+    # The two silent edits happen here, before anything reads the text, so no
+    # later stage has to know they happened: the document model, the sweeps,
+    # every model pass and every anchor all measure against normalized text.
+    norm = NormalizationReport()
+    if fmt.normalize is not None:
+        norm = fmt.normalize(pkg, quotes=cfg.normalize.quotes,
+                             spaces=cfg.normalize.spaces)
+    elif cfg.normalize.quotes or cfg.normalize.spaces:
+        log.info("%s files are not normalized; quotes and spacing are left as "
+                 "the author's application wrote them.", fmt.suffix)
+
+    # The audit's yardstick, taken after normalization and before any tracked
+    # change: this is "the document as ingested", and rejecting every revision
+    # must return to exactly it.
+    baseline = fmt.snapshot(pkg, "current") if fmt.snapshot else {}
     doc = fmt.build_document_model(pkg, cfg)
     chunks = list(chunk_document(doc, cfg))
     if selection is not None:
@@ -141,7 +165,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                        dictionary=cfg.spellcheck.dictionary)
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
-                    spell=spell)
+                    spell=spell, normalization=norm, baseline=baseline)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -230,16 +254,29 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
+    audit_report = AuditReport()
+    if cfg.audit != "off" and fmt.snapshot and prepared.baseline:
+        audit_report = run_audit(prepared.baseline,
+                                 fmt.snapshot(prepared.pkg, "reject"))
+
+    # The reports are written before the audit is enforced, and the document
+    # after it. A failed strict run therefore produces the two files that say
+    # what went wrong and no manuscript at all — which is the only honest
+    # meaning of refusing to ship, and still leaves a diagnosis behind.
     reviewed = out / fmt.reviewed_name(source_path)
-    prepared.pkg.save(reviewed)
     write_findings_json(out / "findings.json", doc=prepared.doc,
                         findings=validated, usage=usage, cfg=cfg,
                         applied_ids=stats.applied, batch=batch,
-                        sweeps=prepared.sweep_reports, spell=prepared.spell)
+                        sweeps=prepared.sweep_reports, spell=prepared.spell,
+                        normalization=prepared.normalization,
+                        audit=audit_report)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
-                     spell=prepared.spell)
+                     spell=prepared.spell,
+                     normalization=prepared.normalization, audit=audit_report)
+    enforce(audit_report, cfg.audit)
+    prepared.pkg.save(reviewed)
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated))

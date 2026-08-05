@@ -33,6 +33,16 @@ prep:
   strip_direct_formatting: true    # in the placed file only; italics always kept
   verify: true                     # refuse to ship a file whose words drifted
 
+# The two edits made silently, outside the tracked-changes system, because
+# neither is a content change an author needs to review. Applied before ingest,
+# so every later stage measures against normalized text. Counted in the report
+# but never logged line by line. Quote curling converts only what it can
+# determine from the text and leaves the rest straight — a mark curled the
+# wrong way ships, because there is no tracked change to reject.
+normalize:
+  quotes: true
+  spaces: true
+
 # A dictionary scan that never corrects anything. Unknown words that repeat,
 # or that are written as names, are the author's own — they become a
 # do-not-flag list sent to every pass, which is what stops a coined name being
@@ -89,6 +99,12 @@ sweeps:
   - sweep_dialogue_tag
 
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
+
+# Rejecting every tracked change must reproduce the document as ingested.
+# strict refuses to write a file that fails the check; warn writes it and says
+# so; off skips it. This is the only thing that would catch text changed
+# without a revision mark around it — which the accepted view cannot show you.
+audit: strict               # strict | warn | off
 output_dir: output
 comments: true              # margin comment on every tracked change
 revision_author: Atmosphere Press Proofreader

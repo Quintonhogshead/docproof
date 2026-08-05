@@ -23,6 +23,7 @@ from docproof.batch import pass_prompts
 from docproof.checkpoint import Checkpoint
 from docproof.config import Config, load_config
 from docproof.formats import get_format
+from docproof.audit import AuditError
 from docproof.ingest import IngestError
 from docproof.pipeline import content_hash, finish, prepare, run_sync
 from docproof.prep.convert import ConversionError
@@ -446,6 +447,21 @@ class JobRunner:
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                              source_path=job.source_path)
+        except AuditError as e:
+            # No reviewed document was written — that is the point — but the
+            # summary and findings were, and they name the paragraph that did
+            # not come back. So the folder stays and the job points at it.
+            #
+            # The checkpoint stays too, unlike prep's: the findings did not
+            # cause this. Something applied text without a revision mark
+            # around it, which is a code fault, and a retry should not have to
+            # pay for the review again to reproduce it.
+            log.error("Review for %s failed its reject-all audit: %s",
+                      job.id, e)
+            self.store.update(job_id, state="failed", error=str(e),
+                              results_dir=str(out))
+            self._record_usage(job_id, out, cfg.api.model, batch=False)
+            return
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise
