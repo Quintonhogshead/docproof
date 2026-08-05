@@ -121,7 +121,12 @@
       "Bash(.venv/bin/python -m pytest tests/test_consistency.py -q)",
       "Bash(xargs -I{} sh -c 'echo -n \"{}: \"; grep \"^channel:\" {}')",
       "Bash(python3 -m pytest tests/ -q)",
-      "Bash(.venv/bin/pytest tests/ -q)"
+      "Bash(.venv/bin/pytest tests/ -q)",
+      "Bash(.venv/bin/pytest tests/test_spellscan.py -q)",
+      "Bash(.venv/bin/pytest tests/test_error_types.py tests/test_prompts.py -q)",
+      "Bash(.venv/bin/pytest tests/test_jobs.py -q)",
+      "Bash(.venv/bin/pytest tests/test_integration.py -q)",
+      "Bash(git cherry-pick *)"
     ]
   }
 }
