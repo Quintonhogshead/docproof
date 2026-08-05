@@ -96,7 +96,15 @@
       "Bash(rm -rf \"$HOME/Library/Application Support/DocProof/jobs/20260801-101500-wildflower-a1\" \"$HOME/Library/Application Support/DocProof/jobs/20260731-224000-wildflower-b2\" \"$HOME/Library/Application Support/DocProof/jobs/20260714-090000-saltmarsh-c3\" && echo \"demo jobs removed\" && .venv/bin/python -m pytest -q 2>&1 | tail -3)",
       "Bash(.venv/bin/python -m docproof prep tests/fixtures/googledoc.docx --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep4 --output both --mock-tags)",
       "Bash(.venv/bin/python -m docproof prep tests/fixtures/googledoc.docx --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c8235baf-2376-478c-b01d-ae911c1233e6/scratchpad/prep5 --output both --mock-tags)",
-      "Bash(/usr/libexec/PlistBuddy -c \"Print :CFBundleIconFile\" dist/DocProof.app/Contents/Info.plist)"
+      "Bash(/usr/libexec/PlistBuddy -c \"Print :CFBundleIconFile\" dist/DocProof.app/Contents/Info.plist)",
+      "Bash(pandoc -t markdown \"/Users/quintonjohnson/Downloads/Atmosphere Press - Proofreading Prompt \\(Three-Pass\\).docx\")",
+      "Bash(ls .venv/bin/python 2>/dev/null; .venv/bin/python -m pytest tests/test_error_types.py -q 2>&1 | tail -30)",
+      "Bash(.venv/bin/python -m docproof inventory tests/fixtures/footnotes.docx)",
+      "Bash(.venv/bin/python /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/check_examples.py)",
+      "Bash(.venv/bin/python -c \"import spylls; print\\('spylls', spylls.__file__\\)\")",
+      "Bash(.venv/bin/python -c \"import symspellpy; print\\('symspell ok'\\)\")",
+      "Bash(.venv/bin/python -m pytest tests/test_sweeps.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_spellscan.py -q)"
     ]
   }
 }
