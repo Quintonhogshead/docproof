@@ -5,6 +5,7 @@ import logging
 
 from .models import (Anchor, CONFIDENCE_RANK, DocumentModel, Finding,
                      index_paragraphs)
+from .voice import in_dialogue
 
 log = logging.getLogger("docproof.validator")
 
@@ -37,7 +38,9 @@ def shrink(original: str, corrected: str) -> tuple[int, str, str]:
 def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
                       query_types: frozenset[str] = frozenset(),
-                      format_types: dict[str, str] | None = None) -> list[Finding]:
+                      format_types: dict[str, str] | None = None,
+                      dialect_queries: bool = False,
+                      single_quotes: bool = False) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
 
     `query_types` are error types that ask rather than correct. They skip the
@@ -49,7 +52,13 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     `format_types` maps an error type to the run formatting it applies. Those
     findings change how text is set rather than what it says, so there is no
     diff to shrink either, and they claim spans in a register of their own —
-    italicising a title and fixing a typo inside it are not in conflict."""
+    italicising a title and fixing a typo inside it are not in conflict.
+
+    `dialect_queries` is `voice: query` — the press cannot say whether this
+    book's nonstandard grammar is the character or the error. Anything found
+    inside quotation marks then goes down the query channel whatever its type:
+    the author is asked, and nobody's speech is edited. The channel stays the
+    validator's to decide, never the model's."""
     format_types = format_types or {}
     paras = index_paragraphs(doc)
     threshold = CONFIDENCE_RANK[min_confidence]
@@ -105,7 +114,9 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                               insert_text=f.corrected_text)))
             continue
 
-        if f.error_type in query_types:
+        if f.error_type in query_types or (
+                dialect_queries and in_dialogue(para.text, s,
+                                                single=single_quotes)):
             # The whole quoted sentence is the anchor: a question is about a
             # passage, not about the characters someone would have changed.
             key = (f.para_id, s, "query")

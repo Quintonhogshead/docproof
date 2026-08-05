@@ -111,6 +111,11 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model")
     p.add_argument("--min-confidence", choices=["low", "medium", "high"])
     p.add_argument("--no-comments", action="store_true")
+    p.add_argument("--voice", choices=["preserve", "query", "correct"],
+                   help="whether this book's nonstandard grammar is the "
+                        "character's voice (preserve, the default), something "
+                        "to ask the author about (query), or error to correct "
+                        "(correct). See docproof/voice.py.")
     p.add_argument("--no-spellcheck", action="store_true",
                    help="skip the dictionary scan for this run: no do-not-flag "
                         "list, no words raised to look at, no coined-term "
@@ -140,6 +145,11 @@ def _configure(args):
         cfg.min_confidence = args.min_confidence
     if getattr(args, "no_comments", False):
         cfg.comments = False
+    # Whether this book's nonstandard grammar is the character or the error.
+    # Per run because it is a fact about the manuscript, and the wrong answer
+    # in one direction rewrites a character's speech.
+    if getattr(args, "voice", None):
+        cfg.voice = args.voice
     # Per run, because the dictionary is a property of the manuscript rather
     # than of the press: one book is British, the next has a glossary of its
     # own, and the third wants no dictionary in the loop at all.

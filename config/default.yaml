@@ -93,6 +93,21 @@ pricing:
 # confirm. See config/variants/ and docs/variants.md.
 variant: us
 
+# Whose grammar is it — the character's or the author's? Fourteen error types
+# tell the model to leave dialect, nonstandard register and "how people speak"
+# alone, because the alternative is a proofreader who levels a character's
+# speech and hands back a book with one voice in it. On a manuscript whose
+# nonstandard grammar is simply error, that same instruction silently declines
+# to find half of it.
+#   preserve — it is voice. Leave it. Costs no tokens; right for most fiction.
+#   query    — you cannot tell. The model reports it and anything inside
+#              quotation marks becomes a margin question, so the author is
+#              asked and nobody's speech is edited.
+#   correct  — it is error. Correct it in dialogue as readily as in narration.
+# Grammar only, at every setting: "nothin'", "gonna" and "ain't" are how a word
+# sounds, and correcting those deletes an accent rather than an error.
+voice: preserve
+
 min_confidence: medium      # low | medium | high — gate for applying changes
 
 # Each entry is ONE API pass over the whole document. A bare key runs alone;

@@ -138,7 +138,8 @@ def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
 def build_system_prompt(types: Sequence[ErrorType], *,
                         explanations: bool = True,
                         vocabulary: str = "",
-                        conventions: str = "") -> str:
+                        conventions: str = "",
+                        voice: str = "") -> str:
     parts = [base_rules(explanations=explanations)]
     if len(types) > 1:
         index = "\n".join(f"- {et.key}: {et.name}" for et in types)
@@ -152,6 +153,11 @@ def build_system_prompt(types: Sequence[ErrorType], *,
         # differs by variant has to be settled before the model reads a type
         # that states one of them, and the section says so itself.
         parts.append(conventions)
+    if voice:
+        # Alongside the conventions and for the same reason: it withdraws a
+        # do-not-flag clause that fourteen of the type sections below state in
+        # their own words, so it has to be read before them.
+        parts.append(voice)
     if vocabulary:
         # Document-specific, but identical for every chunk of this document,
         # so it caches with the rest of the system prompt and is billed once.
@@ -179,7 +185,8 @@ class Analyzer:
 
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
                  provider: Provider, finding_ids: itertools.count,
-                 vocabulary: str = "", conventions: str = ""):
+                 vocabulary: str = "", conventions: str = "",
+                 voice: str = ""):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
@@ -192,7 +199,8 @@ class Analyzer:
         self.system_prompt = build_system_prompt(self.types,
                                                  explanations=explanations,
                                                  vocabulary=vocabulary,
-                                                 conventions=conventions)
+                                                 conventions=conventions,
+                                                 voice=voice)
         self.output_model = build_output_model(self.keys,
                                                explanations=explanations)
         self.schema = strict_json_schema(self.output_model)

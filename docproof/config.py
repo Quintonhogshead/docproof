@@ -130,6 +130,12 @@ class Config(BaseModel):
     # applying its rules silently is how a U.K. manuscript comes back
     # Americanized. See docproof/variants.py.
     variant: Literal["us", "uk", "ca", "au"] = "us"
+    # Whether this book's nonstandard grammar is the character's voice or the
+    # author's error. Stated for the same reason the variant is: fourteen error
+    # types assume it is voice and stay silent, which is right for most fiction
+    # and silently finds nothing in a manuscript where it is not.
+    # See docproof/voice.py.
+    voice: Literal["preserve", "query", "correct"] = "preserve"
     min_confidence: Literal["low", "medium", "high"] = "medium"
     # Each entry is one API pass over the whole document: a bare key runs alone,
     # a list of keys runs as a single combined pass. Grouping trades a little

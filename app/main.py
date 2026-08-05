@@ -33,6 +33,7 @@ from docproof.prep import convert as prep_convert
 from docproof.prep.place import PlaceError, find_indesign, place_into_template
 from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
+from docproof.voice import VOICE_KEYS
 
 from .jobs import Job, JobRunner, JobStore, read_usage
 from .lock import FolderInUse, FolderLock
@@ -75,6 +76,8 @@ class JobRequest(BaseModel):
     # says, which is what a caller that does not know about these means.
     spellcheck: bool | None = None
     dictionary: str | None = Field(default=None, max_length=500)
+    # preserve | query | correct — null means whatever the config says.
+    voice: str | None = None
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
@@ -572,6 +575,9 @@ def _register(app: FastAPI) -> None:
         if req.prep_output not in ("indesign", "tracked", "both"):
             raise HTTPException(
                 400, "prep_output must be 'indesign', 'tracked' or 'both'")
+        if req.voice is not None and req.voice not in VOICE_KEYS:
+            raise HTTPException(
+                400, f"voice must be one of {', '.join(VOICE_KEYS)}")
         # Prep reads its windows in order — a paragraph's meaning depends on
         # what came before it — so there is no batch form of it to offer.
         mode = "now" if req.kind == "prep" else req.mode
@@ -600,6 +606,7 @@ def _register(app: FastAPI) -> None:
                 min_confidence=req.min_confidence,
                 spellcheck=req.spellcheck,
                 dictionary=req.dictionary,
+                voice=req.voice,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,

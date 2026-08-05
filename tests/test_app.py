@@ -841,3 +841,13 @@ def test_a_submission_carries_its_own_choice_about_the_dictionary(client):
 
     plain = client.app_state.runner.store.get(_run(client, staged["id"])["id"])
     assert plain.spellcheck is None and plain.dictionary is None
+
+
+def test_a_submission_can_say_whose_grammar_it_is(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], voice="query")
+    assert client.app_state.runner.store.get(job["id"]).voice == "query"
+    bad = client.post("/api/jobs", json={"file_ids": [staged["id"]],
+                                         "model": "claude-sonnet-5",
+                                         "mode": "now", "voice": "ignore"})
+    assert bad.status_code == 400 and "preserve" in bad.text

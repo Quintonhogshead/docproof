@@ -126,3 +126,53 @@ the right home for anything that might be voice.
 YAML loads, keys match filenames, every enabled key exists, every type has a
 do-not-flag list and calibration examples whose `original_text` quotes the
 example paragraph verbatim.
+
+## Voice: whose grammar is it?
+
+`docproof/voice.py`. Fourteen of the twenty-five types carry some version of
+the same clause — leave dialect alone, leave nonstandard register alone,
+*"me and him" is how people speak*. They are there because the alternative is a
+proofreader who levels a character's speech and hands the author back a book
+with one voice in it.
+
+The clause is an assumption, and on a manuscript where it is wrong it does not
+fail loudly. It finds nothing, which reads exactly like a clean book. On the
+test manuscript this was written for, **27 of 54 missed errors were inside
+quotation marks** — every one sitting under a rule that said not to look.
+Nothing was broken; the instructions were followed exactly.
+
+So the press states it, the way it states the variant:
+
+```yaml
+voice: preserve      # preserve | query | correct
+```
+
+| | what it does | what it costs |
+| --- | --- | --- |
+| `preserve` | the type sections already say to leave it; nothing is added | nothing — the section is empty |
+| `query` | the model reports it, and anything **inside quotation marks** becomes a margin question instead of a correction | one prompt section |
+| `correct` | corrected in dialogue as readily as in narration | one prompt section |
+
+`--voice` sets it for one CLI run, and a job carries its own. The default is
+`preserve` because it is right for most fiction and because the failure it
+risks is the recoverable one: a missed error rather than a rewritten character.
+
+**`query` is the honest setting when nobody has read the book yet.** The
+channel decision stays where every other channel decision lives — in the
+validator, never with the model. A finding whose anchor falls inside quotation
+marks is re-routed to the query channel whatever its type, so the sentence is
+asked about and no speech is edited.
+
+**Grammar only, at every setting.** `Nobody never found` is grammar.
+`nothin'`, `gonna`, `ain't`, `'bout` are how a word sounds, and a pass that
+"corrects" those is not proofreading a book, it is deleting an accent from it.
+The prompt says so explicitly, and `spelling`'s own eye-dialect carve-out is
+left standing.
+
+One limit worth knowing: quotation marks are counted, not parsed. A speech
+running on into the next paragraph is correctly written with no closing mark,
+so counting is the only thing that works — but it also means a paragraph with
+an unbalanced mark reads as speech from that point on. The single-quote
+variants are the awkward case, since the closing mark is also the apostrophe;
+a mark with a letter after it is treated as an apostrophe (`don't`, `'tis`)
+and never closes anything.

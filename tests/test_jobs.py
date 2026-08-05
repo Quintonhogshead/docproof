@@ -380,3 +380,12 @@ def test_the_change_log_can_be_turned_off(runner):
     assert r.config_for(_job(store)).change_log is True
     r.settings.change_log = False
     assert r.config_for(_job(store)).change_log is False
+
+
+def test_a_job_carries_its_own_answer_about_voice(runner):
+    """The most book-specific decision the pipeline makes, so it belongs to
+    the book. Silence means whatever the config says."""
+    store, r = runner
+    assert r.config_for(_job(store)).voice == "preserve"
+    assert r.config_for(_job(store, voice="correct")).voice == "correct"
+    assert store.get("j1").voice == "correct"

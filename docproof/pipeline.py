@@ -30,6 +30,7 @@ from .spellscan import SpellScan, scan as spell_scan
 from .sweeps import SweepReport, run_sweeps
 from .validator import validate_findings
 from .variants import Variant, load_variant
+from .voice import Voice, load_voice
 
 log = logging.getLogger("docproof.pipeline")
 
@@ -56,6 +57,8 @@ class Prepared:
     # a body paragraph the model edited.
     baseline: dict = field(default_factory=dict)
     variant: Variant | None = None
+    # Whether this book's nonstandard grammar is the character or the error.
+    voice: Voice = field(default_factory=Voice)
     # Terms the manuscript writes more than one way. Document-wide, so it
     # belongs here rather than to any chunk, and it costs no API call.
     consistency: ConsistencyReport = field(default_factory=ConsistencyReport)
@@ -65,6 +68,12 @@ class Prepared:
     def conventions(self) -> str:
         """The variant's rules, as a system-prompt section."""
         return self.variant.prompt_section() if self.variant else ""
+
+    @property
+    def voice_section(self) -> str:
+        """What to do about nonstandard grammar. Empty at the default, so a
+        press that never thinks about this pays no tokens for it."""
+        return self.voice.prompt_section()
 
     @property
     def query_types(self) -> frozenset[str]:
@@ -139,6 +148,11 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     reproduce its own chunk list at collection time."""
     fmt = get_format(input_path)
     variant = load_variant(cfg.variant)
+    voice = load_voice(cfg.voice)
+    if voice.reports_dialect:
+        log.info("Nonstandard grammar in this manuscript is treated as error, "
+                 "not voice: findings inside dialogue will be %s.",
+                 "raised as questions" if voice.queries_dialect else "corrected")
     log.info("Proofreading as %s (%s)", variant.name,
              "; ".join(variant.authorities) or variant.dictionary)
     pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
@@ -218,7 +232,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
-                    variant=variant, consistency=consistency,
+                    variant=variant, voice=voice, consistency=consistency,
                     consistency_findings=to_findings(consistency,
                                                      doc.paragraphs))
 
@@ -246,8 +260,10 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     provider: Provider | None,
                     finding_ids: itertools.count,
                     vocabulary: str = "",
-                    conventions: str = "") -> list[Analyzer]:
-    return [Analyzer(cfg, group, provider, finding_ids, vocabulary, conventions)
+                    conventions: str = "",
+                    voice: str = "") -> list[Analyzer]:
+    return [Analyzer(cfg, group, provider, finding_ids, vocabulary,
+                     conventions, voice)
             for group in groups]
 
 
@@ -276,7 +292,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
     for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
                                                  provider, ids,
                                                  prepared.vocabulary,
-                                                 prepared.conventions)):
+                                                 prepared.conventions,
+                                                 prepared.voice_section)):
         for chunk in prepared.chunks:
             key = custom_id(i, chunk.chunk_id)
             cached = checkpoint.get(key) if checkpoint else None
@@ -311,7 +328,11 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                   + list(findings),
                                   prepared.doc, cfg.min_confidence,
                                   query_types=prepared.query_types,
-                                  format_types=prepared.format_types)
+                                  format_types=prepared.format_types,
+                                  dialect_queries=prepared.voice.queries_dialect,
+                                  single_quotes=bool(
+                                      prepared.variant
+                                      and prepared.variant.opens_dialogue_with_single))
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 

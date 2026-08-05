@@ -86,6 +86,10 @@ class Job:
     # fields existed meant.
     spellcheck: bool | None = None
     dictionary: str | None = None
+    # Whether this book's nonstandard grammar is the character or the error.
+    # Per job for the same reason as the dictionary, and more so: it is the
+    # single most book-specific decision the pipeline makes.
+    voice: str | None = None           # preserve | query | correct
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -310,6 +314,8 @@ class JobRunner:
             cfg.spellcheck.enabled = job.spellcheck
         if job.dictionary:
             cfg.spellcheck.dictionary = job.dictionary
+        if job.voice:
+            cfg.voice = job.voice
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
         cfg.change_log = self.settings.change_log
