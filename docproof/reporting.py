@@ -87,7 +87,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
                         "lexicon": list(spell.lexicon),
-                        "candidates": [c.word for c in spell.candidates]}
+                        "candidates": [c.word for c in spell.candidates],
+                        "recurring": [c.word for c in spell.recurring]}
                        if spell is not None else None),
         "usage": dataclasses.asdict(usage),
         "batch": batch,
@@ -228,15 +229,24 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             more = (f" …and {len(spell.lexicon) - 40} more"
                     if len(spell.lexicon) > 40 else "")
             L.append(f"**Treated as this author's own** ({len(spell.lexicon)}) "
-                     f"— sent to every pass as words never to flag or "
-                     f"'correct': {shown}{more}\n")
+                     f"— written as names, and sent to every pass as words "
+                     f"never to flag or 'correct': {shown}{more}\n")
         if spell.candidates:
             shown = ", ".join(c.word for c in spell.candidates[:40])
             more = (f" …and {len(spell.candidates) - 40} more"
                     if len(spell.candidates) > 40 else "")
             L.append(f"**Given to the model to look at** "
-                     f"({len(spell.candidates)}) — used once, not written as "
-                     f"a name, and unknown: {shown}{more}\n")
+                     f"({len(spell.candidates)}) — not written as names, and "
+                     f"either seldom used or an ordinary word wearing an "
+                     f"ending English does not give it: {shown}{more}\n")
+        if spell.recurring:
+            shown = ", ".join(c.word for c in spell.recurring[:40])
+            more = (f" …and {len(spell.recurring) - 40} more"
+                    if len(spell.recurring) > 40 else "")
+            L.append(f"**Repeated, and shown to the model as evidence** "
+                     f"({len(spell.recurring)}) — unknown words used more than "
+                     f"once, which usually means the book's own vocabulary but "
+                     f"is not proof of it: {shown}{more}\n")
 
     if applied:
         # Grouped by kind rather than by document order: reading twenty
