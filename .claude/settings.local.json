@@ -111,7 +111,11 @@
       "Bash(.venv/bin/python -m pytest tests/test_normalize.py -q)",
       "Bash(.venv/bin/python -m docproof review /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/norm.docx --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/none.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/out4)",
       "Bash(sed -n '/## Applied without tracked changes/,/## Scripted checks/p' /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/out4/summary.md)",
-      "Bash(.venv/bin/python -m docproof review tests/fixtures/footnotes.docx --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/none.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/fn)"
+      "Bash(.venv/bin/python -m docproof review tests/fixtures/footnotes.docx --mock-findings /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/none.json --out /private/tmp/claude-501/-Users-quintonjohnson-Desktop-Atmosphere-docproof/c2314df4-2d25-4dfe-a86f-4b8e7190e395/scratchpad/fn)",
+      "Bash(.venv/bin/python -m pytest tests/test_queries.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_idml.py::test_reviewed_name_keeps_the_extension tests/test_integration.py::test_end_to_end_mock -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_app.py::test_an_indesign_layout_can_go_overnight_too -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_changelog.py -q)"
     ]
   }
 }
