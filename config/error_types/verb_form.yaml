@@ -1,0 +1,117 @@
+key: verb_form
+name: Verb form
+version: 1
+
+detection_prompt: |
+  A verb built in a form English does not give it: the past tense standing
+  where the past participle belongs, the participle standing where the past
+  tense belongs, or a tensed verb after an auxiliary that requires the plain
+  form.
+
+  Every word involved is an ordinary English word, correctly spelled, which is
+  why no dictionary catches any of this. What is wrong is which form of the
+  verb the sentence is wearing.
+
+  FLAG:
+  - Past tense where the participle belongs, after "have", "has", "had",
+    "be", "was", "were", "been": "had never saw it", "he had wrote three
+    letters", "they have went home", "it has saw everything", "the sails were
+    took in", "it must be took apart".
+  - The participle standing alone as a past tense, with no auxiliary at all:
+    "she seen nothing", "my father seen the light", "he done the work",
+    "I come home late last night" (past tense of "come" is "came").
+  - A tensed verb after "did", "didn't", "does", "doesn't", "do": "he didn't
+    asked", "the storm didn't finished", "she doesn't wants to".
+  - A past tense standing where the participle belongs in a reduced phrase,
+    with the auxiliary implied rather than written: "the notebook with the
+    title wrote on the cover" (→ written), "the sails took in before dark"
+    (→ taken), "a name carved and then wrote over" (→ written).
+  - "hanged" for "hung". A person is hanged; everything else is hung. "The
+    charts hanged on the walls" should be "hung".
+  - "lay" for "lie" in the intransitive sense — to recline, with no object:
+    "Laying on the bed", "the tools were laying in pieces", "she laid down
+    for an hour" (should be "lay down").
+
+  Do NOT flag:
+  - A form that is not an English word at all: "growed", "teached", "tooken",
+    "knowed", "drownded". Those are misspellings and the spelling type owns
+    them — it gets the dictionary's evidence and this type does not. Leave
+    them entirely alone here, even when you are certain they are wrong.
+  - A past tense that is simply correct. The rule runs one way only: "he
+    wrote it", "she saw the light", "they took the sails in" are all right,
+    and must never be "corrected" into "he written it" or "she seen the
+    light". A participle needs an auxiliary, stated or implied, to stand.
+  - A verb whose number does not match its subject: "the rules was clear",
+    "every mystery have an answer". That is agreement, not form, and
+    subject_verb_agreement owns it. Report it there or not at all.
+  - A tense that is correct but shifts across a passage. tense_shift owns
+    consistency; this type only ever looks at one verb at a time.
+  - "lay" used transitively, which is correct and common: "laying the charts
+    out", "she laid the book down", "the hen was laying eggs", "laying a fire",
+    "laying claim to it". The test is an object: if the verb has one, "lay" is
+    the right word.
+  - Verbs with two accepted forms. Both are correct and neither is an error:
+    "lighted" and "lit", "fitted" and "fit", "dived" and "dove", "sneaked"
+    and "snuck", "pleaded" and "pled", "proved" and "proven", "learned" and
+    "learnt", "dreamed" and "dreamt", "spelled" and "spelt", "burned" and
+    "burnt". A house preference between two correct forms is not this type's
+    business.
+  - The subjunctive, which only looks like a form error: "If I were you",
+    "I wish it were over", "he asked that she be present", "come what may".
+  - Archaic and poetic forms in period or stylized prose: "hath", "doth",
+    "spake", "bade", "gotten" in American English, "holpen" in a quoted text.
+  - Dialect and nonstandard register, in dialogue or in a first-person
+    narrator whose whole voice is nonstandard: "I should have went", "he done
+    it", "she seen him". This is how a person talks, and levelling it rewrites
+    the character rather than proofreading the book. Report at low confidence
+    at most, and prefer not to report at all when the speaker's whole register
+    is nonstandard.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the verb's form
+  changed. Keep the tense the author chose, the auxiliary the author chose, and
+  the voice of the sentence — the form is the error, and nothing else about the
+  clause is in question. Never add or remove an auxiliary to make a different
+  sentence work: "she seen nothing" becomes "she saw nothing", not "she had
+  seen nothing", because the second invents a tense the author did not write.
+  Fix exactly one verb per finding.
+
+confidence_guidance: |
+  high   — an unambiguous form error in narration, where the auxiliary makes
+           the required form certain: "had wrote", "have went", "didn't
+           finished".
+  medium — a bare participle used as a past tense ("she seen nothing"), or a
+           lay/lie call where the object is arguable, or "hanged" for "hung".
+           Each is a real error and each is also a known dialect form.
+  low    — inside dialogue, or in narration whose voice is nonstandard
+           throughout. This is the type most likely to fire on a character.
+
+examples:
+  - text: "The charts had hanged on the walls since before she was born."
+    finding:
+      original_text: "The charts had hanged on the walls since before she was born."
+      corrected_text: "The charts had hung on the walls since before she was born."
+      explanation: "A person is hanged; a chart is hung."
+      confidence: high
+  - text: "He had wrote three letters that winter and posted none of them."
+    finding:
+      original_text: "He had wrote three letters that winter and posted none of them."
+      corrected_text: "He had written three letters that winter and posted none of them."
+      explanation: "After \"had\", \"write\" takes its participle: \"written\"."
+      confidence: high
+  - text: "Laying on the bed, she listened to the rain against the glass."
+    finding:
+      original_text: "Laying on the bed, she listened to the rain against the glass."
+      corrected_text: "Lying on the bed, she listened to the rain against the glass."
+      explanation: "Nothing is being laid down, so the verb is \"lie\": \"Lying\"."
+      confidence: medium
+  - text: "She was laying the charts out on the table one by one."
+    finding: null
+  - text: "The lamp was lighted every evening at the same hour."
+    finding: null
+  - text: "The storm didn't finished until well after midnight."
+    finding:
+      original_text: "The storm didn't finished until well after midnight."
+      corrected_text: "The storm didn't finish until well after midnight."
+      explanation: "\"didn't\" already carries the past tense, so the verb stays plain."
+      confidence: high

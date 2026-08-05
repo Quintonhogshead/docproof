@@ -154,3 +154,19 @@ def test_raw_finding_error_type_defaults_to_empty():
     rf = RawFinding.model_validate(
         {"para_id": "body-0000", "original_text": "a", "corrected_text": "b"})
     assert rf.error_type == ""
+
+
+def test_verb_form_states_its_borders_with_its_neighbours():
+    """It shares a pass with subject_verb_agreement and a subject with
+    spelling and tense_shift. A type that does not name the neighbour owning a
+    case gets it reported twice, and the validator throws the second away —
+    which looks like agreement rather than the duplicate it is."""
+    said = load_error_types(ERROR_DIR, ["verb_form"])["verb_form"]
+    for owner in ("spelling", "subject_verb_agreement", "tense_shift"):
+        assert owner in said.detection_prompt, owner
+    # The forms with two accepted spellings are a house preference, not an
+    # error, and this is the type most likely to be asked to enforce one.
+    for both_right in ("lighted", "fitted", "dived", "snuck"):
+        assert both_right in said.detection_prompt, both_right
+    # The rule runs one way: a bare past tense is correct and stays.
+    assert "he written it" in said.detection_prompt

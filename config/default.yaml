@@ -131,8 +131,12 @@ error_types:
   # changes how text is set rather than what it says
   - [number_style, currency_style, ly_adverb_hyphen, title_italics]
   # sentence grammar — needs parsing, still decidable
+  # verb_form rides here rather than anywhere else so it is read beside
+  # subject_verb_agreement: "the rules was" is agreement and "have went" is
+  # form, and the two are only reliably told apart by stating the boundary in
+  # one place. Same reason comma_splice and run_on_sentence sit together.
   - [comma_splice, run_on_sentence, subject_verb_agreement, that_which,
-     comparative_form]
+     comparative_form, verb_form]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 # Deterministic sweeps, run before any model pass so their edits get first
