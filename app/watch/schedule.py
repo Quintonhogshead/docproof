@@ -1,0 +1,169 @@
+"""Handing the watcher to launchd, so nobody has to remember it.
+
+Four times a day is a `StartCalendarInterval` with four entries, and the rest
+of this file is the small print around that: which executable, where its
+output goes, and the honest caveat that a Mac asleep at six in the morning
+does not run anything at six in the morning.
+
+`RunAtLoad` is false on purpose. Installing a schedule should not immediately
+spend money — the first run happens at the first scheduled time, and anybody
+who wants one now can type `docproof-watch once`.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+log = logging.getLogger("docproof.app.watch.schedule")
+
+LABEL = "com.atmospherepress.docproof.watch"
+DEFAULT_TIMES = ("06:00", "11:00", "16:00", "21:00")
+LAUNCHD_LOG = "launchd.log"
+
+# launchd starts a job with almost no environment. LibreOffice is found by
+# absolute path first, so this is belt: a Homebrew install answers to `which`
+# and nothing else here would find it.
+PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+class ScheduleError(RuntimeError):
+    """A schedule that could not be set, said so a person can act on."""
+
+
+def parse_times(spec: str | list[str]) -> list[tuple[int, int]]:
+    """"06:00,11:00" → [(6, 0), (11, 0)]."""
+    parts = spec.split(",") if isinstance(spec, str) else list(spec)
+    times = []
+    for part in parts:
+        piece = part.strip()
+        if not piece:
+            continue
+        hour, _, minute = piece.partition(":")
+        try:
+            h, m = int(hour), int(minute)
+        except ValueError:
+            raise ScheduleError(f"{piece!r} is not a time. Write them as "
+                                f"HH:MM, separated by commas — for example "
+                                f"{','.join(DEFAULT_TIMES)}.") from None
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ScheduleError(f"There is no such time as {piece}.")
+        times.append((h, m))
+    if not times:
+        raise ScheduleError("No times were given. Write them as HH:MM, "
+                            f"separated by commas — for example "
+                            f"{','.join(DEFAULT_TIMES)}.")
+    return sorted(set(times))
+
+
+def agents_dir() -> Path:
+    return Path.home() / "Library" / "LaunchAgents"
+
+
+def plist_path() -> Path:
+    return agents_dir() / f"{LABEL}.plist"
+
+
+def executable() -> str:
+    """The `docproof-watch` launchd should run, by absolute path.
+
+    `sys.argv[0]` first, because the copy running right now is the copy that
+    should be scheduled — a machine with two virtualenvs would otherwise get
+    whichever one is earlier in a PATH launchd does not share."""
+    argv0 = Path(sys.argv[0])
+    if argv0.name == "docproof-watch" and argv0.exists():
+        return str(argv0.resolve())
+    found = shutil.which("docproof-watch")
+    if found:
+        return str(Path(found).resolve())
+    raise ScheduleError(
+        "Could not find the `docproof-watch` command to schedule. Install "
+        "DocProof with `pip install -e .` in its folder and try again.")
+
+
+def program(home: Path) -> list[str]:
+    """The home is spelled out rather than left to the environment: launchd
+    passes almost none of one, and a scheduled run that quietly used a
+    different folder would be a puzzle nobody enjoys."""
+    return [executable(), "--home", str(Path(home).resolve()), "once"]
+
+
+def plist_content(times, *, command: list[str], log_path: Path) -> bytes:
+    return plistlib.dumps({
+        "Label": LABEL,
+        "ProgramArguments": command,
+        "StartCalendarInterval": [{"Hour": h, "Minute": m} for h, m in times],
+        "RunAtLoad": False,
+        "StandardOutPath": str(log_path),
+        "StandardErrorPath": str(log_path),
+        "EnvironmentVariables": {"PATH": PATH},
+        "ProcessType": "Background",
+    })
+
+
+# --- putting it in place ------------------------------------------------------
+
+def install(times, home: str | Path, *, run=subprocess.run,
+            path: Path | None = None) -> Path:
+    """Write the agent and load it, replacing any earlier one."""
+    root = Path(home)
+    target = path or plist_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    root.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(plist_content(times, command=program(root),
+                                     log_path=root / LAUNCHD_LOG))
+
+    domain = f"gui/{os.getuid()}"
+    # Unloaded first so a changed schedule replaces the old one rather than
+    # being refused for already existing. It fails when nothing is loaded,
+    # which is the ordinary case the first time and not worth reporting.
+    run(["launchctl", "bootout", f"{domain}/{LABEL}"],
+        capture_output=True, text=True)
+    result = run(["launchctl", "bootstrap", domain, str(target)],
+                 capture_output=True, text=True)
+    if getattr(result, "returncode", 0) != 0:
+        detail = (getattr(result, "stderr", "") or "").strip()
+        raise ScheduleError(
+            f"macOS would not start the schedule{': ' + detail if detail else '.'}"
+            f" The agent is written at {target}; `launchctl bootstrap "
+            f"{domain} {target}` is what failed.")
+    return target
+
+
+def uninstall(*, run=subprocess.run, path: Path | None = None) -> bool:
+    """Stop and forget the schedule. Answers whether there was one."""
+    target = path or plist_path()
+    domain = f"gui/{os.getuid()}"
+    run(["launchctl", "bootout", f"{domain}/{LABEL}"],
+        capture_output=True, text=True)
+    if not target.exists():
+        return False
+    target.unlink()
+    return True
+
+
+def current(*, path: Path | None = None) -> list[tuple[int, int]] | None:
+    """The times an installed agent runs at, or None if there is none.
+
+    Read from the file rather than asked of launchctl: the question `status`
+    is answering is what this Mac has been told to do, which the file is the
+    record of."""
+    target = path or plist_path()
+    if not target.is_file():
+        return None
+    try:
+        data = plistlib.loads(target.read_bytes())
+    except Exception as e:                # noqa: BLE001 - any unreadable plist
+        log.warning("Ignoring an unreadable launch agent at %s (%s)", target, e)
+        return None
+    entries = data.get("StartCalendarInterval") or []
+    return [(int(e.get("Hour", 0)), int(e.get("Minute", 0)))
+            for e in entries if isinstance(e, dict)]
+
+
+def describe(times) -> str:
+    return ", ".join(f"{h:02d}:{m:02d}" for h, m in times)

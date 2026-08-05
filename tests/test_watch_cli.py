@@ -10,11 +10,14 @@ no idea what the watcher was thinking.
 from __future__ import annotations
 
 import json
+import plistlib
+import subprocess
 
 import pytest
 
 from app.lock import FolderLock
 from app.watch import cli
+from app.watch import schedule as schedulelib
 from app.watch import tick as ticklib
 from app.watch.settings import WatchSettings
 from app.watch.stages import FORMATTED, STATE_PROP
@@ -278,6 +281,117 @@ def test_status_does_not_need_the_folder_lock(home, capsys, monkeypatch):
         assert run(home, "status") == cli.OK
 
     assert FOLDER in capsys.readouterr().out
+
+
+# --- handing it to macOS ------------------------------------------------------
+
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    """A launch agent somewhere harmless, and a launchctl that only records.
+
+    Nothing in this suite may write to ~/Library/LaunchAgents or load anything
+    into the session running it."""
+    path = tmp_path / "agent.plist"
+
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("app.watch.schedule.plist_path", lambda: path)
+    monkeypatch.setattr("app.watch.schedule.subprocess.run", run)
+    monkeypatch.setattr("app.watch.schedule.executable",
+                        lambda: "/usr/local/bin/docproof-watch")
+    return path
+
+
+def test_scheduling_says_when_it_will_run_and_what_it_wrote(home, capsys,
+                                                            agent, monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "schedule") == cli.OK
+
+    out = capsys.readouterr().out
+    assert "06:00, 11:00, 16:00, 21:00" in out
+    assert str(agent) in out
+    assert plistlib.loads(agent.read_bytes())["Label"] == schedulelib.LABEL
+
+
+def test_scheduling_says_a_sleeping_mac_runs_nothing(home, capsys, agent,
+                                                     monkeypatch):
+    """Said plainly rather than discovered in three weeks."""
+    configured(home)
+    signed_in(monkeypatch)
+
+    run(home, "schedule")
+
+    out = capsys.readouterr().out
+    assert "sleeping Mac runs nothing" in out
+    assert "not made up later" in out
+
+
+def test_the_times_can_be_chosen(home, capsys, agent, monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+
+    assert run(home, "schedule", "--times", "07:30,19:00") == cli.OK
+
+    entries = plistlib.loads(agent.read_bytes())["StartCalendarInterval"]
+    assert entries == [{"Hour": 7, "Minute": 30}, {"Hour": 19, "Minute": 0}]
+
+
+def test_scheduling_before_signing_in_works_but_says_so(home, capsys, agent):
+    """Nothing stops somebody setting the schedule up first. It would just be
+    a surprise to find out in three weeks that nothing had happened."""
+    configured(home)
+
+    assert run(home, "schedule") == cli.OK
+    assert "nothing will happen until" in capsys.readouterr().out
+    assert agent.exists()
+
+
+def test_a_schedule_of_impossible_times_is_refused(home, capsys, agent):
+    configured(home)
+
+    assert run(home, "schedule", "--times", "25:00") == cli.UNUSABLE
+    assert "no such time" in capsys.readouterr().err
+    assert not agent.exists()
+
+
+def test_unscheduling_says_it_stopped(home, capsys, agent, monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+    run(home, "schedule")
+    capsys.readouterr()
+
+    assert run(home, "unschedule") == cli.OK
+
+    assert "not look in the folder on its own" in capsys.readouterr().out
+    assert not agent.exists()
+
+
+def test_unscheduling_when_there_was_no_schedule_is_not_a_failure(home, capsys,
+                                                                  agent):
+    assert run(home, "unschedule") == cli.OK
+    assert "no schedule to remove" in capsys.readouterr().out
+
+
+def test_status_says_when_it_will_next_look(home, capsys, agent, monkeypatch):
+    configured(home)
+    signed_in(monkeypatch)
+    run(home, "schedule", "--times", "06:00")
+    capsys.readouterr()
+
+    run(home, "status")
+
+    assert "Runs at: 06:00" in capsys.readouterr().out
+
+
+def test_status_says_when_nothing_is_scheduled(home, capsys, agent):
+    configured(home)
+
+    run(home, "status")
+
+    assert "only when you say so" in capsys.readouterr().out
 
 
 # --- the home -----------------------------------------------------------------
