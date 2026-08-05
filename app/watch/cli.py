@@ -21,6 +21,7 @@ from app.settings import Paths, get_api_key, set_api_key
 from docproof.providers.catalog import BY_ID, MODELS
 
 from . import auth as authlib
+from . import schedule as schedulelib
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
 from .settings import (GOOGLE_KEY, WatchSettings, default_watch_home,
@@ -73,11 +74,20 @@ def main(argv=None) -> int:
 
     sub.add_parser("status", help="what the watcher has done lately")
 
+    sch = sub.add_parser("schedule",
+                         help="have macOS run a pass a few times a day")
+    sch.add_argument("--times", default=",".join(schedulelib.DEFAULT_TIMES),
+                     help="when to run, as HH:MM separated by commas "
+                          f"(default: {','.join(schedulelib.DEFAULT_TIMES)})")
+
+    sub.add_parser("unschedule", help="stop running passes automatically")
+
     args = ap.parse_args(argv)
     home = Path(args.home).expanduser() if args.home else default_watch_home()
     _logging(home, verbose=args.verbose)
     return {"auth": cmd_auth, "init": cmd_init, "once": cmd_once,
-            "status": cmd_status}[args.cmd](args, home)
+            "status": cmd_status, "schedule": cmd_schedule,
+            "unschedule": cmd_unschedule}[args.cmd](args, home)
 
 
 def _logging(home: Path, *, verbose: bool) -> None:
@@ -266,6 +276,41 @@ _PLAIN = {"new": "to prepare", "done": "already prepared",
 
 # --- what it has been doing ---------------------------------------------------
 
+def cmd_schedule(args, home: Path) -> int:
+    ws = WatchSettings.load(home)
+    try:
+        times = schedulelib.parse_times(args.times)
+        target = schedulelib.install(times, home)
+    except schedulelib.ScheduleError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return UNUSABLE
+
+    print(f"DocProof will look in the folder at "
+          f"{schedulelib.describe(times)}, every day.")
+    print(f"  {target}")
+    print(f"  output goes to {home / schedulelib.LAUNCHD_LOG}")
+    # Said plainly rather than discovered in three weeks: launchd does not run
+    # a calendar job while the Mac is asleep, and does not go back for the one
+    # it missed. It runs at the next scheduled time the machine is awake for.
+    print("\nA sleeping Mac runs nothing. A missed time is not made up "
+          "later — the next one that finds the machine awake does the work.")
+    missing = _missing(ws)
+    if missing:
+        print(f"\nNote: nothing will happen until there is {missing}")
+    return OK
+
+
+def cmd_unschedule(args, home: Path) -> int:
+    try:
+        removed = schedulelib.uninstall()
+    except schedulelib.ScheduleError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return UNUSABLE
+    print("DocProof will not look in the folder on its own any more."
+          if removed else "There was no schedule to remove.")
+    return OK
+
+
 def cmd_status(args, home: Path) -> int:
     ws = WatchSettings.load(home)
     print(f"Folder:  {ws.folder_id or '— not set yet'}")
@@ -273,6 +318,9 @@ def cmd_status(args, home: Path) -> int:
     print(f"Home:    {home}")
     signed = authlib.token_source(get_api_key, bool(ws.client_id))
     print(f"Signed in: {'yes' if signed['configured'] else 'no'}")
+    times = schedulelib.current()
+    print(f"Runs at: {schedulelib.describe(times) if times else
+                      '— only when you say so'}")
     missing = _missing(ws)
     if missing:
         print(f"\nStill needed: {missing}")
