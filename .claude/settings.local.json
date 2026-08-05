@@ -118,7 +118,10 @@
       "Bash(.venv/bin/python -m pytest tests/test_changelog.py -q)",
       "Bash(.venv/bin/python -m pytest tests/test_variants.py -q)",
       "Bash(.venv/bin/python -m pytest tests/test_formatting.py -q)",
-      "Bash(.venv/bin/python -m pytest tests/test_consistency.py -q)"
+      "Bash(.venv/bin/python -m pytest tests/test_consistency.py -q)",
+      "Bash(xargs -I{} sh -c 'echo -n \"{}: \"; grep \"^channel:\" {}')",
+      "Bash(python3 -m pytest tests/ -q)",
+      "Bash(.venv/bin/pytest tests/ -q)"
     ]
   }
 }
