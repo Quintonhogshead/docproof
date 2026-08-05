@@ -25,6 +25,10 @@ detection_prompt: |
     "I thought— no, never mind."
   - Dialogue resuming after an interrupting attribution: "I know," she said,
     "and I don't care." — the "and" is correctly lowercase.
+  - A capitalized pronoun in a dialogue tag: "Wait here." He said. The
+    dialogue_tag type owns that case, because there the capital and the
+    punctuation before it are one defect and get fixed together. Leave it
+    entirely alone here, even when you are certain the capital is wrong.
   - Seasons ("summer"), directions used as directions ("we drove north"),
     common nouns that resemble titles ("the president of the club"), and
     job titles used generically.

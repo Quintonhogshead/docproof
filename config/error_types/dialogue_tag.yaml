@@ -1,0 +1,105 @@
+key: dialogue_tag
+name: Dialogue tag punctuation and capitalization
+version: 1
+
+detection_prompt: |
+  How a line of dialogue joins its attribution ("she said", "he asked"). This
+  is the highest-volume mechanical error class in fiction, and the house guide
+  treats every cell of it as a correction, not a query.
+
+  A dialogue tag is a reporting verb — said, asked, replied, whispered,
+  yelled, muttered, shouted, murmured, called, answered, added, continued,
+  explained, insisted, demanded, admitted, agreed, snapped, hissed, stammered,
+  mumbled, repeated, warned, and the borderline ones the house includes:
+  laughed, sighed, growled, breathed.
+
+  Read the character just before the closing quotation mark, and the subject
+  just after it. Every combination below is an error except the first:
+
+  - Comma, question mark, exclamation mark, or ellipsis + lowercase subject —
+    CORRECT. "Wait here," he said.
+  - Comma, question mark, exclamation mark, or ellipsis + capitalized pronoun —
+    ERROR. Lowercase the pronoun: "Wait here," He said.
+  - Period + lowercase subject — ERROR. The period should be a comma:
+    "Wait here." he said.
+  - Period + capitalized pronoun — ERROR, and BOTH halves are wrong: the
+    period becomes a comma AND the pronoun is lowercased: "Wait here." He
+    said. This is the combination most often missed; check it explicitly
+    rather than assuming the other rows cover it.
+  - Punctuation placed AFTER the closing quote instead of inside it — always
+    an error, whatever follows: "Wait here", he said. Move the punctuation
+    inside the quote, then apply the rows above.
+
+  Do NOT flag:
+  - Action beats. If the words after the quote describe an action rather than
+    an act of speaking, the period is CORRECT and must stay: "Wait here." She
+    turned toward the stairs. This is the single most important exclusion —
+    turning a correct action beat into a tag corrupts the author's rhythm.
+  - Verbs that cannot introduce speech — smiled, nodded, shrugged, grinned,
+    frowned, blinked. Those are action beats, not tags, however they are
+    punctuated.
+  - Question marks and exclamation marks before a tag. They are correct and
+    stay: "Who's there?" he asked. Never convert ? or ! to a comma.
+  - The pronoun "I", which is always capitalized: "Wait here," I said. is
+    correct, and lowercasing it is never right.
+  - A proper name as the tag's subject. Its capital is correct and must be
+    preserved: "Wait here." Sarah said. needs the period changed to a comma
+    and NOTHING else. Never lowercase a name.
+  - Dialogue interrupted by an em dash, and dialogue resuming after an
+    interrupting attribution: "I know," she said, "and I don't care."
+  - Nested or quoted-within-quoted speech.
+  - A genuinely new sentence of narration after the quote: "Wait here." The
+    room had gone quiet.
+
+  The capitalization type may also see the pronoun case here. It does not own
+  it — this type does, because the punctuation and the case are one defect.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the tag punctuated and
+  capitalized correctly. A single tag is ONE finding even when both halves are
+  wrong: change the period to a comma AND lowercase the pronoun in the same
+  corrected_text, because they are one defect in one tag, not two errors.
+  Preserve the quotation-mark characters exactly as the manuscript writes them
+  (curly or straight), never lowercase a proper name, and change nothing
+  outside the tag itself.
+
+confidence_guidance: |
+  high   — an unambiguous reporting verb (said, asked, replied, whispered)
+           with a pronoun or named subject directly after the closing quote.
+  medium — the verb is one of the borderline ones (laughed, sighed, growled,
+           breathed) where an action-beat reading is available.
+  low    — the following words could plainly be an action beat, or the
+           manuscript uses a non-standard attribution convention consistently
+           enough that it reads as deliberate.
+
+examples:
+  - text: "“I told you already.” She said it again, backing toward the door."
+    finding: null
+  - text: "“Wait here.” he said, and the door closed behind him."
+    finding:
+      original_text: "“Wait here.” he said, and the door closed behind him."
+      corrected_text: "“Wait here,” he said, and the door closed behind him."
+      explanation: "A period before a dialogue tag becomes a comma."
+      confidence: high
+  - text: "“You promised me.” She said, and meant it."
+    finding:
+      original_text: "“You promised me.” She said, and meant it."
+      corrected_text: "“You promised me,” she said, and meant it."
+      explanation: "Period becomes a comma and the tag pronoun is lowercased."
+      confidence: high
+  - text: "“Not tonight,” She whispered from the hallway."
+    finding:
+      original_text: "“Not tonight,” She whispered from the hallway."
+      corrected_text: "“Not tonight,” she whispered from the hallway."
+      explanation: "A dialogue tag's pronoun is lowercase."
+      confidence: high
+  - text: "“Don't move.” Sarah said from the doorway."
+    finding:
+      original_text: "“Don't move.” Sarah said from the doorway."
+      corrected_text: "“Don't move,” Sarah said from the doorway."
+      explanation: "Period becomes a comma; the name keeps its capital."
+      confidence: high
+  - text: "“Who's there?” he asked."
+    finding: null
+  - text: "“Wait here.” She turned toward the stairs."
+    finding: null

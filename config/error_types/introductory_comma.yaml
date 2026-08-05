@@ -1,0 +1,68 @@
+key: introductory_comma
+name: Comma after an introductory element
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide calls for a comma after an introductory phrase or
+  clause: "After the meeting, we left."
+
+  FLAG:
+  - A subordinate clause opening the sentence: "Because it was late we went
+    home.", "If you leave now you'll make it.", "When the bell rang she stood."
+  - A participial phrase: "Walking to the station he realized he was early."
+  - A longer prepositional phrase (roughly four words or more): "In the last
+    week of August the rain finally stopped."
+  - A transitional word or phrase followed directly by the main clause:
+    "However he never called.", "On the other hand she had a point."
+  - An introductory element whose omitted comma creates a misreading: "Before
+    eating the children washed their hands."
+
+  Do NOT flag — over-flagging this rule is how a manuscript gets buried in
+  commas it does not need:
+  - A short introductory adverb, where a comma would be intrusive and CMOS does
+    not require one: "Then she left.", "Now he understood.", "Suddenly the door
+    opened.", "Yesterday I called."
+  - A short prepositional phrase of about three words or fewer where no
+    misreading is possible: "In the morning he left." is correct as written.
+  - Inverted sentences, which take no comma: "Down the hill ran the boy.",
+    "Out of the fog came a voice."
+  - A phrase that is the subject of the sentence, not an introduction:
+    "Running down the hill was exhausting.", "To finish the book took a year."
+  - Sentences opening with a coordinating conjunction: "And then he left.",
+    "But nobody answered."
+  - Dialogue tags, and the resumption of interrupted speech.
+  - Elements already followed by a comma.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one comma
+  inserted at the end of the introductory element, immediately before the main
+  clause begins. Add nothing else and reword nothing.
+
+confidence_guidance: |
+  high   — an introductory subordinate clause or participial phrase, in
+           narration, where the missing comma is unambiguous.
+  medium — an introductory prepositional phrase near the short/long boundary,
+           where CMOS would permit either.
+  low    — the element is short, the passage is dialogue or first-person voice
+           where the unbroken rhythm may be deliberate, or the phrase might be
+           the subject rather than an introduction.
+
+examples:
+  - text: "After the meeting we walked back along the river."
+    finding:
+      original_text: "After the meeting we walked back along the river."
+      corrected_text: "After the meeting, we walked back along the river."
+      explanation: "House style takes a comma after an introductory phrase."
+      confidence: high
+  - text: "Then she left without another word."
+    finding: null
+  - text: "Because it was already dark they took the long way home."
+    finding:
+      original_text: "Because it was already dark they took the long way home."
+      corrected_text: "Because it was already dark, they took the long way home."
+      explanation: "An introductory subordinate clause is followed by a comma."
+      confidence: high
+  - text: "Down the hill ran the boy who had started it all."
+    finding: null
+  - text: "Running down the hill was the only thing that helped."
+    finding: null

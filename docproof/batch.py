@@ -177,7 +177,8 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
 
 def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
     """The system prompt each pass will send, keyed by the pass label."""
-    analyzers = build_analyzers(cfg, prepared.groups, None, itertools.count(1))
+    analyzers = build_analyzers(cfg, prepared.groups, None,
+                                itertools.count(1), prepared.vocabulary)
     return {a.label: a.system_prompt for a in analyzers}
 
 
@@ -186,7 +187,8 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
     request carries its own system prompt, so nothing forces them apart."""
     from .analyzer import render_chunk
 
-    analyzers = build_analyzers(cfg, prepared.groups, None, itertools.count(1))
+    analyzers = build_analyzers(cfg, prepared.groups, None,
+                                itertools.count(1), prepared.vocabulary)
     return [
         BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
                      system=analyzer.system_prompt,
@@ -251,7 +253,8 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict) -> tuple[list, Usa
     finding checks the synchronous path uses."""
     ids = itertools.count(1)
     usage = Usage()
-    analyzers = build_analyzers(cfg, prepared.groups, None, ids)
+    analyzers = build_analyzers(cfg, prepared.groups, None, ids,
+                                prepared.vocabulary)
     findings: list = []
     missing = 0
 

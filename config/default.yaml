@@ -33,6 +33,19 @@ prep:
   strip_direct_formatting: true    # in the placed file only; italics always kept
   verify: true                     # refuse to ship a file whose words drifted
 
+# A dictionary scan that never corrects anything. Unknown words that repeat,
+# or that are written as names, are the author's own — they become a
+# do-not-flag list sent to every pass, which is what stops a coined name being
+# "corrected" into the standard word it resembles. Unknown words used once, in
+# lower case, are handed to the model to look at. Needs the optional `spylls`
+# package; without it the scan is skipped and the passes run as before.
+spellcheck:
+  enabled: true
+  dictionary: en_US         # the bundled Hunspell set; variants arrive with Phase 5
+  min_occurrences: 2        # seen this often → a coined term, not a typo
+  suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
+  allowlist: []             # always correct for this house, whatever the dictionary says
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.
@@ -51,11 +64,31 @@ min_confidence: medium      # low | medium | high — gate for applying changes
 error_types:
   # mechanical — objective, verifiable, low false-positive rate
   - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]
+  # house commas — one Atmosphere house-guide rule each
+  - [serial_comma, complex_list_semicolon, introductory_comma,
+     direct_address_comma, tag_question_comma]
+  # dialogue mechanics — the highest-volume error class in fiction, and the
+  # one with the most detailed rule table, so it gets a pass to itself
+  - dialogue_tag
+  # house mechanics — numbers, money, hyphenation
+  - [number_style, currency_style, ly_adverb_hyphen]
   # sentence grammar — needs parsing, still decidable
-  - [comma_splice, run_on_sentence, subject_verb_agreement]
+  - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
-  - [tense_shift, pronoun_agreement, missing_word]
+  - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+# Deterministic sweeps, run before any model pass so their edits get first
+# claim on a span. Each is one Atmosphere house rule expressed as text
+# patterns, and each reports its own final match count — the thing a careful
+# read can never honestly promise. Free: no API call, no tokens.
+sweeps:
+  - sweep_ellipsis
+  - sweep_dash
+  - sweep_stacked_punctuation
+  - sweep_doubled_word
+  - sweep_century
+  - sweep_dialogue_tag
+
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
 output_dir: output
 comments: true              # margin comment on every tracked change
-revision_author: docproof
+revision_author: Atmosphere Press Proofreader

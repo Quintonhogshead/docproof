@@ -1,0 +1,57 @@
+key: tag_question_comma
+name: Comma before a tag question
+version: 1
+
+detection_prompt: |
+  The Atmosphere house guide requires a comma before a tag question — the
+  short interrogative appended to a statement to invite agreement:
+  "…, shall we?" — "…, isn't it?"
+
+  FLAG:
+  - Auxiliary tags: "You're coming aren't you?", "It's cold isn't it?",
+    "He didn't say did he?", "Let's go shall we?"
+  - Short confirming tags: "You'll be there right?", "That's settled then
+    okay?", "You did lock it yeah?"
+
+  Do NOT flag:
+  - An embedded or indirect question, which is not a tag: "She asked whether it
+    was cold.", "I wonder if it isn't too late."
+  - "right", "okay", "yeah", "then" used as ordinary adverbs or interjections
+    rather than tags: "Do it right now.", "Okay, let's start.", "He was right
+    about the weather." This is the main false positive for this type — the tag
+    reading requires a statement in front of it and a question mark after.
+  - A tag that already has its comma.
+  - A tag standing alone as its own sentence: "Isn't it?" after a full stop.
+  - Dialect renderings where the author has plainly fused the tag on purpose
+    ("innit") — leave those entirely alone.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one comma
+  inserted immediately before the tag. Never change the tag's wording, the
+  question mark, or anything else in the sentence.
+
+confidence_guidance: |
+  high   — a standard auxiliary tag ("isn't it", "aren't you", "shall we")
+           after a complete statement, closed by a question mark.
+  medium — a one-word tag ("right", "okay", "yeah") that reads as a tag here
+           but could be an adverb.
+  low    — dialect or heavily stylized speech where the fused tag may be the
+           author's rendering of the character's voice.
+
+examples:
+  - text: "\"You're coming with us aren't you?\" she asked."
+    finding:
+      original_text: "\"You're coming with us aren't you?\" she asked."
+      corrected_text: "\"You're coming with us, aren't you?\" she asked."
+      explanation: "A tag question is preceded by a comma."
+      confidence: high
+  - text: "\"Let's not talk about it shall we?\""
+    finding:
+      original_text: "\"Let's not talk about it shall we?\""
+      corrected_text: "\"Let's not talk about it, shall we?\""
+      explanation: "A tag question is preceded by a comma."
+      confidence: high
+  - text: "\"Do it right now,\" he said."
+    finding: null
+  - text: "She asked whether it was cold enough to snow."
+    finding: null

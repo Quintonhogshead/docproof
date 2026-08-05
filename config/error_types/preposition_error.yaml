@@ -1,0 +1,67 @@
+key: preposition_error
+name: Wrong preposition
+version: 1
+
+detection_prompt: |
+  A preposition that is simply the wrong one for the verb, adjective, or noun
+  it attaches to — a typing slip or a misremembered idiom, not a regional
+  variant.
+
+  FLAG:
+  - A preposition that produces no sensible reading: "the weight stood of the
+    necks of the horses" (should be "on"), "she leaned against the window and
+    stared into the glass" where "at" is plainly meant.
+  - A fixed idiom taking the wrong particle: "afraid from the dark" (of),
+    "capable to lift it" (of lifting), "consists in three parts" (of).
+  - "enough for" / "enough to" swapped: "strong enough for carry it".
+
+  Do NOT flag — this type sits just behind missing_word for false-positive
+  risk, so hold the bar high:
+  - Regional and dialect variants, which are correct in their own English:
+    "wait on" for "wait for" (Southern U.S.), "different than / from / to",
+    "on line" for "in line", "at the weekend" and "in hospital" (British),
+    "outside of".
+  - Idioms that legitimately vary: "bored of / bored with", "talk to / talk
+    with", "in accordance with", "centre on / centre around".
+  - Phrasal verbs, where the particle belongs to the verb: "look up", "put up
+    with", "give in", "hold out", "make off with".
+  - Character voice: non-native speakers, children, period or class dialect,
+    and any speaker the author is characterizing through their grammar.
+  - Archaic or deliberately elevated constructions in historical or fantasy
+    prose.
+  - A missing preposition rather than a wrong one — missing_word owns that.
+  - Any case where two prepositions would both work. If you are choosing
+    between defensible options, this is not an error.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the preposition
+  replaced. Never add or remove words around it, never change the verb, and
+  never rewrite the phrase into a different idiom.
+
+confidence_guidance: |
+  high   — the preposition produces a reading that is not English, in
+           narration, and exactly one replacement fits.
+  medium — the phrase is odd but a second reading is available, or the idiom
+           has more than one accepted form.
+  low    — inside dialogue, in a character voice the author is shaping, or in
+           period, dialect, or invented-world prose.
+
+examples:
+  - text: "He was afraid from the dark long after he stopped admitting it."
+    finding:
+      original_text: "He was afraid from the dark long after he stopped admitting it."
+      corrected_text: "He was afraid of the dark long after he stopped admitting it."
+      explanation: "The idiom is \"afraid of\"."
+      confidence: high
+  - text: "She waited on her brother outside the courthouse."
+    finding: null
+  - text: "“I'm different than I was,” he said."
+    finding: null
+  - text: "The yoke stood of the necks of the two lead horses."
+    finding:
+      original_text: "The yoke stood of the necks of the two lead horses."
+      corrected_text: "The yoke stood on the necks of the two lead horses."
+      explanation: "\"Stood of\" is not English here; the yoke stood on the necks."
+      confidence: high
+  - text: "He put up with the noise for another hour."
+    finding: null

@@ -1,0 +1,66 @@
+key: that_which
+name: That vs. which
+version: 1
+
+detection_prompt: |
+  The Chicago distinction, which the house guide follows for U.S. manuscripts:
+  "that" introduces a restrictive clause (essential to identifying the noun,
+  no commas); "which" introduces a nonrestrictive clause (extra information,
+  set off by commas).
+
+  FLAG:
+  - "which" introducing a restrictive clause with no comma before it, where
+    the clause is essential: "The book which I borrowed was overdue."
+  - "that" introducing a clause that is set off by commas: "The book, that I
+    borrowed, was overdue."
+
+  Do NOT flag:
+  - "which" after a preposition — always correct, never swap it: "the house in
+    which she lived", "the terms of which", "a subject about which he knew
+    nothing".
+  - "that" as a demonstrative: "that house", "after that", "that was the last
+    of it".
+  - "that" as a conjunction introducing a clause, not a relative: "He said
+    that he would come.", "so tired that she slept."
+  - "which" referring back to a whole preceding clause: "He left early, which
+    surprised everyone." That is correct and idiomatic.
+  - A clause where the restrictive vs. nonrestrictive reading genuinely
+    depends on facts the paragraph does not settle. If both readings work, the
+    author's punctuation is the evidence — leave it alone.
+  - Dialogue and close first-person narration, where restrictive "which" is
+    how people actually speak.
+  - Verbatim quoted material from a real published source, including epigraphs
+    and letters.
+  - A manuscript that uses restrictive "which" consistently throughout. That
+    is an authorial habit, not a run of errors; report at low confidence if at
+    all.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the relative pronoun
+  swapped, plus only the comma change the swap itself requires: which → that
+  in a restrictive clause changes just the word, while that → which in a
+  nonrestrictive clause keeps the commas already there. Never add a comma to
+  convert a restrictive clause into a nonrestrictive one — that changes the
+  meaning, and it is the author's to make.
+
+confidence_guidance: |
+  high   — restrictive "which" with no comma, in narration, where the clause
+           is plainly essential to identifying the noun.
+  medium — the clause could be read either way, but the surrounding punctuation
+           points one direction.
+  low    — dialogue, first-person voice, quoted material, or a manuscript-wide
+           habit of restrictive "which".
+
+examples:
+  - text: "The book which I borrowed from her was already overdue."
+    finding:
+      original_text: "The book which I borrowed from her was already overdue."
+      corrected_text: "The book that I borrowed from her was already overdue."
+      explanation: "A restrictive clause takes \"that\" under Chicago style."
+      confidence: high
+  - text: "He left early, which surprised everyone at the table."
+    finding: null
+  - text: "She described the house in which she had grown up."
+    finding: null
+  - text: "He said that he would come back before dark."
+    finding: null

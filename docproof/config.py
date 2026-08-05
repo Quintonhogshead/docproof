@@ -60,6 +60,23 @@ class PrepConfig(BaseModel):
     verify: bool = True
 
 
+class SpellcheckConfig(BaseModel):
+    """A dictionary scan that classifies rather than corrects. Its output is
+    context for the model passes — the manuscript's own vocabulary as a
+    do-not-flag list — never an edit. See docproof/spellscan.py."""
+    enabled: bool = True
+    dictionary: str = "en_US"
+    # Seen this often, or written as a name, and an unknown word is the
+    # author's coined term rather than a typo.
+    min_occurrences: int = Field(default=2, ge=1)
+    # suggest() costs about a quarter-second a word, so only this many
+    # candidates get dictionary guesses. 0 skips them entirely; the
+    # classification itself needs none.
+    suggestion_limit: int = Field(default=25, ge=0)
+    # Words that are always correct for this house, whatever the dictionary says.
+    allowlist: list[str] = Field(default_factory=list)
+
+
 class PricingConfig(BaseModel):
     """Optional $/MTok rates for the cost estimate in summary.md.
     Leave unset to omit the estimate."""
@@ -75,12 +92,17 @@ class Config(BaseModel):
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     skip: SkipConfig = Field(default_factory=SkipConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
+    spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     min_confidence: Literal["low", "medium", "high"] = "medium"
     # Each entry is one API pass over the whole document: a bare key runs alone,
     # a list of keys runs as a single combined pass. Grouping trades a little
     # detection focus for a large cut in input tokens — see docs/error-types.md.
     error_types: list[str | list[str]] = Field(default_factory=list)
+    # Deterministic house-style sweeps, run before any model pass so their
+    # edits get first claim on a span. These cost nothing and, unlike a read,
+    # can report their own final match count. An empty list turns them off.
+    sweeps: list[str] = Field(default_factory=list)
     tracked_changes_policy: Literal["abort", "accept_all_first", "ignore"] = "abort"
     output_dir: str = "output"
     comments: bool = True
@@ -111,6 +133,21 @@ class Config(BaseModel):
                         f"error_types: '{key}' appears more than once; a key in "
                         f"two passes would review the document twice for it")
                 seen.add(key)
+        return value
+
+    @field_validator("sweeps")
+    @classmethod
+    def _validate_sweeps(cls, value):
+        from .sweeps import SWEEPS_BY_KEY
+        seen: set[str] = set()
+        for key in value:
+            if key not in SWEEPS_BY_KEY:
+                raise ValueError(
+                    f"sweeps: unknown sweep '{key}'. "
+                    f"Available: {', '.join(SWEEPS_BY_KEY)}")
+            if key in seen:
+                raise ValueError(f"sweeps: '{key}' appears more than once")
+            seen.add(key)
         return value
 
     @property

@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
@@ -21,6 +21,8 @@ from .formats import DocumentFormat, get_format
 from .models import Chunk, DocumentModel, Usage
 from .providers import Provider
 from .reporting import write_findings_json, write_summary_md
+from .spellscan import SpellScan, scan as spell_scan
+from .sweeps import SweepReport, run_sweeps
 from .validator import validate_findings
 
 log = logging.getLogger("docproof.pipeline")
@@ -33,6 +35,19 @@ class Prepared:
     chunks: list[Chunk]
     groups: list[list[ErrorType]]
     fmt: DocumentFormat
+    # The deterministic sweeps have already run by the time a Prepared exists:
+    # they need no API call, so there is nothing to defer them for, and having
+    # them here means `inventory` can show what a run would fix for free.
+    sweep_findings: list = field(default_factory=list)
+    sweep_reports: list[SweepReport] = field(default_factory=list)
+    # The dictionary scan, for the same reason: it makes no API call, and its
+    # result is the same for every chunk, so it belongs to the document.
+    spell: SpellScan = field(default_factory=SpellScan)
+
+    @property
+    def vocabulary(self) -> str:
+        """The manuscript's own vocabulary, as a system-prompt section."""
+        return self.spell.prompt_section()
 
     @property
     def content_hash(self) -> str:
@@ -103,7 +118,30 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
     log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
              len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
-    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt)
+
+    # Sweeps read the whole paragraph from the document model, not the chunk,
+    # so their offsets and occurrence counts are measured against the same
+    # canonical text the validator anchors into — an oversized paragraph split
+    # across chunks would otherwise have them counting within a slice. They
+    # still only touch paragraphs the run actually covers: a selected-sections
+    # run must not edit the rest of the manuscript.
+    covered = {p.para_id for c in chunks for p in c.paragraphs}
+    sweep_findings, sweep_reports = run_sweeps(
+        [p for p in doc.paragraphs if p.para_id in covered], cfg.sweeps)
+
+    # The spell scan reads the WHOLE document even when the run covers a few
+    # sections. It changes nothing, so reading more costs nothing — and a
+    # coined name is only recognisable as the author's by being used across
+    # the manuscript. Scanning one chapter would file its own hero's name as a
+    # suspected typo.
+    spell = spell_scan(doc.paragraphs, enabled=cfg.spellcheck.enabled,
+                       min_occurrences=cfg.spellcheck.min_occurrences,
+                       suggestion_limit=cfg.spellcheck.suggestion_limit,
+                       allowlist=cfg.spellcheck.allowlist,
+                       dictionary=cfg.spellcheck.dictionary)
+    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
+                    sweep_findings=sweep_findings, sweep_reports=sweep_reports,
+                    spell=spell)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -127,8 +165,10 @@ def chunk_outline(prepared: Prepared) -> list[dict]:
 
 def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     provider: Provider | None,
-                    finding_ids: itertools.count) -> list[Analyzer]:
-    return [Analyzer(cfg, group, provider, finding_ids) for group in groups]
+                    finding_ids: itertools.count,
+                    vocabulary: str = "") -> list[Analyzer]:
+    return [Analyzer(cfg, group, provider, finding_ids, vocabulary)
+            for group in groups]
 
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
@@ -154,7 +194,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
     total = prepared.request_count
     done = 0
     for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
-                                                 provider, ids)):
+                                                 provider, ids,
+                                                 prepared.vocabulary)):
         for chunk in prepared.chunks:
             key = custom_id(i, chunk.chunk_id)
             cached = checkpoint.get(key) if checkpoint else None
@@ -181,7 +222,11 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     """Validate, write tracked changes, save, and report."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    validated = validate_findings(findings, prepared.doc, cfg.min_confidence)
+    # Sweep findings go first: the validator gives the earliest finding to
+    # claim a span the right to it, and a scripted rule is more certain than
+    # anything the model reports about the same characters.
+    validated = validate_findings(list(prepared.sweep_findings) + list(findings),
+                                  prepared.doc, cfg.min_confidence)
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
@@ -189,10 +234,12 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     prepared.pkg.save(reviewed)
     write_findings_json(out / "findings.json", doc=prepared.doc,
                         findings=validated, usage=usage, cfg=cfg,
-                        applied_ids=stats.applied, batch=batch)
+                        applied_ids=stats.applied, batch=batch,
+                        sweeps=prepared.sweep_reports, spell=prepared.spell)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
-                     batch=batch, fmt=fmt)
+                     batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
+                     spell=prepared.spell)
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated))

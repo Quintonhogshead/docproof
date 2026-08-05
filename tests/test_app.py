@@ -12,13 +12,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.jobs import Job, JobRunner, JobStore  # noqa: F401 - JobRunner patched
-from app.main import create_app
+from app.main import CONFIG_PATH, create_app
 from docproof import __version__ as docproof_version
+from docproof.config import load_config
 from app.settings import Paths, Settings
 from .conftest import FIXTURES
 from .fakes import ScriptedBatchProvider, finding_result
 
 SPLICE = "The manuscript was finished, nobody wanted to read it."
+
+# Read from the config the app itself loads, so enabling an error type is a
+# one-file change rather than a test edit. What these tests care about is that
+# the app prices and renders EVERY shipped pass, not how many there are today.
+_SHIPPED = load_config(CONFIG_PATH)
+PASSES = len(_SHIPPED.error_type_groups)
+TYPES = len(_SHIPPED.error_type_keys)
 
 
 @pytest.fixture
@@ -80,7 +88,7 @@ def test_upload_preflights_at_drop_time(client):
     staged = _upload(client)
     assert staged["ok"] is True
     assert staged["sections"] >= 1 and staged["paragraphs"] == 3
-    assert staged["requests"] == staged["sections"] * 3   # three passes
+    assert staged["requests"] == staged["sections"] * PASSES
 
 
 def test_upload_rejects_an_unreadable_kind_of_file(client):
@@ -663,8 +671,8 @@ def test_upload_lists_the_sections_a_user_can_pick(client):
     assert SPLICE in section["preview"]
     assert section["paragraphs"] >= 1 and section["est_tokens"] > 0
     # Uploads preflight against the real config, so the picker prices a
-    # section at the full three passes even though this test runs one.
-    assert staged["passes"] == 3
+    # section at every shipped pass even though this test runs one.
+    assert staged["passes"] == PASSES
     assert staged["requests"] == staged["sections"] * staged["passes"]
 
 
@@ -693,7 +701,8 @@ def test_a_null_selection_means_the_whole_document(client):
 
 def test_prompts_screen_shows_what_will_be_sent(client):
     body = client.get("/api/prompts").json()
-    assert len(body["types"]) == 11
+    assert len(body["types"]) == TYPES
+    assert len(body["passes"]) == PASSES
     assert all(t["detection_prompt"] for t in body["types"])
     assert not any(t["edited"] for t in body["types"])
     # The assembled message is the real one, not a description of it.

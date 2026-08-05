@@ -13,18 +13,22 @@ types. Each entry is one API call per chunk:
 ```yaml
 error_types:
   - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]
-  - [comma_splice, run_on_sentence, subject_verb_agreement]
-  - [tense_shift, pronoun_agreement, missing_word]
+  - [serial_comma, complex_list_semicolon, introductory_comma,
+     direct_address_comma, tag_question_comma]
+  - dialogue_tag
+  - [number_style, currency_style, ly_adverb_hyphen]
+  - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
+  - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 ```
 
-A bare string runs alone; a list runs as one combined pass. The three groups
-above cover 11 types in 3 passes.
+A bare string runs alone; a list runs as one combined pass. The six groups
+above cover 22 types in 6 passes.
 
 This exists because cost is dominated by re-sending the document. One pass per
 type means N copies of the manuscript in input tokens; grouping collapses that
 to one copy per group. The system prompt grows instead, and it's cached, so
-after the first chunk it's nearly free. Going from 11 solo passes to 3 grouped
-ones cuts document input tokens by about 70%.
+after the first chunk it's nearly free. Going from 22 solo passes to 6 grouped
+ones cuts document input tokens by about 73%.
 
 `docproof inventory <file>` prints the arithmetic before you spend anything:
 
