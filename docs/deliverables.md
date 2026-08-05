@@ -109,6 +109,12 @@ asserted that was not.
 The change log is written *before* the audit is enforced, so a run that refuses
 to ship a manuscript still explains itself in the author's own document.
 
+It can be switched off — `change_log: false`, or the switch in **Settings** —
+and the switch is worth reading carefully before it is used. The change log
+costs no API call: it is written from findings the review has already paid for,
+so turning it off buys tidiness rather than money, and it takes the audit
+result and the limits statement out of the author's hands with it.
+
 ## Short paragraphs
 
 `chunking.min_paragraph_chars` keeps two-word paragraphs out of the model

@@ -78,6 +78,14 @@ class Job:
     applied: int | None = None
     results_dir: str | None = None
     min_confidence: str = "medium"
+    # Whether the dictionary scan runs for this document, and what it scans
+    # against. Per job rather than per install: the dictionary belongs to the
+    # manuscript, not the press — one book is British, the next is dense enough
+    # in invented vocabulary to be worth doing without. None on either means
+    # "whatever the config says", which is what every job recorded before these
+    # fields existed meant.
+    spellcheck: bool | None = None
+    dictionary: str | None = None
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -298,8 +306,13 @@ class JobRunner:
         cfg = load_config(self.config_path)
         cfg.api.model = job.model
         cfg.min_confidence = job.min_confidence
+        if job.spellcheck is not None:
+            cfg.spellcheck.enabled = job.spellcheck
+        if job.dictionary:
+            cfg.spellcheck.dictionary = job.dictionary
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
+        cfg.change_log = self.settings.change_log
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:

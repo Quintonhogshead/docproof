@@ -820,3 +820,24 @@ def test_plain_state_never_leaks_jargon():
                    model="m", mode="batch", state=state,
                    schedule_at="23:00").plain_state()
         assert not any(w.lower() in text.lower() for w in words), text
+
+
+def test_the_change_log_switch_persists(client, tmp_path):
+    """A switch that forgets across a restart is a switch nobody trusts."""
+    assert client.get("/api/settings").json()["settings"]["change_log"] is True
+    body = client.put("/api/settings", json={"change_log": False}).json()
+    assert body["settings"]["change_log"] is False
+    assert Settings.load(Paths(tmp_path)).change_log is False
+
+
+def test_a_submission_carries_its_own_choice_about_the_dictionary(client):
+    """Per submission, not per install: the dictionary belongs to the
+    manuscript. A caller that says nothing gets the configured default."""
+    staged = _upload(client)
+    job = _run(client, staged["id"], spellcheck=False, dictionary="dicts/en_GB")
+    record = client.app_state.runner.store.get(job["id"])
+    assert record.spellcheck is False and record.dictionary == "dicts/en_GB"
+    assert client.app_state.runner.config_for(record).spellcheck.enabled is False
+
+    plain = client.app_state.runner.store.get(_run(client, staged["id"])["id"])
+    assert plain.spellcheck is None and plain.dictionary is None

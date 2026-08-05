@@ -331,3 +331,52 @@ def test_a_scheduled_job_promoted_by_the_ticker_stays_promoted(runner,
     r.tick_once()
     assert store.get("j1").state == "queued"
     assert not r.queue.empty()
+
+
+# --- the dictionary scan, per job ---------------------------------------------
+
+def test_a_job_leaves_the_dictionary_scan_to_the_config_by_default(runner):
+    """A job that says nothing about the scan gets whatever the press has
+    configured — which is what every job recorded before these fields
+    existed meant, and what the watcher still submits."""
+    store, r = runner
+    cfg = r.config_for(_job(store))
+    assert cfg.spellcheck.enabled is load_config(CONFIG).spellcheck.enabled
+
+
+def test_a_job_can_turn_the_dictionary_scan_off_for_itself(runner):
+    """Per submission rather than per install: the dictionary belongs to the
+    manuscript. A book dense enough in invented vocabulary is better read
+    without one than with every second word raised."""
+    store, r = runner
+    assert r.config_for(_job(store, spellcheck=False)).spellcheck.enabled is False
+    assert r.config_for(_job(store, spellcheck=True)).spellcheck.enabled is True
+
+
+def test_a_job_can_name_its_own_dictionary(runner):
+    """spylls ships en_US only, so a British manuscript needs the press to
+    point at an .aff/.dic pair of its own — for that book, not for all of
+    them."""
+    store, r = runner
+    cfg = r.config_for(_job(store, dictionary="dicts/en_GB"))
+    assert cfg.spellcheck.dictionary == "dicts/en_GB"
+
+
+def test_the_choice_survives_a_round_trip_through_the_store(runner):
+    """Jobs are JSON on disk and a batch can be collected days later, so a
+    setting the manifest cannot carry is a setting that quietly reverts."""
+    store, _ = runner
+    _job(store, spellcheck=False, dictionary="dicts/en_GB")
+    reloaded = store.get("j1")
+    assert reloaded.spellcheck is False
+    assert reloaded.dictionary == "dicts/en_GB"
+
+
+def test_the_change_log_can_be_turned_off(runner):
+    """It costs no API call — it is written from findings already paid for —
+    so this buys tidiness rather than money. Off means the file is simply not
+    written."""
+    store, r = runner
+    assert r.config_for(_job(store)).change_log is True
+    r.settings.change_log = False
+    assert r.config_for(_job(store)).change_log is False

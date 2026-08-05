@@ -33,3 +33,30 @@ def test_end_to_end_mock(tmp_path):
     p = {wp.para_id: wp.element for wp in walk_package(pkg)}["body-0000"]
     assert paragraph_view_text(p, "reject") == SPLICE_A      # fidelity
     assert ";" in paragraph_view_text(p, "accept")
+
+def _cli_config(*argv):
+    """What `docproof review …` would run with, without running it."""
+    import argparse
+
+    from docproof.__main__ import _common, _configure
+    parser = argparse.ArgumentParser()
+    _common(parser)
+    config = FIXTURES.parent.parent / "config" / "default.yaml"
+    args = parser.parse_args([str(FIXTURES / "simple.docx"),
+                              "--config", str(config), *argv])
+    return _configure(args)[0]
+
+
+def test_the_dictionary_scan_can_be_turned_off_for_one_run():
+    """The dictionary belongs to the manuscript, not the install: a book dense
+    enough in invented vocabulary is better read without one."""
+    assert _cli_config().spellcheck.enabled is True
+    assert _cli_config("--no-spellcheck").spellcheck.enabled is False
+
+
+def test_one_run_can_name_its_own_dictionary():
+    """spylls ships en_US only, so a British manuscript needs an .aff/.dic
+    pair of its own — for that book, not for every book after it."""
+    cfg = _cli_config("--dictionary", "dicts/en_GB")
+    assert cfg.spellcheck.dictionary == "dicts/en_GB"
+    assert cfg.spellcheck.enabled is True

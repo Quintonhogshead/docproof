@@ -1441,6 +1441,7 @@ async function loadSettings() {
   $('indesign-template').value = settings.indesign_template || '';
   $('comments').checked = settings.comments;
   $('explanations').checked = settings.explanations;
+  $('change-log').checked = settings.change_log;
   $('prep-output-default').value = settings.prep_output || 'indesign';
   loadStyleSheet().catch(() => {});
   loadVersion().catch(() => {});
@@ -1462,6 +1463,7 @@ $('save-settings').addEventListener('click', async () => {
     indesign_template: $('indesign-template').value.trim(),
     comments: $('comments').checked,
     explanations: $('explanations').checked,
+    change_log: $('change-log').checked,
     prep_output: $('prep-output-default').value,
   };
   [['anthropic', 'key-anthropic'], ['openai', 'key-openai'],
