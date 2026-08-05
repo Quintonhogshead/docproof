@@ -34,13 +34,15 @@ function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
   });
-  ['drop', 'jobs', 'report', 'spending', 'prompts', 'settings'].forEach((s) => {
+  ['drop', 'jobs', 'report', 'watch', 'spending', 'prompts',
+   'settings'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
   if (name === 'jobs') refreshJobs({ tick: true });
   if (name === 'settings') loadSettings();
   if (name === 'prompts') loadPrompts();
   if (name === 'spending') loadSpending();
+  if (name === 'watch') loadWatch();
 }
 
 // ── what we're doing with these documents ─────────────────────────────────
@@ -981,12 +983,13 @@ async function loadSpending() {
 
   const recent = $('spend-recent');
   recent.innerHTML = '';
-  recent.append(headRow(['Document', 'What for', 'Reviewer', 'Words', 'Cost']));
+  recent.append(headRow(['Document', 'What for', 'Started by', 'Reviewer',
+                         'Words', 'Cost']));
   d.recent.forEach((r) => recent.append(bodyRow([
     r.filename, r.kind === 'prep' ? 'Prepared for layout' : 'Reviewed',
-    r.display, count(r.words), money(r.cost)])));
+    startedBy(r.source), r.display, count(r.words), money(r.cost)])));
   if (!d.recent.length) {
-    recent.append(bodyRow(['Nothing yet', '', '', '', '']));
+    recent.append(bodyRow(['Nothing yet', '', '', '', '', '']));
   }
 
   let note = $('spend-note');
@@ -998,6 +1001,10 @@ async function loadSpending() {
   }
   note.textContent = d.note;
 }
+
+// Two job stores, one bill — so a figure has to be able to say which half it
+// came from.
+const startedBy = (source) => (source === 'watch' ? 'DocWatch' : 'You');
 
 function renderMonths(months) {
   const box = $('spend-months');
@@ -1111,6 +1118,320 @@ function promptCard(t) {
   card.append(actions, status);
   return card;
 }
+
+// ── DocWatch ──────────────────────────────────────────────────────────────
+
+async function loadWatch({ quiet = false } = {}) {
+  const body = await api('/api/watch');
+  if (!state.watchModels) {
+    try {
+      state.watchModels = (await api('/api/models')).models;
+    } catch (_) { state.watchModels = []; }
+  }
+  renderWatch(body, quiet);
+}
+
+// The inputs are filled only on a deliberate load — opening the tab, or
+// finishing a save. The five-second poll redraws everything else, and a poll
+// that rewrote the folder field would eat a paste mid-keystroke.
+function renderWatch(body, quiet) {
+  const w = body.watch;
+  renderWatchSignIn(body);
+  renderWatchRun(body);
+  renderWatchFiles(w.files);
+  if (quiet) return;
+
+  $('watch-folder').value = w.folder_id || '';
+  $('watch-output').value = w.prep_output || 'indesign';
+  $('watch-notes').checked = w.upload_notes;
+  $('watch-failure-note').checked = w.upload_failure_note;
+  $('watch-auto').checked = w.auto_ticks;
+  $('watch-agent').checked = w.times.length > 0;
+  if (w.times.length) $('watch-times').value = w.times.join(',');
+  $('watch-client-id').value = '';
+  $('watch-client-secret').value = '';
+  $('watch-client').open = !w.has_client;
+
+  const picker = $('watch-model');
+  picker.innerHTML = '';
+  (state.watchModels || []).forEach((m) => {
+    const option = document.createElement('option');
+    option.value = m.id;
+    option.textContent = m.available ? m.display : `${m.display} — no key yet`;
+    picker.append(option);
+  });
+  picker.value = w.model;
+}
+
+function renderWatchSignIn(body) {
+  const w = body.watch;
+  const line = $('watch-signin');
+  const actions = $('watch-signin-actions');
+  actions.innerHTML = '';
+
+  const signing = body.sign_in && body.sign_in.state === 'waiting';
+  if (signing) {
+    line.className = 'muted';
+    line.textContent = 'A browser has opened so Google can ask whether '
+      + 'DocProof may read this Drive. Nothing is typed into DocProof — your '
+      + 'password stays with Google.';
+    return;
+  }
+  if (body.sign_in && body.sign_in.state === 'failed') {
+    watchNote($('watch-signin-note'), body.sign_in.message, 'error');
+  }
+
+  line.className = w.signed_in ? 'ok' : 'muted';
+  line.textContent = w.signed_in
+    ? (w.token_source === 'environment'
+      ? 'Signed in — the sign-in came from your environment.'
+      : 'Signed in. The sign-in is in your Keychain, not in a file.')
+    : 'Not signed in to Google yet.';
+
+  const go = document.createElement('button');
+  go.className = w.signed_in ? 'quiet' : 'primary';
+  go.textContent = w.signed_in ? 'Sign in again' : 'Sign in to Google';
+  go.addEventListener('click', () => signInToGoogle(go));
+  actions.append(go);
+
+  if (w.signed_in) {
+    const out = document.createElement('button');
+    out.className = 'quiet';
+    out.textContent = 'Forget this sign-in';
+    out.addEventListener('click', async () => {
+      renderWatch(await api('/api/watch/auth', { method: 'DELETE' }));
+    });
+    actions.append(out);
+  }
+}
+
+async function signInToGoogle(button) {
+  const note = $('watch-signin-note');
+  note.hidden = true;
+  button.disabled = true;
+  try {
+    const payload = {};
+    if ($('watch-client-id').value) {
+      payload.client_id = $('watch-client-id').value.trim();
+    }
+    if ($('watch-client-secret').value) {
+      payload.client_secret = $('watch-client-secret').value.trim();
+    }
+    renderWatch(await api('/api/watch/auth', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }));
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+    $('watch-client').open = true;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderWatchRun(body) {
+  const run = body.run;
+  const line = $('watch-run-state');
+  const bar = $('watch-progress');
+  $('watch-run').disabled = run.busy;
+
+  if (run.busy) {
+    const doing = run.progress[0];
+    line.className = 'muted';
+    line.textContent = doing
+      ? `${doing.filename} — ${doing.plain_state.toLowerCase()}`
+      : 'Looking in the folder…';
+    bar.hidden = !(doing && doing.total);
+    if (doing && doing.total) {
+      bar.firstElementChild.style.width =
+        `${Math.round((doing.done / doing.total) * 100)}%`;
+    }
+    return;
+  }
+
+  bar.hidden = true;
+  const last = run.last;
+  if (!last) {
+    line.className = 'muted';
+    line.textContent = 'It hasn’t looked yet.';
+    return;
+  }
+  if (last.skipped) {
+    line.className = 'muted';
+    line.textContent = 'A pass was already working on this folder, so the last '
+      + 'one stood aside and let it finish.';
+    return;
+  }
+  if (!last.ok) {
+    line.className = 'error';
+    line.textContent = watchTrouble(last);
+    return;
+  }
+  line.className = 'muted';
+  line.textContent = last.prepped.length
+    ? `Prepared ${last.prepped.join(', ')}.`
+    : `Nothing new — ${last.listed} file(s) looked at.`;
+  if (last.deferred) {
+    line.textContent += ` ${last.deferred} more waiting for the next pass.`;
+  }
+}
+
+// The library writes for somebody holding a terminal. In here there are cards.
+function watchTrouble(last) {
+  if (last.error_kind === 'auth_expired') {
+    return 'DocProof is no longer signed in to Google — the sign-in may have '
+      + 'been revoked. Sign in again above.';
+  }
+  if (last.error_kind === 'not_configured') {
+    return 'Something above still needs setting up before a pass can run.';
+  }
+  return last.error;
+}
+
+function renderWatchFiles(files) {
+  const table = $('watch-files');
+  table.innerHTML = '';
+  $('watch-files-empty').hidden = files.length > 0;
+  if (!files.length) return;
+
+  table.append(headRow(['Manuscript', 'What happened', 'Put back', 'Cost']));
+  files.forEach((f) => {
+    table.append(bodyRow([f.name, f.plain_state,
+                          f.uploaded.join(', ') || '—', money(f.cost)]));
+  });
+}
+
+function renderWatchPlan(rows) {
+  const holder = $('watch-plan');
+  holder.innerHTML = '';
+  if (!rows.length) return;
+  const table = document.createElement('table');
+  table.className = 'table';
+  table.append(headRow(['In the folder', 'What a pass would do']));
+  rows.forEach((r) => table.append(bodyRow([r.name, r.label])));
+  holder.append(table);
+}
+
+function watchNote(el, message, kind) {
+  el.className = `action-note ${kind}`;
+  el.textContent = message;
+  el.hidden = false;
+}
+
+// When a refusal has somewhere to go, offer the way there.
+function watchNoteWithFix(el, message) {
+  watchNote(el, message, 'error');
+  if (/key/i.test(message)) {
+    const go = document.createElement('button');
+    go.className = 'link';
+    go.textContent = 'Open Settings';
+    go.addEventListener('click', () => show('settings'));
+    el.append(' ', go);
+  }
+}
+
+$('watch-save').addEventListener('click', async () => {
+  const button = $('watch-save');
+  const note = $('watch-save-note');
+  note.hidden = true;
+  button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        folder: $('watch-folder').value.trim(),
+        model: $('watch-model').value,
+        prep_output: $('watch-output').value,
+        upload_notes: $('watch-notes').checked,
+        upload_failure_note: $('watch-failure-note').checked,
+      }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('watch-run').addEventListener('click', async () => {
+  const button = $('watch-run');
+  const note = $('watch-run-note');
+  note.hidden = true;
+  button.disabled = true;
+  button.textContent = 'Looking…';
+  try {
+    const body = await api('/api/watch/run', { method: 'POST' });
+    renderWatch(body, true);
+    if (!body.started) {
+      watchNote(note, 'A pass is already running.', 'muted');
+    }
+  } catch (err) {
+    watchNoteWithFix(note, err.message);
+  } finally {
+    button.textContent = 'Look now';
+    button.disabled = false;
+  }
+});
+
+$('watch-preview').addEventListener('click', async () => {
+  const button = $('watch-preview');
+  const note = $('watch-run-note');
+  note.hidden = true;
+  button.disabled = true;
+  button.textContent = 'Looking…';
+  try {
+    const body = await api('/api/watch/preview', { method: 'POST' });
+    renderWatchPlan(body.plan);
+    watchNote(note, `A pass would prepare ${body.new} manuscript(s). Nothing `
+      + 'was downloaded, prepared or uploaded.', 'muted');
+  } catch (err) {
+    watchNoteWithFix(note, err.message);
+  } finally {
+    button.textContent = 'Show me what a pass would do';
+    button.disabled = false;
+  }
+});
+
+$('watch-agent').addEventListener('change', async () => {
+  const note = $('watch-schedule-note');
+  note.hidden = true;
+  const on = $('watch-agent').checked;
+  try {
+    const body = on
+      ? await api('/api/watch/schedule', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ times: $('watch-times').value.trim() }),
+      })
+      : await api('/api/watch/schedule', { method: 'DELETE' });
+    renderWatch(body);
+    watchNote(note, on
+      ? `DocProof will look at ${body.watch.times.join(', ')}, every day.`
+      : 'DocProof will only look when you ask it to.', 'ok');
+  } catch (err) {
+    $('watch-agent').checked = !on;
+    watchNote(note, err.message, err.status === 501 ? 'muted' : 'error');
+  }
+});
+
+$('watch-auto').addEventListener('change', async () => {
+  const note = $('watch-schedule-note');
+  note.hidden = true;
+  try {
+    await api('/api/watch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ auto_ticks: $('watch-auto').checked }),
+    });
+  } catch (err) {
+    $('watch-auto').checked = !$('watch-auto').checked;
+    watchNote(note, err.message, 'error');
+  }
+});
 
 // ── settings ──────────────────────────────────────────────────────────────
 
@@ -1611,4 +1932,5 @@ renderKind();
 refreshJobs();
 state.pollTimer = setInterval(() => {
   if (!$('screen-jobs').hidden) refreshJobs();
+  if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
 }, 5000);

@@ -15,18 +15,16 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from app.jobs import JobStore
 from app.lock import FolderInUse, FolderLock
-from app.settings import Paths, get_api_key, set_api_key
+from app.settings import get_api_key
 from docproof.providers.catalog import BY_ID, MODELS
 
 from . import auth as authlib
 from . import schedule as schedulelib
+from . import status as statuslib
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
-from .settings import (GOOGLE_KEY, WatchSettings, default_watch_home,
-                       folder_id_from)
-from .state import STATE_FILE, WatchState
+from .settings import WatchSettings, default_watch_home, folder_id_from
 
 log = logging.getLogger("docproof.app.watch.cli")
 
@@ -148,15 +146,12 @@ def cmd_auth(args, home: Path) -> int:
           "may read this Drive.\nNothing is typed into DocProof — the "
           "password stays with Google.\n")
     try:
-        token = authlib.run_flow(client_id, client_secret,
-                                 open_browser=_open_browser)
+        authlib.sign_in(home, client_id, client_secret,
+                        open_browser=_open_browser)
     except DriveError as e:
         print(f"error: {e}", file=sys.stderr)
         return UNUSABLE
 
-    set_api_key(GOOGLE_KEY, token)
-    ws.client_id, ws.client_secret = client_id, client_secret
-    ws.save(home)
     print("\nSigned in. The sign-in is in your Keychain, not in a file.")
     if not ws.folder_id:
         print("Next: `docproof-watch init --folder <the folder's address>`.")
@@ -211,12 +206,16 @@ def cmd_init(args, home: Path) -> int:
     return OK
 
 
+# What is still needed, said the way a terminal should say it. The library
+# answers with a word; naming the command that fixes it is this front end's job.
+_NEEDS = {"folder": "a folder to watch — `docproof-watch init --folder <address>`",
+          "auth": "a Google sign-in — `docproof-watch auth`"}
+
+
 def _missing(ws: WatchSettings) -> str:
-    if not ws.folder_id:
-        return "a folder to watch — `docproof-watch init --folder <address>`"
-    if not ws.client_id or not ws.client_secret or not get_api_key(GOOGLE_KEY):
-        return "a Google sign-in — `docproof-watch auth`"
-    return ""
+    # The reader is handed over rather than left to the library to find: this
+    # module is where a terminal's idea of "where the keys are" lives.
+    return _NEEDS.get(statuslib.missing(ws, get_key=get_api_key), "")
 
 
 # --- one pass -----------------------------------------------------------------
@@ -269,9 +268,8 @@ def _report(report: ticklib.TickReport) -> int:
     return OK if report.ok else PARTIAL
 
 
-_PLAIN = {"new": "to prepare", "done": "already prepared",
-          "failed": "needs attention", "output": "DocProof wrote this",
-          "skip": "not a manuscript"}
+# The same words the panel uses; one copy, in the library.
+_PLAIN = statuslib.PLAIN_STAGE
 
 
 # --- what it has been doing ---------------------------------------------------
@@ -312,33 +310,27 @@ def cmd_unschedule(args, home: Path) -> int:
 
 
 def cmd_status(args, home: Path) -> int:
-    ws = WatchSettings.load(home)
-    print(f"Folder:  {ws.folder_id or '— not set yet'}")
-    print(f"Model:   {ws.model}")
-    print(f"Home:    {home}")
-    signed = authlib.token_source(get_api_key, bool(ws.client_id))
-    print(f"Signed in: {'yes' if signed['configured'] else 'no'}")
-    times = schedulelib.current()
-    print(f"Runs at: {schedulelib.describe(times) if times else
-                      '— only when you say so'}")
-    missing = _missing(ws)
-    if missing:
-        print(f"\nStill needed: {missing}")
+    """The same account the panel draws, printed.
 
-    state = WatchState.load(home / STATE_FILE)
-    if not state.files:
+    Everything below is `status()`; this function is only the terminal's way of
+    saying it."""
+    s = statuslib.status(home, get_key=get_api_key)
+    print(f"Folder:  {s['folder_id'] or '— not set yet'}")
+    print(f"Model:   {s['model']}")
+    print(f"Home:    {s['home']}")
+    print(f"Signed in: {'yes' if s['signed_in'] else 'no'}")
+    print(f"Runs at: {', '.join(s['times']) or '— only when you say so'}")
+    if s["missing"]:
+        print(f"\nStill needed: {_NEEDS[s['missing']]}")
+
+    if not s["files"]:
         print("\nNothing has been prepared yet.")
         return OK
 
-    store = JobStore(Paths(home))
-    jobs = {job.id: job for job in store.all()}
-    print(f"\n{len(state.files)} manuscript(s) seen:\n")
-    for rec in sorted(state.files.values(), key=lambda r: r.updated_at,
-                      reverse=True):
-        job = jobs.get(rec.job_id)
-        cost = f"  ${job.cost:.2f}" if job and job.cost else ""
-        said = rec.marked or (job.state if job else "in progress")
-        print(f"  {said:<12} {rec.name}{cost}")
-        for name in rec.uploaded:
+    print(f"\n{len(s['files'])} manuscript(s) seen:\n")
+    for row in s["files"]:
+        cost = f"  ${row['cost']:.2f}" if row["cost"] else ""
+        print(f"  {row['said']:<12} {row['name']}{cost}")
+        for name in row["uploaded"]:
             print(f"               → {name}")
     return OK

@@ -393,10 +393,14 @@ docproof prep draft.docx --output both   # tag it for the house template
 ## Not opening it at all
 
 There is a third way in, for the case where the manuscripts arrive somewhere
-by themselves. `docproof-watch` looks in one Google Drive folder a few times a
-day, prepares anything new it finds, and puts the results back beside the
-original — no window, no terminal, nobody remembering to. See
-[watch.md](watch.md).
+by themselves. DocProof can watch one Google Drive folder, prepare anything new
+it finds a few times a day, and put the results back beside the original — no
+window, no terminal, nobody remembering to. See [watch.md](watch.md).
+
+The **DocWatch** tab manages all of it: signing in to Google, choosing the
+folder, looking now, seeing what a pass *would* do before it does it, and
+turning automatic passes on. The same watcher answers to a terminal, which is
+what a scheduled pass uses:
 
 ```bash
 docproof-watch auth              # sign in to Google, once
@@ -405,8 +409,9 @@ docproof-watch once --dry-run    # what a pass would do, spending nothing
 docproof-watch schedule          # hand it to macOS, four times a day
 ```
 
-It keeps its own home, so it never contends with the app for the folder lock —
-and so its spending is added up separately, not in the Spending tab.
+It keeps its own home, so a pass and this window never contend for a folder
+lock — one pass runs at a time whichever started it, and the other stands
+aside. Its spending is in the Spending tab with everything else.
 
 ## How it fits together
 

@@ -85,6 +85,7 @@ def build_usage(jobs, read_usage) -> dict:
     window = _empty()
     by_model: dict[str, dict] = defaultdict(_empty)
     by_kind: dict[str, dict] = defaultdict(_empty)
+    by_source: dict[str, dict] = defaultdict(_empty)
     by_month: dict[str, dict] = defaultdict(_empty)
     documents = words = 0
     unfinished = 0
@@ -104,6 +105,10 @@ def build_usage(jobs, read_usage) -> dict:
         _add(totals, numbers)
         _add(by_model[job.model], numbers)
         _add(by_kind[job.kind], numbers)
+        # getattr, not job.source: this function's whole virtue is that it
+        # runs over any iterable of job-shaped things, and an older record
+        # predates the field.
+        _add(by_source[_source(job)], numbers)
         documents += 1
         words += job.words or 0
 
@@ -118,6 +123,7 @@ def build_usage(jobs, read_usage) -> dict:
                 "id": job.id, "filename": job.filename, "kind": job.kind,
                 "model": job.model, "display": _display(job.model),
                 "mode": job.mode, "state": job.state,
+                "source": _source(job),
                 "created_at": job.created_at, "words": job.words,
                 **numbers,
             })
@@ -131,6 +137,8 @@ def build_usage(jobs, read_usage) -> dict:
                      sorted(by_model.items(), key=lambda kv: -kv[1]["cost"])],
         "by_kind": [{"kind": kind, **numbers}
                     for kind, numbers in sorted(by_kind.items())],
+        "by_source": [{"source": source, **numbers}
+                      for source, numbers in sorted(by_source.items())],
         "by_month": [{"month": month, **numbers}
                      for month, numbers in sorted(by_month.items())][-12:],
         "recent": recent,
@@ -138,6 +146,12 @@ def build_usage(jobs, read_usage) -> dict:
                  "batch discount where it applied. Your provider's bill is "
                  "the last word."),
     }
+
+
+def _source(job) -> str:
+    """Which door a job came in by, tolerant of records made before there
+    was more than one."""
+    return getattr(job, "source", None) or "app"
 
 
 def _display(model: str) -> str:

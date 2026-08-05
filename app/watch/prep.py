@@ -97,7 +97,7 @@ def fetch(token: str, file: DriveFile, dest_dir: str | Path, *,
 def make_job(local: Path, ws: WatchSettings) -> Job:
     return Job(id=new_job_id(local.name), filename=local.name,
                source_path=str(local), model=ws.model, mode="now", kind="prep",
-               prep_output=ws.prep_output,
+               prep_output=ws.prep_output, source="watch",
                created_at=datetime.now(timezone.utc).isoformat())
 
 

@@ -24,6 +24,9 @@ log = logging.getLogger("docproof.app.watch.schedule")
 LABEL = "com.atmospherepress.docproof.watch"
 DEFAULT_TIMES = ("06:00", "11:00", "16:00", "21:00")
 LAUNCHD_LOG = "launchd.log"
+# What a packaged DocProof answers to when it should do one pass and stop.
+# Spelled the same here and in docproof_desktop.py, which reads it.
+WATCH_ONCE = "--watch-once"
 
 # launchd starts a job with almost no environment. LibreOffice is found by
 # absolute path first, so this is belt: a Homebrew install answers to `which`
@@ -68,12 +71,32 @@ def plist_path() -> Path:
     return agents_dir() / f"{LABEL}.plist"
 
 
-def executable() -> str:
-    """The `docproof-watch` launchd should run, by absolute path.
+def frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
 
-    `sys.argv[0]` first, because the copy running right now is the copy that
-    should be scheduled — a machine with two virtualenvs would otherwise get
-    whichever one is earlier in a PATH launchd does not share."""
+
+def executable() -> str:
+    """The program launchd should run, by absolute path.
+
+    A packaged DocProof has no `docproof-watch` anywhere on the machine —
+    somebody who was sent an .app has the app and nothing else — so the bundle
+    schedules its own binary, which knows how to do one pass and stop. From a
+    checkout, `sys.argv[0]` first, because the copy running right now is the
+    copy that should be scheduled: a machine with two virtualenvs would
+    otherwise get whichever one is earlier in a PATH launchd does not share."""
+    if frozen():
+        exe = Path(sys.executable).resolve()
+        if "/AppTranslocation/" in str(exe) or str(exe).startswith("/Volumes/"):
+            # macOS runs an app off a disk image from a randomised read-only
+            # mirror. A schedule pointing there works until the image is
+            # ejected and then fails silently every morning, which is the worst
+            # way for this to break.
+            raise ScheduleError(
+                "DocProof is running straight from its disk image, so the path "
+                "macOS would remember disappears when you eject it. Drag "
+                "DocProof to your Applications folder, open it from there, and "
+                "try again.")
+        return str(exe)
     argv0 = Path(sys.argv[0])
     if argv0.name == "docproof-watch" and argv0.exists():
         return str(argv0.resolve())
@@ -89,7 +112,8 @@ def program(home: Path) -> list[str]:
     """The home is spelled out rather than left to the environment: launchd
     passes almost none of one, and a scheduled run that quietly used a
     different folder would be a puzzle nobody enjoys."""
-    return [executable(), "--home", str(Path(home).resolve()), "once"]
+    last = WATCH_ONCE if frozen() else "once"
+    return [executable(), "--home", str(Path(home).resolve()), last]
 
 
 def plist_content(times, *, command: list[str], log_path: Path) -> bytes:

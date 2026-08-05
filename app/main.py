@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -35,6 +37,14 @@ from docproof.providers import MODELS, estimate_cost, lookup
 from .jobs import Job, JobRunner, JobStore, read_usage
 from .lock import FolderInUse, FolderLock
 from .usage import build_usage
+# The watcher, but never its CLI: `app.watch.cli._logging` clears the docproof
+# logger's handlers, which for a long-lived server means it stops logging.
+from .watch import schedule as schedulelib
+from .watch import status as watchlib
+from .watch.drive import DriveError
+from .watch.runner import WatchRunner
+from .watch.settings import WatchSettings, folder_id_from
+from .watch.tick import NotConfigured
 from .prompts import (PromptError, assembled_passes, clear_override,
                       list_prompts, sample_user_turn, save_override)
 from .report import build_report
@@ -113,8 +123,49 @@ class SettingsUpdate(BaseModel):
     github_token: str | None = None
 
 
+class WatchUpdate(BaseModel):
+    """Partial, like SettingsUpdate: the panel sends what changed."""
+
+    # An address pasted out of a browser, or a bare id. Either is fine.
+    folder: str | None = None
+    model: str | None = None
+    prep_output: str | None = None       # indesign | tracked | both
+    upload_notes: bool | None = None
+    upload_failure_note: bool | None = None
+    # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
+    # in one pass, or set a clock that never stops going off.
+    max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
+    auto_ticks: bool | None = None
+    tick_every_minutes: int | None = Field(default=None, ge=5, le=1440)
+
+
+class WatchAuth(BaseModel):
+    """The OAuth client to sign in with. Blank means "use the saved one"."""
+
+    client_id: str | None = None
+    client_secret: str | None = None
+
+
+class WatchSchedule(BaseModel):
+    times: str = ",".join(schedulelib.DEFAULT_TIMES)
+
+
+def watch_home_for(root: Path) -> Path:
+    """Where the watcher keeps its things, derived from the app's home.
+
+    The same answer as `default_watch_home()` for an ordinary install, and a
+    safer one everywhere else: an app started with `--home somewhere` gets a
+    watcher beside it rather than reaching for the real one, which is also what
+    keeps a test's tmp_path from ever touching it. DOCPROOF_WATCH_HOME still
+    wins, because the terminal honours it and the two doors have to agree about
+    which folder they are both looking at."""
+    env = os.environ.get("DOCPROOF_WATCH_HOME")
+    return Path(env).expanduser() if env else Path(root) / "watch"
+
+
 def create_app(root: Path | None = None, *, start_runner: bool = True,
-               poll_seconds: int = 120) -> FastAPI:
+               poll_seconds: int = 120,
+               watch_home: Path | None = None) -> FastAPI:
     """Build the app. Raises FolderInUse when another DocProof owns this home.
 
     The claim is tied to `start_runner` because the runner is what does the
@@ -126,13 +177,20 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     store = JobStore(paths)
     runner = JobRunner(store, settings, config_path=CONFIG_PATH,
                        poll_seconds=poll_seconds)
+    # Deliberately not given the watch home's lock here. The app claims its own
+    # folder for as long as it is open; the watcher's is claimed only for the
+    # length of a pass, because a scheduled run started by macOS has to be able
+    # to take it while a window is open.
+    watch = WatchRunner(watch_home or watch_home_for(paths.root))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if start_runner:
             runner.start()
+            watch.start()
         yield
         runner.stop()
+        watch.stop()
         if lock:
             lock.release()
 
@@ -141,6 +199,7 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     app.state.settings = settings
     app.state.store = store
     app.state.runner = runner
+    app.state.watch = watch
     app.state.lock = lock
 
     _register(app)
@@ -733,8 +792,14 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/api/usage")
     def usage() -> dict:
-        """Tokens, calls and estimated spend across every job on this machine."""
-        return build_usage(app.state.store.all(), read_usage)
+        """Tokens, calls and estimated spend across every job on this machine.
+
+        Two job stores, one bill. The watcher keeps its own home — a separate
+        folder is a separate lock, which is what lets a pass and this window
+        run at the same moment — but the money comes off the same card, and a
+        figure that quietly left half of it out would be the wrong figure."""
+        watch: WatchRunner = app.state.watch
+        return build_usage([*app.state.store.all(), *watch.jobs()], read_usage)
 
     @app.get("/api/jobs/{job_id}/report")
     def report(job_id: str) -> dict:
@@ -787,6 +852,161 @@ def _register(app: FastAPI) -> None:
         next timer. The Jobs screen calls this when the user opens it."""
         app.state.runner.tick_once()
         return {"jobs": [j.to_api() for j in app.state.store.all()]}
+
+    # -- the watched folder ---------------------------------------------------
+    #
+    # Every route here answers with the whole panel, the way `POST /api/tick`
+    # does: one round trip does the thing and brings back what the screen needs
+    # to redraw, so the page never has to guess what a change did.
+
+    def watch_payload() -> dict:
+        watch: WatchRunner = app.state.watch
+        signing = watch.sign_in_state()
+        return {
+            "watch": watchlib.status(watch.home, agent_path=watch.agent_path),
+            "run": watch.state(),
+            "sign_in": asdict(signing) if signing else None,
+            "can_schedule": sys.platform == "darwin",
+        }
+
+    def watch_needs(ws: WatchSettings) -> None:
+        """Refuse in the app's own words.
+
+        `tick.py` says "Run `docproof-watch init`", which is right for the only
+        caller that shows its messages to somebody holding a terminal. In here
+        there is no terminal — there are cards, and they are what to name."""
+        need = watchlib.missing(ws)
+        if need == "folder":
+            raise HTTPException(400, "Choose the folder to watch first — it is "
+                                     "the second card on this screen.")
+        if need == "auth":
+            raise HTTPException(400, "Sign in to Google first — it is the first "
+                                     "card on this screen.")
+
+    @app.get("/api/watch")
+    def read_watch() -> dict:
+        return watch_payload()
+
+    @app.put("/api/watch")
+    def write_watch(update: WatchUpdate) -> dict:
+        watch: WatchRunner = app.state.watch
+        ws = WatchSettings.load(watch.home)
+        if update.folder is not None:
+            try:
+                ws.folder_id = folder_id_from(update.folder)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
+        if update.model is not None:
+            if lookup(update.model) is None:
+                raise HTTPException(400, f"{update.model} is not a model "
+                                         f"DocProof knows.")
+            ws.model = update.model
+        if update.prep_output is not None:
+            if update.prep_output not in ("indesign", "tracked", "both"):
+                raise HTTPException(400, "prep_output must be 'indesign', "
+                                         "'tracked' or 'both'")
+            ws.prep_output = update.prep_output
+        for name in ("upload_notes", "upload_failure_note",
+                     "max_files_per_tick", "auto_ticks", "tick_every_minutes"):
+            value = getattr(update, name)
+            if value is not None:
+                setattr(ws, name, value)
+        ws.save(watch.home)
+        return watch_payload()
+
+    @app.get("/api/watch/auth")
+    def read_watch_auth() -> dict:
+        return watch_payload()
+
+    @app.post("/api/watch/auth")
+    def start_watch_auth(body: WatchAuth) -> dict:
+        """Open Google's consent page and start waiting for the answer.
+
+        Returns immediately with the sign-in marked `waiting`; the page polls.
+        The consent page opens in the real browser rather than in DocProof's
+        own window on purpose — Google refuses OAuth inside an embedded web
+        view, and a password belongs in Google's page anyway."""
+        watch: WatchRunner = app.state.watch
+        ws = WatchSettings.load(watch.home)
+        client_id = (body.client_id or ws.client_id or "").strip()
+        client_secret = (body.client_secret or ws.client_secret or "").strip()
+        if not client_id or not client_secret:
+            raise HTTPException(400,
+                                "Signing in needs a Google OAuth client. "
+                                "docs/watch.md walks through the five minutes "
+                                "in the Google Cloud console that makes one.")
+        watch.begin_sign_in(client_id, client_secret)
+        return watch_payload()
+
+    @app.delete("/api/watch/auth")
+    def forget_watch_auth() -> dict:
+        """Forget the sign-in, keep the client.
+
+        The client id and secret are not the secret — an installed application
+        cannot keep one — and signing in again needs them."""
+        delete_api_key("google")
+        return watch_payload()
+
+    @app.post("/api/watch/run")
+    def run_watch() -> dict:
+        watch: WatchRunner = app.state.watch
+        watch_needs(WatchSettings.load(watch.home))
+        started = watch.run_now()
+        # Not an error when it is already going. The button is disabled while a
+        # pass runs, so this is only ever a double click, and answering "it is
+        # already doing what you asked" in red would be the wrong noise.
+        return {"started": started, **watch_payload()}
+
+    @app.post("/api/watch/preview")
+    def preview_watch() -> dict:
+        """What a pass would do, without doing any of it.
+
+        Synchronous: a dry run is one token refresh and one listing, so there
+        is nothing to wait for and a real answer can come back with it."""
+        watch: WatchRunner = app.state.watch
+        watch_needs(WatchSettings.load(watch.home))
+        try:
+            report = watch.preview()
+        except NotConfigured:
+            watch_needs(WatchSettings.load(watch.home))
+            raise
+        except DriveError as e:
+            raise HTTPException(400, str(e)) from None
+        return {
+            "listed": report.listed,
+            "new": report.new,
+            # The label comes from here rather than the page, so the words for
+            # a stage have one home.
+            "plan": [{"name": name, "stage": stage,
+                      "label": watchlib.PLAIN_STAGE.get(stage, stage)}
+                     for name, stage in report.plan],
+        }
+
+    @app.put("/api/watch/schedule")
+    def set_watch_schedule(body: WatchSchedule) -> dict:
+        watch: WatchRunner = app.state.watch
+        if sys.platform != "darwin":
+            raise HTTPException(501, "Looking while DocProof is closed needs "
+                                     "a Mac.")
+        try:
+            times = schedulelib.parse_times(body.times)
+            schedulelib.install(times, watch.home, path=watch.agent_path,
+                                **({"run": watch.launchctl}
+                                   if watch.launchctl else {}))
+        except schedulelib.ScheduleError as e:
+            raise HTTPException(400, str(e)) from None
+        return watch_payload()
+
+    @app.delete("/api/watch/schedule")
+    def clear_watch_schedule() -> dict:
+        watch: WatchRunner = app.state.watch
+        if sys.platform != "darwin":
+            raise HTTPException(501, "Looking while DocProof is closed needs "
+                                     "a Mac.")
+        schedulelib.uninstall(path=watch.agent_path,
+                              **({"run": watch.launchctl}
+                                 if watch.launchctl else {}))
+        return watch_payload()
 
     # -- settings -------------------------------------------------------------
 

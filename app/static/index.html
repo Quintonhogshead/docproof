@@ -12,6 +12,7 @@
   <nav>
     <button class="tab" data-screen="drop" aria-current="true">Drop documents</button>
     <button class="tab" data-screen="jobs">Results <span id="jobs-badge" hidden></span></button>
+    <button class="tab" data-screen="watch">DocWatch</button>
     <button class="tab" data-screen="spending">Spending</button>
     <button class="tab" data-screen="prompts">What it looks for</button>
     <button class="tab" data-screen="settings">Settings</button>
@@ -145,6 +146,129 @@
     <div id="report-aside"></div>
   </section>
 
+  <!-- ── DocWatch ─────────────────────────────────────────────────────── -->
+  <section id="screen-watch" class="screen" hidden>
+    <h2>DocWatch</h2>
+    <p class="muted">One folder in Google Drive, looked at a few times a day.
+      Anything in it that looks like a manuscript and hasn't been prepared yet
+      is prepared, and the results go back beside the original — so a book that
+      arrives overnight is ready for a designer by morning. The author's own
+      file is never moved, renamed or changed.</p>
+
+    <div class="card">
+      <h3>Google Drive</h3>
+      <p id="watch-signin" class="muted">Checking…</p>
+      <div class="job-actions" id="watch-signin-actions"></div>
+      <p id="watch-signin-note" class="action-note" hidden></p>
+
+      <details id="watch-client">
+        <summary>The Google sign-in DocProof uses</summary>
+        <p class="muted small">DocProof needs its own OAuth client to ask
+          Google for permission — five minutes in the Google Cloud console,
+          once. <code>docs/watch.md</code> walks through it, including which
+          consent screen to pick.</p>
+        <label class="field">
+          <span>Client ID</span>
+          <input type="text" id="watch-client-id"
+                 placeholder="…apps.googleusercontent.com" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Client secret</span>
+          <input type="password" id="watch-client-secret" autocomplete="off">
+        </label>
+      </details>
+    </div>
+
+    <div class="card">
+      <h3>What to watch</h3>
+      <label class="field">
+        <span>The folder <small class="muted">— open it in a browser and paste
+          the whole address from the bar</small></span>
+        <input type="text" id="watch-folder"
+               placeholder="https://drive.google.com/drive/folders/…">
+      </label>
+
+      <label class="field">
+        <span>Prepare manuscripts with</span>
+        <select id="watch-model"></select>
+      </label>
+
+      <label class="field">
+        <span>Put back</span>
+        <select id="watch-output">
+          <option value="indesign">A file ready for InDesign</option>
+          <option value="tracked">A tracked-changes copy to review first</option>
+          <option value="both">Both</option>
+        </select>
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-notes" checked>
+        Include the notes about what it decided
+        <small class="muted">What was tagged as what, and anything it wants a
+          designer to look at.</small>
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-failure-note">
+        Leave a note when a manuscript can't be prepared
+        <small class="muted">Off by default: the folder authors and designers
+          share should hold manuscripts, not apologies.</small>
+      </label>
+
+      <div class="job-actions">
+        <button id="watch-save" class="primary">Save</button>
+      </div>
+      <p id="watch-save-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
+      <h3>A pass</h3>
+      <p id="watch-run-state" class="muted">—</p>
+      <div class="bar" id="watch-progress" hidden><i></i></div>
+      <div class="job-actions">
+        <button id="watch-run" class="primary">Look now</button>
+        <button id="watch-preview" class="quiet">Show me what a pass would
+          do</button>
+      </div>
+      <p id="watch-run-note" class="action-note" hidden></p>
+      <div id="watch-plan"></div>
+    </div>
+
+    <div class="card">
+      <h3>Automatic passes</h3>
+      <p class="muted">Two clocks, and they can't collide: whichever starts
+        first claims the folder and the other stands aside.</p>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-agent">
+        Look even when DocProof is closed
+        <small class="muted">A sleeping Mac runs nothing, and a time it slept
+          through isn't made up later.</small>
+      </label>
+      <label class="field sub">
+        <span>at</span>
+        <input type="text" id="watch-times" value="06:00,11:00,16:00,21:00">
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-auto">
+        Look while DocProof is open
+        <small class="muted">This is what picks up a time the Mac was asleep
+          for. Closing DocProof stops a pass; the next one carries on where it
+          left off.</small>
+      </label>
+
+      <p id="watch-schedule-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
+      <h3>What it has prepared</h3>
+      <p id="watch-files-empty" class="muted" hidden>Nothing yet.</p>
+      <table class="table" id="watch-files"></table>
+    </div>
+  </section>
+
   <!-- ── Spending ─────────────────────────────────────────────────────── -->
   <section id="screen-spending" class="screen" hidden>
     <h2>Spending</h2>
@@ -230,6 +354,12 @@
           <button type="button" data-test="gemini">Test</button>
         </span>
         <small class="status" id="status-gemini"></small>
+      </label>
+
+      <label class="field">
+        <span>Google Drive <small class="muted">— for DocWatch. Signed in from
+          the DocWatch tab, not pasted here.</small></span>
+        <small class="status" id="status-google"></small>
       </label>
     </div>
 

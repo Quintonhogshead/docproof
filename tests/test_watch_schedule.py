@@ -233,3 +233,55 @@ def test_a_docproof_watch_that_is_not_installed_says_how_to_install_it(
 
     with pytest.raises(ScheduleError, match="pip install"):
         REAL_EXECUTABLE()
+
+
+# --- a packaged app has no command to schedule --------------------------------
+
+def bundled(monkeypatch, tmp_path, at="Applications"):
+    """A DocProof that thinks it is a .app."""
+    exe = tmp_path / at / "DocProof.app" / "Contents" / "MacOS" / "DocProof"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(schedulelib.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(schedulelib.sys, "executable", str(exe))
+    return exe
+
+
+def test_a_packaged_app_schedules_itself(tmp_path, monkeypatch, plist):
+    """Somebody who was sent an .app has the app and nothing else — there is no
+    `docproof-watch` anywhere on that machine to point launchd at."""
+    exe = bundled(monkeypatch, tmp_path)
+    monkeypatch.setattr(schedulelib, "executable", REAL_EXECUTABLE)
+
+    schedulelib.install([(6, 0)], tmp_path / "home", run=recorder(), path=plist)
+
+    assert written(plist)["ProgramArguments"] == [
+        str(exe), "--home", str((tmp_path / "home").resolve()), "--watch-once"]
+
+
+def test_a_checkout_still_schedules_the_command(tmp_path, monkeypatch, plist):
+    monkeypatch.setattr(schedulelib.sys, "frozen", False, raising=False)
+
+    schedulelib.install([(6, 0)], tmp_path, run=recorder(), path=plist)
+
+    assert written(plist)["ProgramArguments"][-1] == "once"
+
+
+def test_an_app_running_from_its_disk_image_refuses_to_schedule(tmp_path,
+                                                                monkeypatch):
+    """The path macOS would remember disappears when the image is ejected, and
+    the schedule would then fail silently every morning."""
+    bundled(monkeypatch, tmp_path)
+    monkeypatch.setattr(schedulelib.sys, "executable",
+                        "/Volumes/DocProof/DocProof.app/Contents/MacOS/DocProof")
+
+    with pytest.raises(ScheduleError, match="Applications folder"):
+        REAL_EXECUTABLE()
+
+
+def test_the_flag_the_bundle_is_scheduled_with_is_the_one_it_answers_to():
+    """Two files spell this; if they ever disagree the schedule opens a window
+    at six in the morning instead of doing a pass."""
+    import docproof_desktop
+
+    assert schedulelib.WATCH_ONCE == docproof_desktop.WATCH_ONCE

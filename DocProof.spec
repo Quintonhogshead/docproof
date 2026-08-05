@@ -86,6 +86,10 @@ hiddenimports = [
     # cannot see them in the import graph.
     *collect_submodules("uvicorn"),
     "keyring.backends.macOS",
+    # Reached only through a function-level import in docproof_desktop.py, and
+    # only by a scheduled pass. Named here so a build cannot lose the one part
+    # of the app that runs while nobody is looking.
+    "app.watch.cli",
 ]
 
 a = Analysis(

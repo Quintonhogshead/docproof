@@ -21,6 +21,7 @@ from pathlib import Path
 log = logging.getLogger("docproof.app.watch.state")
 
 STATE_FILE = "state.json"
+LAST_TICK = "last_tick"
 VERSION = 1
 
 
@@ -97,3 +98,34 @@ class WatchState:
         staging = self.path.with_name(self.path.name + ".writing")
         staging.write_text(body, encoding="utf-8")
         os.replace(staging, self.path)
+
+
+# --- when it last looked ------------------------------------------------------
+#
+# One timestamp, in its own small file, because two clocks now ask for it: the
+# launchd agent runs whether or not the app is open, and a timer inside the app
+# picks up the time a sleeping Mac slept through. Neither should repeat what the
+# other just did.
+
+def note_tick(home: str | Path) -> None:
+    """Say that a pass has started.
+
+    Written at the start rather than the end, deliberately. A pass can run for
+    hours; a stamp written when it finished would read as "never looked" for
+    every one of them, which is exactly the window in which the other clock
+    would decide to start a second pass."""
+    path = Path(home) / LAST_TICK
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    except OSError as e:                  # noqa: BLE001 - a stamp is not the job
+        log.warning("Could not record when the watcher last looked (%s)", e)
+
+
+def last_tick(home: str | Path) -> datetime | None:
+    """When a pass last started, or None if one never has."""
+    path = Path(home) / LAST_TICK
+    try:
+        return datetime.fromisoformat(path.read_text("utf-8").strip())
+    except (OSError, ValueError):
+        return None

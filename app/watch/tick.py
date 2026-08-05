@@ -27,7 +27,7 @@ from . import drive, prep
 from .drive import DriveError, DriveFile
 from .settings import GOOGLE_KEY, WatchSettings
 from .stages import JOB_PROP, OUTPUT_PROP, SOURCE_PROP, Stage, classify
-from .state import WatchState
+from .state import WatchState, note_tick
 
 log = logging.getLogger("docproof.app.watch.tick")
 
@@ -281,6 +281,10 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                          if stage == Stage.NEW_MANUSCRIPT.value)
         return report
 
+    # Stamped before the work, not after — see state.note_tick. Two clocks ask
+    # when this last happened, and a pass that runs for three hours must not
+    # look like one that never started.
+    note_tick(root)
     paths = Paths(root).ensure()
     store = JobStore(paths)
     runner = JobRunner(store, ws.app_settings(root), config_path=config_path())

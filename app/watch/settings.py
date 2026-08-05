@@ -93,6 +93,14 @@ class WatchSettings:
     # running is not, so the file is marked and left alone until a human looks.
     max_attempts: int = 3
     output_dir: str = ""
+    # The clock inside the running app, which exists because launchd does not
+    # run a calendar job while a Mac is asleep and does not go back for the one
+    # it missed. Off by default: opening an application should not start
+    # spending money.
+    auto_ticks: bool = False
+    # How often that clock *considers* a pass. It considers; the "last looked"
+    # stamp and the folder lock decide.
+    tick_every_minutes: int = 60
 
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":

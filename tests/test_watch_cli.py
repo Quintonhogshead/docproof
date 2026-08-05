@@ -406,6 +406,33 @@ def test_the_home_can_be_put_somewhere_else(tmp_path, capsys, monkeypatch):
         FOLDER
 
 
+def test_the_bundle_does_one_pass_and_never_opens_a_window(monkeypatch):
+    """What macOS runs four times a day on a Mac that only ever had the .app.
+    It must reach the watcher's own command line, and must not reach the part
+    that builds a window."""
+    import docproof_desktop
+    seen = []
+    monkeypatch.setattr("app.watch.cli.main", lambda argv: seen.append(argv) or 0)
+    monkeypatch.setattr(
+        "app.desktop.main",
+        lambda argv=None: pytest.fail("a scheduled pass opened the app"))
+
+    code = docproof_desktop.main(["--home", "/tmp/w", "--watch-once"])
+
+    assert code == 0
+    assert seen == [["--home", "/tmp/w", "once"]]
+
+
+def test_the_bundle_opens_the_app_when_it_is_not_a_scheduled_pass(monkeypatch):
+    import docproof_desktop
+    opened = []
+    monkeypatch.setattr("app.desktop.main",
+                        lambda argv=None: opened.append(argv) or 0)
+
+    assert docproof_desktop.main([]) == 0
+    assert opened == [[]]
+
+
 def test_a_scheduled_run_leaves_a_log_behind(home, capsys, monkeypatch):
     """The only place anybody can look afterwards to see why a morning was
     quiet."""
