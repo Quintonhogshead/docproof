@@ -116,7 +116,9 @@
       "Bash(.venv/bin/python -m pytest tests/test_idml.py::test_reviewed_name_keeps_the_extension tests/test_integration.py::test_end_to_end_mock -q)",
       "Bash(.venv/bin/python -m pytest tests/test_app.py::test_an_indesign_layout_can_go_overnight_too -q)",
       "Bash(.venv/bin/python -m pytest tests/test_changelog.py -q)",
-      "Bash(.venv/bin/python -m pytest tests/test_variants.py -q)"
+      "Bash(.venv/bin/python -m pytest tests/test_variants.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_formatting.py -q)",
+      "Bash(.venv/bin/python -m pytest tests/test_consistency.py -q)"
     ]
   }
 }
