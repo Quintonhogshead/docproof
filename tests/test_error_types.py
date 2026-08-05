@@ -156,17 +156,61 @@ def test_raw_finding_error_type_defaults_to_empty():
     assert rf.error_type == ""
 
 
+def _flat(text: str) -> str:
+    """A prompt with its line wrapping collapsed. The YAML wraps at 78 columns,
+    so a phrase these tests care about can straddle a newline."""
+    return " ".join(text.split())
+
+
 def test_verb_form_states_its_borders_with_its_neighbours():
     """It shares a pass with subject_verb_agreement and a subject with
     spelling and tense_shift. A type that does not name the neighbour owning a
     case gets it reported twice, and the validator throws the second away —
     which looks like agreement rather than the duplicate it is."""
-    said = load_error_types(ERROR_DIR, ["verb_form"])["verb_form"]
+    said = _flat(load_error_types(
+        ERROR_DIR, ["verb_form"])["verb_form"].detection_prompt)
     for owner in ("spelling", "subject_verb_agreement", "tense_shift"):
-        assert owner in said.detection_prompt, owner
+        assert owner in said, owner
     # The forms with two accepted spellings are a house preference, not an
     # error, and this is the type most likely to be asked to enforce one.
     for both_right in ("lighted", "fitted", "dived", "snuck"):
-        assert both_right in said.detection_prompt, both_right
+        assert both_right in said, both_right
     # The rule runs one way: a bare past tense is correct and stays.
-    assert "he written it" in said.detection_prompt
+    assert "he written it" in said
+
+
+def test_double_negative_leaves_the_deliberate_ones_alone():
+    """Litotes is a figure of speech, not a fault. "Not unkind" flattened to
+    "kind" is a worse sentence, and it is the failure this type would make
+    most often if it only counted negatives."""
+    et = load_error_types(ERROR_DIR, ["double_negative"])["double_negative"]
+    # Collapsed, because the YAML wraps and a phrase can straddle a newline.
+    said = _flat(et.detection_prompt)
+    for keep in ("not unkind", "not unlike", "not impossible",
+                 "don't disagree", "can't help but"):
+        assert keep in said, keep
+    # Two negatives in two clauses is one negative each, which is correct.
+    assert "separate clauses" in said
+    # Which negative goes is not arbitrary: taking the first one rewrites the
+    # rhythm of a sentence nobody asked to have rewritten.
+    assert "SECOND negative" in _flat(et.fix_guidance)
+    assert "nothing → anything" in _flat(et.fix_guidance)
+
+
+def test_adjective_adverb_knows_the_three_ways_it_would_be_wrong():
+    """The rule is simple and the exceptions are not. Each of these is a whole
+    class of correct English that an -ly reflex would break."""
+    said = _flat(load_error_types(
+        ERROR_DIR, ["adjective_adverb"])["adjective_adverb"].detection_prompt)
+    # Linking verbs take adjectives: "felt badly" is the error, not "felt bad".
+    assert "felt bad" in said
+    assert "NOT \"felt badly\"" in said
+    # Flat adverbs are adverbs already.
+    for flat in ("drive slow", "hold tight", "work hard", "play fair"):
+        assert flat in said, flat
+    # A resultative describes the state, not the manner.
+    assert "painted the door red" in said
+    assert "wiped the lens clean" in said
+    # And the two neighbours that own adjacent cases.
+    for owner in ("comparative_form", "ly_adverb_hyphen"):
+        assert owner in said, owner

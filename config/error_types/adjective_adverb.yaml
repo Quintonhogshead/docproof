@@ -1,0 +1,97 @@
+key: adjective_adverb
+name: Adjective for adverb
+
+version: 1
+
+detection_prompt: |
+  An adjective doing an adverb's work — modifying a verb, an adjective or
+  another adverb, where English wants the -ly form.
+
+  Most of the difficulty here is in the second list, not the first. English is
+  full of adjectives that are also adverbs, and full of verbs that take an
+  adjective on purpose, so the wrong instinct fires constantly. Read the
+  do-not-flag list before flagging anything.
+
+  FLAG:
+  - An adjective modifying a verb of action, where no reading below applies:
+    "she recorded each sighting careful", "the needle was falling steady",
+    "he answered honest", "they searched thorough".
+  - "good" where "well" is wanted. "Good" is an adjective; the adverb is
+    "well": "they prepared good for the storm", "she plays good", "he did
+    good on the exam" (meaning performed well — "did good" meaning did good
+    deeds is correct and different).
+  - An adjective used as an intensifier before another adjective or adverb:
+    "real quick", "awful tired", "terrible sorry" — the adverb forms are
+    "really", "awfully", "terribly".
+
+  Do NOT flag:
+  - **Linking verbs take adjectives.** After be, seem, appear, become, remain,
+    stay, look, sound, smell, taste, feel, grow, turn, go and prove, the word
+    describes the subject and an adjective is correct: "the sea looked calm",
+    "she felt bad" (NOT "felt badly"), "it smells sweet", "the milk went
+    sour", "he seems tired", "that sounds good", "stay quiet", "the proof
+    proved false". This is the commonest false positive of the whole type.
+  - **Flat adverbs**, which are ordinary English and take no -ly: "drive
+    slow", "come close", "hold tight", "think fast", "work hard", "run deep",
+    "sit tight", "play fair", "aim high", "buy cheap", "sleep late", "talk
+    straight", "stand firm", "travel light". Never add -ly to one of these.
+  - **Resultatives** — the word describes the state something ends in, not how
+    the action was done: "he painted the door red", "she wiped the lens
+    clean", "they pulled him free", "cut it short", "wash it clean", "come
+    home safe", "shake it loose". The test: if you could say "…so that it was
+    X", the word is an adjective and it is correct.
+  - An adjective modifying a noun, however far it sits from it: "a quick
+    answer", "the steady rain".
+  - Comparatives and superlatives, however formed: "more quicker", "most
+    fastest". comparative_form owns those and reports them.
+  - Whether an -ly adverb should be hyphenated to what follows ("a badly
+    written book"). ly_adverb_hyphen owns that; this type never touches
+    hyphens.
+  - Dialect and nonstandard register, in dialogue or in a first-person
+    narrator whose whole voice is nonstandard. Report at low confidence at
+    most, and prefer not to report at all when the speaker's whole register is
+    nonstandard.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with only the adjective
+  replaced by its adverb — usually by adding -ly, and by replacing "good" with
+  "well". Do not move the word, do not reorder the clause, and do not reach for
+  a different adverb than the one the author's word implies: "careful" becomes
+  "carefully", never "with care". Fix one word per finding.
+
+confidence_guidance: |
+  high   — an adjective modifying an action verb in narration, where no
+           linking-verb, flat-adverb or resultative reading is available:
+           "recorded each sighting careful", "prepared good".
+  medium — a word that is also a standard flat adverb, where the -ly form is
+           the better choice but the bare one is defensible: "found the
+           problem quick", "the needle was falling steady".
+  low    — inside dialogue; where a resultative reading exists, even a
+           strained one ("pulled safe from the water" can mean they ended up
+           safe); or a familiar informal intensifier.
+
+examples:
+  - text: "Marley recorded each sighting careful in her notebook."
+    finding:
+      original_text: "Marley recorded each sighting careful in her notebook."
+      corrected_text: "Marley recorded each sighting carefully in her notebook."
+      explanation: "\"careful\" modifies \"recorded\", so it takes the adverb form."
+      confidence: high
+  - text: "They prepared good for the storm, but preparation only goes so far."
+    finding:
+      original_text: "They prepared good for the storm, but preparation only goes so far."
+      corrected_text: "They prepared well for the storm, but preparation only goes so far."
+      explanation: "\"good\" is an adjective; the adverb of manner is \"well\"."
+      confidence: high
+  - text: "The sea looked calm from the top of the tower."
+    finding: null
+  - text: "He told her to drive slow on the coast road."
+    finding: null
+  - text: "She wiped the lens clean and looked again."
+    finding: null
+  - text: "Her grandfather found the problem quick: a snapped drive belt."
+    finding:
+      original_text: "Her grandfather found the problem quick: a snapped drive belt."
+      corrected_text: "Her grandfather found the problem quickly: a snapped drive belt."
+      explanation: "\"quick\" modifies \"found\"; the adverb is \"quickly\"."
+      confidence: medium

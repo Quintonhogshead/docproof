@@ -1,0 +1,90 @@
+key: double_negative
+name: Double negative
+version: 1
+
+detection_prompt: |
+  Two negatives inside one clause where only one negation is meant.
+
+  FLAG:
+  - A negative verb with a negative object or adverb: "he didn't say nothing",
+    "the rent don't cost me nothing", "the light won't never go out",
+    "she couldn't find nobody", "he hasn't got no money".
+  - Two negative words in one clause: "Nobody never found where it comes
+    from", "nothing never changes here".
+  - A negative with "hardly", "scarcely" or "barely", which are already
+    negative: "without hardly moving", "couldn't hardly see", "didn't barely
+    touch it", "not scarcely a mile".
+  - "neither / nor" standing where "either / or" belongs, because a negative
+    earlier in the sentence has already done the work: "refusing to come out
+    for neither food nor kindness", "he never asked for neither help nor
+    pity".
+  - A negative reaching across into a second negative that was meant as
+    "any": "I do not believe it means us no harm", "no matter how it looked
+    to nobody else".
+
+  Do NOT flag:
+  - Litotes — deliberate double negation, which is a figure of speech and
+    usually the whole point of the sentence: "not unkind", "not unlike her
+    mother", "it is not impossible", "she was not unhappy to go", "I don't
+    disagree", "not without merit", "never not working". These are correct and
+    changing them flattens the writing.
+  - Two negatives in separate clauses. Each clause carries one, which is
+    correct: "He didn't come, and nobody called after." "She said nothing, and
+    he never asked."
+  - A single negative, however emphatic: "he said nothing at all", "nobody
+    came", "she had never once been late".
+  - "can't help but", which is doubled in form and entirely standard: "I can't
+    help but wonder", "you can't help but notice".
+  - Correctly paired correlatives with no other negative in the clause:
+    "Neither the boys nor the girl was ready."
+  - Dialect and nonstandard register, in dialogue or in a first-person
+    narrator whose whole voice is nonstandard. "I ain't never seen nothing
+    like it" is a way of speaking that has been English for centuries, and
+    levelling it rewrites the speaker rather than proofreading the book.
+    Report at low confidence at most, and prefer not to report at all when the
+    speaker's whole register is nonstandard.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one negation
+  removed, and it must be removed from the SECOND negative rather than the
+  first. Turn it into its any-form: nothing → anything, nobody → anybody,
+  never → ever, no → any, neither/nor → either/or. So "didn't say nothing"
+  becomes "didn't say anything", never "said nothing" — the author put the
+  negative on the verb, and moving it there rewrites the rhythm of the
+  sentence for no reason. Change nothing else. Fix one clause per finding.
+
+confidence_guidance: |
+  high   — a plain double negative in narration, where the intended meaning is
+           not in doubt: "without saying nothing", "nobody never found".
+  medium — a negative reaching into "hardly", "scarcely" or "barely", or a
+           neither/nor after a negative. Both are real errors, and in both the
+           smallest sensible fix is arguable.
+  low    — inside dialogue, or in narration whose voice is nonstandard
+           throughout. Along with verb_form, this is the type most likely to
+           fire on a character rather than on an error.
+
+examples:
+  - text: "He studied it for a long time without saying nothing."
+    finding:
+      original_text: "He studied it for a long time without saying nothing."
+      corrected_text: "He studied it for a long time without saying anything."
+      explanation: "\"without\" is already negative, so \"nothing\" doubles it."
+      confidence: high
+  - text: "Nobody never found where the light comes from."
+    finding:
+      original_text: "Nobody never found where the light comes from."
+      corrected_text: "Nobody ever found where the light comes from."
+      explanation: "\"Nobody\" carries the negative; \"never\" repeats it."
+      confidence: high
+  - text: "The cat refused to come out for neither food nor kindness."
+    finding:
+      original_text: "The cat refused to come out for neither food nor kindness."
+      corrected_text: "The cat refused to come out for either food or kindness."
+      explanation: "\"refused\" is the negative, so the pair is \"either / or\"."
+      confidence: medium
+  - text: "It was not unlike the summer she turned twelve."
+    finding: null
+  - text: "He didn't come, and nobody called after."
+    finding: null
+  - text: "\"I ain't never seen nothing like it,\" the old man said."
+    finding: null

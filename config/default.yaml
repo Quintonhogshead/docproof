@@ -136,9 +136,14 @@ error_types:
   # form, and the two are only reliably told apart by stating the boundary in
   # one place. Same reason comma_splice and run_on_sentence sit together.
   - [comma_splice, run_on_sentence, subject_verb_agreement, that_which,
-     comparative_form, verb_form]
-  # judgment calls — style-sensitive, most likely to fire on deliberate prose
-  - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+     comparative_form, verb_form, double_negative]
+  # judgment calls — style-sensitive, most likely to fire on deliberate prose.
+  # adjective_adverb belongs here rather than with the grammar above: the rule
+  # is simple and the exceptions are not, since English is full of flat adverbs
+  # ("drive slow") and of verbs that take an adjective on purpose ("she felt
+  # bad"). It also keeps the grammar pass from growing an eighth type.
+  - [tense_shift, pronoun_agreement, missing_word, preposition_error,
+     adjective_adverb]
 # Deterministic sweeps, run before any model pass so their edits get first
 # claim on a span. Each is one Atmosphere house rule expressed as text
 # patterns, and each reports its own final match count — the thing a careful
