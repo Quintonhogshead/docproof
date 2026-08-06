@@ -2298,6 +2298,71 @@ $('admin-settings-save').addEventListener('click', async () => {
   } finally { btn.disabled = false; }
 });
 
+// -- house style guide (prep tags manuscripts into it) ------------------------
+
+async function loadHouseStyle() {
+  if (!WEB || !ME || !ME.is_admin) return;
+  let data;
+  try { data = await api('/api/prep/styles'); } catch (_) { return; }
+  const summary = $('admin-sheet-summary');
+  const reset = $('admin-sheet-reset');
+  if (!data.ok) {
+    summary.className = 'error';
+    summary.textContent = data.error
+      || 'The current style guide could not be read.';
+    reset.hidden = !data.using_override;
+    return;
+  }
+  const count = (data.styles || []).length;
+  summary.className = 'muted';
+  summary.textContent = data.using_override
+    ? `Using your uploaded guide “${data.name}” (v${data.version}) — ${count} styles.`
+    : `Using the shipped default “${data.name}” (v${data.version}) — ${count} `
+      + 'styles. Upload your own to replace it for everyone.';
+  reset.hidden = !data.using_override;
+}
+
+$('admin-sheet-pick').addEventListener('click',
+  () => $('admin-sheet-file').click());
+
+$('admin-sheet-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const note = $('admin-sheet-note');
+  note.className = 'action-note muted';
+  note.textContent = 'Checking the style guide…';
+  note.hidden = false;
+  const fd = new FormData();
+  fd.append('file', file);              // field name matches the route param
+  try {
+    // No Content-Type header: the browser sets the multipart boundary.
+    await api('/api/prep/styles/sheet', { method: 'POST', body: fd });
+    note.className = 'action-note ok';
+    note.textContent = 'Installed. Prep uses it from the next document on.';
+    loadHouseStyle();
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+  } finally {
+    e.target.value = '';                // let the same file be re-picked
+  }
+});
+
+$('admin-sheet-reset').addEventListener('click', async () => {
+  const note = $('admin-sheet-note');
+  try {
+    await api('/api/prep/styles/sheet', { method: 'DELETE' });
+    note.className = 'action-note ok';
+    note.textContent = 'Back to the shipped style guide.';
+    note.hidden = false;
+    loadHouseStyle();
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+    note.hidden = false;
+  }
+});
+
 async function loadAdmin() {
   if (!WEB || !ME || !ME.is_admin) return;
   addReveal($('admin-new-password'));
@@ -2351,6 +2416,7 @@ async function loadAdmin() {
   }
   loadKeys();
   loadReviewDefaults();
+  loadHouseStyle();
 }
 
 boot();
