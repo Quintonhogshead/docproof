@@ -159,7 +159,8 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
                    opener=opener)
 
     if job.state == "failed" and job.verified is False:
-        _refuse(token, ws, file, job, rec, state, opener=opener, report=report)
+        _refuse(token, ws, file, job, rec, state, listing, opener=opener,
+                report=report)
         return
     if job.state != "done":
         # Something transient — a model that would not answer, a disk that
@@ -214,7 +215,8 @@ def _prepare(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 
 
 def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
-            state: WatchState, *, opener, report: TickReport) -> None:
+            state: WatchState, listing: list[DriveFile], *, opener,
+            report: TickReport) -> None:
     """Prep wrote a file and then proved it no longer said what the author
     said, so the file was deleted rather than shipped.
 
@@ -227,16 +229,25 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
 
     if ws.upload_failure_note:
         note = prep.failure_note(job, file, reason)
-        if note is not None:
-            new_id = drive.upload(token, ws.folder_id, note, name=note.name,
-                                  mime_type=prep.MARKDOWN_MIME,
-                                  app_properties={OUTPUT_PROP: "1",
-                                                  SOURCE_PROP: file.id,
-                                                  JOB_PROP: job.id},
-                                  opener=opener)
-            rec.uploaded[note.name] = new_id
-            state.record(rec)
-            report.uploaded.append(note.name)
+        # The same two guards upload_outputs keeps: a note that landed on a
+        # tick whose marker never did is adopted, not uploaded again beside
+        # itself.
+        if note is not None and note.name not in rec.uploaded:
+            orphan = prep._already_there(listing, file.id, note.name)
+            if orphan is not None:
+                rec.uploaded[note.name] = orphan.id
+                state.record(rec)
+            else:
+                new_id = drive.upload(token, ws.folder_id, note,
+                                      name=note.name,
+                                      mime_type=prep.MARKDOWN_MIME,
+                                      app_properties={OUTPUT_PROP: "1",
+                                                      SOURCE_PROP: file.id,
+                                                      JOB_PROP: job.id},
+                                      opener=opener)
+                rec.uploaded[note.name] = new_id
+                state.record(rec)
+                report.uploaded.append(note.name)
 
     prep.mark_source(token, file, job, rec, state, failed=reason, opener=opener)
     report.failed.append((file.name, reason))
@@ -297,12 +308,12 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     paths = Paths(root).ensure()
     store = JobStore(paths)
     runner = JobRunner(store, ws.app_settings(root), config_path=config_path())
+    state = WatchState.load(root / STATE_FILE)
     if not mock:
         # A rehearsal leaves real leftovers alone: _drain finishes whatever a
         # dead pass left mid-flight through the real provider, and
         # `--mock-tags` is documented as costing nothing.
-        _drain(runner)
-    state = WatchState.load(root / STATE_FILE)
+        _drain(runner, state, listing)
 
     collect_finished(token, ws, listing, state, store, opener=opener,
                      report=report)
@@ -312,18 +323,34 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     return report
 
 
-def _drain(runner: JobRunner) -> None:
+def _drain(runner: JobRunner, state: WatchState,
+           listing: list[DriveFile]) -> None:
     """Finish anything a previous tick left in flight, before starting more.
 
     `resume_interrupted` puts the ids on the runner's queue expecting a worker
     thread to be reading it. There isn't one — this process does the work
-    itself — so the queue is emptied by hand."""
+    itself — so the queue is emptied by hand.
+
+    A job whose manuscript has left the folder is parked rather than run:
+    finishing it pays the model for work that can never be delivered. The
+    checkpoint stays, so a manuscript that comes back resumes from what was
+    already bought."""
+    present = {f.id for f in listing}
+    owner = {rec.job_id: fid for fid, rec in state.files.items() if rec.job_id}
     runner.resume_interrupted()
     while True:
         try:
             job_id = runner.queue.get_nowait()
         except queue.Empty:
             return
+        file_id = owner.get(job_id)
+        if file_id is not None and file_id not in present:
+            log.info("Job %s is for a manuscript no longer in the folder; "
+                     "parking it.", job_id)
+            runner.store.update(job_id, state="failed",
+                                error="The manuscript left the folder before "
+                                      "this finished.")
+            continue
         try:
             runner.run_one(job_id)
         except Exception as e:            # noqa: BLE001 - mirrors _work

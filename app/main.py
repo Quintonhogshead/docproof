@@ -578,12 +578,20 @@ def _register(app: FastAPI) -> None:
                 400, f"No API key saved for {info.display}. Add one in "
                      f"Settings first.")
 
-        group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
-        created = []
+        # Every id is resolved before any job is enqueued: a 404 halfway
+        # through used to leave the earlier files already running — the page
+        # said failure, the retry ran them twice, and twice was billed twice.
+        sources = {}
         for file_id in req.file_ids:
             source = _resolve_upload(paths, file_id)
             if source is None:
                 raise HTTPException(404, f"Uploaded file {file_id!r} is gone")
+            sources[file_id] = source
+
+        group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
+        created = []
+        for file_id in req.file_ids:
+            source = sources[file_id]
             job = Job(
                 id=batchlib.new_job_id(source.name),
                 filename=source.name,
@@ -915,7 +923,11 @@ def _register(app: FastAPI) -> None:
     def write_watch(update: WatchUpdate) -> dict:
         watch: WatchRunner = app.state.watch
         ws = WatchSettings.load(watch.home)
-        if update.folder is not None:
+        # An empty folder box means "unchanged", the same as an absent one:
+        # the panel always sends the field, and on a fresh setup it is blank —
+        # refusing it here used to throw away the model and output choices
+        # saved alongside it.
+        if update.folder:
             try:
                 ws.folder_id = folder_id_from(update.folder)
             except ValueError as e:

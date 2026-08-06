@@ -121,6 +121,17 @@ def test_the_folder_can_be_pasted_as_a_browser_address(client):
     assert WatchSettings.load(client.home).folder_id == FOLDER
 
 
+def test_a_blank_folder_box_means_unchanged_not_an_error(client):
+    """A fresh panel has an empty folder box, and Save always sends the
+    field. Refusing '' used to throw away the model and output choices
+    saved alongside it."""
+    answer = client.put("/api/watch", json={"folder": "",
+                                            "prep_output": "both"})
+
+    assert answer.status_code == 200
+    assert WatchSettings.load(client.home).prep_output == "both"
+
+
 def test_something_that_is_not_a_folder_is_refused(client):
     answer = client.put("/api/watch", json={"folder": "my documents"})
 

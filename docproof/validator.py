@@ -132,16 +132,19 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             out.append(_status(f, "skipped_low_confidence", anchor))
             continue
 
-        # 4 — overlap with already-accepted edits in this paragraph
-        spans = accepted_spans.setdefault(f.para_id, [])
-        if any(_overlaps(start, end, a, b) for a, b in spans):
-            out.append(_status(f, "rejected_overlap", anchor))
-            continue
-
-        # 5 — exact duplicate
+        # 4 — exact duplicate. Asked before overlap on purpose: an identical
+        # edit necessarily overlaps the accepted copy of itself, so the other
+        # order reports every duplicate as an overlap and this status never
+        # fires.
         key = (f.para_id, start, end, inserted)
         if key in seen:
             out.append(_status(f, "rejected_duplicate", anchor))
+            continue
+
+        # 5 — overlap with already-accepted edits in this paragraph
+        spans = accepted_spans.setdefault(f.para_id, [])
+        if any(_overlaps(start, end, a, b) for a, b in spans):
+            out.append(_status(f, "rejected_overlap", anchor))
             continue
 
         seen.add(key)

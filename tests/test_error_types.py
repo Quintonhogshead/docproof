@@ -41,6 +41,16 @@ def test_every_error_type_file_loads():
                     f"paragraph text verbatim")
 
 
+def test_an_emptied_override_is_a_broken_file_not_a_crash(tmp_path):
+    """The override dir holds user-edited copies. An editor that saved one
+    blank used to surface as `AttributeError: 'NoneType'` — a traceback where
+    every neighbouring failure is a sentence naming the file."""
+    (tmp_path / "comma_splice.yaml").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="comma_splice.yaml is empty"):
+        load_error_types(ERROR_DIR, ["comma_splice"], override_dir=tmp_path)
+
+
 def test_every_calibration_example_survives_the_validator():
     """An example teaches the model what a good finding looks like, so every
     example must be one the validator would actually accept: it has to anchor

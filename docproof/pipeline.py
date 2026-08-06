@@ -285,6 +285,13 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                 add_usage(usage, cached.usage)
             else:
                 before = snapshot(usage)
+                # A failed earlier attempt at this call still paid for its
+                # tokens. Folding them in ahead of the snapshot makes the
+                # retry's entry cumulative, so the spend survives on disk and
+                # in the totals however many resumes it takes.
+                burned = checkpoint.burned(key) if checkpoint else None
+                if burned:
+                    add_usage(usage, burned)
                 found, ok = analyzer.analyze_chunk(chunk, usage)
                 findings.extend(found)
                 if checkpoint:

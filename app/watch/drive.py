@@ -11,6 +11,7 @@ Every failure that a person could fix comes back as a sentence saying how.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import urllib.error
@@ -122,9 +123,17 @@ def _reason(error: urllib.error.HTTPError) -> str:
 def _call(request: urllib.request.Request, *, opener, what: str) -> bytes:
     """One request, with every failure a person could fix turned into a
     sentence saying how to fix it."""
+    with _answer(request, opener=opener, what=what) as response:
+        return response.read()
+
+
+@contextlib.contextmanager
+def _answer(request: urllib.request.Request, *, opener, what: str):
+    """The open response, with `_call`'s error translation. Split out for the
+    one caller that needs a header rather than the body."""
     try:
         with opener(request) as response:
-            return response.read()
+            yield response
     except urllib.error.HTTPError as e:
         detail = _reason(e)
         tail = f" Google said: {detail}" if detail else ""
@@ -275,6 +284,9 @@ def _write(dest: str | Path, body: bytes) -> Path:
 
 # --- writing back -------------------------------------------------------------
 
+MULTIPART_LIMIT = 5 * 1024 * 1024        # Google's cap for multipart uploads
+
+
 def upload(token: str, folder_id: str, path: str | Path, *,
            name: str | None = None,
            app_properties: dict[str, str] | None = None,
@@ -284,11 +296,18 @@ def upload(token: str, folder_id: str, path: str | Path, *,
     One multipart request rather than a resumable session: these are
     manuscripts, not video, and a resumable upload's virtue — surviving a
     dropped connection halfway — is one a watcher already has, because the
-    next tick re-uploads what the state file says never landed."""
+    next tick re-uploads what the state file says never landed. The exception
+    is size: Google refuses multipart bodies over 5 MB, and a manuscript
+    with photographs in it can pass that, so those go by session instead —
+    still in one shot, still retried by the next tick if it drops."""
     source = Path(path)
     metadata = {"name": name or source.name, "parents": [folder_id]}
     if app_properties:
         metadata["appProperties"] = app_properties
+
+    if source.stat().st_size > MULTIPART_LIMIT:
+        return _upload_by_session(token, metadata, source, mime_type,
+                                  opener=opener)
 
     boundary = f"docproof-{uuid.uuid4().hex}"
     body = b"".join([
@@ -306,6 +325,35 @@ def upload(token: str, folder_id: str, path: str | Path, *,
                        content_type=f"multipart/related; boundary={boundary}")
     answer = _json_call(request, opener=opener,
                         what=f"upload {metadata['name']}")
+    new_id = str(answer.get("id", ""))
+    if not new_id:
+        raise DriveError(f"Google Drive accepted {metadata['name']} but did "
+                         f"not say where it put it.")
+    return new_id
+
+
+def _upload_by_session(token: str, metadata: dict, source: Path,
+                       mime_type: str, *, opener) -> str:
+    """The over-5MB path: ask for a session, then put the bytes to it.
+
+    Two requests where multipart is one, which is why it is not the default.
+    The session URI carries its own authorisation, and an interrupted put is
+    not resumed — the next tick starts over, same as the multipart path."""
+    what = f"upload {metadata['name']}"
+    start = _request(_url(UPLOAD_API, {"uploadType": "resumable",
+                                       "fields": "id", **SHARED_DRIVE}),
+                     token, data=json.dumps(metadata).encode(),
+                     method="POST",
+                     content_type="application/json; charset=UTF-8")
+    start.add_header("X-Upload-Content-Type", mime_type)
+    with _answer(start, opener=opener, what=what) as response:
+        session = str(response.headers.get("Location") or "")
+    if not session:
+        raise DriveError(f"Google Drive did not open a session to {what}.")
+
+    put = _request(session, token, data=source.read_bytes(), method="PUT",
+                   content_type=mime_type)
+    answer = _json_call(put, opener=opener, what=what)
     new_id = str(answer.get("id", ""))
     if not new_id:
         raise DriveError(f"Google Drive accepted {metadata['name']} but did "

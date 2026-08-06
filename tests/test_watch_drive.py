@@ -179,6 +179,45 @@ def test_an_upload_is_one_multipart_request(tmp_path):
     assert query_of(request)["uploadType"] == ["multipart"]
 
 
+def test_a_file_too_big_for_multipart_goes_by_session(tmp_path):
+    """Google refuses multipart bodies over 5 MB, and a tagged manuscript
+    with photographs in it crosses that line. Those used to fail on every
+    tick until the give-up marked the book failed."""
+    big = tmp_path / "tagged_Big.docx"
+    big.write_bytes(b"x" * (drive.MULTIPART_LIMIT + 1))
+    seen = []
+
+    class Answer:
+        def __init__(self, headers, body):
+            self.headers, self.body = headers, body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def opener(request, timeout=60):
+        seen.append(request)
+        if "uploadType=resumable" in request.full_url:
+            return Answer({"Location": "https://upload.example/session-1"},
+                          b"{}")
+        return Answer({}, json.dumps({"id": "up-9"}).encode())
+
+    new_id = drive.upload("at-1", FOLDER, big, opener=opener)
+
+    assert new_id == "up-9"
+    start, put = seen
+    assert query_of(start)["uploadType"] == ["resumable"]
+    assert json.loads(start.data)["parents"] == [FOLDER]
+    assert put.full_url == "https://upload.example/session-1"
+    assert put.get_method() == "PUT"
+    assert len(put.data) == drive.MULTIPART_LIMIT + 1
+
+
 def test_an_upload_can_be_given_a_different_name(tmp_path):
     """Prep writes one `prep_notes.md` per run; a folder holds many books."""
     source = tmp_path / "prep_notes.md"

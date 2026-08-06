@@ -99,14 +99,25 @@ def perform_update(runner, *, run=subprocess.run, spawn=subprocess.Popen,
         raise UpdateError(checked["message"])
 
     staging = Path(tempfile.mkdtemp(prefix="docproof-update-"))
-    got = download_release(into=staging)
-    if not got.get("ok"):
-        raise UpdateError(got["message"])
-    dmg = Path(got["path"])
+    try:
+        got = download_release(into=staging)
+        if not got.get("ok"):
+            raise UpdateError(got["message"])
+        dmg = Path(got["path"])
 
-    fresh = _extract_app(dmg, staging, run=run)
-    _check_it_is_newer(fresh, checked)
-    _swap(bundle, fresh, run=run)
+        fresh = _extract_app(dmg, staging, run=run)
+        _check_it_is_newer(fresh, checked)
+        # Asked again, not just at the top: the download took long enough for
+        # a review to have started, and the exit below would kill it mid-call.
+        reason = refuse_reason(runner)
+        if reason:
+            raise UpdateError(reason)
+        _swap(bundle, fresh, run=run)
+    finally:
+        # Hundreds of megabytes of DMG and extracted app, done with either
+        # way: the swap copied what it needed, and a failure must not leave a
+        # docproof-update-* pile in the temp dir per attempt.
+        shutil.rmtree(staging, ignore_errors=True)
 
     _reopen_after_exit(bundle, spawn=spawn)
     version = checked.get("tag", "").lstrip("v") or "the new version"
@@ -316,6 +327,14 @@ def rebuild_from_checkout(runner, *, run=subprocess.run,
         raise UpdateError(
             f"There is no virtualenv at {python}, so DocProof cannot build "
             f"itself. Create one in {source} and try again.")
+    if bundle.resolve() == (source / "dist" / "DocProof.app").resolve():
+        # PyInstaller --noconfirm deletes and recreates dist/DocProof.app —
+        # the very bundle this process is running from. The rebuild would
+        # saw off its own branch and then fail to install what it built.
+        raise UpdateError(
+            "DocProof is running from the build folder itself, which the "
+            "rebuild deletes and recreates. Copy DocProof.app to "
+            "Applications, open it from there, then rebuild.")
 
     say("pulling")
     _pull(source, run=run)
@@ -328,6 +347,12 @@ def rebuild_from_checkout(runner, *, run=subprocess.run,
     fresh = _build(source, python, run=run)
 
     say("installing")
+    # Asked again, not just at the top: pull, tests and PyInstaller ran for
+    # minutes, the app stayed usable throughout, and a review started in the
+    # meantime must not be killed by the exit below.
+    reason = refuse_reason(runner)
+    if reason:
+        raise UpdateError(reason)
     _swap(bundle, fresh, run=run)
     _reopen_after_exit(bundle, spawn=spawn)
 

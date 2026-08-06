@@ -110,6 +110,14 @@ class Checkpoint:
         entry = self._entries.get(key)
         return entry if entry is not None and entry.ok else None
 
+    def burned(self, key: str) -> dict | None:
+        """The usage a failed earlier attempt at this call already paid, or
+        None. The retry cannot recover those tokens, but the totals must
+        still count them — this is the other half of keeping ok=False
+        entries at all."""
+        entry = self._entries.get(key)
+        return entry.usage if entry is not None and not entry.ok else None
+
     def put(self, key: str, *, items: list[dict], usage: Usage,
             ok: bool) -> None:
         self._entries[key] = Entry(items=items,

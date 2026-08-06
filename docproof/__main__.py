@@ -247,8 +247,14 @@ def cmd_submit(args) -> int:
 def cmd_status(args) -> int:
     cfg, _ = _configure(args)
     setup_logging(cfg.output_dir)
-    jobs = ([batchlib.load(args.workspace, args.job_id)] if args.job_id
-            else batchlib.load_all(args.workspace))
+    try:
+        jobs = ([batchlib.load(args.workspace, args.job_id)] if args.job_id
+                else batchlib.load_all(args.workspace))
+    except (batchlib.BatchError, json.JSONDecodeError, TypeError) as e:
+        # load_all shrugs off unreadable manifests; asking for one by id has
+        # to answer in words too, not a traceback.
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     if not jobs:
         print(f"No queued reviews in {args.workspace}/")
         return 0
@@ -280,7 +286,11 @@ def cmd_collect(args) -> int:
         provider = build_provider(cfg)
         outputs = batchlib.collect(job, provider, error_dir, args.workspace,
                                    out_dir=args.out)
-    except (batchlib.BatchError, ProviderError, IngestError) as e:
+    except (batchlib.BatchError, ProviderError, IngestError, ValueError,
+            TypeError) as e:
+        # ValueError is the edited-document case: the manifest names chunks
+        # the re-chunked source no longer has, which the content-hash check
+        # never gets to see. (It also covers a corrupt manifest's JSON.)
         print(f"error: {e}", file=sys.stderr)
         return 2
 

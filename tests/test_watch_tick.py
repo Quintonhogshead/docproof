@@ -356,6 +356,29 @@ def test_a_failure_note_can_be_asked_for(tmp_path, ws, provider, monkeypatch):
     assert b"Nothing about the original was changed" in note
 
 
+def test_a_failure_note_is_not_stacked_when_the_marker_lags(tmp_path, ws,
+                                                            provider,
+                                                            monkeypatch):
+    """The note landed; the marker patch then failed, so the next tick came
+    back to the same file. It used to upload a second note beside the first —
+    the same crash window upload_outputs already guards."""
+    eats_a_word(monkeypatch)
+    ws.upload_failure_note = True
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT,
+                        fail={"patch": http_error(500, "nope")})
+
+    first = run(tmp_path, ws, opener)
+    assert not first.ok                      # note up, marker not
+
+    run(tmp_path, ws, opener)                # Drive is healthy again
+
+    notes = [e for e in opener.files.values()
+             if e["name"] == "prep_failed_Wolves.md"]
+    assert len(notes) == 1                   # adopted, not stacked
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FAILED
+
+
 # --- when something is merely broken ------------------------------------------
 
 def test_a_transient_failure_is_tried_again_and_then_given_up_on(
@@ -635,6 +658,34 @@ def test_an_interrupted_job_is_finished_before_new_work_is_started(
 
     runner = JobRunner(store, ws.app_settings(tmp_path),
                        config_path=ticklib.config_path())
-    ticklib._drain(runner)
+    state = WatchState.load(tmp_path / "state.json")
+    listing = [ticklib.DriveFile(id="f-1", name="Wolves.docx",
+                                 mime_type=GOOGLE_DOC_MIME)]
+    ticklib._drain(runner, state, listing)
 
     assert store.get(job.id).state == "done"
+
+
+def test_a_withdrawn_manuscripts_job_is_parked_not_paid_for(tmp_path, ws,
+                                                            provider):
+    """The author pulled the file back mid-run. Finishing its job pays the
+    model for work that can never be delivered — parked instead, with the
+    checkpoint kept, so a returning manuscript resumes what was bought."""
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT)
+    run(tmp_path, ws, opener)
+
+    store = JobStore(Paths(tmp_path))
+    job = store.all()[0]
+    store.update(job.id, state="running")
+    paid = len(provider.calls)
+
+    runner = JobRunner(store, ws.app_settings(tmp_path),
+                       config_path=ticklib.config_path())
+    state = WatchState.load(tmp_path / "state.json")
+    ticklib._drain(runner, state, listing=[])      # the folder no longer has it
+
+    parked = store.get(job.id)
+    assert parked.state == "failed"
+    assert "left the folder" in parked.error
+    assert len(provider.calls) == paid             # not a token spent on it

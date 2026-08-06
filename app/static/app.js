@@ -1123,10 +1123,13 @@ function promptCard(t) {
 
 async function loadWatch({ quiet = false } = {}) {
   const body = await api('/api/watch');
-  if (!state.watchModels) {
+  // Refreshed on every deliberate load, kept on the five-second poll: a key
+  // saved or deleted in Settings must show here the next time the tab is
+  // opened, not after a full page reload.
+  if (!state.watchModels || !quiet) {
     try {
       state.watchModels = (await api('/api/models')).models;
-    } catch (_) { state.watchModels = []; }
+    } catch (_) { state.watchModels = state.watchModels || []; }
   }
   renderWatch(body, quiet);
 }
@@ -1341,7 +1344,8 @@ $('watch-save').addEventListener('click', async () => {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        folder: $('watch-folder').value.trim(),
+        // null, not '': an empty box is "no change", and the server agrees.
+        folder: $('watch-folder').value.trim() || null,
         model: $('watch-model').value,
         prep_output: $('watch-output').value,
         upload_notes: $('watch-notes').checked,

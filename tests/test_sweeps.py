@@ -256,6 +256,23 @@ def test_findings_anchor_and_apply_cleanly_through_the_validator():
         "He went to the twentieth century door!")
 
 
+def test_an_identical_edit_reported_twice_is_a_duplicate_not_an_overlap():
+    """Two copies of one finding used to both come back `rejected_overlap`:
+    an identical edit necessarily overlaps the accepted copy of itself, so
+    with the overlap check asked first, `rejected_duplicate` could never
+    fire on a plain edit."""
+    from docproof.models import Finding
+
+    doc, _ = _doc("He went to to the door.")
+    twin = dict(chunk_id="c", para_id="body-0000", error_type="repeated_word",
+                original_text="to to", occurrence=1, corrected_text="to",
+                explanation="", confidence="high")
+    out = validate_findings([Finding(finding_id="f-0001", **twin),
+                             Finding(finding_id="f-0002", **twin)],
+                            doc, "medium")
+    assert [f.status for f in out] == ["validated", "rejected_duplicate"]
+
+
 def test_a_repeated_sentence_anchors_by_occurrence():
     """Two identical sentences in one paragraph must not both anchor to the
     first one — that is what `occurrence` is for."""

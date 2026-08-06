@@ -59,6 +59,13 @@ def load_error_types(dir_path: str | Path, enabled: list[str], *,
                 f"Error type '{key}' is enabled but {path} does not exist. "
                 f"Available: {sorted(p.stem for p in dir_path.glob('*.yaml') if not p.stem.startswith('_'))}")
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            # The override dir holds user-edited copies, and an editor that
+            # saved one blank must read as a broken file, not a crash.
+            what = ("empty" if data is None
+                    else f"a YAML {type(data).__name__}, not a mapping")
+            raise ValueError(f"{path} is {what}; restore it or delete it so "
+                             f"the shipped copy is used.")
         missing = [f for f in REQUIRED if not data.get(f)]
         if missing:
             raise ValueError(f"{path} is missing required fields: {missing}")

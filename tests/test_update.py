@@ -310,6 +310,28 @@ class RebuildHarness:
             terminate=self.terminate, progress=lambda s, m="": self.stages.append(s))
 
 
+def test_a_failed_update_leaves_no_staging_behind(runner, monkeypatch,
+                                                  tmp_path):
+    """The DMG plus the extracted app is hundreds of megabytes. A failure a
+    person retries three times must not stack three copies in the temp dir —
+    and the success path exits the process, so cleanup cannot be left to it
+    either."""
+    h = SwapHarness(monkeypatch, tmp_path, runner)
+    h.stamp_version = "0.1.0"                # image is old: refused after extract
+    staged = []
+
+    def tracked_mkdtemp(prefix):
+        d = tmp_path / f"{prefix}0"
+        d.mkdir()
+        staged.append(d)
+        return str(d)
+
+    monkeypatch.setattr(updatelib.tempfile, "mkdtemp", tracked_mkdtemp)
+    with pytest.raises(UpdateError):
+        h.update()
+    assert staged and not staged[0].exists()
+
+
 def test_a_rebuild_pulls_tests_builds_then_swaps(runner, monkeypatch, tmp_path):
     """The order tools/update.sh uses, for the reason it uses it: the tests run
     before anything is replaced."""
@@ -344,6 +366,49 @@ def test_the_old_app_goes_to_the_trash_not_nowhere(runner, monkeypatch,
 
     kept = list(h.trash.glob("DocProof (replaced *).app"))
     assert kept and (kept[0] / "Contents" / "old-marker").exists()
+
+
+def test_a_rebuild_refuses_to_run_from_its_own_build_folder(runner,
+                                                            monkeypatch,
+                                                            tmp_path):
+    """PyInstaller --noconfirm deletes and recreates dist/DocProof.app. A
+    DocProof launched from there would saw off its own branch and then fail
+    to install what it built — refused at the door instead."""
+    h = RebuildHarness(monkeypatch, tmp_path, runner)
+    inside = h.source / "dist" / "DocProof.app"
+    (inside / "Contents" / "MacOS").mkdir(parents=True)
+    monkeypatch.setattr(sys, "executable",
+                        str(inside / "Contents" / "MacOS" / "DocProof"))
+
+    with pytest.raises(UpdateError, match="build folder"):
+        h.rebuild()
+    assert not h.commands                    # refused before any git ran
+
+
+def test_a_review_started_during_the_build_stops_the_install(runner,
+                                                             monkeypatch,
+                                                             tmp_path):
+    """The refusal at the top ran when the rebuild began; pull, tests and
+    PyInstaller then took minutes with the app fully usable. A review started
+    in that window must not be killed by the exit — asked again at the door
+    of the swap."""
+    h = RebuildHarness(monkeypatch, tmp_path, runner)
+    store = h.runner.store
+    inner = h.run
+
+    def run_and_start_a_review(command, **kwargs):
+        result = inner(command, **kwargs)
+        if RebuildHarness._what(command) == "build":
+            store.save(Job(id="j1", filename="x.docx", source_path="x",
+                           model="claude-sonnet-5", mode="now",
+                           state="running"))
+        return result
+
+    h.run = run_and_start_a_review
+    with pytest.raises(UpdateError, match="being worked on"):
+        h.rebuild()
+    assert (h.bundle / "Contents" / "old-marker").is_file()  # untouched
+    assert h.terminated == [] and h.spawned == []
 
 
 def test_tests_that_fail_install_nothing(runner, monkeypatch, tmp_path):

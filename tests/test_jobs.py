@@ -247,8 +247,11 @@ def test_an_interrupted_review_resumes_instead_of_starting_over(
 
 def test_a_resumed_review_equals_an_uninterrupted_one(runner, monkeypatch,
                                                       tmp_path):
-    """Same findings, same f-NNNN ids, same usage totals — a reader of the
-    output cannot tell the run was ever interrupted."""
+    """Same findings, same f-NNNN ids — a reader of the output cannot tell
+    the run was ever interrupted. The usage totals are the one honest
+    difference: the first attempt paid for a call that failed, the resume
+    paid to retry it, and the total owns both. (Here the failed call is the
+    scripted finding landing in a pass whose schema rejects it.)"""
     import json as jsonlib
 
     from .fakes import DyingProvider, FakeProvider, finding_result
@@ -285,7 +288,15 @@ def test_a_resumed_review_equals_an_uninterrupted_one(runner, monkeypatch,
     a = {k: v for k, v in control_findings.items() if k not in strip}
     b = {k: v for k, v in resumed_findings.items() if k not in strip}
     assert a["findings"] == b["findings"]      # ids, order, statuses — all of it
-    assert a["usage"] == b["usage"]
+    # One extra call, at USAGE's prices: the schema-mismatch call the first
+    # attempt burned before dying, which the resume retried rather than
+    # forgot. Erasing it was the bug — the control's total is what an
+    # uninterrupted run costs, not what this one did.
+    au, bu = a["usage"], b["usage"]
+    assert bu["api_calls"] == au["api_calls"] + 1
+    assert bu["input_tokens"] == au["input_tokens"] + 100
+    assert bu["output_tokens"] == au["output_tokens"] + 20
+    assert bu["cache_read_input_tokens"] == au["cache_read_input_tokens"] + 50
 
 
 def test_a_failed_call_is_retried_on_resume_not_trusted(runner, monkeypatch):

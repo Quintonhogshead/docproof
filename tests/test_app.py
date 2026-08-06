@@ -483,6 +483,31 @@ def test_cancelling_an_unknown_job_says_so(client):
     assert resp.status_code == 404
 
 
+def test_a_cancelled_job_is_not_still_running_on_the_dashboard(client):
+    """Cancelled is over, the same as failed. It used to sit in the
+    `unfinished` count forever — a machine with nothing running whose
+    Requests tile said otherwise."""
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch", schedule_at="23:59")
+    client.post(f"/api/jobs/{job['id']}/cancel")
+
+    assert client.get("/api/usage").json()["unfinished"] == 0
+
+
+def test_a_missing_upload_creates_no_jobs_at_all(client):
+    """Two files, the second's upload gone: the old loop had already enqueued
+    the first before 404ing, so the page said failure while half the batch
+    ran — and the natural retry ran (and billed) it twice."""
+    good = _upload(client)
+
+    resp = client.post("/api/jobs", json={
+        "file_ids": [good["id"], "u-gone"], "model": "claude-sonnet-5",
+        "mode": "now"})
+
+    assert resp.status_code == 404
+    assert client.get("/api/jobs").json()["jobs"] == []
+
+
 def test_a_cancelled_job_reports_ready_false(client):
     """Cancelled is a dead end, not a result — nothing should offer to open
     files for it the way a finished job does."""

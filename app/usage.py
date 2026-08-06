@@ -93,7 +93,9 @@ def build_usage(jobs, read_usage) -> dict:
 
     for job in jobs:
         if job.state != "done":
-            if job.state not in ("failed",):
+            # Terminal states are over, not unfinished: a cancelled job used
+            # to sit in the "still running" count forever.
+            if job.state not in ("failed", "cancelled"):
                 unfinished += 1
             # A failed prep still burned tokens getting there, so it counts.
             if not (job.api_calls or job.input_tokens):

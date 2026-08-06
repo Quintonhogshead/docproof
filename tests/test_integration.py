@@ -33,3 +33,16 @@ def test_end_to_end_mock(tmp_path):
     p = {wp.para_id: wp.element for wp in walk_package(pkg)}["body-0000"]
     assert paragraph_view_text(p, "reject") == SPLICE_A      # fidelity
     assert ";" in paragraph_view_text(p, "accept")
+
+def test_status_for_a_job_that_never_existed_answers_in_words(tmp_path, capsys,
+                                                              monkeypatch):
+    """`docproof status <id>` after the job folder was deleted used to be an
+    unhandled traceback. The listing path already shrugged at unreadable
+    manifests; the by-id path has to answer in words too."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["status", "gone-123",
+               "--config", str(FIXTURES.parent.parent / "config" /
+                               "default.yaml"),
+               "--workspace", str(tmp_path / "jobs")])
+    assert rc == 2
+    assert "gone-123" in capsys.readouterr().err
