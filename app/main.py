@@ -1328,7 +1328,17 @@ def _register(app: FastAPI) -> None:
         s: Settings = app.state.settings
         return {"settings": s.__dict__, "keys": key_status()}
 
-    @app.put("/api/settings")
+    def _may_edit_settings(request: Request) -> None:
+        """One settings file serves the whole server, so on the web build only
+        an administrator may change it. The desktop build has one user and no
+        gate, so this passes."""
+        if app.state.web:
+            user = getattr(request.state, "user", None)
+            if not (user and user.is_admin):
+                raise HTTPException(
+                    403, "Only an administrator can change the review defaults.")
+
+    @app.put("/api/settings", dependencies=[Depends(_may_edit_settings)])
     def write_settings(update: SettingsUpdate) -> dict:
         s: Settings = app.state.settings
         for field_name in ("model", "min_confidence", "output_dir",

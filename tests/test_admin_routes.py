@@ -151,3 +151,27 @@ def test_default_cap_applies_when_user_has_none(app, monkeypatch):
     r = editor.post("/api/jobs", json={"file_ids": [file_id],
                                        "model": "claude-sonnet-5", "mode": "batch"})
     assert r.status_code == 402
+
+
+# -- review defaults (the web-relevant Settings options) ----------------------
+
+def test_admin_sets_review_defaults(app):
+    boss = _as(app, "boss@press.com")
+    r = boss.put("/api/settings", json={"comments": False, "explanations": False})
+    assert r.status_code == 200
+    got = boss.get("/api/settings").json()["settings"]
+    assert got["comments"] is False and got["explanations"] is False
+
+
+def test_non_admin_cannot_change_settings(app):
+    ed = _as(app, "editor@press.com")
+    assert ed.put("/api/settings", json={"comments": False}).status_code == 403
+    # Reading is fine — the Drop screen reads defaults for everyone.
+    assert ed.get("/api/settings").status_code == 200
+
+
+def test_desktop_settings_need_no_admin(tmp_path):
+    app = create_app(tmp_path, start_runner=False)   # web=False
+    with TestClient(app) as c:
+        assert c.put("/api/settings",
+                     json={"explanations": False}).status_code == 200

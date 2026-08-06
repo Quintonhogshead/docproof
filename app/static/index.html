@@ -539,6 +539,31 @@
         environment is used until you override it here.</p>
       <div id="admin-keys"></div>
     </div>
+
+    <div class="card">
+      <h3>Review defaults</h3>
+      <p class="muted">How reviews behave for everyone. The reviewer, care level
+        and timing are still chosen per document on the Drop screen; these are
+        the settings that have no per-document control.</p>
+      <label class="checkbox">
+        <input type="checkbox" id="admin-comments">
+        Explain every change in the document itself
+        <small class="muted">A margin comment in Word beside each tracked
+          change.</small>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="admin-explanations">
+        Ask the model for a reason with every change
+        <small class="muted">Turning this off makes reviews noticeably
+          cheaper — the reasons are most of what the model writes back. The
+          corrections themselves are unaffected.</small>
+      </label>
+      <div class="job-actions">
+        <button type="button" id="admin-settings-save" class="primary">Save
+          defaults</button>
+        <span id="admin-settings-saved" class="ok" hidden>Saved.</span>
+      </div>
+    </div>
   </section>
 </main>
 
