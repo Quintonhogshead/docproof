@@ -77,7 +77,8 @@ All commands are run from the repository folder on your Mac.
 
 ### 3.1 Point the config at your app
 
-`fly.toml` already sets `app = "docproof"` and `primary_region = "iad"`. Change
+`fly.toml` already sets `app = "docproof-atmosphere"` and
+`primary_region = "iad"`. Change
 them if you like:
 
 - **`app`** must be globally unique on Fly. If `fly apps create` (next step)
@@ -96,7 +97,7 @@ them if you like:
 > scanning.
 
 ```bash
-fly apps create docproof
+fly apps create docproof-atmosphere
 ```
 
 (Use the same name as `app` in `fly.toml`. If it's taken, choose another and
