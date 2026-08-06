@@ -108,3 +108,20 @@ def test_your_own_job_is_reachable(app):
     _seed_job(app, "a@press.com", "job-a")
     a = _as(app, "a@press.com")
     assert a.get("/api/jobs/job-a").json()["id"] == "job-a"
+
+
+def test_web_accepts_a_prep_job(app):
+    # docx in, formatted docx out — prep runs server-side; only the later .indd
+    # placement needs a Mac. Creating the job is all the web path has to allow.
+    a = _as(app, "a@press.com")
+    file_id = _upload(a)
+    r = a.post("/api/jobs", json={"file_ids": [file_id],
+                                  "model": "claude-sonnet-5",
+                                  "kind": "prep", "prep_output": "indesign"})
+    assert r.status_code == 200
+    assert r.json()["jobs"][0]["is_prep"] is True
+
+
+def test_healthz_reports_version(app):
+    body = _as(app, "a@press.com").get("/healthz").json()
+    assert body["ok"] and body["version"]

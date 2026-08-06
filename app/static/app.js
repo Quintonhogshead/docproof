@@ -667,12 +667,14 @@ function prepActions(job) {
   const note = actionNote();
   const first = job.prep_output === 'tracked' ? 'tracked' : 'indesign';
   if (job.prep_output !== 'tracked') {
-    actions.append(openButton(job, 'indesign', 'Open the file for InDesign',
-                              note));
+    actions.append(openButton(job, 'indesign',
+      WEB ? 'Download the InDesign-ready file' : 'Open the file for InDesign',
+      note));
   }
   if (job.prep_output !== 'indesign') {
-    actions.append(openButton(job, 'tracked', 'Open the tracked-changes file',
-                              note));
+    actions.append(openButton(job, 'tracked',
+      WEB ? 'Download the tracked-changes file' : 'Open the tracked-changes file',
+      note));
   }
   const read = document.createElement('button');
   read.textContent = 'Read the prep notes';
@@ -2036,12 +2038,11 @@ function applyMode() {
     const tab = document.querySelector(`.tab[data-screen="${screen}"]`);
     if (tab) tab.hidden = true;
   }
-  // Web v1 reviews for errors only — preparing for InDesign needs a Mac — so
-  // the choice comes off the screen and review is settled on.
-  const kinds = document.querySelector('.kinds');
-  if (kinds) kinds.hidden = true;
-  const review = document.querySelector('input[name="kind"][value="review"]');
-  if (review) review.checked = true;
+  // Both jobs are available on the web: review, and preparing a manuscript for
+  // layout. Prep hands back Word files — a tagged .docx whose paragraph styles
+  // are the house template's own — which is document work the server does
+  // itself. Only the last step, placing that file into a native .indd, needs
+  // InDesign on a Mac, and its button is already kept off the web build.
   $('update-banner').hidden = true;
 }
 
@@ -2088,7 +2089,21 @@ function showLogin() {
   });
 }
 
+// The build's version, from the one route open before sign-in. Shown on the
+// login screen and in the header once inside.
+async function showVersion() {
+  try {
+    const { version } = await api('/healthz');
+    if (!version) return;
+    const header = $('app-version');
+    if (header) header.textContent = 'v' + version;
+    const login = $('login-version');
+    if (login) login.textContent = 'DocProof v' + version;
+  } catch (_) { /* the version line just stays empty */ }
+}
+
 async function boot() {
+  showVersion();
   await resolveSession();
   if (WEB && !ME) { showLogin(); return; }
   startApp();
