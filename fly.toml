@@ -1,0 +1,36 @@
+# Fly.io configuration for the hosted DocProof web build.
+#
+# This is a template: set `app` to the name you register with `fly launch`, and
+# pick a region near your editors. Secrets are NOT here — set them with
+# `fly secrets set` (see DEPLOY.md) so they never land in the repo.
+
+app = "docproof-CHANGE-ME"
+primary_region = "iad"        # pick one near your users: fly platform regions
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DOCPROOF_HOME = "/data/docproof"
+  PORT = "8000"
+  # A monthly spend ceiling, in USD, for every ordinary account without one of
+  # its own. Admins are never capped. Remove to leave ordinary users uncapped.
+  DOCPROOF_DEFAULT_CAP = "20"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # The machine must stay up: the batch ticker polls the vendor for overnight
+  # jobs, and a stopped machine polls nothing. So no auto-stop.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+# Accounts (users.db) and every job live here, and must survive redeploys.
+[[mounts]]
+  source = "docproof_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

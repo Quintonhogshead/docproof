@@ -67,6 +67,13 @@ class Paths:
     def settings_file(self) -> Path:
         return self.root / "settings.json"
 
+    @property
+    def users_db(self) -> Path:
+        """The web build's account database. The desktop app never opens it —
+        it has one user and no sign-in — so nothing here creates the file; the
+        first `docproof-admin add-user` does."""
+        return self.root / "users.db"
+
     def ensure(self) -> "Paths":
         for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep):
             d.mkdir(parents=True, exist_ok=True)

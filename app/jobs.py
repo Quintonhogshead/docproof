@@ -91,6 +91,11 @@ class Job:
     # one bill, and a spending figure that cannot say which is a figure nobody
     # trusts. Older records have no `source` and were all the app.
     source: str = "app"                # app | watch
+    # Whose review this is, in the web build. The id of the signed-in user who
+    # created it; the desktop build has no users, so its records carry the
+    # single local owner (or, from before this field existed, an empty string —
+    # which the web build never writes and its ownership checks never match).
+    owner_id: str = ""
     tagged: int | None = None          # paragraphs given a style
     flags: int | None = None           # things prep wants a human to decide
     verified: bool | None = None       # the author's words came through intact
@@ -186,9 +191,13 @@ class JobStore:
         known = {f for f in Job.__dataclass_fields__}
         return Job(**{k: v for k, v in data.items() if k in known})
 
-    def all(self) -> list[Job]:
+    def all(self, owner_id: str | None = None) -> list[Job]:
+        """Every job, newest first. Pass owner_id to get only one user's — the
+        web build does, so one person's list never shows another's work; the
+        desktop build passes nothing and sees the single owner's lot."""
         jobs = [j for d in self.paths.jobs.glob("*")
-                if (j := self.get(d.name)) is not None]
+                if (j := self.get(d.name)) is not None
+                and (owner_id is None or j.owner_id == owner_id)]
         return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
     def update(self, job_id: str, **fields) -> Job | None:
