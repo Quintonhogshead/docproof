@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -34,6 +34,8 @@ from docproof.prep.place import PlaceError, find_indesign, place_into_template
 from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
 
+from .accounts import AccountError, User
+from .auth import current_user, owner_for, require_admin
 from .jobs import Job, JobRunner, JobStore, read_usage
 from .lock import FolderInUse, FolderLock
 from .usage import build_usage
@@ -48,8 +50,9 @@ from .watch.tick import NotConfigured
 from .prompts import (PromptError, assembled_passes, clear_override,
                       list_prompts, sample_user_turn, save_override)
 from .report import build_report
-from .settings import (Paths, Settings, default_root, delete_api_key,
-                       get_api_key, key_status, resource_root, set_api_key)
+from .settings import (ENV_VARS, PROVIDERS, Paths, Settings, default_root,
+                       delete_api_key, get_api_key, key_status, resource_root,
+                       set_api_key)
 from .update import (Rebuilder, UpdateError, perform_update,
                      refuse_reason)
 from .version import build_info, check_for_update, download_release
@@ -151,6 +154,65 @@ class WatchSchedule(BaseModel):
     times: str = ",".join(schedulelib.DEFAULT_TIMES)
 
 
+class AdminCreateUser(BaseModel):
+    email: str
+    password: str
+    is_admin: bool = False
+    monthly_cap: float | None = None
+
+
+class AdminUpdateUser(BaseModel):
+    """Everything an administrator can change about an account. A field left out
+    is left alone; monthly_cap is the exception the other way — sending it as
+    null clears the cap (back to the server default), which is different from
+    not sending it, so the route reads `model_fields_set` to tell them apart."""
+    disabled: bool | None = None
+    is_admin: bool | None = None
+    monthly_cap: float | None = None
+    password: str | None = None
+
+
+class KeyUpdate(BaseModel):
+    key: str | None = None
+
+
+# The provider labels the portal shows, matching the desktop Settings screen.
+KEY_DISPLAY = {"anthropic": "Claude", "openai": "ChatGPT", "gemini": "Gemini"}
+
+
+# --- spend caps ---------------------------------------------------------------
+
+CAP_ENV = "DOCPROOF_DEFAULT_CAP"
+
+
+def default_cap() -> float | None:
+    """The monthly ceiling for a user who has none of their own, or None for no
+    ceiling. Set DOCPROOF_DEFAULT_CAP on the server to put a floor of caution
+    under every ordinary account at once."""
+    raw = os.environ.get(CAP_ENV)
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        log.warning("Ignoring unreadable %s=%r", CAP_ENV, raw)
+        return None
+
+
+def cap_for(user: User | None) -> float | None:
+    """What this user may spend this month, or None for no limit. Administrators
+    are never capped — that is what God Mode means — and neither is the desktop
+    build, where `user` is None."""
+    if user is None or user.is_admin:
+        return None
+    return user.monthly_cap if user.monthly_cap is not None else default_cap()
+
+
+def month_spend(store: JobStore, owner: str) -> float:
+    """What this owner's jobs have cost so far in the current calendar month."""
+    prefix = datetime.now(timezone.utc).strftime("%Y-%m")
+    return sum(j.cost or 0.0 for j in store.all(owner)
+               if (j.created_at or "").startswith(prefix))
+
+
 def watch_home_for(root: Path) -> Path:
     """Where the watcher keeps its things, derived from the app's home.
 
@@ -166,12 +228,19 @@ def watch_home_for(root: Path) -> Path:
 
 def create_app(root: Path | None = None, *, start_runner: bool = True,
                poll_seconds: int = 120,
-               watch_home: Path | None = None) -> FastAPI:
+               watch_home: Path | None = None,
+               web: bool = False, session_secret: str | None = None,
+               https_only: bool = True) -> FastAPI:
     """Build the app. Raises FolderInUse when another DocProof owns this home.
 
     The claim is tied to `start_runner` because the runner is what does the
     damage: a second worker thread over one job folder adopts the first's
-    in-flight review and runs it again. An app built without one only reads."""
+    in-flight review and runs it again. An app built without one only reads.
+
+    `web=True` is the hosted build: it adds sign-in (accounts, sessions, and a
+    gate over every /api route) and makes each request's work belong to the
+    user who made it. `web=False` is the desktop app, unchanged — no accounts,
+    no gate, one local owner. Everything between the two builds is shared."""
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
@@ -203,20 +272,163 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     app.state.watch = watch
     app.state.rebuild = Rebuilder()
     app.state.lock = lock
+    app.state.web = web
 
     _register(app)
+    if web:
+        # Sign-in, sessions, and the gate over every /api route. Added after the
+        # routes exist so the gate wraps all of them; the desktop build skips
+        # this entirely and stays open, as it always was.
+        from .accounts import Accounts
+        from .auth import install_auth
+        from .keystore import KeyStore
+        install_auth(app, Accounts(paths.users_db), secret=session_secret,
+                     https_only=https_only)
+        # Provider keys an administrator sets in the portal live on the volume
+        # and are loaded into the environment here, where get_api_key looks
+        # first. env_keys remembers what the environment itself provided (a fly
+        # secret, say) so removing a portal key brings that back without a
+        # restart. A portal key takes precedence while it exists.
+        keystore = KeyStore(paths.keys_db)
+        app.state.keystore = keystore
+        app.state.env_keys = {p: os.environ.get(ENV_VARS[p]) for p in PROVIDERS}
+        for provider in PROVIDERS:
+            stored = keystore.get(provider)
+            if stored:
+                os.environ[ENV_VARS[provider]] = stored
+        # God Mode: the admin-only routes for managing users, caps and keys.
+        # Only the web build has users to manage, so only it registers these.
+        _register_admin(app)
     static = resource_root() / "app" / "static"
     if static.is_dir():
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
 
 
-def _resolve_upload(paths: Paths, file_id: str) -> Path | None:
+def _register_admin(app: FastAPI) -> None:
+    """God Mode: user and cap management, every route behind require_admin.
+    Registered only for the web build, which is the only one with accounts."""
+    accounts = app.state.accounts
+    store: JobStore = app.state.store
+
+    def _row(u: User) -> dict:
+        return {"id": u.id, "email": u.email, "is_admin": u.is_admin,
+                "disabled": u.disabled, "monthly_cap": u.monthly_cap,
+                "effective_cap": cap_for(u),
+                "spent_this_month": round(month_spend(store, u.id), 4)}
+
+    @app.get("/api/admin/users", dependencies=[Depends(require_admin)])
+    def admin_list_users() -> dict:
+        return {"users": [_row(u) for u in accounts.list_users()],
+                "default_cap": default_cap()}
+
+    @app.post("/api/admin/users", dependencies=[Depends(require_admin)])
+    def admin_create_user(body: AdminCreateUser) -> dict:
+        try:
+            user = accounts.create_user(body.email, body.password,
+                                        is_admin=body.is_admin,
+                                        monthly_cap=body.monthly_cap)
+        except AccountError as e:
+            raise HTTPException(400, str(e))
+        return _row(user)
+
+    @app.put("/api/admin/users/{user_id}")
+    def admin_update_user(user_id: str, body: AdminUpdateUser,
+                          me: User = Depends(require_admin)) -> dict:
+        target = accounts.get_user(user_id)
+        if target is None:
+            raise HTTPException(404, "No such user")
+        # No locking yourself out: an administrator can't disable their own
+        # account or drop their own admin. Another administrator has to.
+        if target.id == me.id:
+            if body.disabled:
+                raise HTTPException(400, "You can't disable your own account.")
+            if body.is_admin is False:
+                raise HTTPException(
+                    400, "You can't remove your own admin access.")
+        try:
+            if body.password is not None:
+                accounts.set_password(user_id, body.password)
+        except AccountError as e:
+            raise HTTPException(400, str(e))
+        if body.disabled is not None:
+            accounts.set_disabled(user_id, body.disabled)
+        if body.is_admin is not None:
+            accounts.set_admin(user_id, body.is_admin)
+        # Sent-as-null clears the cap; omitted leaves it. model_fields_set is
+        # what tells the two apart.
+        if "monthly_cap" in body.model_fields_set:
+            accounts.set_cap(user_id, body.monthly_cap)
+        return _row(accounts.get_user(user_id))
+
+    @app.get("/api/admin/usage", dependencies=[Depends(require_admin)])
+    def admin_usage() -> dict:
+        """Every user's month-to-date spend, for the God Mode dashboard."""
+        rows = []
+        for u in accounts.list_users():
+            totals = build_usage(store.all(u.id), read_usage)["totals"]
+            rows.append({"id": u.id, "email": u.email,
+                         "monthly_cap": u.monthly_cap,
+                         "effective_cap": cap_for(u), **totals})
+        return {"users": rows, "default_cap": default_cap()}
+
+    # -- provider API keys ----------------------------------------------------
+
+    def _key_rows() -> list[dict]:
+        rows = []
+        for provider in PROVIDERS:
+            portal = app.state.keystore.get(provider) is not None
+            from_env = bool(app.state.env_keys.get(provider))
+            source = "portal" if portal else ("environment" if from_env else None)
+            rows.append({"provider": provider,
+                         "display": KEY_DISPLAY.get(provider, provider),
+                         "configured": bool(get_api_key(provider)),
+                         "source": source})
+        return rows
+
+    @app.get("/api/admin/keys", dependencies=[Depends(require_admin)])
+    def admin_keys() -> dict:
+        """Which providers have a key and where it came from — never the key
+        itself, which is set once and never read back to a browser."""
+        return {"keys": _key_rows()}
+
+    @app.put("/api/admin/keys/{provider}", dependencies=[Depends(require_admin)])
+    def admin_set_key(provider: str, body: KeyUpdate) -> dict:
+        if provider not in PROVIDERS:
+            raise HTTPException(404, "Unknown provider")
+        key = (body.key or "").strip()
+        if not key:
+            raise HTTPException(400, "Paste a key, or use Remove to clear it.")
+        app.state.keystore.set(provider, key)
+        os.environ[ENV_VARS[provider]] = key      # in force for the next review
+        log.info("Admin set the %s key", provider)
+        return {"keys": _key_rows()}
+
+    @app.delete("/api/admin/keys/{provider}",
+                dependencies=[Depends(require_admin)])
+    def admin_clear_key(provider: str) -> dict:
+        if provider not in PROVIDERS:
+            raise HTTPException(404, "Unknown provider")
+        app.state.keystore.delete(provider)
+        # Put back whatever the environment gave at boot, so removing a portal
+        # key falls back to a fly secret rather than to nothing.
+        restore = app.state.env_keys.get(provider)
+        if restore:
+            os.environ[ENV_VARS[provider]] = restore
+        else:
+            os.environ.pop(ENV_VARS[provider], None)
+        return {"keys": _key_rows()}
+
+
+def _resolve_upload(paths: Paths, file_id: str, owner: str) -> Path | None:
     """Map a staged-file id onto a path, refusing anything that escapes the
-    uploads directory. The id comes from the browser, so it is untrusted."""
-    candidate = (paths.uploads / file_id).resolve()
-    uploads = paths.uploads.resolve()
-    if not candidate.is_relative_to(uploads) or not candidate.is_file():
+    owner's own uploads directory. The id comes from the browser, so it is
+    untrusted — and staging is per-owner, so requiring the path to sit under
+    uploads/<owner> is also what stops one user resolving another's file by
+    guessing its id."""
+    owner_root = (paths.uploads / owner).resolve()
+    candidate = (paths.uploads / owner / file_id).resolve()
+    if not candidate.is_relative_to(owner_root) or not candidate.is_file():
         return None
     return candidate
 
@@ -337,7 +549,8 @@ def _register(app: FastAPI) -> None:
     # -- files ----------------------------------------------------------------
 
     @app.post("/api/files")
-    async def upload(files: list[UploadFile]) -> dict:
+    async def upload(files: list[UploadFile],
+                     owner: str = Depends(owner_for)) -> dict:
         """Stage documents and preflight them immediately, so a file docproof
         refuses to touch says so at drop time rather than at 11pm.
 
@@ -345,7 +558,11 @@ def _register(app: FastAPI) -> None:
         an .idml can be reviewed but never prepped, a manuscript with tracked
         changes in it is refused by both, and a .doc can be prepped only once
         LibreOffice has turned it into a .docx. All of that is local parsing,
-        so answering both questions costs one extra read of the file."""
+        so answering both questions costs one extra read of the file.
+
+        Staging lives under uploads/<owner>, so the id handed back is only ever
+        resolvable by the user who uploaded it — one local owner on the desktop,
+        the signed-in user on the web."""
         paths: Paths = app.state.paths
         cfg = load_config(CONFIG_PATH)
         staged = []
@@ -354,7 +571,7 @@ def _register(app: FastAPI) -> None:
             # Each upload gets its own folder so the document keeps its real
             # name — that name ends up on the file the user opens.
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
-            folder = paths.uploads / stamp
+            folder = paths.uploads / owner / stamp
             folder.mkdir(parents=True, exist_ok=True)
             dest = folder / name
             with dest.open("wb") as fh:
@@ -507,12 +724,12 @@ def _register(app: FastAPI) -> None:
     # -- models ---------------------------------------------------------------
 
     @app.get("/api/models")
-    def models(file_ids: str = "") -> dict:
+    def models(file_ids: str = "", owner: str = Depends(owner_for)) -> dict:
         """The catalog, plus what these specific files would cost on each."""
         paths: Paths = app.state.paths
         keys = key_status()
         ids = [f for f in file_ids.split(",") if f]
-        totals = _token_totals(paths, ids)
+        totals = _token_totals(paths, ids, owner)
 
         out = []
         for m in MODELS:
@@ -537,13 +754,14 @@ def _register(app: FastAPI) -> None:
         return {"models": out, "keys": keys,
                 "output_token_guess": OUTPUT_TOKEN_GUESS}
 
-    def _token_totals(paths: Paths, ids: list[str]) -> tuple[int, int] | None:
+    def _token_totals(paths: Paths, ids: list[str],
+                      owner: str) -> tuple[int, int] | None:
         if not ids:
             return None
         cfg = load_config(CONFIG_PATH)
         tokens = requests = 0
         for file_id in ids:
-            path = _resolve_upload(paths, file_id)
+            path = _resolve_upload(paths, file_id, owner)
             if path is None:
                 continue
             try:
@@ -556,8 +774,21 @@ def _register(app: FastAPI) -> None:
 
     # -- jobs -----------------------------------------------------------------
 
+    def _owned_job(job_id: str, owner: str) -> Job | None:
+        """A job the caller is allowed to see, or None — for a 404 that reads
+        the same whether the job is missing or someone else's, so a job id
+        can't be probed for existence. On the desktop build there are no owners
+        to check; the one local user sees everything, as before."""
+        job = app.state.store.get(job_id)
+        if job is None:
+            return None
+        if app.state.web and job.owner_id != owner:
+            return None
+        return job
+
     @app.post("/api/jobs")
-    def create_jobs(req: JobRequest) -> dict:
+    def create_jobs(req: JobRequest,
+                    owner: str = Depends(owner_for)) -> dict:
         paths: Paths = app.state.paths
         runner: JobRunner = app.state.runner
         if req.mode not in ("now", "batch"):
@@ -583,10 +814,32 @@ def _register(app: FastAPI) -> None:
         # said failure, the retry ran them twice, and twice was billed twice.
         sources = {}
         for file_id in req.file_ids:
-            source = _resolve_upload(paths, file_id)
+            source = _resolve_upload(paths, file_id, owner)
             if source is None:
                 raise HTTPException(404, f"Uploaded file {file_id!r} is gone")
             sources[file_id] = source
+
+        # Spend cap (web build only). The estimate for this very submission
+        # counts, so one oversized review can't slip past a nearly-spent cap;
+        # administrators and the desktop build have no cap and skip all of this.
+        if app.state.web:
+            cap = cap_for(app.state.accounts.get_user(owner))
+            if cap is not None:
+                spent = month_spend(app.state.store, owner)
+                totals = _token_totals(paths, req.file_ids, owner)
+                est = 0.0
+                if totals:
+                    inp, reqs = totals
+                    est = estimate_cost(
+                        req.model, input_tokens=inp,
+                        output_tokens=reqs * OUTPUT_TOKEN_GUESS,
+                        batch=(mode == "batch")) or 0.0
+                if spent + est > cap:
+                    raise HTTPException(
+                        402, f"This review would put you over your "
+                             f"${cap:.2f} monthly limit — you have used "
+                             f"${spent:.2f} so far this month. Ask an "
+                             f"administrator to raise it.")
 
         group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
         created = []
@@ -605,26 +858,28 @@ def _register(app: FastAPI) -> None:
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
                 prep_output=req.prep_output,
+                owner_id=owner,
             )
             created.append(runner.enqueue(job).to_api())
         return {"jobs": created, "group_id": group_id}
 
     @app.get("/api/jobs")
-    def list_jobs() -> dict:
-        return {"jobs": [j.to_api() for j in app.state.store.all()]}
+    def list_jobs(owner: str = Depends(owner_for)) -> dict:
+        scope = owner if app.state.web else None
+        return {"jobs": [j.to_api() for j in app.state.store.all(scope)]}
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str) -> dict:
-        job = app.state.store.get(job_id)
+    def get_job(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No such review")
         return job.to_api()
 
     @app.post("/api/jobs/{job_id}/retry")
-    def retry(job_id: str) -> dict:
+    def retry(job_id: str, owner: str = Depends(owner_for)) -> dict:
         store: JobStore = app.state.store
         runner: JobRunner = app.state.runner
-        job = store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No such review")
         if job.state != "failed":
@@ -634,7 +889,7 @@ def _register(app: FastAPI) -> None:
         return runner.enqueue(store.get(job_id)).to_api()
 
     @app.post("/api/jobs/{job_id}/cancel")
-    def cancel(job_id: str) -> dict:
+    def cancel(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """Stop a review before it has started spending anything.
 
         Once a job is running, waiting overnight on a vendor, or writing its
@@ -642,7 +897,7 @@ def _register(app: FastAPI) -> None:
         already billed or already being written. Only a job that has not
         started can be pulled back, so that is all this offers."""
         store: JobStore = app.state.store
-        job = store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No such review")
         if job.state not in ("queued", "scheduled"):
@@ -662,23 +917,24 @@ def _register(app: FastAPI) -> None:
         return updated.to_api()
 
     @app.get("/api/jobs/{job_id}/file/{which}")
-    def download(job_id: str, which: str):
+    def download(job_id: str, which: str, owner: str = Depends(owner_for)):
         """Serve a result over HTTP — the browser build's way of handing a file
         over, and the fallback when the desktop window cannot open one."""
-        job = app.state.store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
         path = _result_path(job, which)
         return FileResponse(path, filename=path.name)
 
     @app.post("/api/jobs/{job_id}/open/{which}")
-    def open_result(job_id: str, which: str, reveal: bool = False) -> dict:
+    def open_result(job_id: str, which: str, reveal: bool = False,
+                    owner: str = Depends(owner_for)) -> dict:
         """Open a result in Word, InDesign, or the Finder.
 
         This is the desktop window's version of the download route: the file
         already exists in the user's own Documents folder, so the honest thing
         to do with "Open in Word" is open it in Word."""
-        job = app.state.store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
         path = _result_path(job, which)
@@ -689,13 +945,14 @@ def _register(app: FastAPI) -> None:
         return {"ok": True, "opened": path.name}
 
     @app.post("/api/jobs/{job_id}/place")
-    def place_in_indesign(job_id: str) -> dict:
+    def place_in_indesign(job_id: str,
+                          owner: str = Depends(owner_for)) -> dict:
         """Flow a finished prep job into the house template.
 
         Synchronous on purpose. This takes a minute and the user is watching
         InDesign do it — a job that reported back later would be stranger than
         a button that waits."""
-        job = app.state.store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this job yet")
         if not job.is_prep:
@@ -729,9 +986,9 @@ def _register(app: FastAPI) -> None:
         return {"ok": True, "filename": placed.name, "path": str(placed)}
 
     @app.get("/api/jobs/{job_id}/prep")
-    def prep_notes(job_id: str) -> dict:
+    def prep_notes(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """What prep did, read back for the results screen."""
-        job = app.state.store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this job yet")
         path = Path(job.results_dir) / "prep.json"
@@ -823,20 +1080,24 @@ def _register(app: FastAPI) -> None:
     # -- what it has cost -----------------------------------------------------
 
     @app.get("/api/usage")
-    def usage() -> dict:
-        """Tokens, calls and estimated spend across every job on this machine.
+    def usage(owner: str = Depends(owner_for)) -> dict:
+        """Tokens, calls and estimated spend.
 
-        Two job stores, one bill. The watcher keeps its own home — a separate
-        folder is a separate lock, which is what lets a pass and this window
-        run at the same moment — but the money comes off the same card, and a
-        figure that quietly left half of it out would be the wrong figure."""
+        On the desktop it is every job on this machine: two job stores, one
+        bill — the watcher keeps its own home (a separate folder is a separate
+        lock, which lets a pass and this window run at once), but the money
+        comes off the same card, so leaving half of it out would be the wrong
+        figure. On the web it is this user's own jobs only; the watcher isn't
+        theirs, so it has no place in their total."""
+        if app.state.web:
+            return build_usage(app.state.store.all(owner), read_usage)
         watch: WatchRunner = app.state.watch
         return build_usage([*app.state.store.all(), *watch.jobs()], read_usage)
 
     @app.get("/api/jobs/{job_id}/report")
-    def report(job_id: str) -> dict:
+    def report(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """The findings, read back as prose rather than as a record."""
-        job = app.state.store.get(job_id)
+        job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this review yet")
         path = Path(job.results_dir) / "findings.json"
@@ -864,7 +1125,18 @@ def _register(app: FastAPI) -> None:
             "explanations": cfg.report_explanations,
         }
 
-    @app.put("/api/prompts/{key}")
+    def _may_edit_prompts(request: Request) -> None:
+        """The detection prompts are one shared setting for the whole server, so
+        on the web build only an administrator may change them. The desktop
+        build has one user and no gate, so this passes."""
+        if app.state.web:
+            user = getattr(request.state, "user", None)
+            if not (user and user.is_admin):
+                raise HTTPException(
+                    403, "Only an administrator can change what DocProof "
+                         "looks for.")
+
+    @app.put("/api/prompts/{key}", dependencies=[Depends(_may_edit_prompts)])
     def write_prompt(key: str, update: PromptUpdate) -> dict:
         try:
             save_override(ERROR_DIR, app.state.paths.prompts, key,
@@ -873,17 +1145,22 @@ def _register(app: FastAPI) -> None:
             raise HTTPException(400, str(e))
         return read_prompts()
 
-    @app.delete("/api/prompts/{key}")
+    @app.delete("/api/prompts/{key}", dependencies=[Depends(_may_edit_prompts)])
     def reset_prompt(key: str) -> dict:
         clear_override(app.state.paths.prompts, key)
         return read_prompts()
 
     @app.post("/api/tick")
-    def tick() -> dict:
+    def tick(owner: str = Depends(owner_for)) -> dict:
         """Advance scheduled and in-flight work now instead of waiting for the
-        next timer. The Jobs screen calls this when the user opens it."""
+        next timer. The Jobs screen calls this when the user opens it.
+
+        The tick itself advances everyone's batch work — it is the one shared
+        clock — but the list it returns is only the caller's own, the same as
+        /api/jobs."""
         app.state.runner.tick_once()
-        return {"jobs": [j.to_api() for j in app.state.store.all()]}
+        scope = owner if app.state.web else None
+        return {"jobs": [j.to_api() for j in app.state.store.all(scope)]}
 
     # -- the watched folder ---------------------------------------------------
     #

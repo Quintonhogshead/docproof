@@ -28,6 +28,10 @@ app = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "keyring>=25.0",
+    # Signed session cookies for the web build's sign-in (Starlette's
+    # SessionMiddleware imports it). The desktop app never signs anyone in, but
+    # it is one small pure-Python package and both builds install this extra.
+    "itsdangerous>=2.0",
 ]
 desktop = [
     "docproof[app]",
@@ -46,6 +50,8 @@ docproof = "docproof.__main__:main"
 docproof-app = "app.run:main"
 docproof-desktop = "app.desktop:main"
 docproof-watch = "app.watch.cli:main"
+docproof-admin = "app.admin:main"
+docproof-serve = "app.serve:main"
 
 [build-system]
 requires = ["setuptools>=68"]

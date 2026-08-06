@@ -7,6 +7,30 @@
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+
+<!-- ── Sign in (web build only) ─────────────────────────────────────────── -->
+<div id="login" hidden>
+  <form id="login-form" class="login-card">
+    <p class="login-kicker">Atmosphere&nbsp;Press</p>
+    <h1 class="login-mark">DocProof</h1>
+    <p class="login-lede">Manuscript review, returned as tracked changes you
+      accept or reject.</p>
+    <label class="field">
+      <span>Email</span>
+      <input type="email" id="login-email" autocomplete="username" required>
+    </label>
+    <label class="field">
+      <span>Password</span>
+      <input type="password" id="login-password"
+             autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="primary big-button">Sign in</button>
+    <p id="login-error" class="error" hidden></p>
+    <p class="login-foot">Accounts are created by an administrator. If you
+      don't have one yet, ask them to add you.</p>
+  </form>
+</div>
+
 <header>
   <h1>DocProof</h1>
   <nav>
@@ -16,7 +40,12 @@
     <button class="tab" data-screen="spending">Spending</button>
     <button class="tab" data-screen="prompts">What it looks for</button>
     <button class="tab" data-screen="settings">Settings</button>
+    <button class="tab" data-screen="admin" id="tab-admin" hidden>Admin</button>
   </nav>
+  <div id="user-area" hidden>
+    <span id="user-email" class="muted"></span>
+    <button type="button" id="logout" class="quiet">Log out</button>
+  </div>
 </header>
 
 <div id="update-banner" hidden>
@@ -460,6 +489,56 @@
 
     <button id="save-settings" class="primary">Save settings</button>
     <p id="settings-saved" class="ok" hidden>Saved.</p>
+  </section>
+
+  <!-- ── Admin (God Mode, web build, admins only) ─────────────────────────── -->
+  <section id="screen-admin" class="screen" hidden>
+    <h2>People</h2>
+    <p class="muted">Everyone who can sign in, and what each has spent this
+      month. Only administrators see this screen. A spend limit blank uses the
+      server default; administrators are never limited.</p>
+
+    <div class="card">
+      <h3>Add someone</h3>
+      <div class="admin-new">
+        <label class="field">
+          <span>Email</span>
+          <input type="email" id="admin-new-email" autocomplete="off"
+                 placeholder="editor@atmospherepress.com">
+        </label>
+        <label class="field">
+          <span>Temporary password <small class="muted">— they can't change it
+            themselves yet, so pick something and share it</small></span>
+          <input type="text" id="admin-new-password" autocomplete="off">
+        </label>
+        <label class="field narrow">
+          <span>Monthly limit ($)</span>
+          <input type="number" id="admin-new-cap" min="0" step="1"
+                 placeholder="default">
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" id="admin-new-admin">
+          Make them an administrator
+        </label>
+      </div>
+      <div class="job-actions">
+        <button type="button" id="admin-create" class="primary">Add user</button>
+      </div>
+      <p id="admin-new-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
+      <h3>Everyone</h3>
+      <table class="table" id="admin-users"></table>
+    </div>
+
+    <div class="card">
+      <h3>Provider API keys</h3>
+      <p class="muted">The keys DocProof reviews with — used by everyone, held on
+        the server, and never shown again once saved. A key set in the server's
+        environment is used until you override it here.</p>
+      <div id="admin-keys"></div>
+    </div>
   </section>
 </main>
 
