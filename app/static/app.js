@@ -93,12 +93,28 @@ const reasonBlocked = (f) =>
 const zone = $('dropzone');
 const input = $('file-input');
 
-$('pick').addEventListener('click', (e) => { e.stopPropagation(); input.click(); });
-zone.addEventListener('click', () => input.click());
-zone.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+// One drop at a time: while the server is checking a stack, another drop or
+// pick would stage the same documents twice.
+let uploading = false;
+
+$('pick').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!uploading) input.click();
 });
-input.addEventListener('change', () => upload([...input.files]));
+zone.addEventListener('click', () => { if (!uploading) input.click(); });
+zone.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    if (!uploading) input.click();
+  }
+});
+input.addEventListener('change', () => {
+  const picked = [...input.files];
+  // Clear the input so picking the same file again — say, after removing it
+  // from the list — fires this event again.
+  input.value = '';
+  upload(picked);
+});
 
 ['dragenter', 'dragover'].forEach((evt) =>
   zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add('hot'); }));
@@ -108,6 +124,10 @@ zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
 async function upload(files) {
   if (!files.length) return;
+  if (uploading) {
+    fail('Still checking the last drop — it will appear in a moment.');
+    return;
+  }
   $('drop-error').hidden = true;
 
   // A drop ignores the picker's filter, so the choice above the drop zone is
@@ -123,16 +143,52 @@ async function upload(files) {
   }
   if (!files.length) return;
 
+  uploading = true;
+  zone.classList.add('busy');
+  $('drop-status').hidden = false;
   const body = new FormData();
   files.forEach((f) => body.append('files', f));
   try {
     const { files: staged } = await api('/api/files', { method: 'POST', body });
-    state.files = state.files.concat(staged);
+    // A document whose bytes are already in the list is the same document
+    // dropped twice — usually a drop repeated because the first one was
+    // still being checked. Keep the copy that is already there.
+    const seen = new Set(
+      state.files.filter((f) => f.ok && f.sha256).map((f) => f.sha256));
+    const dupes = [];
+    const fresh = [];
+    for (const f of staged) {
+      if (f.duplicate || (f.ok && f.sha256 && seen.has(f.sha256))) {
+        dupes.push(f);
+        continue;
+      }
+      if (f.ok && f.sha256) seen.add(f.sha256);
+      fresh.push(f);
+    }
+    if (dupes.length) {
+      fail(`Already in the list, so not added again: `
+           + `${dupes.map((f) => f.filename).join(', ')}.`);
+      discardStaged(dupes);
+    }
+    state.files = state.files.concat(fresh);
     renderFiles();
     await loadModels();
   } catch (err) {
     fail(err.message);
+  } finally {
+    uploading = false;
+    zone.classList.remove('busy');
+    $('drop-status').hidden = true;
   }
+}
+
+// Tell the server these staged copies left the list, so they leave the disk
+// too. Fire-and-forget: the server keeps anything a job still reads, and a
+// copy that lingers because this request was lost is caught by the sweep at
+// the next launch.
+function discardStaged(files) {
+  files.filter((f) => f.id).forEach((f) =>
+    api(`/api/files/${f.id}`, { method: 'DELETE' }).catch(() => {}));
 }
 
 function renderFiles() {
@@ -155,6 +211,7 @@ function renderFiles() {
     drop.addEventListener('click', () => {
       state.selected.delete(f.id);
       state.files.splice(i, 1); renderFiles(); loadModels();
+      discardStaged([f]);
     });
     li.append(name, meta, drop);
     if (f.ok && !isPrep() && f.chunks && f.chunks.length > 1) {
@@ -406,12 +463,13 @@ $('start').addEventListener('click', async () => {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Starting…';
+  const running = filesToRun();
   try {
     await api('/api/jobs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        file_ids: filesToRun().map((f) => f.id),
+        file_ids: running.map((f) => f.id),
         model: $('model').value,
         kind: kind(),
         prep_output: prepOutput(),
@@ -422,6 +480,10 @@ $('start').addEventListener('click', async () => {
         selections: isPrep() ? {} : selectionPayload(),
       }),
     });
+    // Starting clears the whole list, but only the runnable files became
+    // jobs. The rest — blocked for this kind of job — leave the disk too.
+    const submitted = new Set(running.map((f) => f.id));
+    discardStaged(state.files.filter((f) => !submitted.has(f.id)));
     state.files = [];
     state.selected.clear();
     renderFiles();

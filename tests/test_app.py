@@ -123,6 +123,88 @@ def test_staged_file_says_which_application_it_came_from(client):
     assert _upload(client)["format"]["name"] == "Word"
 
 
+def test_staged_file_carries_the_hash_of_its_bytes(client):
+    """The page uses the hash to recognise a document it is already holding,
+    so it has to be the digest of the bytes as dropped."""
+    import hashlib
+    staged = _upload(client)
+    expected = hashlib.sha256((FIXTURES / "simple.docx").read_bytes())
+    assert staged["sha256"] == expected.hexdigest()
+
+
+def test_the_same_file_twice_in_one_drop_is_kept_once(client):
+    data = (FIXTURES / "simple.docx").read_bytes()
+    resp = client.post("/api/files", files=[
+        ("files", ("simple.docx", data)),
+        ("files", ("simple copy.docx", data))])
+    first, second = resp.json()["files"]
+    assert first["ok"] is True
+    assert second["ok"] is False and second["duplicate"] is True
+    assert "simple.docx" in second["error"]
+    # The duplicate's staged folder is gone; the original's remains.
+    uploads = client.app_state.paths.uploads
+    staged_files = [p for p in uploads.rglob("*.docx")]
+    assert len(staged_files) == 1
+
+
+def test_removing_a_staged_file_deletes_its_folder(client):
+    staged = _upload(client)
+    uploads = client.app_state.paths.uploads
+    assert list(uploads.iterdir())
+    resp = client.delete(f"/api/files/{staged['id']}")
+    assert resp.json()["removed"] is True
+    assert not list(uploads.iterdir())
+    # Removing it twice is not an error, just nothing to do.
+    assert client.delete(f"/api/files/{staged['id']}").json()["removed"] is False
+
+
+def test_a_file_an_unfinished_job_reads_cannot_be_removed(client):
+    """A scheduled job goes back to its source when its hour arrives, so the
+    list on the page does not get to delete it out from under the job."""
+    staged = _upload(client)
+    _run(client, staged["id"], mode="batch", schedule_at="23:59")
+    resp = client.delete(f"/api/files/{staged['id']}")
+    assert resp.json() == {"removed": False, "reason": "in use"}
+    assert list(client.app_state.paths.uploads.iterdir())
+
+
+def test_startup_sweep_keeps_what_jobs_and_the_grace_period_protect(client):
+    """Three staged files: an old orphan goes, a fresh orphan stays for the
+    grace period, and an old one a scheduled job reads stays for the job."""
+    import os
+    from app.main import UPLOAD_GRACE_SECONDS, sweep_uploads
+    paths = client.app_state.paths
+    stale = time.time() - UPLOAD_GRACE_SECONDS - 60
+
+    orphan = _upload(client)
+    kept_fresh = client.post("/api/files", files={
+        "files": ("fresh.docx", (FIXTURES / "simple.docx").read_bytes()
+                  + b"\x00")}).json()["files"][0]
+    kept_scheduled = client.post("/api/files", files={
+        "files": ("booked.docx", (FIXTURES / "simple.docx").read_bytes()
+                  + b"\x01")}).json()["files"][0]
+    _run(client, kept_scheduled["id"], mode="batch", schedule_at="23:59")
+    for entry in (orphan, kept_scheduled):
+        folder = paths.uploads / entry["id"].split("/")[0]
+        os.utime(folder, (stale, stale))
+
+    assert sweep_uploads(paths, client.app_state.store) == 1
+    remaining = {p.name for p in paths.uploads.iterdir()}
+    assert kept_fresh["id"].split("/")[0] in remaining
+    assert kept_scheduled["id"].split("/")[0] in remaining
+    assert orphan["id"].split("/")[0] not in remaining
+
+
+def test_different_files_in_one_drop_are_not_mistaken_for_copies(client):
+    resp = client.post("/api/files", files=[
+        ("files", ("simple.docx", (FIXTURES / "simple.docx").read_bytes())),
+        ("files", ("layout.idml", (FIXTURES / "layout.idml").read_bytes()))])
+    entries = resp.json()["files"]
+    assert [e["filename"] for e in entries] == ["simple.docx", "layout.idml"]
+    assert all(e["ok"] for e in entries)
+    assert entries[0]["sha256"] != entries[1]["sha256"]
+
+
 def test_the_app_can_say_which_build_it_is(client):
     body = client.get("/api/version").json()
     assert body["version"] == docproof_version

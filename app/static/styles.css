@@ -101,6 +101,20 @@ main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 5rem; }
 #dropzone:hover, #dropzone:focus-visible { border-color: var(--accent); outline: none; }
 #dropzone.hot { border-color: var(--accent); background: var(--accent-soft); }
 #dropzone p { margin: 0.3rem 0; }
+
+/* While a drop is being checked the zone stays visible but stops inviting:
+   the pulse says "working", and the pointer says another drop must wait. */
+#dropzone.busy {
+  cursor: progress;
+  border-color: var(--accent);
+  animation: drop-busy 1.1s ease-in-out infinite alternate;
+}
+#dropzone.busy .big, #dropzone.busy .muted { opacity: 0.45; }
+#drop-status { color: var(--accent); font-weight: 600; }
+@keyframes drop-busy {
+  from { background: transparent; }
+  to   { background: var(--accent-soft); }
+}
 .big { font-size: 1.3rem; font-weight: 600; }
 .small { font-size: 0.85rem; }
 #drop-formats { margin-top: 0.8rem; }

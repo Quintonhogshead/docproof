@@ -5,12 +5,16 @@ job store, and returns JSON. The pipeline itself lives in docproof/.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -35,7 +39,7 @@ from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
 from docproof.voice import VOICE_KEYS
 
-from .jobs import Job, JobRunner, JobStore, read_usage
+from .jobs import TERMINAL_STATES, Job, JobRunner, JobStore, read_usage
 from .lock import FolderInUse, FolderLock
 from .usage import build_usage
 # The watcher, but never its CLI: `app.watch.cli._logging` clears the docproof
@@ -64,6 +68,10 @@ ERROR_DIR = CONFIG_PATH.parent / "error_types"
 OUTPUT_TOKEN_GUESS = 600
 # A style sheet is a page of YAML. Anything this size is the wrong file.
 MAX_SHEET_BYTES = 1_000_000
+# How long an unclaimed staged upload survives a restart. Long enough that a
+# window left open overnight can still start its review in the morning; short
+# enough that abandoned drops do not sit on the disk for months.
+UPLOAD_GRACE_SECONDS = 24 * 3600
 
 
 class JobRequest(BaseModel):
@@ -197,6 +205,11 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         if start_runner:
             runner.start()
             watch.start()
+            # Tied to start_runner like everything else destructive: only the
+            # instance that owns the folder cleans it. A thread so a slow disk
+            # does not hold up the window opening.
+            threading.Thread(target=sweep_uploads, args=(paths, store),
+                             name="uploads-sweep", daemon=True).start()
         yield
         runner.stop()
         watch.stop()
@@ -217,6 +230,43 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     if static.is_dir():
         app.mount("/", StaticFiles(directory=static, html=True), name="static")
     return app
+
+
+def _upload_folders_in_use(store: JobStore) -> set[Path]:
+    """The staged folders some job will read again. A job that has not reached
+    a terminal state goes back to its source document — a scheduled one submits
+    it later, a waiting one applies the vendor's results to it — so its folder
+    has to survive any cleanup."""
+    return {Path(job.source_path).resolve().parent
+            for job in store.all() if job.state not in TERMINAL_STATES}
+
+
+def sweep_uploads(paths: Paths, store: JobStore) -> int:
+    """Delete staged uploads nothing needs any more, and say how many went.
+
+    Runs at startup. A staged file is kept while any unfinished job references
+    it, and for a grace period regardless — a browser window left open across
+    a restart still holds ids for files it staged before, and its "Start
+    review" click should keep working."""
+    uploads = paths.uploads.resolve()
+    if not uploads.is_dir():
+        return 0
+    in_use = _upload_folders_in_use(store)
+    cutoff = time.time() - UPLOAD_GRACE_SECONDS
+    removed = 0
+    for folder in uploads.iterdir():
+        if not folder.is_dir() or folder.resolve() in in_use:
+            continue
+        try:
+            if folder.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(folder, ignore_errors=True)
+        removed += 1
+    if removed:
+        log.info("Swept %d stale staged upload(s)", removed)
+    return removed
 
 
 def _resolve_upload(paths: Paths, file_id: str) -> Path | None:
@@ -345,7 +395,7 @@ def _register(app: FastAPI) -> None:
     # -- files ----------------------------------------------------------------
 
     @app.post("/api/files")
-    async def upload(files: list[UploadFile]) -> dict:
+    def upload(files: list[UploadFile]) -> dict:
         """Stage documents and preflight them immediately, so a file docproof
         refuses to touch says so at drop time rather than at 11pm.
 
@@ -353,28 +403,82 @@ def _register(app: FastAPI) -> None:
         an .idml can be reviewed but never prepped, a manuscript with tracked
         changes in it is refused by both, and a .doc can be prepped only once
         LibreOffice has turned it into a .docx. All of that is local parsing,
-        so answering both questions costs one extra read of the file."""
+        so answering both questions costs one extra read of the file.
+
+        Deliberately not `async`: preflight is seconds of parsing per document
+        and conversion is a LibreOffice subprocess, and a coroutine doing that
+        holds the event loop — a five-file drop used to freeze every other
+        request until it finished. A plain function runs on the thread pool
+        instead, so the app keeps answering while a stack is staged."""
         paths: Paths = app.state.paths
         cfg = load_config(CONFIG_PATH)
-        staged = []
-        for upload_file in files:
+
+        # Write everything to disk first, in arrival order, hashing as it
+        # streams: a file whose bytes match an earlier file in the same drop
+        # is the same document twice, and it is kept once.
+        todo: list[dict | tuple[str, Path, str]] = []
+        seen: dict[str, str] = {}
+        for position, upload_file in enumerate(files):
             name = Path(upload_file.filename or "document.docx").name
             # Each upload gets its own folder so the document keeps its real
-            # name — that name ends up on the file the user opens.
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+            # name — that name ends up on the file the user opens. The
+            # position suffix keeps two files landing in the same microsecond
+            # out of each other's folders.
+            stamp = (datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+                     + f"-{position}")
             folder = paths.uploads / stamp
             folder.mkdir(parents=True, exist_ok=True)
             dest = folder / name
+            digest = hashlib.sha256()
             with dest.open("wb") as fh:
-                shutil.copyfileobj(upload_file.file, fh)
-
-            entry = _stage(cfg, paths, stamp, dest)
-            if not entry["ok"]:
+                while chunk := upload_file.file.read(1 << 20):
+                    fh.write(chunk)
+                    digest.update(chunk)
+            sha = digest.hexdigest()
+            if sha in seen:
                 shutil.rmtree(folder, ignore_errors=True)
-            staged.append(entry)
+                todo.append({"filename": name, "ok": False, "duplicate": True,
+                             "sha256": sha,
+                             "error": f"The same file as {seen[sha]}, which "
+                                      f"is already in this drop — kept once."})
+                continue
+            seen[sha] = name
+            todo.append((stamp, dest, sha))
+
+        # The heavy part — conversion and both preflights — runs a few files
+        # at a time, so one slow conversion does not stall the whole drop.
+        def stage_one(item: dict | tuple[str, Path, str]) -> dict:
+            if isinstance(item, dict):        # a duplicate, already answered
+                return item
+            stamp, dest, sha = item
+            entry = _stage(cfg, paths, stamp, dest, sha)
+            if not entry["ok"]:
+                shutil.rmtree(dest.parent, ignore_errors=True)
+            return entry
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            staged = list(pool.map(stage_one, todo))
         return {"files": staged}
 
-    def _stage(cfg, paths: Paths, stamp: str, dest: Path) -> dict:
+    @app.delete("/api/files/{file_id:path}")
+    def remove_upload(file_id: str) -> dict:
+        """Delete one staged upload, because it left the list on the page.
+
+        Refuses nothing and never errors: a file already gone was removed
+        twice, and a file an unfinished job still reads is kept — the job
+        outranks the list. Either way the page has nothing to do about it,
+        so the answer just says what happened."""
+        paths: Paths = app.state.paths
+        store: JobStore = app.state.store
+        path = _resolve_upload(paths, file_id)
+        if path is None:
+            return {"removed": False, "reason": "gone"}
+        if path.parent.resolve() in _upload_folders_in_use(store):
+            return {"removed": False, "reason": "in use"}
+        shutil.rmtree(path.parent, ignore_errors=True)
+        return {"removed": True}
+
+    def _stage(cfg, paths: Paths, stamp: str, dest: Path, sha256: str) -> dict:
         name = dest.name
         note = None
         if prep_convert.needs_conversion(dest):
@@ -388,7 +492,10 @@ def _register(app: FastAPI) -> None:
 
         entry: dict = {"id": f"{stamp}/{dest.name}", "filename": dest.name,
                        "original_filename": name, "converted": dest.name != name,
-                       "note": note}
+                       # The hash of the bytes as dropped, before any
+                       # conversion: it is how the page recognises a document
+                       # it is already holding.
+                       "sha256": sha256, "note": note}
         try:
             entry["format"] = get_format(dest.name).to_api()
         except IngestError as e:

@@ -39,6 +39,11 @@ log = logging.getLogger("docproof.app.jobs")
 APP_MANIFEST = "app.json"
 POLL_SECONDS = 120
 
+# States a job never leaves. Everything else will read its source document
+# again: a scheduled job submits it later, a waiting one applies the vendor's
+# results to it when they arrive.
+TERMINAL_STATES = frozenset({"done", "failed", "cancelled"})
+
 # State → what the user reads. Keep the vocabulary out of the vendor's world:
 # no "batch", no "API", no "chunks".
 PLAIN_STATE = {
