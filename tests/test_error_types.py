@@ -214,3 +214,34 @@ def test_adjective_adverb_knows_the_three_ways_it_would_be_wrong():
     # And the two neighbours that own adjacent cases.
     for owner in ("comparative_form", "ly_adverb_hyphen"):
         assert owner in said, owner
+
+
+def test_the_fragment_type_asks_rather_than_corrects():
+    """Fiction is built out of deliberate fragments — "Not a ship. Not a
+    buoy." is a writer choosing a rhythm. A type that joined those up would
+    rewrite the paragraph, so this one is a query and can only ask."""
+    et = load_error_types(ERROR_DIR, ["orphaned_clause"])["orphaned_clause"]
+    assert et.is_query
+    said = _flat(et.detection_prompt)
+    # The deliberate shape has no subordinating word, and is out of scope at
+    # any confidence.
+    assert "Not a ship. Not a buoy." in said
+    assert "no subordinating word at all" in said
+    # And the opposite fault belongs to the types that own it.
+    for owner in ("comma_splice", "run_on_sentence"):
+        assert owner in said, owner
+
+
+def test_parallelism_repairs_the_stray_item_not_the_series():
+    """The majority form is the author's intent. Rebuilding the other items to
+    match the odd one out rewrites more of the sentence than the error
+    justifies."""
+    et = load_error_types(ERROR_DIR,
+                          ["faulty_parallelism"])["faulty_parallelism"]
+    said = _flat(et.fix_guidance)
+    assert "not the other way round" in said
+    assert "never re-order the series or touch its punctuation" in said
+    # serial_comma owns the commas; a negative correlative is double_negative's.
+    borders = _flat(et.detection_prompt)
+    for owner in ("serial_comma", "double_negative"):
+        assert owner in borders, owner

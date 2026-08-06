@@ -1,0 +1,87 @@
+key: faulty_parallelism
+name: Faulty parallelism
+version: 1
+
+detection_prompt: |
+  Items joined in one series or by one correlative pair, built in grammatical
+  forms that do not match.
+
+  A series sets up a shape with its first item, and every item after it is read
+  against that shape. When one breaks the pattern the sentence stumbles, and
+  the break is almost always mechanical rather than meant.
+
+  FLAG:
+  - A mismatched form inside a coordinated series: "They spent two days
+    hauling the boat out, shuttering windows, and to stack sandbags" — the
+    first two are -ing and the third is an infinitive.
+  - An infinitive series that loses its footing: "She wanted to write, to
+    sail, and reading" — the third should be "to read".
+  - A noun series with a clause dropped into it: "He liked the quiet, the
+    cold, and that nobody asked him anything."
+  - Correlative pairs whose halves take different shapes — "both … and",
+    "either … or", "neither … nor", "not only … but also": "He was not only
+    tired but also he was hungry" (the halves should match: "not only tired
+    but also hungry"); "She wanted either to leave or staying".
+  - A verb series that changes its auxiliary agreement partway: "The lamp had
+    been cleaned, refilled, and they lit it."
+
+  Do NOT flag:
+  - Deliberate variation for rhythm, which is a real and common device: a
+    writer may break a pattern on the last item precisely so it lands. If the
+    series reads as a choice rather than a slip, leave it.
+  - Series whose items are simply different kinds of thing but grammatically
+    matched: "the cold, the dark, and the waiting" is parallel.
+  - Elliptical constructions where a word is understood rather than missing:
+    "She could sail, and he could not" — "sail" carries over.
+  - Two items joined by "and" that are not a series at all but a compound
+    predicate: "He turned and walked away."
+  - Long or complex items where matching the form exactly would produce a
+    worse sentence. Parallelism is a guideline for readability and not a rule
+    that outranks sense.
+  - The Oxford comma or any other punctuation of a series. serial_comma owns
+    the commas, and this type never touches them — report the form only.
+  - A correlative used with a negative elsewhere in the clause ("refusing to
+    come out for neither food nor kindness"). That is a double negative and
+    double_negative owns it.
+  - Dialogue and nonstandard register, where speech is not built to a plan.
+    Report at low confidence at most.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the odd item rebuilt into
+  the shape the rest of the series already uses — not the other way round. The
+  majority form is the author's intent; changing the other items to match the
+  stray one rewrites more of the sentence than the error justifies. Change the
+  smallest number of words that makes the item match, keep the author's word
+  choice, and never re-order the series or touch its punctuation.
+
+confidence_guidance: |
+  high   — a series of three or more where one item plainly breaks the shape
+           the others share, in narration.
+  medium — a series of two, or a correlative pair, where the mismatch is real
+           but the rhythm could be deliberate.
+  low    — inside dialogue, or where the break falls on the final item, which
+           is exactly where a writer would put one on purpose.
+
+examples:
+  - text: "They spent two days hauling the boat out of the water, shuttering windows, and to stack sandbags along the door."
+    finding:
+      original_text: "They spent two days hauling the boat out of the water, shuttering windows, and to stack sandbags along the door."
+      corrected_text: "They spent two days hauling the boat out of the water, shuttering windows, and stacking sandbags along the door."
+      explanation: "The first two items are -ing forms, so the third matches: \"stacking\"."
+      confidence: high
+  - text: "She wanted to write, to sail, and reading whatever she liked."
+    finding:
+      original_text: "She wanted to write, to sail, and reading whatever she liked."
+      corrected_text: "She wanted to write, to sail, and to read whatever she liked."
+      explanation: "The series is built from infinitives, so the third item takes \"to read\"."
+      confidence: high
+  - text: "The cold, the dark, and the waiting were what she remembered."
+    finding: null
+  - text: "He turned and walked away without another word."
+    finding: null
+  - text: "He was not only tired but also he was hungry."
+    finding:
+      original_text: "He was not only tired but also he was hungry."
+      corrected_text: "He was not only tired but also hungry."
+      explanation: "\"not only … but also\" joins matching halves: \"tired\" and \"hungry\"."
+      confidence: medium

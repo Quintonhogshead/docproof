@@ -275,6 +275,85 @@ def _sweep_century(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- a / an ------------------------------------------------------------------
+
+# Which article a word takes is decided by the sound it starts with, not the
+# letter, and the two disagree in exactly two directions. Both lists are short,
+# closed and famous, which is what makes this a sweep rather than a question
+# for a model: there is nothing here to weigh up.
+
+# Vowel letter, consonant sound → takes "a". Almost all of them are the "yoo"
+# words plus the "wun" words.
+_CONSONANT_SOUND = frozenset("""
+one once oneness
+unicorn uniform unify unifying unilateral union unionize unique unisex unison
+unit unite united unity universal universe university uranium urea urethane
+urinal urine usable usage use used useful useless user usual usually usurer
+usurious utensil utilitarian utility utilize utopia utopian
+eucalyptus eugenics eulogy euphemism euphemistic euphoria euro european
+eureka ewe ewer ouija
+""".split())
+
+# Consonant letter, vowel sound → takes "an". In American English the h is
+# silent in these and only these.
+_VOWEL_SOUND = frozenset("""
+hour hourly hours honest honestly honesty honor honors honorable honorably
+honorary honoured honour honours honourable heir heirs heiress heirloom
+herb herbs herbal
+""".split())
+
+_ARTICLE = re.compile(r"\b(?P<art>[Aa]n?)(?P<gap>\s+)(?P<word>[A-Za-z][A-Za-z'’-]*)")
+
+
+def _article_for(word: str) -> str | None:
+    """"a" or "an" for this word, or None when the sweep should not guess.
+
+    Silence is the important half. A word this cannot be certain about — an
+    acronym, an initial, anything capitalized mid-sentence — is left entirely
+    alone, because "an" before a letter read aloud ("an F, an X-ray") and "a"
+    before one read as a word ("a UFO, a NASA engineer") depend on knowing how
+    the reader says it, and no rule in the text can tell."""
+    if word.upper() == word and len(word) > 1:
+        return None                          # NASA, UFO, MRI — unknowable here
+    # A compound is said the way its first part is said, and only that part
+    # decides the article: "a one-time champion", "an hour-long wait". Reading
+    # the whole token would make "one-time" look like a vowel.
+    word = re.split(r"[-’']", word)[0]
+    if len(word) < 2:
+        return None                          # "a T-shirt" vs "an X-ray"
+    low = word.lower()
+    if low in _CONSONANT_SOUND:
+        return "a"
+    if low in _VOWEL_SOUND:
+        return "an"
+    if not word[0].isalpha():
+        return None
+    if word[0].isupper():
+        return None                          # a proper noun may be said any way
+    # "an historic" is a live and defensible usage, so the h-words that are not
+    # on the silent list are left alone rather than argued with.
+    if low[0] == "h":
+        return None
+    return "an" if low[0] in "aeiou" else "a"
+
+
+def _sweep_article(text: str, variant=None) -> list[Hit]:
+    hits: list[Hit] = []
+    for m in _ARTICLE.finditer(text):
+        want = _article_for(m.group("word"))
+        if want is None or want == m.group("art").lower():
+            continue
+        # The author's capital is the author's: "A hour" at the start of a
+        # sentence becomes "An hour", not "an hour".
+        if m.group("art")[0].isupper():
+            want = want[0].upper() + want[1:]
+        hits.append(Hit(m.start("art"), m.end("art"), want,
+                        f"“{m.group('word')}” begins with a "
+                        f"{'vowel' if want.lower() == 'an' else 'consonant'} "
+                        f"sound, so the article is “{want.lower()}”."))
+    return hits
+
+
 # --- dialogue tags -----------------------------------------------------------
 
 # The house brief builds this as a table and warns against assembling it from
@@ -375,6 +454,7 @@ SWEEPS: tuple[Sweep, ...] = (
     Sweep("sweep_century", "Centuries spelled out", _sweep_century),
     Sweep("sweep_dialogue_tag", "Dialogue tag punctuation and case",
           _sweep_dialogue_tag),
+    Sweep("sweep_article", "a / an before the wrong sound", _sweep_article),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

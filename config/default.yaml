@@ -143,7 +143,7 @@ error_types:
   # ("drive slow") and of verbs that take an adjective on purpose ("she felt
   # bad"). It also keeps the grammar pass from growing an eighth type.
   - [tense_shift, pronoun_agreement, missing_word, preposition_error,
-     adjective_adverb]
+     adjective_adverb, faulty_parallelism, orphaned_clause]
 # Deterministic sweeps, run before any model pass so their edits get first
 # claim on a span. Each is one Atmosphere house rule expressed as text
 # patterns, and each reports its own final match count — the thing a careful
@@ -155,6 +155,7 @@ sweeps:
   - sweep_doubled_word
   - sweep_century
   - sweep_dialogue_tag
+  - sweep_article
 
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
 

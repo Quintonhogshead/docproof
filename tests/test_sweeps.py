@@ -331,3 +331,46 @@ def test_shipped_config_enables_sweeps():
     cfg = load_config(CONFIG_PATH)
     assert cfg.sweeps, "the shipped config ships with sweeps turned off"
     assert set(cfg.sweeps) <= set(SWEEPS_BY_KEY)
+
+
+# --- a / an -------------------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("They watched for nearly a hour before it sank.",
+     "They watched for nearly an hour before it sank."),
+    ("She ate a apple in an rush.", "She ate an apple in a rush."),
+    # The article's capital is the author's: a sentence still starts with one.
+    ("A hour later, he came back.", "An hour later, he came back."),
+    ("He was a honest man with an unique problem.",
+     "He was an honest man with a unique problem."),
+    ("It was an European visitor and a unicorn tattoo.",
+     "It was a European visitor and a unicorn tattoo."),
+])
+def test_the_article_follows_the_sound_not_the_letter(before, after):
+    assert swept("sweep_article", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    # Read aloud, and only the reader knows how: "an F" but "a UFO".
+    "She had an MRI, a UFO sighting and an F on the test.",
+    "He drove a Toyota past an Oxford man and a Ukrainian flag.",
+    # "an historic" is live and defensible usage, so an h-word that is not on
+    # the silent-h list is left alone rather than argued with.
+    "It was a historic day, and an historic one at that.",
+    # Already right.
+    "It took an hour and a half to reach a united front.",
+    "She is an heir to an honest fortune and a one-time champion.",
+    # A compound is said the way its first part is said: "a one-time
+    # champion", not "an one-time"; "an hour-long wait", not "a hour-long".
+    "It was an hour-long wait for a once-in-a-lifetime sight.",
+])
+def test_the_article_sweep_stays_off_what_it_cannot_know(text):
+    assert unchanged("sweep_article", text)
+
+
+def test_the_article_sweep_is_idempotent_on_the_shipped_config():
+    """`remaining` is the honest end of "…and zero remaining", so a sweep whose
+    own fix still matches its own pattern is not finished."""
+    text = "A hour with a apple and an unicorn and an honest answer."
+    once = swept("sweep_article", text)
+    assert swept("sweep_article", once) == once

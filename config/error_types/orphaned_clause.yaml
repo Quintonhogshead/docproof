@@ -1,0 +1,82 @@
+key: orphaned_clause
+name: Subordinate clause standing alone
+version: 1
+channel: query
+
+detection_prompt: |
+  A subordinate or relative clause punctuated as a whole sentence, where it
+  belongs to the sentence before it.
+
+  This asks; it never corrects, and the reason is the whole design of the
+  type. Fiction uses fragments constantly and on purpose — "Not a ship. Not a
+  buoy." is a writer choosing a rhythm, and a proofreader who joins those up
+  has rewritten the paragraph. But a relative clause left hanging off the end
+  of a thought is just as often a full stop typed where a comma was meant, and
+  only the author knows which. So the question goes to the author.
+
+  FLAG — but only these two shapes, and only when the clause has no main verb
+  phrase of its own to stand on:
+  - A relative clause opening with "which", "who", "whom" or "whose", where
+    what it refers to is in the previous sentence: "The sightings happened on
+    calm nights. Which meant she might not have long to wait."
+  - A clause opening with a subordinating conjunction and going no further —
+    "because", "although", "though", "while", "since", "unless", "whereas",
+    "if", "after", "before", "so that": "He never went back to the point.
+    Because the light had gone out for good."
+
+  Do NOT flag:
+  - Fragments with no subordinating word at all. These are the deliberate
+    ones, and they are not this type's business at any confidence: "Not a
+    ship. Not a buoy." "Nothing." "A long silence." "Rain, then more rain."
+    "Forty years at the light." Leave every one of them alone.
+  - A question or an answer written as a fragment, which is how dialogue and
+    close narration work: "Why the point? Because it was hers."
+  - Anything inside quotation marks. People speak in fragments and it is not
+    an error when they do.
+  - An imperative, which has no stated subject and is a complete sentence
+    anyway: "Watch the water." "Go now."
+  - A clause introduced by "which" that is a complete sentence in its own
+    right, as in a question: "Which lamp did he mean?"
+  - A subordinate clause correctly attached with a comma or a dash. There is
+    nothing wrong with it and nothing to ask about.
+  - A run of fragments used as an obvious device — several in a row, or a
+    paragraph built out of them. That is a voice, and asking about it once per
+    fragment would bury the change log.
+  - Comma splices and run-on sentences, which are the opposite fault and are
+    owned by comma_splice and run_on_sentence.
+
+fix_guidance: |
+  Quote BOTH sentences in original_text — the one the clause seems to belong
+  to and the clause itself, verbatim and in that order. This is the one type
+  whose original_text is two sentences rather than one, because the question
+  is about the full stop between them and a reader cannot answer it looking at
+  the fragment alone.
+
+  This type asks and never corrects, so corrected_text must repeat
+  original_text exactly as written, character for character, with no change of
+  any kind. Put the question in explanation, and offer the join without making
+  it — the author may have meant the full stop.
+
+confidence_guidance: |
+  high   — a "which" clause with no main verb, plainly continuing the sentence
+           before it, in narration that uses no other fragments.
+  medium — a subordinating-conjunction clause, where the same construction is
+           a recognised stylistic device and the author may well mean it.
+  low    — anywhere the surrounding prose already uses fragments, so this may
+           be one more of them.
+
+examples:
+  - text: "The sightings always happened on calm nights in late summer. Which meant she might not have long to wait."
+    finding:
+      original_text: "The sightings always happened on calm nights in late summer. Which meant she might not have long to wait."
+      corrected_text: "The sightings always happened on calm nights in late summer. Which meant she might not have long to wait."
+      explanation: "\"Which meant…\" has no main verb of its own and reads as a continuation of the sentence before it. Was a comma meant instead of the full stop, or is the fragment deliberate?"
+      confidence: high
+  - text: "Not a ship. Not a buoy. It moved against the wind."
+    finding: null
+  - text: "He asked her why she stayed. Because it was hers, and always had been."
+    finding: null
+  - text: "\"Which is why I never went back,\" he said quietly."
+    finding: null
+  - text: "Forty years at the light. Forty winters of the same grey water."
+    finding: null
