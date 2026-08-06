@@ -2257,6 +2257,32 @@ async function loadKeys() {
   }
 }
 
+async function loadReviewDefaults() {
+  if (!WEB || !ME || !ME.is_admin) return;
+  let data;
+  try { data = await api('/api/settings'); } catch (_) { return; }
+  $('admin-comments').checked = data.settings.comments;
+  $('admin-explanations').checked = data.settings.explanations;
+}
+
+$('admin-settings-save').addEventListener('click', async () => {
+  const saved = $('admin-settings-saved');
+  const btn = $('admin-settings-save');
+  saved.hidden = true;
+  btn.disabled = true;
+  try {
+    await api('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comments: $('admin-comments').checked,
+                             explanations: $('admin-explanations').checked }),
+    });
+    saved.hidden = false;
+  } catch (err) {
+    alert(err.message);
+  } finally { btn.disabled = false; }
+});
+
 async function loadAdmin() {
   if (!WEB || !ME || !ME.is_admin) return;
   addReveal($('admin-new-password'));
@@ -2309,6 +2335,7 @@ async function loadAdmin() {
     table.append(tr);
   }
   loadKeys();
+  loadReviewDefaults();
 }
 
 boot();
