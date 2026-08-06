@@ -73,13 +73,23 @@ def _notes_statement(doc) -> str:
             f"that read only the main document lose them.")
 
 
-def _limits(cfg, doc, findings, spell) -> list[str]:
+def _limits(cfg, doc, findings, spell, passes=None) -> list[str]:
+    missed = [p for p in (passes or ()) if not p.answered]
+    # The claim this bullet makes is the first thing a lost pass falsifies, so
+    # it is written from what actually happened rather than from the plan.
+    coverage = (
+        "Every paragraph of running text was read, and the scripted checks "
+        "above ran over all of them exhaustively."
+        if not missed else
+        f"The scripted checks above ran over every paragraph exhaustively, "
+        f"but {len(missed)} of the model's reading passes did not come back, "
+        f"so parts of this manuscript were not read for some kinds of error "
+        f"— see the note below this list.")
     lines = [
         "This was a mechanical and grammatical pass. It does not read for "
         "plot, character, pacing, structure, or fact — nothing here should be "
         "taken as a comment on the writing.",
-        "Every paragraph of running text was read, and the scripted checks "
-        "above ran over all of them exhaustively. Paragraphs skipped by style "
+        coverage + " Paragraphs skipped by style "
         "— headings, titles, table-of-contents lines — were not reviewed, "
         f"though they were included in the audit ({len(doc.skipped)} skipped).",
         "Text that is not paragraph text was not reviewed: words inside "
@@ -114,7 +124,7 @@ def _reason(f: Finding) -> str:
 def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                      applied_ids, sweeps=None, spell=None, normalization=None,
                      audit=None, usage=None, stats=None,
-                     variant=None) -> None:
+                     variant=None, passes=None) -> None:
     """Write the change log. Imports python-docx lazily so that a run which
     does not want one never pays for the import."""
     import docx
@@ -289,16 +299,34 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             "rejecting the tracked changes returns the original text.")
 
     d.add_heading("Limits of this pass", level=1)
-    for line in _limits(cfg, doc, findings, spell):
+    for line in _limits(cfg, doc, findings, spell, passes):
         d.add_paragraph(line, style="List Bullet")
 
+    missed = [p for p in (passes or ()) if not p.answered]
+    if missed:
+        # Not a bullet among the standing limits: those are true of every run,
+        # and this one is true of this run only. It names the sections so the
+        # press can re-read them rather than re-reading the whole book.
+        d.add_paragraph(
+            f"Not read in this pass: {len(missed)} of the "
+            f"{len(passes)} reading passes over this manuscript did not "
+            f"return. For the sections and error types below, this document "
+            f"records no corrections because they were never looked at — not "
+            f"because none were needed. Reviewing the file again will retry "
+            f"them.")
+        for p in missed:
+            types = ", ".join(k.replace("_", " ") for k in p.error_types)
+            d.add_paragraph(f"Section {p.chunk_id}, pass {p.pass_index + 1} "
+                            f"({types}) — {p.describe()}.",
+                            style="List Bullet")
+
     d.add_heading("How this pass was made", level=1)
-    passes = "; ".join(" + ".join(g) for g in cfg.error_type_groups)
+    groups = "; ".join(" + ".join(g) for g in cfg.error_type_groups)
     d.add_paragraph(
         f"Model: {cfg.api.model}. Confidence gate: {cfg.min_confidence}. "
         f"{len(doc.paragraphs)} paragraph(s) reviewed in "
         f"{len(cfg.error_type_groups)} pass(es) over "
-        f"{len(cfg.error_type_keys)} error type(s): {passes}.")
+        f"{len(cfg.error_type_keys)} error type(s): {groups}.")
     if spell is not None and spell.available:
         d.add_paragraph(
             f"Dictionary scan: {spell.tokens:,} words read, {spell.unknown:,} "

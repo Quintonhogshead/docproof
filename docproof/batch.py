@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .config import Config
-from .models import Usage
+from .models import PassResult, Usage
 from .pipeline import Outputs, Prepared, build_analyzers, finish, prepare
 from .providers import BatchRequest, BatchStatus, Provider
 
@@ -143,9 +143,15 @@ def load_all(workspace: str | Path) -> list[Job]:
 def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
            provider: Provider, workspace: str | Path, *,
            max_chunks: int | None = None,
-           selection: Sequence[str] | None = None) -> Job:
-    prepared = prepare(cfg, input_path, error_dir, max_chunks=max_chunks,
-                       selection=selection)
+           selection: Sequence[str] | None = None,
+           prepared: Prepared | None = None) -> Job:
+    """`prepared` is for a caller that has already read the document — the app
+    prepares first to measure the job against the vendor's queue limit, and
+    passing the result back saves ingesting and chunking the whole manuscript
+    a second time. It must be a `prepare` of this same file and selection."""
+    if prepared is None:
+        prepared = prepare(cfg, input_path, error_dir, max_chunks=max_chunks,
+                           selection=selection)
     requests = build_requests(cfg, prepared)
     if not requests:
         raise BatchError(
@@ -238,11 +244,11 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
             f"Start a new review of the current version.")
 
     results = provider.collect_batch(job.batch_id)
-    findings, usage = _assemble(cfg, prepared, results)
+    findings, usage, passes = _assemble(cfg, prepared, results)
 
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                     source_path=source, batch=True)
+                     source_path=source, batch=True, passes=passes)
     job.state = "done"
     save(job, workspace)
     log.info("Job %s collected: %d change(s) applied", job.job_id,
@@ -250,15 +256,18 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     return outputs
 
 
-def _assemble(cfg: Config, prepared: Prepared, results: dict) -> tuple[list, Usage]:
+def _assemble(cfg: Config, prepared: Prepared, results: dict
+              ) -> tuple[list, Usage, list[PassResult]]:
     """Map batch results back onto (pass, chunk) and run them through the same
-    finding checks the synchronous path uses."""
+    finding checks the synchronous path uses — including the per-call record,
+    so a batch that came back short says so in its own report rather than only
+    in this process's log."""
     ids = itertools.count(1)
     usage = Usage()
     analyzers = build_analyzers(cfg, prepared.groups, None, ids,
                                 prepared.vocabulary, prepared.conventions)
     findings: list = []
-    missing = 0
+    passes: list[PassResult] = []
 
     # Ordered by pass then chunk so finding IDs come out in the same order a
     # synchronous run would produce.
@@ -266,17 +275,23 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict) -> tuple[list, Usa
         for chunk in prepared.chunks:
             result = results.get(custom_id(i, chunk.chunk_id))
             if result is None:
-                missing += 1
+                passes.append(PassResult(chunk_id=chunk.chunk_id,
+                                         pass_index=i,
+                                         error_types=analyzer.keys,
+                                         answered=False, reason="no_result"))
                 continue
-            findings.extend(analyzer.findings_from(result, chunk, usage))
+            found, outcome = analyzer.findings_from(result, chunk, usage)
+            findings.extend(found)
+            passes.append(outcome)
 
     unknown = set(results) - {custom_id(i, c.chunk_id)
                               for i in range(len(analyzers))
                               for c in prepared.chunks}
+    missing = sum(1 for p in passes if not p.answered)
     if missing:
-        log.warning("%d request(s) had no result in the batch; those sections "
-                    "were not reviewed.", missing)
+        log.warning("%d request(s) had no usable result in the batch; those "
+                    "sections were not reviewed.", missing)
     if unknown:
         log.warning("Batch returned %d result(s) for unknown requests: %s",
                     len(unknown), sorted(unknown)[:5])
-    return findings, usage
+    return findings, usage, passes

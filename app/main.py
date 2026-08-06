@@ -753,12 +753,14 @@ def _register(app: FastAPI) -> None:
         Once a job is running, waiting overnight on a vendor, or writing its
         files, there is nothing local left to cancel — the work is either
         already billed or already being written. Only a job that has not
-        started can be pulled back, so that is all this offers."""
+        started can be pulled back, so that is all this offers. A job holding
+        for room in the vendor's queue is one of those: nothing has been sent,
+        and it is the one a user watching a backlog most wants to pull."""
         store: JobStore = app.state.store
         job = store.get(job_id)
         if job is None:
             raise HTTPException(404, "No such review")
-        if job.state not in ("queued", "scheduled"):
+        if job.state not in ("queued", "scheduled", "holding"):
             raise HTTPException(
                 400, "This one has already started, so there is nothing left "
                      "to cancel.")

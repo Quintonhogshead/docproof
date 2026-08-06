@@ -14,6 +14,7 @@ import json
 import re
 from pathlib import Path
 
+from docproof.models import NO_RESPONSE_REASONS
 from docproof.providers import estimate_cost
 
 # Confidence is a three-point scale in the data. On screen it is a sentence
@@ -102,6 +103,7 @@ def build_report(findings_path: str | Path,
 
     usage = data.get("usage") or {}
     config = data.get("config") or {}
+    coverage = _coverage_view(data.get("passes"), names)
     cost = estimate_cost(
         config.get("model", ""),
         input_tokens=usage.get("input_tokens", 0)
@@ -123,7 +125,32 @@ def build_report(findings_path: str | Path,
             "not_applied": len(other),
         },
         "cost": cost,
+        "coverage": coverage,
         "groups": ordered,
         "low_confidence": low,
         "not_applied": other,
+    }
+
+
+def _coverage_view(passes, names: dict[str, str]) -> dict | None:
+    """What to warn about, or None when there is nothing to warn about.
+
+    Only ever set when a call went missing. This screen's headline reads
+    "Nothing needed changing" on an empty review, which is the one sentence a
+    lost pass turns into a lie — so the warning has to reach here, not just
+    the summary file."""
+    if not passes or passes.get("complete", True):
+        return None
+    missed = [c for c in passes.get("calls") or () if not c.get("answered")]
+    return {
+        "requested": passes.get("requested", 0),
+        "answered": passes.get("answered", 0),
+        "missed": [{
+            "chunk_id": c.get("chunk_id", ""),
+            # 1-based to match how the summary and the config list passes.
+            "pass": int(c.get("pass") or 0) + 1,
+            "error_names": [names.get(k, k) for k in c.get("error_types") or ()],
+            "reason": NO_RESPONSE_REASONS.get(c.get("reason", ""),
+                                              "the call did not come back"),
+        } for c in missed],
     }

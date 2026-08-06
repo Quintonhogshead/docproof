@@ -31,6 +31,7 @@ from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
 from docproof.providers import ProviderError, build_provider, estimate_cost, \
     provider_for
+from docproof.utils.tokens import estimate_tokens
 
 from .settings import Paths, Settings, get_api_key
 
@@ -49,6 +50,7 @@ TERMINAL_STATES = frozenset({"done", "failed", "cancelled"})
 PLAIN_STATE = {
     "scheduled": "Waiting until {when}",
     "queued": "Waiting to start",
+    "holding": "Waiting for room in the overnight queue",
     "running": "Reviewing ({done} of {total} sections)",
     "waiting": "Processing overnight — check back in the morning",
     "collecting": "Almost done — writing your document",
@@ -110,6 +112,10 @@ class Job:
     source: str = "app"                # app | watch
     tagged: int | None = None          # paragraphs given a style
     flags: int | None = None           # things prep wants a human to decide
+    # What this job will put in the vendor's batch queue, measured once when
+    # the worker first picks it up. Recorded on the job so the ticker can add
+    # up what is in flight without re-reading every manuscript to do it.
+    est_tokens: int = 0
     verified: bool | None = None       # the author's words came through intact
     words: int | None = None
     # What this job actually cost, recorded when it finishes so the dashboard
@@ -465,12 +471,13 @@ class JobRunner:
         # a crash or a mid-run exception resumes instead of paying again. Only
         # a finished job deletes it.
         checkpoint = self._checkpoint(job, cfg, prepared)
-        findings, usage = run_sync(cfg, prepared, provider, progress=progress,
-                                   checkpoint=checkpoint)
+        findings, usage, passes = run_sync(cfg, prepared, provider,
+                                           progress=progress,
+                                           checkpoint=checkpoint)
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                             source_path=job.source_path)
+                             source_path=job.source_path, passes=passes)
         except AuditError as e:
             # No reviewed document was written — that is the point — but the
             # summary and findings were, and they name the paragraph that did
@@ -589,6 +596,59 @@ class JobRunner:
 
     # -- batch ----------------------------------------------------------------
 
+    def has_room_for(self, job: Job, cfg: Config, est_tokens: int) -> bool:
+        """Whether this job fits in what the vendor will hold right now.
+
+        Batch APIs meter enqueued tokens across every batch in flight at once,
+        so the question is never about this job alone. Only jobs actually at
+        the vendor count: a job still `collecting` has had its batch completed,
+        and completed work is off the vendor's books even though ours are still
+        open. Per vendor, since the ceiling is one vendor's.
+
+        A document too large for the whole ceiling is submitted anyway rather
+        than held forever — the vendor gets to answer for it, which is a
+        failure the user can read, unlike a job that never moves. Public so
+        the ticker can ask before waking a held job.
+
+        What it cannot see is another job store: the watcher keeps its own,
+        in its own home, so the two would each count only their own half of
+        one vendor's queue. Costless today — the watcher submits no batch
+        reviews — but it is a real seam the day the copy-edit slot in
+        app/watch/tick.py is filled in."""
+        ceiling = cfg.batch.enqueued_token_ceiling
+        if ceiling <= 0:
+            return True
+        vendor = provider_for(cfg.api.model, cfg.api.provider)
+        in_flight = sum(
+            j.est_tokens for j in self.store.all()
+            if j.id != job.id and j.state == "waiting" and not j.is_prep
+            and provider_for(j.model, cfg.api.provider) == vendor)
+        if in_flight == 0:
+            return True
+        return in_flight + est_tokens <= ceiling
+
+    def _estimate_enqueued(self, cfg: Config, prepared) -> int:
+        """What this job will put in the vendor's queue.
+
+        `est_document_tokens` counts the manuscript once per pass, which is
+        the smaller half: every one of those requests also carries its pass's
+        system prompt, and that prompt is no rounding error — it holds the
+        error-type definitions, the book's own vocabulary and the variant's
+        conventions. Counting only the manuscript would let a book through at
+        half its real weight and put the queue back over the limit."""
+        per_request = sum(estimate_tokens(p)
+                          for p in pass_prompts(cfg, prepared).values())
+        return (prepared.est_document_tokens
+                + len(prepared.chunks) * per_request)
+
+    def _hold(self, job: Job, est_tokens: int) -> None:
+        """Park a job until there is room. `update_if` for the same reason
+        promotion uses it: a cancellation landing in this instant must win."""
+        log.info("Holding %s (~%d tokens): the vendor's queue is full",
+                 job.id, est_tokens)
+        self.store.update_if(job.id, expect=job.state, state="holding",
+                             est_tokens=est_tokens, error=None)
+
     def _submit_batch(self, job_id: str) -> None:
         job = self.store.get(job_id)
         # Same guard _run_now and _run_prep already have: a job cancelled while
@@ -597,18 +657,38 @@ class JobRunner:
         if job is None or job.state not in ("queued", "running"):
             return
         cfg = self.config_for(job)
+        # A job the ticker woke has been measured already. Asking again before
+        # reading the manuscript is what keeps a wake that loses the race to
+        # another job cheap: it goes back to holding without re-ingesting.
+        if job.est_tokens and not self.has_room_for(job, cfg, job.est_tokens):
+            self._hold(job, job.est_tokens)
+            return
         try:
             provider = self._provider(cfg)
+            prepared = prepare(cfg, job.source_path, self.error_dir,
+                               selection=job.selection)
+        except (ProviderError, IngestError, batchlib.BatchError,
+                FileNotFoundError, ValueError) as e:
+            self.store.update(job_id, state="failed", error=str(e))
+            return
+
+        est = self._estimate_enqueued(cfg, prepared)
+        if not self.has_room_for(job, cfg, est):
+            self._hold(job, est)
+            return
+
+        try:
             batch_job = batchlib.submit(cfg, job.source_path, self.error_dir,
                                         provider, self.store.paths.jobs,
-                                        selection=job.selection)
+                                        selection=job.selection,
+                                        prepared=prepared)
         except (ProviderError, IngestError, batchlib.BatchError,
                 FileNotFoundError, ValueError) as e:
             self.store.update(job_id, state="failed", error=str(e))
             return
         # batchlib picked its own folder; record the link and adopt its total.
         self.store.update(job_id, state="waiting", total=batch_job.request_count,
-                          error=None)
+                          est_tokens=est, error=None)
         (self.store.dir(job_id) / "batch_job_id").write_text(batch_job.job_id,
                                                              encoding="utf-8")
 
@@ -624,8 +704,9 @@ class JobRunner:
                 log.exception("Ticker pass failed")
 
     def tick_once(self) -> None:
-        """One pass: submit anything due, advance anything waiting. Public so
-        tests can drive it without waiting on a timer."""
+        """One pass: submit anything due, advance anything waiting, then wake
+        anything the vendor now has room for. Public so tests can drive it
+        without waiting on a timer."""
         for job in self.store.all():
             if job.state == "scheduled" and self._due(job):
                 # Guards against a cancellation landing between this read and
@@ -641,6 +722,27 @@ class JobRunner:
             # leaves it alone rather than looking for a batch that isn't there.
             elif job.state in ("waiting", "collecting") and not job.is_prep:
                 self._advance_batch(job)
+        self._release_held()
+
+    def _release_held(self) -> None:
+        """Jobs held out of a full vendor queue, asked again now that a batch
+        ahead of them may have landed.
+
+        Deliberately after the advance loop: a batch that finished during this
+        very pass has already left `waiting` by the time the room is counted,
+        so the manuscript behind it goes out tonight rather than two minutes
+        from now. The check here is the cheap one — it trusts the estimate
+        taken when the job was measured — and the worker re-checks before it
+        submits, so two jobs woken by one pass cannot both go out over the
+        ceiling; the loser simply goes back to holding."""
+        for job in self.store.all():
+            if job.state != "holding":
+                continue
+            if not self.has_room_for(job, self.config_for(job),
+                                     job.est_tokens):
+                continue
+            if self.store.update_if(job.id, expect="holding", state="queued"):
+                self.queue.put(job.id)
 
     def _due(self, job: Job) -> bool:
         target = self._scheduled_for(job)

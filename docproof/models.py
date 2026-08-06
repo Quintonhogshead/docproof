@@ -75,6 +75,43 @@ class Finding:
     format: str = ""
 
 
+# Why a (pass, chunk) call produced nothing, in the words a report can print.
+# The keys are what `stop_reason` and the finding-schema check already
+# distinguish; until now that distinction lived only in the log.
+NO_RESPONSE_REASONS = {
+    "refusal": "the model declined this section",
+    "max_tokens": "output truncated at the token limit",
+    "error": "the request failed",
+    "schema_mismatch": "the response did not match the finding schema",
+    "no_result": "the batch returned no result for this request",
+}
+
+
+@dataclass(frozen=True)
+class PassResult:
+    """One (pass, chunk) API call: whether it came back, and what it carried.
+
+    A pass that answers "nothing wrong in this section" and a pass that never
+    answered both contribute zero findings, and nothing downstream could tell
+    them apart — a whole error-type group could lose a chunk and the run read
+    as a clean one with fewer notes. Recording the call, not just its
+    findings, is what makes that difference legible in the reports."""
+    chunk_id: str
+    pass_index: int
+    error_types: tuple[str, ...]
+    answered: bool
+    returned: int = 0    # findings in the response, before the content checks
+    kept: int = 0        # findings that survived them
+    reason: str = ""     # a NO_RESPONSE_REASONS key, when answered is False
+
+    @property
+    def label(self) -> str:
+        return "+".join(self.error_types)
+
+    def describe(self) -> str:
+        return NO_RESPONSE_REASONS.get(self.reason, self.reason or "unknown")
+
+
 @dataclass(frozen=True)
 class DocumentModel:
     source_path: str

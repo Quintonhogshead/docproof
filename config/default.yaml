@@ -77,6 +77,15 @@ consistency:
   min_length: 7             # shorter keys collide by accident
   min_dominance: 2          # how far the majority must lead; 1 flags even splits
 
+# How much overnight work may sit at one vendor at once. Batch APIs meter
+# *enqueued* tokens across every batch in flight, not per batch, and the room
+# comes back as batches finish rather than as time passes — OpenAI's limit is
+# 2M on the lower tiers. A submission that would cross the ceiling waits, and
+# goes out on the poll after a batch ahead of it lands. Counted per vendor.
+# 0 submits everything immediately, which is what DocProof did before this.
+batch:
+  enqueued_token_ceiling: 1800000
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

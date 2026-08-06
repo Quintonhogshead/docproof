@@ -389,3 +389,156 @@ def test_a_job_carries_its_own_answer_about_voice(runner):
     assert r.config_for(_job(store)).voice == "preserve"
     assert r.config_for(_job(store, voice="correct")).voice == "correct"
     assert store.get("j1").voice == "correct"
+
+
+# --- room in the vendor's queue -----------------------------------------------
+#
+# Batch APIs meter enqueued tokens across every batch in flight at once, and
+# the room comes back as batches finish rather than as time passes. Four
+# manuscripts dropped on the window used to go out inside a few seconds and the
+# later ones came back rejected.
+
+def _ceiling(monkeypatch, tokens: int) -> None:
+    base = JobRunner.config_for
+
+    def with_ceiling(self, job):
+        cfg = base(self, job)
+        cfg.batch.enqueued_token_ceiling = tokens
+        return cfg
+
+    monkeypatch.setattr(JobRunner, "config_for", with_ceiling)
+
+
+def _batch_setup(runner_fixture, monkeypatch, ceiling: int):
+    from .fakes import FakeProvider
+
+    store, r = _review_setup(runner_fixture, monkeypatch, FakeProvider())
+    _ceiling(monkeypatch, ceiling)
+    return store, r
+
+
+def test_a_batch_holds_when_the_vendors_queue_is_already_full(runner,
+                                                              monkeypatch):
+    store, r = _batch_setup(runner, monkeypatch, 1_000_000)
+    _job(store, id="ahead", state="waiting", mode="batch",
+         est_tokens=1_000_000)
+    _job(store, id="j2", state="queued", mode="batch")
+
+    def boom(*a, **k):
+        raise AssertionError("nothing may be sent while the queue is full")
+
+    monkeypatch.setattr("app.jobs.batchlib.submit", boom)
+
+    r.run_one("j2")
+    held = store.get("j2")
+    assert held.state == "holding"
+    assert held.est_tokens > 0          # measured, so the ticker can add it up
+    assert not (store.dir("j2") / "batch_job_id").exists()
+
+
+def test_a_held_job_goes_out_when_the_batch_ahead_of_it_lands(runner,
+                                                              monkeypatch):
+    """The whole point of holding: it is a queue, not a refusal."""
+    store, r = _batch_setup(runner, monkeypatch, 1_000_000)
+    _job(store, id="ahead", state="waiting", mode="batch",
+         est_tokens=1_000_000)
+    _job(store, id="j2", state="queued", mode="batch")
+    r.run_one("j2")
+    assert store.get("j2").state == "holding"
+
+    store.update("ahead", state="done")       # the batch ahead of it lands
+    r.tick_once()
+    assert store.get("j2").state == "queued"
+    assert not r.queue.empty()
+
+    r.run_one("j2")
+    out = store.get("j2")
+    assert out.state == "waiting", out.error
+    assert (store.dir("j2") / "batch_job_id").is_file()
+
+
+def test_a_manuscript_bigger_than_the_whole_ceiling_still_goes_out(runner,
+                                                                   monkeypatch):
+    """A book too large for the ceiling has nothing to wait for — no batch
+    ahead of it will ever make it fit. Holding it would be a job that never
+    moves; sending it gets the vendor's answer, which the user can read."""
+    store, r = _batch_setup(runner, monkeypatch, 1)
+    _job(store, id="j1", state="queued", mode="batch")
+
+    r.run_one("j1")
+    job = store.get("j1")
+    assert job.state == "waiting", job.error
+
+
+def test_a_held_job_that_loses_the_race_is_not_read_again(runner, monkeypatch):
+    """Two jobs woken by one tick both come back to the worker; the second
+    finds the room gone. It must re-hold on the estimate it already has rather
+    than ingesting and chunking the manuscript to learn the same number."""
+    store, r = _batch_setup(runner, monkeypatch, 1_000_000)
+    _job(store, id="ahead", state="waiting", mode="batch",
+         est_tokens=1_000_000)
+    _job(store, id="j2", state="queued", mode="batch", est_tokens=500_000)
+
+    def boom(*a, **k):
+        raise AssertionError("a job already measured must not be read again")
+
+    monkeypatch.setattr("app.jobs.prepare", boom)
+
+    r.run_one("j2")
+    held = store.get("j2")
+    assert held.state == "holding" and held.est_tokens == 500_000
+
+
+def test_the_ceiling_is_counted_per_vendor(runner, monkeypatch):
+    """One vendor's full queue says nothing about another's. A house running
+    OpenAI overnight and Anthropic by day would otherwise throttle itself
+    against a limit that does not apply."""
+    store, r = _batch_setup(runner, monkeypatch, 1_000_000)
+    _job(store, id="ahead", state="waiting", mode="batch",
+         model="gpt-5.6-luna", est_tokens=5_000_000)
+    _job(store, id="j2", state="queued", mode="batch",
+         model="claude-sonnet-5")
+
+    r.run_one("j2")
+    assert store.get("j2").state == "waiting", store.get("j2").error
+
+
+def test_the_queue_can_be_turned_off(runner, monkeypatch):
+    """0 is what DocProof did before the queue existed: submit on sight."""
+    store, r = _batch_setup(runner, monkeypatch, 0)
+    _job(store, id="ahead", state="waiting", mode="batch",
+         est_tokens=9_000_000)
+    _job(store, id="j2", state="queued", mode="batch")
+
+    r.run_one("j2")
+    assert store.get("j2").state == "waiting", store.get("j2").error
+
+
+def test_a_cancelled_held_job_is_not_woken_by_the_ticker(runner, monkeypatch):
+    """The same race the scheduled promotion guards: a cancel landing between
+    the ticker reading the job and writing its new state must win."""
+    store, r = _batch_setup(runner, monkeypatch, 1_000_000)
+    _job(store, id="j1", state="holding", mode="batch", est_tokens=10)
+    store.update_if("j1", expect="holding", state="cancelled")
+
+    r.tick_once()
+    assert store.get("j1").state == "cancelled"
+    assert r.queue.empty()
+
+
+def test_the_estimate_counts_the_prompts_not_only_the_manuscript(runner,
+                                                                 monkeypatch):
+    """Every request carries its pass's system prompt — the error-type
+    definitions, the book's vocabulary, the variant's conventions — and on a
+    manuscript's worth of requests that is not a rounding error. Counting the
+    text alone would let a book into the queue at half its real weight."""
+    from docproof.pipeline import prepare
+
+    store, r = _batch_setup(runner, monkeypatch, 0)
+    job = _job(store, id="j1", state="queued", mode="batch")
+    cfg = r.config_for(job)
+    prepared = prepare(cfg, job.source_path, r.error_dir)
+
+    r.run_one("j1")
+    measured = store.get("j1").est_tokens
+    assert measured > prepared.est_document_tokens

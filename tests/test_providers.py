@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from docproof.analyzer import Analyzer, build_output_model
 from docproof.config import Config
 from docproof.error_registry import load_error_types
-from docproof.models import Chunk, ParagraphRef, Usage
+from docproof.models import (NO_RESPONSE_REASONS, Chunk, ParagraphRef, Usage)
 from docproof.providers import (ProviderError, ProviderResult, build_provider,
                                 estimate_cost, lookup, provider_for,
                                 strict_json_schema)
@@ -77,10 +77,10 @@ def test_analyzer_without_explanations_still_produces_findings():
         "occurrence": 1,
         "corrected_text": "The manuscript was finished; nobody wanted it.",
         "confidence": "high"}]}, usage=USAGE)])
-    findings, ok = Analyzer(cfg, list(registry.values()), provider,
-                            ids()).analyze_chunk(_chunk(), Usage())
+    findings, call = Analyzer(cfg, list(registry.values()), provider,
+                              ids()).analyze_chunk(_chunk(), Usage())
 
-    assert ok and [f.error_type for f in findings] == ["comma_splice"]
+    assert call.answered and [f.error_type for f in findings] == ["comma_splice"]
     assert findings[0].explanation == ""      # nothing asked for, nothing lost
 
 
@@ -165,27 +165,52 @@ def test_analyzer_happy_path_and_usage_accounting():
         original="The manuscript was finished, nobody wanted it.",
         corrected="The manuscript was finished; nobody wanted it.")])
     usage = Usage()
-    findings, ok = _analyzer(provider).analyze_chunk(_chunk(), usage)
+    findings, call = _analyzer(provider).analyze_chunk(_chunk(), usage)
 
-    assert ok and [f.error_type for f in findings] == ["comma_splice"]
+    assert call.answered and [f.error_type for f in findings] == ["comma_splice"]
+    assert call.returned == call.kept == 1
     assert usage.api_calls == 1
     assert usage.input_tokens == USAGE.input_tokens
     assert usage.cache_read_input_tokens == USAGE.cache_read_input_tokens
 
 
-@pytest.mark.parametrize("result", [
-    ProviderResult(stop_reason="refusal", error="declined"),
-    ProviderResult(stop_reason="max_tokens", error="truncated"),
-    ProviderResult(stop_reason="error", error="503"),
-    ProviderResult(parsed={"findings": [{"para_id": "body-0000"}]}),  # malformed
+@pytest.mark.parametrize("result,reason", [
+    (ProviderResult(stop_reason="refusal", error="declined"), "refusal"),
+    (ProviderResult(stop_reason="max_tokens", error="truncated"), "max_tokens"),
+    (ProviderResult(stop_reason="error", error="503"), "error"),
+    (ProviderResult(parsed={"findings": [{"para_id": "body-0000"}]}),
+     "schema_mismatch"),                                          # malformed
 ])
-def test_analyzer_drops_bad_results_without_raising(result):
+def test_analyzer_drops_bad_results_without_raising(result, reason):
     usage = Usage()
-    findings, ok = _analyzer(FakeProvider([result])).analyze_chunk(_chunk(), usage)
+    findings, call = _analyzer(FakeProvider([result])).analyze_chunk(_chunk(),
+                                                                     usage)
     # Empty AND marked failed: a checkpointed run retries these rather than
     # caching "nothing wrong here" for a chunk the model never actually read.
-    assert findings == [] and ok is False
+    assert findings == [] and call.answered is False
+    # And the reason survives the log line, because the reports print it.
+    assert call.reason == reason and call.describe() in NO_RESPONSE_REASONS.values()
     assert usage.api_calls == 1      # the attempt is still counted
+
+
+def test_analyzer_separates_returned_from_kept():
+    """A response that came back but whose findings failed the content checks
+    is not the same fault as a call that never landed, so the record keeps
+    both numbers."""
+    provider = FakeProvider([ProviderResult(parsed={"findings": [
+        {"para_id": "body-0000", "error_type": "comma_splice",
+         "original_text": "The manuscript was finished, nobody wanted it.",
+         "occurrence": 1,
+         "corrected_text": "The manuscript was finished; nobody wanted it.",
+         "confidence": "high"},
+        {"para_id": "body-9999", "error_type": "comma_splice",  # unknown para
+         "original_text": "Nowhere in this document.", "occurrence": 1,
+         "corrected_text": "Nowhere in this document!", "confidence": "high"},
+    ]}, usage=USAGE)])
+    findings, call = _analyzer(provider).analyze_chunk(_chunk(), Usage())
+
+    assert call.answered and len(findings) == 1
+    assert call.returned == 2 and call.kept == 1
 
 
 # --- OpenAI response parsing (no network) -------------------------------------

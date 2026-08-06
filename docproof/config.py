@@ -111,6 +111,19 @@ class PricingConfig(BaseModel):
     output_per_mtok: float | None = None
 
 
+class BatchConfig(BaseModel):
+    """How much work may be sitting at one vendor at once.
+
+    Batch APIs meter *enqueued* tokens across every batch you have in flight,
+    not per batch — OpenAI's limit is a couple of million on the lower tiers,
+    and it frees up as batches finish rather than as time passes. Four
+    manuscripts dropped on the window at once used to go out inside a few
+    seconds and the later ones came back rejected. See app/jobs.py."""
+    # 0 turns the queue off entirely: every job is submitted the moment the
+    # worker reaches it, which is what DocProof did before this existed.
+    enqueued_token_ceiling: int = Field(default=1_800_000, ge=0)
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -123,6 +136,7 @@ class Config(BaseModel):
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
+    batch: BatchConfig = Field(default_factory=BatchConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent
     # versus per cent, the that/which rule — and it selects the spell-scan

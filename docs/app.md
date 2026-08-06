@@ -289,6 +289,26 @@ sent the previous window's answers — so it cannot be split into a pile of
 independent requests answered out of order. The app hides the choice for prep
 jobs and the server pins them to "right now" regardless of what was asked for.
 
+**Overnight work queues itself.** Vendors meter *enqueued* tokens — every batch
+you have in flight at once, counted together, against a ceiling that on
+OpenAI's lower tiers is a couple of million. The room comes back as batches
+finish, not as time passes, so four manuscripts dropped on the window at once
+used to go out inside a few seconds and the later ones came back rejected.
+
+Now each submission is measured before it is sent — every chunk once per pass,
+plus the pass's system prompt on each of those requests, which is the larger
+half on a short book — and added up against what is already at that vendor. A document that would cross the ceiling waits, reading **"Waiting
+for room in the overnight queue"**, and goes out on the first poll after a
+batch ahead of it lands — usually within two minutes of the room appearing.
+Nothing has been sent, so a held review can still be cancelled.
+
+Two deliberate limits. A book too large for the whole ceiling is submitted
+anyway: no batch ahead of it will ever make it fit, and the vendor's rejection
+is something the user can read, unlike a job that never moves. And the count is
+per vendor, so an OpenAI backlog never throttles an Anthropic run. The ceiling
+is `batch.enqueued_token_ceiling` in `config/default.yaml` — raise it with your
+tier, or set it to `0` to submit everything on sight as DocProof used to.
+
 A batch review survives quitting the app. Everything needed to finish sits in
 `~/Library/Application Support/DocProof/jobs/<id>/`, so reopening DocProof picks
 up where it left off.

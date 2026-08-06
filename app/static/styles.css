@@ -385,6 +385,13 @@ details.sections > summary {
   color: var(--ink);
 }
 
+/* A review that lost a pass read exactly like a clean one until this existed,
+   so it is styled to be the first thing seen, not a footnote. */
+.coverage-warning { border-left: 3px solid var(--warn); }
+.coverage-warning h3 { color: var(--warn); margin: 0; }
+.coverage-warning ul { margin: 0; padding-left: 1.1rem; font-size: 0.88rem; }
+.coverage-warning li { margin-bottom: 0.3rem; }
+
 .finding {
   border-left: 3px solid var(--line);
   padding: 0.1rem 0 0.1rem 0.9rem;

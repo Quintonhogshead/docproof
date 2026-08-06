@@ -518,6 +518,26 @@ def test_an_indesign_layout_can_go_overnight_too(client, provider):
         reviewed.headers["content-disposition"])
 
 
+def test_a_full_vendor_queue_holds_a_submission_and_says_so(client,
+                                                            monkeypatch):
+    """End to end, through HTTP: nothing is sent, the card explains itself in
+    the app's own vocabulary, and the review can still be pulled back — which
+    is the one a user watching a backlog most wants to cancel."""
+    monkeypatch.setattr(JobRunner, "has_room_for",
+                        lambda self, job, cfg, est: False)
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch")
+    client.app_state.runner.wait_idle()
+
+    held = client.get(f"/api/jobs/{job['id']}").json()
+    assert held["state"] == "holding"
+    assert held["plain_state"] == "Waiting for room in the overnight queue"
+
+    resp = client.post(f"/api/jobs/{job['id']}/cancel")
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "cancelled"
+
+
 def test_scheduled_job_holds_until_its_time(client, monkeypatch):
     staged = _upload(client)
     job = _run(client, staged["id"], mode="batch", schedule_at="23:59")
@@ -896,8 +916,8 @@ def test_staged_file_id_cannot_escape_the_uploads_folder(client, tmp_path):
 
 def test_plain_state_never_leaks_jargon():
     words = ("batch", "API", "chunk", "token", "provider")
-    for state in ("scheduled", "queued", "running", "waiting", "collecting",
-                  "done", "failed", "cancelled"):
+    for state in ("scheduled", "queued", "holding", "running", "waiting",
+                  "collecting", "done", "failed", "cancelled"):
         text = Job(id="j", filename="f.docx", source_path="/f.docx",
                    model="m", mode="batch", state=state,
                    schedule_at="23:00").plain_state()

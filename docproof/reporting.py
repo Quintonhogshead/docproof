@@ -49,12 +49,38 @@ def scripted_check_rows(sweeps, findings: list[Finding],
     return rows
 
 
+def pass_coverage(passes) -> dict | None:
+    """Which of the run's calls came back, one row per (pass, chunk).
+
+    This is the only place a report can say "this section was reviewed for
+    these error types and nothing was wrong" as distinct from "this section
+    was never reviewed for them". Both produce no findings; only one of them
+    means the manuscript is clean."""
+    if passes is None:
+        return None
+    calls = [{"pass": p.pass_index,
+              "error_types": list(p.error_types),
+              "chunk_id": p.chunk_id,
+              "answered": p.answered,
+              "returned": p.returned,
+              "kept": p.kept,
+              "reason": p.reason}
+             for p in passes]
+    answered = sum(1 for p in passes if p.answered)
+    return {"requested": len(calls), "answered": answered,
+            "complete": answered == len(calls), "calls": calls}
+
+
+def unanswered(passes) -> list:
+    return [p for p in (passes or ()) if not p.answered]
+
+
 def write_findings_json(path: Path, *, doc: DocumentModel,
                         findings: list[Finding], usage: Usage, cfg: Config,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
-                        normalization=None, audit=None, consistency=None
-                        ) -> None:
+                        normalization=None, audit=None, consistency=None,
+                        passes=None) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -67,6 +93,9 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                    "min_confidence": cfg.min_confidence,
                    "revision_author": cfg.revision_author},
         "scripted_checks": scripted_check_rows(sweeps, findings, applied_ids),
+        # Coverage before results: every count below it is only as complete as
+        # the calls that produced them.
+        "passes": pass_coverage(passes),
         "normalization": ({"ran": normalization.ran,
                            "quotes": normalization.quotes,
                            "spaces": normalization.spaces,
@@ -112,7 +141,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
-                     audit=None, consistency=None) -> None:
+                     audit=None, consistency=None, passes=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -123,11 +152,11 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
 
     L: list[str] = []
     L.append(f"# docproof review — {Path(doc.source_path).name}\n")
-    passes = cfg.error_type_groups
+    groups = cfg.error_type_groups
     L.append(f"*{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · "
              f"model `{cfg.api.model}` · {len(cfg.error_type_keys)} error "
-             f"type(s) in {len(passes)} pass(es) · gate: {cfg.min_confidence}*\n")
-    L.append("Passes: " + "; ".join(" + ".join(g) for g in passes) + "\n")
+             f"type(s) in {len(groups)} pass(es) · gate: {cfg.min_confidence}*\n")
+    L.append("Passes: " + "; ".join(" + ".join(g) for g in groups) + "\n")
 
     # Lead with the sentence a writer actually wants: how much changed, and
     # what kind of mistake it mostly was.
@@ -144,6 +173,36 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              ", ".join(f"{k} {v}" for k, v in stats.items()) +
              f". Paragraphs reviewed: {len(doc.paragraphs)}; "
              f"skipped: {len(doc.skipped)}.\n")
+
+    # Directly under the counts, because it says how far to trust them.
+    coverage = pass_coverage(passes)
+    if coverage is not None:
+        missed = unanswered(passes)
+        if not missed:
+            L.append(f"**Coverage: complete.** All {coverage['requested']} "
+                     f"review call(s) answered, so every section was read for "
+                     f"every error type above.\n")
+        else:
+            L.append("## Sections that were not reviewed\n")
+            L.append(f"**{len(missed)} of {coverage['requested']} review "
+                     f"call(s) did not come back.** Each covers one group of "
+                     f"error types over one section, so the types listed below "
+                     f"were never checked against that section — for those "
+                     f"pairings the counts above mean *not looked at*, not "
+                     f"*nothing wrong*. Everything else in this report stands. "
+                     f"Re-running the review will retry them.\n")
+            for p in missed:
+                types = ", ".join(f"`{k}`" for k in p.error_types)
+                L.append(f"- **{p.chunk_id}**, pass {p.pass_index + 1} "
+                         f"({types}) — {p.describe()}")
+            L.append("")
+            if any(p.reason == "max_tokens" for p in missed):
+                L.append("Truncated calls are the fixable kind: raise "
+                         "`api.max_output_tokens`, or split the error types in "
+                         "that pass across two smaller passes. A pass loses the "
+                         "whole section when its answer is cut off, so the "
+                         "sections with the most to fix are the ones most "
+                         "likely to be lost.\n")
 
     if by_type:
         L.append("Applied changes by error type: " +

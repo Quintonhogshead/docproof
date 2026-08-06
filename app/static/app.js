@@ -552,7 +552,9 @@ function renderJobs(jobs) {
     // Only offered before anything has actually started: once a review is
     // running, waiting overnight, or writing its files, there is nothing
     // local left to pull back — the work is billed or already in progress.
-    if (job.state === 'queued' || job.state === 'scheduled') {
+    // 'holding' qualifies: nothing has been sent to the vendor yet.
+    if (job.state === 'queued' || job.state === 'scheduled'
+        || job.state === 'holding') {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
       const note = actionNote();
@@ -817,6 +819,10 @@ function renderReport(r, format) {
 
   const groups = $('report-groups');
   groups.innerHTML = '';
+  // Before anything else, because it says how far to trust everything else:
+  // a pass that never came back leaves sections unread, and the counts above
+  // would otherwise read as "checked, nothing wrong".
+  if (r.coverage) groups.append(coverageWarning(r.coverage));
   // Nothing below is applied to the document by this screen — it is a reading
   // of what is waiting in the file — so say where that file is reviewed first.
   if (format && h.applied) {
@@ -842,6 +848,31 @@ function renderReport(r, format) {
     + 'document was changed for them.');
   addAside(aside, 'Not applied', r.not_applied,
     'These were found but could not be placed in the document safely.');
+}
+
+function coverageWarning(c) {
+  const box = document.createElement('section');
+  box.className = 'card coverage-warning';
+  const head = document.createElement('h3');
+  const lost = c.requested - c.answered;
+  head.textContent = `${lost} of ${c.requested} checks did not finish`;
+  const note = document.createElement('p');
+  note.className = 'muted';
+  note.textContent = 'Each check reads one section for one group of mistakes. '
+    + 'The sections below were never read for the kinds listed, so for those '
+    + 'the review found nothing because it did not look — not because there '
+    + 'was nothing there. Everything else on this page stands. Reviewing the '
+    + 'file again will retry them.';
+  box.append(head, note);
+  const list = document.createElement('ul');
+  c.missed.forEach((m) => {
+    const li = document.createElement('li');
+    li.textContent = `Section ${m.chunk_id}, check ${m.pass} `
+      + `(${m.error_names.join(', ')}) — ${m.reason}`;
+    list.append(li);
+  });
+  box.append(list);
+  return box;
 }
 
 function addAside(parent, title, findings, blurb) {

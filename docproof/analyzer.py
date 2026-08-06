@@ -9,7 +9,7 @@ from typing import Literal, Sequence
 
 from .config import Config
 from .error_registry import ErrorType
-from .models import Chunk, Finding, Usage
+from .models import Chunk, Finding, PassResult, Usage
 from .providers import Provider, ProviderResult, strict_json_schema
 
 log = logging.getLogger("docproof.analyzer")
@@ -186,13 +186,16 @@ class Analyzer:
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
                  provider: Provider, finding_ids: itertools.count,
                  vocabulary: str = "", conventions: str = "",
-                 voice: str = ""):
+                 voice: str = "", *, pass_index: int = 0):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
         self.types = tuple(error_types)
         self.keys = tuple(et.key for et in self.types)
         self.label = "+".join(self.keys)
+        # Which pass this is, so a call can name itself in the report the same
+        # way the config lists it.
+        self.pass_index = pass_index
         self.ids = finding_ids           # shared across passes → unique IDs
         self.provider = provider
         explanations = cfg.report_explanations
@@ -214,10 +217,12 @@ class Analyzer:
     # -- public ---------------------------------------------------------------
 
     def analyze_chunk(self, chunk: Chunk, usage: Usage
-                      ) -> tuple[list[Finding], bool]:
-        """One call. The bool is whether the provider actually answered —
-        a run that checkpoints its results needs to tell a failed call from a
-        chunk with nothing wrong in it, because `[]` alone means both."""
+                      ) -> tuple[list[Finding], PassResult]:
+        """One call. The PassResult is the call itself — whether the provider
+        answered, and why not when it didn't. A run that checkpoints its
+        results needs to tell a failed call from a chunk with nothing wrong in
+        it, because `[]` alone means both; so does anyone reading the report
+        afterwards and wondering why a section came back quiet."""
         result = self.provider.complete_structured(
             model=self.cfg.api.model,
             system=self.system_prompt,
@@ -227,45 +232,62 @@ class Analyzer:
             max_tokens=self.cfg.api.max_output_tokens,
         )
         usage.add(result.usage)
-        parsed = self._unwrap(result, chunk.chunk_id)
-        if parsed is None:
-            return [], False
-        return self._to_findings(list(parsed.findings), chunk), True
+        return self._harvest(result, chunk)
 
     def findings_from(self, result: ProviderResult, chunk: Chunk,
-                      usage: Usage) -> list[Finding]:
+                      usage: Usage) -> tuple[list[Finding], PassResult]:
         """Turn one provider result into findings. Shared by the synchronous
-        path and the batch collector, so both apply the same checks."""
+        path and the batch collector, so both apply the same checks and both
+        record the call the same way."""
         usage.add(result.usage)
-        parsed = self._unwrap(result, chunk.chunk_id)
-        if parsed is None:
-            return []
-        return self._to_findings(list(parsed.findings), chunk)
+        return self._harvest(result, chunk)
 
     # -- internals ------------------------------------------------------------
 
-    def _unwrap(self, result: ProviderResult, chunk_id: str) -> BaseModel | None:
+    def _harvest(self, result: ProviderResult, chunk: Chunk
+                 ) -> tuple[list[Finding], PassResult]:
+        parsed, reason = self._unwrap(result, chunk.chunk_id)
+        if parsed is None:
+            return [], PassResult(chunk_id=chunk.chunk_id,
+                                  pass_index=self.pass_index,
+                                  error_types=self.keys,
+                                  answered=False, reason=reason)
+        items = list(parsed.findings)
+        kept = self._to_findings(items, chunk)
+        # `returned` and `kept` differ when findings were dropped for quoting
+        # an unknown paragraph or coming back degenerate — a different fault
+        # from a call that never landed, and worth telling apart.
+        return kept, PassResult(chunk_id=chunk.chunk_id,
+                                pass_index=self.pass_index,
+                                error_types=self.keys, answered=True,
+                                returned=len(items), kept=len(kept))
+
+    def _unwrap(self, result: ProviderResult, chunk_id: str
+                ) -> tuple[BaseModel | None, str]:
+        """The parsed response, or None and the reason it isn't there. The
+        reason is a NO_RESPONSE_REASONS key: it goes into the reports, so it
+        has to survive past this log line."""
         if result.stop_reason == "refusal":
             log.error("%s [%s]: model refused this chunk; skipping. %s",
                       chunk_id, self.label, result.error or "")
-            return None
+            return None, "refusal"
         if result.stop_reason == "max_tokens":
             log.error("%s [%s]: output truncated at %d tokens; raise "
                       "api.max_output_tokens, or split this error-type group "
                       "into smaller passes. Skipping chunk — every type in the "
                       "group loses this chunk, not just one.",
                       chunk_id, self.label, self.cfg.api.max_output_tokens)
-            return None
+            return None, "max_tokens"
         if result.stop_reason != "ok" or result.parsed is None:
             log.error("%s [%s]: request failed: %s", chunk_id, self.label,
                       result.error or "no content returned")
-            return None
+            return None, "error"
         try:
-            return self.output_model.model_validate(result.parsed)
+            return self.output_model.model_validate(result.parsed), ""
         except ValidationError as e:
             log.error("%s [%s]: response did not match the finding schema: %s",
                       chunk_id, self.label, e)
-            return None
+            return None, "schema_mismatch"
 
     def _to_findings(self, items: list[RawFinding], chunk: Chunk) -> list[Finding]:
         valid_ids = {p.para_id for p in chunk.paragraphs}
@@ -306,14 +328,15 @@ class MockAnalyzer:
     including on real manuscripts."""
 
     def __init__(self, error_types: Sequence[ErrorType], canned: list[dict],
-                 finding_ids: itertools.count):
+                 finding_ids: itertools.count, *, pass_index: int = 0):
         self.types = tuple(error_types)
         self.keys = tuple(et.key for et in self.types)
         self.canned = canned
         self.ids = finding_ids
+        self.pass_index = pass_index
 
     def analyze_chunk(self, chunk: Chunk, usage: Usage
-                      ) -> tuple[list[Finding], bool]:
+                      ) -> tuple[list[Finding], PassResult]:
         valid = {p.para_id for p in chunk.paragraphs}
         out = []
         for item in self.canned:
@@ -335,4 +358,7 @@ class MockAnalyzer:
                     original_text=rf.original_text, occurrence=rf.occurrence,
                     corrected_text=rf.corrected_text,
                     explanation=rf.explanation, confidence=rf.confidence))
-        return out, True
+        return out, PassResult(chunk_id=chunk.chunk_id,
+                               pass_index=self.pass_index,
+                               error_types=self.keys, answered=True,
+                               returned=len(out), kept=len(out))

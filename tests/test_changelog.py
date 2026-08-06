@@ -18,7 +18,7 @@ from docx.text.paragraph import Paragraph
 from docproof.analyzer import MockAnalyzer
 from docproof.config import Config, load_config
 from docproof.formats import DOCX, IDML
-from docproof.models import Usage
+from docproof.models import PassResult, Usage
 from docproof.pipeline import finish, prepare
 
 
@@ -35,7 +35,8 @@ def _read(path):
     return "\n".join(text), tables
 
 
-def _run(tmp_path, paragraphs, mock=(), *, error_types=("comma_splice",), **kw):
+def _run(tmp_path, paragraphs, mock=(), *, error_types=("comma_splice",),
+         passes=None, **kw):
     d = docx.Document()
     for t in paragraphs:
         d.add_paragraph(t)
@@ -55,7 +56,7 @@ def _run(tmp_path, paragraphs, mock=(), *, error_types=("comma_splice",), **kw):
                 chunk, Usage())
             findings += found
     return finish(prepared, findings, Usage(), cfg, out_dir=tmp_path / "out",
-                  source_path=src)
+                  source_path=src, passes=passes)
 
 
 # --- filenames ----------------------------------------------------------------
@@ -246,6 +247,38 @@ def test_the_limits_section_admits_what_was_not_read(tmp_path):
     assert "does not read for plot" in text
     assert "images" in text
     assert "proposed, not imposed" in text
+
+
+def test_a_complete_run_still_claims_every_paragraph_was_read(tmp_path):
+    """The claim is worth making — it is only worth making when it's true."""
+    passes = [PassResult(chunk_id="chunk-000", pass_index=0,
+                         error_types=("comma_splice",), answered=True,
+                         returned=1, kept=1)]
+    text, _ = _read(_run(tmp_path, [SPLICE], passes=passes).change_log)
+    assert "Every paragraph of running text was read" in text
+    assert "did not come back" not in text
+
+
+def test_a_lost_pass_withdraws_the_claim_in_the_authors_own_document(tmp_path):
+    """The change log goes to the press and the author, and its limits section
+    asserts the whole manuscript was read. A pass that never returned makes
+    that false, so the assertion has to be written from what happened."""
+    passes = [
+        PassResult(chunk_id="chunk-000", pass_index=0,
+                   error_types=("comma_splice",), answered=False,
+                   reason="max_tokens"),
+        PassResult(chunk_id="chunk-001", pass_index=0,
+                   error_types=("comma_splice",), answered=True,
+                   returned=0, kept=0),
+    ]
+    text, _ = _read(_run(tmp_path, [SPLICE], passes=passes).change_log)
+
+    assert "Every paragraph of running text was read" not in text
+    assert "1 of the model's reading passes did not come back" in text
+    # And the section is named, so a re-read is targeted rather than total.
+    assert "Section chunk-000, pass 1 (comma splice)" in text
+    assert "output truncated at the token limit" in text
+    assert "never looked at" in text
 
 
 def test_the_default_config_ships_the_change_log_on():

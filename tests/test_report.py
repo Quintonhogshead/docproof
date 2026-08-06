@@ -130,3 +130,57 @@ def test_a_review_that_changed_nothing_still_reports(tmp_path):
     assert report["headline"]["applied"] == 0
     assert report["groups"] == []
     assert report["source"] == "Novel.docx"
+
+
+# --- coverage -----------------------------------------------------------------
+
+def _passes(*missed, requested=6):
+    """A `passes` block with `missed` describing the calls that failed."""
+    calls = [{"pass": 0, "error_types": ["comma_splice"], "chunk_id": "chunk-000",
+              "answered": True, "returned": 0, "kept": 0, "reason": ""}
+             for _ in range(requested - len(missed))]
+    calls.extend(missed)
+    return {"requested": requested, "answered": requested - len(missed),
+            "complete": not missed, "calls": calls}
+
+
+def test_a_complete_run_raises_no_coverage_warning(tmp_path):
+    path = _write(tmp_path, [], passes=_passes())
+    assert build_report(path)["coverage"] is None
+
+
+def test_a_report_predating_the_flag_raises_no_coverage_warning(tmp_path):
+    """findings.json written before per-call records existed, and the mock
+    path, both omit the block. Unknown coverage is not failed coverage."""
+    assert build_report(_write(tmp_path, []))["coverage"] is None
+    assert build_report(_write(tmp_path, [], passes=None))["coverage"] is None
+
+
+def test_a_lost_pass_reaches_the_screen_in_the_reader_s_words(tmp_path):
+    """The failure this whole record exists for: an empty review whose
+    headline would otherwise read "Nothing needed changing"."""
+    path = _write(tmp_path, [], passes=_passes({
+        "pass": 0, "error_types": ["comma_splice", "spelling"],
+        "chunk_id": "chunk-000", "answered": False,
+        "returned": 0, "kept": 0, "reason": "max_tokens"}))
+
+    coverage = build_report(path, {"comma_splice": "Comma splice"})["coverage"]
+    assert coverage["requested"] == 6 and coverage["answered"] == 5
+    (missed,) = coverage["missed"]
+    assert missed["chunk_id"] == "chunk-000"
+    assert missed["pass"] == 1                  # 1-based on screen
+    # Display names where there is one, the raw key where there isn't — never
+    # a blank, which would read as "no error types affected".
+    assert missed["error_names"] == ["Comma splice", "spelling"]
+    assert missed["reason"] == "output truncated at the token limit"
+
+
+def test_an_unrecognised_reason_still_says_something(tmp_path):
+    """A reason from a newer pipeline than this reader falls back to plain
+    English rather than an empty string."""
+    path = _write(tmp_path, [], passes=_passes({
+        "pass": 2, "error_types": ["spelling"], "chunk_id": "chunk-001",
+        "answered": False, "returned": 0, "kept": 0, "reason": "quantum_flux"}))
+
+    (missed,) = build_report(path)["coverage"]["missed"]
+    assert missed["reason"] == "the call did not come back"

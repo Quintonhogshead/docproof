@@ -50,10 +50,15 @@ class Entry:
     """One completed call: what it found (or tagged), what it cost, and
     whether the provider actually answered. `ok=False` entries are kept for
     the usage they burned, but a resume retries them — a failed call and a
-    call that found nothing must not be confused."""
+    call that found nothing must not be confused.
+
+    `returned` is what the response held before the content checks ran, so a
+    resumed run reports the same per-call record as the run that paid for it.
+    Older checkpoints predate it and fall back to the kept count."""
     items: list[dict]
     usage: dict
     ok: bool
+    returned: int = 0
 
 
 class Checkpoint:
@@ -92,9 +97,12 @@ class Checkpoint:
             return 0
         for key, entry in (raw.get("entries") or {}).items():
             try:
-                self._entries[key] = Entry(items=list(entry["items"]),
+                items = list(entry["items"])
+                self._entries[key] = Entry(items=items,
                                            usage=dict(entry["usage"]),
-                                           ok=bool(entry["ok"]))
+                                           ok=bool(entry["ok"]),
+                                           returned=int(entry.get("returned",
+                                                                  len(items))))
             except (KeyError, TypeError) as e:
                 log.warning("Skipping malformed checkpoint entry %s (%s)",
                             key, e)
@@ -111,9 +119,10 @@ class Checkpoint:
         return entry if entry is not None and entry.ok else None
 
     def put(self, key: str, *, items: list[dict], usage: Usage,
-            ok: bool) -> None:
-        self._entries[key] = Entry(items=items,
-                                   usage=dataclasses.asdict(usage), ok=ok)
+            ok: bool, returned: int | None = None) -> None:
+        self._entries[key] = Entry(
+            items=items, usage=dataclasses.asdict(usage), ok=ok,
+            returned=len(items) if returned is None else returned)
         self._write()
 
     def delete(self) -> None:

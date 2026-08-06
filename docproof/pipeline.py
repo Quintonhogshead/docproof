@@ -22,7 +22,7 @@ from .error_registry import ErrorType, load_error_types
 from .formats import DocumentFormat, get_format
 from .audit import AuditReport, enforce, run_audit
 from .changelog import write_change_log
-from .models import Chunk, DocumentModel, Usage
+from .models import Chunk, DocumentModel, PassResult, Usage
 from .normalize import NormalizationReport
 from .providers import Provider
 from .reporting import write_findings_json, write_summary_md
@@ -262,14 +262,22 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     vocabulary: str = "",
                     conventions: str = "",
                     voice: str = "") -> list[Analyzer]:
+    # The index is the pass's identity everywhere else — it keys the batch
+    # custom_id and the checkpoint — so the analyzer carries it too, and a
+    # call it records names the same pass the config lists.
     return [Analyzer(cfg, group, provider, finding_ids, vocabulary,
-                     conventions, voice)
-            for group in groups]
+                     conventions, voice, pass_index=i)
+            for i, group in enumerate(groups)]
 
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
-             progress=None, checkpoint=None) -> tuple[list, Usage]:
+             progress=None, checkpoint=None
+             ) -> tuple[list, Usage, list[PassResult]]:
     """Review every chunk now, one API call per (pass, chunk).
+
+    The third return is one PassResult per call, in loop order — the record of
+    which calls actually answered. Without it, a pass that loses a chunk is
+    indistinguishable downstream from a pass that found nothing wrong in it.
 
     `progress` is called with (done, total) after each call so a UI can show
     movement; it is the only reason this loop isn't a comprehension.
@@ -287,6 +295,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
     ids = itertools.count(start)
     usage = Usage()
     findings: list = []
+    passes: list[PassResult] = []
     total = prepared.request_count
     done = 0
     for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
@@ -300,24 +309,39 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
             if cached is not None:
                 findings.extend(finding_from_dict(d) for d in cached.items)
                 add_usage(usage, cached.usage)
+                # A checkpoint only hands back calls that answered — `get`
+                # withholds the failed ones so a resume retries them — so a
+                # replayed call is an answered call by construction.
+                passes.append(PassResult(
+                    chunk_id=chunk.chunk_id, pass_index=i,
+                    error_types=analyzer.keys, answered=True,
+                    returned=cached.returned, kept=len(cached.items)))
             else:
                 before = snapshot(usage)
-                found, ok = analyzer.analyze_chunk(chunk, usage)
+                found, outcome = analyzer.analyze_chunk(chunk, usage)
                 findings.extend(found)
+                passes.append(outcome)
                 if checkpoint:
                     checkpoint.put(
                         key, items=[finding_to_dict(f) for f in found],
-                        usage=usage_delta(before, usage), ok=ok)
+                        usage=usage_delta(before, usage),
+                        ok=outcome.answered, returned=outcome.returned)
             done += 1
             if progress:
                 progress(done, total)
-    return findings, usage
+    return findings, usage, passes
 
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
-           batch: bool = False) -> Outputs:
-    """Validate, write tracked changes, save, and report."""
+           batch: bool = False,
+           passes: Sequence[PassResult] | None = None) -> Outputs:
+    """Validate, write tracked changes, save, and report.
+
+    `passes` is the per-call record from `run_sync` or the batch collector.
+    None means the caller doesn't track calls (the mock path, a test); the
+    reports then say nothing about coverage rather than claiming it was
+    complete, because an unknown is not a pass."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     # Sweep findings go first: the validator gives the earliest finding to
@@ -351,13 +375,14 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         applied_ids=stats.applied, batch=batch,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
-                        audit=audit_report, consistency=prepared.consistency)
+                        audit=audit_report, consistency=prepared.consistency,
+                        passes=passes)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,
-                     consistency=prepared.consistency)
+                     consistency=prepared.consistency, passes=passes)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)
@@ -366,7 +391,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          sweeps=prepared.sweep_reports, spell=prepared.spell,
                          normalization=prepared.normalization,
                          audit=audit_report, usage=usage, stats=stats,
-                         variant=prepared.variant)
+                         variant=prepared.variant, passes=passes)
 
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)

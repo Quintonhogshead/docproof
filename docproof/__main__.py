@@ -231,12 +231,12 @@ def cmd_review(args) -> int:
         canned = _load_mocks(args.mock_findings)
         if canned is None:
             return 2
-        findings, usage = _run_mock(cfg, prepared, canned)
+        findings, usage, passes = _run_mock(cfg, prepared, canned)
     else:
-        findings, usage = run_sync(cfg, prepared, provider)
+        findings, usage, passes = run_sync(cfg, prepared, provider)
 
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                     source_path=args.input)
+                     source_path=args.input, passes=passes)
     print(f"\n{outputs.applied} tracked change(s) applied.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
@@ -416,12 +416,14 @@ def _run_mock(cfg, prepared, canned):
     ids = itertools.count(1)
     usage = Usage()
     findings = []
-    for group in prepared.groups:
-        analyzer = MockAnalyzer(group, canned, ids)
+    passes = []
+    for i, group in enumerate(prepared.groups):
+        analyzer = MockAnalyzer(group, canned, ids, pass_index=i)
         for chunk in prepared.chunks:
-            found, _ = analyzer.analyze_chunk(chunk, usage)
+            found, outcome = analyzer.analyze_chunk(chunk, usage)
             findings.extend(found)
-    return findings, usage
+            passes.append(outcome)
+    return findings, usage, passes
 
 
 if __name__ == "__main__":
