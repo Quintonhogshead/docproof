@@ -187,9 +187,25 @@ Two ways, both equivalent:
 
 ### Pushing an update
 
-Make your change, commit it, then:
+**Automatic (set up in this repo).** `.github/workflows/deploy.yml` deploys the
+site on every push to `main` — so **merging a PR updates the live site**,
+usually within a couple of minutes. It needs one one-time secret:
+
+1. Create a Fly deploy token:
+   ```bash
+   fly tokens create deploy
+   ```
+2. In GitHub: **Settings → Secrets and variables → Actions → New repository
+   secret**, name it `FLY_API_TOKEN`, and paste the token.
+
+After that, nothing to do — merge and it ships. Watch a run under the repo's
+**Actions** tab.
+
+**By hand** (any time, no token needed on the server — you deploy from your
+Mac):
 
 ```bash
+git checkout main && git pull
 fly deploy
 ```
 
@@ -202,9 +218,6 @@ actively running needs a one-click retry.
 column, say). Those need a migration: bump `CURRENT_SCHEMA` in
 `app/accounts.py` and add the migration step before deploying. Ordinary
 code changes never need this.
-
-To make deploys automatic on every push, add a GitHub Action (Fly documents a
-ten-line workflow at <https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/>).
 
 ### Watching spend
 

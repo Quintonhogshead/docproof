@@ -1,0 +1,33 @@
+# Deploy the DocProof web build to Fly.io on every push to main.
+#
+# One-time setup (see DEPLOY.md): create a Fly deploy token with
+#   fly tokens create deploy
+# and paste it into this repo's GitHub secrets as FLY_API_TOKEN
+# (Settings → Secrets and variables → Actions → New repository secret).
+#
+# After that, merging a PR into main deploys the site automatically — usually
+# live within a couple of minutes. A deploy is safe mid-review: batch jobs
+# resume on their own, and at worst one running "now" review needs a retry.
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+
+# Never run two deploys at once; if pushes land close together, let the newer
+# one supersede a deploy still waiting to start.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # --remote-only builds on Fly's builders, so the runner needs no Docker.
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
