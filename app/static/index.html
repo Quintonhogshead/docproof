@@ -72,6 +72,10 @@
       <input type="file" id="file-input" accept=".docx,.idml" multiple hidden>
     </div>
 
+    <!-- Outside #staged: a failed first drop must be visible even though the
+         staged list never appeared. -->
+    <p id="drop-error" class="error" hidden></p>
+
     <div id="staged" hidden>
       <h2 id="staged-title">Ready to go</h2>
       <ul id="file-list"></ul>
@@ -156,7 +160,6 @@
 
       <button id="start" class="primary big-button">Start review</button>
       <p id="start-hint" class="muted" hidden></p>
-      <p id="drop-error" class="error" hidden></p>
     </div>
   </section>
 
@@ -205,7 +208,7 @@
         </label>
         <label class="field">
           <span>Client secret</span>
-          <input type="password" id="watch-client-secret" autocomplete="off">
+          <input type="password" id="watch-client-secret" autocomplete="new-password">
         </label>
       </details>
     </div>
@@ -361,7 +364,7 @@
         <span>Claude key <small class="muted">from console.anthropic.com</small></span>
         <span class="row">
           <input type="password" id="key-anthropic" placeholder="sk-ant-…"
-                 autocomplete="off">
+                 autocomplete="new-password">
           <button type="button" data-test="anthropic">Test</button>
         </span>
         <small class="status" id="status-anthropic"></small>
@@ -371,7 +374,7 @@
         <span>ChatGPT key <small class="muted">from platform.openai.com</small></span>
         <span class="row">
           <input type="password" id="key-openai" placeholder="sk-…"
-                 autocomplete="off">
+                 autocomplete="new-password">
           <button type="button" data-test="openai">Test</button>
         </span>
         <small class="status" id="status-openai"></small>
@@ -381,7 +384,7 @@
         <span>Gemini key <small class="muted">from aistudio.google.com</small></span>
         <span class="row">
           <input type="password" id="key-gemini" placeholder="AIza…"
-                 autocomplete="off">
+                 autocomplete="new-password">
           <button type="button" data-test="gemini">Test</button>
         </span>
         <small class="status" id="status-gemini"></small>
@@ -479,7 +482,7 @@
         <span>GitHub token <small class="muted">— read-only, for checking
           releases. Whoever sent you DocProof can give you one.</small></span>
         <input type="password" id="key-github" placeholder="github_pat_…"
-               autocomplete="off">
+               autocomplete="new-password">
         <small class="status" id="status-github"></small>
       </label>
       <p class="muted small">The app checks quietly when it opens and offers

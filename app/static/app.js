@@ -444,6 +444,9 @@ function fail(message) {
   const box = $('drop-error');
   box.textContent = message;
   box.hidden = false;
+  // The box sits above the staged list; whoever failed — a drop with nothing
+  // staged yet, or Start at the bottom of the page — should still see it.
+  box.scrollIntoView({ block: 'nearest' });
 }
 
 // ── jobs ──────────────────────────────────────────────────────────────────
@@ -2203,7 +2206,11 @@ async function loadKeys() {
 
     const input = document.createElement('input');
     input.type = 'password';
-    input.autocomplete = 'off';
+    // Not 'off': browsers ignore that on password fields and fill in the
+    // site's saved sign-in password — which then gets saved as "the key".
+    // 'new-password' is the value they actually honor by leaving it alone.
+    input.autocomplete = 'new-password';
+    input.name = `${k.provider}-api-key`;
     input.placeholder = k.configured
       ? 'saved — paste a new key to replace' : 'paste a key';
 

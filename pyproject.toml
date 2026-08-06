@@ -61,7 +61,14 @@ build-backend = "setuptools.build_meta"
 version = {attr = "docproof.__version__"}
 
 [tool.setuptools.packages.find]
-include = ["docproof*", "app*"]
+# config/ ships in the wheel because resource_root() resolves shipped resources
+# relative to the installed packages — a pip-installed server (the Docker web
+# build) has no source checkout to fall back on.
+include = ["docproof*", "app*", "config*"]
 
 [tool.setuptools.package-data]
 app = ["static/*"]
+config = ["*.yaml"]
+"config.error_types" = ["*.yaml"]
+"config.prep" = ["*.yaml"]
+"config.variants" = ["*.yaml"]

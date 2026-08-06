@@ -23,7 +23,7 @@ import uvicorn
 
 from .auth import SESSION_ENV, resolve_secret
 from .lock import FolderInUse
-from .main import create_app
+from .main import CONFIG_PATH, create_app
 from .settings import PROVIDERS, key_status
 
 log = logging.getLogger("docproof.serve")
@@ -63,6 +63,14 @@ def main(argv=None) -> int:
         print(f"\nNo API key is set. Give the server at least one of "
               f"{', '.join(p.upper() + '_API_KEY' for p in PROVIDERS)} so it "
               f"can run reviews.\n", file=sys.stderr)
+        return 2
+    if not CONFIG_PATH.is_file():
+        # An install that didn't ship config/ turns every review, drop and key
+        # test into a 500 at request time. Refusing to boot says so once,
+        # plainly, instead.
+        print(f"\nThe shipped configuration is missing: {CONFIG_PATH}. This "
+              f"install is incomplete — rebuild it from a checkout that "
+              f"includes the config directory.\n", file=sys.stderr)
         return 2
 
     home = Path(args.home).expanduser() if args.home else None
