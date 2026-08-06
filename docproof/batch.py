@@ -181,12 +181,27 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
     return job
 
 
+def _analyzers(cfg: Config, prepared: Prepared,
+               finding_ids: itertools.count | None = None) -> list:
+    """The passes this review is made of, built the way `run_sync` builds them.
+
+    One helper rather than the three copies that used to stand here: every
+    document-wide section added to `Prepared` has to reach the prompt from both
+    directions, and three call sites is how the voice section came to be sent
+    by the synchronous path and silently dropped by this one. A batch review
+    missing it is a review that never asked whether the book's nonstandard
+    grammar was the character or the error — and answers as if it were the
+    error, which is the expensive way to be wrong."""
+    return build_analyzers(cfg, prepared.groups, None,
+                           finding_ids if finding_ids is not None
+                           else itertools.count(1),
+                           prepared.vocabulary, prepared.conventions,
+                           prepared.voice_section)
+
+
 def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
     """The system prompt each pass will send, keyed by the pass label."""
-    analyzers = build_analyzers(cfg, prepared.groups, None,
-                                itertools.count(1), prepared.vocabulary,
-                                prepared.conventions)
-    return {a.label: a.system_prompt for a in analyzers}
+    return {a.label: a.system_prompt for a in _analyzers(cfg, prepared)}
 
 
 def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
@@ -194,9 +209,7 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
     request carries its own system prompt, so nothing forces them apart."""
     from .analyzer import render_chunk
 
-    analyzers = build_analyzers(cfg, prepared.groups, None,
-                                itertools.count(1), prepared.vocabulary,
-                                prepared.conventions)
+    analyzers = _analyzers(cfg, prepared)
     return [
         BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
                      system=analyzer.system_prompt,
@@ -264,8 +277,7 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict
     in this process's log."""
     ids = itertools.count(1)
     usage = Usage()
-    analyzers = build_analyzers(cfg, prepared.groups, None, ids,
-                                prepared.vocabulary, prepared.conventions)
+    analyzers = _analyzers(cfg, prepared, ids)
     findings: list = []
     passes: list[PassResult] = []
 

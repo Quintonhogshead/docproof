@@ -238,3 +238,56 @@ def test_load_all_skips_an_unreadable_manifest(tmp_path):
 
     jobs = batchlib.load_all(tmp_path)
     assert len(jobs) == 1
+
+
+# --- the same review, whichever way it is sent --------------------------------
+
+def test_an_overnight_review_asks_about_voice_too(tmp_path):
+    """The batch path built its analyzers in three places and every one of
+    them was a `voice` short, so a book submitted overnight was reviewed as
+    though its nonstandard grammar were the author's error — while the
+    manifest recorded a config that said otherwise. Whichever way a review is
+    sent, it asks the same question."""
+    cfg = _cfg(voice="correct")
+    prepared = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    assert prepared.voice_section                  # the fixture for this test
+
+    requests = batchlib.build_requests(cfg, prepared)
+    assert requests
+    for r in requests:
+        assert prepared.voice_section in r.system
+
+    # And what the manifest records is what actually went out.
+    for prompt in batchlib.pass_prompts(cfg, prepared).values():
+        assert prepared.voice_section in prompt
+
+
+def test_a_preserved_voice_still_costs_the_batch_nothing(tmp_path):
+    """The other boundary: the default adds no section, so a press that never
+    thinks about this pays no tokens for it overnight either."""
+    cfg = _cfg(voice="preserve")
+    prepared = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    assert prepared.voice_section == ""
+
+    plain = batchlib.build_requests(cfg, prepared)[0].system
+    cfg_correct = _cfg(voice="correct")
+    asked = batchlib.build_requests(
+        cfg_correct,
+        prepare(cfg_correct, FIXTURES / "simple.docx", ERROR_DIR))[0].system
+    assert len(asked) > len(plain)
+
+
+def test_the_batch_prompt_matches_the_synchronous_one(tmp_path):
+    """The guard that outlives this fix: both paths build their passes from
+    the same helper, so a section added to one is added to both."""
+    import itertools
+
+    from docproof.pipeline import build_analyzers
+
+    cfg = _cfg(voice="query")
+    prepared = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    sync = build_analyzers(cfg, prepared.groups, None, itertools.count(1),
+                           prepared.vocabulary, prepared.conventions,
+                           prepared.voice_section)
+    assert ({a.label: a.system_prompt for a in sync}
+            == batchlib.pass_prompts(cfg, prepared))
