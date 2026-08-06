@@ -616,7 +616,11 @@ def _register(app: FastAPI) -> None:
 
     def _review_preflight(cfg, path: Path) -> tuple[dict | None, str | None]:
         try:
-            prepared = prepare(cfg, path, ERROR_DIR)
+            # Counts only: this runs once per file at drop time and reports
+            # section and token counts. The spell scan, sweeps and consistency
+            # pass are seconds of work per manuscript whose results the drop
+            # screen never shows — the real review recomputes them.
+            prepared = prepare(cfg, path, ERROR_DIR, analyses=False)
         except (IngestError, ValueError) as e:
             return None, str(e)
         return {

@@ -129,14 +129,22 @@ def content_hash(doc: DocumentModel) -> str:
 
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             max_chunks: int | None = None,
-            selection: Sequence[str] | None = None) -> Prepared:
+            selection: Sequence[str] | None = None,
+            analyses: bool = True) -> Prepared:
     """Ingest, chunk, and resolve error types. Raises IngestError on a document
     docproof refuses to touch (tracked changes, corruption).
 
     `selection` narrows the run to specific chunk ids. Chunking itself always
     runs over the whole document, so ids and paragraph offsets mean the same
     thing whether or not a subset was picked — that is what lets a batch job
-    reproduce its own chunk list at collection time."""
+    reproduce its own chunk list at collection time.
+
+    `analyses=False` skips the whole-document passes that make no API call but
+    read every paragraph — the sweeps, the dictionary scan, the consistency
+    pass, and the audit baseline. A drop-time preflight only wants section and
+    token counts and throws all of that away, so paying for it there (the spell
+    scan's Hunspell suggestions are seconds per manuscript) is pure latency.
+    The real run leaves it on."""
     fmt = get_format(input_path)
     variant = load_variant(cfg.variant)
     log.info("Proofreading as %s (%s)", variant.name,
@@ -156,8 +164,9 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
 
     # The audit's yardstick, taken after normalization and before any tracked
     # change: this is "the document as ingested", and rejecting every revision
-    # must return to exactly it.
-    baseline = fmt.snapshot(pkg, "current") if fmt.snapshot else {}
+    # must return to exactly it. A counts-only preflight never audits anything,
+    # so it skips the snapshot.
+    baseline = fmt.snapshot(pkg, "current") if (analyses and fmt.snapshot) else {}
     doc = fmt.build_document_model(pkg, cfg)
     chunks = list(chunk_document(doc, cfg))
     if selection is not None:
@@ -178,49 +187,60 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
              len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
 
-    # Sweeps read the whole paragraph from the document model, not the chunk,
-    # so their offsets and occurrence counts are measured against the same
-    # canonical text the validator anchors into — an oversized paragraph split
-    # across chunks would otherwise have them counting within a slice. They
-    # still only touch paragraphs the run actually covers: a selected-sections
-    # run must not edit the rest of the manuscript.
-    covered = {p.para_id for c in chunks for p in c.paragraphs}
     whole = selection is None and not max_chunks
-    swept = [p for p in doc.paragraphs
-             # On a whole-document run the sweeps also reach the paragraphs
-             # too short for a model pass — in fiction those are lines of
-             # dialogue, and a "?!" or a mispunctuated tag is exactly what
-             # lives there. A partial run stays inside its selection, because
-             # editing the rest of the book is not what was asked for.
-             if p.para_id in covered or (whole and not p.reviewable)]
-    sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps, variant)
+    if analyses:
+        # Sweeps read the whole paragraph from the document model, not the
+        # chunk, so their offsets and occurrence counts are measured against
+        # the same canonical text the validator anchors into — an oversized
+        # paragraph split across chunks would otherwise have them counting
+        # within a slice. They still only touch paragraphs the run actually
+        # covers: a selected-sections run must not edit the rest of the
+        # manuscript.
+        covered = {p.para_id for c in chunks for p in c.paragraphs}
+        swept = [p for p in doc.paragraphs
+                 # On a whole-document run the sweeps also reach the paragraphs
+                 # too short for a model pass — in fiction those are lines of
+                 # dialogue, and a "?!" or a mispunctuated tag is exactly what
+                 # lives there. A partial run stays inside its selection,
+                 # because editing the rest of the book is not what was asked
+                 # for.
+                 if p.para_id in covered or (whole and not p.reviewable)]
+        sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps, variant)
 
-    # The spell scan reads the WHOLE document even when the run covers a few
-    # sections. It changes nothing, so reading more costs nothing — and a
-    # coined name is only recognisable as the author's by being used across
-    # the manuscript. Scanning one chapter would file its own hero's name as a
-    # suspected typo.
-    spell = spell_scan(doc.paragraphs, enabled=cfg.spellcheck.enabled,
-                       min_occurrences=cfg.spellcheck.min_occurrences,
-                       suggestion_limit=cfg.spellcheck.suggestion_limit,
-                       allowlist=cfg.spellcheck.allowlist,
-                       # An explicit dictionary wins; otherwise the variant
-                       # picks one, which is the whole point of stating it.
-                       dictionary=cfg.spellcheck.dictionary or variant.dictionary)
+        # The spell scan reads the WHOLE document even when the run covers a
+        # few sections. It changes nothing, so reading more costs nothing — and
+        # a coined name is only recognisable as the author's by being used
+        # across the manuscript. Scanning one chapter would file its own hero's
+        # name as a suspected typo.
+        spell = spell_scan(doc.paragraphs, enabled=cfg.spellcheck.enabled,
+                           min_occurrences=cfg.spellcheck.min_occurrences,
+                           suggestion_limit=cfg.spellcheck.suggestion_limit,
+                           allowlist=cfg.spellcheck.allowlist,
+                           # An explicit dictionary wins; otherwise the variant
+                           # picks one, which is the whole point of stating it.
+                           dictionary=cfg.spellcheck.dictionary
+                           or variant.dictionary)
 
-    # Whole-document, and only on a whole-document run: "you write this three
-    # ways" is not a claim a review of two chapters can make.
-    consistency = find_inconsistencies(
-        doc.paragraphs if whole else [],
-        enabled=cfg.consistency.enabled and whole,
-        min_length=cfg.consistency.min_length,
-        min_dominance=cfg.consistency.min_dominance)
+        # Whole-document, and only on a whole-document run: "you write this
+        # three ways" is not a claim a review of two chapters can make.
+        consistency = find_inconsistencies(
+            doc.paragraphs if whole else [],
+            enabled=cfg.consistency.enabled and whole,
+            min_length=cfg.consistency.min_length,
+            min_dominance=cfg.consistency.min_dominance)
+        consistency_findings = to_findings(consistency, doc.paragraphs)
+    else:
+        # Counts-only preflight: none of the discardable whole-document work.
+        sweep_findings, sweep_reports = [], []
+        spell = SpellScan()
+        consistency = ConsistencyReport()
+        consistency_findings = []
+
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
                     variant=variant, consistency=consistency,
-                    consistency_findings=to_findings(consistency,
-                                                     doc.paragraphs))
+                    consistency_findings=consistency_findings)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
