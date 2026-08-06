@@ -77,13 +77,13 @@ All commands are run from the repository folder on your Mac.
 
 ### 3.1 Point the config at your app
 
-`fly.toml` already sets `app = "docproof-atmosphere"` and
+`fly.toml` already sets `app = "atmosphere-docproof"` and
 `primary_region = "iad"`. Change
 them if you like:
 
-- **`app`** must be globally unique on Fly. If `fly apps create` (next step)
-  reports the name is taken, pick another (e.g. `docproof-atmosphere`) and put
-  it here.
+- **`app`** must be globally unique on Fly, and lowercase (it becomes the URL
+  subdomain). If `fly apps create` (next step) reports the name is taken, pick
+  another (e.g. `atmosphere-docproof-2`) and put it here.
 - **`primary_region`** should be near your editors. Codes are at
   <https://fly.io/docs/reference/regions/> — e.g. `iad` (Virginia), `lax` (Los
   Angeles), `lhr` (London).
@@ -97,7 +97,7 @@ them if you like:
 > scanning.
 
 ```bash
-fly apps create docproof-atmosphere
+fly apps create atmosphere-docproof
 ```
 
 (Use the same name as `app` in `fly.toml`. If it's taken, choose another and
