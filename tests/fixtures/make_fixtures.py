@@ -168,6 +168,66 @@ def toc() -> None:
         z.writestr("word/document.xml", _TOC_DOC)
 
 
+# A designed title page, written the way Word writes one. Every string in a
+# text box appears in the file TWICE: once as DrawingML under mc:Choice, once
+# as the VML copy under mc:Fallback that older readers use. Neither copy is
+# paragraph text — the walker never yields textbox paragraphs, so ingest sees
+# these three body paragraphs as empty and no pass can reach inside them.
+#
+# The byline is the case that matters most: a text box and ordinary run text
+# in the SAME paragraph, so the paragraph is not empty and a text extractor
+# that reads too much appends the doubled title to real, reviewable prose.
+_TEXTBOX_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:v="urn:schemas-microsoft-com:vml"
+            mc:Ignorable="wps">
+  <w:body>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r>
+      <mc:AlternateContent>
+        <mc:Choice Requires="wps"><w:drawing><wp:inline><wps:wsp><wps:txbx><w:txbxContent>
+          <w:p><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>GAIA'S REVENGE</w:t></w:r></w:p>
+        </w:txbxContent></wps:txbx></wps:wsp></wp:inline></w:drawing></mc:Choice>
+        <mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>
+          <w:p><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>GAIA'S REVENGE</w:t></w:r></w:p>
+        </w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>
+      </mc:AlternateContent>
+    </w:r></w:p>
+    <w:p><w:r>
+      <mc:AlternateContent>
+        <mc:Choice Requires="wps"><w:drawing><wp:inline><wps:wsp><wps:txbx><w:txbxContent>
+          <w:p><w:r><w:t>By Stephen Demczuk</w:t></w:r></w:p>
+        </w:txbxContent></wps:txbx></wps:wsp></wp:inline></w:drawing></mc:Choice>
+        <mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>
+          <w:p><w:r><w:t>By Stephen Demczuk</w:t></w:r></w:p>
+        </w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>
+      </mc:AlternateContent>
+    </w:r><w:r><w:t xml:space="preserve">A novel of the coast, the weather---and the people who stayed.</w:t></w:r></w:p>
+    <w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>
+      <w:p><w:r><w:t>Contents</w:t></w:r></w:p>
+    </w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>
+    <w:p><w:r><w:t>The manuscript was finished, nobody wanted to read it.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>She opened the letter, her hands would not stay still.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+
+def textbox() -> None:
+    """A manuscript whose front matter is laid out in text boxes. Written as
+    raw XML rather than through python-docx because the mc:Choice/mc:Fallback
+    pair — the same string stored twice — is the entire point."""
+    empty_rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                  '<Relationships xmlns="http://schemas.openxmlformats.org/'
+                  'package/2006/relationships"/>')
+    with zipfile.ZipFile(HERE / "textbox.docx", "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _GOOGLE_CONTENT_TYPES)
+        z.writestr("_rels/.rels", _GOOGLE_ROOT_RELS)
+        z.writestr("word/document.xml", _TEXTBOX_DOC)
+        z.writestr("word/_rels/document.xml.rels", empty_rels)
+
+
 def tracked() -> None:
     """A manuscript that still has an unresolved edit in it. Prep refuses this
     outright — it restyles every paragraph, and doing that around somebody
@@ -189,4 +249,5 @@ def tracked() -> None:
 
 if __name__ == "__main__":
     simple(); styled(); table(); footnotes(); googledoc(); toc(); tracked()
+    textbox()
     print("fixtures written to", HERE)

@@ -46,7 +46,13 @@ INS_TAG      = qn("w:ins")
 DEL_TAG      = qn("w:del")
 XML_SPACE    = f"{{{XML_NS}}}space"
 
-_TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
+# Subtrees whose w:t elements are not a paragraph's text. Textbox content is
+# its own paragraph stream that the walker never yields, and mc:Fallback is a
+# second copy of whatever mc:Choice already holds — counting it would read the
+# same string twice. Public because the accept/reject views must skip exactly
+# the same subtrees the baseline does; two extractors disagreeing about what
+# counts as text is what a text box on the title page looks like to the audit.
+TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
 
 
 # --- The canonical text contract --------------------------------------------
@@ -60,7 +66,7 @@ def iter_text_elements(p: etree._Element) -> Iterator[etree._Element]:
         node = t.getparent()
         skip = False
         while node is not None and node is not p:
-            if node.tag in _TEXT_SKIP_ANCESTORS:
+            if node.tag in TEXT_SKIP_ANCESTORS:
                 skip = True
                 break
             node = node.getparent()

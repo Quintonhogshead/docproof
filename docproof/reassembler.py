@@ -13,8 +13,8 @@ from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
 from .utils.xml_helpers import (CT_NS, DELTEXT_TAG, DEL_TAG, DR_NS, DocxPackage,
                                 INS_TAG, P_TAG, PR_NS, RPR_TAG, R_TAG, T_TAG,
-                                W_NS, merge_adjacent_runs, paragraph_text, qn,
-                                set_text, walk_package)
+                                TEXT_SKIP_ANCESTORS, W_NS, merge_adjacent_runs,
+                                paragraph_text, qn, set_text, walk_package)
 
 log = logging.getLogger("docproof.reassembler")
 
@@ -274,10 +274,22 @@ def apply_format_change(p, a: Anchor, mark: str, author: str, date: str, ids
 # --- accept / reject views (the invariant checkers) ---------------------------
 
 def paragraph_view_text(p, mode: Literal["accept", "reject"]) -> str:
+    """What the paragraph would say with every change accepted, or rejected.
+
+    Skips the same subtrees `iter_text_elements` does. That is not a detail:
+    the audit compares this against a baseline taken with `paragraph_text`, so
+    any subtree only one of them reads is reported as an untracked edit. A
+    title-page text box is the case that bites — Word writes it as an
+    `mc:AlternateContent` whose `mc:Fallback` repeats the `mc:Choice` string,
+    so a walker that reads everything sees the title twice against a baseline
+    that saw it not at all.
+    """
     parts: list[str] = []
 
     def walk(el):
         for c in el:
+            if c.tag in TEXT_SKIP_ANCESTORS:
+                continue
             if c.tag == INS_TAG:
                 if mode == "accept":
                     walk(c)

@@ -239,6 +239,58 @@ def test_a_real_run_normalizes_and_passes_its_own_audit(tmp_path):
     assert rejected == prepared.baseline
 
 
+def test_a_title_page_in_text_boxes_does_not_fail_the_audit(tmp_path):
+    """Regression: a designed title page must not read as an untracked edit.
+
+    The baseline skips textbox content and mc:Fallback duplicates. When the
+    reject view did not, a book whose front matter was laid out in text boxes
+    failed its own audit at character 0 of every such paragraph — the baseline
+    empty, the reject view holding the title twice, once per Choice/Fallback
+    copy — and a clean manuscript refused to ship.
+    """
+    import json
+
+    from docproof.config import load_config
+    from docproof.formats import DOCX
+    from docproof.models import Usage
+    from docproof.pipeline import finish, prepare
+    from docproof.reassembler import paragraph_view_text
+
+    src = tmp_path / "titled.docx"
+    src.write_bytes((FIXTURES / "textbox.docx").read_bytes())
+
+    cfg = load_config("config/default.yaml")
+    prepared = prepare(cfg, src, "config/error_types")
+
+    # Neither view reads a text box, so the paragraphs that hold nothing else
+    # stay empty and the byline keeps only its own prose.
+    views = {wp.para_id: (paragraph_view_text(wp.element, "accept"),
+                          paragraph_view_text(wp.element, "reject"))
+             for wp in walk_package(prepared.pkg)}
+    assert views["body-0000"] == ("", "")            # the title, twice over
+    assert views["body-0002"] == ("", "")            # a plain VML text box
+    assert "GAIA" not in "".join(t for pair in views.values() for t in pair)
+    assert "By Stephen Demczuk" not in views["body-0001"][1]
+    assert views["body-0001"][1].startswith("A novel of the coast")
+
+    # Strict is the default, so a run that returns at all already passed its
+    # audit — findings.json says so in as many words.
+    assert cfg.audit == "strict"
+    out = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "out",
+                 source_path=src)
+    assert out.reviewed_path.exists()
+    audit = json.loads(out.findings_json.read_text())["audit"]
+    assert audit["passed"] is True, audit
+
+    # And the run was not vacuous: the em dash sweep landed in the byline, the
+    # one paragraph here that is both reviewable and adjacent to a text box.
+    reviewed = DocxPackage(out.reviewed_path)
+    accepted = [paragraph_view_text(wp.element, "accept")
+                for wp in walk_package(reviewed)]
+    assert any("weather—and" in t for t in accepted)
+    assert DOCX.snapshot(reviewed, "reject") == prepared.baseline
+
+
 def test_an_untracked_edit_makes_a_real_run_refuse_to_ship(tmp_path):
     """The audit is only worth having if it fails. Sneak a change past the
     tracked-changes machinery and the run must produce no file at all."""
