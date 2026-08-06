@@ -5,6 +5,7 @@ limit is refused a new review with a 402."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -175,3 +176,37 @@ def test_desktop_settings_need_no_admin(tmp_path):
     with TestClient(app) as c:
         assert c.put("/api/settings",
                      json={"explanations": False}).status_code == 200
+
+
+# -- house style guide (prep's style set, admin-managed) ----------------------
+
+def test_admin_uploads_and_resets_house_style(app):
+    boss = _as(app, "boss@press.com")
+    payload = boss.get("/api/prep/styles").json()
+    assert payload["ok"] and not payload["using_override"]
+    # Re-upload the shipped sheet: guaranteed valid, and turns on the override.
+    shipped = Path(payload["shipped_path"]).read_bytes()
+    r = boss.post("/api/prep/styles/sheet",
+                  files={"file": ("house.yaml", shipped, "application/x-yaml")})
+    assert r.status_code == 200 and r.json()["using_override"] is True
+    # And reset goes back to the shipped default.
+    assert boss.delete("/api/prep/styles/sheet").json()["using_override"] is False
+
+
+def test_non_admin_cannot_change_house_style(app):
+    ed = _as(app, "editor@press.com")
+    assert ed.post("/api/prep/styles/sheet",
+                   files={"file": ("x.yaml", b"name: x", "application/x-yaml")}
+                   ).status_code == 403
+    assert ed.delete("/api/prep/styles/sheet").status_code == 403
+    # Reading the current guide is fine.
+    assert ed.get("/api/prep/styles").status_code == 200
+
+
+def test_desktop_house_style_needs_no_admin(tmp_path):
+    app = create_app(tmp_path, start_runner=False)   # web=False
+    with TestClient(app) as c:
+        shipped = Path(c.get("/api/prep/styles").json()["shipped_path"]).read_bytes()
+        assert c.post("/api/prep/styles/sheet",
+                      files={"file": ("house.yaml", shipped, "application/x-yaml")}
+                      ).status_code == 200

@@ -1012,7 +1012,19 @@ def _register(app: FastAPI) -> None:
         publisher exactly which file is in force and what is in it."""
         return _style_payload(app.state.paths)
 
-    @app.post("/api/prep/styles/sheet")
+    def _may_edit_styles(request: Request) -> None:
+        """The house style guide is one file for the whole server, so on the web
+        build only an administrator may replace or adjust it. The desktop build
+        has one user and no gate, so this passes."""
+        if app.state.web:
+            user = getattr(request.state, "user", None)
+            if not (user and user.is_admin):
+                raise HTTPException(
+                    403, "Only an administrator can change the house style "
+                         "guide.")
+
+    @app.post("/api/prep/styles/sheet",
+              dependencies=[Depends(_may_edit_styles)])
     async def upload_style_sheet(file: UploadFile) -> dict:
         """Take a replacement style set from the Settings screen.
 
@@ -1029,14 +1041,16 @@ def _register(app: FastAPI) -> None:
                      f"sensibly be. Is it the right file?")
         return _install_sheet(app.state.paths, raw, override)
 
-    @app.delete("/api/prep/styles/sheet")
+    @app.delete("/api/prep/styles/sheet",
+                dependencies=[Depends(_may_edit_styles)])
     def reset_style_sheet() -> dict:
         """Go back to the style set DocProof ships with. This also discards any
         adjustments made below — there is one file, so there is one undo."""
         _override_path(app.state.paths).unlink(missing_ok=True)
         return _style_payload(app.state.paths)
 
-    @app.put("/api/prep/styles/format")
+    @app.put("/api/prep/styles/format",
+             dependencies=[Depends(_may_edit_styles)])
     def set_style_formats(req: SheetFormatUpdate) -> dict:
         """Adjust how the styles look, and nothing else.
 

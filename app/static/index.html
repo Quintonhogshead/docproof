@@ -566,6 +566,24 @@
         <span id="admin-settings-saved" class="ok" hidden>Saved.</span>
       </div>
     </div>
+
+    <div class="card">
+      <h3>House style guide</h3>
+      <p class="muted">The style set that <strong>Prepare for layout</strong>
+        tags manuscripts into. It's a file, not something built in — upload your
+        house <code>.yaml</code> and prep uses it for everyone from the next
+        document on. The <strong>name</strong> of each style is what InDesign
+        matches when a designer places the file, so it must match your template
+        character for character.</p>
+      <p id="admin-sheet-summary" class="muted">Checking…</p>
+      <div class="job-actions">
+        <button type="button" id="admin-sheet-pick">Upload a style guide…</button>
+        <button type="button" id="admin-sheet-reset" class="quiet" hidden>Reset
+          to the shipped default</button>
+        <input type="file" id="admin-sheet-file" accept=".yaml,.yml" hidden>
+      </div>
+      <p id="admin-sheet-note" class="action-note" hidden></p>
+    </div>
   </section>
 </main>
 
