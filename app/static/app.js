@@ -2027,8 +2027,12 @@ function applyMode() {
   $('tab-admin').hidden = !ME.is_admin;
   // The desktop-only corners have no place in a shared web build: the Google
   // Drive watcher, and the local Settings (keys live in the server's
-  // environment, and its file paths mean nothing to a browser).
-  for (const screen of ['watch', 'settings']) {
+  // environment, and its file paths mean nothing to a browser). The detection
+  // prompts are shared server config, so only an admin edits them — hide the
+  // tab from everyone else.
+  const hide = ['watch', 'settings'];
+  if (!ME.is_admin) hide.push('prompts');
+  for (const screen of hide) {
     const tab = document.querySelector(`.tab[data-screen="${screen}"]`);
     if (tab) tab.hidden = true;
   }
@@ -2059,6 +2063,7 @@ function startApp() {
 
 function showLogin() {
   $('login').hidden = false;
+  addReveal($('login-password'));
   $('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const error = $('login-error');
@@ -2138,8 +2143,123 @@ async function adminUpdate(id, patch) {
   loadAdmin();
 }
 
+// A Show/Hide toggle for a password or key field. Wraps the input in a little
+// flex row and drops a button beside it. Safe to call more than once.
+function addReveal(input) {
+  if (!input || input.dataset.reveal) return input;
+  input.dataset.reveal = '1';
+  const row = document.createElement('span');
+  row.className = 'pw-row';
+  input.parentNode.insertBefore(row, input);
+  row.appendChild(input);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'reveal';
+  btn.textContent = 'Show';
+  btn.addEventListener('click', () => {
+    const hidden = input.type === 'password';
+    input.type = hidden ? 'text' : 'password';
+    btn.textContent = hidden ? 'Hide' : 'Show';
+  });
+  row.appendChild(btn);
+  return input;
+}
+
+async function loadKeys() {
+  if (!WEB || !ME || !ME.is_admin) return;
+  let data;
+  try { data = await api('/api/admin/keys'); } catch (_) { return; }
+  const wrap = $('admin-keys');
+  wrap.innerHTML = '';
+  for (const k of data.keys) {
+    const field = document.createElement('div');
+    field.className = 'key-field';
+
+    const label = document.createElement('div');
+    label.className = 'key-label';
+    const name = document.createElement('strong');
+    name.textContent = k.display;
+    const status = document.createElement('span');
+    status.className = 'muted small';
+    status.textContent = k.configured
+      ? (k.source === 'portal' ? ' · set here' : ' · from the server environment')
+      : ' · not set';
+    label.append(name, status);
+
+    const input = document.createElement('input');
+    input.type = 'password';
+    input.autocomplete = 'off';
+    input.placeholder = k.configured
+      ? 'saved — paste a new key to replace' : 'paste a key';
+
+    const save = document.createElement('button');
+    save.className = 'primary';
+    save.textContent = 'Save';
+    const test = document.createElement('button');
+    test.textContent = 'Test';
+    const remove = document.createElement('button');
+    remove.className = 'quiet';
+    remove.textContent = 'Remove';
+    const note = actionNote();
+
+    save.addEventListener('click', async () => {
+      const key = input.value.trim();
+      if (!key) {
+        note.className = 'action-note error';
+        note.textContent = 'Paste a key first.';
+        note.hidden = false;
+        return;
+      }
+      save.disabled = true;
+      try {
+        await api(`/api/admin/keys/${k.provider}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key }),
+        });
+        loadKeys();
+      } catch (err) {
+        note.className = 'action-note error';
+        note.textContent = err.message;
+        note.hidden = false;
+      } finally { save.disabled = false; }
+    });
+
+    test.addEventListener('click', async () => {
+      note.className = 'action-note muted';
+      note.textContent = 'Testing…';
+      note.hidden = false;
+      try {
+        const r = await api(`/api/settings/test/${k.provider}`, { method: 'POST' });
+        note.className = 'action-note ' + (r.ok ? 'ok' : 'error');
+        note.textContent = r.message;
+      } catch (err) {
+        note.className = 'action-note error';
+        note.textContent = err.message;
+      }
+    });
+
+    remove.addEventListener('click', () => api(`/api/admin/keys/${k.provider}`,
+      { method: 'DELETE' }).then(loadKeys).catch((err) => {
+        note.className = 'action-note error';
+        note.textContent = err.message;
+        note.hidden = false;
+      }));
+
+    const row = document.createElement('div');
+    row.className = 'job-actions key-row';
+    row.append(input, save, test);
+    if (k.configured && k.source === 'portal') row.append(remove);
+
+    field.append(label, row, note);
+    addReveal(input);
+    wrap.append(field);
+  }
+}
+
 async function loadAdmin() {
   if (!WEB || !ME || !ME.is_admin) return;
+  addReveal($('admin-new-password'));
   let data;
   try { data = await api('/api/admin/users'); } catch (_) { return; }
   const money = (n) => `$${(n || 0).toFixed(2)}`;
@@ -2188,6 +2308,7 @@ async function loadAdmin() {
     tr.append(email, role, spent, capCell, actions);
     table.append(tr);
   }
+  loadKeys();
 }
 
 boot();

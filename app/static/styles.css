@@ -582,6 +582,29 @@ details.sections > summary {
 
 #admin-users td { vertical-align: middle; }
 #admin-users .admin-cap-input { width: 5rem; }
+
+/* Show/Hide password toggle */
+.pw-row { display: flex; gap: 0.35rem; align-items: stretch; }
+.pw-row input { flex: 1; min-width: 0; }
+.reveal {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0 0.6rem;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.reveal:hover { color: var(--ink); background: var(--accent-soft); }
+
+/* Provider API keys */
+.key-field { padding: 0.75rem 0; border-top: 1px solid var(--line); }
+.key-field:first-child { border-top: 0; padding-top: 0.25rem; }
+.key-label { margin-bottom: 0.45rem; }
+.key-row { align-items: center; }
+.key-row .pw-row { flex: 1; min-width: 12rem; }
 .pill {
   display: inline-block;
   font-size: 0.72rem;

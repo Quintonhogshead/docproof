@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -50,8 +50,9 @@ from .watch.tick import NotConfigured
 from .prompts import (PromptError, assembled_passes, clear_override,
                       list_prompts, sample_user_turn, save_override)
 from .report import build_report
-from .settings import (Paths, Settings, default_root, delete_api_key,
-                       get_api_key, key_status, resource_root, set_api_key)
+from .settings import (ENV_VARS, PROVIDERS, Paths, Settings, default_root,
+                       delete_api_key, get_api_key, key_status, resource_root,
+                       set_api_key)
 from .update import (Rebuilder, UpdateError, perform_update,
                      refuse_reason)
 from .version import build_info, check_for_update, download_release
@@ -171,6 +172,14 @@ class AdminUpdateUser(BaseModel):
     password: str | None = None
 
 
+class KeyUpdate(BaseModel):
+    key: str | None = None
+
+
+# The provider labels the portal shows, matching the desktop Settings screen.
+KEY_DISPLAY = {"anthropic": "Claude", "openai": "ChatGPT", "gemini": "Gemini"}
+
+
 # --- spend caps ---------------------------------------------------------------
 
 CAP_ENV = "DOCPROOF_DEFAULT_CAP"
@@ -272,9 +281,22 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         # this entirely and stays open, as it always was.
         from .accounts import Accounts
         from .auth import install_auth
+        from .keystore import KeyStore
         install_auth(app, Accounts(paths.users_db), secret=session_secret,
                      https_only=https_only)
-        # God Mode: the admin-only routes for managing users and their caps.
+        # Provider keys an administrator sets in the portal live on the volume
+        # and are loaded into the environment here, where get_api_key looks
+        # first. env_keys remembers what the environment itself provided (a fly
+        # secret, say) so removing a portal key brings that back without a
+        # restart. A portal key takes precedence while it exists.
+        keystore = KeyStore(paths.keys_db)
+        app.state.keystore = keystore
+        app.state.env_keys = {p: os.environ.get(ENV_VARS[p]) for p in PROVIDERS}
+        for provider in PROVIDERS:
+            stored = keystore.get(provider)
+            if stored:
+                os.environ[ENV_VARS[provider]] = stored
+        # God Mode: the admin-only routes for managing users, caps and keys.
         # Only the web build has users to manage, so only it registers these.
         _register_admin(app)
     static = resource_root() / "app" / "static"
@@ -349,6 +371,53 @@ def _register_admin(app: FastAPI) -> None:
                          "monthly_cap": u.monthly_cap,
                          "effective_cap": cap_for(u), **totals})
         return {"users": rows, "default_cap": default_cap()}
+
+    # -- provider API keys ----------------------------------------------------
+
+    def _key_rows() -> list[dict]:
+        rows = []
+        for provider in PROVIDERS:
+            portal = app.state.keystore.get(provider) is not None
+            from_env = bool(app.state.env_keys.get(provider))
+            source = "portal" if portal else ("environment" if from_env else None)
+            rows.append({"provider": provider,
+                         "display": KEY_DISPLAY.get(provider, provider),
+                         "configured": bool(get_api_key(provider)),
+                         "source": source})
+        return rows
+
+    @app.get("/api/admin/keys", dependencies=[Depends(require_admin)])
+    def admin_keys() -> dict:
+        """Which providers have a key and where it came from — never the key
+        itself, which is set once and never read back to a browser."""
+        return {"keys": _key_rows()}
+
+    @app.put("/api/admin/keys/{provider}", dependencies=[Depends(require_admin)])
+    def admin_set_key(provider: str, body: KeyUpdate) -> dict:
+        if provider not in PROVIDERS:
+            raise HTTPException(404, "Unknown provider")
+        key = (body.key or "").strip()
+        if not key:
+            raise HTTPException(400, "Paste a key, or use Remove to clear it.")
+        app.state.keystore.set(provider, key)
+        os.environ[ENV_VARS[provider]] = key      # in force for the next review
+        log.info("Admin set the %s key", provider)
+        return {"keys": _key_rows()}
+
+    @app.delete("/api/admin/keys/{provider}",
+                dependencies=[Depends(require_admin)])
+    def admin_clear_key(provider: str) -> dict:
+        if provider not in PROVIDERS:
+            raise HTTPException(404, "Unknown provider")
+        app.state.keystore.delete(provider)
+        # Put back whatever the environment gave at boot, so removing a portal
+        # key falls back to a fly secret rather than to nothing.
+        restore = app.state.env_keys.get(provider)
+        if restore:
+            os.environ[ENV_VARS[provider]] = restore
+        else:
+            os.environ.pop(ENV_VARS[provider], None)
+        return {"keys": _key_rows()}
 
 
 def _resolve_upload(paths: Paths, file_id: str, owner: str) -> Path | None:
@@ -1056,7 +1125,18 @@ def _register(app: FastAPI) -> None:
             "explanations": cfg.report_explanations,
         }
 
-    @app.put("/api/prompts/{key}")
+    def _may_edit_prompts(request: Request) -> None:
+        """The detection prompts are one shared setting for the whole server, so
+        on the web build only an administrator may change them. The desktop
+        build has one user and no gate, so this passes."""
+        if app.state.web:
+            user = getattr(request.state, "user", None)
+            if not (user and user.is_admin):
+                raise HTTPException(
+                    403, "Only an administrator can change what DocProof "
+                         "looks for.")
+
+    @app.put("/api/prompts/{key}", dependencies=[Depends(_may_edit_prompts)])
     def write_prompt(key: str, update: PromptUpdate) -> dict:
         try:
             save_override(ERROR_DIR, app.state.paths.prompts, key,
@@ -1065,7 +1145,7 @@ def _register(app: FastAPI) -> None:
             raise HTTPException(400, str(e))
         return read_prompts()
 
-    @app.delete("/api/prompts/{key}")
+    @app.delete("/api/prompts/{key}", dependencies=[Depends(_may_edit_prompts)])
     def reset_prompt(key: str) -> dict:
         clear_override(app.state.paths.prompts, key)
         return read_prompts()
