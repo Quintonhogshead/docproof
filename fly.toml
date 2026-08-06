@@ -1,10 +1,11 @@
 # Fly.io configuration for the hosted DocProof web build.
 #
-# This is a template: set `app` to the name you register with `fly launch`, and
-# pick a region near your editors. Secrets are NOT here — set them with
-# `fly secrets set` (see DEPLOY.md) so they never land in the repo.
+# Create the app with `fly apps create <app>` and deploy with `fly deploy` —
+# NOT `fly launch`, whose source scanner ignores this Dockerfile. Secrets are
+# NOT here — set them with `fly secrets set` (see DEPLOY.md) so they never land
+# in the repo. Change `app` if the name is taken (it's global to Fly).
 
-app = "docproof-CHANGE-ME"
+app = "docproof"
 primary_region = "iad"        # pick one near your users: fly platform regions
 
 [build]

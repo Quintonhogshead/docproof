@@ -77,32 +77,35 @@ All commands are run from the repository folder on your Mac.
 
 ### 3.1 Point the config at your app
 
-Open `fly.toml` and change two lines:
+`fly.toml` already sets `app = "docproof"` and `primary_region = "iad"`. Change
+them if you like:
 
-```toml
-app = "docproof-atmosphere"        # a name you choose; must be unique on Fly
-primary_region = "iad"             # pick one near your editors (see below)
-```
-
-Region codes are at <https://fly.io/docs/reference/regions/> — e.g. `iad`
-(Virginia), `lax` (Los Angeles), `lhr` (London). Pick the closest to where most
-people will use it.
+- **`app`** must be globally unique on Fly. If `fly apps create` (next step)
+  reports the name is taken, pick another (e.g. `docproof-atmosphere`) and put
+  it here.
+- **`primary_region`** should be near your editors. Codes are at
+  <https://fly.io/docs/reference/regions/> — e.g. `iad` (Virginia), `lax` (Los
+  Angeles), `lhr` (London).
 
 ### 3.2 Create the app and its disk
 
-```bash
-fly launch --no-deploy
-```
-
-Answer **No** if it offers to tweak settings or add databases — the repo's
-`fly.toml` is already set up. This registers the app name. Then create the
-persistent disk (3 GB is plenty to start; you can grow it later):
+> **Do not use `fly launch`.** Its source scanner tries to guess a framework
+> and errors out *("Could not detect runtime or Dockerfile")* even though the
+> Dockerfile is right there. Create the app directly instead — `fly deploy`
+> (step 3.4) builds straight from our `Dockerfile` via `fly.toml`, with no
+> scanning.
 
 ```bash
-fly volumes create docproof_data --size 3
+fly apps create docproof
 ```
 
-When it asks which region, choose the **same** one as `primary_region`.
+(Use the same name as `app` in `fly.toml`. If it's taken, choose another and
+update `fly.toml` to match.) Then create the persistent disk in the same region
+as `primary_region` (3 GB is plenty to start; you can grow it later):
+
+```bash
+fly volumes create docproof_data --size 3 --region iad
+```
 
 ### 3.3 Set the secrets
 
