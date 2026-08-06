@@ -566,6 +566,17 @@ details.sections > summary {
   gap: 0.7rem;
 }
 #user-email { font-size: 0.85rem; }
+.version {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.login-version {
+  margin: 0.2rem 0 0;
+  text-align: center;
+  opacity: 0.7;
+}
 
 /* God Mode */
 .admin-new {

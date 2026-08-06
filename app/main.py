@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from docproof import __version__ as _docproof_version
 from docproof import batch as batchlib
 from docproof import prep as preplib
 from docproof.config import load_config
@@ -1388,7 +1389,9 @@ def _register(app: FastAPI) -> None:
 
     @app.get("/healthz")
     def healthz() -> dict:
-        return {"ok": True}
+        # version rides along here because this is the one route open before
+        # sign-in, so the web build can show it on the login screen too.
+        return {"ok": True, "version": _docproof_version}
 
 
 def __getattr__(name: str):
