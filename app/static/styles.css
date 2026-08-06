@@ -105,6 +105,31 @@ main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 5rem; }
 .small { font-size: 0.85rem; }
 #drop-formats { margin-top: 0.8rem; }
 
+/* ── staging (the wait between a drop and the list appearing) ───────────── */
+
+.staging {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+  color: var(--muted);
+}
+.spinner {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* Respect a reduced-motion preference: still show it turning, but slowly and
+   without the fast flicker that setting exists to avoid. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+}
+
 /* The badge is inline in a bold filename; keep it from inheriting the weight. */
 .file-name .tag { font-weight: 600; }
 

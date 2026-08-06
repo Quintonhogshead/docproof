@@ -76,6 +76,14 @@
          staged list never appeared. -->
     <p id="drop-error" class="error" hidden></p>
 
+    <!-- Shown while the server stages and preflights a drop, which can take a
+         few seconds — longer if a manuscript needs converting first. Bridges
+         the gap between dropping and the file appearing in the list below. -->
+    <div id="staging" class="staging" role="status" aria-live="polite" hidden>
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="staging-text">Reading your documents…</span>
+    </div>
+
     <div id="staged" hidden>
       <h2 id="staged-title">Ready to go</h2>
       <ul id="file-list"></ul>

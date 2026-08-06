@@ -131,14 +131,35 @@ async function upload(files) {
 
   const body = new FormData();
   files.forEach((f) => body.append('files', f));
+  showStaging(files.length);
   try {
     const { files: staged } = await api('/api/files', { method: 'POST', body });
     state.files = state.files.concat(staged);
     renderFiles();
-    await loadModels();
   } catch (err) {
     fail(err.message);
+  } finally {
+    // Hide the instant the documents are read and shown — not after
+    // loadModels, which is a separate, slower fetch that enriches the cost
+    // figures. Leaving it up through that made the spinner linger beside the
+    // list that had already appeared.
+    hideStaging();
   }
+  await loadModels();
+}
+
+// The spinner that fills the gap between a drop and the list below it. The
+// server stages and preflights every file — and may convert one first — so
+// this can run for a few seconds with otherwise nothing on screen.
+function showStaging(count) {
+  $('staging-text').textContent = count === 1
+    ? 'Reading your document…'
+    : `Reading your ${count} documents…`;
+  $('staging').hidden = false;
+}
+
+function hideStaging() {
+  $('staging').hidden = true;
 }
 
 function renderFiles() {
