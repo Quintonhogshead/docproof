@@ -138,13 +138,18 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     rec.name = file.name
     rec.modified_time = file.modified_time
 
-    if rec.attempts >= ws.max_attempts:
+    job = store.get(rec.job_id) if rec.job_id else None
+    paid_for = (job is not None and job.state == "done" and job.results_dir
+                and Path(job.results_dir).is_dir())
+
+    if rec.attempts >= ws.max_attempts and not paid_for:
         # Tried on three separate runs and failed the same way each time. That
         # is a fact about the file, not about the weather, so it stops being
-        # tried and starts being visible.
+        # tried and starts being visible. A job that *finished* is exempt: the
+        # model has been paid and the files exist, so what failed three times
+        # was only the upload — free to retry, ruinous to give up on.
         reason = f"Gave up after {rec.attempts} attempts."
         log.error("%s: %s", file.name, reason)
-        job = store.get(rec.job_id) if rec.job_id else None
         prep.mark_source(token, file, job or _placeholder(file, ws), rec,
                          state, failed=reason, opener=opener)
         report.failed.append((file.name, reason))
@@ -266,6 +271,14 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         raise NotConfigured("DocProof is not signed in to Google. Run "
                             "`docproof-watch auth`.")
 
+    if not dry_run:
+        # Stamped before the first network call, not after it — see
+        # state.note_tick. Two clocks ask when this last happened, and a pass
+        # that dies refreshing its token must still count as a look, or the
+        # in-app clock retries it every minute instead of every
+        # tick_every_minutes. A dry run stays read-only, stamp included.
+        note_tick(root)
+
     token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
                                        opener=opener)
     listing = drive.list_folder(token, ws.folder_id, opener=opener)
@@ -281,14 +294,14 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                          if stage == Stage.NEW_MANUSCRIPT.value)
         return report
 
-    # Stamped before the work, not after — see state.note_tick. Two clocks ask
-    # when this last happened, and a pass that runs for three hours must not
-    # look like one that never started.
-    note_tick(root)
     paths = Paths(root).ensure()
     store = JobStore(paths)
     runner = JobRunner(store, ws.app_settings(root), config_path=config_path())
-    _drain(runner)
+    if not mock:
+        # A rehearsal leaves real leftovers alone: _drain finishes whatever a
+        # dead pass left mid-flight through the real provider, and
+        # `--mock-tags` is documented as costing nothing.
+        _drain(runner)
     state = WatchState.load(root / STATE_FILE)
 
     collect_finished(token, ws, listing, state, store, opener=opener,

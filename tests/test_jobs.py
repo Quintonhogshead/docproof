@@ -92,6 +92,102 @@ def test_a_cancelled_prep_job_is_never_tagged(runner, monkeypatch):
     assert store.get("j1").state == "cancelled"
 
 
+def test_a_cancel_landing_while_the_worker_prepares_still_wins(runner,
+                                                               monkeypatch):
+    """The id was dequeued and the guard passed; the cancel lands while the
+    document is still being ingested. The old plain `state="running"` write
+    clobbered the cancellation and ran the whole review anyway, billed."""
+    import app.jobs as jobsmod
+    from .fakes import FakeProvider
+
+    provider = FakeProvider()
+    store, r = _review_setup(runner, monkeypatch, provider)
+    _job(store, state="queued")
+
+    real_prepare = jobsmod.prepare
+
+    def prepare_and_lose_the_race(*a, **kw):
+        store.update_if("j1", expect="queued", state="cancelled")
+        return real_prepare(*a, **kw)
+
+    monkeypatch.setattr("app.jobs.prepare", prepare_and_lose_the_race)
+
+    r.run_one("j1")
+    assert store.get("j1").state == "cancelled"
+    assert provider.calls == [], "a cancelled job must never reach the provider"
+
+
+def test_a_cancel_landing_during_batch_submission_still_wins(runner,
+                                                             monkeypatch):
+    """Submitting to the vendor takes a network round-trip; a cancel in that
+    window must not be overwritten by `waiting` — the batch is already gone,
+    but the job the user pulled back stays pulled back."""
+    from types import SimpleNamespace
+
+    store, r = runner
+    _job(store, state="queued", mode="batch")
+    monkeypatch.setattr("app.jobs.build_provider", lambda cfg, api_key=None: None)
+    monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
+
+    def submit_and_lose_the_race(*a, **kw):
+        store.update_if("j1", expect="queued", state="cancelled")
+        return SimpleNamespace(job_id="b-1", request_count=3)
+
+    monkeypatch.setattr("app.jobs.batchlib.submit", submit_and_lose_the_race)
+
+    r.run_one("j1")
+    assert store.get("j1").state == "cancelled"
+
+
+def test_the_batch_id_is_on_disk_before_the_job_says_waiting(runner,
+                                                             monkeypatch):
+    """`waiting` is the ticker's cue to go looking for the id file. Written in
+    the other order, a tick between the two writes failed the job as lost
+    while the batch was live — and billed — at the vendor."""
+    from types import SimpleNamespace
+
+    store, r = runner
+    _job(store, state="queued", mode="batch")
+    monkeypatch.setattr("app.jobs.build_provider", lambda cfg, api_key=None: None)
+    monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr(
+        "app.jobs.batchlib.submit",
+        lambda *a, **kw: SimpleNamespace(job_id="b-1", request_count=3))
+
+    real = store.update_if
+    seen = {}
+
+    def spying(job_id, *, expect, **fields):
+        if fields.get("state") == "waiting":
+            seen["id_on_disk"] = (store.dir(job_id) / "batch_job_id").is_file()
+        return real(job_id, expect=expect, **fields)
+
+    monkeypatch.setattr(store, "update_if", spying)
+
+    r.run_one("j1")
+    assert store.get("j1").state == "waiting"
+    assert seen["id_on_disk"] is True
+
+
+def test_only_one_tick_pass_runs_at_a_time(runner, monkeypatch):
+    """The ticker thread and POST /api/tick both call tick_once. A second
+    caller is turned away — two passes over the same ready batch used to
+    collect it twice, into two folders."""
+    store, r = runner
+    _job(store, state="scheduled", mode="batch", schedule_at="00:00")
+    monkeypatch.setattr(JobRunner, "_due", lambda self, job: True)
+
+    assert r._tick_mutex.acquire(blocking=False)   # another pass is looking
+    try:
+        r.tick_once()
+        assert store.get("j1").state == "scheduled"    # turned away, no work
+    finally:
+        r._tick_mutex.release()
+
+    r.tick_once()                                  # the lock is free again
+    assert store.get("j1").state == "queued"
+
+
 def test_update_if_only_wins_when_the_state_still_matches(runner):
     store, _ = runner
     _job(store, state="queued")

@@ -230,6 +230,7 @@ class JobRunner:
         self.queue: queue.Queue[str] = queue.Queue()
         self._stop = threading.Event()
         self._busy = threading.Event()
+        self._tick_mutex = threading.Lock()
         self._threads: list[threading.Thread] = []
 
     # -- lifecycle ------------------------------------------------------------
@@ -428,11 +429,17 @@ class JobRunner:
             prepared = prepare(cfg, job.source_path, self.error_dir,
                                selection=job.selection)
         except (ProviderError, IngestError, FileNotFoundError, ValueError) as e:
-            self.store.update(job_id, state="failed", error=str(e))
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e))
             return
 
-        self.store.update(job_id, state="running", done=0,
-                          total=prepared.request_count)
+        # Compare-and-swap, not a plain write: building the provider and
+        # ingesting the document took long enough for a cancel to land in the
+        # meantime, and a job the user pulled back must not start paying for
+        # model calls — or overwrite its own cancellation — now.
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=prepared.request_count) is None:
+            return
 
         def progress(done: int, total: int) -> None:
             self.store.update(job_id, done=done, total=total)
@@ -489,12 +496,16 @@ class JobRunner:
                 override_dir=self.store.paths.prep)
         except (ProviderError, IngestError, StyleSheetError, ConversionError,
                 FileNotFoundError, ValueError) as e:
-            self.store.update(job_id, state="failed", error=str(e))
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e))
             return
 
-        self.store.update(job_id, state="running", done=0,
-                          total=prepared.request_count,
-                          words=prepared.structure.word_count)
+        # Same compare-and-swap as _run_now, for the same reason: preparing a
+        # whole manuscript leaves plenty of room for a cancel to land first.
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=prepared.request_count,
+                                words=prepared.structure.word_count) is None:
+            return
 
         # Kept through failures — including a failed verification — so a retry
         # replays the windows already paid for rather than re-tagging the book.
@@ -580,13 +591,24 @@ class JobRunner:
                                         selection=job.selection)
         except (ProviderError, IngestError, batchlib.BatchError,
                 FileNotFoundError, ValueError) as e:
-            self.store.update(job_id, state="failed", error=str(e))
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e))
             return
         # batchlib picked its own folder; record the link and adopt its total.
-        self.store.update(job_id, state="waiting", total=batch_job.request_count,
-                          error=None)
+        # The id file goes down before the state does: `waiting` is the
+        # ticker's cue to go looking for the id, and writing them the other
+        # way round gave it a moment where a submitted, billable batch looked
+        # lost and the job was failed for it.
         (self.store.dir(job_id) / "batch_job_id").write_text(batch_job.job_id,
                                                              encoding="utf-8")
+        if self.store.update_if(job_id, expect=job.state, state="waiting",
+                                total=batch_job.request_count,
+                                error=None) is None:
+            # Cancelled while the batch was on its way to the vendor. It can't
+            # be unsubmitted, so say what it cost: the id file names it.
+            log.warning("Job %s was cancelled during submission; batch %s is "
+                        "at the vendor and will not be collected.", job_id,
+                        batch_job.job_id)
 
     def _batch_job_id(self, job: Job) -> str | None:
         path = self.store.dir(job.id) / "batch_job_id"
@@ -601,22 +623,34 @@ class JobRunner:
 
     def tick_once(self) -> None:
         """One pass: submit anything due, advance anything waiting. Public so
-        tests can drive it without waiting on a timer."""
-        for job in self.store.all():
-            if job.state == "scheduled" and self._due(job):
-                # Guards against a cancellation landing between this read and
-                # the write below: only queue it if it was still scheduled at
-                # the moment of the update, not just at the moment of this read.
-                if self.store.update_if(job.id, expect="scheduled",
-                                        state="queued"):
-                    self.queue.put(job.id)
-            # `collecting` is included so a job interrupted partway through
-            # collection is picked up again: the results are still at the
-            # vendor, and both poll and collect can be re-run. Prep is never
-            # at a vendor — the worker owns it start to finish — so the ticker
-            # leaves it alone rather than looking for a batch that isn't there.
-            elif job.state in ("waiting", "collecting") and not job.is_prep:
-                self._advance_batch(job)
+        tests can drive it without waiting on a timer.
+
+        One pass at a time, and a second caller is turned away rather than
+        queued: the ticker thread and `POST /api/tick` both come through here,
+        and two passes over the same ready batch would collect it twice into
+        two folders. Whoever holds the lock is already doing the looking."""
+        if not self._tick_mutex.acquire(blocking=False):
+            return
+        try:
+            for job in self.store.all():
+                if job.state == "scheduled" and self._due(job):
+                    # Guards against a cancellation landing between this read
+                    # and the write below: only queue it if it was still
+                    # scheduled at the moment of the update, not just at the
+                    # moment of this read.
+                    if self.store.update_if(job.id, expect="scheduled",
+                                            state="queued"):
+                        self.queue.put(job.id)
+                # `collecting` is included so a job interrupted partway through
+                # collection is picked up again: the results are still at the
+                # vendor, and both poll and collect can be re-run. Prep is
+                # never at a vendor — the worker owns it start to finish — so
+                # the ticker leaves it alone rather than looking for a batch
+                # that isn't there.
+                elif job.state in ("waiting", "collecting") and not job.is_prep:
+                    self._advance_batch(job)
+        finally:
+            self._tick_mutex.release()
 
     def _due(self, job: Job) -> bool:
         target = self._scheduled_for(job)
@@ -662,7 +696,11 @@ class JobRunner:
         if batch_job.state != "ready":
             return
 
-        self.store.update(job.id, state="collecting")
+        # CAS for the same reason the scheduled→queued promotion has one: the
+        # job was read at the top of the pass, and its state may have moved on.
+        if self.store.update_if(job.id, expect=job.state,
+                                state="collecting") is None:
+            return
         out = self._claim_results_dir(job)
         try:
             outputs = batchlib.collect(batch_job, provider, self.error_dir,

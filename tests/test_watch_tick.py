@@ -380,6 +380,37 @@ def test_a_transient_failure_is_tried_again_and_then_given_up_on(
     assert report.failed
 
 
+def test_a_finished_manuscript_is_never_given_up_on(tmp_path, ws, provider,
+                                                    monkeypatch):
+    """Prep finished on the first tick; Drive then failed the upload three
+    ticks running. The model has been paid and the files exist — the next
+    healthy tick delivers them instead of marking the book failed."""
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
+                        docx=MANUSCRIPT)
+    real_upload = ticklib.drive.upload
+    drive_is = {"down": True}
+
+    def flaky_upload(*a, **kw):
+        if drive_is["down"]:
+            raise urllib.error.URLError("drive is down")
+        return real_upload(*a, **kw)
+
+    monkeypatch.setattr("app.watch.drive.upload", flaky_upload)
+
+    for _ in range(3):
+        assert not run(tmp_path, ws, opener).ok
+    paid = len(provider.calls)
+    assert WatchState.load(tmp_path / "state.json").get("f-1").attempts == 3
+
+    drive_is["down"] = False
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok
+    assert "tagged_Wolves.docx" in uploads_in(opener)
+    assert len(provider.calls) == paid           # delivered, not re-run
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
+
+
 def test_one_bad_manuscript_does_not_stop_the_others(tmp_path, ws, provider,
                                                      monkeypatch):
     opener = fake_drive(folder(f_1=drive_entry("Broken.docx", modified="1"),
@@ -490,6 +521,51 @@ def test_a_rehearsal_still_checks_the_authors_words(tmp_path, ws, monkeypatch):
     assert not report.ok
     assert uploads_in(opener) == {}
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FAILED
+
+
+def test_a_rehearsal_leaves_interrupted_real_work_alone(tmp_path, ws, provider):
+    """`--mock-tags` is documented as costing nothing. A job a dead real pass
+    left mid-flight must wait for a real pass — not be finished, at full
+    price, by a rehearsal draining the queue."""
+    from app.jobs import Job
+
+    store = JobStore(Paths(tmp_path).ensure())
+    store.save(Job(id="j1", filename="Wolves.docx",
+                   source_path=str(tmp_path / "gone.docx"),
+                   model="claude-haiku-4-5", mode="now", kind="prep",
+                   state="running"))
+    opener = fake_drive(folder())
+
+    report = run(tmp_path, ws, opener, mock=True)
+
+    assert report.ok
+    assert provider.calls == []
+    assert JobStore(Paths(tmp_path)).get("j1").state == "running"  # untouched
+
+
+def test_a_pass_that_dies_at_the_door_still_counts_as_a_look(tmp_path, ws,
+                                                             provider):
+    """The in-app clock retries whenever there is no stamp. A pass that failed
+    refreshing its token must leave one anyway, or a revoked sign-in means a
+    fresh full attempt every minute instead of every tick_every_minutes."""
+    from app.watch.state import last_tick
+
+    opener = fake_drive(fail={"token": http_error(400, "invalid_grant")})
+
+    with pytest.raises(ticklib.DriveError):
+        run(tmp_path, ws, opener)
+
+    assert last_tick(tmp_path) is not None
+
+
+def test_a_dry_run_leaves_no_stamp(tmp_path, ws, provider):
+    """Read-only means the stamp too: a look that did no work must not push
+    back the clock that decides when real work happens."""
+    from app.watch.state import last_tick
+
+    run(tmp_path, ws, fake_drive(folder()), dry_run=True)
+
+    assert last_tick(tmp_path) is None
 
 
 # --- before anything can happen -----------------------------------------------

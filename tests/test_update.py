@@ -206,6 +206,32 @@ def test_a_failed_install_puts_the_old_app_back(runner, monkeypatch, tmp_path):
     assert h.terminated == [] and h.spawned == []
 
 
+def test_a_half_copied_install_is_cleared_before_the_old_app_returns(
+        runner, monkeypatch, tmp_path):
+    """cp can die after creating part of the destination bundle, and rename(2)
+    will not replace a non-empty directory. The debris used to make the
+    rollback itself fail — leaving the broken half-copy installed and the
+    working app in the Trash."""
+    h = SwapHarness(monkeypatch, tmp_path, runner)
+    inner = h.run
+
+    def dying_final_cp(command, **kwargs):
+        if command[0] == "cp" and command[3] == str(h.bundle):
+            partial = h.bundle / "Contents"
+            partial.mkdir(parents=True)
+            (partial / "half-written").write_text("debris")
+            return subprocess.CompletedProcess(command, 1, "", "disk full")
+        return inner(command, **kwargs)
+
+    h.run = dying_final_cp
+    with pytest.raises(UpdateError, match="Nothing was changed"):
+        h.update()
+    # Rolled back clean: the old bundle is home, the debris is gone.
+    assert (h.bundle / "Contents" / "old-marker").is_file()
+    assert not (h.bundle / "Contents" / "half-written").exists()
+    assert not list(h.trash.glob("*.app"))
+
+
 # --- rebuilding from the checkout ---------------------------------------------
 #
 # The machine DocProof is written on has no release to install: the newest

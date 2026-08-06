@@ -35,6 +35,26 @@ def test_roundtrip_across_formatting_boundary(tmp_path, cfg):
         "It was late. We were tired, the road went on."
 
 
+def test_an_insertion_and_a_deletion_at_the_same_offset_both_apply(tmp_path,
+                                                                   cfg):
+    """The validator lets a pure insertion coexist with a deletion starting at
+    the same offset. Applied insertion-first — which a start-only sort did
+    whenever the insertion came first in the findings list — the inserted text
+    sat under the deletion's slice re-check and a validated edit was silently
+    dropped from the document."""
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = doc.paragraphs[0].para_id
+    edits = [_validated(pid, 13, 13, "", "so ", 1),   # the losing order
+             _validated(pid, 13, 16, "we ", "", 2)]
+    stats = apply_tracked_changes(pkg, doc, edits, cfg)
+    assert set(stats.applied) == {"f-1", "f-2"} and not stats.skipped
+    p = _para(pkg, pid)
+    assert paragraph_view_text(p, "reject") == ORIG
+    assert paragraph_view_text(p, "accept") == \
+        "It was late, so were tired, the road went on."
+
+
 def test_two_edits_one_paragraph_descending(tmp_path, cfg):
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)

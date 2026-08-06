@@ -496,8 +496,15 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 else:
                     unplaced.append(f.finding_id)
 
+            # Descending start, so edits never shift the offsets of the ones
+            # still to come — and descending end within a start, so a deletion
+            # goes before a pure insertion at the same offset. The validator
+            # lets that pair coexist; applied the other way round, the
+            # inserted text lands inside the slice the deletion re-checks
+            # below, and a validated edit is silently skipped.
             for f in sorted((x for x in plist if x.status == "validated"),
-                            key=lambda x: x.anchor.start, reverse=True):
+                            key=lambda x: (x.anchor.start, x.anchor.end),
+                            reverse=True):
                 a = f.anchor
                 if paragraph_text(p)[a.start:a.end] != a.delete_text:
                     log.error("%s: anchor slice mismatch at apply time — "

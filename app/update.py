@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -142,7 +143,18 @@ def _swap(bundle: Path, fresh: Path, *, run) -> None:
         if done.returncode != 0:
             raise OSError(done.stderr.strip() or "cp failed")
     except OSError as e:
-        os.replace(trashed, bundle)          # put the old one back; still works
+        # A cp that died partway left a partial bundle at the destination,
+        # and rename(2) will not replace a non-empty directory — so the
+        # debris has to go before the old app can take its place back.
+        shutil.rmtree(bundle, ignore_errors=True)
+        try:
+            os.replace(trashed, bundle)      # put the old one back; still works
+        except OSError as undo:
+            raise UpdateError(
+                f"Could not install the new DocProof ({e}), and putting the "
+                f"old one back failed too ({undo}). The old app is in the "
+                f"Trash as “{trashed.name}” — drag it back to "
+                f"{bundle.parent}.")
         raise UpdateError(f"Could not install the new DocProof ({e}). "
                           f"Nothing was changed.")
 
