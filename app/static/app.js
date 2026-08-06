@@ -24,6 +24,11 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [] };
 
+// Web build only, set once at boot from /api/me. The desktop app has no such
+// route, so WEB stays false and every desktop path below is untouched.
+let WEB = false;
+let ME = null;
+
 // ── navigation ────────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tab').forEach((tab) => {
@@ -35,7 +40,7 @@ function show(name) {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
   });
   ['drop', 'jobs', 'report', 'watch', 'spending', 'prompts',
-   'settings'].forEach((s) => {
+   'settings', 'admin'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
   if (name === 'jobs') refreshJobs({ tick: true });
@@ -43,6 +48,7 @@ function show(name) {
   if (name === 'prompts') loadPrompts();
   if (name === 'spending') loadSpending();
   if (name === 'watch') loadWatch();
+  if (name === 'admin') loadAdmin();
 }
 
 // ── what we're doing with these documents ─────────────────────────────────
@@ -522,13 +528,18 @@ function renderJobs(jobs) {
       actions.className = 'job-actions';
       const note = actionNote();
       const doc = openButton(job, 'document',
-        job.format ? `Open in ${job.format.app}` : 'Open reviewed document',
+        WEB ? 'Download reviewed document'
+            : (job.format ? `Open in ${job.format.app}` : 'Open reviewed document'),
         note);
       const read = document.createElement('button');
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
-      actions.append(doc, read,
-        openButton(job, 'document', 'Show in Finder', note, { reveal: true }));
+      actions.append(doc, read);
+      // "Show in Finder" only means something on the Mac the file lives on.
+      if (!WEB) {
+        actions.append(
+          openButton(job, 'document', 'Show in Finder', note, { reveal: true }));
+      }
       const bits = [];
       if (typeof job.applied === 'number') {
         bits.push(`${job.applied} change${job.applied === 1 ? '' : 's'} suggested`);
@@ -590,6 +601,9 @@ function openButton(job, which, text, note, { reveal = false } = {}) {
   button.textContent = text;
   if (reveal) button.className = 'quiet';
   button.addEventListener('click', async () => {
+    // In the browser build there is no local app to hand the file to, and no
+    // Finder to reveal it in — the honest thing is to download it.
+    if (WEB) { window.location.href = `/api/jobs/${job.id}/file/${which}`; return; }
     button.disabled = true;
     if (note) note.hidden = true;
     const query = reveal ? '?reveal=true' : '';
@@ -663,9 +677,13 @@ function prepActions(job) {
   const read = document.createElement('button');
   read.textContent = 'Read the prep notes';
   read.addEventListener('click', () => openPrepReport(job));
-  actions.append(read,
-    openButton(job, first, 'Show in Finder', note, { reveal: true }));
-  if (job.prep_output !== 'tracked') actions.append(placeButton(job, note));
+  actions.append(read);
+  if (!WEB) {
+    actions.append(
+      openButton(job, first, 'Show in Finder', note, { reveal: true }));
+    // Placing needs InDesign on a Mac; there is none behind a web build.
+    if (job.prep_output !== 'tracked') actions.append(placeButton(job, note));
+  }
 
   const bits = [];
   if (typeof job.tagged === 'number') bits.push(`${job.tagged} paragraphs tagged`);
@@ -1988,14 +2006,188 @@ async function applyDefaults() {
   if (radio) radio.checked = true;
 }
 
-loadFormats().catch(() => {});
-loadModels().catch(() => {});
-loadStyleSheet().catch(() => {});
-applyDefaults().catch(() => {});
-offerUpdateIfBehind();
-renderKind();
-refreshJobs();
-state.pollTimer = setInterval(() => {
-  if (!$('screen-jobs').hidden) refreshJobs();
-  if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
-}, 5000);
+// ── sign-in and mode (web build) ───────────────────────────────────────────
+
+async function resolveSession() {
+  // /api/me is a web-only route: 200 signed in, 401 signed out, and — in the
+  // desktop app, where it doesn't exist — a 404 that leaves WEB false.
+  try {
+    ME = await api('/api/me');
+    WEB = true;
+  } catch (err) {
+    WEB = err.status === 401;
+    ME = null;
+  }
+}
+
+function applyMode() {
+  if (!WEB) return;
+  $('user-area').hidden = false;
+  $('user-email').textContent = ME.email;
+  $('tab-admin').hidden = !ME.is_admin;
+  // The desktop-only corners have no place in a shared web build: the Google
+  // Drive watcher, and the local Settings (keys live in the server's
+  // environment, and its file paths mean nothing to a browser).
+  for (const screen of ['watch', 'settings']) {
+    const tab = document.querySelector(`.tab[data-screen="${screen}"]`);
+    if (tab) tab.hidden = true;
+  }
+  // Web v1 reviews for errors only — preparing for InDesign needs a Mac — so
+  // the choice comes off the screen and review is settled on.
+  const kinds = document.querySelector('.kinds');
+  if (kinds) kinds.hidden = true;
+  const review = document.querySelector('input[name="kind"][value="review"]');
+  if (review) review.checked = true;
+  $('update-banner').hidden = true;
+}
+
+function startApp() {
+  applyMode();
+  loadFormats().catch(() => {});
+  loadModels().catch(() => {});
+  loadStyleSheet().catch(() => {});
+  applyDefaults().catch(() => {});
+  if (!WEB) offerUpdateIfBehind();
+  renderKind();
+  refreshJobs();
+  state.pollTimer = setInterval(() => {
+    if (!$('screen-jobs').hidden) refreshJobs();
+    if (WEB) return;
+    if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
+  }, 5000);
+}
+
+function showLogin() {
+  $('login').hidden = false;
+  $('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const error = $('login-error');
+    const button = e.target.querySelector('button');
+    error.hidden = true;
+    button.disabled = true;
+    try {
+      ME = await api('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: $('login-email').value,
+                               password: $('login-password').value }),
+      });
+      $('login').hidden = true;
+      startApp();
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+async function boot() {
+  await resolveSession();
+  if (WEB && !ME) { showLogin(); return; }
+  startApp();
+}
+
+// ── God Mode ────────────────────────────────────────────────────────────────
+
+$('logout').addEventListener('click', async () => {
+  try { await api('/api/logout', { method: 'POST' }); } catch (_) {}
+  window.location.reload();
+});
+
+$('admin-create').addEventListener('click', async () => {
+  const note = $('admin-new-note');
+  note.hidden = true;
+  const cap = $('admin-new-cap').value.trim();
+  const body = { email: $('admin-new-email').value.trim(),
+                 password: $('admin-new-password').value,
+                 is_admin: $('admin-new-admin').checked };
+  if (cap !== '') body.monthly_cap = Number(cap);
+  try {
+    await api('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    for (const id of ['admin-new-email', 'admin-new-password', 'admin-new-cap']) {
+      $(id).value = '';
+    }
+    $('admin-new-admin').checked = false;
+    note.className = 'action-note ok';
+    note.textContent = 'Added.';
+    note.hidden = false;
+    loadAdmin();
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+    note.hidden = false;
+  }
+});
+
+async function adminUpdate(id, patch) {
+  try {
+    await api(`/api/admin/users/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  } catch (err) {
+    alert(err.message);
+  }
+  loadAdmin();
+}
+
+async function loadAdmin() {
+  if (!WEB || !ME || !ME.is_admin) return;
+  let data;
+  try { data = await api('/api/admin/users'); } catch (_) { return; }
+  const money = (n) => `$${(n || 0).toFixed(2)}`;
+  const table = $('admin-users');
+  table.innerHTML = '';
+  const head = document.createElement('tr');
+  head.innerHTML = '<th>Email</th><th>Role</th><th>This month</th>'
+    + '<th>Monthly limit</th><th></th>';
+  table.append(head);
+
+  for (const u of data.users) {
+    const tr = document.createElement('tr');
+    if (u.disabled) tr.className = 'row-disabled';
+
+    const email = document.createElement('td');
+    email.textContent = u.email;
+    const role = document.createElement('td');
+    role.innerHTML = u.is_admin
+      ? '<span class="pill">admin</span>' : '<span class="pill off">user</span>';
+    const spent = document.createElement('td');
+    spent.textContent = money(u.spent_this_month);
+
+    const capCell = document.createElement('td');
+    const cap = document.createElement('input');
+    cap.type = 'number'; cap.min = '0'; cap.step = '1';
+    cap.className = 'admin-cap-input';
+    cap.value = u.monthly_cap ?? '';
+    cap.placeholder = u.is_admin ? '∞'
+      : (data.default_cap != null ? String(data.default_cap) : '∞');
+    cap.disabled = u.is_admin;              // admins are never capped
+    cap.addEventListener('change', () => {
+      const v = cap.value.trim();
+      adminUpdate(u.id, { monthly_cap: v === '' ? null : Number(v) });
+    });
+    capCell.append(cap);
+
+    const actions = document.createElement('td');
+    const toggle = document.createElement('button');
+    toggle.className = 'link';
+    toggle.textContent = u.disabled ? 'Enable' : 'Disable';
+    if (u.id === ME.id) toggle.disabled = true;   // no locking yourself out
+    toggle.addEventListener('click',
+      () => adminUpdate(u.id, { disabled: !u.disabled }));
+    actions.append(toggle);
+
+    tr.append(email, role, spent, capCell, actions);
+    table.append(tr);
+  }
+}
+
+boot();

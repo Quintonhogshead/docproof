@@ -453,3 +453,142 @@ details.sections > summary {
 
 #sheet-styles { margin-top: 0.8rem; }
 #sheet-override { font-size: 0.82rem; word-break: break-all; }
+
+/* ── web build: sign-in, the user badge, and God Mode ──────────────────── */
+
+/* The sign-in is the cover, not the desk: an editorial, bookish moment. A warm
+   paper field with a faint manuscript ruling, a real book serif, an ink rule,
+   and a load that settles line by line. Uses only system faces, so the offline
+   desktop shell (which never shows this) is unaffected. */
+:root {
+  --book: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua",
+          "Hoefler Text", Georgia, serif;
+  --ink-deep: #2a1d12;
+}
+@media (prefers-color-scheme: dark) { :root { --ink-deep: #f0e7dd; } }
+
+#login {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  color: var(--ink);
+  background:
+    radial-gradient(120% 90% at 15% 0%, rgba(124, 74, 45, 0.10), transparent 55%),
+    radial-gradient(120% 90% at 100% 100%, rgba(124, 74, 45, 0.08), transparent 50%),
+    repeating-linear-gradient(0deg, transparent 0 33px,
+                              rgba(124, 74, 45, 0.05) 33px 34px),
+    var(--bg);
+}
+.login-card {
+  width: 100%;
+  max-width: 23rem;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent-soft));
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: 2px;
+  padding: 2.4rem 2.1rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4) inset,
+              0 24px 60px -30px rgba(42, 29, 18, 0.55);
+}
+/* Each line rises into place in turn on first paint. */
+.login-card > * {
+  opacity: 0;
+  animation: login-rise 0.62s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.login-card > *:nth-child(1) { animation-delay: 0.02s; }
+.login-card > *:nth-child(2) { animation-delay: 0.09s; }
+.login-card > *:nth-child(3) { animation-delay: 0.16s; }
+.login-card > *:nth-child(4) { animation-delay: 0.24s; }
+.login-card > *:nth-child(5) { animation-delay: 0.32s; }
+.login-card > *:nth-child(6) { animation-delay: 0.40s; }
+.login-card > *:nth-child(7) { animation-delay: 0.46s; }
+@keyframes login-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-card > * { animation: none; opacity: 1; }
+}
+
+.login-kicker {
+  margin: 0;
+  font: 0.7rem/1 var(--book);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.login-mark {
+  margin: 0.1rem 0 0;
+  font: 500 2.7rem/1 var(--book);
+  letter-spacing: -0.015em;
+  color: var(--ink-deep);
+}
+.login-lede {
+  margin: 0 0 0.5rem;
+  font: italic 1.02rem/1.5 var(--book);
+  color: var(--muted);
+}
+.login-card .field span { font-size: 0.85rem; }
+.login-card input {
+  border-radius: 2px;
+  background: var(--bg);
+}
+.login-card input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.login-card .big-button {
+  margin-top: 0.4rem;
+  border-radius: 2px;
+  letter-spacing: 0.02em;
+}
+.login-foot {
+  margin: 0.3rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+
+/* The header stretches so the user badge can sit at the far right. */
+#user-area {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+#user-email { font-size: 0.85rem; }
+
+/* God Mode */
+.admin-new {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem 1rem;
+  align-items: end;
+}
+.admin-new .field.narrow { max-width: 9rem; }
+.admin-new .checkbox { grid-column: 1 / -1; }
+@media (max-width: 620px) {
+  .admin-new { grid-template-columns: 1fr; }
+}
+
+#admin-users td { vertical-align: middle; }
+#admin-users .admin-cap-input { width: 5rem; }
+.pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.pill.off { background: var(--line); color: var(--muted); }
+.row-disabled td { opacity: 0.5; }
