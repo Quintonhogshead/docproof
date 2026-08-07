@@ -62,6 +62,18 @@ PREP_OUTPUTS = {"indesign": ["indesign"], "tracked": ["tracked"],
                 "both": ["indesign", "tracked"]}
 
 
+class _ReplayOnly:
+    """A provider that refuses to call out. `download_anyway` replays a
+    completed run from its checkpoint, so every call should already be cached;
+    if one is not, this raises instead of quietly paying for a re-review."""
+    name = "replay-only"
+
+    def complete_structured(self, **kwargs):
+        raise RuntimeError(
+            "download-anyway expected every call to be in the checkpoint, but "
+            "one was missing — refusing to re-run the review at cost.")
+
+
 @dataclass
 class Job:
     id: str
@@ -108,6 +120,14 @@ class Job:
     cache_write_tokens: int = 0
     api_calls: int = 0
     cost: float | None = None
+    # Set when a review failed the reject-all audit specifically (as opposed to
+    # a provider or ingest error), so the results card can offer "download
+    # anyway" only where it applies.
+    audit_failed: bool = False
+    # Set when the user chose "download anyway" on such a review: the file was
+    # written with the audit downgraded to a warning, so it is clear the
+    # integrity check did not pass.
+    audit_overridden: bool = False
 
     @property
     def is_prep(self) -> bool:
@@ -347,6 +367,42 @@ class JobRunner:
     def discard_checkpoint(self, job_id: str) -> None:
         (self.store.dir(job_id) / "checkpoint.json").unlink(missing_ok=True)
 
+    def download_anyway(self, job_id: str) -> Job | None:
+        """Write the reviewed document for a review that failed the reject-all
+        audit, with the audit downgraded to a warning.
+
+        Costs nothing: every model call is already in the checkpoint, so the
+        findings replay without touching the provider. The checkpoint is
+        fingerprinted on the *original* config, so it is rebuilt and replayed
+        under that config first; only then is the audit downgraded, for the
+        write itself. The audit failure stays recorded (audit_overridden=True)
+        so nothing pretends the check passed."""
+        job = self.store.get(job_id)
+        if job is None or job.is_prep or job.state != "failed":
+            return None
+
+        cfg = self.config_for(job)                      # original: audit strict
+        prepared = prepare(cfg, job.source_path, self.error_dir,
+                           selection=job.selection)
+        checkpoint = self._checkpoint(job, cfg, prepared)
+        # _ReplayOnly guarantees this makes no API calls: if the checkpoint is
+        # somehow incomplete, it raises rather than silently charging for a
+        # re-review.
+        findings, usage = run_sync(cfg, prepared, _ReplayOnly(),
+                                   checkpoint=checkpoint)
+
+        cfg.audit = "warn"                              # now let the write pass
+        out = (Path(job.results_dir) if job.results_dir
+               else self._claim_results_dir(job))
+        outputs = finish(prepared, findings, usage, cfg, out_dir=out,
+                         source_path=job.source_path)
+        checkpoint.delete()
+        updated = self.store.update(job_id, state="done", audit_overridden=True,
+                                    applied=outputs.applied,
+                                    results_dir=str(out), error=job.error)
+        self._record_usage(job_id, out, cfg.api.model, batch=False)
+        return updated
+
     def _provider(self, cfg: Config):
         name = provider_for(cfg.api.model, cfg.api.provider)
         return build_provider(cfg, api_key=get_api_key(name))
@@ -475,7 +531,7 @@ class JobRunner:
             log.error("Review for %s failed its reject-all audit: %s",
                       job.id, e)
             self.store.update(job_id, state="failed", error=str(e),
-                              results_dir=str(out))
+                              results_dir=str(out), audit_failed=True)
             self._record_usage(job_id, out, cfg.api.model, batch=False)
             return
         except Exception:                     # noqa: BLE001 - re-raised below

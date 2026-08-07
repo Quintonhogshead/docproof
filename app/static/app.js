@@ -744,7 +744,30 @@ function renderJobs(jobs) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
       actions.append(retry);
-      li.append(why, actions);
+
+      // A review that failed only the integrity check has all its work done
+      // and paid for — offer to hand the file over anyway, clearly flagged.
+      if (job.audit_failed) {
+        const note = actionNote();
+        const anyway = document.createElement('button');
+        anyway.textContent = 'Download anyway';
+        anyway.addEventListener('click', async () => {
+          anyway.disabled = true;
+          note.hidden = true;
+          try {
+            await api(`/api/jobs/${job.id}/download-anyway`, { method: 'POST' });
+            refreshJobs();
+          } catch (err) {
+            note.textContent = err.message;
+            note.hidden = false;
+            anyway.disabled = false;
+          }
+        });
+        actions.append(anyway);
+        li.append(why, actions, note);
+      } else {
+        li.append(why, actions);
+      }
     }
 
     list.append(li);
