@@ -1,0 +1,47 @@
+error_type: tense_shift
+
+# Seeded errors: an unmotivated past/present switch inside one sentence.
+# Traps (expect: clean): legitimate tense combinations, historical present,
+# flashback-within-a-sentence, dialogue — the deliberate prose this type must
+# not touch. None of these paragraphs appear as a calibration example.
+cases:
+  - id: ts-001
+    text: "He shut the ledger and reaches for the lamp on the corner of the desk."
+    expect: { span: "reaches", correction: "reached", confidence: high }
+
+  - id: ts-002
+    text: "The horses bolted at the noise and run straight for the broken fence."
+    expect: { span: "run", correction: "ran", confidence: high }
+
+  - id: ts-003
+    text: "She counted the coins twice and slides them back across the counter without a word."
+    expect: { span: "slides", correction: "slid", confidence: high }
+
+  - id: ts-004
+    text: "The tide went out before dawn and leaves the little boats leaning in the mud."
+    expect: { span: "leaves", correction: "left", confidence: high }
+
+  - id: ts-005
+    text: "They buried the dog under the elm and say nothing to each other for the rest of the day."
+    expect: { span: "say", correction: "said", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ts-101
+    text: "She knew, even then, that the river still runs black past the mill on winter mornings."
+    expect: clean          # ongoing general truth, not a shift
+
+  - id: ts-102
+    text: "He remembered the orchard as it stands today, gone to bramble and rust."
+    expect: clean          # present describes the present, deliberately
+
+  - id: ts-103
+    text: "\"I told him,\" she said, \"and now he thinks he owns the place.\""
+    expect: clean          # dialogue moves between tenses naturally
+
+  - id: ts-104
+    text: "The sergeant raises his hand, the column halts, and the dust rolls on ahead of them."
+    expect: clean          # sustained historical present
+
+  - id: ts-105
+    text: "She walks the same shoreline she walked as a child, counting the same grey stones."
+    expect: clean          # flashback comparison within the sentence

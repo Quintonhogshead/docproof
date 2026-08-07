@@ -102,6 +102,40 @@ main { max-width: 46rem; margin: 0 auto; padding: 2rem 1.5rem 5rem; }
 #dropzone.hot { border-color: var(--accent); background: var(--accent-soft); }
 #dropzone p { margin: 0.3rem 0; }
 .big { font-size: 1.3rem; font-weight: 600; }
+
+/* Compare tab: two smaller dropzones sharing the review dropzone's look. */
+.dropzone {
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 2rem 1.25rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone:focus-visible {
+  border-color: var(--accent); outline: none;
+}
+.dropzone.hot { border-color: var(--accent); background: var(--accent-soft); }
+.dropzone p { margin: 0; }
+.compare-drops {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+@media (max-width: 640px) { .compare-drops { grid-template-columns: 1fr; } }
+.compare-label { margin: 0 0 0.4rem; font-weight: 600; }
+.tile-num {
+  font-size: 1.35rem; font-weight: 600; letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.tile-label { font-size: 0.85rem; color: var(--muted); }
+.cmp-list { margin: 0.5rem 0 0; padding-left: 1.1rem; }
+.cmp-list li {
+  margin: 0.3rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
 .small { font-size: 0.85rem; }
 #drop-formats { margin-top: 0.8rem; }
 

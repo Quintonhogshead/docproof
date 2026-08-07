@@ -1,0 +1,51 @@
+error_type: spelling
+
+# Seeded errors: a common misspelling or typo dropped into otherwise clean
+# narration. Traps: coined names, dialect, archaic forms, and a consistently
+# British paragraph — the false positives the do-not-flag list exists for. No
+# paragraph here is a shipped calibration example.
+cases:
+  - id: sp-001
+    text: "The committee met in secret and reached no concensus before midnight."
+    expect: { span: "concensus", correction: "consensus", confidence: high }
+
+  - id: sp-002
+    text: "He kept the recipts in a shoebox under the bed for nineteen years."
+    expect: { span: "recipts", correction: "receipts", confidence: high }
+
+  - id: sp-003
+    text: "It was a seperate matter entirely, and she refused to discuss it."
+    expect: { span: "seperate", correction: "separate", confidence: high }
+
+  - id: sp-004
+    text: "The accident occured on the coast road just after the rain stopped."
+    expect: { span: "occured", correction: "occurred", confidence: high }
+
+  - id: sp-005
+    text: "They found the arrangment strange but did not say so aloud."
+    expect: { span: "arrangment", correction: "arrangement", confidence: high }
+
+  - id: sp-006
+    text: "She hte the door open and stepped into the cold of the stairwell."
+    expect: { span: "hte", correction: "hit", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: sp-101
+    text: "Vorrenth had not spoken to the Thennish envoy since the Sundering."
+    expect: clean          # coined proper nouns
+
+  - id: sp-102
+    text: "\"Y'all ain't goin' nowhere till that fence is mended,\" he drawled."
+    expect: clean          # dialect in dialogue
+
+  - id: sp-103
+    text: "'Twas the grey hour when the o'erworn travellers came at last to rest."
+    expect: clean          # archaic and poetic forms
+
+  - id: sp-104
+    text: "The neighbours realised the colour of the harbour had changed overnight."
+    expect: clean          # consistent British spelling
+
+  - id: sp-105
+    text: "The ransom note read: I have you're cat. Leeve the muny by the oek tree."
+    expect: clean          # deliberate misspelling characterizing an artifact

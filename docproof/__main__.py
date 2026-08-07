@@ -94,10 +94,46 @@ def main(argv=None) -> int:
                      help="label everything as running text; exercises the "
                           "writers and the verifier with no API call")
 
+    cmp = sub.add_parser(
+        "compare", help="compare the tracked changes on two .docx files "
+                        "(e.g. a human proofread vs docproof's output)")
+    cmp.add_argument("doc_a", help="the baseline / ground-truth doc "
+                                   "(e.g. the human-proofread manuscript)")
+    cmp.add_argument("doc_b", help="the doc to compare against it "
+                                   "(e.g. docproof's Pre-Proofread output)")
+    cmp.add_argument("--config", default="config/default.yaml")
+    cmp.add_argument("--out", help="where to write the report "
+                                   "(default: from config)")
+    cmp.add_argument("--label-a", default="human",
+                     help="name for doc_a in the report (default: human)")
+    cmp.add_argument("--label-b", default="docproof",
+                     help="name for doc_b in the report (default: docproof)")
+
+    ev = sub.add_parser(
+        "eval", help="score the model against the held-out corpus "
+                     "(docs/accuracy-eval-plan.md)")
+    ev.add_argument("--config", default="config/default.yaml")
+    ev.add_argument("--model")
+    ev.add_argument("--error-types",
+                    help="score only these passes (same syntax as review); "
+                         "cases of other types are skipped")
+    ev.add_argument("--out", help="where to write the scorecard "
+                                  "(default: from config)")
+    ev.add_argument("--cases-dir", default="eval/cases",
+                    help="the corpus directory (default: eval/cases)")
+    ev.add_argument("--gate", choices=["low", "medium", "high"],
+                    default="medium",
+                    help="confidence gate the per-type table is shown at; the "
+                         "full low/medium/high curve is always reported")
+    ev.add_argument("--mock-findings",
+                    help="JSON file of raw findings; scores the harness itself "
+                         "with no API call")
+
     args = ap.parse_args(argv)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
-            "collect": cmd_collect, "prep": cmd_prep}[args.cmd](args)
+            "collect": cmd_collect, "prep": cmd_prep,
+            "eval": cmd_eval, "compare": cmd_compare}[args.cmd](args)
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -371,6 +407,127 @@ def cmd_prep(args) -> int:
     for path in list(outputs.documents.values()) + [outputs.notes_md,
                                                     outputs.notes_json]:
         print(f"  {path}")
+    return 0
+
+
+def cmd_compare(args) -> int:
+    import json as _json
+
+    from .trackdiff import (TrackDiffError, compare_edits, extract_edits,
+                            open_docx, render_markdown, report_json)
+
+    cfg = load_config(args.config)
+    if getattr(args, "out", None):
+        cfg.output_dir = args.out
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+
+    try:
+        a = extract_edits(open_docx(args.doc_a))
+        b = extract_edits(open_docx(args.doc_b))
+    except TrackDiffError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    report = compare_edits(a, b, label_a=args.label_a, label_b=args.label_b)
+
+    out.mkdir(parents=True, exist_ok=True)
+    md_path = out / "compare.md"
+    json_path = out / "compare.json"
+    md_path.write_text(render_markdown(report, a.base), encoding="utf-8")
+    json_path.write_text(
+        _json.dumps(report_json(report, a.base), indent=2, ensure_ascii=False),
+        encoding="utf-8")
+
+    def pct(x): return f"{x * 100:.0f}%" if x is not None else "—"
+    print(f"{args.label_a}: {a.edit_count} edit(s)  ·  "
+          f"{args.label_b}: {b.edit_count} edit(s)  ·  "
+          f"{report.aligned_paras} paragraph(s) compared")
+    if report.unaligned:
+        print(f"  {len(report.unaligned)} paragraph(s) skipped "
+              f"(base text differs — not comparable)")
+    print(f"\n  agree {report.agree}  ·  different fix {report.diff_fix}  ·  "
+          f"only {args.label_a} {report.only_a}  ·  "
+          f"only {args.label_b} {report.only_b}")
+    print(f"\nScored against {args.label_a} as ground truth:")
+    print(f"  located recall {pct(report.located_recall)}  ·  "
+          f"exact recall {pct(report.exact_recall)}  ·  "
+          f"precision {pct(report.precision)}  ·  F1 {pct(report.f1)}")
+    print(f"\n  {md_path}\n  {json_path}")
+    return 0
+
+
+def cmd_eval(args) -> int:
+    from .eval.corpus import CorpusError, check_no_leakage, load_corpus
+    from .eval.runner import run_eval
+    from .eval.scorecard import write_scorecard
+    from .eval.scorer import score_curve
+
+    cfg, error_dir = _configure(args)
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+
+    try:
+        cases = load_corpus(args.cases_dir)
+        check_no_leakage(cases, error_dir)
+    except (CorpusError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    # The corpus is per-type; scoring only makes sense for the types the run
+    # actually exercises. --error-types narrows the passes; narrow the cases to
+    # match so a skipped type is not scored as all-misses.
+    enabled = set(cfg.error_type_keys)
+    cases = [c for c in cases if c.error_type in enabled]
+    if not cases:
+        print("error: no corpus cases match the enabled error types.",
+              file=sys.stderr)
+        return 2
+
+    provider = None
+    mock = None
+    if args.mock_findings:
+        mock = _load_mocks(args.mock_findings)
+        if mock is None:
+            return 2
+    else:
+        try:
+            provider = build_provider(cfg)
+        except ProviderError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    n_err = sum(1 for c in cases if not c.is_clean)
+    n_trap = len(cases) - n_err
+    print(f"Scoring {len(cases)} cases ({n_err} seeded errors, {n_trap} traps) "
+          f"across {len(enabled)} type(s) on {cfg.api.model}"
+          f"{' [mock]' if mock else ''}")
+
+    def progress(done, total):
+        print(f"  reviewing {done}/{total}", end="\r", flush=True)
+
+    work = out / "eval"
+    try:
+        run = run_eval(cfg, cases, error_dir, work, provider=provider,
+                       mock_findings=mock,
+                       progress=None if mock else progress)
+    except (IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    curve = score_curve(run)
+    json_path, md_path = write_scorecard(curve, work, default_gate=args.gate)
+
+    card = curve[args.gate]
+    p, r, f = card.micro
+    def pct(x): return f"{x * 100:.0f}%" if x is not None else "—"
+    print(f"\nAt the {args.gate} gate: "
+          f"precision {pct(p)}, recall {pct(r)}, F1 {pct(f)}")
+    print(f"  trap false-positive rate: {pct(card.trap_fp_rate)}")
+    print(f"  anchor-failure rate:      {pct(card.anchor_failure_rate)}")
+    if card.cost is not None:
+        print(f"  cost: ${card.cost:.2f}")
+    print(f"\n  {md_path}\n  {json_path}")
     return 0
 
 
