@@ -222,6 +222,21 @@ select, input[type="text"], input[type="password"], input[type="time"] {
   color: var(--ink);
 }
 
+/* Effort slider: the current level rides at the end of the label. */
+#effort-field > span:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+#effort-name { color: var(--accent); font-weight: 600; }
+input[type="range"] {
+  width: 100%;
+  margin: 0.15rem 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 button {
   font: inherit;
   padding: 0.45rem 0.9rem;

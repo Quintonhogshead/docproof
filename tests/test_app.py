@@ -912,6 +912,41 @@ def test_settings_survive_a_restart(client, tmp_path):
     assert Settings.load(Paths(tmp_path)).model == "claude-opus-5"
 
 
+# --- reasoning effort ---------------------------------------------------------
+
+def test_the_effort_default_persists_and_round_trips(client, tmp_path):
+    resp = client.put("/api/settings", json={"effort": "high"})
+    assert resp.status_code == 200
+    assert resp.json()["settings"]["effort"] == "high"
+    assert client.get("/api/settings").json()["settings"]["effort"] == "high"
+    assert Settings.load(Paths(tmp_path)).effort == "high"
+
+
+def test_an_unknown_effort_default_is_refused(client):
+    assert client.put("/api/settings", json={"effort": "turbo"}).status_code == 400
+
+
+def test_a_review_falls_back_to_the_saved_effort(client):
+    """A page that sends no effort inherits whatever the default was set to."""
+    client.put("/api/settings", json={"effort": "medium"})
+    job = _run(client, _upload(client)["id"])
+    assert job["effort"] == "medium"
+
+
+def test_a_review_can_override_the_saved_effort_for_one_run(client):
+    client.put("/api/settings", json={"effort": "low"})
+    job = _run(client, _upload(client)["id"], effort="max")
+    assert job["effort"] == "max"
+
+
+def test_a_job_asking_for_an_unknown_effort_is_refused(client):
+    staged = _upload(client)
+    resp = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-sonnet-5",
+        "mode": "now", "effort": "turbo"})
+    assert resp.status_code == 400
+
+
 def test_staged_file_id_cannot_escape_the_uploads_folder(client, tmp_path):
     outside = tmp_path.parent / "secret.docx"
     outside.write_bytes(b"PK")
