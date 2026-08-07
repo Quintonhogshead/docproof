@@ -205,12 +205,11 @@ class Analyzer:
 
     # -- public ---------------------------------------------------------------
 
-    def analyze_chunk(self, chunk: Chunk, usage: Usage
-                      ) -> tuple[list[Finding], bool]:
-        """One call. The bool is whether the provider actually answered —
-        a run that checkpoints its results needs to tell a failed call from a
-        chunk with nothing wrong in it, because `[]` alone means both."""
-        result = self.provider.complete_structured(
+    def fetch(self, chunk: Chunk) -> ProviderResult:
+        """Just the network call for one chunk — no parsing, no id assignment,
+        no shared state touched. Pure, so it is safe to run for several chunks
+        concurrently; the ordered bookkeeping happens later in process_result."""
+        return self.provider.complete_structured(
             model=self.cfg.api.model,
             system=self.system_prompt,
             user=render_chunk(chunk),
@@ -218,11 +217,26 @@ class Analyzer:
             schema_name=self.schema_name,
             max_tokens=self.cfg.api.max_output_tokens,
         )
+
+    def process_result(self, result: ProviderResult, chunk: Chunk,
+                       usage: Usage) -> tuple[list[Finding], bool]:
+        """Turn one provider result into findings, counting its tokens and
+        assigning ids. Must run in document order — it advances the shared id
+        counter — so the caller calls it serially even when fetch() ran in
+        parallel. The bool is whether the provider actually answered: a run that
+        checkpoints needs to tell a failed call from a clean chunk, because `[]`
+        means both."""
         usage.add(result.usage)
         parsed = self._unwrap(result, chunk.chunk_id)
         if parsed is None:
             return [], False
         return self._to_findings(list(parsed.findings), chunk), True
+
+    def analyze_chunk(self, chunk: Chunk, usage: Usage
+                      ) -> tuple[list[Finding], bool]:
+        """One call, fetch and bookkeeping together — the serial path and the
+        interface the batch collector mirrors."""
+        return self.process_result(self.fetch(chunk), chunk, usage)
 
     def findings_from(self, result: ProviderResult, chunk: Chunk,
                       usage: Usage) -> list[Finding]:

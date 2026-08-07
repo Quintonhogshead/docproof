@@ -19,6 +19,13 @@ class APIConfig(BaseModel):
     # a low setting is both cheaper and no less accurate here. Ignored on
     # models that don't accept it. null omits the parameter entirely.
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
+    # How many chunk requests a synchronous ("right now") review has in flight
+    # at once. A review is one call per (pass, chunk), and they are independent,
+    # so fetching several concurrently is most of the wall-clock win. Ordering,
+    # cost accounting and resume are unaffected — findings are still assembled
+    # in document order. 1 restores the old strictly-serial behaviour; keep it
+    # modest so a big manuscript does not trip the provider's rate limit.
+    concurrency: int = Field(default=8, ge=1)
 
 
 class ChunkingConfig(BaseModel):
