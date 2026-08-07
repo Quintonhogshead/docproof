@@ -32,8 +32,8 @@ sweeps:
 
 | sweep | what it fixes |
 |---|---|
-| `sweep_ellipsis` | `...` and `. . .` become `…`, with a non-breaking space before and a plain space after |
-| `sweep_dash` | `--`/`---` become an en dash between numbers, an unspaced em dash elsewhere; a spaced en dash becomes an em dash |
+| `sweep_ellipsis` | `...` and `. . .` become `…`; the spacing around it follows `style.ellipsis` (default `nbsp`, the house convention: a non-breaking space before, a plain space after — see below) |
+| `sweep_dash` | `--`/`---` become an en dash between numbers, an unspaced em dash elsewhere; a spaced en dash *or* a pre-existing spaced em dash closes up to an unspaced em dash |
 | `sweep_stacked_punctuation` | `!!`, `?!`, `‽` collapse to one mark; a question stays a question |
 | `sweep_doubled_word` | `the the` → `the`, minus the doublings that are real English |
 | `sweep_century` | `20th century` → `twentieth century` |
@@ -65,6 +65,33 @@ Because both the sweep and the error type can see a pronoun-subject dialogue
 tag, the model sometimes reports one the sweep already fixed. The validator
 rejects it as `rejected_overlap` and the summary says so. That redundancy is
 deliberate: turning sweeps off must not turn the rule off.
+
+### A house-style choice: ellipsis spacing
+
+Some sweeps enforce a rule; one enforces a *preference*. How an ellipsis sits
+against its neighbours is the press's call, not a grammar fact, so it is a
+config knob — `style.ellipsis` in `config/default.yaml`:
+
+- `nbsp` (default) — a non-breaking space before the ellipsis, so it never
+  wraps away from the word it trails, and a plain space after: `Bad␣…` (the
+  space before is non-breaking). This is the Atmosphere house convention, set
+  out in the proofreading brief, so it is the default.
+- `closed` — no space before the ellipsis, a plain space after only when a word
+  follows: `I… guess`, `"I don't know…"`. For a manuscript or imprint that sets
+  ellipses closed up instead of to the house convention.
+- `space` — a plain space on both sides.
+
+Only the leading space changes between modes; the glyph is always normalized to
+`…` and the trailing space before the next word is the same in all three. In
+every mode the sweep leaves an already-correct ellipsis alone, so it never
+re-touches one that already follows the configured convention.
+
+Note that the default deliberately re-spaces a bare `…` that lacks the
+non-breaking space, because the brief calls that out by name: "Check pre-existing
+… characters too — many manuscripts contain … without the required non-breaking
+space before." A comparison against a human file that sets ellipses closed up
+will therefore show these as disagreements — the sweep is applying house style,
+not fighting it.
 
 ### The scripted-check report
 

@@ -205,7 +205,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                  # because editing the rest of the book is not what was asked
                  # for.
                  if p.para_id in covered or (whole and not p.reviewable)]
-        sweep_findings, sweep_reports = run_sweeps(swept, cfg.sweeps, variant)
+        sweep_findings, sweep_reports = run_sweeps(
+            swept, cfg.sweeps, variant, ellipsis_style=cfg.style.ellipsis)
 
         # The spell scan reads the WHOLE document even when the run covers a
         # few sections. It changes nothing, so reading more costs nothing — and

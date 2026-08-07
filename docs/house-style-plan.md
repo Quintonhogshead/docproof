@@ -86,8 +86,10 @@ sweeps run over the `DocumentModel`, footnotes and endnotes are covered free —
 `walk_package` already ingests them, which satisfies the prompt's Operating
 Principle 8.
 
-Sweeps: stacked punctuation · three-dot ellipsis → `…` and the NBSP before it ·
-hyphen-run dashes (`--`/`---`, en dash between numbers, em dash in prose) ·
+Sweeps: stacked punctuation · three-dot ellipsis → `…`, spaced to the house
+convention (`style.ellipsis`, default `nbsp` — a non-breaking space before) ·
+hyphen-run dashes (`--`/`---`, en dash between numbers, em dash in prose) and
+closing up a spaced em dash ·
 doubled words · centuries · numbers candidate detection feeding the Phase 1
 `number_style` judgment · the dialogue-tag exhaustive table, all cells
 enumerated as data, both character orders.

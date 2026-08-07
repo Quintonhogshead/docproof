@@ -76,6 +76,24 @@ class NormalizeConfig(BaseModel):
     spaces: bool = True       # runs of two or more spaces collapse to one
 
 
+class StyleConfig(BaseModel):
+    """House-style conventions the deterministic sweeps enforce where the right
+    answer is a publisher's choice rather than a rule. Kept here and not in the
+    per-English variant files because none of it flips on US/UK — a house sets
+    it once for every manuscript it proofreads.
+
+    `ellipsis` is how an ellipsis sits against the words around it:
+      nbsp   — a non-breaking space before it, so it never wraps away from the
+        word it trails, and a plain space after. The Atmosphere house
+        convention (Bad[NBSP]… she trailed off), so it is the default.
+      closed — no space before it, a plain space after only when a word
+        follows ("I… guess"). For a manuscript or imprint that sets ellipses
+        closed up instead of to the house convention.
+      space  — a plain space on both sides.
+    The trailing space is the same in every mode; only the lead differs."""
+    ellipsis: Literal["nbsp", "closed", "space"] = "nbsp"
+
+
 class SpellcheckConfig(BaseModel):
     """A dictionary scan that classifies rather than corrects. Its output is
     context for the model passes — the manuscript's own vocabulary as a
@@ -127,6 +145,7 @@ class Config(BaseModel):
     skip: SkipConfig = Field(default_factory=SkipConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
+    style: StyleConfig = Field(default_factory=StyleConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)

@@ -12,8 +12,8 @@ import pytest
 
 from docproof.config import Config
 from docproof.models import DocumentModel, ParagraphRef
-from docproof.sweeps import (SWEEPS, SWEEPS_BY_KEY, apply_hits, ordinal_word,
-                             run_sweeps)
+from docproof.sweeps import (SWEEPS, SWEEPS_BY_KEY, _sweep_ellipsis, apply_hits,
+                             ordinal_word, run_sweeps)
 from docproof.validator import validate_findings
 
 ALL = [s.key for s in SWEEPS]
@@ -29,31 +29,55 @@ def unchanged(key: str, text: str) -> bool:
 
 
 # --- ellipsis ----------------------------------------------------------------
+#
+# House style is a non-breaking space before the ellipsis and a plain space
+# after (Bad\u00a0\u2026 she trailed off), so that is the sweep's default. Only
+# the leading space is configurable \u2014 see the style test at the end.
 
 @pytest.mark.parametrize("before,after", [
-    ("She hesitated... then went on.", "She hesitated … then went on."),
-    ("She hesitated . . . then went on.", "She hesitated … then went on."),
-    # The rule is a non-breaking space before and a plain space after, so a
-    # run of dots jammed against the next word gets both.
-    ("She hesitated....then went on.", "She hesitated … then went on."),
-    # A bare ellipsis character is a target too: the rule is as much about the
-    # non-breaking space as about the glyph.
-    ("Bad… she trailed off.", "Bad … she trailed off."),
+    ("She hesitated... then went on.", "She hesitated\u00a0\u2026 then went on."),
+    ("She hesitated . . . then went on.", "She hesitated\u00a0\u2026 then went on."),
+    # A run of dots jammed against the next word gets the glyph, the leading
+    # non-breaking space, and a plain trailing space.
+    ("She hesitated....then went on.", "She hesitated\u00a0\u2026 then went on."),
+    # A bare ellipsis missing the required non-breaking space is a target too:
+    # the brief says to check pre-existing \u2026 characters.
+    ("Bad\u2026 she trailed off.", "Bad\u00a0\u2026 she trailed off."),
     # No space is added before a closing quote, only before the ellipsis.
-    ("“I don't know…” she said.", "“I don't know …” she said."),
+    ("\u201cI don't know\u2026\u201d she said.", "\u201cI don't know\u00a0\u2026\u201d she said."),
 ])
 def test_ellipsis_normalizes_glyph_and_spacing(before, after):
     assert swept("sweep_ellipsis", before) == after
 
 
-def test_ellipsis_leaves_a_correct_one_alone():
-    assert unchanged("sweep_ellipsis", "Bad … she trailed off.")
+def test_ellipsis_leaves_a_house_style_one_alone():
+    assert unchanged("sweep_ellipsis", "Bad\u00a0\u2026 she trailed off.")
 
 
 def test_ellipsis_at_the_start_of_a_paragraph_gets_no_leading_space():
     """There is nothing for the non-breaking space to hold on to at the start
-    of a paragraph, so only the trailing space is added."""
-    assert swept("sweep_ellipsis", "…and then nothing.") == "… and then nothing."
+    of a paragraph, so only the trailing space is added, in every style."""
+    assert swept("sweep_ellipsis", "\u2026and then nothing.") == "\u2026 and then nothing."
+
+
+@pytest.mark.parametrize("style,after", [
+    ("nbsp", "I\u00a0\u2026 guess"),     # house style: a non-breaking space before
+    ("closed", "I\u2026 guess"),          # no space before
+    ("space", "I \u2026 guess"),          # a plain space before
+])
+def test_ellipsis_style_chooses_the_leading_space(style, after):
+    """style.ellipsis picks the lead; the trailing space before the next word
+    is the same in every mode."""
+    text = "I... guess"
+    assert apply_hits(text, _sweep_ellipsis(text, None, style)) == after
+
+
+def test_ellipsis_closed_mode_closes_up_a_house_style_ellipsis():
+    """The escape hatch: a book that sets ellipses closed up gets the leading
+    non-breaking space removed, and an already-closed one is left alone."""
+    text = "I\u00a0\u2026 guess"
+    assert apply_hits(text, _sweep_ellipsis(text, None, "closed")) == "I\u2026 guess"
+    assert not _sweep_ellipsis("I\u2026 guess", None, "closed")
 
 
 # --- dashes ------------------------------------------------------------------
@@ -69,6 +93,10 @@ def test_ellipsis_at_the_start_of_a_paragraph_gets_no_leading_space():
     # A spaced en dash is an em dash doing the wrong job.
     ("He waited – and waited – for an answer.",
      "He waited—and waited—for an answer."),
+    # A pre-existing spaced em dash is house style set the wrong way; close
+    # it up. (The proofreader in the field does exactly this by hand.)
+    ("Hannah — only nineteen — smiled.", "Hannah—only nineteen—smiled."),
+    ("He turned — and stopped.", "He turned—and stopped."),
 ])
 def test_dash_conversions(before, after):
     assert swept("sweep_dash", before) == after
@@ -78,6 +106,7 @@ def test_dash_conversions(before, after):
     "The range was 1999–2005 exactly.",       # a correct tight en dash
     "She was a well-known author.",           # a single hyphen is a hyphen
     "post–World War II era",                  # open-compound modifier
+    "The forest—quiet—waited.",              # a correct tight em dash
     "* * *",                                  # a scene divider, not prose
 ])
 def test_dash_leaves_correct_punctuation_alone(text):

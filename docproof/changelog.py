@@ -31,12 +31,16 @@ _MAX_TABLE_ROWS = 600
 def _style_basis(cfg, variant) -> list[str]:
     lines = [f"This manuscript was proofread as {variant.name}."]
     lines += list(variant.authorities)
+    ellipsis_clause = {
+        "closed": "the ellipsis character closed up to the word before it",
+        "nbsp": "the ellipsis character with a non-breaking space before it",
+        "space": "the ellipsis character with a space on each side",
+    }[cfg.style.ellipsis]
     lines.append(
         "The Atmosphere Press House Style Guide applies throughout, and "
         "overrides the above where they differ: serial comma always, "
         "spelled-out numbers to one hundred, spelled-out centuries, unspaced "
-        "em dashes, and the ellipsis character with a non-breaking space "
-        "before it.")
+        f"em dashes, and {ellipsis_clause}.")
     if variant.confirm:
         # The brief asks for this by name. Canadian and Australian English are
         # hybrids — Canadian takes U.S. punctuation with Canadian spelling —
