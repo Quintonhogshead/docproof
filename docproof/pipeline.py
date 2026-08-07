@@ -275,32 +275,51 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
              progress=None, checkpoint=None) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk).
 
-    `progress` is called with (done, total) after each call so a UI can show
-    movement; it is the only reason this loop isn't a comprehension.
+    The calls are independent, so up to `cfg.api.concurrency` of them are in
+    flight at once — most of a review's wall-clock is waiting on the network,
+    and this is where that time goes. Only the *fetch* is concurrent, though:
+    the results are folded back in strict document order, because the validator
+    gives an earlier finding first claim on a span, the id counter must hand out
+    stable f-NNNN, and the token accounting and resumable checkpoint both depend
+    on that order. So a big manuscript comes back far sooner, byte-for-byte the
+    same as if it had run serially.
+
+    `progress` is called with (done, total) as each call is folded in, in order.
 
     `checkpoint` (a docproof.checkpoint.Checkpoint, already loaded) makes the
-    run resumable: each completed call's findings land in it as they arrive,
-    and calls it already holds are replayed instead of paid for again. The
-    replay happens *in loop order* — the validator gives earlier findings
-    first claim on a span, so order is part of the result, not presentation."""
+    run resumable: each completed call's findings land in it as they arrive, in
+    order, and calls it already holds are replayed instead of paid for again."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from .batch import custom_id
     from .checkpoint import (add_usage, finding_from_dict, finding_to_dict,
                              snapshot, usage_delta)
 
     start = (checkpoint.max_finding_id() + 1) if checkpoint else 1
     ids = itertools.count(start)
+    analyzers = build_analyzers(cfg, prepared.groups, provider, ids,
+                               prepared.vocabulary, prepared.conventions)
+    # The work list, in the order results must be folded back in.
+    work = [(analyzer, chunk, custom_id(i, chunk.chunk_id))
+            for i, analyzer in enumerate(analyzers)
+            for chunk in prepared.chunks]
+
     usage = Usage()
     findings: list = []
     total = prepared.request_count
-    done = 0
-    for i, analyzer in enumerate(build_analyzers(cfg, prepared.groups,
-                                                 provider, ids,
-                                                 prepared.vocabulary,
-                                                 prepared.conventions)):
-        for chunk in prepared.chunks:
-            key = custom_id(i, chunk.chunk_id)
-            cached = checkpoint.get(key) if checkpoint else None
-            if cached is not None:
+
+    with ThreadPoolExecutor(max_workers=cfg.api.concurrency) as pool:
+        # Fetch every uncached chunk concurrently; a cached call needs no
+        # network and gets no future.
+        futures = [
+            None if (checkpoint and checkpoint.get(key) is not None)
+            else pool.submit(analyzer.fetch, chunk)
+            for analyzer, chunk, key in work]
+
+        for done, ((analyzer, chunk, key), future) in enumerate(
+                zip(work, futures), start=1):
+            if future is None:                       # replay a cached call
+                cached = checkpoint.get(key)
                 findings.extend(finding_from_dict(d) for d in cached.items)
                 add_usage(usage, cached.usage)
             else:
@@ -312,13 +331,15 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                 burned = checkpoint.burned(key) if checkpoint else None
                 if burned:
                     add_usage(usage, burned)
-                found, ok = analyzer.analyze_chunk(chunk, usage)
+                # .result() blocks only until THIS call lands; later ones keep
+                # fetching in the pool meanwhile. Bookkeeping stays in order.
+                found, ok = analyzer.process_result(future.result(), chunk,
+                                                    usage)
                 findings.extend(found)
                 if checkpoint:
                     checkpoint.put(
                         key, items=[finding_to_dict(f) for f in found],
                         usage=usage_delta(before, usage), ok=ok)
-            done += 1
             if progress:
                 progress(done, total)
     return findings, usage
