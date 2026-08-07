@@ -7,6 +7,12 @@ change rejected). Two documents that began from the same manuscript share that
 base, so their edits land in the same coordinate system and can be set-compared
 directly.
 
+Paragraphs are lined up by that reject-all *content*, not by ordinal position:
+a single inserted, deleted, or split paragraph — a blank line, a scene break —
+shifts every positional id after it, so aligning on position throws the whole
+tail of the document out of sync. Matching on the base text lets identical prose
+pair up regardless of surrounding structural drift.
+
 The comparison buckets every edit as:
 
   * agree           — both docs make the same net change to the same place
@@ -25,6 +31,7 @@ from __future__ import annotations
 
 import zipfile
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from .models import Anchor
@@ -235,24 +242,44 @@ class CompareReport:
         return 2 * p * r / (p + r)
 
 
+def _ordered(doc: DocEdits) -> list[tuple[str, str]]:
+    """(para_id, reject-all base) in document order. `DocEdits.base` is built by
+    walking the package top to bottom, and dicts preserve insertion order, so
+    this is the paragraph sequence as it reads."""
+    return list(doc.base.items())
+
+
 def compare_edits(a: DocEdits, b: DocEdits, *, label_a: str = "A",
                   label_b: str = "B") -> CompareReport:
     report = CompareReport(label_a=label_a, label_b=label_b)
-    for para_id in sorted(set(a.base) | set(b.base)):
-        base_a = a.base.get(para_id)
-        base_b = b.base.get(para_id)
-        # Only compare where the two docs agree on the underlying (rejected)
-        # text — otherwise the offsets are not in the same coordinate system and
-        # a "match" would be luck. Length-preserving quote-fold aside, this
-        # requires the bases to be identical.
-        if base_a is None or base_b is None or _fold(base_a) != _fold(base_b):
-            if a.edits.get(para_id) or b.edits.get(para_id):
-                report.unaligned.append(para_id)
-            continue
-        report.aligned_paras += 1
-        report.paras.append(_compare_para(para_id, base_a,
-                                          a.edits.get(para_id, []),
-                                          b.edits.get(para_id, [])))
+    a_items = _ordered(a)
+    b_items = _ordered(b)
+    # Align paragraphs by content. We only ever compare a pair whose reject-all
+    # bases are identical (quote-fold aside) — otherwise the offsets are not in
+    # the same coordinate system and a "match" would be luck — so diff the two
+    # sequences of base texts and take difflib's runs of equal paragraphs.
+    a_keys = [_fold(base) for _, base in a_items]
+    b_keys = [_fold(base) for _, base in b_items]
+    sm = SequenceMatcher(a=a_keys, b=b_keys, autojunk=False)
+    matched_a: set[int] = set()
+    matched_b: set[int] = set()
+    for i, j, n in sm.get_matching_blocks():
+        for k in range(n):
+            ia, ib = i + k, j + k
+            matched_a.add(ia)
+            matched_b.add(ib)
+            pa_id, base = a_items[ia]
+            pb_id, _ = b_items[ib]
+            report.aligned_paras += 1
+            report.paras.append(_compare_para(
+                pa_id, base, a.edits.get(pa_id, []), b.edits.get(pb_id, [])))
+    # A paragraph that carries edits but found no content match is unaligned:
+    # its base differs between the two files, so it has no comparable partner.
+    unaligned = {pid for idx, (pid, _) in enumerate(a_items)
+                 if idx not in matched_a and a.edits.get(pid)}
+    unaligned |= {pid for idx, (pid, _) in enumerate(b_items)
+                  if idx not in matched_b and b.edits.get(pid)}
+    report.unaligned = sorted(unaligned)
     # Drop paragraphs where nothing happened, to keep the report about edits.
     report.paras = [p for p in report.paras
                     if p.agree or p.diff_fix or p.only_a or p.only_b]
