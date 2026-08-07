@@ -228,6 +228,7 @@ function hideStaging() {
 
   $('cmp-run').addEventListener('click', runCompare);
   $('cmp-open').addEventListener('click', openReport);
+  $('cmp-download').addEventListener('click', downloadReport);
 
   async function runCompare() {
     if (!(slots.a && slots.b)) return;
@@ -484,6 +485,10 @@ function hideStaging() {
       + `<tr><td>Exact recall (same fix too)</td><td>${pct(s.exact_recall)}</td></tr>`
       + `<tr><td>Precision</td><td>${pct(s.precision)}</td></tr>`
       + `<tr><td>F1</td><td>${pct(s.f1)}</td></tr></tbody></table>`
+      + `<p class="caveat">Precision counts an <em>only in ${esc(d.label_b)}</em> `
+      + `edit against ${esc(d.label_b)}, but such an edit may be a real error `
+      + `${esc(d.label_a)} missed rather than a false alarm. Treat it as a floor `
+      + `and eyeball the “Only in ${esc(d.label_b)}” list below.</p>`
       + `<h2>Missed by ${esc(d.label_b)} (${misses.length})</h2>`
       + `<p class="blurb">${esc(d.label_a)} changed these; ${esc(d.label_b)} `
       + `did not.</p>${oneCol(misses)}`
@@ -532,25 +537,49 @@ function hideStaging() {
   // own Print — saved as a PDF. If a pop-up blocker (or a webview that won't
   // open tabs) stops the window, fall back to handing over the .html file so
   // the button never silently does nothing.
-  function openReport() {
-    if (!lastReport) return;
+  // Build the report as a blob URL both buttons draw from. Returns the URL and
+  // the mode (the mode names the download file). Returns null with nothing on
+  // screen, so callers can no-op.
+  function buildReportUrl() {
+    if (!lastReport) return null;
     const { mode: m, data, nameA, nameB } = lastReport;
     const html = m === 'formatting'
       ? formattingReport(data, nameA, nameB)
       : changesReport(data, nameA, nameB);
-    const blob = new Blob([html], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, '_blank');
-    if (!win) {
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `docproof-compare-${m}.html`;
-      document.body.append(a);
-      a.click();
-      a.remove();
-    }
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    return { url, m };
+  }
+
+  // Hand the blob over as a file the user keeps. Same mechanism the pop-up
+  // fallback below uses, only here it is the whole point rather than a rescue.
+  function saveReportUrl(url, m) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `docproof-compare-${m}.html`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+
+  // Open the report in a new tab. If a pop-up blocker (or a webview that won't
+  // open tabs) stops the window, fall back to saving the file so the button
+  // never silently does nothing.
+  function openReport() {
+    const built = buildReportUrl();
+    if (!built) return;
+    const { url, m } = built;
+    if (!window.open(url, '_blank')) saveReportUrl(url, m);
     // Give the new tab time to load the blob before releasing it.
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // Save the report straight to a file — no tab, no pop-up to be blocked.
+  function downloadReport() {
+    const built = buildReportUrl();
+    if (!built) return;
+    saveReportUrl(built.url, built.m);
+    // The download reads the blob synchronously; release it on the next tick.
+    setTimeout(() => URL.revokeObjectURL(built.url), 0);
   }
 })();
 
