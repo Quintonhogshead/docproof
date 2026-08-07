@@ -12,7 +12,8 @@ from fastapi.testclient import TestClient
 
 from app.accounts import Accounts
 from app.jobs import Job
-from app.main import CAP_ENV, create_app
+from app.main import create_app
+from app.routes.common import CAP_ENV
 from app.settings import Paths
 from .conftest import FIXTURES
 
@@ -21,7 +22,7 @@ SECRET = "test-session-secret"
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "test-key")
     accounts = Accounts(Paths(tmp_path).users_db)
     accounts.create_user("boss@press.com", "password1", is_admin=True)
     accounts.create_user("editor@press.com", "password1")

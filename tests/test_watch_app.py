@@ -36,8 +36,8 @@ FOLDER_URL = f"https://drive.google.com/drive/u/0/folders/{FOLDER}?usp=sharing"
 def client(tmp_path, monkeypatch):
     """An app whose watcher never reaches Google, launchctl or the Keychain."""
     monkeypatch.delenv("DOCPROOF_WATCH_HOME", raising=False)
-    monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
-    monkeypatch.setattr("app.main.key_status", lambda: {})
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.settings.key_status", lambda: {})
     monkeypatch.setattr("app.watch.status.get_api_key",
                         lambda name: "refresh-1")
 
@@ -261,7 +261,7 @@ def test_signing_out_forgets_the_token_but_keeps_the_client(client,
     cannot keep one — and signing in again needs them."""
     configured(client)
     forgotten = []
-    monkeypatch.setattr("app.main.delete_api_key", forgotten.append)
+    monkeypatch.setattr("app.settings.delete_api_key", forgotten.append)
 
     client.delete("/api/watch/auth")
 
@@ -440,7 +440,7 @@ def test_turning_the_schedule_off_removes_it(client, tmp_path):
 
 def test_scheduling_anywhere_but_a_mac_says_so(client, monkeypatch):
     configured(client)
-    monkeypatch.setattr("app.main.sys.platform", "linux")
+    monkeypatch.setattr("sys.platform", "linux")
 
     answer = client.put("/api/watch/schedule", json={"times": "06:00"})
 

@@ -23,8 +23,8 @@ import uvicorn
 
 from .auth import SESSION_ENV, resolve_secret
 from .lock import FolderInUse
-from .main import CONFIG_PATH, create_app
-from .settings import PROVIDERS, key_status
+from .main import create_app
+from .settings import CONFIG_PATH, PROVIDERS, key_status
 
 log = logging.getLogger("docproof.serve")
 

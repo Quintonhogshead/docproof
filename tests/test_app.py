@@ -12,10 +12,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.jobs import Job, JobRunner, JobStore  # noqa: F401 - JobRunner patched
-from app.main import CONFIG_PATH, create_app
+from app.main import create_app
+from app.settings import CONFIG_PATH, Paths, Settings
 from docproof import __version__ as docproof_version
 from docproof.config import load_config
-from app.settings import Paths, Settings
 from .conftest import FIXTURES
 from .fakes import ScriptedBatchProvider, finding_result
 
@@ -41,8 +41,8 @@ def client(tmp_path, provider, monkeypatch):
     monkeypatch.setattr("app.jobs.build_provider",
                         lambda cfg, api_key=None: provider)
     monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
-    monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
-    monkeypatch.setattr("app.main.key_status", lambda: {
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.settings.key_status", lambda: {
         "anthropic": {"configured": True, "source": "environment"},
         "openai": {"configured": True, "source": "environment"},
         "gemini": {"configured": True, "source": "environment"}})
@@ -159,7 +159,7 @@ def test_the_app_can_say_which_build_it_is(client):
 def test_checking_for_a_newer_build_answers_in_a_sentence(client, monkeypatch):
     """However it goes — up to date, behind, or the source folder gone — the
     button has something to print. Nothing here reaches a network."""
-    monkeypatch.setattr("app.main.check_for_update",
+    monkeypatch.setattr("app.version.check_for_update",
                         lambda: {"ok": True, "current": False,
                                  "message": "There are 3 changes …"})
     body = client.get("/api/version/check").json()
@@ -175,10 +175,10 @@ def test_a_new_version_is_downloaded_and_shown_never_installed(client,
     dmg = tmp_path / "DocProof-0.2.0.dmg"
     dmg.write_bytes(b"disk image")
     revealed = []
-    monkeypatch.setattr("app.main.download_release", lambda: {
+    monkeypatch.setattr("app.version.download_release", lambda: {
         "ok": True, "path": str(dmg), "filename": dmg.name,
         "message": f"{dmg.name} is in your Downloads folder."})
-    monkeypatch.setattr("app.main._open_path",
+    monkeypatch.setattr("app.routes.common.open_path",
                         lambda path, *, reveal=False: revealed.append((path, reveal)))
     monkeypatch.setattr("sys.platform", "darwin")
 
@@ -188,7 +188,7 @@ def test_a_new_version_is_downloaded_and_shown_never_installed(client,
 
 
 def test_a_download_that_could_not_happen_says_why(client, monkeypatch):
-    monkeypatch.setattr("app.main.download_release", lambda: {
+    monkeypatch.setattr("app.version.download_release", lambda: {
         "ok": False, "message": "GitHub would not accept that token."})
     resp = client.post("/api/version/download")
     assert resp.status_code == 400
@@ -196,7 +196,7 @@ def test_a_download_that_could_not_happen_says_why(client, monkeypatch):
 
 
 def test_update_route_installs_and_reports(client, monkeypatch):
-    monkeypatch.setattr("app.main.perform_update", lambda runner: {
+    monkeypatch.setattr("app.update.perform_update", lambda runner: {
         "ok": True, "message": "DocProof 0.2.0 is installed — reopening now."})
     body = client.post("/api/version/update").json()
     assert body["ok"] and "reopening" in body["message"]
@@ -208,7 +208,7 @@ def test_update_route_passes_refusals_through_verbatim(client, monkeypatch):
     def refuse(runner):
         raise UpdateError("A document is being worked on right now.")
 
-    monkeypatch.setattr("app.main.perform_update", refuse)
+    monkeypatch.setattr("app.update.perform_update", refuse)
     resp = client.post("/api/version/update")
     assert resp.status_code == 400
     assert "being worked on" in resp.json()["detail"]
@@ -217,7 +217,7 @@ def test_update_route_passes_refusals_through_verbatim(client, monkeypatch):
 def test_rebuild_route_starts_and_reports_its_progress(client, monkeypatch):
     """A minute of work, so the route answers at once and the page asks how it
     is going."""
-    monkeypatch.setattr("app.main.refuse_reason", lambda runner: None)
+    monkeypatch.setattr("app.update.refuse_reason", lambda runner: None)
     monkeypatch.setattr("app.update.rebuild_from_checkout",
                         lambda runner, progress=None, **kw: "0.3.0")
 
@@ -235,7 +235,7 @@ def test_rebuild_route_starts_and_reports_its_progress(client, monkeypatch):
 def test_rebuild_route_refuses_before_it_starts_anything(client, monkeypatch):
     """Somebody who clicks this mid-review is told now, not a second later in
     a progress line."""
-    monkeypatch.setattr("app.main.refuse_reason",
+    monkeypatch.setattr("app.update.refuse_reason",
                         lambda runner: "A document is being worked on right now.")
     started = []
     monkeypatch.setattr("app.update.rebuild_from_checkout",
@@ -252,7 +252,7 @@ def test_a_rebuild_that_fails_is_reported_through_the_progress_route(
         client, monkeypatch):
     from app.update import UpdateError
 
-    monkeypatch.setattr("app.main.refuse_reason", lambda runner: None)
+    monkeypatch.setattr("app.update.refuse_reason", lambda runner: None)
 
     def explode(runner, progress=None, **kw):
         raise UpdateError("The tests do not pass, so nothing was installed.")
@@ -273,7 +273,7 @@ def test_the_github_token_is_stored_like_every_other_secret(client,
     """Not an AI key and nothing bills for it, but it is still a secret: the
     Keychain, never a file, never returned to the page."""
     saved = {}
-    monkeypatch.setattr("app.main.set_api_key",
+    monkeypatch.setattr("app.settings.set_api_key",
                         lambda provider, key: saved.update({provider: key}))
     body = client.put("/api/settings",
                       json={"github_token": "github_pat_abc"}).json()
@@ -373,7 +373,7 @@ def test_download_anyway_refused_on_a_healthy_job(client, provider):
 
 def test_job_is_refused_without_a_key(client, monkeypatch):
     staged = _upload(client)
-    monkeypatch.setattr("app.main.get_api_key", lambda p: None)
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: None)
     resp = client.post("/api/jobs", json={"file_ids": [staged["id"]],
                                           "model": "claude-sonnet-5",
                                           "mode": "now"})
@@ -403,7 +403,7 @@ def test_failed_job_reports_plainly_and_can_be_retried(client, monkeypatch):
 def opened(monkeypatch):
     """Every file the app hands to the desktop, without handing it anywhere."""
     calls: list[tuple[Path, bool]] = []
-    monkeypatch.setattr("app.main._open_path",
+    monkeypatch.setattr("app.routes.common.open_path",
                         lambda path, *, reveal=False: calls.append((path, reveal)))
     monkeypatch.setattr("sys.platform", "darwin")
     return calls
@@ -892,7 +892,7 @@ def test_models_endpoint_prices_the_staged_files(client):
 
 def test_settings_round_trip_never_returns_a_key(client, monkeypatch):
     saved = {}
-    monkeypatch.setattr("app.main.set_api_key",
+    monkeypatch.setattr("app.settings.set_api_key",
                         lambda p, k: saved.__setitem__(p, k))
     resp = client.put("/api/settings", json={
         "model": "claude-haiku-4-5", "min_confidence": "high",

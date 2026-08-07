@@ -28,8 +28,8 @@ def client(tmp_path, provider, monkeypatch):
     monkeypatch.setattr("app.jobs.build_provider",
                         lambda cfg, api_key=None: provider)
     monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
-    monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
-    monkeypatch.setattr("app.main.key_status", lambda: {
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.settings.key_status", lambda: {
         "anthropic": {"configured": True, "source": "environment"},
         "openai": {"configured": True, "source": "environment"},
         "gemini": {"configured": True, "source": "environment"}})
@@ -209,8 +209,8 @@ def indesign(client, monkeypatch, tmp_path):
     client.app_state.settings.indesign_template = str(template)
 
     calls = []
-    monkeypatch.setattr("app.main.find_indesign", lambda: "/Applications/ID.app")
-    monkeypatch.setattr("app.main._open_path",
+    monkeypatch.setattr("docproof.prep.place.find_indesign", lambda: "/Applications/ID.app")
+    monkeypatch.setattr("app.routes.common.open_path",
                         lambda path, *, reveal=False: None)
     monkeypatch.setattr("sys.platform", "darwin")
 
@@ -220,7 +220,7 @@ def indesign(client, monkeypatch, tmp_path):
         Path(out).write_bytes(b"an InDesign document")
         return Path(out)
 
-    monkeypatch.setattr("app.main.place_into_template", fake_place)
+    monkeypatch.setattr("docproof.prep.place.place_into_template", fake_place)
     return calls
 
 
@@ -273,7 +273,7 @@ def test_what_indesign_said_went_wrong_reaches_the_user(client, indesign,
     def boom(*a, **k):
         raise PlaceError("InDesign reported: The template is locked.")
 
-    monkeypatch.setattr("app.main.place_into_template", boom)
+    monkeypatch.setattr("docproof.prep.place.place_into_template", boom)
     job = start_prep(client, upload(client)["id"])
     resp = client.post(f"/api/jobs/{job['id']}/place")
     assert resp.status_code == 400
