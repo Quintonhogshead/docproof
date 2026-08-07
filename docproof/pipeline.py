@@ -360,7 +360,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                   + list(findings),
                                   prepared.doc, cfg.min_confidence,
                                   query_types=prepared.query_types,
-                                  format_types=prepared.format_types)
+                                  format_types=prepared.format_types,
+                                  edit_guard=cfg.edit_guard)
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 

@@ -37,7 +37,8 @@ def shrink(original: str, corrected: str) -> tuple[int, str, str]:
 def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
                       query_types: frozenset[str] = frozenset(),
-                      format_types: dict[str, str] | None = None) -> list[Finding]:
+                      format_types: dict[str, str] | None = None,
+                      edit_guard=None) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
 
     `query_types` are error types that ask rather than correct. They skip the
@@ -49,7 +50,14 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     `format_types` maps an error type to the run formatting it applies. Those
     findings change how text is set rather than what it says, so there is no
     diff to shrink either, and they claim spans in a register of their own —
-    italicising a title and fixing a typo inside it are not in conflict."""
+    italicising a title and fixing a typo inside it are not in conflict.
+
+    `edit_guard` (an EditGuardConfig) is the overreach safety net: a correction
+    that re-types a large span or adds a lot of new text is the model rewriting,
+    not proofreading, and is rejected before it can become a tracked change. It
+    applies only to the shrink-to-a-diff path — a query or a formatting mark is
+    not an edit — and never trips a sweep, whose changes are punctuation-sized.
+    None disables it, which is the default so a bare call stays unguarded."""
     format_types = format_types or {}
     paras = index_paragraphs(doc)
     threshold = CONFIDENCE_RANK[min_confidence]
@@ -127,6 +135,20 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         anchor = Anchor(start=start, end=end,
                         delete_text=deleted, insert_text=inserted)
 
+        # 2.5 — overreach guard. A proofreading fix is minimal; an edit that
+        # re-types a large span or adds a lot of new text is the model
+        # fabricating content or rewriting a passage, and is rejected before it
+        # can reach the manuscript. Checked ahead of the confidence gate so an
+        # over-large edit is never merely "skipped, low confidence" — it is
+        # refused outright, and counted.
+        if edit_guard is not None and edit_guard.enabled and _oversteps(
+                deleted, inserted, edit_guard):
+            out.append(_status(f, "rejected_oversized", anchor))
+            log.warning("%s (%s): rejected as an over-large edit — deletes %d, "
+                        "inserts %d chars, not a minimal proofreading fix",
+                        f.finding_id, f.error_type, len(deleted), len(inserted))
+            continue
+
         # 3 — confidence gate (anchored first, so the report stays informative)
         if CONFIDENCE_RANK[f.confidence] < threshold:
             out.append(_status(f, "skipped_low_confidence", anchor))
@@ -155,6 +177,16 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     log.info("Validated %d/%d findings (%s)", n_ok, len(out),
              _tally(out))
     return out
+
+
+def _oversteps(deleted: str, inserted: str, guard) -> bool:
+    """Whether a minimal diff is too big to be a proofreading fix: it re-types a
+    span wider than the size cap, or it adds more net new text than the growth
+    cap. Pure deletions never trip the growth cap — removing text is not
+    fabrication."""
+    if len(deleted) > guard.max_edit_chars or len(inserted) > guard.max_edit_chars:
+        return True
+    return len(inserted) - len(deleted) > guard.max_added_chars
 
 
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:

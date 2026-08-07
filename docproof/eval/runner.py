@@ -101,7 +101,8 @@ def run_eval(cfg: Config, cases: list[Case], error_dir: str | Path, work_dir: Pa
         + list(model_findings),
         prepared.doc, cfg.min_confidence,
         query_types=prepared.query_types,
-        format_types=prepared.format_types)
+        format_types=prepared.format_types,
+        edit_guard=cfg.edit_guard)
 
     return EvalRun(cases=cases, built=built, doc=prepared.doc,
                    findings=validated, usage=usage, model=cfg.api.model)

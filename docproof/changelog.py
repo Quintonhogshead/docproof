@@ -139,6 +139,7 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     queries = [f for f in findings if f.status == "query"]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     rejected = [f for f in findings if f.status.startswith("rejected")]
+    oversized = [f for f in findings if f.status == "rejected_oversized"]
 
     d = docx.Document()
     name = Path(doc.source_path).stem
@@ -261,8 +262,16 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
         d.add_paragraph(
             f"{len(rejected)} finding(s) were discarded by the validator "
             f"before reaching the manuscript — a quote that did not match the "
-            f"text, an edit overlapping one already made, or a duplicate. "
-            f"None of them changed anything.")
+            f"text, an edit overlapping one already made, a duplicate, or an "
+            f"edit too large to be a proofreading fix. None of them changed "
+            f"anything.")
+    if oversized:
+        d.add_paragraph(
+            f"Of those, {len(oversized)} were refused specifically for "
+            f"overstepping: an edit that re-typed a long passage wholesale or "
+            f"added new text the original did not contain. A proofreading pass "
+            f"corrects; it does not rewrite or invent, so these were held back "
+            f"rather than applied.")
     if spell is not None and spell.available and spell.lexicon:
         d.add_paragraph(
             f"{len(spell.lexicon)} word(s) not in the dictionary were treated "
