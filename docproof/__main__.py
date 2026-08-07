@@ -108,6 +108,9 @@ def main(argv=None) -> int:
                      help="name for doc_a in the report (default: human)")
     cmp.add_argument("--label-b", default="docproof",
                      help="name for doc_b in the report (default: docproof)")
+    cmp.add_argument("--formatting", action="store_true",
+                     help="compare InDesign paragraph styling instead of "
+                          "tracked changes (a human's hand-tagging vs prep's)")
 
     ev = sub.add_parser(
         "eval", help="score the model against the held-out corpus "
@@ -422,6 +425,9 @@ def cmd_compare(args) -> int:
     out = Path(cfg.output_dir)
     setup_logging(out)
 
+    if getattr(args, "formatting", False):
+        return _cmd_compare_formatting(args, out)
+
     try:
         a = extract_edits(open_docx(args.doc_a))
         b = extract_edits(open_docx(args.doc_b))
@@ -453,6 +459,44 @@ def cmd_compare(args) -> int:
     print(f"  located recall {pct(report.located_recall)}  ·  "
           f"exact recall {pct(report.exact_recall)}  ·  "
           f"precision {pct(report.precision)}  ·  F1 {pct(report.f1)}")
+    print(f"\n  {md_path}\n  {json_path}")
+    return 0
+
+
+def _cmd_compare_formatting(args, out: Path) -> int:
+    """`compare --formatting`: diff the InDesign paragraph styling on two docs
+    instead of their tracked changes."""
+    import json as _json
+
+    from . import formatdiff
+
+    try:
+        a = formatdiff.extract_styles(formatdiff.open_docx(args.doc_a))
+        b = formatdiff.extract_styles(formatdiff.open_docx(args.doc_b))
+    except formatdiff.TrackDiffError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    report = formatdiff.compare_styles(a, b, label_a=args.label_a,
+                                       label_b=args.label_b)
+
+    out.mkdir(parents=True, exist_ok=True)
+    md_path = out / "compare-formatting.md"
+    json_path = out / "compare-formatting.json"
+    md_path.write_text(formatdiff.render_markdown(report), encoding="utf-8")
+    json_path.write_text(
+        _json.dumps(formatdiff.report_json(report), indent=2,
+                    ensure_ascii=False),
+        encoding="utf-8")
+
+    def pct(x): return f"{x * 100:.0f}%" if x is not None else "—"
+    print(f"{args.label_a}: {a.styled_count} paragraph(s)  ·  "
+          f"{args.label_b}: {b.styled_count} paragraph(s)  ·  "
+          f"{report.aligned_paras} compared")
+    print(f"\n  same style {report.agree}  ·  different {report.different}  ·  "
+          f"only {args.label_a} {len(report.only_a)}  ·  "
+          f"only {args.label_b} {len(report.only_b)}")
+    print(f"\n  style agreement {pct(report.agreement)}")
     print(f"\n  {md_path}\n  {json_path}")
     return 0
 

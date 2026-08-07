@@ -202,10 +202,30 @@ function hideStaging() {
   wire('a');
   wire('b');
 
+  const mode = () =>
+    document.querySelector('input[name="cmp-mode"]:checked').value;
+
+  // The slot hints and the results panel are the same two files either way; only
+  // the framing changes, so the labels follow the mode.
+  function syncHints() {
+    const fmt = mode() === 'formatting';
+    $('cmp-hint-a').textContent = fmt ? '— e.g. hand-formatted for InDesign'
+                                      : '— e.g. the human proofread';
+    $('cmp-hint-b').textContent = "— e.g. DocProof's output";
+    // A previous comparison is about the old mode; clear it so the two can't
+    // be read side by side and mistaken for each other.
+    $('cmp-results').hidden = true;
+    $('cmp-error').hidden = true;
+  }
+  document.querySelectorAll('input[name="cmp-mode"]').forEach((r) =>
+    r.addEventListener('change', syncHints));
+  syncHints();
+
   $('cmp-run').addEventListener('click', runCompare);
 
   async function runCompare() {
     if (!(slots.a && slots.b)) return;
+    const chosen = mode();
     $('cmp-error').hidden = true;
     $('cmp-results').hidden = true;
     $('cmp-run').disabled = true;
@@ -213,8 +233,11 @@ function hideStaging() {
     const body = new FormData();
     body.append('doc_a', slots.a);
     body.append('doc_b', slots.b);
+    body.append('mode', chosen);
     try {
-      renderCompare(await api('/api/compare', { method: 'POST', body }));
+      const d = await api('/api/compare', { method: 'POST', body });
+      if (chosen === 'formatting') renderFormatCompare(d);
+      else renderCompare(d);
     } catch (err) {
       $('cmp-error').textContent = err.message;
       $('cmp-error').hidden = false;
@@ -278,6 +301,38 @@ function hideStaging() {
       cmpGroup(`Only ${d.label_b}`, extras,
                `${d.label_b} changed these; ${d.label_a} did not — worth a `
                + `look for false positives.`));
+    $('cmp-results').hidden = false;
+  }
+
+  // The formatting comparison: same two files, but the diff is over the
+  // InDesign paragraph-style NAME each one gave every paragraph, not the
+  // tracked changes. A is the human's tagging, B is DocProof's prep pass.
+  function renderFormatCompare(d) {
+    const t = d.totals;
+    const tiles = $('cmp-tiles');
+    tiles.replaceChildren(
+      tile(t.agree, 'same style'),
+      tile(t.different, 'different style'),
+      tile(t.only_a, `only ${d.label_a}`),
+      tile(t.only_b, `only ${d.label_b}`));
+
+    $('cmp-score').textContent =
+      `${t.agree} of ${d.aligned_paragraphs} paragraph(s) got the same style `
+      + `(${pct(d.agreement)} agreement).`;
+    const skipped = t.only_a + t.only_b;
+    $('cmp-caveat').textContent = skipped
+      ? `${skipped} paragraph(s) exist in only one file — a blank line kept or `
+        + `dropped, a paragraph split — so they have no partner to compare.`
+      : '';
+
+    const differ = d.differences.map((e) =>
+      `${e.text}   ·   ${d.label_a}: ${e.style_a}   ·   ${d.label_b}: ${e.style_b}`);
+
+    const groups = $('cmp-groups');
+    groups.replaceChildren(
+      cmpGroup('Styled differently', differ,
+               `Both files styled these; ${d.label_a} and ${d.label_b} chose `
+               + `different paragraph styles.`));
     $('cmp-results').hidden = false;
   }
 
