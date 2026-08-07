@@ -79,6 +79,21 @@ def _key(form: str) -> str:
     return re.sub(r"[-\s’']", "", form).lower()
 
 
+def _structure(form: str) -> str:
+    """Case- and apostrophe-glyph-folded, but otherwise structure-preserving.
+
+    Unlike ``_key`` this *keeps* spaces and hyphens, so *blood cursed*,
+    *blood-cursed* and *bloodcursed* stay three distinct structures while
+    *You should* and *you should* — and *ANIMALS* and *animals* — become one.
+    That is the whole distinction this scan is allowed to flag: a structural
+    difference between spellings of a term, never a capitalization or a
+    straight-versus-curly apostrophe difference. English capitalizes the first
+    word of every sentence, so almost any common word appears both lowercased
+    and sentence-initial; folding case here is what keeps that from reading as
+    an inconsistency."""
+    return form.lower().replace("’", "'")
+
+
 @dataclass
 class _Group:
     counts: Counter = field(default_factory=Counter)
@@ -121,18 +136,36 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
 
     terms: list[Inconsistency] = []
     for key, g in sorted(groups.items()):
-        if len(g.counts) < 2:
+        # Collapse the surface forms into their structures before deciding
+        # anything. Two spellings that differ only in letter case (or in the
+        # apostrophe glyph) share one structure, so a term written one way but
+        # sometimes at the start of a sentence — the overwhelming majority of
+        # what a naive surface-form comparison flags — never reaches the
+        # dominance test at all.
+        buckets: dict[str, Counter] = defaultdict(Counter)
+        for form, n in g.counts.items():
+            buckets[_structure(form)][form] += n
+        if len(buckets) < 2:
             continue
-        (dominant, top), = g.counts.most_common(1)
-        minority = [f for f, n in g.counts.items()
-                    if f != dominant and top >= n * min_dominance]
-        if not minority:
-            # No form clearly dominates, so this is two deliberate choices or
-            # a word this scan should not be guessing about.
+        totals = {s: sum(c.values()) for s, c in buckets.items()}
+        # One representative surface form per structure: the spelling used
+        # most, breaking ties toward the plain lowercase form so the recommended
+        # spelling never carries an incidental sentence-initial capital.
+        reps = {s: min(c, key=lambda f, c=c: (-c[f], f != f.lower(), f))
+                for s, c in buckets.items()}
+        dom_struct = max(totals, key=lambda s: (totals[s], s))
+        dom_total = totals[dom_struct]
+        minority_structs = {s for s, t in totals.items()
+                            if s != dom_struct and dom_total >= t * min_dominance}
+        if not minority_structs:
+            # No structure clearly dominates, so this is two deliberate choices
+            # or a word this scan should not be guessing about.
             continue
-        outliers = tuple(o for o in g.where if o.form in minority)
+        outliers = tuple(o for o in g.where
+                         if _structure(o.form) in minority_structs)
         if outliers:
-            terms.append(Inconsistency(key, g.counts, dominant, outliers))
+            counts = Counter({reps[s]: totals[s] for s in totals})
+            terms.append(Inconsistency(key, counts, reps[dom_struct], outliers))
 
     report = ConsistencyReport(ran=True, terms=tuple(terms))
     log.info("Consistency scan: %d term(s) written more than one way, "
@@ -155,9 +188,15 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             if para is None:
                 continue
             window, _, occurrence = sentence_window(para.text, o.start, o.end)
+            # term.counts now holds one representative spelling per structure,
+            # so the list reads "over consume" vs "overconsume", not a dozen
+            # case variants of one word. Exclude this occurrence's own
+            # structure by structure, not by exact spelling: a sentence-initial
+            # outlier still names the other forms, not itself.
+            o_struct = _structure(o.form)
             others = ", ".join(
                 f"“{f}” ({c})" for f, c in term.counts.most_common()
-                if f != o.form)
+                if _structure(f) != o_struct)
             findings.append(Finding(
                 finding_id=f"c-{n:04d}",
                 chunk_id="consistency",
