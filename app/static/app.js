@@ -755,10 +755,14 @@ function renderJobs(jobs) {
           anyway.disabled = true;
           note.hidden = true;
           try {
+            // Writes the .docx from the review already done, then hands it over
+            // the same way a finished review does — otherwise the file lands on
+            // the server and the button looks like it did nothing.
             await api(`/api/jobs/${job.id}/download-anyway`, { method: 'POST' });
+            handOver(job, 'docx', note);
             refreshJobs();
           } catch (err) {
-            note.textContent = err.message;
+            note.textContent = err.message || 'Could not write the document.';
             note.hidden = false;
             anyway.disabled = false;
           }
@@ -811,6 +815,21 @@ function openButton(job, which, text, note, { reveal = false } = {}) {
     }
   });
   return button;
+}
+
+// Hand a finished file to the user directly (not via a button press): download
+// it in the browser build, open it in Word on the desktop — falling back to a
+// download when there's no application to open it with.
+function handOver(job, which, note) {
+  if (WEB) { window.location.href = `/api/jobs/${job.id}/file/${which}`; return; }
+  api(`/api/jobs/${job.id}/open/${which}`, { method: 'POST' }).catch((err) => {
+    if (err.status === 501) {
+      window.location.href = `/api/jobs/${job.id}/file/${which}`;
+    } else if (note) {
+      note.textContent = err.message;
+      note.hidden = false;
+    }
+  });
 }
 
 // The last manual step, done for you: open the house template, flow the tagged
