@@ -67,6 +67,14 @@ class Paths:
         return self.root / "error_types"
 
     @property
+    def results(self) -> Path:
+        """Where the web build writes finished documents. On a server there is
+        no user Documents folder to reach for, and results must survive a
+        redeploy exactly as the job records do, so they live here on the volume
+        beside them — not in the desktop's ~/Documents/DocProof default."""
+        return self.root / "results"
+
+    @property
     def prep(self) -> Path:
         """A house style set the publisher dropped in themselves. A
         house_styles.yaml here replaces the shipped one wholesale, which is how
@@ -149,6 +157,19 @@ class Settings:
         paths.ensure()
         paths.settings_file.write_text(
             json.dumps(self.__dict__, indent=2), encoding="utf-8")
+
+
+def field_in_settings_file(paths: Paths, name: str) -> bool:
+    """Whether the persisted settings file explicitly carries this field.
+
+    Lets the web build pick its own default for a setting the desktop defaults
+    differently — output_dir, say — without ever clobbering a value an
+    administrator actually chose and saved."""
+    try:
+        data = json.loads(paths.settings_file.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and name in data
 
 
 # --- API keys -----------------------------------------------------------------

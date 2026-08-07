@@ -17,7 +17,7 @@ from . import routes
 from .jobs import JobRunner, JobStore
 from .lock import FolderLock
 from .settings import (CONFIG_PATH, ENV_VARS, PROVIDERS, Paths, Settings,
-                       default_root, resource_root)
+                       default_root, field_in_settings_file, resource_root)
 from .update import Rebuilder
 from .watch.runner import WatchRunner
 
@@ -53,6 +53,14 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
+    if web and not field_in_settings_file(paths, "output_dir"):
+        # The default output_dir is the desktop's ~/Documents/DocProof, which on
+        # a server lands on the container's throwaway filesystem — finished
+        # documents there vanish on the next redeploy or restart while the job
+        # records that point at them survive on the volume, so the results tab
+        # 404s "…is missing". Keep results on the volume beside the job records.
+        # An administrator who set output_dir themselves is left untouched.
+        settings.output_dir = str(paths.results)
     store = JobStore(paths)
     runner = JobRunner(store, settings, config_path=CONFIG_PATH,
                        poll_seconds=poll_seconds)
