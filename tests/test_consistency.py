@@ -106,6 +106,63 @@ def test_disabled_scan_does_nothing():
     assert not r.ran and r.terms == ()
 
 
+# --- case is not a structural difference --------------------------------------
+# The single largest noise source in real output: English capitalizes the first
+# word of every sentence, so almost any common word appears both lowercased and
+# sentence-initial. That is not a term written two ways, and must never be
+# flagged — while the genuine open/closed/hyphen differences underneath it must
+# survive untouched.
+
+def test_sentence_initial_capital_is_not_an_inconsistency():
+    r = find_inconsistencies(_paras(
+        "You should always warm up before the heavier compound lifts begin.",
+        "you should try the omega-rich foods first, she wrote in the margin.",
+        "You should rest between sets, and you should hydrate throughout too.",
+        "In her notes she repeated that you should never skip the cool down."))
+    assert r.terms == ()
+
+
+def test_all_caps_variant_is_not_an_inconsistency():
+    r = find_inconsistencies(_paras(
+        "The animals grazed while the other animals watched from the ridge line.",
+        "ANIMALS, the sign said, in letters a foot tall above the pen gate.",
+        "She counted the animals twice and still came up one animal short."))
+    assert "animals" not in _keys(r)
+
+
+def test_real_open_vs_closed_compound_still_flagged_despite_case_noise():
+    r = find_inconsistencies(_paras(
+        "They overconsume protein and then overconsume it again the next day.",
+        "Do not over consume the supplement, the label warned in small print.",
+        "Overconsume it and the benefit plateaus; overconsume it further and it harms."))
+    assert _keys(r) == {"overconsume": "overconsume"}
+    assert r.terms[0].minority_forms == ("over consume",)
+    # The sentence-initial "Overconsume" shares the dominant structure and must
+    # not be dragged in as an outlier.
+    assert all(o.form != "Overconsume" for o in r.terms[0].outliers)
+
+
+def test_hyphen_variant_with_sentence_initial_capital():
+    r = find_inconsistencies(_paras(
+        "The blood-cursed rider never returns from the northern marches alone.",
+        "Blood-cursed and weary, he crossed the bridge before the last light.",
+        "She had heard of the bloodcursed before, in stories told at night."))
+    assert _keys(r) == {"bloodcursed": "blood-cursed"}
+    assert r.terms[0].minority_forms == ("bloodcursed",)
+    assert all(o.form != "Blood-cursed" for o in r.terms[0].outliers)
+
+
+def test_an_even_split_after_aggregation_is_not_flagged():
+    """Aggregating case variants must not manufacture a dominant form out of a
+    genuine open/closed tie — three 'over all' against two 'overall' is still
+    the author's call, not a slip to nag about."""
+    r = find_inconsistencies(_paras(
+        "Over all it went well, over all better than the pessimists had feared.",
+        "Overall the plan held; overall the numbers came in close to target.",
+        "over all, she judged, the season was neither triumph nor disaster."))
+    assert "overall" not in _keys(r)
+
+
 # --- the findings -------------------------------------------------------------
 
 def test_findings_are_queries_that_change_nothing():
