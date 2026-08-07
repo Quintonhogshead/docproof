@@ -30,4 +30,7 @@ jobs:
       # --remote-only builds on Fly's builders, so the runner needs no Docker.
       - run: flyctl deploy --remote-only
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          # The token has been stored under both names in this repo's history;
+          # accept either so a rename doesn't silently break the deploy. flyctl
+          # reads FLY_API_TOKEN, so that name wins when both are set.
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN || secrets.FLY_API_KEY }}
