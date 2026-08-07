@@ -484,6 +484,11 @@ details.sections > summary {
 
 /* ── spending ────────────────────────────────────────────────────────────── */
 
+.cmp-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.6rem;
+}
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

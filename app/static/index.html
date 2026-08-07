@@ -191,17 +191,32 @@
 
   <!-- ── Compare ──────────────────────────────────────────────────────── -->
   <section id="screen-compare" class="screen" hidden>
-    <h2>Compare tracked changes</h2>
-    <p class="muted">Drop two versions of the same manuscript — say a human
-      proofread and DocProof's own pass — and see where their tracked changes
-      agree, where each caught something the other missed, and where they fixed
-      the same thing differently. Nothing is uploaded to a reviewer or billed;
-      the two files are read on the spot and compared.</p>
+    <h2>Compare two versions</h2>
+    <p class="muted">Drop two versions of the same manuscript — say a human's
+      work and DocProof's own pass — and see where they agree and where they
+      part ways. Nothing is uploaded to a reviewer or billed; the two files are
+      read on the spot and compared.</p>
+
+    <fieldset class="field" id="cmp-mode">
+      <legend>Compare what?</legend>
+      <label class="radio">
+        <input type="radio" name="cmp-mode" value="changes" checked>
+        <span><strong>Tracked changes</strong> — where each proofread caught
+          something the other missed, and where they fixed the same thing
+          differently</span>
+      </label>
+      <label class="radio">
+        <input type="radio" name="cmp-mode" value="formatting">
+        <span><strong>InDesign formatting</strong> — where a human's paragraph
+          styling and DocProof's prep pass tagged the same paragraph
+          differently</span>
+      </label>
+    </fieldset>
 
     <div class="compare-drops">
       <div class="compare-slot">
-        <p class="compare-label">Ground truth <small class="muted">— e.g. the
-          human proofread</small></p>
+        <p class="compare-label">Ground truth <small class="muted"
+          id="cmp-hint-a">— e.g. the human proofread</small></p>
         <div class="dropzone mini" id="cmp-zone-a" tabindex="0" role="button"
              aria-label="Drop the ground-truth document">
           <p id="cmp-name-a" class="muted">Drop a .docx, or click to choose</p>
@@ -209,8 +224,8 @@
         </div>
       </div>
       <div class="compare-slot">
-        <p class="compare-label">Compare against <small class="muted">— e.g.
-          DocProof's output</small></p>
+        <p class="compare-label">Compare against <small class="muted"
+          id="cmp-hint-b">— e.g. DocProof's output</small></p>
         <div class="dropzone mini" id="cmp-zone-b" tabindex="0" role="button"
              aria-label="Drop the document to compare">
           <p id="cmp-name-b" class="muted">Drop a .docx, or click to choose</p>
@@ -226,6 +241,9 @@
     <p id="cmp-error" class="error" hidden></p>
 
     <div id="cmp-results" hidden>
+      <div class="cmp-toolbar">
+        <button id="cmp-open" class="quiet">Open report</button>
+      </div>
       <div class="tiles" id="cmp-tiles"></div>
       <p id="cmp-score" class="headline"></p>
       <p id="cmp-caveat" class="muted small"></p>

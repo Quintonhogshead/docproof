@@ -202,10 +202,36 @@ function hideStaging() {
   wire('a');
   wire('b');
 
+  const mode = () =>
+    document.querySelector('input[name="cmp-mode"]:checked').value;
+
+  // The result last shown, kept so "Download report" can rebuild it as a
+  // standalone HTML file without re-uploading or re-comparing anything.
+  let lastReport = null;      // { mode, data, nameA, nameB }
+
+  // The slot hints and the results panel are the same two files either way; only
+  // the framing changes, so the labels follow the mode.
+  function syncHints() {
+    const fmt = mode() === 'formatting';
+    $('cmp-hint-a').textContent = fmt ? '— e.g. hand-formatted for InDesign'
+                                      : '— e.g. the human proofread';
+    $('cmp-hint-b').textContent = "— e.g. DocProof's output";
+    // A previous comparison is about the old mode; clear it so the two can't
+    // be read side by side and mistaken for each other.
+    $('cmp-results').hidden = true;
+    $('cmp-error').hidden = true;
+    lastReport = null;
+  }
+  document.querySelectorAll('input[name="cmp-mode"]').forEach((r) =>
+    r.addEventListener('change', syncHints));
+  syncHints();
+
   $('cmp-run').addEventListener('click', runCompare);
+  $('cmp-open').addEventListener('click', openReport);
 
   async function runCompare() {
     if (!(slots.a && slots.b)) return;
+    const chosen = mode();
     $('cmp-error').hidden = true;
     $('cmp-results').hidden = true;
     $('cmp-run').disabled = true;
@@ -213,8 +239,13 @@ function hideStaging() {
     const body = new FormData();
     body.append('doc_a', slots.a);
     body.append('doc_b', slots.b);
+    body.append('mode', chosen);
     try {
-      renderCompare(await api('/api/compare', { method: 'POST', body }));
+      const d = await api('/api/compare', { method: 'POST', body });
+      if (chosen === 'formatting') renderFormatCompare(d);
+      else renderCompare(d);
+      lastReport = { mode: chosen, data: d,
+                     nameA: slots.a.name, nameB: slots.b.name };
     } catch (err) {
       $('cmp-error').textContent = err.message;
       $('cmp-error').hidden = false;
@@ -281,6 +312,38 @@ function hideStaging() {
     $('cmp-results').hidden = false;
   }
 
+  // The formatting comparison: same two files, but the diff is over the
+  // InDesign paragraph-style NAME each one gave every paragraph, not the
+  // tracked changes. A is the human's tagging, B is DocProof's prep pass.
+  function renderFormatCompare(d) {
+    const t = d.totals;
+    const tiles = $('cmp-tiles');
+    tiles.replaceChildren(
+      tile(t.agree, 'same style'),
+      tile(t.different, 'different style'),
+      tile(t.only_a, `only ${d.label_a}`),
+      tile(t.only_b, `only ${d.label_b}`));
+
+    $('cmp-score').textContent =
+      `${t.agree} of ${d.aligned_paragraphs} paragraph(s) got the same style `
+      + `(${pct(d.agreement)} agreement).`;
+    const skipped = t.only_a + t.only_b;
+    $('cmp-caveat').textContent = skipped
+      ? `${skipped} paragraph(s) exist in only one file — a blank line kept or `
+        + `dropped, a paragraph split — so they have no partner to compare.`
+      : '';
+
+    const differ = d.differences.map((e) =>
+      `${e.text}   ·   ${d.label_a}: ${e.style_a}   ·   ${d.label_b}: ${e.style_b}`);
+
+    const groups = $('cmp-groups');
+    groups.replaceChildren(
+      cmpGroup('Styled differently', differ,
+               `Both files styled these; ${d.label_a} and ${d.label_b} chose `
+               + `different paragraph styles.`));
+    $('cmp-results').hidden = false;
+  }
+
   function cmpGroup(title, items, blurb) {
     const card = document.createElement('div');
     card.className = 'card';
@@ -302,6 +365,192 @@ function hideStaging() {
       card.append(ul);
     }
     return card;
+  }
+
+  // ── the downloadable report ───────────────────────────────────────────────
+  // A self-contained HTML file built from the JSON already on screen: no second
+  // upload, no server round-trip. It opens in any browser and prints to PDF, and
+  // it reads as a document — a titled header, summary cards, and clean tables —
+  // rather than the working panel above. Every value that came from a document
+  // is escaped: this string becomes a file the user may send on.
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  const REPORT_CSS = `
+    :root{--ink:#1e1c1a;--muted:#6a6560;--line:#e2ded8;--accent:#7c4a2d;
+      --accent-soft:#f3ece6;--warn:#9a3412;--bg:#fbfaf8;--panel:#fff}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);
+      font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+    .wrap{max-width:820px;margin:0 auto;padding:48px 32px 72px}
+    header.rep{border-bottom:2px solid var(--accent);padding-bottom:20px;margin-bottom:26px}
+    .brand{font:600 .74rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+      letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+    h1{font:600 1.85rem/1.2 "Iowan Old Style",Palatino,Georgia,serif;margin:.35em 0 .1em}
+    .sub{color:var(--muted);margin:.15em 0}
+    .files{display:flex;gap:12px 28px;flex-wrap:wrap;margin-top:14px;font-size:.9rem}
+    .files b{color:var(--accent);font-weight:600}
+    .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 8px}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+      padding:15px 12px;text-align:center}
+    .card .n{display:block;font:600 1.9rem/1 "Iowan Old Style",Palatino,Georgia,serif}
+    .card .l{display:block;color:var(--muted);font-size:.8rem;margin-top:6px}
+    .headline{font-size:1.08rem;background:var(--accent-soft);border-radius:10px;
+      padding:15px 18px;margin:14px 0 2px}
+    .headline b{color:var(--accent)}
+    .caveat{color:var(--muted);font-size:.9rem;margin:.4em 0 0}
+    h2{font:600 1.1rem/1.3 "Iowan Old Style",Palatino,Georgia,serif;
+      margin:32px 0 4px;border-bottom:1px solid var(--line);padding-bottom:6px}
+    .blurb{color:var(--muted);font-size:.9rem;margin:.2em 0 12px}
+    table{width:100%;border-collapse:collapse;font-size:.94rem;margin:6px 0}
+    th{text-align:left;color:var(--muted);font-weight:600;font-size:.74rem;
+      text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line);
+      padding:7px 10px}
+    td{border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86rem}
+    .metrics td:last-child{font-weight:600;text-align:right;
+      font-variant-numeric:tabular-nums}
+    .style-a{color:var(--warn);font-weight:600}
+    .style-b{color:var(--accent);font-weight:600}
+    .none{color:var(--muted);font-style:italic;margin:6px 0}
+    .foot{margin-top:44px;color:var(--muted);font-size:.8rem;
+      border-top:1px solid var(--line);padding-top:14px}
+    @media print{body{background:#fff}.wrap{padding:0}
+      .card,.headline{border:1px solid #ccc}}
+  `;
+
+  const shell = (title, sub, files, body) =>
+    `<!doctype html><html lang="en"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>${esc(title)}</title><style>${REPORT_CSS}</style></head><body>`
+    + `<div class="wrap"><header class="rep"><div class="brand">DocProof</div>`
+    + `<h1>${esc(title)}</h1>${sub}${files}</header>${body}`
+    + `<div class="foot">Generated ${esc(new Date().toLocaleString())} · `
+    + `read locally — nothing was uploaded to a reviewer or billed.</div>`
+    + `</div></body></html>`;
+
+  const subLine = (d) =>
+    `<p class="sub">${esc(d.label_a)} vs ${esc(d.label_b)} · `
+    + `${d.aligned_paragraphs} paragraph(s) compared</p>`;
+
+  const filesLine = (d, nameA, nameB) =>
+    `<div class="files"><span><b>${esc(d.label_a)}</b> — `
+    + `${esc(nameA || 'document A')}</span><span><b>${esc(d.label_b)}</b> — `
+    + `${esc(nameB || 'document B')}</span></div>`;
+
+  const cards = (items) =>
+    `<div class="cards">${items.map((c) =>
+      `<div class="card"><span class="n">${esc(c.n)}</span>`
+      + `<span class="l">${esc(c.l)}</span></div>`).join('')}</div>`;
+
+  const oneCol = (items) => items.length
+    ? `<table><tbody>${items.map((x) =>
+        `<tr><td class="mono">${esc(x)}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="none">None.</p>';
+
+  function changesReport(d, nameA, nameB) {
+    const t = d.totals;
+    const s = d.score_a_as_truth;
+    const misses = [];
+    const differ = [];
+    const extras = [];
+    d.paragraphs.forEach((p) => {
+      p.only_a.forEach((e) => misses.push(e.text));
+      p.different_fix.forEach((e) => differ.push([e.a.text, e.b.text]));
+      p.only_b.forEach((e) => extras.push(e.text));
+    });
+    const differTable = differ.length
+      ? `<table><thead><tr><th>${esc(d.label_a)}</th><th>${esc(d.label_b)}</th>`
+        + `</tr></thead><tbody>${differ.map((r) =>
+          `<tr><td class="mono">${esc(r[0])}</td>`
+          + `<td class="mono">${esc(r[1])}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="none">None.</p>';
+    const caveat = d.unaligned_paragraphs.length
+      ? `<p class="caveat">${d.unaligned_paragraphs.length} paragraph(s) skipped `
+        + `— their text differs between the two files, so their edits can't be `
+        + `lined up.</p>` : '';
+    const body =
+      cards([{ n: t.agree, l: 'agree' },
+             { n: t.different_fix, l: 'different fix' },
+             { n: t.only_a, l: `only ${d.label_a}` },
+             { n: t.only_b, l: `only ${d.label_b}` }])
+      + `<div class="headline">Against <b>${esc(d.label_a)}</b>: found `
+      + `${pct(s.located_recall)} of its changes (${pct(s.exact_recall)} with `
+      + `the same fix), precision ${pct(s.precision)}.</div>${caveat}`
+      + `<h2>Scored against ${esc(d.label_a)} as ground truth</h2>`
+      + `<table class="metrics"><tbody>`
+      + `<tr><td>Located recall (found the spot)</td><td>${pct(s.located_recall)}</td></tr>`
+      + `<tr><td>Exact recall (same fix too)</td><td>${pct(s.exact_recall)}</td></tr>`
+      + `<tr><td>Precision</td><td>${pct(s.precision)}</td></tr>`
+      + `<tr><td>F1</td><td>${pct(s.f1)}</td></tr></tbody></table>`
+      + `<h2>Missed by ${esc(d.label_b)} (${misses.length})</h2>`
+      + `<p class="blurb">${esc(d.label_a)} changed these; ${esc(d.label_b)} `
+      + `did not.</p>${oneCol(misses)}`
+      + `<h2>Fixed differently (${differ.length})</h2>`
+      + `<p class="blurb">Both changed the same place, to different text.</p>`
+      + `${differTable}`
+      + `<h2>Only in ${esc(d.label_b)} (${extras.length})</h2>`
+      + `<p class="blurb">${esc(d.label_b)} changed these; ${esc(d.label_a)} did `
+      + `not — worth a look for false positives.</p>${oneCol(extras)}`;
+    return shell('Tracked-changes comparison', subLine(d),
+                 filesLine(d, nameA, nameB), body);
+  }
+
+  function formattingReport(d, nameA, nameB) {
+    const t = d.totals;
+    const skipped = t.only_a + t.only_b;
+    const rows = d.differences;
+    const diffTable = rows.length
+      ? `<table><thead><tr><th>Paragraph</th><th>${esc(d.label_a)}</th>`
+        + `<th>${esc(d.label_b)}</th></tr></thead><tbody>${rows.map((e) =>
+          `<tr><td>${esc(e.text)}</td><td class="style-a">${esc(e.style_a)}</td>`
+          + `<td class="style-b">${esc(e.style_b)}</td></tr>`).join('')}`
+        + `</tbody></table>`
+      : `<p class="none">None — the two files agreed on every paragraph's `
+        + `style.</p>`;
+    const caveat = skipped
+      ? `<p class="caveat">${skipped} paragraph(s) exist in only one file — a `
+        + `blank line kept or dropped, a paragraph split — so they have no `
+        + `partner to compare.</p>` : '';
+    const body =
+      cards([{ n: t.agree, l: 'same style' },
+             { n: t.different, l: 'different style' },
+             { n: t.only_a, l: `only ${d.label_a}` },
+             { n: t.only_b, l: `only ${d.label_b}` }])
+      + `<div class="headline"><b>${t.agree}</b> of <b>${d.aligned_paragraphs}`
+      + `</b> paragraph(s) got the same style — <b>${pct(d.agreement)}</b> `
+      + `agreement.</div>${caveat}`
+      + `<h2>Styled differently (${rows.length})</h2>`
+      + `<p class="blurb">Both files styled these paragraphs; ${esc(d.label_a)} `
+      + `and ${esc(d.label_b)} chose different paragraph styles.</p>${diffTable}`;
+    return shell('InDesign-formatting comparison', subLine(d),
+                 filesLine(d, nameA, nameB), body);
+  }
+
+  // Open the report in a new tab, where it can be read and — via the browser's
+  // own Print — saved as a PDF. If a pop-up blocker (or a webview that won't
+  // open tabs) stops the window, fall back to handing over the .html file so
+  // the button never silently does nothing.
+  function openReport() {
+    if (!lastReport) return;
+    const { mode: m, data, nameA, nameB } = lastReport;
+    const html = m === 'formatting'
+      ? formattingReport(data, nameA, nameB)
+      : changesReport(data, nameA, nameB);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `docproof-compare-${m}.html`;
+      document.body.append(a);
+      a.click();
+      a.remove();
+    }
+    // Give the new tab time to load the blob before releasing it.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 })();
 
