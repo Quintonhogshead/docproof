@@ -13,6 +13,7 @@ from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
 from .utils.xml_helpers import (CT_NS, DELTEXT_TAG, DEL_TAG, DR_NS, DocxPackage,
                                 INS_TAG, P_TAG, PR_NS, RPR_TAG, R_TAG, T_TAG,
+                                TEXT_SKIP_ANCESTORS,
                                 W_NS, merge_adjacent_runs, paragraph_text, qn,
                                 set_text, walk_package)
 
@@ -286,6 +287,13 @@ def paragraph_view_text(p, mode: Literal["accept", "reject"]) -> str:
                     walk(c)
             elif c.tag in (T_TAG, DELTEXT_TAG):
                 parts.append(c.text or "")
+            elif c.tag in TEXT_SKIP_ANCESTORS:
+                # A textbox's own text and an mc:Fallback duplicate are not this
+                # paragraph's canonical text — iter_text_elements skips them, so
+                # this view must too, or the reject-all audit sees text on the
+                # title page (a cover text box + its fallback) that the ingested
+                # baseline never counted, and fails a paragraph nothing touched.
+                continue
             else:
                 walk(c)
 
