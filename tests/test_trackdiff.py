@@ -116,6 +116,45 @@ def test_different_fix_same_place(tmp_path):
     assert (r.agree, r.diff_fix, r.only_a, r.only_b) == (0, 1, 0, 0)
 
 
+def test_word_level_and_char_level_edits_agree():
+    """The report pathology: one document records a change as a single wide
+    edit (a whole-word retype) and the other as the minimal per-character fix.
+    Same resulting text, so they must agree — not land in 'different fix' with a
+    phantom 'only in docproof' left over, which is what pairwise anchor matching
+    produced before the two sides were canonicalized to one granularity."""
+    base = "the middle city"
+    a = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(4, 15, "middle city", "Middle City")]})
+    b = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(4, 5, "m", "M"),
+                                      Anchor(11, 12, "c", "C")]})
+    r = compare_edits(a, b, label_a="human", label_b="docproof")
+    assert (r.agree, r.diff_fix, r.only_a, r.only_b) == (2, 0, 0, 0)
+    assert r.precision == 1.0 and r.exact_recall == 1.0
+
+
+def test_partial_overlap_is_one_clean_miss_not_a_double_count():
+    """Human capitalizes two words as one wide edit; docproof caught only the
+    first. The second is a single clean miss, not a phantom smeared across
+    'different fix' and 'only human'."""
+    base = "the middle city"
+    a = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(4, 15, "middle city", "Middle City")]})
+    b = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(4, 5, "m", "M")]})
+    r = compare_edits(a, b, label_a="human", label_b="docproof")
+    assert (r.agree, r.diff_fix, r.only_a, r.only_b) == (1, 0, 1, 0)
+
+
+def test_canonical_anchors_merges_a_close_fix_but_not_distant_ones():
+    from docproof.trackdiff import _canonical_anchors
+    # A dialogue-tag fix — period→comma and the pronoun it lowercases, with the
+    # closing quote and a space between — is one logical edit, so one anchor.
+    assert len(_canonical_anchors('stop." He ran', 'stop," he ran')) == 1
+    # Two capitalizations six characters apart are two separate edits.
+    assert len(_canonical_anchors("the middle city", "the Middle City")) == 2
+
+
 def test_unaligned_paragraph_is_reported_not_matched():
     # Two synthetic docs whose bases differ: nothing should match, and the
     # paragraph is reported as unaligned.
