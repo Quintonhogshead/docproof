@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import logging
 import zipfile
 from pathlib import Path
@@ -127,25 +126,31 @@ def build_document_model(pkg: DocxPackage, cfg: Config) -> DocumentModel:
 
         if not text.strip():
             skipped.append((wp.para_id, "empty"))
-        elif any(fnmatch.fnmatchcase(style, pat) for pat in cfg.skip.styles):
+        elif cfg.skip.fully_skipped(style):
             skipped.append((wp.para_id, f"style:{style}"))
         else:
-            # Too short to be worth a model pass, but still ours to sweep:
+            # A paragraph the model does not review but the sweeps still reach.
+            # Two reasons land here: a heading style (a chapter title carries a
+            # compound-number or punctuation fix, but is not the model's to
+            # rewrite), and a paragraph too short to be worth a model request —
             # "“Who?” he asked." is sixteen characters and carries a dialogue
-            # tag. Dropping it here would make every sweep's "zero remaining"
-            # mean "zero remaining in the long paragraphs", which is not what
-            # anyone reading that number would take it to mean.
+            # tag. Dropping either would make every sweep's "zero remaining"
+            # mean "zero remaining in the long body paragraphs", which is not
+            # what anyone reading that number would take it to mean.
+            sweep_only = cfg.skip.is_sweep_only(style)
             short = len(text) < cfg.chunking.min_paragraph_chars
             paragraphs.append(ParagraphRef(
                 para_id=wp.para_id, part=wp.part, location=wp.location,
-                text=text, style=style, reviewable=not short))
+                text=text, style=style, reviewable=not (short or sweep_only)))
+            reason = (" (sweeps only: heading)" if sweep_only else
+                      " (sweeps only: short)" if short else "")
             log.debug("para %s [%s/%s] %d chars%s", wp.para_id, wp.location,
-                      style, len(text), " (sweeps only)" if short else "")
+                      style, len(text), reason)
 
-    n_short = sum(1 for p in paragraphs if not p.reviewable)
+    n_sweep_only = sum(1 for p in paragraphs if not p.reviewable)
     log.info("Ingested %d paragraph(s) from %s: %d for the model, %d swept "
-             "only (too short), %d skipped entirely",
-             len(paragraphs), pkg.path.name, len(paragraphs) - n_short,
-             n_short, len(skipped))
+             "only (headings and short lines), %d skipped entirely",
+             len(paragraphs), pkg.path.name, len(paragraphs) - n_sweep_only,
+             n_sweep_only, len(skipped))
     return DocumentModel(source_path=str(pkg.path),
                          paragraphs=tuple(paragraphs), skipped=tuple(skipped))

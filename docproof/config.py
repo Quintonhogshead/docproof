@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 from typing import Literal
 
@@ -35,8 +36,27 @@ class ChunkingConfig(BaseModel):
 
 
 class SkipConfig(BaseModel):
+    """Which paragraphs a review leaves to one side, by Word/InDesign style id
+    (fnmatch patterns).
+
+    `styles` are skipped outright — neither reviewed nor swept. A table of
+    contents regenerates from the headings, so editing it is pointless; a title
+    or caption is set display text, not prose to proofread.
+
+    `sweep_only` styles still get the deterministic sweeps but never a model
+    pass. A chapter heading is exactly where a compound-number or stray-
+    punctuation fix lives ("Chapter Twenty Four" -> "Twenty-Four"), yet it is
+    not something to let the model rewrite. (The IDML path has no sweep-only
+    channel, so it skips these outright, as it always has.)"""
     styles: list[str] = Field(default_factory=lambda: [
-        "Heading*", "Title", "Subtitle", "TOC*", "Caption"])
+        "Title", "Subtitle", "TOC*", "Caption"])
+    sweep_only: list[str] = Field(default_factory=lambda: ["Heading*"])
+
+    def fully_skipped(self, style: str) -> bool:
+        return any(fnmatch.fnmatchcase(style, pat) for pat in self.styles)
+
+    def is_sweep_only(self, style: str) -> bool:
+        return any(fnmatch.fnmatchcase(style, pat) for pat in self.sweep_only)
 
 
 class PrepConfig(BaseModel):

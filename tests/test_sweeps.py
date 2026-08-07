@@ -188,6 +188,31 @@ def test_century_leaves_other_ordinals_alone():
     assert unchanged("sweep_century", "She came in 4th and never forgot it.")
 
 
+# --- compound numbers --------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("Chapter Twenty Four", "Chapter Twenty-Four"),
+    ("seventy five people", "seventy-five people"),
+    ("It cost thirty two dollars.", "It cost thirty-two dollars."),
+    # Case is taken from the text, on both words.
+    ("TWENTY FOUR", "TWENTY-FOUR"),
+    ("Twenty four", "Twenty-four"),
+])
+def test_compound_number_is_hyphenated(before, after):
+    assert swept("sweep_compound_number", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "twenty-four already",                    # already hyphenated
+    "one hundred and twenty",                 # a bare ten, no ones word
+    "twenty four-year-olds",                  # ambiguous: leave a following hyphen
+    "He counted twenty. Four remained.",      # a sentence break, not a compound
+    "forty",                                  # a ten on its own
+])
+def test_compound_number_leaves_others_alone(text):
+    assert unchanged("sweep_compound_number", text)
+
+
 # --- dialogue tags -----------------------------------------------------------
 #
 # The house brief lays this out as a table and warns that building it from ad

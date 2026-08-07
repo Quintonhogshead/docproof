@@ -47,6 +47,13 @@ def _para(pkg, pid):
     return {wp.para_id: wp.element for wp in walk_package(pkg)}[pid]
 
 
+def _body(doc):
+    """The body paragraph in styled.docx. It opens with a chapter heading,
+    which is now ingested (swept, not modelled), so it is no longer the first
+    paragraph in the model."""
+    return next(p.para_id for p in doc.paragraphs if p.text == ORIG)
+
+
 def _validated(pid, start, end, deleted, inserted, i=1):
     return Finding(f"f-{i}", "chunk-000", pid, "comma_splice",
                    ORIG, 1, "", "test", "high", status="validated",
@@ -56,7 +63,7 @@ def _validated(pid, start, end, deleted, inserted, i=1):
 def test_roundtrip_across_formatting_boundary(tmp_path, cfg):
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
-    pid = doc.paragraphs[0].para_id            # the heading was skipped
+    pid = _body(doc)
     # ", w" -> ". W": deletion straddles the roman/bold run boundary
     f = _validated(pid, 11, 14, ", w", ". W")
     stats = apply_tracked_changes(pkg, doc, [f], cfg)
@@ -79,7 +86,7 @@ def test_an_insertion_and_a_deletion_at_the_same_offset_both_apply(tmp_path,
     dropped from the document."""
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
-    pid = doc.paragraphs[0].para_id
+    pid = _body(doc)
     edits = [_validated(pid, 13, 13, "", "so ", 1),   # the losing order
              _validated(pid, 13, 16, "we ", "", 2)]
     stats = apply_tracked_changes(pkg, doc, edits, cfg)
@@ -93,7 +100,7 @@ def test_an_insertion_and_a_deletion_at_the_same_offset_both_apply(tmp_path,
 def test_two_edits_one_paragraph_descending(tmp_path, cfg):
     pkg = preflight(FIXTURES / "styled.docx", "abort")
     doc = build_document_model(pkg, cfg)
-    pid = doc.paragraphs[0].para_id
+    pid = _body(doc)
     edits = [_validated(pid, 11, 12, ",", ";", 1),
              _validated(pid, 26, 27, ",", ";", 2)]
     apply_tracked_changes(pkg, doc, edits, cfg)

@@ -12,12 +12,13 @@ chunking:
   min_paragraph_chars: 20
 
 skip:
-  styles:                   # Word style IDs, fnmatch patterns
-    - "Heading*"
-    - "Title"
+  styles:                   # skipped outright — not reviewed, not swept
+    - "Title"               # (Word style IDs, fnmatch patterns)
     - "Subtitle"
-    - "TOC*"
+    - "TOC*"                # a table of contents regenerates from the headings
     - "Caption"
+  sweep_only:               # deterministic sweeps run, but no model pass
+    - "Heading*"            # a chapter heading: "Chapter Twenty Four" -> "Twenty-Four"
 
 # Manuscript prep: tagging a Word manuscript into a house InDesign style set.
 # Both paths are relative to this file. THE STYLE SET IS house_styles.yaml —
@@ -148,6 +149,7 @@ sweeps:
   - sweep_stacked_punctuation
   - sweep_doubled_word
   - sweep_century
+  - sweep_compound_number
   - sweep_dialogue_tag
 
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
