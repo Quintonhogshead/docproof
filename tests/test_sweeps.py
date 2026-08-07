@@ -397,7 +397,7 @@ def test_a_duplicated_sweep_is_rejected_by_config():
 
 
 def test_shipped_config_enables_sweeps():
-    from app.main import CONFIG_PATH
+    from app.settings import CONFIG_PATH
     from docproof.config import load_config
     cfg = load_config(CONFIG_PATH)
     assert cfg.sweeps, "the shipped config ships with sweeps turned off"

@@ -25,6 +25,10 @@ def resource_root() -> Path:
     bundled = getattr(sys, "_MEIPASS", None)
     return Path(bundled) if bundled else Path(__file__).resolve().parent.parent
 
+
+CONFIG_PATH = resource_root() / "config" / "default.yaml"
+ERROR_DIR = CONFIG_PATH.parent / "error_types"
+
 KEYCHAIN_SERVICE = "docproof"
 # The AI providers, plus two that are not providers at all: a read-only GitHub
 # token, so a build somebody was sent can ask whether a newer one has been

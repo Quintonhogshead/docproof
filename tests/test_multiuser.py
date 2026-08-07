@@ -21,7 +21,7 @@ def app(tmp_path, monkeypatch):
     # A saved key lets jobs be created without a vendor; the runner is off, so
     # nothing actually calls out — jobs simply sit queued, which is all these
     # ownership checks need.
-    monkeypatch.setattr("app.main.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "test-key")
     accounts = Accounts(Paths(tmp_path).users_db)
     accounts.create_user("a@press.com", "password1")
     accounts.create_user("b@press.com", "password1")
