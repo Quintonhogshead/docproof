@@ -958,6 +958,24 @@ def _register(app: FastAPI) -> None:
         app.state.runner.discard_checkpoint(job_id)
         return updated.to_api()
 
+    @app.post("/api/jobs/{job_id}/download-anyway")
+    def download_anyway(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        """Write the document for a review that failed the reject-all audit.
+
+        The integrity check found text that changed without a tracked change
+        around it; this hands the file over anyway, clearly flagged, reusing the
+        review already paid for (no new model calls). The user has seen the
+        mismatch on the results card before pressing this."""
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review.")
+        if job.state != "failed":
+            raise HTTPException(409, "This review did not fail the audit.")
+        updated = app.state.runner.download_anyway(job_id)
+        if updated is None:
+            raise HTTPException(409, "This review can't be written out.")
+        return updated.to_api()
+
     @app.get("/api/jobs/{job_id}/file/{which}")
     def download(job_id: str, which: str, owner: str = Depends(owner_for)):
         """Serve a result over HTTP — the browser build's way of handing a file

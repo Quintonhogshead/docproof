@@ -213,6 +213,20 @@ def _review_setup(runner_fixture, monkeypatch, provider):
     monkeypatch.setattr("app.jobs.get_api_key", lambda p: "test-key")
     settings_dir = store.paths.root / "out"
     r.settings.output_dir = str(settings_dir)
+    # These tests pin resume/checkpoint semantics, which are defined by document
+    # order — a call fails, the run dies, the resume reuses exactly the
+    # successful calls. Concurrent fetch would make *which* call the
+    # DyingProvider kills non-deterministic; that speed optimisation is proved
+    # equivalent to serial separately, in test_concurrency.py. So run these one
+    # call at a time.
+    base = r.config_for                       # bound to this runner
+
+    def serial_config(self, job):
+        cfg = base(job)
+        cfg.api.concurrency = 1
+        return cfg
+
+    monkeypatch.setattr(type(r), "config_for", serial_config)
     return store, r
 
 

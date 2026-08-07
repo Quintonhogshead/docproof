@@ -314,6 +314,63 @@ def test_run_now_produces_downloadable_results(client, provider):
         client.get(f"/api/jobs/{job['id']}/file/findings").text)["findings"]
 
 
+def test_download_anyway_writes_the_file_after_an_audit_failure(
+        client, provider, monkeypatch):
+    from docproof.audit import AuditError
+    import app.jobs as jobs_module
+
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+
+    # Make the first finish() raise the reject-all audit — as if the reassembler
+    # had left an untracked change — while the review itself succeeds and
+    # checkpoints. download_anyway calls the real finish (2nd call) with the
+    # audit downgraded.
+    real_finish = jobs_module.finish
+    calls = {"n": 0}
+
+    def flaky_finish(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise AuditError("body-0000 at character 5: reject-all mismatch")
+        return real_finish(*a, **k)
+
+    monkeypatch.setattr("app.jobs.finish", flaky_finish)
+
+    staged = _upload(client)
+    job = _run(client, staged["id"])
+    client.app_state.runner.wait_idle()
+
+    failed = client.get(f"/api/jobs/{job['id']}").json()
+    assert failed["state"] == "failed"
+    assert failed["audit_failed"] is True
+    assert "reject-all mismatch" in failed["error"]
+
+    # The escape hatch: no new model calls (the scripted provider has no results
+    # left), the file is written, and the override is recorded.
+    resp = client.post(f"/api/jobs/{job['id']}/download-anyway")
+    assert resp.status_code == 200, resp.text
+    done = resp.json()
+    assert done["state"] == "done" and done["audit_overridden"] is True
+
+    docx = client.get(f"/api/jobs/{job['id']}/file/docx")
+    assert docx.status_code == 200 and docx.content[:2] == b"PK"
+
+
+def test_download_anyway_refused_on_a_healthy_job(client, provider):
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    staged = _upload(client)
+    job = _run(client, staged["id"])
+    client.app_state.runner.wait_idle()
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
+    # A review that passed the audit has nothing to override.
+    resp = client.post(f"/api/jobs/{job['id']}/download-anyway")
+    assert resp.status_code == 409
+
+
 def test_job_is_refused_without_a_key(client, monkeypatch):
     staged = _upload(client)
     monkeypatch.setattr("app.main.get_api_key", lambda p: None)
