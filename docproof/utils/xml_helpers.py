@@ -46,7 +46,12 @@ INS_TAG      = qn("w:ins")
 DEL_TAG      = qn("w:del")
 XML_SPACE    = f"{{{XML_NS}}}space"
 
-_TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
+# Text under these ancestors is NOT canonical paragraph text: a textbox holds
+# its own separate story, and an mc:Fallback is a duplicate rendering of the
+# mc:Choice beside it. Both the forward extractor (iter_text_elements) and the
+# accept/reject views (paragraph_view_text) must honour this, or the two
+# disagree and the reject-all audit fails on a paragraph nothing touched.
+TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
 
 
 # --- The canonical text contract --------------------------------------------
@@ -60,7 +65,7 @@ def iter_text_elements(p: etree._Element) -> Iterator[etree._Element]:
         node = t.getparent()
         skip = False
         while node is not None and node is not p:
-            if node.tag in _TEXT_SKIP_ANCESTORS:
+            if node.tag in TEXT_SKIP_ANCESTORS:
                 skip = True
                 break
             node = node.getparent()

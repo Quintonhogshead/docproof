@@ -1,9 +1,44 @@
+from lxml import etree
+
 from docproof.config import Config
 from docproof.ingest import build_document_model, preflight
 from docproof.models import Anchor, Finding
 from docproof.reassembler import apply_tracked_changes, paragraph_view_text
-from docproof.utils.xml_helpers import DocxPackage, walk_package
+from docproof.utils.xml_helpers import (MC_NS, DocxPackage, iter_text_elements,
+                                        paragraph_text, walk_package)
 from .conftest import FIXTURES
+
+_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _w(t):
+    return f"{{{_W}}}{t}"
+
+
+def _mc(t):
+    return f"{{{MC_NS}}}{t}"
+
+
+def test_reject_view_ignores_textbox_and_fallback_like_the_baseline():
+    """A cover title in an mc:AlternateContent — a text box in the Choice, a
+    duplicate in the Fallback — is not this paragraph's canonical text. The
+    accept/reject views must agree with iter_text_elements (which skips both),
+    or the reject-all audit fails a title page nothing touched: the baseline
+    reads empty while the view reads the title twice."""
+    p = etree.Element(_w("p"))
+    alt = etree.SubElement(p, _mc("AlternateContent"))
+    txbx = etree.SubElement(etree.SubElement(alt, _mc("Choice")),
+                            _w("txbxContent"))
+    r1 = etree.SubElement(txbx, _w("r"))
+    etree.SubElement(r1, _w("t")).text = "Witch in the Wall"
+    fb = etree.SubElement(alt, _mc("Fallback"))
+    r2 = etree.SubElement(fb, _w("r"))
+    etree.SubElement(r2, _w("t")).text = "Witch in the Wall "
+
+    assert list(iter_text_elements(p)) == []          # canonical text is empty
+    assert paragraph_text(p) == ""
+    assert paragraph_view_text(p, "reject") == ""      # was the doubled title
+    assert paragraph_view_text(p, "accept") == ""
 
 ORIG = "It was late, we were tired, the road went on."
 
