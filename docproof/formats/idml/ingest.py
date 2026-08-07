@@ -6,7 +6,6 @@ can produce a document whose accept/reject order silently changes the text.
 """
 from __future__ import annotations
 
-import fnmatch
 import logging
 import zipfile
 from pathlib import Path
@@ -135,7 +134,10 @@ def build_document_model(pkg: IdmlPackage, cfg: Config) -> DocumentModel:
             # bill for findings that can never appear, so footnotes are listed
             # as skipped instead. See docs/idml-notes.md.
             skipped.append((wp.para_id, "footnote:tracked-changes-unsupported"))
-        elif any(fnmatch.fnmatchcase(wp.style, pat) for pat in cfg.skip.styles):
+        elif cfg.skip.fully_skipped(wp.style) or cfg.skip.is_sweep_only(wp.style):
+            # IDML has no sweep-only channel — there is no reviewable=False
+            # tier and short paragraphs are skipped outright too — so a heading
+            # style is skipped here just as it always was.
             skipped.append((wp.para_id, f"style:{wp.style}"))
         elif len(text) < cfg.chunking.min_paragraph_chars:
             skipped.append((wp.para_id, f"short:{len(text)}"))

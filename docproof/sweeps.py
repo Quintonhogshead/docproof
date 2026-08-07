@@ -295,6 +295,36 @@ def _sweep_century(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- compound numbers --------------------------------------------------------
+
+# A spelled-out compound number from twenty-one to ninety-nine written as two
+# words. CMOS and the house guide hyphenate these, so "Chapter Twenty Four"
+# becomes "Chapter Twenty-Four". Only cardinals: an ordinal ("twenty first")
+# reads far more often as two separate words ("twenty first drafts") and is
+# left to a judgment read.
+_TENS = "twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety"
+_ONES_WORD = "one|two|three|four|five|six|seven|eight|nine"
+_COMPOUND_NUMBER = re.compile(
+    rf"\b(?P<tens>{_TENS})[ \t\u00a0]+(?P<ones>{_ONES_WORD})\b", re.IGNORECASE)
+
+
+def _sweep_compound_number(text: str, variant=None) -> list[Hit]:
+    hits: list[Hit] = []
+    for m in _COMPOUND_NUMBER.finditer(text):
+        # A following hyphen means the ones word heads a compound modifier —
+        # "twenty four-year-olds" is twenty of them, not twenty-four — so the
+        # pairing is ambiguous and the sweep leaves it alone.
+        if text[m.end():m.end() + 1] == "-":
+            continue
+        # Case is taken from the text, so "Twenty Four" -> "Twenty-Four" and
+        # "twenty four" -> "twenty-four".
+        hits.append(Hit(m.start(), m.end(),
+                        f"{m.group('tens')}-{m.group('ones')}",
+                        "House style hyphenates a compound number from "
+                        "twenty-one to ninety-nine."))
+    return hits
+
+
 # --- dialogue tags -----------------------------------------------------------
 
 # The house brief builds this as a table and warns against assembling it from
@@ -393,6 +423,8 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_stacked_punctuation),
     Sweep("sweep_doubled_word", "Doubled words", _sweep_doubled_word),
     Sweep("sweep_century", "Centuries spelled out", _sweep_century),
+    Sweep("sweep_compound_number", "Compound numbers hyphenated",
+          _sweep_compound_number),
     Sweep("sweep_dialogue_tag", "Dialogue tag punctuation and case",
           _sweep_dialogue_tag),
 )

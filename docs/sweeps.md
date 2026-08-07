@@ -27,6 +27,7 @@ sweeps:
   - sweep_stacked_punctuation
   - sweep_doubled_word
   - sweep_century
+  - sweep_compound_number
   - sweep_dialogue_tag
 ```
 
@@ -37,7 +38,16 @@ sweeps:
 | `sweep_stacked_punctuation` | `!!`, `?!`, `‽` collapse to one mark; a question stays a question |
 | `sweep_doubled_word` | `the the` → `the`, minus the doublings that are real English |
 | `sweep_century` | `20th century` → `twentieth century` |
+| `sweep_compound_number` | a spelled-out compound number `twenty four` → `twenty-four` (twenty-one to ninety-nine); left alone before a hyphen (`twenty four-year-olds`) |
 | `sweep_dialogue_tag` | the brief's dialogue-tag table, every cell |
+
+Sweeps reach more paragraphs than the model does. Beyond the body prose the
+model reviews, they also run on heading-styled paragraphs (`skip.sweep_only`,
+default `Heading*`) and on lines too short for a model pass — a chapter heading
+is exactly where `sweep_compound_number` earns its place (`Chapter Twenty Four`
+→ `Chapter Twenty-Four`), but not somewhere to let the model rewrite. A table of
+contents (`skip.styles`) is left alone entirely, because it regenerates from the
+headings.
 
 Order is precision order, exactly as with `error_types`: the validator gives
 the first finding to claim a span the right to it, and sweeps run before every
