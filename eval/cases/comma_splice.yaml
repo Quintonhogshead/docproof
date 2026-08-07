@@ -1,0 +1,39 @@
+error_type: comma_splice
+
+# Seeded errors: two independent clauses joined by only a comma. Traps:
+# comma + coordinating conjunction, a leading dependent clause, dialogue
+# attribution, and a run-on with no comma (which belongs to run_on_sentence,
+# not here). No paragraph here is a shipped calibration example.
+cases:
+  - id: cs-001
+    text: "The lamps were lit along the quay, the last of the boats had not come in."
+    expect: { span: "quay, the", correction: "quay; the", confidence: high }
+
+  - id: cs-002
+    text: "The verdict surprised no one, the courtroom emptied in silence anyway."
+    expect: { span: "one, the", correction: "one; the", confidence: high }
+
+  - id: cs-003
+    text: "She packed the last crate before noon, the movers never arrived at all."
+    expect: { span: "noon, the", correction: "noon; the", confidence: high }
+
+  - id: cs-004
+    text: "The engine coughed twice and died, no one under the hood knew why."
+    expect: { span: "died, no", correction: "died; no", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: cs-101
+    text: "It had rained all week, so the river was running high under the bridge."
+    expect: clean          # comma + coordinating conjunction "so"
+
+  - id: cs-102
+    text: "Because the road was closed, they took the long way around the lake."
+    expect: clean          # leading dependent clause
+
+  - id: cs-103
+    text: "\"I'm finished here,\" she said, gathering her coat from the chair."
+    expect: clean          # dialogue attribution, not a splice
+
+  - id: cs-104
+    text: "The gate stood open the dogs were nowhere to be seen in the yard."
+    expect: clean          # run-on with no comma — run_on_sentence owns it, not this type

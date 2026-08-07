@@ -34,6 +34,8 @@ from docproof.prep import convert as prep_convert
 from docproof.prep.place import PlaceError, find_indesign, place_into_template
 from docproof.prep.styles import StyleSheetError
 from docproof.providers import MODELS, estimate_cost, lookup
+from docproof.trackdiff import (TrackDiffError, compare_edits, extract_edits,
+                                open_docx, report_json)
 
 from .accounts import AccountError, User
 from .auth import current_user, owner_for, require_admin
@@ -651,6 +653,41 @@ def _register(app: FastAPI) -> None:
             "output_tokens": prepared.est_output_tokens,
             "style_sheet": prepared.sheet.name,
         }, None
+
+    # -- compare two tracked-changes documents --------------------------------
+
+    @app.post("/api/compare")
+    async def compare(doc_a: UploadFile, doc_b: UploadFile,
+                      owner: str = Depends(owner_for)) -> dict:
+        """Diff the tracked changes on two uploaded .docx files.
+
+        Unlike /api/files, this does NOT reject a document that carries tracked
+        changes — comparing them is the whole point — so each file is opened
+        with trackdiff.open_docx rather than the review preflight. Nothing is
+        staged or queued: parsing two documents and diffing their revisions is
+        local and fast, so the answer comes back in the same request. The
+        uploads are written under the owner's space and removed before the
+        function returns."""
+        paths: Paths = app.state.paths
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        folder = paths.uploads / owner / f"compare-{stamp}"
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            edits = []
+            for i, up in enumerate((doc_a, doc_b)):
+                name = Path(up.filename or f"doc{i}.docx").name
+                dest = folder / f"{i}_{name}"
+                with dest.open("wb") as fh:
+                    shutil.copyfileobj(up.file, fh)
+                try:
+                    edits.append(extract_edits(open_docx(dest)))
+                except TrackDiffError as e:
+                    raise HTTPException(400, str(e))
+            report = compare_edits(edits[0], edits[1],
+                                   label_a="human", label_b="docproof")
+            return report_json(report, edits[0].base)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     # -- which build is this --------------------------------------------------
 

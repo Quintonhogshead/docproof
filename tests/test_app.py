@@ -123,6 +123,33 @@ def test_staged_file_says_which_application_it_came_from(client):
     assert _upload(client)["format"]["name"] == "Word"
 
 
+# --- compare (tracked-changes diff) -------------------------------------------
+
+def test_compare_two_tracked_change_docs(client):
+    # tracked.docx carries one tracked insertion; comparing it with itself is a
+    # perfect match. It also proves /api/compare accepts tracked-changes docs,
+    # which /api/files deliberately rejects.
+    with (FIXTURES / "tracked.docx").open("rb") as a, \
+         (FIXTURES / "tracked.docx").open("rb") as b:
+        resp = client.post("/api/compare",
+                           files={"doc_a": ("tracked.docx", a),
+                                  "doc_b": ("tracked.docx", b)})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["totals"]["agree"] >= 1
+    assert data["totals"]["only_a"] == 0 and data["totals"]["only_b"] == 0
+    assert data["score_a_as_truth"]["located_recall"] == 1.0
+
+
+def test_compare_rejects_a_non_docx(client):
+    with (FIXTURES / "tracked.docx").open("rb") as a:
+        resp = client.post("/api/compare",
+                           files={"doc_a": ("tracked.docx", a),
+                                  "doc_b": ("notes.txt", b"not a zip")})
+    assert resp.status_code == 400
+    assert ".docx" in resp.json()["detail"]
+
+
 def test_the_app_can_say_which_build_it_is(client):
     body = client.get("/api/version").json()
     assert body["version"] == docproof_version

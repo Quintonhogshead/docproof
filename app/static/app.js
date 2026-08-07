@@ -39,7 +39,7 @@ function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
   });
-  ['drop', 'jobs', 'report', 'watch', 'spending', 'prompts',
+  ['drop', 'jobs', 'report', 'compare', 'watch', 'spending', 'prompts',
    'settings', 'admin'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
@@ -161,6 +161,149 @@ function showStaging(count) {
 function hideStaging() {
   $('staging').hidden = true;
 }
+
+// ── compare tracked changes ────────────────────────────────────────────────
+// Two .docx in, a diff of their tracked changes out. Independent of the review
+// flow above: its own upload endpoint (/api/compare), which — unlike
+// /api/files — accepts documents that already carry tracked changes.
+(() => {
+  const slots = { a: null, b: null };
+
+  function wire(key) {
+    const zone = $(`cmp-zone-${key}`);
+    const input = $(`cmp-input-${key}`);
+    const name = $(`cmp-name-${key}`);
+    const set = (file) => {
+      slots[key] = file || null;
+      name.textContent = file ? file.name
+                              : 'Drop a .docx, or click to choose';
+      name.classList.toggle('muted', !file);
+      $('cmp-run').disabled = !(slots.a && slots.b);
+    };
+    zone.addEventListener('click', () => input.click());
+    zone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+    input.addEventListener('change', () => set(input.files[0]));
+    ['dragenter', 'dragover'].forEach((evt) =>
+      zone.addEventListener(evt, (e) => {
+        e.preventDefault(); zone.classList.add('hot');
+      }));
+    ['dragleave', 'drop'].forEach((evt) =>
+      zone.addEventListener(evt, (e) => {
+        e.preventDefault(); zone.classList.remove('hot');
+      }));
+    zone.addEventListener('drop', (e) => {
+      const f = [...e.dataTransfer.files]
+        .find((x) => x.name.toLowerCase().endsWith('.docx'));
+      if (f) set(f);
+    });
+  }
+  wire('a');
+  wire('b');
+
+  $('cmp-run').addEventListener('click', runCompare);
+
+  async function runCompare() {
+    if (!(slots.a && slots.b)) return;
+    $('cmp-error').hidden = true;
+    $('cmp-results').hidden = true;
+    $('cmp-run').disabled = true;
+    $('cmp-busy').hidden = false;
+    const body = new FormData();
+    body.append('doc_a', slots.a);
+    body.append('doc_b', slots.b);
+    try {
+      renderCompare(await api('/api/compare', { method: 'POST', body }));
+    } catch (err) {
+      $('cmp-error').textContent = err.message;
+      $('cmp-error').hidden = false;
+    } finally {
+      $('cmp-busy').hidden = true;
+      $('cmp-run').disabled = false;
+    }
+  }
+
+  const pct = (x) =>
+    (x === null || x === undefined ? '—' : `${Math.round(x * 100)}%`);
+
+  function tile(n, label) {
+    const el = document.createElement('div');
+    el.className = 'tile';
+    const num = document.createElement('span');
+    num.className = 'tile-num';
+    num.textContent = String(n);
+    const lab = document.createElement('span');
+    lab.className = 'tile-label';
+    lab.textContent = label;
+    el.append(num, lab);
+    return el;
+  }
+
+  function renderCompare(d) {
+    const t = d.totals;
+    const tiles = $('cmp-tiles');
+    tiles.replaceChildren(
+      tile(t.agree, 'agree'),
+      tile(t.different_fix, 'different fix'),
+      tile(t.only_a, `only ${d.label_a}`),
+      tile(t.only_b, `only ${d.label_b}`));
+
+    const s = d.score_a_as_truth;
+    $('cmp-score').textContent =
+      `Against ${d.label_a}: found ${pct(s.located_recall)} of its changes `
+      + `(${pct(s.exact_recall)} with the same fix), precision `
+      + `${pct(s.precision)}.`;
+    $('cmp-caveat').textContent = d.unaligned_paragraphs.length
+      ? `${d.unaligned_paragraphs.length} paragraph(s) skipped — their text `
+        + `differs between the two files, so their edits can't be lined up.`
+      : '';
+
+    const misses = [];
+    const differ = [];
+    const extras = [];
+    d.paragraphs.forEach((p) => {
+      p.only_a.forEach((e) => misses.push(e.text));
+      p.different_fix.forEach((e) =>
+        differ.push(`${d.label_a}: ${e.a.text}   ·   ${d.label_b}: ${e.b.text}`));
+      p.only_b.forEach((e) => extras.push(e.text));
+    });
+
+    const groups = $('cmp-groups');
+    groups.replaceChildren(
+      cmpGroup(`Missed by ${d.label_b}`, misses,
+               `${d.label_a} changed these; ${d.label_b} did not.`),
+      cmpGroup('Fixed differently', differ,
+               'Both changed the same place, to different text.'),
+      cmpGroup(`Only ${d.label_b}`, extras,
+               `${d.label_b} changed these; ${d.label_a} did not — worth a `
+               + `look for false positives.`));
+    $('cmp-results').hidden = false;
+  }
+
+  function cmpGroup(title, items, blurb) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const h = document.createElement('h3');
+    h.textContent = `${title} (${items.length})`;
+    card.append(h);
+    const note = document.createElement('p');
+    note.className = 'muted small';
+    note.textContent = items.length ? blurb : 'None.';
+    card.append(note);
+    if (items.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'cmp-list';
+      items.forEach((x) => {
+        const li = document.createElement('li');
+        li.textContent = x;               // untrusted document text — never HTML
+        ul.append(li);
+      });
+      card.append(ul);
+    }
+    return card;
+  }
+})();
 
 function renderFiles() {
   const list = $('file-list');
