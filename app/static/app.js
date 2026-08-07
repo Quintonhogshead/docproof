@@ -757,6 +757,50 @@ async function loadModels() {
 
 $('model').addEventListener('change', renderCost);
 
+// ── reasoning effort ──────────────────────────────────────────────────────
+// A 1-based slider over these, cheapest → deepest, mirroring EFFORT_LEVELS on
+// the server. Low is the shipped default: grammar detection is precise, so a
+// low setting is both cheaper and no less accurate.
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_NAME = { low: 'Low', medium: 'Medium', high: 'High',
+                      xhigh: 'Very high', max: 'Max' };
+const EFFORT_BLURB = {
+  low: 'Cheapest, and all that grammar detection needs.',
+  medium: 'A little more deliberation for style-sensitive passes.',
+  high: 'Slower and dearer — for the hardest judgment calls.',
+  xhigh: 'Deeper still; rarely worth it for proofreading.',
+  max: 'The deepest the model offers, and the most expensive.',
+};
+
+function effortValue() {
+  return EFFORT_LEVELS[Number($('effort').value) - 1] || 'low';
+}
+
+function setEffort(level) {
+  const i = EFFORT_LEVELS.indexOf(level);
+  $('effort').value = String((i < 0 ? 0 : i) + 1);
+  renderEffort();
+}
+
+function renderEffort() {
+  const level = effortValue();
+  $('effort-name').textContent = EFFORT_NAME[level];
+  $('effort-blurb').textContent = EFFORT_BLURB[level];
+}
+
+$('effort').addEventListener('input', renderEffort);
+// Releasing the slider makes this the saved default. Fire-and-forget: on the
+// web build only an administrator may change shared defaults, and the 403 there
+// is harmless — the value still rides along with the job below either way.
+$('effort').addEventListener('change', () => {
+  api('/api/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ effort: effortValue() }),
+  }).catch(() => {});
+});
+renderEffort();
+
 // What the picked sections would cost on this model. The server prices the
 // whole document; once sections are deselected only the client knows what is
 // left, so it re-does the same arithmetic with the rates the server sent.
@@ -867,6 +911,7 @@ $('start').addEventListener('click', async () => {
         schedule_at: (!isPrep() && mode() === 'batch' && $('schedule-on').checked)
           ? $('schedule-at').value : null,
         min_confidence: $('confidence').value,
+        effort: effortValue(),
         selections: isPrep() ? {} : selectionPayload(),
       }),
     });
@@ -2493,6 +2538,7 @@ async function applyDefaults() {
   const radio = document.querySelector(
     `input[name="prep-output"][value="${choice}"]`);
   if (radio) radio.checked = true;
+  setEffort(settings.effort || 'low');
 }
 
 // ── sign-in and mode (web build) ───────────────────────────────────────────

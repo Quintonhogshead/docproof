@@ -35,6 +35,19 @@ def _job(store, **over) -> Job:
     return store.save(Job(**fields))
 
 
+def test_the_jobs_effort_reaches_the_run_config(runner):
+    """config_for is where a job's reasoning depth becomes the model's."""
+    store, r = runner
+    assert r.config_for(_job(store, effort="max")).api.effort == "max"
+
+
+def test_a_record_from_before_effort_existed_runs_at_low(runner):
+    store, r = runner
+    job = _job(store)                     # no effort field set
+    assert job.effort == "low"
+    assert r.config_for(job).api.effort == "low"
+
+
 def test_a_queued_job_still_in_the_worker_queue_does_not_run(runner,
                                                              monkeypatch):
     """The id can still be in `queue.Queue` after cancelling — nothing removes

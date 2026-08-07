@@ -41,6 +41,12 @@ ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
             "google": "GOOGLE_REFRESH_TOKEN"}
 PROVIDERS = ("anthropic", "openai", "gemini")
 
+# Reasoning depth the model runs at, ordered cheapest → deepest. Mirrors the
+# Literal in docproof.config.APIConfig.effort. The app never offers "null"
+# (omit the parameter entirely) — that is a config-file-only choice, not a
+# slider position — so the UI always sends one of these.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 
 @dataclass(frozen=True)
 class Paths:
@@ -108,6 +114,11 @@ def default_output_dir() -> Path:
 class Settings:
     model: str = "claude-sonnet-5"
     min_confidence: str = "medium"
+    # Reasoning depth for the model, one of EFFORT_LEVELS. Low is the shipped
+    # default: grammar detection is precise and well-specified, so a low
+    # setting is both cheaper and no less accurate. Applies to reviews and to
+    # manuscript prep alike, since both make model calls.
+    effort: str = "low"
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     # Which file manuscript prep hands back by default: the InDesign-ready

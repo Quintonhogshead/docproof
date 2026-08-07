@@ -34,6 +34,9 @@ class JobRequest(BaseModel):
     mode: str = "batch"                       # "now" | "batch"
     schedule_at: str | None = None            # "HH:MM" local
     min_confidence: str = "medium"
+    # Reasoning depth for this run. None falls back to the saved default, so an
+    # older page that doesn't send it keeps whatever the defaults screen set.
+    effort: str | None = None
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
@@ -112,6 +115,10 @@ def register(app: FastAPI) -> None:
         # Prep reads its windows in order — a paragraph's meaning depends on
         # what came before it — so there is no batch form of it to offer.
         mode = "now" if req.kind == "prep" else req.mode
+        if req.effort is not None and req.effort not in settingslib.EFFORT_LEVELS:
+            raise HTTPException(
+                400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
+        effort = req.effort or app.state.settings.effort
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -165,6 +172,7 @@ def register(app: FastAPI) -> None:
                 group_id=group_id,
                 schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
+                effort=effort,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,

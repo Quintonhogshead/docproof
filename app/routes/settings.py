@@ -15,6 +15,7 @@ from ..settings import CONFIG_PATH, Settings
 class SettingsUpdate(BaseModel):
     model: str | None = None
     min_confidence: str | None = None
+    effort: str | None = None
     output_dir: str | None = None
     default_mode: str | None = None
     comments: bool | None = None
@@ -41,7 +42,10 @@ def register(app: FastAPI) -> None:
     @app.put("/api/settings", dependencies=[Depends(may_edit)])
     def write_settings(update: SettingsUpdate) -> dict:
         s: Settings = app.state.settings
-        for field_name in ("model", "min_confidence", "output_dir",
+        if update.effort is not None and update.effort not in settingslib.EFFORT_LEVELS:
+            raise HTTPException(
+                400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
+        for field_name in ("model", "min_confidence", "effort", "output_dir",
                            "default_mode", "prep_output", "comments",
                            "explanations", "indesign_template"):
             value = getattr(update, field_name)

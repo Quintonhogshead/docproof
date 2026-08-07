@@ -90,6 +90,9 @@ class Job:
     applied: int | None = None
     results_dir: str | None = None
     min_confidence: str = "medium"
+    # Reasoning depth for the model. Older records predate this field; the
+    # default keeps them on the shipped "low" behaviour.
+    effort: str = "low"
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -327,6 +330,7 @@ class JobRunner:
     def config_for(self, job: Job) -> Config:
         cfg = load_config(self.config_path)
         cfg.api.model = job.model
+        cfg.api.effort = job.effort
         cfg.min_confidence = job.min_confidence
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
