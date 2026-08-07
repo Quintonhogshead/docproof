@@ -31,12 +31,16 @@ _MAX_TABLE_ROWS = 600
 def _style_basis(cfg, variant) -> list[str]:
     lines = [f"This manuscript was proofread as {variant.name}."]
     lines += list(variant.authorities)
+    ellipsis_clause = {
+        "closed": "the ellipsis character closed up to the word before it",
+        "nbsp": "the ellipsis character with a non-breaking space before it",
+        "space": "the ellipsis character with a space on each side",
+    }[cfg.style.ellipsis]
     lines.append(
         "The Atmosphere Press House Style Guide applies throughout, and "
         "overrides the above where they differ: serial comma always, "
         "spelled-out numbers to one hundred, spelled-out centuries, unspaced "
-        "em dashes, and the ellipsis character with a non-breaking space "
-        "before it.")
+        f"em dashes, and {ellipsis_clause}.")
     if variant.confirm:
         # The brief asks for this by name. Canadian and Australian English are
         # hybrids — Canadian takes U.S. punctuation with Canadian spelling —
@@ -135,6 +139,7 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     queries = [f for f in findings if f.status == "query"]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     rejected = [f for f in findings if f.status.startswith("rejected")]
+    oversized = [f for f in findings if f.status == "rejected_oversized"]
 
     d = docx.Document()
     name = Path(doc.source_path).stem
@@ -257,8 +262,16 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
         d.add_paragraph(
             f"{len(rejected)} finding(s) were discarded by the validator "
             f"before reaching the manuscript — a quote that did not match the "
-            f"text, an edit overlapping one already made, or a duplicate. "
-            f"None of them changed anything.")
+            f"text, an edit overlapping one already made, a duplicate, or an "
+            f"edit too large to be a proofreading fix. None of them changed "
+            f"anything.")
+    if oversized:
+        d.add_paragraph(
+            f"Of those, {len(oversized)} were refused specifically for "
+            f"overstepping: an edit that re-typed a long passage wholesale or "
+            f"added new text the original did not contain. A proofreading pass "
+            f"corrects; it does not rewrite or invent, so these were held back "
+            f"rather than applied.")
     if spell is not None and spell.available and spell.lexicon:
         d.add_paragraph(
             f"{len(spell.lexicon)} word(s) not in the dictionary were treated "

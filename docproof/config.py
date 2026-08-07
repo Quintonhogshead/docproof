@@ -76,6 +76,47 @@ class NormalizeConfig(BaseModel):
     spaces: bool = True       # runs of two or more spaces collapse to one
 
 
+class StyleConfig(BaseModel):
+    """House-style conventions the deterministic sweeps enforce where the right
+    answer is a publisher's choice rather than a rule. Kept here and not in the
+    per-English variant files because none of it flips on US/UK — a house sets
+    it once for every manuscript it proofreads.
+
+    `ellipsis` is how an ellipsis sits against the words around it:
+      nbsp   — a non-breaking space before it, so it never wraps away from the
+        word it trails, and a plain space after. The Atmosphere house
+        convention (Bad[NBSP]… she trailed off), so it is the default.
+      closed — no space before it, a plain space after only when a word
+        follows ("I… guess"). For a manuscript or imprint that sets ellipses
+        closed up instead of to the house convention.
+      space  — a plain space on both sides.
+    The trailing space is the same in every mode; only the lead differs."""
+    ellipsis: Literal["nbsp", "closed", "space"] = "nbsp"
+
+
+class EditGuardConfig(BaseModel):
+    """A safety net against a model pass overstepping proofreading into
+    rewriting. A proofreading fix is minimal by contract — analyzer.py tells the
+    model 'the smallest possible fix ... change nothing else' — so an edit that
+    replaces a large span, or adds a lot of new text, is almost always the model
+    fabricating content (an invented dialogue tag) or re-typing a passage
+    wholesale rather than correcting it. Such a finding is rejected before it can
+    become a tracked change, and the rejection is counted so it stays visible.
+
+    The thresholds are in characters of the *minimal* diff, measured after the
+    common prefix and suffix are trimmed, so a small fix inside a long sentence
+    is judged by what it actually changes, not by the sentence's length."""
+    enabled: bool = True
+    # Largest span, deleted or inserted, a single correction may touch. Beyond
+    # this it is a wholesale re-type, not a proofreading edit.
+    max_edit_chars: int = Field(default=64, ge=1)
+    # Most net new characters a correction may add (inserted minus deleted). A
+    # missing word or a spelled-out number adds a little; a fabricated clause or
+    # dialogue attribution adds a lot. Deleting text is never capped this way —
+    # removing words is not fabrication.
+    max_added_chars: int = Field(default=16, ge=0)
+
+
 class SpellcheckConfig(BaseModel):
     """A dictionary scan that classifies rather than corrects. Its output is
     context for the model passes — the manuscript's own vocabulary as a
@@ -127,6 +168,8 @@ class Config(BaseModel):
     skip: SkipConfig = Field(default_factory=SkipConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
+    style: StyleConfig = Field(default_factory=StyleConfig)
+    edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)

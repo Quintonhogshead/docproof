@@ -182,6 +182,57 @@ def _same_effect(base: str, a: Anchor, b: Anchor) -> bool:
     return _apply(base, a) == _apply(base, b)
 
 
+def _apply_all(base: str, edits: list[Anchor]) -> str:
+    """The paragraph as it reads with every one of `edits` accepted — one
+    document's whole tracked-changes result for this paragraph. The edits are
+    non-overlapping (they come from a single document's revisions), so stitching
+    the base's untouched spans around each insertion reproduces it."""
+    out: list[str] = []
+    last = 0
+    for a in sorted(edits, key=lambda e: (e.start, e.end)):
+        out.append(base[last:a.start])
+        out.append(a.insert_text)
+        last = a.end
+    out.append(base[last:])
+    return "".join(out)
+
+
+# Two change regions separated by this few unchanged characters or fewer count
+# as one edit. It keeps a single logical fix that touches more than one spot —
+# a period turned to a comma plus the pronoun it lowercases, across the closing
+# quote and space between them — from splitting into an agreement and a phantom
+# extra. Wider than this and two genuinely separate edits would fuse.
+_CANON_GAP = 3
+
+
+def _canonical_anchors(base: str, target: str) -> list[Anchor]:
+    """`base` → `target` as a minimal set of replacement anchors in base
+    coordinates, independent of how either document happened to record the
+    change.
+
+    This is the whole reason a word-level retype and a one-character fix can
+    compare equal: both sides are re-derived from their accept-all text to the
+    *same* granularity, so a change one document wrote as a single wide edit and
+    the other split into several narrow ones line up instead of landing in
+    'different fix' with a phantom 'only in B' left over. Quote-folded so a
+    straight/curly difference is not mistaken for an edit."""
+    fb, ft = _fold(base), _fold(target)
+    ops = [op for op in
+           SequenceMatcher(None, fb, ft, autojunk=False).get_opcodes()
+           if op[0] != "equal"]
+    anchors: list[Anchor] = []
+    i = 0
+    while i < len(ops):
+        _, i1, i2, j1, j2 = ops[i]
+        # Absorb the next change when only a short unchanged run separates them.
+        while i + 1 < len(ops) and ops[i + 1][1] - i2 <= _CANON_GAP:
+            i2, j2 = ops[i + 1][2], ops[i + 1][4]
+            i += 1
+        anchors.append(Anchor(i1, i2, base[i1:i2], target[j1:j2]))
+        i += 1
+    return anchors
+
+
 @dataclass
 class ParaCompare:
     para_id: str
@@ -289,8 +340,14 @@ def compare_edits(a: DocEdits, b: DocEdits, *, label_a: str = "A",
 def _compare_para(para_id: str, base: str, a_edits: list[Anchor],
                   b_edits: list[Anchor]) -> ParaCompare:
     pc = ParaCompare(para_id=para_id)
-    unmatched_b = list(b_edits)
-    for a in a_edits:
+    # Compare by resulting text, not by how each document recorded its edits:
+    # re-derive both sides from their accept-all result to one canonical
+    # granularity first, so a word-level retype and a minimal fix that reach the
+    # same text agree instead of splitting into a disagreement and a phantom.
+    a_canon = _canonical_anchors(base, _apply_all(base, a_edits))
+    b_canon = _canonical_anchors(base, _apply_all(base, b_edits))
+    unmatched_b = list(b_canon)
+    for a in a_canon:
         overlapping = [b for b in unmatched_b if _overlaps(a, b)]
         # Prefer a same-effect partner (an "agree") over a mere overlap.
         exact = next((b for b in overlapping if _same_effect(base, a, b)), None)
@@ -373,7 +430,9 @@ def render_markdown(report: CompareReport, base_a: dict[str, str]) -> str:
     L: list[str] = []
     L.append(f"# Tracked-changes comparison — {a} vs {b}\n")
     L.append(f"{report.aligned_paras} paragraph(s) compared"
-             + (f" · {len(report.unaligned)} skipped (base mismatch)"
+             + (f" · {len(report.unaligned)} skipped because their base text "
+                f"differs between the two files — a different underlying "
+                f"version, so the edits cannot be lined up"
                 if report.unaligned else "") + "\n")
 
     L.append("## Totals\n")

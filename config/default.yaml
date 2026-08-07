@@ -115,6 +115,29 @@ error_types:
   - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+# House-style conventions the sweeps enforce where the right answer is the
+# press's choice, not a rule. Not in config/variants/ because none of it flips
+# on US/UK — a house sets it once for every manuscript.
+#   ellipsis: how an ellipsis sits against its neighbours.
+#     nbsp   — a non-breaking space before it, a plain space after. The
+#              Atmosphere house convention (Bad[NBSP]… she trailed off).
+#     closed — no space before it, a plain space after when a word follows
+#              ("I… guess"). For a book that sets ellipses closed up instead.
+#     space  — a plain space on both sides.
+style:
+  ellipsis: nbsp            # nbsp (house style) | closed | space
+
+# A safety net against a model pass overstepping proofreading into rewriting.
+# A proofreading fix is minimal by contract, so an edit that replaces a large
+# span (a wholesale re-type) or adds a lot of new text (a fabricated clause or
+# dialogue attribution) is rejected before it can become a tracked change, and
+# counted so the rejection stays visible. Thresholds are characters of the
+# minimal diff, after the shared prefix and suffix are trimmed.
+edit_guard:
+  enabled: true
+  max_edit_chars: 64        # largest span, deleted or inserted, one fix may touch
+  max_added_chars: 16       # most net new characters one fix may add (insert − delete)
+
 # Deterministic sweeps, run before any model pass so their edits get first
 # claim on a span. Each is one Atmosphere house rule expressed as text
 # patterns, and each reports its own final match count — the thing a careful

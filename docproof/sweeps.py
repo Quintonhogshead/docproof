@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Callable, Sequence
 
 from .models import Finding, ParagraphRef
@@ -124,12 +124,18 @@ def _sentence_starts_at(text: str, pos: int) -> bool:
 # --- ellipsis ----------------------------------------------------------------
 
 # Three or more dots, however they are spaced, or an ellipsis character that
-# may already be there. Both are correction targets: the house rule is about
-# the spacing as much as the glyph.
+# may already be there. The glyph is always normalized to …; whether an
+# already-correct … counts as a target depends on the spacing the house wants
+# (see `style`), so a bare … is matched and then filtered out when rebuilding
+# it changes nothing.
 _ELLIPSIS = re.compile(r"\.(?:[ \t\u00a0]*\.){2,}|…")
 
+# The marks a leading space attaches to: a word character or any of these.
+# Nothing before the ellipsis (a paragraph start) takes no lead in any mode.
+_ELLIPSIS_LEADS = ",;:!?" + _CLOSING_QUOTES
 
-def _sweep_ellipsis(text: str, variant=None) -> list[Hit]:
+
+def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
     hits: list[Hit] = []
     for m in _ELLIPSIS.finditer(text):
         lo, hi = m.start(), m.end()
@@ -139,23 +145,32 @@ def _sweep_ellipsis(text: str, variant=None) -> list[Hit]:
             hi += 1
         before = text[lo - 1] if lo > 0 else ""
         after = text[hi] if hi < len(text) else ""
-        # A non-breaking space before, so the ellipsis never wraps away from
-        # the word it trails; a plain space after, only when a word follows.
-        lead = "\u00a0" if before and (before.isalnum() or before in ",;:!?" +
-                                       _CLOSING_QUOTES) else ""
+        attaches = bool(before) and (before.isalnum() or before in _ELLIPSIS_LEADS)
+        # Only the lead varies with house style. The trailing space is a plain
+        # space whenever a word follows, the same in every mode.
+        if style == "nbsp":
+            # A non-breaking space, so the ellipsis never wraps away from the
+            # word it trails.
+            lead = "\u00a0" if attaches else ""
+            why = ("House style sets an ellipsis as … with a non-breaking "
+                   "space before it.")
+        elif style == "space":
+            lead = " " if attaches else ""
+            why = "House style sets an ellipsis as … with a space on each side."
+        else:  # "closed"
+            lead = ""
+            why = "House style closes up an ellipsis: … with no space before it."
         trail = " " if after.isalnum() else ""
         replacement = f"{lead}…{trail}"
         if text[lo:hi] == replacement:
             continue
-        hits.append(Hit(lo, hi, replacement,
-                        "House style sets an ellipsis as … with a "
-                        "non-breaking space before it."))
+        hits.append(Hit(lo, hi, replacement, why))
     return hits
 
 
 # --- dashes ------------------------------------------------------------------
 
-_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–)(?P<post>[ \t\u00a0]*)")
+_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—)(?P<post>[ \t\u00a0]*)")
 
 
 def _sweep_dash(text: str, variant=None) -> list[Hit]:
@@ -168,7 +183,12 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
         before = text[:m.start("pre")][-1:]
         after = text[m.end("post"):][:1]
         run = m.group("run")
-        if run == "–":
+        if run == "—":
+            # Already an em dash. House style sets it unspaced, so the only
+            # thing to fix is a space around it; the idempotency check below
+            # drops the ones that are already tight.
+            replacement, why = "—", "House style sets an em dash unspaced."
+        elif run == "–":
             # An en dash tight between numbers is a correct range. Spaced, it
             # is being used as a sentence break, which house style sets as an
             # unspaced em dash.
@@ -390,7 +410,8 @@ def resolve(keys: Sequence[str]) -> list[Sweep]:
 
 
 def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
-               variant=None) -> tuple[list[Finding], list[SweepReport]]:
+               variant=None, *, ellipsis_style: str = "nbsp"
+               ) -> tuple[list[Finding], list[SweepReport]]:
     """Every enabled sweep over every paragraph, as findings plus the counts
     the change log has to quote.
 
@@ -400,9 +421,14 @@ def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
     reports: list[SweepReport] = []
     n = 0
     for sweep in resolve(keys):
+        # The ellipsis sweep is the one whose right answer is a house choice
+        # (config/default.yaml → style.ellipsis); every other sweep reads only
+        # text and variant, so it is bound here and the rest are called as-is.
+        scan = (partial(sweep.scan, style=ellipsis_style)
+                if sweep.key == "sweep_ellipsis" else sweep.scan)
         flagged = remaining = 0
         for para in paragraphs:
-            hits = sweep.scan(para.text, variant)
+            hits = scan(para.text, variant)
             if not hits:
                 continue
             flagged += len(hits)
@@ -423,8 +449,7 @@ def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
                     explanation=hit.explanation,
                     confidence="high",
                 ))
-            remaining += len(sweep.scan(apply_hits(para.text, hits),
-                                              variant))
+            remaining += len(scan(apply_hits(para.text, hits), variant))
         reports.append(SweepReport(sweep.key, sweep.name, flagged, remaining))
         if remaining:
             log.error("%s: %d match(es) still present after its own fixes — "
