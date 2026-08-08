@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI
 
-from docproof.providers import MODELS, estimate_cost
+from docproof.providers import EFFORT_MULTIPLIER, MODELS, estimate_cost
 
 from . import common
 from .. import settings as settingslib
@@ -31,6 +31,7 @@ def register(app: FastAPI) -> None:
                      # partial selection without another round trip.
                      "input_per_mtok": m.input_per_mtok,
                      "output_per_mtok": m.output_per_mtok,
+                     "supports_effort": m.supports_effort,
                      "batch_discount": m.batch_discount}
             if totals:
                 inp, req = totals
@@ -41,5 +42,10 @@ def register(app: FastAPI) -> None:
                     m.id, input_tokens=inp,
                     output_tokens=req * common.OUTPUT_TOKEN_GUESS, batch=True)
             out.append(entry)
+        # The effort table and the configured default ride along so the picker
+        # can factor the reasoning dial into its live estimate and open on the
+        # house default, both without hardcoding server-owned values.
         return {"models": out, "keys": keys,
-                "output_token_guess": common.OUTPUT_TOKEN_GUESS}
+                "output_token_guess": common.OUTPUT_TOKEN_GUESS,
+                "effort_multipliers": EFFORT_MULTIPLIER,
+                "default_model": app.state.settings.model}

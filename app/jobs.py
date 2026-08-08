@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import shutil
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -25,7 +26,8 @@ from docproof.config import Config, load_config
 from docproof.formats import get_format
 from docproof.audit import AuditError
 from docproof.ingest import IngestError
-from docproof.pipeline import content_hash, finish, prepare, run_sync
+from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
+                               run_sync)
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
@@ -232,6 +234,18 @@ class JobStore:
                 setattr(job, k, v)
             return self.save(job)
 
+    def delete(self, job_id: str) -> bool:
+        """Remove a job's record folder — the manifest, checkpoint, and any
+        batch bookkeeping. The produced documents live elsewhere (results_dir);
+        the runner clears those before calling this. Returns whether anything
+        was there to remove."""
+        with self._lock:
+            d = self.dir(job_id)
+            if not d.is_dir():
+                return False
+            shutil.rmtree(d, ignore_errors=True)
+            return True
+
     def update_if(self, job_id: str, *, expect: str, **fields) -> Job | None:
         """`update`, but only if the job is still in the state the caller last
         saw it in. Cancelling reads a job's state and then, a moment later,
@@ -264,6 +278,11 @@ class JobRunner:
         self._busy = threading.Event()
         self._tick_mutex = threading.Lock()
         self._threads: list[threading.Thread] = []
+        # Ids the user has asked to abort mid-run. The worker polls this as it
+        # folds each call in; a set + lock rather than per-job Events so the
+        # request can land before the worker has even picked the job up.
+        self._cancel_lock = threading.Lock()
+        self._cancel_requested: set[str] = set()
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -303,6 +322,35 @@ class JobRunner:
                 self.queue.put(job.id)
             elif job.state == "queued":
                 self.queue.put(job.id)
+
+    # -- cancellation ---------------------------------------------------------
+
+    def request_cancel(self, job_id: str) -> None:
+        """Ask a running job to stop. The worker notices between calls and
+        raises out of the run; harmless if the job isn't actually running,
+        since the flag is cleared when the worker next finishes with this id."""
+        with self._cancel_lock:
+            self._cancel_requested.add(job_id)
+
+    def _cancel_pending(self, job_id: str) -> bool:
+        with self._cancel_lock:
+            return job_id in self._cancel_requested
+
+    def _clear_cancel(self, job_id: str) -> None:
+        with self._cancel_lock:
+            self._cancel_requested.discard(job_id)
+
+    def _abort(self, job_id: str) -> None:
+        """Finalize an aborted run. The checkpoint goes the way a queued
+        cancel's does — a cancelled job never runs again, so the calls it did
+        pay for before the abort are unreusable clutter — and any results
+        folder claimed but never written is handed back."""
+        self._release_results_dir(job_id)
+        self.discard_checkpoint(job_id)
+        job = self.store.get(job_id)
+        if job is not None and job.state not in ("done", "failed"):
+            self.store.update(job_id, state="cancelled", error=None)
+        log.info("Job %s aborted by request", job_id)
 
     # -- submission -----------------------------------------------------------
 
@@ -457,6 +505,32 @@ class JobRunner:
             return                             # it has results, or is gone
         self.store.update(job_id, results_dir=None)
 
+    def delete_job(self, job_id: str) -> bool:
+        """Remove a finished job for good: its produced documents and its
+        record, so it leaves the results list and reclaims its disk.
+
+        The results folder is deleted only when it sits inside the configured
+        output directory — a guard so a malformed results_dir can never turn
+        this into an rmtree of somewhere it shouldn't be. The abort flag is
+        cleared too, in case a delete races a run that just finished."""
+        job = self.store.get(job_id)
+        if job is None:
+            return False
+        if job.results_dir:
+            results = Path(job.results_dir)
+            base = Path(self.settings.output_dir).expanduser().resolve()
+            try:
+                inside = results.resolve().is_relative_to(base)
+            except (OSError, ValueError):
+                inside = False
+            if inside and results.is_dir():
+                shutil.rmtree(results, ignore_errors=True)
+            elif not inside:
+                log.warning("Leaving results dir outside the output base in "
+                            "place: %s", job.results_dir)
+        self._clear_cancel(job_id)
+        return self.store.delete(job_id)
+
     # -- worker ---------------------------------------------------------------
 
     def _work(self) -> None:
@@ -472,6 +546,10 @@ class JobRunner:
                 log.exception("Job %s failed", job_id)
                 self.store.update(job_id, state="failed", error=str(e))
             finally:
+                # Whatever happened to the job, this id's abort request is spent:
+                # clear it so it can't touch a later run that reuses nothing but
+                # the same worker.
+                self._clear_cancel(job_id)
                 self._busy.clear()
                 self.queue.task_done()
 
@@ -517,8 +595,14 @@ class JobRunner:
         # a crash or a mid-run exception resumes instead of paying again. Only
         # a finished job deletes it.
         checkpoint = self._checkpoint(job, cfg, prepared)
-        findings, usage = run_sync(cfg, prepared, provider, progress=progress,
-                                   checkpoint=checkpoint)
+        try:
+            findings, usage = run_sync(
+                cfg, prepared, provider, progress=progress,
+                checkpoint=checkpoint,
+                should_cancel=lambda: self._cancel_pending(job_id))
+        except JobCancelled:
+            self._abort(job_id)
+            return
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
@@ -576,13 +660,23 @@ class JobRunner:
                                 words=prepared.structure.word_count) is None:
             return
 
+        # Prep reads its windows in order, one call at a time, so an abort just
+        # rides the progress callback: it raises between windows, after the last
+        # finished one is checkpointed and before the next is paid for.
+        def progress(done: int, total: int) -> None:
+            if self._cancel_pending(job_id):
+                raise JobCancelled()
+            self.store.update(job_id, done=done, total=total)
+
         # Kept through failures — including a failed verification — so a retry
         # replays the windows already paid for rather than re-tagging the book.
         checkpoint = self._checkpoint(job, cfg, prepared)
-        tags, usage = preplib.run(
-            cfg, prepared, provider, checkpoint=checkpoint,
-            progress=lambda done, total: self.store.update(job_id, done=done,
-                                                           total=total))
+        try:
+            tags, usage = preplib.run(cfg, prepared, provider,
+                                      checkpoint=checkpoint, progress=progress)
+        except JobCancelled:
+            self._abort(job_id)
+            return
         self.store.update(job_id, state="collecting")
         out = self._claim_results_dir(job)
         try:

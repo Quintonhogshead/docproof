@@ -121,7 +121,11 @@ def default_output_dir() -> Path:
 
 @dataclass
 class Settings:
-    model: str = "claude-sonnet-5"
+    # ChatGPT Luna is the shipped default: the cheapest model in the catalog,
+    # and grammar detection is a precise, well-specified task that does not
+    # need a dearer one. The picker opens on this (via /api/models'
+    # default_model) on every load.
+    model: str = "gpt-5.6-luna"
     min_confidence: str = "medium"
     # Reasoning depth for the model, one of EFFORT_LEVELS. Low is the shipped
     # default: grammar detection is precise and well-specified, so a low

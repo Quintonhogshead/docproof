@@ -46,6 +46,11 @@ class JobRequest(BaseModel):
     prep_output: str = "indesign"             # "indesign" | "tracked" | "both"
 
 
+# The states a job stays in for good: it has stopped, so it can be removed from
+# the results list. Everything else is still moving and must be aborted first.
+_TERMINAL = ("done", "failed", "cancelled")
+
+
 def _result_name(job: Job, which: str) -> str | None:
     """What a job called the file the user is asking for."""
     stem = Path(job.filename).stem or "document"
@@ -209,31 +214,75 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str, owner: str = Depends(owner_for)) -> dict:
-        """Stop a review before it has started spending anything.
+        """Abort a job. A queued or scheduled one is pulled back before it
+        spends anything; a running one is told to stop, and the worker halts it
+        between calls — cancelling every call not yet started, so the abort
+        stops the spend, not just the folding.
 
-        Once a job is running, waiting overnight on a vendor, or writing its
-        files, there is nothing local left to cancel — the work is either
-        already billed or already being written. Only a job that has not
-        started can be pulled back, so that is all this offers."""
+        An overnight batch already at the vendor is the one thing that can't be
+        recalled: it will bill whether or not we collect it, so it is refused
+        rather than pretending to stop. A job in its brief file-writing
+        (collecting) moment is past the point of stopping too."""
         store: JobStore = app.state.store
+        runner: JobRunner = app.state.runner
         job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No such review")
+
+        if job.state == "running":
+            # The worker owns the state now; signal it and let it flip the job
+            # to cancelled when it next comes up for air. The record still reads
+            # "running" for the moment, which is honest — it is, until it stops.
+            runner.request_cancel(job_id)
+            return store.get(job_id).to_api()
+
         if job.state not in ("queued", "scheduled"):
             raise HTTPException(
-                400, "This one has already started, so there is nothing left "
-                     "to cancel.")
+                400, "This one is already past the point of stopping — an "
+                     "overnight batch can't be recalled, and a finished job "
+                     "has nothing left to cancel.")
         updated = store.update_if(job_id, expect=job.state, state="cancelled",
                                   error=None)
         if updated is None:
-            # It started in the instant between the check above and this one.
+            # It moved on in the instant between the check above and this one.
+            # If it started running, catch it there instead of failing the call.
+            if (moved := store.get(job_id)) is not None and moved.state == "running":
+                runner.request_cancel(job_id)
+                return moved.to_api()
             raise HTTPException(
-                400, "This one just started, so there is nothing left to "
+                400, "This one just moved on, so there is nothing left to "
                      "cancel.")
         # A cancelled job never runs again, so any checkpoint a failed earlier
         # attempt left behind is just clutter in the job folder now.
-        app.state.runner.discard_checkpoint(job_id)
+        runner.discard_checkpoint(job_id)
         return updated.to_api()
+
+    @app.post("/api/jobs/clear")
+    def clear_jobs(owner: str = Depends(owner_for)) -> dict:
+        """Clear every finished job from the results list at once — the ones
+        that are done, failed, or were cancelled. Active work is left alone.
+        Removes each job's produced documents along with its record."""
+        store: JobStore = app.state.store
+        runner: JobRunner = app.state.runner
+        scope = owner if app.state.web else None
+        removed = [job.id for job in store.all(scope)
+                   if job.state in _TERMINAL and runner.delete_job(job.id)]
+        return {"removed": removed}
+
+    @app.delete("/api/jobs/{job_id}")
+    def delete_job(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        """Remove one finished job from the results list, produced documents
+        and all. Only a job that has stopped — done, failed, or cancelled — can
+        be removed; abort a running one first."""
+        runner: JobRunner = app.state.runner
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review")
+        if job.state not in _TERMINAL:
+            raise HTTPException(
+                400, "This one is still active. Abort it first, then remove it.")
+        runner.delete_job(job_id)
+        return {"ok": True, "id": job_id}
 
     @app.post("/api/jobs/{job_id}/download-anyway")
     def download_anyway(job_id: str, owner: str = Depends(owner_for)) -> dict:

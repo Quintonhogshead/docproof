@@ -964,3 +964,69 @@ def test_plain_state_never_leaks_jargon():
                    model="m", mode="batch", state=state,
                    schedule_at="23:00").plain_state()
         assert not any(w.lower() in text.lower() for w in words), text
+
+
+# --- aborting and clearing ----------------------------------------------------
+
+def test_aborting_a_running_job_signals_the_worker(client):
+    """A running job's cancel doesn't fail the way it used to — it flags the
+    run for the worker to stop, and answers 200 rather than '400, already
+    started'."""
+    store: JobStore = client.app_state.store
+    runner: JobRunner = client.app_state.runner
+    store.save(Job(id="run1", filename="simple.docx",
+                   source_path=str(FIXTURES / "simple.docx"),
+                   model="claude-sonnet-5", mode="now", state="running"))
+
+    resp = client.post("/api/jobs/run1/cancel")
+    assert resp.status_code == 200, resp.text
+    assert runner._cancel_pending("run1"), "the worker was asked to stop"
+
+
+def test_an_overnight_batch_still_cannot_be_recalled(client):
+    """A submitted batch is at the vendor and will bill regardless; cancel says
+    so rather than pretending to stop it."""
+    store: JobStore = client.app_state.store
+    store.save(Job(id="wait1", filename="simple.docx", source_path="x",
+                   model="claude-sonnet-5", mode="batch", state="waiting"))
+    resp = client.post("/api/jobs/wait1/cancel")
+    assert resp.status_code == 400
+    assert store.get("wait1").state == "waiting"
+
+
+def test_clearing_removes_finished_jobs_and_their_documents(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"])
+    client.app_state.runner.wait_idle()
+    jid = job["id"]
+    record = client.app_state.store.get(jid)
+    assert record.state == "done"
+    assert record.results_dir and Path(record.results_dir).is_dir()
+
+    resp = client.post("/api/jobs/clear")
+    assert resp.status_code == 200
+    assert jid in resp.json()["removed"]
+    assert client.get("/api/jobs").json()["jobs"] == []
+    assert not Path(record.results_dir).exists(), "documents cleared too"
+
+
+def test_deleting_one_finished_job_leaves_the_others(client):
+    first = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+    second = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+
+    resp = client.delete(f"/api/jobs/{first['id']}")
+    assert resp.status_code == 200
+    ids = [j["id"] for j in client.get("/api/jobs").json()["jobs"]]
+    assert first["id"] not in ids
+    assert second["id"] in ids
+
+
+def test_deleting_an_active_job_is_refused(client):
+    store: JobStore = client.app_state.store
+    store.save(Job(id="act1", filename="simple.docx", source_path="x",
+                   model="claude-sonnet-5", mode="batch", state="waiting"))
+    resp = client.delete("/api/jobs/act1")
+    assert resp.status_code == 400
+    assert store.get("act1") is not None, "an active job is left in place"

@@ -20,6 +20,10 @@ const api = async (path, options) => {
 // every section in it, so "do nothing" means "review the whole document".
 const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 outputGuess: 600, sheet: null,
+                // The reasoning-effort → output-cost factors and the house
+                // default model, both sent by /api/models so the picker never
+                // hardcodes a server-owned number.
+                effortMultipliers: {}, defaultModel: null,
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [] };
@@ -161,6 +165,58 @@ function showStaging(count) {
 function hideStaging() {
   $('staging').hidden = true;
 }
+
+// ── printable report styling ───────────────────────────────────────────────
+// Shared by the compare report below and the designer-notes report further
+// down. Both build a self-contained HTML document — DocProof header, summary
+// cards, clean tables — that opens in any browser and prints to PDF. Every
+// value that came from a document is escaped: these strings become files the
+// user may send on.
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+const REPORT_CSS = `
+  :root{--ink:#1e1c1a;--muted:#6a6560;--line:#e2ded8;--accent:#7c4a2d;
+    --accent-soft:#f3ece6;--warn:#9a3412;--bg:#fbfaf8;--panel:#fff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:820px;margin:0 auto;padding:48px 32px 72px}
+  header.rep{border-bottom:2px solid var(--accent);padding-bottom:20px;margin-bottom:26px}
+  .brand{font:600 .74rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+  h1{font:600 1.85rem/1.2 "Iowan Old Style",Palatino,Georgia,serif;margin:.35em 0 .1em}
+  .sub{color:var(--muted);margin:.15em 0}
+  .files{display:flex;gap:12px 28px;flex-wrap:wrap;margin-top:14px;font-size:.9rem}
+  .files b{color:var(--accent);font-weight:600}
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 8px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:15px 12px;text-align:center}
+  .card .n{display:block;font:600 1.9rem/1 "Iowan Old Style",Palatino,Georgia,serif}
+  .card .l{display:block;color:var(--muted);font-size:.8rem;margin-top:6px}
+  .headline{font-size:1.08rem;background:var(--accent-soft);border-radius:10px;
+    padding:15px 18px;margin:14px 0 2px}
+  .headline b{color:var(--accent)}
+  .caveat{color:var(--muted);font-size:.9rem;margin:.4em 0 0}
+  h2{font:600 1.1rem/1.3 "Iowan Old Style",Palatino,Georgia,serif;
+    margin:32px 0 4px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .blurb{color:var(--muted);font-size:.9rem;margin:.2em 0 12px}
+  table{width:100%;border-collapse:collapse;font-size:.94rem;margin:6px 0}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:.74rem;
+    text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line);
+    padding:7px 10px}
+  td{border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86rem}
+  .metrics td:last-child{font-weight:600;text-align:right;
+    font-variant-numeric:tabular-nums}
+  .style-a{color:var(--warn);font-weight:600}
+  .style-b{color:var(--accent);font-weight:600}
+  .none{color:var(--muted);font-style:italic;margin:6px 0}
+  .foot{margin-top:44px;color:var(--muted);font-size:.8rem;
+    border-top:1px solid var(--line);padding-top:14px}
+  @media print{body{background:#fff}.wrap{padding:0}
+    .card,.headline{border:1px solid #ccc}}
+`;
 
 // ── compare tracked changes ────────────────────────────────────────────────
 // Two .docx in, a diff of their tracked changes out. Independent of the review
@@ -372,54 +428,9 @@ function hideStaging() {
   // A self-contained HTML file built from the JSON already on screen: no second
   // upload, no server round-trip. It opens in any browser and prints to PDF, and
   // it reads as a document — a titled header, summary cards, and clean tables —
-  // rather than the working panel above. Every value that came from a document
-  // is escaped: this string becomes a file the user may send on.
-
-  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-  const REPORT_CSS = `
-    :root{--ink:#1e1c1a;--muted:#6a6560;--line:#e2ded8;--accent:#7c4a2d;
-      --accent-soft:#f3ece6;--warn:#9a3412;--bg:#fbfaf8;--panel:#fff}
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--ink);
-      font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
-    .wrap{max-width:820px;margin:0 auto;padding:48px 32px 72px}
-    header.rep{border-bottom:2px solid var(--accent);padding-bottom:20px;margin-bottom:26px}
-    .brand{font:600 .74rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
-      letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
-    h1{font:600 1.85rem/1.2 "Iowan Old Style",Palatino,Georgia,serif;margin:.35em 0 .1em}
-    .sub{color:var(--muted);margin:.15em 0}
-    .files{display:flex;gap:12px 28px;flex-wrap:wrap;margin-top:14px;font-size:.9rem}
-    .files b{color:var(--accent);font-weight:600}
-    .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:26px 0 8px}
-    .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-      padding:15px 12px;text-align:center}
-    .card .n{display:block;font:600 1.9rem/1 "Iowan Old Style",Palatino,Georgia,serif}
-    .card .l{display:block;color:var(--muted);font-size:.8rem;margin-top:6px}
-    .headline{font-size:1.08rem;background:var(--accent-soft);border-radius:10px;
-      padding:15px 18px;margin:14px 0 2px}
-    .headline b{color:var(--accent)}
-    .caveat{color:var(--muted);font-size:.9rem;margin:.4em 0 0}
-    h2{font:600 1.1rem/1.3 "Iowan Old Style",Palatino,Georgia,serif;
-      margin:32px 0 4px;border-bottom:1px solid var(--line);padding-bottom:6px}
-    .blurb{color:var(--muted);font-size:.9rem;margin:.2em 0 12px}
-    table{width:100%;border-collapse:collapse;font-size:.94rem;margin:6px 0}
-    th{text-align:left;color:var(--muted);font-weight:600;font-size:.74rem;
-      text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line);
-      padding:7px 10px}
-    td{border-bottom:1px solid var(--line);padding:9px 10px;vertical-align:top}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86rem}
-    .metrics td:last-child{font-weight:600;text-align:right;
-      font-variant-numeric:tabular-nums}
-    .style-a{color:var(--warn);font-weight:600}
-    .style-b{color:var(--accent);font-weight:600}
-    .none{color:var(--muted);font-style:italic;margin:6px 0}
-    .foot{margin-top:44px;color:var(--muted);font-size:.8rem;
-      border-top:1px solid var(--line);padding-top:14px}
-    @media print{body{background:#fff}.wrap{padding:0}
-      .card,.headline{border:1px solid #ccc}}
-  `;
+  // rather than the working panel above. Escaping and the shared print styling
+  // (esc, REPORT_CSS) live at module scope above, alongside the designer-notes
+  // report that reuses them.
 
   const shell = (title, sub, files, body) =>
     `<!doctype html><html lang="en"><head><meta charset="utf-8">`
@@ -550,12 +561,24 @@ function hideStaging() {
     return { url, m };
   }
 
+  // Name the download after the book being compared — the first upload is the
+  // subject — so a folder of reports is read at a glance. Drop the extension
+  // and any characters a filesystem would choke on; fall back to a generic
+  // name if, somehow, no filename came through.
+  function reportFilename(m) {
+    const book = (lastReport && (lastReport.nameA || lastReport.nameB)) || '';
+    const stem = book.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, ' ').trim();
+    const label = m === 'formatting' ? 'formatting comparison'
+      : 'tracked-changes comparison';
+    return stem ? `${stem} — ${label}.html` : `docproof-compare-${m}.html`;
+  }
+
   // Hand the blob over as a file the user keeps. Same mechanism the pop-up
   // fallback below uses, only here it is the whole point rather than a rescue.
   function saveReportUrl(url, m) {
     const a = document.createElement('a');
     a.href = url;
-    a.download = `docproof-compare-${m}.html`;
+    a.download = reportFilename(m);
     document.body.append(a);
     a.click();
     a.remove();
@@ -735,6 +758,8 @@ async function loadModels() {
   const models = body.models;
   state.models = models;
   state.outputGuess = body.output_token_guess || state.outputGuess;
+  state.effortMultipliers = body.effort_multipliers || state.effortMultipliers;
+  state.defaultModel = body.default_model || state.defaultModel;
 
   const select = $('model');
   const previous = select.value;
@@ -746,12 +771,14 @@ async function loadModels() {
     opt.disabled = !m.available;
     select.append(opt);
   });
-  // Prefer a usable model, but always select something: the cost estimate is
-  // useful before a key exists, and a blank dropdown looks broken.
-  const fallback = models.find((m) => m.available) || models[0];
-  select.value = models.some((m) => m.id === previous && m.available)
-    ? previous
-    : (fallback ? fallback.id : '');
+  // Open on the house default when it is usable; otherwise prefer any usable
+  // model, but always select something — the cost estimate is useful before a
+  // key exists, and a blank dropdown looks broken.
+  const usable = (id) => models.some((m) => m.id === id && m.available);
+  const fallback = (usable(state.defaultModel) && state.defaultModel)
+    || (models.find((m) => m.available) || models[0] || {}).id
+    || '';
+  select.value = usable(previous) ? previous : fallback;
   renderCost();
 }
 
@@ -788,7 +815,9 @@ function renderEffort() {
   $('effort-blurb').textContent = EFFORT_BLURB[level];
 }
 
-$('effort').addEventListener('input', renderEffort);
+// Both the description and the price move with the dial: a deeper effort costs
+// more, and the estimate must say so as the slider slides.
+$('effort').addEventListener('input', () => { renderEffort(); renderCost(); });
 // Releasing the slider makes this the saved default. Fire-and-forget: on the
 // web build only an administrator may change shared defaults, and the 403 there
 // is harmless — the value still rides along with the job below either way.
@@ -801,9 +830,37 @@ $('effort').addEventListener('change', () => {
 });
 renderEffort();
 
+// ── dark-mode toggle ───────────────────────────────────────────────────────
+// The <head> already applied any saved theme before paint; here we only sync
+// the switch to what's in effect and persist the user's choice. With no saved
+// value the OS preference decides, so the switch reflects that via matchMedia.
+(function themeToggle() {
+  const box = $('theme-toggle');
+  if (!box) return;
+  const saved = (() => {
+    try { return localStorage.getItem('docproof-theme'); } catch (e) { return null; }
+  })();
+  const prefersDark = window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  box.checked = saved ? saved === 'dark' : !!prefersDark;
+  box.addEventListener('change', () => {
+    const theme = box.checked ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    try { localStorage.setItem('docproof-theme', theme); } catch (e) { /* private mode */ }
+  });
+})();
+
 // What the picked sections would cost on this model. The server prices the
 // whole document; once sections are deselected only the client knows what is
 // left, so it re-does the same arithmetic with the rates the server sent.
+// The reasoning dial changes only what the model writes back, so it scales the
+// output half of the estimate and never the input. Mirrors effort_multiplier
+// on the server: models that ignore effort are never scaled.
+function effortFactor(m) {
+  if (!m || !m.supports_effort) return 1;
+  return state.effortMultipliers[effortValue()] || 1;
+}
+
 function priceSelection(m) {
   let tokens = 0;
   let requests = 0;
@@ -818,7 +875,7 @@ function priceSelection(m) {
   });
   if (!requests) return { now: null, batch: null };
   const full = (tokens * m.input_per_mtok
-    + requests * state.outputGuess * m.output_per_mtok) / 1e6;
+    + requests * state.outputGuess * m.output_per_mtok * effortFactor(m)) / 1e6;
   return { now: full, batch: full * m.batch_discount };
 }
 
@@ -826,10 +883,11 @@ function priceSelection(m) {
 // add up to on this model.
 function pricePrep(m) {
   let cost = 0;
+  const factor = effortFactor(m);
   filesToRun().forEach((f) => {
     if (!f.prep) return;
     cost += (f.prep.input_tokens * m.input_per_mtok
-      + f.prep.output_tokens * m.output_per_mtok) / 1e6;
+      + f.prep.output_tokens * m.output_per_mtok * factor) / 1e6;
   });
   return cost;
 }
@@ -947,16 +1005,26 @@ async function refreshJobs({ tick = false } = {}) {
   } catch (_) { /* transient; the next poll will catch up */ }
 }
 
+// Jobs the user has hit Abort on but which the worker hasn't yet flipped to
+// cancelled — kept so the button reads "Aborting…" across the polls in between
+// instead of springing back to "Abort".
+const aborting = new Set();
+const TERMINAL_STATES = ['done', 'failed', 'cancelled'];
+
 function renderJobs(jobs) {
   const list = $('job-list');
   list.innerHTML = '';
   $('jobs-empty').hidden = jobs.length > 0;
 
   const active = jobs.filter(
-    (j) => !['done', 'failed', 'cancelled'].includes(j.state)).length;
+    (j) => !TERMINAL_STATES.includes(j.state)).length;
   const badge = $('jobs-badge');
   badge.hidden = active === 0;
   badge.textContent = String(active);
+  // A job that reached a terminal state is no longer aborting; forget it so the
+  // set can't grow without bound.
+  jobs.forEach((j) => { if (TERMINAL_STATES.includes(j.state)) aborting.delete(j.id); });
+  $('jobs-clear').hidden = !jobs.some((j) => TERMINAL_STATES.includes(j.state));
 
   jobs.forEach((job) => {
     const li = document.createElement('li');
@@ -981,6 +1049,39 @@ function renderJobs(jobs) {
       fill.style.width = `${Math.round((job.done / job.total) * 100)}%`;
       bar.append(fill);
       li.append(bar);
+    }
+
+    // A running review is actively spending; let the user pull the plug. The
+    // worker stops between calls and cancels everything not already in flight,
+    // so the abort caps the spend rather than only hiding the result.
+    if (job.state === 'running') {
+      const actions = document.createElement('div');
+      actions.className = 'job-actions';
+      const note = actionNote();
+      const abort = document.createElement('button');
+      if (aborting.has(job.id)) {
+        abort.textContent = 'Aborting…';
+        abort.disabled = true;
+      } else {
+        abort.className = 'danger';
+        abort.textContent = 'Abort';
+        abort.addEventListener('click', async () => {
+          abort.disabled = true;
+          note.hidden = true;
+          aborting.add(job.id);
+          try {
+            await api(`/api/jobs/${job.id}/cancel`, { method: 'POST' });
+            refreshJobs();
+          } catch (err) {
+            aborting.delete(job.id);
+            note.textContent = err.message;
+            note.hidden = false;
+            abort.disabled = false;
+          }
+        });
+      }
+      actions.append(abort, note);
+      li.append(actions);
     }
 
     // Only offered before anything has actually started: once a review is
@@ -1097,9 +1198,48 @@ function renderJobs(jobs) {
       }
     }
 
+    // A finished job — done, failed, or cancelled — can be cleared from the
+    // list. It takes the produced documents with it, so it asks first.
+    if (TERMINAL_STATES.includes(job.state)) {
+      const remove = document.createElement('button');
+      remove.className = 'link job-remove';
+      remove.textContent = 'Remove';
+      remove.title = 'Remove from this list and delete its downloaded files';
+      remove.addEventListener('click', async () => {
+        if (!confirm(`Remove “${job.filename}” from the list? This also `
+          + `deletes its downloaded files, and can't be undone.`)) return;
+        remove.disabled = true;
+        try {
+          await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
+          refreshJobs();
+        } catch (err) {
+          remove.disabled = false;
+          alert(err.message || 'Could not remove this one.');
+        }
+      });
+      li.append(remove);
+    }
+
     list.append(li);
   });
 }
+
+// Clear every finished job at once. One confirm, then a single call the server
+// scopes to this user's own finished work.
+$('jobs-clear').addEventListener('click', async () => {
+  const btn = $('jobs-clear');
+  if (!confirm('Remove every finished document from this list? This also '
+    + "deletes their downloaded files, and can't be undone.")) return;
+  btn.disabled = true;
+  try {
+    await api('/api/jobs/clear', { method: 'POST' });
+    refreshJobs();
+  } catch (err) {
+    alert(err.message || 'Could not clear the finished documents.');
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 // Where a result button says why it couldn't do what it said.
 function actionNote() {
@@ -1192,6 +1332,144 @@ function placeButton(job, note) {
 
 // A finished prep job: whichever files it wrote, the notes, and the one number
 // that matters — whether the author's words came through untouched.
+// The designer notes, as a printable document. Same house style as the compare
+// report (shared REPORT_CSS/esc), built from the prep JSON the in-app notes
+// screen already uses. It prints itself on open, so the button reads as a PDF
+// download: the browser's own Print → Save as PDF gives crisp, selectable text
+// with no dependency. The heart of it is the "For the designer" list — the
+// judgment calls prep raised but did not make.
+function designerNotesHTML(d) {
+  const c = d.counts || {};
+  const flags = d.flags || [];
+  const sheet = d.style_sheet || {};
+  const cfg = d.config || {};
+  const u = d.usage || {};
+  const num = (n) => Number(n || 0).toLocaleString();
+  const rightNum = ' style="text-align:right;font-variant-numeric:tabular-nums"';
+  const money = typeof d.cost === 'number'
+    ? (d.cost < 0.01 ? '<$0.01' : '$' + d.cost.toFixed(2)) : '—';
+
+  const title = `Designer notes — ${d.source_name || 'manuscript'}`;
+  const gen = d.generated_at ? new Date(d.generated_at).toLocaleString() : '';
+  const sub = `<p class="sub">Style set ${esc(sheet.name || '—')}`
+    + `${sheet.version ? ' v' + esc(sheet.version) : ''}`
+    + `${sheet.trim ? ' · ' + esc(sheet.trim) : ''}`
+    + `${cfg.model ? ' · ' + esc(cfg.model) : ''}</p>`
+    + (gen ? `<p class="sub">Prepared ${esc(gen)}</p>` : '');
+
+  const cards = '<div class="cards">'
+    + `<div class="card"><span class="n">${num(c.tagged)}</span><span class="l">paragraphs tagged</span></div>`
+    + `<div class="card"><span class="n">${num(c.words)}</span><span class="l">words</span></div>`
+    + `<div class="card"><span class="n">${num(c.scene_breaks_inserted)}</span><span class="l">scene breaks written</span></div>`
+    + `<div class="card"><span class="n">${num(flags.length)}</span><span class="l">flags for the designer</span></div>`
+    + '</div>';
+
+  const verify = d.verified
+    ? '<p class="headline">✓ <b>Word for word, this says exactly what the '
+      + `manuscript said</b> — checked on the finished `
+      + `${(d.verification || []).length > 1 ? 'files' : 'file'}, not assumed.</p>`
+    : '<p class="headline" style="background:#fbeae2">✗ <b>The word-for-word '
+      + 'check did not pass.</b> Nothing was handed over — do not place this file.</p>';
+
+  const styleRows = Object.entries(d.styles || {}).map(([name, n]) =>
+    `<tr><td>${esc(name)}</td><td${rightNum}>${num(n)}</td></tr>`).join('');
+  const styleTable = styleRows
+    ? '<h2>Style mapping</h2><p class="blurb">Every paragraph carries one of '
+      + 'these InDesign paragraph-style names — the template\'s own.</p>'
+      + `<table><thead><tr><th>InDesign paragraph style</th>`
+      + `<th${rightNum}>Paragraphs</th></tr></thead><tbody>${styleRows}</tbody></table>`
+    : '';
+
+  const cleanup = [
+    [`${num(c.blank_lines_removed)} blank line(s) removed`,
+      'InDesign takes vertical spacing from the styles, not from empty paragraphs.'],
+    [`${num(c.paragraphs_trimmed)} paragraph(s) trimmed`,
+      'Trailing spaces and tabs. First-line indents were left to the style.'],
+    [`${num(c.scene_breaks_inserted)} scene break(s) written, ${num(c.scene_breaks_from_author)} the author had typed`,
+      'Only where the author signalled one — none were invented.'],
+    [`${num(c.italic_paragraphs)} paragraph(s) keep their italics`,
+      'Inline emphasis is left exactly where it was.'],
+  ];
+  const cleanupHTML = '<h2>What it did</h2>' + cleanup.map(([t, b]) =>
+    `<p><b>${esc(t)}</b> <span class="caveat">${esc(b)}</span></p>`).join('');
+
+  const flagsHTML = flags.length
+    ? `<h2>For the designer — ${num(flags.length)}</h2>`
+      + '<p class="blurb">These are raised, not fixed. Each one is a judgment a '
+      + 'person should make.</p>'
+      + flags.map((f) => `<div class="flag"><code>${esc(f.para_id)}</code> `
+        + `${esc(f.message)}`
+        + (f.preview ? ` <em>“${esc(f.preview)}”</em>` : '') + '</div>').join('')
+    : '<h2>For the designer</h2><p class="none">No flags — nothing needs a '
+      + 'human decision.</p>';
+
+  const un = d.unanswered_paragraphs || [];
+  const unHTML = un.length
+    ? `<h2>Not labelled — ${num(un.length)}</h2><p class="blurb">These paragraphs `
+      + 'were left untagged; give them a style by hand in InDesign.</p>'
+      + `<p class="mono">${un.map(esc).join(', ')}</p>`
+    : '';
+
+  const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+    + (u.cache_read_input_tokens || 0);
+  const usageHTML = '<h2>Usage</h2><table><tbody>'
+    + `<tr><td>API calls</td><td${rightNum}>${num(u.api_calls)}</td></tr>`
+    + `<tr><td>Input tokens</td><td${rightNum}>${num(inTok)}</td></tr>`
+    + `<tr><td>Output tokens</td><td${rightNum}>${num(u.output_tokens)}</td></tr>`
+    + `<tr><td>Estimated cost</td><td${rightNum}>${esc(money)}</td></tr>`
+    + '</tbody></table>';
+
+  const flagStyle = '.flag{padding:9px 0;border-bottom:1px solid var(--line)}'
+    + '.flag code{color:var(--accent);font-family:ui-monospace,SFMono-Regular,'
+    + 'Menlo,monospace;font-size:.85rem}.flag em{color:var(--muted)}';
+  // The document prints itself once loaded, so the button lands straight in the
+  // browser's Save-as-PDF dialog.
+  const autoPrint = '<script>window.addEventListener("load",function(){'
+    + 'setTimeout(function(){try{window.print();}catch(e){}},300);});<\/script>';
+
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + `<title>${esc(title)}</title><style>${REPORT_CSS}${flagStyle}</style></head><body>`
+    + '<div class="wrap"><header class="rep">'
+    + '<div class="brand">DocProof · InDesign prep</div>'
+    + `<h1>${esc(title)}</h1>${sub}</header>`
+    + cards + verify + styleTable + cleanupHTML + flagsHTML + unHTML + usageHTML
+    + `<div class="foot">Generated ${esc(new Date().toLocaleString())} · designer `
+    + 'notes for the InDesign-ready file, produced by the prep run.</div>'
+    + `</div>${autoPrint}</body></html>`;
+}
+
+function notesFilename(d) {
+  const stem = (d.source_name || 'manuscript')
+    .replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]+/g, ' ').trim();
+  return `${stem || 'manuscript'} — designer notes.html`;
+}
+
+// Fetch the prep JSON, build the printable notes, and open them in a new tab
+// where they print themselves. If a pop-up blocker (or a webview that won't
+// open tabs) stops the window, hand the .html over instead so the button never
+// silently does nothing — the saved file still prints itself on open.
+async function openDesignerNotes(job) {
+  let d;
+  try {
+    d = await api(`/api/jobs/${job.id}/prep`);
+  } catch (err) {
+    alert(`Couldn't load the designer notes: ${err.message}`);
+    return;
+  }
+  const url = URL.createObjectURL(
+    new Blob([designerNotesHTML(d)], { type: 'text/html' }));
+  if (!window.open(url, '_blank')) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = notesFilename(d);
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 function prepActions(job) {
   const wrap = document.createElement('div');
   const actions = document.createElement('div');
@@ -1212,6 +1490,10 @@ function prepActions(job) {
   read.textContent = 'Read the prep notes';
   read.addEventListener('click', () => openPrepReport(job));
   actions.append(read);
+  const notesPdf = document.createElement('button');
+  notesPdf.textContent = 'Download designer notes (PDF)';
+  notesPdf.addEventListener('click', () => openDesignerNotes(job));
+  actions.append(notesPdf);
   if (!WEB) {
     actions.append(
       openButton(job, first, 'Show in Finder', note, { reveal: true }));

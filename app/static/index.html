@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DocProof</title>
 <link rel="stylesheet" href="/styles.css">
+<script>
+  // Apply the saved theme before the stylesheet paints, so a chosen dark (or a
+  // chosen light on a dark OS) never flashes the other way on load. A missing
+  // value leaves the OS preference in charge.
+  try {
+    var t = localStorage.getItem('docproof-theme');
+    if (t === 'dark' || t === 'light') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) { /* private mode: fall back to the OS preference */ }
+</script>
 </head>
 <body>
 
@@ -44,6 +55,11 @@
     <button class="tab" data-screen="settings">Settings</button>
     <button class="tab" data-screen="admin" id="tab-admin" hidden>Admin</button>
   </nav>
+  <label class="theme-switch" title="Toggle dark mode">
+    <span class="label">Dark</span>
+    <input type="checkbox" id="theme-toggle" role="switch" aria-label="Dark mode">
+    <span class="track"><span class="thumb"></span></span>
+  </label>
   <div id="user-area" hidden>
     <span id="app-version" class="version"></span>
     <span id="user-email" class="muted"></span>
@@ -189,7 +205,10 @@
 
   <!-- ── Jobs ─────────────────────────────────────────────────────────── -->
   <section id="screen-jobs" class="screen" hidden>
-    <h2>Your documents</h2>
+    <div class="jobs-head">
+      <h2>Your documents</h2>
+      <button type="button" id="jobs-clear" class="quiet" hidden>Clear finished</button>
+    </div>
     <p id="jobs-empty" class="muted">Nothing here yet. Drop a document on the
       first tab to get started.</p>
     <ul id="job-list"></ul>
