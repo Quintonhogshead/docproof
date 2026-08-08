@@ -15,6 +15,13 @@ name, and the rest go to the author as a question, because which form a book
 uses is the author's to settle and getting it wrong silently would be worse
 than not asking.
 
+Two kinds of difference are grammar rather than spelling, and the scan folds
+them away before it counts: capitalization (English capitalizes the first word
+of every sentence) and a *form-final* possessive apostrophe (*mothers* and
+*mother's* are different words that coexist, not one term written two ways). An
+apostrophe *inside* a term — *farmer's market* against *farmers market* — is a
+spelling of one term and is still asked about. See ``_structure``.
+
 Proper names get one carefully-bounded exception. A capitalized word that
 never appears lowercased and differs from another only in its diacritics —
 *Rian* against *Rían*, *Zoe* against *Zoë* — is one name, not two words with
@@ -50,6 +57,24 @@ CONSISTENCY_KEY = "term_consistency"
 NAME_KEY = "name_consistency"
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+
+
+def _trim_quote(text: str, start: int, end: int) -> tuple[str, int, int]:
+    """Give back a closing single quote that ``_WORD`` swallowed.
+
+    ``_WORD`` allows a trailing ' or ’ so it can hold possessives and clitics,
+    but that same rule grabs the closing quote of single-quoted dialogue
+    (*cursed’*), and a bare word that appears once inside quotes would then flag
+    against itself. A trailing quote is a closing quote — trim it and shorten
+    the end offset to keep the occurrence anchored to the word — *unless* the
+    character before it is an s, where it may be a real plural possessive
+    (*mothers’*); that reading is left for ``_structure`` to fold away. (A
+    dialect elision mark, *runnin’*, is trimmed too, which is harmless: the
+    elided spelling keys apart from the full word regardless.)"""
+    if text[-1] in "'’" and text[-2] not in "sS":
+        return text[:-1], start, end - 1
+    return text, start, end
+
 
 # Pairs that collapse to the same key and are NOT inconsistencies: English
 # distinguishes them. Flagging these would train the press to ignore this
@@ -118,7 +143,7 @@ def _key(form: str) -> str:
 
 
 def _structure(form: str) -> str:
-    """Case- and apostrophe-glyph-folded, but otherwise structure-preserving.
+    """Case- and apostrophe-folded, but otherwise structure-preserving.
 
     Unlike ``_key`` this *keeps* spaces and hyphens, so *blood cursed*,
     *blood-cursed* and *bloodcursed* stay three distinct structures while
@@ -128,8 +153,29 @@ def _structure(form: str) -> str:
     straight-versus-curly apostrophe difference. English capitalizes the first
     word of every sentence, so almost any common word appears both lowercased
     and sentence-initial; folding case here is what keeps that from reading as
-    an inconsistency."""
-    return form.lower().replace("’", "'")
+    an inconsistency.
+
+    A *form-final* possessive apostrophe is folded away for the same reason.
+    *mothers* against *mother's* against *mothers'* is a plural against a
+    possessive — grammatically different words that legitimately coexist, not
+    one term written two ways — so they collapse to a single structure and the
+    group never reaches the dominance test. An apostrophe *internal* to the
+    term, anchored by a following word (*Krebs' Cycle* against *Krebs Cycle*,
+    *farmer's market* against *farmers market*), is one fixed term written two
+    ways; it stays a distinct structure and still flags. The fold runs at the
+    very end of the whole form, which may carry spaces or hyphens, so *the
+    mother's* folds to *the mothers* while *krebs' cycle* is left untouched.
+
+    Known limitation: *Krebs's Cycle* against *Krebs' Cycle* — the s's-versus-s'
+    style choice — is not caught, because the extra s lands the two forms in
+    different ``_key`` buckets before this ever runs."""
+    s = form.lower().replace("’", "'")
+    # Fold a form-final possessive: mother's and mothers' both become mothers.
+    # s' before 's, so a possessive that also carries a trailing closing quote
+    # (mother's’ from dialogue) folds all the way rather than stalling halfway.
+    s = re.sub(r"s'$", "s", s)
+    s = re.sub(r"'s$", "s", s)
+    return s
 
 
 def _fold_accents(s: str) -> str:
@@ -259,17 +305,21 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
 
     groups: dict[str, _Group] = defaultdict(_Group)
     for para in paragraphs:
-        words = list(_WORD.finditer(para.text))
-        for i, m in enumerate(words):
-            forms = [(m.group(0), m.start(), m.end())]
+        # Trim closing-quote artifacts up front, so both the single-token form
+        # and the two-word window below see the word without its stray quote.
+        tokens = [_trim_quote(m.group(0), m.start(), m.end())
+                  for m in _WORD.finditer(para.text)]
+        for i, (wtext, wstart, wend) in enumerate(tokens):
+            forms = [(wtext, wstart, wend)]
             # The open-compound spelling of the same term is two words, so a
             # scan that only looked at single tokens would miss exactly the
-            # case the brief names first.
-            if i + 1 < len(words):
-                nxt = words[i + 1]
-                if para.text[m.end():nxt.start()] == " ":
-                    forms.append((para.text[m.start():nxt.end()],
-                                  m.start(), nxt.end()))
+            # case the brief names first. The gap is measured from the *trimmed*
+            # end, so a closing quote sitting between the words (cursed’ blood)
+            # blocks the join instead of fusing two unrelated words.
+            if i + 1 < len(tokens):
+                ntext, nstart, nend = tokens[i + 1]
+                if para.text[wend:nstart] == " ":
+                    forms.append((para.text[wstart:nend], wstart, nend))
             for form, start, end in forms:
                 key = _key(form)
                 if len(key) < min_length or key in _LEGITIMATE:

@@ -164,6 +164,70 @@ def test_an_even_split_after_aggregation_is_not_flagged():
     assert "overall" not in _keys(r)
 
 
+# --- a possessive is grammar, an internal apostrophe is spelling ---------------
+# A plural against a possessive — mothers / mother's / mothers' — is two
+# different words that legitimately coexist, and the difference is form-final.
+# It must never flag. An apostrophe *inside* a fixed term (Krebs' Cycle) is one
+# term written two ways and must still flag. Word count is not the test: the
+# two-word windows 'the mothers' and "the mother's" also differ only
+# form-finally and must not flag either.
+
+def test_a_plural_and_a_possessive_are_not_an_inconsistency():
+    r = find_inconsistencies(_paras(
+        "The mother's patience wore thin as the long afternoon dragged on.",
+        "Every mother's instinct told her the storm would come by nightfall.",
+        "A mother's love, the old song went, outlasts the winter and the war.",
+        "The mothers gathered at the gate to wait for the returning boats."))
+    assert "mothers" not in _keys(r)
+
+
+def test_a_shared_preceding_word_does_not_resurrect_the_false_positive():
+    """'the mothers' and "the mother's" share a key through the two-word window,
+    but their only difference is still form-final — so still no inconsistency."""
+    r = find_inconsistencies(_paras(
+        "In the mother's house the lamps were kept burning right through dusk.",
+        "The mother's house stood apart from the village, past the old mill.",
+        "They said the mother's house had a room no key would ever open again.",
+        "The mothers gathered there each spring to mend the fishing nets."))
+    assert "themothers" not in _keys(r)
+
+
+def test_an_internal_apostrophe_in_a_fixed_term_still_flags():
+    r = find_inconsistencies(_paras(
+        "The Krebs' Cycle governs how the cell releases the energy it stores.",
+        "She sketched the Krebs' Cycle on the board in quick sure strokes.",
+        "Every exam asks about the Krebs' Cycle in one form or another.",
+        "The Krebs Cycle, he insisted, was the only chemistry worth knowing."))
+    assert _keys(r) == {"krebscycle": "Krebs' Cycle"}
+    assert r.terms[0].minority_forms == ("Krebs Cycle",)
+    # The redundant preceding-word group ("The Krebs'" vs "The Krebs") differs
+    # only form-finally, so folding form-final apostrophes suppresses it — an
+    # intended side effect, not a regression.
+    assert "thekrebs" not in _keys(r)
+
+
+def test_a_lowercase_internal_possessive_still_flags():
+    r = find_inconsistencies(_paras(
+        "They sell late tomatoes at the farmer's market every Saturday.",
+        "The farmer's market moved indoors once the autumn rains set in.",
+        "She found the best pears at the farmer's market near the harbour.",
+        "The farmers market on the square was the oldest one in the county."))
+    assert _keys(r) == {"farmersmarket": "farmer's market"}
+    assert r.terms[0].minority_forms == ("farmers market",)
+
+
+def test_a_closing_quote_does_not_create_a_variant():
+    """_WORD swallows the closing quote of single-quoted dialogue (blood-cursed’),
+    so a word that appears bare three times and once inside quotes would flag
+    against itself — the trim gives the quote back before grouping."""
+    r = find_inconsistencies(_paras(
+        "The rider was blood-cursed, or so the villagers always whispered.",
+        "Everyone agreed the man was blood-cursed from the day of his birth.",
+        "The priest would only say the child was blood-cursed and looked away.",
+        "‘I always knew he was blood-cursed’ was the only thing she would say."))
+    assert r.terms == ()
+
+
 # --- the findings -------------------------------------------------------------
 
 def test_findings_are_queries_that_change_nothing():
