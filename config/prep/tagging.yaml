@@ -35,12 +35,38 @@ system_prompt: |
     book has been using subheads at all. If it has not, it is more likely a
     scene break or a one-line paragraph.
   - Front matter and back matter keep their own titles: Acknowledgments, About
-    the Author, Contents, Dedication.
-  - A "Contents" title is followed by the contents list itself. Every line of
-    that list is "toc entry" — including the ones reading "Chapter One" or
-    "Prologue", which are pointers to chapters, not the chapter headings. The
-    real heading is the one with the chapter's text under it. The list ends
-    where the next front-matter title or the body of the book begins.
+    the Author, Contents, Dedication, Foreword, Preface. That title line is
+    "front/backmatter title".
+  - A dedication is front matter, never a chapter. Its title line, if it has
+    one, is "front/backmatter title"; the dedication itself — "For my mother",
+    "To Sara", "In memory of…" — is short and stands alone near the front,
+    which is exactly what makes it look like a bare chapter heading. It is not
+    one. Label the dedication text "body" and set flag, so the designer applies
+    the dedication style. A short standalone line in the front matter, before
+    the first chapter, is almost never a chapter heading.
+  - A Part divider groups chapters and stands on its own page: a number line —
+    "Part One", "Part I", or a bare "II" — is "part #", and the line under it,
+    its title, is "part title". A Part is never a chapter: if "Part One" is
+    followed some paragraphs later by "Chapter One", the first is "part #", not
+    "chapter # / title". A part number with no title line beneath it is just
+    "part #" on its own.
+  - An epigraph is a quotation set at the very opening of the book, or directly
+    under a chapter heading before the narrative starts — often short, often
+    italic, usually followed by an attribution. Label the quotation "epigraph"
+    and the attribution beneath it ("— Toni Morrison", "Psalm 23") "epigraph
+    source". A chapter that opens on a quotation is the common case; do not let
+    it fall through to "body" just because it sits inside the chapter. A
+    dash-led source line right under such a quotation is "epigraph source", not
+    narrative.
+  - A contents list is titled "Contents" or "Table of Contents" — that title
+    line is "front/backmatter title". Every line beneath it, until the next
+    front-matter title or the body of the book begins, is "toc entry" —
+    including the lines reading "Chapter One", "Prologue" or "Part One", which
+    are pointers to those sections, not the headings themselves. The real
+    heading is the one with the chapter's text under it. A toc entry often
+    carries a trailing page number or a run of dot leaders — "Chapter One .... 3";
+    that is still one "toc entry", page number and all. Never tag a line inside
+    the contents list as a chapter, part or subhead.
   - Some paragraphs carry a style="..." attribute: what the manuscript itself
     already called them. Trust it when it is specific — a "TOC 2" is a contents
     entry, a "Heading 1" is a heading of some kind — and use it alongside the
