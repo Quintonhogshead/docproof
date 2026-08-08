@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import unicodedata
 
 import docx
 import pytest
@@ -164,6 +165,58 @@ def test_an_even_split_after_aggregation_is_not_flagged():
     assert "overall" not in _keys(r)
 
 
+# --- accented terms are terms too ---------------------------------------------
+# The tokenizer reads Unicode letters (and decomposed combining marks) whole,
+# so fiancée is one token, not fianc + e — an accented compound is as visible
+# to the scan as an ASCII one. What the scan must never do is fold the accents
+# away: café against cafe may be a loanword against its anglicization, and
+# accent drift is the name scan's question, asked only of proper names.
+
+def test_an_accented_compound_hyphen_that_comes_and_goes():
+    r = find_inconsistencies(_paras(
+        "The café-goers lingered over their cups long past the lunch hour.",
+        "Most café-goers knew better than to ask about the corner table.",
+        "The cafégoers had claimed the terrace by the time she arrived."))
+    assert _keys(r) == {"cafégoers": "café-goers"}
+    assert r.terms[0].minority_forms == ("cafégoers",)
+
+
+def test_an_accented_open_compound_against_a_closed_one():
+    r = find_inconsistencies(_paras(
+        "They took the après ski slowly, boots steaming against the stove.",
+        "The après-ski was livelier than the slopes had been all day.",
+        "Nobody dressed for the après-ski until the light had fully gone."))
+    assert _keys(r) == {"aprèsski": "après-ski"}
+    assert r.terms[0].minority_forms == ("après ski",)
+
+
+def test_an_accent_only_difference_is_not_a_term_inconsistency():
+    """fiancée and fiancee never collapse to one key. A loanword and its
+    anglicized spelling can be two deliberate choices, so the term scan does
+    not accent-fold — accent drift is only ever the name scan's question, and
+    only for proper names."""
+    r = find_inconsistencies(_paras(
+        "Her fiancée wrote from the coast every week without fail.",
+        "The fiancée kept every letter in the drawer beside the bed.",
+        "The fiancee of the harbour master was less faithful a writer."))
+    assert r.terms == ()
+
+
+def test_a_decomposed_accent_is_the_same_term_as_a_composed_one():
+    """One manuscript pasted together from two tools can carry café in both
+    Unicode normalization forms. The two render identically, so they must
+    group as one spelling — and a difference no reader can see must never
+    itself be the flag."""
+    r = find_inconsistencies(_paras(
+        "The café-goers lingered over their cups long past the lunch hour.",
+        unicodedata.normalize(
+            "NFD", "Most café-goers knew better than to ask for a table."),
+        "The cafégoers had claimed the terrace by the time she arrived."))
+    assert list(_keys(r)) == ["cafégoers"]
+    assert unicodedata.normalize("NFC", r.terms[0].dominant) == "café-goers"
+    assert r.terms[0].minority_forms == ("cafégoers",)
+
+
 # --- the findings -------------------------------------------------------------
 
 def test_findings_are_queries_that_change_nothing():
@@ -299,6 +352,18 @@ def test_case_only_difference_is_still_not_a_name_drift():
 def test_names_scan_can_be_disabled():
     r = find_inconsistencies(_name_paras(), names=False)
     assert r.names == ()
+
+
+def test_a_decomposed_manuscript_still_shows_its_name_drift():
+    """Word writes composed accents, but text that passed through other tools
+    can arrive decomposed; the scan must read Rían whole either way."""
+    paras = _paras(*[unicodedata.normalize("NFD", t) for t in (
+        [f"Rían walked the wall at dusk on night {i} of the siege."
+         for i in range(24)] + ["Rian was late to the muster again."])])
+    names = _drift(paras)
+    assert names["rian"].enforce
+    assert names["rian"].minority_forms == ("Rian",)
+    assert unicodedata.normalize("NFC", names["rian"].dominant) == "Rían"
 
 
 # --- through the pipeline -----------------------------------------------------
