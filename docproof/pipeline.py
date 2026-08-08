@@ -34,6 +34,12 @@ from .variants import Variant, load_variant
 log = logging.getLogger("docproof.pipeline")
 
 
+class JobCancelled(Exception):
+    """Raised out of a run the moment the user aborts it, so the caller can
+    mark the job cancelled rather than failed. Not an error: nothing went
+    wrong, the work was called off."""
+
+
 @dataclass
 class Prepared:
     pkg: object                  # the format's package wrapper
@@ -276,7 +282,8 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
 
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
-             progress=None, checkpoint=None) -> tuple[list, Usage]:
+             progress=None, checkpoint=None, should_cancel=None
+             ) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk).
 
     The calls are independent, so up to `cfg.api.concurrency` of them are in
@@ -292,7 +299,13 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
 
     `checkpoint` (a docproof.checkpoint.Checkpoint, already loaded) makes the
     run resumable: each completed call's findings land in it as they arrive, in
-    order, and calls it already holds are replayed instead of paid for again."""
+    order, and calls it already holds are replayed instead of paid for again.
+
+    `should_cancel`, if given, is polled once per folded call; when it first
+    returns true the run raises `JobCancelled` and cancels every call not yet
+    started, so an abort stops paying for the tail of the document. Calls
+    already in flight (at most `cfg.api.concurrency`) still finish — a thread
+    pool can't recall them — but their results are dropped."""
     from concurrent.futures import ThreadPoolExecutor
 
     from .batch import custom_id
@@ -322,6 +335,14 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
 
         for done, ((analyzer, chunk, key), future) in enumerate(
                 zip(work, futures), start=1):
+            if should_cancel and should_cancel():
+                # Drop every call not already running so the abort stops the
+                # spend, not just the folding. The with-block's shutdown waits
+                # out the few still in flight; we raise past it.
+                for pending in futures:
+                    if pending is not None:
+                        pending.cancel()
+                raise JobCancelled()
             if future is None:                       # replay a cached call
                 cached = checkpoint.get(key)
                 findings.extend(finding_from_dict(d) for d in cached.items)

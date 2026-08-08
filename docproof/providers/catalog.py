@@ -86,12 +86,41 @@ def provider_for(model_id: str, fallback: str) -> str:
     return info.provider if info else fallback
 
 
+# How much a deeper reasoning effort inflates what the model writes back. The
+# effort dial changes only the model's own thinking, not the document, so it
+# lands entirely on output tokens — the input (the manuscript) is unchanged.
+# These are estimate multipliers for the cost hint, not billed figures: the
+# real spend is measured from actual usage after a run. Low is the shipped
+# default and the baseline, so it is 1.0. A model that ignores effort
+# (supports_effort=False, e.g. Haiku) is never scaled.
+EFFORT_MULTIPLIER: dict[str, float] = {
+    "low": 1.0,
+    "medium": 1.6,
+    "high": 2.6,
+    "xhigh": 4.0,
+    "max": 6.0,
+}
+
+
+def effort_multiplier(model_id: str, effort: str | None) -> float:
+    """The output-token cost factor for this model at this effort — 1.0 when
+    the model ignores effort, or the effort is unset or unrecognised."""
+    info = lookup(model_id)
+    if info is None or not info.supports_effort or not effort:
+        return 1.0
+    return EFFORT_MULTIPLIER.get(effort, 1.0)
+
+
 def estimate_cost(model_id: str, *, input_tokens: int, output_tokens: int,
-                  batch: bool = False) -> float | None:
-    """Dollars, or None when the model isn't in the catalog."""
+                  batch: bool = False, effort: str | None = None) -> float | None:
+    """Dollars, or None when the model isn't in the catalog.
+
+    `effort` scales the output-token half of the estimate (see
+    EFFORT_MULTIPLIER); omit it to price at the baseline (low) effort."""
     info = lookup(model_id)
     if info is None:
         return None
     rate = info.batch_discount if batch else 1.0
+    scaled_output = output_tokens * effort_multiplier(model_id, effort)
     return rate * (input_tokens * info.input_per_mtok
-                   + output_tokens * info.output_per_mtok) / 1_000_000
+                   + scaled_output * info.output_per_mtok) / 1_000_000

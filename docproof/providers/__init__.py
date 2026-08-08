@@ -3,12 +3,14 @@ from __future__ import annotations
 from .base import (BatchRequest, BatchStatus, NormalizedUsage, Provider,
                    ProviderError, ProviderResult, inlined_json_schema,
                    strict_json_schema)
-from .catalog import MODELS, ModelInfo, estimate_cost, lookup, provider_for
+from .catalog import (EFFORT_MULTIPLIER, MODELS, ModelInfo, effort_multiplier,
+                      estimate_cost, lookup, provider_for)
 
-__all__ = ["BatchRequest", "BatchStatus", "MODELS", "ModelInfo",
-           "NormalizedUsage", "Provider", "ProviderError", "ProviderResult",
-           "build_provider", "estimate_cost", "inlined_json_schema", "lookup",
-           "provider_for", "strict_json_schema"]
+__all__ = ["BatchRequest", "BatchStatus", "EFFORT_MULTIPLIER", "MODELS",
+           "ModelInfo", "NormalizedUsage", "Provider", "ProviderError",
+           "ProviderResult", "build_provider", "effort_multiplier",
+           "estimate_cost", "inlined_json_schema", "lookup", "provider_for",
+           "strict_json_schema"]
 
 
 def build_provider(cfg, *, api_key: str | None = None) -> Provider:

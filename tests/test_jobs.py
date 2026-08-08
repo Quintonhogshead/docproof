@@ -15,6 +15,7 @@ from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, Settings
 from docproof.config import load_config
 from .conftest import FIXTURES
+from .fakes import FakeProvider
 
 CONFIG = FIXTURES.parent.parent / "config" / "default.yaml"
 
@@ -465,3 +466,80 @@ def test_a_scheduled_job_promoted_by_the_ticker_stays_promoted(runner,
     r.tick_once()
     assert store.get("j1").state == "queued"
     assert not r.queue.empty()
+
+
+# -- aborting a running job -------------------------------------------------
+
+class _CancelOnFirstCall(FakeProvider):
+    """Requests its own job's abort from inside the first model call, so the
+    run is mid-flight — some calls already paid for — when the cancel lands."""
+
+    def __init__(self, runner, job_id):
+        super().__init__()
+        self._runner = runner
+        self._job_id = job_id
+
+    def complete_structured(self, **kwargs):
+        self._runner.request_cancel(self._job_id)
+        return super().complete_structured(**kwargs)
+
+
+def test_aborting_a_running_review_stops_the_tail(runner, monkeypatch):
+    """A review already spending is told to stop; it must halt before working
+    the whole document, and end cancelled rather than done — with nothing
+    written, since it never finished."""
+    store, r = runner
+    provider = _CancelOnFirstCall(r, "j1")
+    _review_setup(runner, monkeypatch, provider)   # concurrency 1, provider wired
+    _job(store, state="queued")
+
+    r.run_one("j1")
+
+    job = store.get("j1")
+    assert job.state == "cancelled"
+    assert 0 < len(provider.calls) < 6, "stopped mid-document, not at the end"
+    assert not job.results_dir, "an aborted run writes nothing"
+    assert not (store.dir("j1") / "checkpoint.json").exists()
+
+
+def test_a_stale_abort_flag_cannot_touch_a_later_run(runner):
+    """The worker clears a job's abort request when it finishes with the id, so
+    an abort that arrived too late can't quietly kill the next thing."""
+    store, r = runner
+    r.request_cancel("j1")
+    assert r._cancel_pending("j1")
+    r._clear_cancel("j1")
+    assert not r._cancel_pending("j1")
+
+
+# -- deleting a finished job ------------------------------------------------
+
+def test_delete_job_removes_the_documents_and_the_record(runner):
+    store, r = runner
+    out = store.paths.root / "out"
+    r.settings.output_dir = str(out)
+    results = out / "MyBook"
+    results.mkdir(parents=True)
+    (results / "MyBook - Pre-Proofread.docx").write_text("reviewed")
+    _job(store, state="done", results_dir=str(results))
+
+    assert r.delete_job("j1") is True
+    assert not results.exists(), "produced documents are removed"
+    assert store.get("j1") is None, "the record leaves the results list"
+
+
+def test_delete_job_spares_a_results_dir_outside_the_output_base(runner,
+                                                                 tmp_path):
+    """The rmtree only ever reaches inside the configured output directory; a
+    results_dir pointing anywhere else has its record removed but its files
+    left untouched."""
+    store, r = runner
+    r.settings.output_dir = str(store.paths.root / "out")
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    (outside / "precious.txt").write_text("keep me")
+    _job(store, state="done", results_dir=str(outside))
+
+    assert r.delete_job("j1") is True
+    assert store.get("j1") is None
+    assert (outside / "precious.txt").exists(), "files outside the base survive"
