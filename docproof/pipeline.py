@@ -228,7 +228,10 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             doc.paragraphs if whole else [],
             enabled=cfg.consistency.enabled and whole,
             min_length=cfg.consistency.min_length,
-            min_dominance=cfg.consistency.min_dominance)
+            min_dominance=cfg.consistency.min_dominance,
+            names=cfg.consistency.names,
+            name_dominance=cfg.consistency.name_dominance,
+            name_min_count=cfg.consistency.name_min_count)
         consistency_findings = to_findings(consistency, doc.paragraphs)
     else:
         # Counts-only preflight: none of the discardable whole-document work.

@@ -15,7 +15,8 @@ import docx
 import pytest
 
 from docproof.config import Config, load_config
-from docproof.consistency import (CONSISTENCY_KEY, find_inconsistencies,
+from docproof.consistency import (CONSISTENCY_KEY, NAME_KEY,
+                                  find_inconsistencies, find_name_drift,
                                   to_findings)
 from docproof.models import ParagraphRef, Usage
 from docproof.pipeline import finish, prepare
@@ -198,6 +199,108 @@ def test_a_finding_anchors_to_the_sentence_around_the_outlier():
     assert f.original_text == "The bloodcursed were only ever a story here."
 
 
+# --- names: detect, decide, enforce --------------------------------------------
+# A capitalized word that never appears lowercased and differs from another
+# only in its diacritics is one name spelled two ways. Lopsided evidence is
+# corrected as tracked changes; anything short of the bar is asked about.
+
+def _name_paras(dominant=24, stray="Rian was late to the muster again."):
+    texts = [f"Rían walked the wall at dusk on night {i} of the siege."
+             for i in range(dominant)]
+    if stray:
+        texts.append(stray)
+    return _paras(*texts)
+
+
+def _drift(paras, **kw):
+    return {n.key: n for n in find_name_drift(paras, **kw)}
+
+
+def test_a_lopsided_diacritic_split_is_corrected():
+    names = _drift(_name_paras())
+    assert names["rian"].enforce
+    assert names["rian"].dominant == "Rían"
+    assert names["rian"].minority_forms == ("Rian",)
+    assert len(names["rian"].outliers) == 1
+
+
+def test_the_correction_is_a_tracked_change_finding():
+    paras = _name_paras()
+    report = find_inconsistencies(paras)
+    fs = [f for f in to_findings(report, paras) if f.error_type == NAME_KEY]
+    assert len(fs) == 1
+    f = fs[0]
+    assert f.finding_id.startswith("n-")           # its own id series
+    assert f.original_text == "Rian was late to the muster again."
+    assert f.corrected_text == "Rían was late to the muster again."
+    assert "spells this name" in f.explanation
+
+
+def test_a_word_that_appears_lowercase_is_ordinary_english():
+    """exposé the noun against Expose the verb: any lowercase sighting means
+    the word belongs to English, not to the cast list."""
+    paras = _paras(
+        "Exposé after exposé ran in the morning papers that season.",
+        "Expose the ledger and the house of Vane falls with it.",
+        "Expose them all, she said, and see what the city does then.")
+    assert _drift(paras) == {}
+
+
+def test_a_close_split_is_asked_about_not_corrected():
+    paras = _paras(
+        "Zoë kept the ledger. Zoë kept the keys. Zoë kept her own counsel.",
+        "Zoe kept the garden gate locked after dark, whatever anyone said.")
+    names = _drift(paras)
+    assert not names["zoe"].enforce
+    fs = to_findings(find_inconsistencies(paras), paras)
+    queries = [f for f in fs if f.error_type == CONSISTENCY_KEY]
+    assert len(queries) == 1
+    assert queries[0].corrected_text == queries[0].original_text
+    assert "Is the difference deliberate?" in queries[0].explanation
+
+
+def test_a_thin_majority_is_asked_about():
+    """Five-to-one dominance, but the name is barely established — a minor
+    character seen ten times is not evidence enough to correct silently."""
+    names = _drift(_name_paras(dominant=10))
+    assert not names["rian"].enforce
+
+
+def test_sharing_a_sentence_downgrades_to_a_question():
+    """Two similarly-named characters interacting is exactly what the scan
+    cannot tell from a slip, so it asks."""
+    names = _drift(_name_paras(
+        stray="Rían turned to Rian and neither spoke of the muster."))
+    assert not names["rian"].enforce
+
+
+def test_a_possessive_stray_is_corrected_without_touching_the_clitic():
+    paras = _name_paras(stray="It was Rian’s watch when the beacon failed.")
+    fs = [f for f in to_findings(find_inconsistencies(paras), paras)
+          if f.error_type == NAME_KEY]
+    assert fs[0].corrected_text == "It was Rían’s watch when the beacon failed."
+
+
+def test_an_all_caps_stray_keeps_its_setting():
+    paras = _name_paras(stray="RIAN AT THE WALL")
+    fs = [f for f in to_findings(find_inconsistencies(paras), paras)
+          if f.error_type == NAME_KEY]
+    assert fs[0].corrected_text == "RÍAN AT THE WALL"
+
+
+def test_case_only_difference_is_still_not_a_name_drift():
+    """RIAN in a heading against Rian in prose is one spelling set two ways —
+    the case-only rule holds for names just as it does for terms."""
+    paras = _paras("RIAN AT THE WALL",
+                   "Rian walked the wall at dusk, counting the torches.")
+    assert _drift(paras) == {}
+
+
+def test_names_scan_can_be_disabled():
+    r = find_inconsistencies(_name_paras(), names=False)
+    assert r.names == ()
+
+
 # --- through the pipeline -----------------------------------------------------
 
 def _run(tmp_path, texts, *, max_chunks=None, **cfg_kw):
@@ -253,3 +356,37 @@ def test_the_shipped_config_enables_it():
     cfg = load_config("config/default.yaml")
     assert cfg.consistency.enabled and cfg.consistency.min_dominance == 2
     assert Config().consistency.enabled
+
+
+NAME_TEXTS = ([f"Rían walked the wall at dusk on night {i} of the siege."
+               for i in range(24)]
+              + ["Rian was late to the muster again."])
+
+
+def test_a_run_corrects_the_stray_name(tmp_path):
+    import zipfile
+    _, out = _run(tmp_path, NAME_TEXTS)
+    assert out.applied == 1                      # the stray, and nothing else
+    comments = zipfile.ZipFile(out.reviewed_path).read(
+        "word/comments.xml").decode()
+    assert "spells this name" in comments
+    payload = json.loads(out.findings_json.read_text())
+    names = payload["consistency"]["names"]
+    assert names == [{"key": "rian", "dominant": "Rían",
+                      "forms": {"Rían": 24, "Rian": 1},
+                      "outliers": 1, "enforced": True}]
+    assert payload["audit"]["passed"] is True
+    assert "Names spelled more than one way" in out.summary_md.read_text()
+
+
+def test_a_partial_run_makes_no_name_claim(tmp_path):
+    prepared, _ = _run(tmp_path, NAME_TEXTS, max_chunks=1)
+    assert prepared.consistency.names == ()
+
+
+def test_the_shipped_config_enables_the_name_scan():
+    cfg = load_config("config/default.yaml")
+    assert cfg.consistency.names
+    assert cfg.consistency.name_dominance == 5
+    assert cfg.consistency.name_min_count == 20
+    assert Config().consistency.names

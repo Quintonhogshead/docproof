@@ -160,7 +160,9 @@ class SpellcheckConfig(BaseModel):
 
 class ConsistencyConfig(BaseModel):
     """One term written more than one way — the rule per-paragraph review
-    cannot do, because it needs the whole book at once. Asks, never corrects.
+    cannot do, because it needs the whole book at once. Terms ask, never
+    correct; proper names with diacritic drift (Rian against Rían) correct
+    when one spelling clearly owns the book, and ask otherwise.
     See docproof/consistency.py."""
     enabled: bool = True
     # Short keys collide by accident; the shorter the term, the more likely
@@ -170,6 +172,13 @@ class ConsistencyConfig(BaseModel):
     # minority reads as a slip rather than a second deliberate choice. 1 also
     # flags an even split, where there is no dominant form to recommend.
     min_dominance: int = Field(default=2, ge=1)
+    # The proper-name diacritic scan, and its bar for correcting rather than
+    # asking: the dominant spelling must outnumber every stray name_dominance
+    # times over AND be seen at least name_min_count times. Below the bar the
+    # group is asked about, not corrected.
+    names: bool = True
+    name_dominance: int = Field(default=5, ge=2)
+    name_min_count: int = Field(default=20, ge=2)
 
 
 class PricingConfig(BaseModel):
