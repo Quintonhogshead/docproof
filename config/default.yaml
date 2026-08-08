@@ -64,15 +64,24 @@ spellcheck:
 
 # One term written more than one way — blood-cursed against bloodcursed, safe
 # keeping against safekeeping. The rule per-paragraph review structurally
-# cannot do: a model reading chapter 4 has no idea what chapter 40 said. It
-# asks and never corrects, because the same test that finds an inconsistency
-# cannot tell one from a distinction (awhile and a while differ in meaning),
-# and which form a book uses is the author's to settle. Whole-document runs
-# only. Free: no API call.
+# cannot do: a model reading chapter 4 has no idea what chapter 40 said. For
+# terms it asks and never corrects, because the same test that finds an
+# inconsistency cannot tell one from a distinction (awhile and a while differ
+# in meaning), and which form a book uses is the author's to settle.
+# Proper names get one bounded exception: a capitalized word that never
+# appears lowercased and differs from another only in its diacritics — Rian
+# against Rían — is one name, not two meanings. When one spelling clearly owns
+# the book (name_dominance times as many, name_min_count seen, never in one
+# sentence with a stray), the strays are corrected as tracked changes the
+# author can still reject; below that bar they are asked about like any term.
+# Whole-document runs only. Free: no API call.
 consistency:
   enabled: true
   min_length: 7             # shorter keys collide by accident
   min_dominance: 2          # how far the majority must lead; 1 flags even splits
+  names: true               # proper-name diacritic scan (Rian -> Rían)
+  name_dominance: 5         # majority lead before a stray is corrected, not asked
+  name_min_count: 20        # how established the dominant spelling must be
 
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset

@@ -82,7 +82,12 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                          "terms": [{"key": t.key, "dominant": t.dominant,
                                     "forms": dict(t.counts),
                                     "outliers": len(t.outliers)}
-                                   for t in consistency.terms]}
+                                   for t in consistency.terms],
+                         "names": [{"key": n.key, "dominant": n.dominant,
+                                    "forms": dict(n.counts),
+                                    "outliers": len(n.outliers),
+                                    "enforced": n.enforce}
+                                   for n in consistency.names]}
                         if consistency is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
@@ -198,6 +203,22 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         for t in consistency.terms:
             forms = ", ".join(f"`{f}` ({n})" for f, n in t.counts.most_common())
             L.append(f"- {forms} — most often **{t.dominant}**")
+        L.append("")
+
+    if consistency is not None and consistency.names:
+        L.append("## Names spelled more than one way\n")
+        L.append("Capitalized words that never appear lowercased and differ "
+                 "only in their diacritics — one name, spelled two ways. "
+                 "Where one spelling clearly owns the book, the strays were "
+                 "corrected as tracked changes (reject them if the spellings "
+                 "are different characters); the rest are questions in the "
+                 "margins.\n")
+        for nd in consistency.names:
+            forms = ", ".join(f"`{f}` ({n})" for f, n in nd.counts.most_common())
+            what = ("corrected" if nd.enforce else "asked about")
+            L.append(f"- {forms} — {len(nd.outliers)} occurrence(s) of the "
+                     f"minority spelling {what}; the book uses "
+                     f"**{nd.dominant}**")
         L.append("")
 
     rows = scripted_check_rows(sweeps, findings, applied_ids)

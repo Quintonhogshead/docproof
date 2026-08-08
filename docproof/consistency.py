@@ -6,18 +6,30 @@ and it is the one rule per-paragraph review structurally cannot do. A model
 reading chunk 4 has no idea what chunk 40 said. Finding this needs the whole
 document at once, which is exactly what a deterministic scan is for.
 
-It **asks and never corrects**, for a reason worth stating. Detection here is
-mechanical: strip the hyphens and spaces, and two spellings of one term
-collapse to the same key. But that same test cannot tell an inconsistency from
-a distinction — *awhile* and *a while* mean different things, as do *everyday*
-and *every day*. The known pairs are excluded by name, and the rest go to the
-author as a question, because which form a book uses is the author's to settle
-and getting it wrong silently would be worse than not asking.
+For terms it **asks and never corrects**, for a reason worth stating.
+Detection here is mechanical: strip the hyphens and spaces, and two spellings
+of one term collapse to the same key. But that same test cannot tell an
+inconsistency from a distinction — *awhile* and *a while* mean different
+things, as do *everyday* and *every day*. The known pairs are excluded by
+name, and the rest go to the author as a question, because which form a book
+uses is the author's to settle and getting it wrong silently would be worse
+than not asking.
+
+Proper names get one carefully-bounded exception. A capitalized word that
+never appears lowercased and differs from another only in its diacritics —
+*Rian* against *Rían*, *Zoe* against *Zoë* — is one name, not two words with
+different meanings; English has no minimal pairs there the way it does for
+compounds. When one spelling clearly owns the book (see ``find_name_drift``
+for the exact bar), the strays are corrected as tracked changes, because the
+author's accept/reject review is itself the human judgment the query channel
+exists to request — a lopsided count answers the question before it is asked.
+Anything short of that bar falls back to a question, same as the terms.
 """
 from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -31,6 +43,11 @@ log = logging.getLogger("docproof.consistency")
 # config/error_types defines it — because there is no prompt to write: the
 # whole thing is decided before any model sees the document.
 CONSISTENCY_KEY = "term_consistency"
+
+# The key a name correction carries. A separate key because the channel is
+# decided per error type: CONSISTENCY_KEY findings ask, these correct. Like
+# CONSISTENCY_KEY it lives outside config/error_types — no prompt to write.
+NAME_KEY = "name_consistency"
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
 
@@ -66,13 +83,34 @@ class Inconsistency:
 
 
 @dataclass(frozen=True)
+class NameDrift:
+    """One proper name, spelled with and without its diacritics."""
+    key: str
+    counts: Counter                       # representative form -> times seen
+    dominant: str
+    outliers: tuple[Occurrence, ...]
+    # Whether the evidence clears the bar for correcting rather than asking.
+    enforce: bool
+
+    @property
+    def minority_forms(self) -> tuple[str, ...]:
+        return tuple(sorted({o.form for o in self.outliers}))
+
+
+@dataclass(frozen=True)
 class ConsistencyReport:
     ran: bool = False
     terms: tuple[Inconsistency, ...] = ()
+    names: tuple[NameDrift, ...] = ()
 
     @property
     def flagged(self) -> int:
-        return sum(len(t.outliers) for t in self.terms)
+        return (sum(len(t.outliers) for t in self.terms)
+                + sum(len(n.outliers) for n in self.names if not n.enforce))
+
+    @property
+    def corrected(self) -> int:
+        return sum(len(n.outliers) for n in self.names if n.enforce)
 
 
 def _key(form: str) -> str:
@@ -94,21 +132,127 @@ def _structure(form: str) -> str:
     return form.lower().replace("’", "'")
 
 
+def _fold_accents(s: str) -> str:
+    """Diacritics stripped: Rían and Rian fold to the same key."""
+    return "".join(ch for ch in unicodedata.normalize("NFD", s)
+                   if not unicodedata.combining(ch))
+
+
+# A trailing possessive is not part of the name: Rían's and Rían are one name,
+# and trimming it here both merges their counts and keeps a correction from
+# touching the clitic.
+_POSSESSIVE = re.compile(r"(?:[’']s|[’'])$")
+
+# _WORD is ASCII on purpose — the term scan's keys and lengths are tuned to
+# it — but a name scan that cannot read Rían whole has nothing to scan.
+# [^\W\d_] is a Unicode letter.
+_NAME_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|['’-])*")
+
+
 @dataclass
 class _Group:
     counts: Counter = field(default_factory=Counter)
     where: list[Occurrence] = field(default_factory=list)
 
 
+def find_name_drift(paragraphs: Sequence[ParagraphRef], *,
+                    min_dominance: int = 5,
+                    min_count: int = 20) -> tuple[NameDrift, ...]:
+    """Proper names spelled with and without their diacritics.
+
+    A candidate is a capitalized word of three letters or more that never
+    appears lowercased anywhere in the manuscript — a word that does is
+    ordinary English (*exposé* the noun against *expose* the verb), and
+    ordinary English is not this scan's to touch. Two candidates that differ
+    only in their diacritics are one name spelled two ways.
+
+    The strays are corrected rather than asked about when the evidence is
+    lopsided enough to answer the question itself: the dominant spelling
+    appears at least `min_count` times, outnumbers every minority spelling
+    `min_dominance` times over, and never shares a sentence with a stray —
+    sharing one is the pattern of two similarly-named characters interacting,
+    and the signal to ask. A group short of that bar carries enforce=False
+    and goes to the author as a question, same as the terms."""
+    by_id = {p.para_id: p for p in paragraphs}
+    groups: dict[str, _Group] = defaultdict(_Group)
+    lowercased: set[str] = set()
+    for para in paragraphs:
+        for m in _NAME_WORD.finditer(para.text):
+            form, start = m.group(0), m.start()
+            form = _POSSESSIVE.sub("", form)
+            if len(form) < 3:
+                continue
+            key = _fold_accents(_structure(form))
+            if form[0].islower():
+                lowercased.add(key)
+                continue
+            g = groups[key]
+            g.counts[form] += 1
+            g.where.append(Occurrence(para.para_id, start,
+                                      start + len(form), form))
+
+    names: list[NameDrift] = []
+    for key, g in sorted(groups.items()):
+        if key in lowercased:
+            continue
+        # Sub-bucket by structure, exactly as the term scan does: RIAN in a
+        # heading and Rian in prose are one spelling, not two. Two structures
+        # under one accent-folded key differ in their diacritics and nothing
+        # else — the key construction guarantees it, and that guarantee is
+        # the whole reason correcting is safe here.
+        buckets: dict[str, Counter] = defaultdict(Counter)
+        for form, n in g.counts.items():
+            buckets[_structure(form)][form] += n
+        if len(buckets) < 2:
+            continue
+        totals = {s: sum(c.values()) for s, c in buckets.items()}
+        reps = {s: min(c, key=lambda f, c=c: (-c[f], f))
+                for s, c in buckets.items()}
+        dom_struct = max(totals, key=lambda s: (totals[s], s))
+        dom_total = totals[dom_struct]
+        minority = set(totals) - {dom_struct}
+        outliers = tuple(o for o in g.where
+                         if _structure(o.form) in minority)
+        dom_forms = tuple(buckets[dom_struct])
+        enforce = (dom_total >= min_count
+                   and all(dom_total >= totals[s] * min_dominance
+                           for s in minority)
+                   and not _share_a_sentence(outliers, dom_forms, by_id))
+        counts = Counter({reps[s]: totals[s] for s in totals})
+        names.append(NameDrift(key, counts, reps[dom_struct],
+                               outliers, enforce))
+    return tuple(names)
+
+
+def _share_a_sentence(outliers: Sequence[Occurrence],
+                      dom_forms: Sequence[str], by_id: dict) -> bool:
+    """Whether any stray spelling sits in one sentence with the dominant one."""
+    for o in outliers:
+        para = by_id.get(o.para_id)
+        if para is None:
+            continue
+        window, lo, _ = sentence_window(para.text, o.start, o.end)
+        rest = window[:o.start - lo] + window[o.end - lo:]
+        if any(f in rest for f in dom_forms):
+            return True
+    return False
+
+
 def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          enabled: bool = True, min_length: int = 7,
-                         min_dominance: int = 2) -> ConsistencyReport:
+                         min_dominance: int = 2, names: bool = True,
+                         name_dominance: int = 5,
+                         name_min_count: int = 20) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
     `min_length` keeps short words out — the shorter the key, the more likely
     two forms are unrelated English rather than one term. `min_dominance` is
     how many times the majority form must outnumber a minority one before the
     minority reads as a slip rather than a second, equally deliberate choice.
+
+    `names` also runs the proper-name diacritic scan; `name_dominance` and
+    `name_min_count` set its bar for correcting rather than asking. See
+    ``find_name_drift``.
     """
     if not enabled:
         return ConsistencyReport(ran=False)
@@ -167,18 +311,25 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
             counts = Counter({reps[s]: totals[s] for s in totals})
             terms.append(Inconsistency(key, counts, reps[dom_struct], outliers))
 
-    report = ConsistencyReport(ran=True, terms=tuple(terms))
-    log.info("Consistency scan: %d term(s) written more than one way, "
-             "%d occurrence(s) to ask about", len(terms), report.flagged)
+    drift = (find_name_drift(paragraphs, min_dominance=name_dominance,
+                             min_count=name_min_count) if names else ())
+    report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift)
+    log.info("Consistency scan: %d term(s) written more than one way and "
+             "%d name(s) with diacritic drift — %d occurrence(s) to correct, "
+             "%d to ask about", len(terms), len(drift), report.corrected,
+             report.flagged)
     return report
 
 
 def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 start_id: int = 1) -> list[Finding]:
-    """One query per outlier occurrence, anchored to the sentence it sits in.
+    """One finding per outlier occurrence, anchored to the sentence it sits in.
 
-    Queries, not corrections: which spelling a book uses is the author's
-    decision, and this scan cannot tell a slip from a distinction."""
+    Term outliers are queries — which spelling a book uses is the author's
+    decision, and that scan cannot tell a slip from a distinction. Name
+    outliers whose group cleared the enforcement bar are corrections, and go
+    down the tracked-change channel like any other edit; the rest are queries
+    too."""
     by_id = {p.para_id: p for p in paragraphs}
     findings: list[Finding] = []
     n = start_id
@@ -213,4 +364,57 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 confidence="high",
             ))
             n += 1
+
+    c = 1
+    for drift in report.names:
+        for o in drift.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, lo, occurrence = sentence_window(para.text, o.start, o.end)
+            dom_count = drift.counts[drift.dominant]
+            if drift.enforce:
+                # An all-caps stray (a heading) keeps its setting; everything
+                # else takes the dominant spelling verbatim.
+                fix = (drift.dominant.upper()
+                       if o.form.isupper() and len(o.form) > 1
+                       else drift.dominant)
+                findings.append(Finding(
+                    finding_id=f"n-{c:04d}",
+                    chunk_id="consistency",
+                    para_id=o.para_id,
+                    error_type=NAME_KEY,
+                    original_text=window,
+                    occurrence=occurrence,
+                    corrected_text=(window[:o.start - lo] + fix
+                                    + window[o.end - lo:]),
+                    explanation=(
+                        f"This manuscript spells this name "
+                        f"“{drift.dominant}” {dom_count} time(s) but "
+                        f"“{o.form}” here. Corrected to the spelling the "
+                        f"book uses; reject if the two spellings are "
+                        f"different characters."),
+                    confidence="high",
+                ))
+                c += 1
+            else:
+                others = ", ".join(
+                    f"“{f}” ({cnt})" for f, cnt in drift.counts.most_common()
+                    if _structure(f) != _structure(o.form))
+                findings.append(Finding(
+                    finding_id=f"c-{n:04d}",
+                    chunk_id="consistency",
+                    para_id=o.para_id,
+                    error_type=CONSISTENCY_KEY,
+                    original_text=window,
+                    occurrence=occurrence,
+                    corrected_text=window,          # a query changes nothing
+                    explanation=(
+                        f"This manuscript spells what may be one name more "
+                        f"than one way: “{o.form}” here, and elsewhere "
+                        f"{others}. Is the difference deliberate? If not, "
+                        f"“{drift.dominant}” is the form used most."),
+                    confidence="high",
+                ))
+                n += 1
     return findings
