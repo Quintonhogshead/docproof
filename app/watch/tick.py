@@ -23,9 +23,11 @@ from pathlib import Path
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, prep
+from . import drive, hubspot, prep
 from .drive import DriveError, DriveFile
-from .settings import GOOGLE_KEY, WatchSettings
+from .hubspot import HubSpotAuthError, HubSpotError
+from .keys import key_from_name
+from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
 from .stages import JOB_PROP, OUTPUT_PROP, SOURCE_PROP, Stage, classify
 from .state import WatchState, note_tick
 
@@ -53,6 +55,11 @@ class TickReport:
     new: int = 0
     skipped: int = 0
     deferred: int = 0
+    # Manuscripts left where they are because HubSpot did not say to touch them:
+    # no key, no record, not marked ready, or a lookup that could not be reached
+    # this pass. Stood aside, not failed — no marker is written, so the next
+    # tick reconsiders — so it is counted apart from `failed`.
+    waiting: int = 0
     prepped: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
@@ -100,12 +107,19 @@ def submit_ready(token: str, ws: WatchSettings, listing: list[DriveFile],
 
 def run_prep(token: str, home: Path, ws: WatchSettings,
              listing: list[DriveFile], state: WatchState, runner: JobRunner,
-             store: JobStore, *, mock: bool, opener,
+             store: JobStore, *, mock: bool, opener, hs_token: str | None = None,
              report: TickReport) -> None:
     """Prepare every manuscript nobody has prepared yet."""
     todo = [f for f in listing if classify(f) is Stage.NEW_MANUSCRIPT]
     todo.sort(key=lambda f: (f.modified_time, f.name))
     report.new = len(todo)
+
+    # When HubSpot is the gate, only the books it says are ready go on. The
+    # token was resolved once in `tick`, the same road the Google one takes, so
+    # a test can drive the gate through the injected key reader.
+    if ws.hubspot_enabled:
+        todo = _gate_hubspot(hs_token, ws, todo, state, opener=opener,
+                             report=report)
 
     if len(todo) > ws.max_files_per_tick:
         # Said out loud, not swallowed: a cap that quietly drops work reads
@@ -119,7 +133,7 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
     for file in todo:
         try:
             _one(token, home, ws, file, listing, state, runner, store,
-                 mock=mock, opener=opener, report=report)
+                 mock=mock, opener=opener, hs_token=hs_token, report=report)
         except Exception as e:            # noqa: BLE001 - one book, not the run
             # A manuscript that cannot be prepared must not take the four
             # behind it down with it.
@@ -131,9 +145,85 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
             state.record(record)
 
 
+def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
+                  state: WatchState, *, opener,
+                  report: TickReport) -> list[DriveFile]:
+    """Keep only the manuscripts HubSpot says to work on.
+
+    Waiting is the `FolderInUse` posture, not a failure: no key, no record, or
+    "ready" still off leaves the file exactly where it is, with no marker, so
+    the next tick reconsiders — a book becomes eligible the moment an editor
+    flips its toggle, without anyone touching the folder.
+
+    Two failure shapes are kept apart on purpose. A bad token dooms the whole
+    pass, so `HubSpotAuthError` is left to propagate and stop everything. A
+    lookup that merely could not be reached — HubSpot busy, a dropped
+    connection — is one file's bad luck, so it is caught here and that file
+    waits while the rest go on, the same "one book, not the run" rule the prep
+    loop keeps.
+
+    The record id is written onto the file's record *before* it is prepared, so
+    a crash anywhere in the round trip still knows which HubSpot record to
+    finish. That is also what lets a book DocProof already started — recognised
+    by a record id it wrote earlier — be carried through to completion even
+    after a crash between the HubSpot write and the Drive marker."""
+    want = [p for p in (ws.hubspot_ready_property, ws.hubspot_done_property)
+            if p]
+    eligible: list[DriveFile] = []
+    for file in todo:
+        key = key_from_name(file.name, ws.hubspot_key_pattern)
+        if not key:
+            log.info("Waiting: %s carries no HubSpot key in its name.",
+                     file.name)
+            report.waiting += 1
+            continue
+        try:
+            record = hubspot.find_record(
+                hs_token, ws.hubspot_object, ws.hubspot_key_property, key,
+                want_properties=want, opener=opener)
+        except HubSpotAuthError:
+            raise                         # the token is bad — stop the pass
+        except HubSpotError as e:         # this file only — the rest go on
+            log.info("Waiting: could not look up %s in HubSpot (%s); the next "
+                     "run will try again.", file.name, e)
+            report.waiting += 1
+            continue
+
+        if record is None:
+            log.info("Waiting: no HubSpot %s has %s = %s.", ws.hubspot_object,
+                     ws.hubspot_key_property, key)
+            report.waiting += 1
+            continue
+
+        rec = state.get(file.id)
+        ours = bool(rec.hubspot_id)       # a record id we wrote on an earlier tick
+        done = hubspot.is_on(record, ws.hubspot_done_property)
+        ready = hubspot.is_on(record, ws.hubspot_ready_property)
+
+        # done + ours   -> finish our own tail after a crash before the marker
+        # not done+ours -> finish what we already started, ready or not: the
+        #                  spend is already committed and the checkpoint holds
+        # fresh + ready -> start it
+        # anything else -> wait (done elsewhere, or simply not ready yet)
+        proceed = ours if done else (ours or ready)
+        if not proceed:
+            why = "already marked done" if done else "not marked ready"
+            log.info("Waiting: %s is %s in HubSpot.", file.name, why)
+            report.waiting += 1
+            continue
+
+        if rec.hubspot_id != record.id:
+            rec.hubspot_id = record.id    # written before prep, never after
+            rec.name = file.name
+            state.record(rec)
+        eligible.append(file)
+    return eligible
+
+
 def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
          listing: list[DriveFile], state: WatchState, runner: JobRunner,
-         store: JobStore, *, mock: bool, opener, report: TickReport) -> None:
+         store: JobStore, *, mock: bool, opener, hs_token: str | None,
+         report: TickReport) -> None:
     rec = state.get(file.id)
     rec.name = file.name
     rec.modified_time = file.modified_time
@@ -168,10 +258,48 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
         raise PrepFailed(job.error or "Preparing the manuscript did not finish.")
 
     report.prepped.append(file.name)
-    report.uploaded.extend(
-        prep.upload_outputs(token, file, job, ws, rec, state, listing,
-                            opener=opener))
+    uploaded = prep.upload_outputs(token, file, job, ws, rec, state, listing,
+                                   opener=opener)
+    report.uploaded.extend(uploaded)
+
+    _finish_hubspot(hs_token, ws, file, rec, state, uploaded, opener=opener)
+
     prep.mark_source(token, file, job, rec, state, opener=opener)
+
+
+def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,
+                    rec, state: WatchState, uploaded: list[str], *,
+                    opener) -> None:
+    """Flip the completion toggle on the book we just put back.
+
+    Between `upload_outputs` and `mark_source` on purpose, and the local record
+    is written *before* the Drive marker: with the marker last, a file that
+    reads `formatted` in Drive was `done` in HubSpot first, so the two can never
+    disagree in the direction that would strand a book as done-but-unmarked.
+
+    Setting a boolean that is already true is harmless, which is what makes the
+    whole step safe to repeat when a later tick finishes an interrupted one."""
+    if not (ws.hubspot_enabled and rec.hubspot_id and not rec.hubspot_done):
+        return
+    props = {ws.hubspot_done_property: "true"}
+    if ws.hubspot_output_property:
+        name = _output_name(uploaded) or _output_name(list(rec.uploaded))
+        if name:
+            props[ws.hubspot_output_property] = name
+    hubspot.set_properties(hs_token, ws.hubspot_object, rec.hubspot_id, props,
+                           opener=opener)
+    rec.hubspot_done = True
+    state.record(rec)                     # recorded before the Drive marker
+
+
+def _output_name(names: list[str]) -> str:
+    """The deliverable to name in HubSpot: the InDesign-ready file if there is
+    one, otherwise the first thing we uploaded. Chosen by prefix rather than by
+    position so `prep_output="both"` does not name the tracked-changes file."""
+    for name in names:
+        if name.startswith("tagged_"):
+            return name
+    return names[0] if names else ""
 
 
 def _placeholder(file: DriveFile, ws: WatchSettings) -> Job:
@@ -281,6 +409,25 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     if not refresh:
         raise NotConfigured("DocProof is not signed in to Google. Run "
                             "`docproof-watch auth`.")
+    if ws.hubspot_enabled:
+        # Half-configured is worse than off: a gate that cannot ask HubSpot
+        # would either prep everything ungated or nothing at all, so it is
+        # refused here with the field that is missing named.
+        blanks = [name for name, value in (
+            ("hubspot_object", ws.hubspot_object),
+            ("hubspot_key_property", ws.hubspot_key_property),
+            ("hubspot_ready_property", ws.hubspot_ready_property),
+            ("hubspot_done_property", ws.hubspot_done_property),
+        ) if not value]
+        if blanks:
+            raise NotConfigured(
+                "HubSpot is switched on but " + ", ".join(blanks)
+                + " is not set. Run `docproof-watch init` to fill it in.")
+        if not (get_key or get_api_key)(HUBSPOT_KEY):
+            raise NotConfigured(
+                "HubSpot is switched on but there is no token. Run "
+                "`docproof-watch hubspot-token` on the desktop, or set the "
+                "HUBSPOT_TOKEN secret on the server.")
 
     if not dry_run:
         # Stamped before the first network call, not after it — see
@@ -315,11 +462,17 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         # `--mock-tags` is documented as costing nothing.
         _drain(runner, state, listing)
 
+    # Resolved the same way the Google token is — through the injected reader,
+    # so a test drives the gate without a keychain. The preflight above has
+    # already refused the pass if it is enabled and missing.
+    hs_token = ((get_key or get_api_key)(HUBSPOT_KEY)
+                if ws.hubspot_enabled else None)
+
     collect_finished(token, ws, listing, state, store, opener=opener,
                      report=report)
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
     run_prep(token, root, ws, listing, state, runner, store, mock=mock,
-             opener=opener, report=report)
+             opener=opener, hs_token=hs_token, report=report)
     return report
 
 

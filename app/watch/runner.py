@@ -36,6 +36,7 @@ from app.settings import Paths
 from . import auth as authlib
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
+from .hubspot import HubSpotAuthError, HubSpotError
 from .settings import WatchSettings
 from .state import last_tick
 from .status import missing
@@ -57,6 +58,9 @@ class TickOutcome:
     listed: int = 0
     new: int = 0
     deferred: int = 0
+    # Left alone this pass because HubSpot did not say to touch them. Not a
+    # failure — the panel says "N waiting" rather than colouring the pass red.
+    waiting: int = 0
     prepped: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
@@ -65,7 +69,7 @@ class TickOutcome:
     # and an app user has none, so the translation happens at the front door
     # rather than by making the library ask who is calling.
     error_kind: str = ""      # "" | not_configured | auth_expired | drive
-                              #    | in_use | other
+                              #    | hubspot | hubspot_auth | in_use | other
     error: str = ""
     # The folder was already claimed, so this pass stood aside. Not a failure —
     # it is the arrangement working.
@@ -176,12 +180,17 @@ class WatchRunner:
             out.ok, out.error_kind, out.error = False, "not_configured", str(e)
         except DriveError as e:
             out.ok, out.error_kind, out.error = False, "drive", str(e)
+        except HubSpotAuthError as e:
+            # The subclass first: a bad token is a person's job, not a retry's.
+            out.ok, out.error_kind, out.error = False, "hubspot_auth", str(e)
+        except HubSpotError as e:
+            out.ok, out.error_kind, out.error = False, "hubspot", str(e)
         except Exception as e:            # noqa: BLE001 - mirrors JobRunner._work
             log.exception("A watch pass failed")
             out.ok, out.error_kind, out.error = False, "other", str(e)
         else:
             out.listed, out.new = report.listed, report.new
-            out.deferred = report.deferred
+            out.deferred, out.waiting = report.deferred, report.waiting
             out.prepped, out.uploaded = report.prepped, report.uploaded
             out.failed = report.failed
             out.ok = report.ok
@@ -316,7 +325,8 @@ def _outcome(out: TickOutcome | None) -> dict | None:
     return {
         "started_at": out.started_at, "finished_at": out.finished_at,
         "ok": out.ok, "listed": out.listed, "new": out.new,
-        "deferred": out.deferred, "prepped": list(out.prepped),
+        "deferred": out.deferred, "waiting": out.waiting,
+        "prepped": list(out.prepped),
         "uploaded": list(out.uploaded),
         "failed": [{"name": n, "reason": r} for n, r in out.failed],
         "error_kind": out.error_kind, "error": out.error,

@@ -39,6 +39,14 @@ class FileRecord:
     # here is what makes a resumed upload cost nothing.
     uploaded: dict[str, str] = field(default_factory=dict)
     marked: str = ""            # "" | "formatted" | "failed"
+    # The CRM record this manuscript's key resolved to, written before prep so a
+    # crash between the HubSpot lookup and the Drive marker still knows which
+    # record to finish. Empty for a manuscript prepared before HubSpot was
+    # turned on, which is how the completion sweep leaves those alone.
+    hubspot_id: str = ""
+    # Whether the completion toggle has been set. Recorded before the Drive
+    # marker, so a file that is `formatted` in Drive was `done` in HubSpot first.
+    hubspot_done: bool = False
     modified_time: str = ""
     updated_at: str = ""
 

@@ -123,6 +123,12 @@ fly secrets set \
   ever change it, everyone is simply logged out and signs in again.
 - Set `OPENAI_API_KEY` and/or `GEMINI_API_KEY` too if editors will pick those
   models.
+- `GOOGLE_REFRESH_TOKEN` and `HUBSPOT_TOKEN` are needed only if you run the
+  Drive watcher on the server, and `HUBSPOT_TOKEN` only if it gates on HubSpot
+  ([docs/watch.md](docs/watch.md#gating-on-hubspot-optional)). Both are plain
+  `fly secrets set` values — `fly secrets set HUBSPOT_TOKEN=…` — read
+  environment-first, so setting them here is all the wiring there is. Neither is
+  a review-provider key, so neither appears in the admin portal's key screen.
 
 To confirm what's set (values are hidden):
 

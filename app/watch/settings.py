@@ -25,6 +25,9 @@ log = logging.getLogger("docproof.app.watch.settings")
 
 WATCH_SETTINGS = "watch.json"
 GOOGLE_KEY = "google"
+# What the app calls the HubSpot private-app token in ENV_VARS/Keychain, spelled
+# once so the CLI, the preflight and the docs can point at the same thing.
+HUBSPOT_KEY = "hubspot"
 
 # What the app calls this in ENV_VARS/Keychain, spelled once so the CLI and the
 # docs can point at the same thing.
@@ -101,6 +104,28 @@ class WatchSettings:
     # How often that clock *considers* a pass. It considers; the "last looked"
     # stamp and the folder lock decide.
     tick_every_minutes: int = 60
+
+    # -- HubSpot ---------------------------------------------------------------
+    # All off by default: an install that has never heard of HubSpot behaves
+    # exactly as it did before this existed. Turning it on gates every new
+    # manuscript on a CRM record — see docs/watch.md and `_gate_hubspot`.
+    hubspot_enabled: bool = False
+    # The objectType path segment: "deals", "contacts", or a custom object as
+    # either its "p_book" name or its "2-XXXXXX" id.
+    hubspot_object: str = "deals"
+    # The property the filename key is matched against — an ISBN, an order
+    # number, whatever the press already writes into the name.
+    hubspot_key_property: str = ""
+    # How to pull that key out of the filename. Empty means the whole stem;
+    # otherwise a regex, and the first capture group (or the whole match).
+    hubspot_key_pattern: str = ""
+    # The boolean an editor flips to say "this book is ready to format".
+    hubspot_ready_property: str = ""
+    # The boolean DocProof sets when it has put the formatted file back.
+    hubspot_done_property: str = ""
+    # Optional: a property to write the output filename into, so the CRM record
+    # links to what was produced. Empty means do not write it.
+    hubspot_output_property: str = ""
 
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":

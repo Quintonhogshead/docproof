@@ -142,7 +142,8 @@ def drive_entry(name: str, *, mime: str = DOCX_MIME, props: dict | None = None,
 
 def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
                fail: dict | None = None, page_size: int | None = None,
-               access_token: str = "at-1"):
+               access_token: str = "at-1",
+               hubspot: dict[str, dict] | None = None):
     """Stands in for Google Drive, holding one folder that stays live.
 
     The folder is a real dict the fake reads and writes, not a scripted list of
@@ -150,14 +151,27 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     makes "the second tick finds nothing to do" a thing a test can simply ask
     for, rather than a sequence it has to choreograph.
 
-    `fail` maps an endpoint — token, list, download, export, upload, patch — to
-    an exception raised the first time that endpoint is called and not after,
-    which is how a tick is made to die in a chosen place."""
+    `fail` maps an endpoint — token, list, download, export, upload, patch, and
+    the HubSpot pair hubspot_search / hubspot_patch — to an exception raised the
+    first time that endpoint is called and not after, which is how a tick is
+    made to die in a chosen place.
+
+    `hubspot` maps a key value — what a filename resolves to — onto the record's
+    properties, e.g. `{"9781234567890": {"ready": "true", "done": "false"}}`.
+    The same opener answers HubSpot as well as Drive, because a tick threads one
+    opener to both. `opener.hubspot` is the live record store to assert against.
+    """
     calls = []
     store = {fid: {**meta, "id": fid} for fid, meta in (files or {}).items()}
     content: dict[str, bytes] = {}
     uploads = itertools.count(1)
     failures = dict(fail or {})
+
+    # Keyed by a stable, predictable id so a test can name the record it expects
+    # to be patched. `_key` is what a filename must resolve to to find it.
+    hs_records = {f"hs-{key}": {"id": f"hs-{key}", "_key": str(key),
+                                "properties": dict(props)}
+                  for key, props in (hubspot or {}).items()}
 
     class Response:
         def __init__(self, body: bytes):
@@ -198,6 +212,23 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
         parsed = urllib.parse.urlparse(request.full_url)
         query = urllib.parse.parse_qs(parsed.query)
         path = parsed.path
+
+        if "api.hubapi.com" in request.full_url:
+            if path.endswith("/search"):
+                _maybe_fail("hubspot_search")
+                body = json.loads(request.data)
+                value = body["filterGroups"][0]["filters"][0]["value"]
+                results = [{"id": r["id"], "properties": r["properties"]}
+                           for r in hs_records.values() if r["_key"] == value]
+                return Response(json.dumps({"total": len(results),
+                                            "results": results}).encode())
+            _maybe_fail("hubspot_patch")     # the only other verb is the PATCH
+            rid = path.rsplit("/", 1)[-1]
+            rec = hs_records.setdefault(
+                rid, {"id": rid, "_key": "", "properties": {}})
+            rec["properties"].update(
+                json.loads(request.data).get("properties") or {})
+            return Response(json.dumps({"id": rid}).encode())
 
         if "oauth2.googleapis.com" in request.full_url:
             _maybe_fail("token")
@@ -245,6 +276,7 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     opener.calls = calls
     opener.files = store
     opener.content = content
+    opener.hubspot = hs_records
     return opener
 
 
