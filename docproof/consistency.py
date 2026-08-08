@@ -49,7 +49,13 @@ CONSISTENCY_KEY = "term_consistency"
 # CONSISTENCY_KEY it lives outside config/error_types — no prompt to write.
 NAME_KEY = "name_consistency"
 
-_WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+# A word is a Unicode letter — [^\W\d_] — continued by letters, apostrophes,
+# hyphens, or combining diacritics (U+0300–U+036F), so an accent that arrives
+# decomposed cannot split its word. Both scans tokenize with this: an
+# ASCII-only class would read Rían as R + an and fiancée as fianc + e,
+# leaving every accented term invisible and spraying fragments that pair with
+# their neighbours into phantom open compounds.
+_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|[\u0300-\u036f'’-])*")
 
 # Pairs that collapse to the same key and are NOT inconsistencies: English
 # distinguishes them. Flagging these would train the press to ignore this
@@ -114,6 +120,13 @@ class ConsistencyReport:
 
 
 def _key(form: str) -> str:
+    # NFC first: composed and decomposed spellings of one accent must be one
+    # key, and one length for min_length. The accents themselves stay — café
+    # against cafe may be a loanword against its anglicization, two deliberate
+    # choices, so the term scan never accent-folds. Whether an accent
+    # difference is drift is find_name_drift's question, asked only of proper
+    # names, where English has no such minimal pairs.
+    form = unicodedata.normalize("NFC", form)
     return re.sub(r"[-\s’']", "", form).lower()
 
 
@@ -128,8 +141,10 @@ def _structure(form: str) -> str:
     straight-versus-curly apostrophe difference. English capitalizes the first
     word of every sentence, so almost any common word appears both lowercased
     and sentence-initial; folding case here is what keeps that from reading as
-    an inconsistency."""
-    return form.lower().replace("’", "'")
+    an inconsistency. Normalization form is folded for the same reason: a
+    composed and a decomposed café render identically, and a difference no
+    reader can see is not a difference this scan may report."""
+    return unicodedata.normalize("NFC", form).lower().replace("’", "'")
 
 
 def _fold_accents(s: str) -> str:
@@ -142,11 +157,6 @@ def _fold_accents(s: str) -> str:
 # and trimming it here both merges their counts and keeps a correction from
 # touching the clitic.
 _POSSESSIVE = re.compile(r"(?:[’']s|[’'])$")
-
-# _WORD is ASCII on purpose — the term scan's keys and lengths are tuned to
-# it — but a name scan that cannot read Rían whole has nothing to scan.
-# [^\W\d_] is a Unicode letter.
-_NAME_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|['’-])*")
 
 
 @dataclass
@@ -177,7 +187,7 @@ def find_name_drift(paragraphs: Sequence[ParagraphRef], *,
     groups: dict[str, _Group] = defaultdict(_Group)
     lowercased: set[str] = set()
     for para in paragraphs:
-        for m in _NAME_WORD.finditer(para.text):
+        for m in _WORD.finditer(para.text):
             form, start = m.group(0), m.start()
             form = _POSSESSIVE.sub("", form)
             if len(form) < 3:
