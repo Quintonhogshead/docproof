@@ -19,6 +19,7 @@ from app.jobs import JobRunner, JobStore
 from app.settings import Paths
 from app.watch import tick as ticklib
 from app.watch.drive import GOOGLE_DOC_MIME
+from app.watch.hubspot import HubSpotAuthError
 from app.watch.settings import WatchSettings
 from app.watch.stages import (FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
                               REASON_PROP, SOURCE_PROP, STATE_PROP)
@@ -689,3 +690,170 @@ def test_a_withdrawn_manuscripts_job_is_parked_not_paid_for(tmp_path, ws,
     assert parked.state == "failed"
     assert "left the folder" in parked.error
     assert len(provider.calls) == paid             # not a token spent on it
+
+
+# --- the HubSpot gate ---------------------------------------------------------
+#
+# A shared folder, so a file has to say which book it is. When HubSpot is the
+# gate, a manuscript is prepared only when its record is marked ready and not
+# already done, and its record is marked done once the file is back. Everything
+# else waits, untouched, for a later tick — the same "stood aside, not failed"
+# posture the folder lock keeps.
+
+def hs_ws(**over):
+    """A watcher with the HubSpot gate switched on. The filename stem is the
+    key (no pattern), so "Wolves.docx" looks up the record keyed "Wolves"."""
+    fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
+                  client_id="client-1", client_secret="secret-1",
+                  hubspot_enabled=True, hubspot_object="deals",
+                  hubspot_key_property="isbn", hubspot_ready_property="ready",
+                  hubspot_done_property="done")
+    fields.update(over)
+    return WatchSettings(**fields)
+
+
+def hs_props(opener, key="Wolves"):
+    return opener.hubspot[f"hs-{key}"]["properties"]
+
+
+def test_a_ready_book_is_prepared_and_marked_done_in_hubspot(tmp_path, provider):
+    ws = hs_ws(hubspot_output_property="output_file")
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true", "done": "false"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Wolves.docx"]
+    assert "tagged_Wolves.docx" in uploads_in(opener)
+    props = hs_props(opener)
+    assert props["done"] == "true"                 # the toggle DocProof owns
+    assert props["output_file"] == "tagged_Wolves.docx"
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.hubspot_id == "hs-Wolves" and rec.hubspot_done is True
+
+
+def test_a_book_that_is_not_ready_waits_untouched(tmp_path, provider):
+    """Ready off is a reason to wait, and waiting spends nothing, writes no
+    Drive marker, and does not touch HubSpot — so flipping the toggle later is
+    all it takes."""
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "false", "done": "false"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.waiting == 1 and report.prepped == [] and report.ok
+    assert provider.calls == []                    # no model was called
+    assert uploads_in(opener) == {}                # nothing put back
+    assert STATE_PROP not in opener.files["f-1"].get("appProperties", {})
+    assert hs_props(opener)["done"] == "false"     # HubSpot untouched
+
+
+def test_a_book_with_no_hubspot_record_waits(tmp_path, provider):
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.waiting == 1 and report.prepped == [] and provider.calls == []
+
+
+def test_a_file_whose_name_carries_no_key_waits(tmp_path, provider):
+    ws = hs_ws(hubspot_key_pattern=r"ISBN (\d{13})")     # nothing to match
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.waiting == 1 and report.prepped == [] and provider.calls == []
+
+
+def test_a_book_already_done_elsewhere_is_left_alone(tmp_path, provider):
+    """Marked done in HubSpot but never prepared by us — an editor set it by
+    hand. Skipped rather than re-run: done means done."""
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true", "done": "true"}})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.waiting == 1 and report.prepped == [] and provider.calls == []
+
+
+def test_one_hubspot_lookup_failing_does_not_stop_the_others(tmp_path, provider):
+    """A lookup that could not be reached is one book's bad luck; the rest of
+    the pass goes on, the same rule the prep loop keeps."""
+    ws = hs_ws()
+    opener = fake_drive(folder(
+        f_1=drive_entry("Aardvark.docx", modified="2026-01-01T00:00:00.000Z"),
+        f_2=drive_entry("Wolves.docx", modified="2026-01-02T00:00:00.000Z")),
+        docx=MANUSCRIPT,
+        hubspot={"Aardvark": {"ready": "true"}, "Wolves": {"ready": "true"}},
+        fail={"hubspot_search": http_error(503)})   # only the first lookup dies
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Wolves.docx"]        # the second still went
+    assert report.waiting == 1 and report.ok        # the first stood aside
+
+
+def test_a_rejected_token_stops_the_whole_pass(tmp_path, provider):
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true"}},
+                        fail={"hubspot_search": http_error(401)})
+
+    with pytest.raises(HubSpotAuthError):
+        run(tmp_path, ws, opener)
+
+
+def test_enabling_hubspot_without_a_required_field_refuses_the_pass(
+        tmp_path, provider):
+    ws = hs_ws(hubspot_ready_property="")           # a gate that cannot ask
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true"}})
+
+    with pytest.raises(ticklib.NotConfigured, match="ready"):
+        run(tmp_path, ws, opener)
+
+
+def test_with_hubspot_off_the_crm_is_never_asked(tmp_path, ws, provider):
+    """The regression guard: an install that never heard of HubSpot behaves
+    exactly as it did before, ready toggles and all."""
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "false"}})
+
+    report = run(tmp_path, ws, opener)              # the default, off ws
+
+    assert report.prepped == ["Wolves.docx"]        # prepped despite ready off
+    assert not any("api.hubapi.com" in c.full_url for c in opener.calls)
+
+
+def test_a_crash_before_the_drive_marker_is_finished_next_tick(tmp_path,
+                                                               provider):
+    """The reachable gap (#3): HubSpot is told done, then the process dies
+    before the Drive marker lands. The next tick recognises the book as ours
+    and finishes the tail — no re-prep, no redundant HubSpot write."""
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": {"ready": "true", "done": "false"}},
+                        fail={"patch": http_error(500)})   # the marker dies
+
+    first = run(tmp_path, ws, opener)
+
+    assert not first.ok                             # the marker failed
+    assert hs_props(opener)["done"] == "true"       # but done was set first
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.hubspot_done is True and rec.hubspot_id == "hs-Wolves"
+    assert STATE_PROP not in opener.files["f-1"].get("appProperties", {})
+    spent = len(provider.calls)
+
+    second = run(tmp_path, ws, opener)              # the marker now succeeds
+
+    assert second.prepped == ["Wolves.docx"]        # finished, not gated away
+    assert len(provider.calls) == spent             # zero re-spend
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
+    patches = [c for c in opener.calls if "api.hubapi.com" in c.full_url
+               and c.get_method() == "PATCH"]
+    assert len(patches) == 1                        # done was written once

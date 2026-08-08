@@ -10,13 +10,14 @@ launchd runs four times a day needs no arguments and no attention.
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import sys
 import webbrowser
 from pathlib import Path
 
 from app.lock import FolderInUse, FolderLock
-from app.settings import get_api_key
+from app.settings import get_api_key, set_api_key
 from docproof.providers.catalog import BY_ID, MODELS
 
 from . import auth as authlib
@@ -24,7 +25,8 @@ from . import schedule as schedulelib
 from . import status as statuslib
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
-from .settings import WatchSettings, default_watch_home, folder_id_from
+from .settings import (HUBSPOT_KEY, WatchSettings, default_watch_home,
+                       folder_id_from)
 
 log = logging.getLogger("docproof.app.watch.cli")
 
@@ -61,6 +63,31 @@ def main(argv=None) -> int:
     ini.add_argument("--model", help="which model prepares the manuscripts")
     ini.add_argument("--output", choices=["indesign", "tracked", "both"],
                      help="which file(s) to put back in the folder")
+    ini.add_argument("--enable-hubspot", action="store_true",
+                     help="gate new manuscripts on a HubSpot record; asks for "
+                          "any field left out")
+    ini.add_argument("--disable-hubspot", action="store_true",
+                     help="stop gating on HubSpot")
+    ini.add_argument("--hubspot-object",
+                     help="the objectType: deals, contacts, or a custom id")
+    ini.add_argument("--hubspot-key-property",
+                     help="the property a filename key is matched against")
+    ini.add_argument("--hubspot-key-pattern",
+                     help="a regex to pull the key out of the filename "
+                          "(default: the whole filename stem)")
+    ini.add_argument("--hubspot-ready-property",
+                     help="the boolean an editor flips to mean 'ready'")
+    ini.add_argument("--hubspot-done-property",
+                     help="the boolean DocProof sets when it has put the file "
+                          "back")
+    ini.add_argument("--hubspot-output-property",
+                     help="optional: a property to write the output filename "
+                          "into")
+
+    ht = sub.add_parser("hubspot-token",
+                        help="store the HubSpot private-app token")
+    ht.add_argument("--status", action="store_true",
+                    help="say whether a token is stored, without storing one")
 
     on = sub.add_parser("once", help="do one pass over the folder now")
     on.add_argument("--dry-run", action="store_true",
@@ -85,7 +112,8 @@ def main(argv=None) -> int:
     _logging(home, verbose=args.verbose)
     return {"auth": cmd_auth, "init": cmd_init, "once": cmd_once,
             "status": cmd_status, "schedule": cmd_schedule,
-            "unschedule": cmd_unschedule}[args.cmd](args, home)
+            "unschedule": cmd_unschedule,
+            "hubspot-token": cmd_hubspot_token}[args.cmd](args, home)
 
 
 def _logging(home: Path, *, verbose: bool) -> None:
@@ -192,10 +220,15 @@ def cmd_init(args, home: Path) -> int:
         ws.model = args.model
     if args.output:
         ws.prep_output = args.output
+    _apply_hubspot(args, ws)
     ws.save(home)
 
     print(f"Watching folder {ws.folder_id or '— not set yet'}")
     print(f"Preparing with {ws.model}, handing back: {ws.prep_output}")
+    if ws.hubspot_enabled:
+        print(f"HubSpot gate on: {ws.hubspot_object}, "
+              f"ready={ws.hubspot_ready_property or '— not set'}, "
+              f"done={ws.hubspot_done_property or '— not set'}")
     print(f"Keeping its things in {home}")
     missing = _missing(ws)
     if missing:
@@ -206,10 +239,82 @@ def cmd_init(args, home: Path) -> int:
     return OK
 
 
+_HUBSPOT_FLAGS = (
+    ("hubspot_object", "hubspot_object"),
+    ("hubspot_key_property", "hubspot_key_property"),
+    ("hubspot_key_pattern", "hubspot_key_pattern"),
+    ("hubspot_ready_property", "hubspot_ready_property"),
+    ("hubspot_done_property", "hubspot_done_property"),
+    ("hubspot_output_property", "hubspot_output_property"),
+)
+
+# The fields a gate cannot run without. Asked for interactively when enabling
+# leaves one blank, so `init --enable-hubspot` never quietly writes a gate the
+# next pass will only refuse.
+_HUBSPOT_REQUIRED = {
+    "hubspot_object": "Which HubSpot object (deals, contacts, or a custom id)",
+    "hubspot_key_property": "Which property the filename key matches",
+    "hubspot_ready_property": "Which boolean says a book is ready",
+    "hubspot_done_property": "Which boolean DocProof sets when it is done",
+}
+
+
+def _apply_hubspot(args, ws: WatchSettings) -> None:
+    """Fold the `--hubspot-*` flags into the settings, and fill any required
+    field still blank once the gate is switched on."""
+    if getattr(args, "disable_hubspot", False):
+        ws.hubspot_enabled = False
+    for attr, flag in _HUBSPOT_FLAGS:
+        value = getattr(args, flag, None)
+        if value is not None:
+            setattr(ws, attr, value)
+    if getattr(args, "enable_hubspot", False):
+        ws.hubspot_enabled = True
+    if not ws.hubspot_enabled:
+        return
+    for attr, prompt in _HUBSPOT_REQUIRED.items():
+        if not getattr(ws, attr):
+            setattr(ws, attr, _ask(prompt))
+
+
 # What is still needed, said the way a terminal should say it. The library
 # answers with a word; naming the command that fixes it is this front end's job.
 _NEEDS = {"folder": "a folder to watch — `docproof-watch init --folder <address>`",
           "auth": "a Google sign-in — `docproof-watch auth`"}
+
+
+def cmd_hubspot_token(args, home: Path) -> int:
+    """Store the HubSpot private-app token where the vendor keys live.
+
+    The token is read off stdin when one is piped in, and asked for without an
+    echo otherwise, so it never lands in shell history the way a `--flag` would.
+    Private-app tokens do not expire, so this is a one-time step per install."""
+    if args.status:
+        stored = bool(get_api_key(HUBSPOT_KEY))
+        print("A HubSpot token is stored." if stored
+              else "No HubSpot token yet. Run `docproof-watch hubspot-token`.")
+        return OK if stored else UNUSABLE
+
+    token = _read_secret("Paste the HubSpot private-app token")
+    if not token:
+        print("error: no token given, so nothing was stored.", file=sys.stderr)
+        return UNUSABLE
+    set_api_key(HUBSPOT_KEY, token)
+    print("Stored. It is in your Keychain, not in a file.")
+    if not WatchSettings.load(home).hubspot_enabled:
+        print("The HubSpot gate is off. Turn it on with "
+              "`docproof-watch init --enable-hubspot`.")
+    return OK
+
+
+def _read_secret(prompt: str) -> str:
+    """A pasted secret, off stdin when piped and without an echo otherwise."""
+    if sys.stdin is not None and not sys.stdin.isatty():
+        return sys.stdin.readline().strip()
+    try:
+        return getpass.getpass(f"{prompt}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
 
 
 def _missing(ws: WatchSettings) -> str:

@@ -1830,6 +1830,9 @@ function renderWatchRun(body) {
   if (last.deferred) {
     line.textContent += ` ${last.deferred} more waiting for the next pass.`;
   }
+  if (last.waiting) {
+    line.textContent += ` ${last.waiting} waiting on HubSpot.`;
+  }
 }
 
 // The library writes for somebody holding a terminal. In here there are cards.
@@ -1840,6 +1843,10 @@ function watchTrouble(last) {
   }
   if (last.error_kind === 'not_configured') {
     return 'Something above still needs setting up before a pass can run.';
+  }
+  if (last.error_kind === 'hubspot_auth') {
+    return 'HubSpot would not accept the token — it may be wrong or missing a '
+      + 'scope. Set a new HUBSPOT_TOKEN and try again.';
   }
   return last.error;
 }

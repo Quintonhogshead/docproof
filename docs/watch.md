@@ -111,6 +111,63 @@ docproof-watch init --model claude-sonnet-5 --output both
 any model in DocProof's catalog; see [app.md](app.md#choosing-a-reviewer) for
 which are worth it.
 
+## Gating on HubSpot (optional)
+
+Left off, the watcher prepares every new manuscript it finds. Turned on, it
+prepares a manuscript only when a record in your HubSpot CRM says the book is
+ready, and marks that record done once the formatted file is back — so the
+decision to format lives where the team already tracks production, and nobody
+has to touch the folder to make it happen.
+
+The two toggles are yours to name. An editor flips a **ready** boolean on a
+book's record; DocProof sets a **done** boolean when it has put the file back.
+Which HubSpot object (a deal, a contact, a custom object) and which properties
+those are is all configuration — DocProof assumes nothing about your schema.
+
+**One shared folder, a key in the filename.** There are no per-book folders.
+A manuscript says which book it is through its name: a value — an ISBN, an order
+number, whatever your team already writes there — that matches a property on the
+record. By default the whole filename (without its extension) is the key; give a
+regex if the key is only part of the name.
+
+Setting it up is a token and a handful of fields:
+
+```bash
+# 1. Paste a HubSpot private-app token (CRM read + write scopes).
+#    It goes to the Keychain, never a file, and does not expire.
+docproof-watch hubspot-token
+
+# 2. Turn the gate on and name the object and properties. It asks for any
+#    required field you leave out.
+docproof-watch init --enable-hubspot \
+  --hubspot-object deals \
+  --hubspot-key-property isbn \
+  --hubspot-ready-property ready_to_format \
+  --hubspot-done-property formatting_done
+```
+
+Two optional fields refine it:
+
+- `--hubspot-key-pattern` — a regex to pull the key out of the filename when it
+  is not the whole name. The first capture group is the key (or the whole match
+  if there are no groups). `--hubspot-key-pattern 'ISBN (\d{13})'` reads the ISBN
+  out of `Wolves [ISBN 9781234567890].docx`.
+- `--hubspot-output-property` — a property to write the formatted filename into,
+  so the record links to what was produced.
+
+Turn it back off with `docproof-watch init --disable-hubspot`. The token stays
+in the Keychain for next time.
+
+**What a book waits on.** A manuscript is left untouched — no download, no model
+call, no Drive marker, so the next pass reconsiders it — whenever its name
+carries no key, no record matches that key, the record is not marked ready, or
+the record is already marked done. `status` and the panel count these as
+*waiting*, distinct from *failed*. A book becomes eligible the moment an editor
+flips its ready toggle; nothing in the folder has to change.
+
+**On the server**, there is no Keychain: set the token as a secret instead —
+`fly secrets set HUBSPOT_TOKEN=…` — and see [DEPLOY.md](../DEPLOY.md#33-set-the-secrets).
+
 ## Trying it before trusting it
 
 Two rehearsals, in order. Neither costs anything.
@@ -363,11 +420,12 @@ collect yet.
 [`stages.py`](../app/watch/stages.py), which is one pure function over one
 file. The first version will be a subfolder an editor drops the file into.
 
-**HubSpot.** The same branch, asking a deal's stage instead of looking at a
-subfolder — production status stays where the team already manages it, and a
-note written back on the deal is what tells a copy editor their file is ready.
-The linking piece is a custom deal property holding the book's folder id,
-filled in once when the contract is signed.
+(**HubSpot gating** is now built — see [Gating on HubSpot](#gating-on-hubspot-optional)
+above. It landed as a gate in [`tick.py`](../app/watch/tick.py)'s prep slot
+rather than a branch in `classify`, on purpose: the decision needs a network
+round-trip, and `classify` is the one function that stays pure and testable
+without one. It is off by default, so an install that never configures it is
+byte-for-byte the watcher described everywhere else here.)
 
 ### Somewhere other than a Mac
 
@@ -386,9 +444,11 @@ app/watch/
 ├── settings.py   the folder, the model, the home
 ├── stages.py     what each file is — the seam copy editing joins at
 ├── drive.py      Google Drive over plain HTTP; no SDK
+├── hubspot.py    HubSpot's CRM over plain HTTP; no SDK — the optional gate
+├── keys.py       the filename → HubSpot key rule, pure and testable
 ├── auth.py       signing in once, from a browser
 ├── prep.py       one manuscript: fetch, prepare, upload, mark
-├── tick.py       one pass: collect → submit → prepare
+├── tick.py       one pass: collect → submit → prepare (prepare is HubSpot-gated)
 ├── status.py     what it has done, for whichever front end is asking
 ├── runner.py     the pass held open inside the app: a thread and a lock
 ├── schedule.py   the launchd agent
