@@ -56,7 +56,13 @@ CONSISTENCY_KEY = "term_consistency"
 # CONSISTENCY_KEY it lives outside config/error_types — no prompt to write.
 NAME_KEY = "name_consistency"
 
-_WORD = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+# A word is a Unicode letter — [^\W\d_] — continued by letters, apostrophes,
+# hyphens, or combining diacritics (U+0300–U+036F), so an accent that arrives
+# decomposed cannot split its word. Both scans tokenize with this: an
+# ASCII-only class would read Rían as R + an and fiancée as fianc + e,
+# leaving every accented term invisible and spraying fragments that pair with
+# their neighbours into phantom open compounds.
+_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|[\u0300-\u036f'’-])*")
 
 
 def _trim_quote(text: str, start: int, end: int) -> tuple[str, int, int]:
@@ -139,6 +145,13 @@ class ConsistencyReport:
 
 
 def _key(form: str) -> str:
+    # NFC first: composed and decomposed spellings of one accent must be one
+    # key, and one length for min_length. The accents themselves stay — café
+    # against cafe may be a loanword against its anglicization, two deliberate
+    # choices, so the term scan never accent-folds. Whether an accent
+    # difference is drift is find_name_drift's question, asked only of proper
+    # names, where English has no such minimal pairs.
+    form = unicodedata.normalize("NFC", form)
     return re.sub(r"[-\s’']", "", form).lower()
 
 
@@ -153,7 +166,9 @@ def _structure(form: str) -> str:
     straight-versus-curly apostrophe difference. English capitalizes the first
     word of every sentence, so almost any common word appears both lowercased
     and sentence-initial; folding case here is what keeps that from reading as
-    an inconsistency.
+    an inconsistency. Normalization form is folded for the same reason: a
+    composed and a decomposed café render identically, and a difference no
+    reader can see is not a difference this scan may report.
 
     A *form-final* possessive apostrophe is folded away for the same reason.
     *mothers* against *mother's* against *mothers'* is a plural against a
@@ -169,7 +184,7 @@ def _structure(form: str) -> str:
     Known limitation: *Krebs's Cycle* against *Krebs' Cycle* — the s's-versus-s'
     style choice — is not caught, because the extra s lands the two forms in
     different ``_key`` buckets before this ever runs."""
-    s = form.lower().replace("’", "'")
+    s = unicodedata.normalize("NFC", form).lower().replace("’", "'")
     # Fold a form-final possessive: mother's and mothers' both become mothers.
     # s' before 's, so a possessive that also carries a trailing closing quote
     # (mother's’ from dialogue) folds all the way rather than stalling halfway.
@@ -188,11 +203,6 @@ def _fold_accents(s: str) -> str:
 # and trimming it here both merges their counts and keeps a correction from
 # touching the clitic.
 _POSSESSIVE = re.compile(r"(?:[’']s|[’'])$")
-
-# _WORD is ASCII on purpose — the term scan's keys and lengths are tuned to
-# it — but a name scan that cannot read Rían whole has nothing to scan.
-# [^\W\d_] is a Unicode letter.
-_NAME_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|['’-])*")
 
 
 @dataclass
@@ -223,7 +233,7 @@ def find_name_drift(paragraphs: Sequence[ParagraphRef], *,
     groups: dict[str, _Group] = defaultdict(_Group)
     lowercased: set[str] = set()
     for para in paragraphs:
-        for m in _NAME_WORD.finditer(para.text):
+        for m in _WORD.finditer(para.text):
             form, start = m.group(0), m.start()
             form = _POSSESSIVE.sub("", form)
             if len(form) < 3:
