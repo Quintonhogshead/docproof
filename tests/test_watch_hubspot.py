@@ -19,7 +19,8 @@ import urllib.parse
 import pytest
 
 from app.watch import hubspot
-from app.watch.hubspot import HubSpotAuthError, HubSpotError, HubSpotRecord
+from app.watch.hubspot import (HubSpotAuthError, HubSpotError,
+                               HubSpotGuardError, HubSpotRecord)
 from app.watch.keys import key_from_name
 
 from .fakes import fake_drive
@@ -171,7 +172,7 @@ def test_a_completion_patches_only_the_properties_it_is_given():
                                                    "done": "false"}})
 
     hubspot.set_properties("tok-1", "deals", "hs-9781234567890",
-                           {"done": "true"}, opener=opener)
+                           {"done": "true"}, allow={"done"}, opener=opener)
 
     request = opener.calls[0]
     assert request.get_method() == "PATCH"
@@ -181,6 +182,21 @@ def test_a_completion_patches_only_the_properties_it_is_given():
     # The one boolean changed; what was already there is untouched.
     props = opener.hubspot["hs-9781234567890"]["properties"]
     assert props == {"ready": "true", "done": "true"}
+
+
+def test_a_property_outside_the_allowlist_is_refused_before_any_request():
+    """The guard that makes a write-scoped token safe to grant: DocProof may set
+    only the properties it names, and a stray one is stopped here — no request
+    leaves, so nothing on the record, and no other property, is ever touched."""
+    opener = scripted()          # no answers scripted: any call would raise
+
+    with pytest.raises(HubSpotGuardError, match="author_last_name"):
+        hubspot.set_properties(
+            "tok-1", "0-970", "hs-Grest",
+            {"docproof": "Formatting Complete", "author_last_name": "wiped"},
+            allow={"docproof", "output_file"}, opener=opener)
+
+    assert opener.calls == []    # the guard fired before the wire
 
 
 # --- name_matches -------------------------------------------------------------

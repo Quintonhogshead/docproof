@@ -783,6 +783,27 @@ def test_read_only_hubspot_prepares_but_never_writes_back(tmp_path, provider):
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 
+def test_an_empty_done_value_refuses_to_write_rather_than_blank_the_status(
+        tmp_path):
+    """Defence behind preflight, which already refuses a blank done-value: were
+    it ever empty, moving the status on would blank it instead. So `_finish`
+    refuses — no PATCH leaves and the record keeps the value it had."""
+    from types import SimpleNamespace
+
+    ws = hs_ws(hubspot_format_done_value="")
+    opener = fake_drive(hubspot={"Wolves": ready("Wolves")})
+    file = SimpleNamespace(name="Wolves.docx")
+    rec = SimpleNamespace(hubspot_id="hs-Wolves", hubspot_done=False,
+                          uploaded=[])
+    state = WatchState.load(tmp_path / "state.json")
+
+    ticklib._finish_hubspot("tok-1", ws, file, rec, state, [], opener=opener)
+
+    assert rec.hubspot_done is False
+    assert not any(c.get_method() == "PATCH" for c in opener.calls)
+    assert hs_props(opener)["docproof"] == "Ready for Formatting"   # untouched
+
+
 def test_a_book_that_is_not_ready_waits_untouched(tmp_path, provider):
     """Not-ready is a reason to wait, and waiting spends nothing, writes no
     Drive marker, and does not touch HubSpot — so setting the value later is

@@ -455,13 +455,26 @@ def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,
         log.info("HubSpot is read-only: leaving %s at its current status.",
                  file.name)
         return
+    if not ws.hubspot_format_done_value:
+        # Defence behind preflight, which already refuses a blank done-value: a
+        # patch of an empty value would blank the status property rather than
+        # move it on, so it is refused here too. The book is left at whatever
+        # value it had, exactly as read-only mode leaves it.
+        log.warning("HubSpot done-value is empty: leaving %s at its current "
+                    "status rather than blanking it.", file.name)
+        return
+    # The allowlist set_properties enforces: DocProof may write the status
+    # property, and the output property only when one is configured — never
+    # anything else, whatever props ends up holding.
     props = {ws.hubspot_status_property: ws.hubspot_format_done_value}
+    allow = {ws.hubspot_status_property}
     if ws.hubspot_output_property:
+        allow.add(ws.hubspot_output_property)
         name = _output_name(uploaded) or _output_name(list(rec.uploaded))
         if name:
             props[ws.hubspot_output_property] = name
     hubspot.set_properties(hs_token, ws.hubspot_object, rec.hubspot_id, props,
-                           opener=opener)
+                           allow=allow, opener=opener)
     rec.hubspot_done = True
     state.record(rec)                     # recorded before the Drive marker
 
