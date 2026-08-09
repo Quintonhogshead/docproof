@@ -1,8 +1,8 @@
 """HubSpot's CRM, over its REST API and nothing else.
 
-The watcher asks HubSpot two questions and gives it one answer: is this book
-marked ready, is it already done, and — when a manuscript has been prepared —
-mark it done. That is a search and a patch, two HTTP requests, so this module
+The watcher asks HubSpot one question and gives it one answer: what does this
+book's status property say, and — when a manuscript has been prepared — move
+that status on. That is a search and a patch, two HTTP requests, so this module
 copies `drive.py` exactly: one `_open_url` at the bottom, passed in by every
 caller, so no test ever reaches HubSpot.
 
@@ -133,39 +133,42 @@ def _json_call(request: urllib.request.Request, *, opener, what: str) -> dict:
 
 # --- asking --------------------------------------------------------------------
 
-def find_record(token: str, object_type: str, key_property: str,
-                key_value: str, *, want_properties, opener=_open_url
-                ) -> HubSpotRecord | None:
-    """The one record whose `key_property` equals `key_value`.
+def find_by_value(token: str, object_type: str, prop: str, value: str, *,
+                  want_properties, opener=_open_url, cap: int = 500
+                  ) -> list[HubSpotRecord]:
+    """Every record whose `prop` equals `value`.
 
-    `None` when nothing matches — a manuscript whose key names no book yet, a
-    reason to wait rather than a reason to stop. More than one match is a human
-    data problem, not something to guess at: two books cannot share an ISBN, so
-    it is raised the way prep raises "gave up", loud and needing a person."""
-    body = json.dumps({
-        "filterGroups": [{"filters": [{
-            "propertyName": key_property,
-            "operator": "EQ",
-            "value": key_value,
-        }]}],
-        "properties": list(want_properties),
-        # Two is enough to tell "one" from "more than one" without asking for a
-        # page of books that happen to share a broken key.
-        "limit": 2,
-    }).encode()
-    request = _request(f"{API}/crm/v3/objects/{object_type}/search",
-                       token, data=body, method="POST")
-    answer = _json_call(request, opener=opener,
-                        what=f"look up the {object_type} record")
-    results = answer.get("results")
-    if not isinstance(results, list) or not results:
-        return None
-    if len(results) > 1:
-        raise HubSpotError(
-            f"More than one {object_type} has {key_property} = {key_value}. "
-            f"HubSpot cannot say which book this file is, so nothing was "
-            f"touched — a person needs to fix the duplicate.")
-    return HubSpotRecord.from_api(results[0])
+    The gate searches for the short list of books an editor has flagged — the
+    status property at its "ready" value — and then picks among them by author
+    key, so this hands back all of them rather than refusing when more than one
+    comes back. Among thousands of records only a handful are ever ready at once,
+    so the list is small; it is paged to `cap` all the same, and a ready list
+    longer than that is logged rather than silently trimmed."""
+    records: list[HubSpotRecord] = []
+    after: str | None = None
+    while True:
+        payload: dict = {
+            "filterGroups": [{"filters": [{
+                "propertyName": prop, "operator": "EQ", "value": value}]}],
+            "properties": list(want_properties),
+            "limit": 100,
+        }
+        if after:
+            payload["after"] = after
+        request = _request(f"{API}/crm/v3/objects/{object_type}/search",
+                           token, data=json.dumps(payload).encode(),
+                           method="POST")
+        answer = _json_call(request, opener=opener,
+                            what=f"search the {object_type} records")
+        for raw in answer.get("results") or []:
+            records.append(HubSpotRecord.from_api(raw))
+            if len(records) >= cap:
+                log.warning("More than %d %s records are '%s'; only the first "
+                            "%d were looked at.", cap, object_type, value, cap)
+                return records
+        after = ((answer.get("paging") or {}).get("next") or {}).get("after")
+        if not after:
+            return records
 
 
 def set_properties(token: str, object_type: str, record_id: str,
@@ -181,13 +184,17 @@ def set_properties(token: str, object_type: str, record_id: str,
                what=f"mark the {object_type} record done")
 
 
-def is_on(record: HubSpotRecord, prop: str) -> bool:
-    """Whether a HubSpot boolean is set.
+def name_matches(stored: str, key: str) -> bool:
+    """Whether a filename's author key names this record.
 
-    HubSpot keeps booleans as the strings "true"/"false". Anything that is not
-    "true" — a "false", a blank, a property that was never set — is off, so a
-    misspelled property name reads as "not ready" and waits rather than
-    surprising anyone by running."""
-    if not prop:
+    Trimmed and case-insensitive, and a co-author parenthetical is set aside —
+    a file named for "Lichtenstein" matches a record whose author last name is
+    stored "Lichtenstein (and Dolores DelBello)" — because the folder carries
+    one surname and the record may carry more. An empty key or an empty stored
+    value matches nothing, so a blank never sweeps a book in by accident."""
+    s = (stored or "").strip().lower()
+    k = (key or "").strip().lower()
+    if not s or not k:
         return False
-    return record.properties.get(prop, "").strip().lower() == "true"
+    main = s.split(" (")[0].strip()
+    return k == s or k == main

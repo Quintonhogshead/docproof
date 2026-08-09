@@ -8,3 +8,6 @@ tests/fixtures/*.docx
 jobs/
 build/
 dist/
+
+# HubSpot CLI credentials
+hubspot.config.yml

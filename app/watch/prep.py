@@ -35,7 +35,7 @@ from docproof.prep.verify import VerificationFailed
 
 from app.jobs import Job, JobRunner, JobStore
 
-from . import drive
+from . import drive, naming
 from .drive import DOCX_MIME, DriveFile
 from .settings import WatchSettings
 from .stages import (AT_PROP, FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
@@ -162,24 +162,34 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
 # --- putting it back ----------------------------------------------------------
 
 def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
-    """What of this run belongs in the folder.
+    """What of this run belongs in the folder, and what to call it there.
 
-    Found on disk rather than reconstructed from the job, so the day prep
-    names a file differently the upload follows it there.
+    Prep writes internal names (`tagged_*.docx`, `tracked_*.docx`,
+    `prep_notes.md`); the folder belongs to people, so each is renamed to the
+    house stage series on the way out — `<surname> - book 0.docx` for the
+    InDesign-ready deliverable, with the tracked-changes copy and the notes
+    beside it under the same base (see `naming.py`).
 
-    The notes are renamed on the way out. Prep writes one `prep_notes.md` per
-    run and Drive will happily hold five files with that name; the folder
-    belongs to people, so the book's name goes in it."""
+    The deliverable takes the bare base name. If a run made no InDesign-ready
+    file (a tracked-only prep), the tracked file takes it instead, so the folder
+    always has one `<base>.docx` to hand to the next stage."""
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return []
-    stem = Path(job.filename).stem or "manuscript"
-    found = [Artifact(path, path.name, DOCX_MIME)
-             for prefix in ("tagged_", "tracked_")
-             for path in sorted(out.glob(f"{prefix}*.docx"))]
+    base = naming.format_base(Path(job.filename).stem or "manuscript")
+    tagged = sorted(out.glob("tagged_*.docx"))
+    tracked = sorted(out.glob("tracked_*.docx"))
+    found: list[Artifact] = []
+    primary = tagged or tracked         # a tracked-only prep still has a deliverable
+    if primary:
+        found.append(Artifact(primary[0], f"{base}.docx", DOCX_MIME))
+    if tagged and tracked:              # both asked for: the redline sits beside it
+        found.append(Artifact(tracked[0],
+                              f"{base}{naming.TRACKED_SUFFIX}.docx", DOCX_MIME))
     notes = out / "prep_notes.md"
     if ws.upload_notes and notes.is_file():
-        found.append(Artifact(notes, f"prep_notes_{stem}.md", MARKDOWN_MIME))
+        found.append(Artifact(notes, f"{base}{naming.NOTES_SUFFIX}.md",
+                              MARKDOWN_MIME))
     return found
 
 

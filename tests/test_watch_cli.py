@@ -32,9 +32,14 @@ MANUSCRIPT = (FIXTURES / "googledoc.docx").read_bytes()
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """A watch home nobody else knows about, and no ambient sign-in."""
+    """A watch home nobody else knows about, and no ambient sign-in.
+
+    Both readers are stubbed: the CLI's own, and the one the preflight in `tick`
+    reaches through — otherwise a real Google token in the developer's Keychain
+    leaks in and a "not signed in" test tries to reach the network."""
     monkeypatch.delenv("GOOGLE_REFRESH_TOKEN", raising=False)
     monkeypatch.setattr("app.watch.cli.get_api_key", lambda name: None)
+    monkeypatch.setattr("app.watch.tick.get_api_key", lambda name: None)
     return tmp_path
 
 
@@ -183,7 +188,7 @@ def test_a_pass_prepares_what_is_there_and_says_so(home, capsys, monkeypatch):
 
     out = capsys.readouterr().out
     assert "Prepared 1: Wolves.docx" in out
-    assert "tagged_Wolves.docx" in out
+    assert "Wolves - book 0.docx" in out
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 

@@ -37,7 +37,13 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 # own files only — the ones it created or a person explicitly opened with it —
 # and every manuscript this watcher exists to find was put there by somebody
 # else. There is no narrower scope that can see an author's upload.
-SCOPE = "https://www.googleapis.com/auth/drive"
+#
+# `gmail.send` is added for the alert email (see notify.py): send-only, so it can
+# leave a "needs a person" note in the owner's own mailbox and cannot read a
+# single message. A Drive-only sign-in predates it, so email answers 403 until
+# `docproof-watch auth` is run again to re-consent.
+SCOPE = ("https://www.googleapis.com/auth/drive"
+         " https://www.googleapis.com/auth/gmail.send")
 
 DEFAULT_TIMEOUT = 300
 

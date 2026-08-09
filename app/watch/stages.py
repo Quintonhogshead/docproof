@@ -20,6 +20,7 @@ from docproof.formats.base import DocumentFormat
 from docproof.prep.convert import CONVERTIBLE
 
 from .drive import DriveFile, GOOGLE_DOC_MIME
+from .naming import is_output_name
 
 # What prep can read: Word, plus everything LibreOffice converts for it. Taken
 # from prep itself so the two cannot drift — a format added there is watched
@@ -85,7 +86,8 @@ def classify(file: DriveFile) -> Stage:
 def _looks_like_output(name: str) -> bool:
     lowered = name.lower()
     return (lowered.startswith(OUTPUT_PREFIXES)
-            or Path(lowered).stem.endswith(OUTPUT_STEM_SUFFIXES))
+            or Path(lowered).stem.endswith(OUTPUT_STEM_SUFFIXES)
+            or is_output_name(name))
 
 
 def _is_manuscript(name: str) -> bool:

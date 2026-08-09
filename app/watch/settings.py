@@ -104,6 +104,12 @@ class WatchSettings:
     # How often that clock *considers* a pass. It considers; the "last looked"
     # stamp and the folder lock decide.
     tick_every_minutes: int = 60
+    # An address to email when a pass leaves something a person must sort out — a
+    # surname matching two ready Projects, or a manuscript that failed prep.
+    # Empty means send nothing. Delivered through Gmail as the signed-in Google
+    # account (see `notify.py`), which needs the gmail.send scope — so re-run
+    # `docproof-watch auth` after upgrading, or the send answers 403.
+    notify_email: str = ""
 
     # -- HubSpot ---------------------------------------------------------------
     # All off by default: an install that has never heard of HubSpot behaves
@@ -119,13 +125,30 @@ class WatchSettings:
     # How to pull that key out of the filename. Empty means the whole stem;
     # otherwise a regex, and the first capture group (or the whole match).
     hubspot_key_pattern: str = ""
-    # The boolean an editor flips to say "this book is ready to format".
-    hubspot_ready_property: str = ""
-    # The boolean DocProof sets when it has put the formatted file back.
-    hubspot_done_property: str = ""
+    # A single enumeration ("dropdown") property that carries a book through the
+    # pipeline — e.g. a "DocProof" property whose value moves from "Ready for
+    # Formatting" to "Formatting Complete". One property with values that
+    # transition, rather than a boolean per stage: it is what the production team
+    # already reads at a glance, and it leaves room for the proofing values to
+    # live on the same property later. Store the option's *internal value*, which
+    # HubSpot may spell differently from the label shown in the CRM.
+    hubspot_status_property: str = ""
+    # The status value that means "format this book now". An editor sets it;
+    # DocProof gates on it. Proofing will add its own ready value here later.
+    hubspot_format_ready_value: str = ""
+    # The status value DocProof writes back once the formatted file is in the
+    # folder.
+    hubspot_format_done_value: str = ""
     # Optional: a property to write the output filename into, so the CRM record
     # links to what was produced. Empty means do not write it.
     hubspot_output_property: str = ""
+    # Whether to write anything back to HubSpot at all. On by default: the gate
+    # reads a book's status and, when the formatted file is back, moves it on.
+    # Turned off, DocProof still *reads* the gate — a book is prepared only when
+    # its record says ready — but never touches the CRM, so a real formatting run
+    # can be watched end to end without changing a record. A book still marks
+    # itself done in Drive, so it is not prepared twice.
+    hubspot_write_back: bool = True
 
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":
