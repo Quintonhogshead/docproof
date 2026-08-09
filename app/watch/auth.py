@@ -226,6 +226,18 @@ def sign_in(home: str | Path, client_id: str, client_secret: str, *,
     ws.save(home)
 
 
+def web_consent(client_id: str, redirect_uri: str) -> tuple[str, str]:
+    """Start a sign-in that finishes in the browser, not on a loopback.
+
+    The hosted build cannot open a browser on the server or run a listener a
+    person can reach, so there is no `run_flow` here: Google sends its answer
+    back to a route on this same server (`redirect_uri`), and this only has to
+    hand back the freshly-minted state to remember and the consent page to send
+    the browser to. The state is what the callback checks the answer against."""
+    state = secrets.token_urlsafe(24)
+    return state, consent_url(client_id, redirect_uri, state)
+
+
 def token_source(get_key, has_client: bool) -> dict:
     """What `auth --status` reports: whether there is a sign-in and where it
     came from, never the token itself."""
@@ -240,4 +252,4 @@ def token_source(get_key, has_client: bool) -> dict:
 
 __all__ = ["AUTH_URL", "SCOPE", "AuthError", "AuthExpired", "Loopback",
            "consent_url", "exchange_code", "parse_redirect", "run_flow",
-           "sign_in", "token_source"]
+           "sign_in", "token_source", "web_consent"]

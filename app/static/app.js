@@ -1976,6 +1976,7 @@ function renderWatch(body, quiet) {
   renderWatchSignIn(body);
   renderWatchRun(body);
   renderWatchFiles(w.files);
+  applyWatchSchedule(body.can_schedule);
   if (quiet) return;
 
   $('watch-folder').value = w.folder_id || '';
@@ -1998,6 +1999,22 @@ function renderWatch(body, quiet) {
     picker.append(option);
   });
   picker.value = w.model;
+}
+
+function applyWatchSchedule(canSchedule) {
+  // The "look while closed" clock is a macOS launch agent — it has no meaning
+  // on the always-on server, which never closes. Where it can't run, hide it
+  // and let the remaining clock speak for itself: the in-app timer that looks
+  // on a schedule while DocProof runs is the one doing the work there.
+  $('watch-client-web').hidden = !WEB;
+  $('watch-closed-schedule').hidden = !canSchedule;
+  if (canSchedule) return;
+  $('watch-schedule-intro').textContent =
+    'DocProof looks on its own while it is running.';
+  $('watch-auto-label').textContent = 'Look automatically';
+  $('watch-auto-hint').textContent =
+    'Checks the folder on a schedule and prepares anything new. Turning this '
+    + 'off pauses the automatic passes — Look now still works.';
 }
 
 function renderWatchSignIn(body) {
@@ -2054,11 +2071,20 @@ async function signInToGoogle(button) {
     if ($('watch-client-secret').value) {
       payload.client_secret = $('watch-client-secret').value.trim();
     }
-    renderWatch(await api('/api/watch/auth', {
+    const body = await api('/api/watch/auth', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-    }));
+    });
+    // On the web build Google's consent page can't open on the server, so the
+    // server hands back its address and the browser already on screen goes
+    // there; it returns to this page through /api/watch/auth/callback. The
+    // desktop build opens the page itself and reports back through the poll.
+    if (body.consent_url) {
+      window.location.href = body.consent_url;
+      return;
+    }
+    renderWatch(body);
   } catch (err) {
     watchNote(note, err.message, 'error');
     $('watch-client').open = true;
@@ -2849,13 +2875,13 @@ function applyMode() {
   $('user-area').hidden = false;
   $('user-email').textContent = ME.email;
   $('tab-admin').hidden = !ME.is_admin;
-  // The desktop-only corners have no place in a shared web build: the Google
-  // Drive watcher, and the local Settings (keys live in the server's
-  // environment, and its file paths mean nothing to a browser). The detection
-  // prompts are shared server config, so only an admin edits them — hide the
-  // tab from everyone else.
-  const hide = ['watch', 'settings'];
-  if (!ME.is_admin) hide.push('prompts');
+  // Local Settings have no place in a shared web build — keys live in the
+  // server's environment and its file paths mean nothing to a browser — so
+  // that tab is gone for everyone. DocWatch and the detection prompts are
+  // shared server config an administrator manages, so they are hidden from
+  // everyone else but stay for an admin.
+  const hide = ['settings'];
+  if (!ME.is_admin) hide.push('prompts', 'watch');
   for (const screen of hide) {
     const tab = document.querySelector(`.tab[data-screen="${screen}"]`);
     if (tab) tab.hidden = true;
@@ -2877,11 +2903,27 @@ function startApp() {
   if (!WEB) offerUpdateIfBehind();
   renderKind();
   refreshJobs();
+  resumeWatchReturn();
   state.pollTimer = setInterval(() => {
     if (!$('screen-jobs').hidden) refreshJobs();
-    if (WEB) return;
     if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
   }, 5000);
+}
+
+function resumeWatchReturn() {
+  // Coming back from Google's consent page on the web build: the callback
+  // redirects here with #watch, and — if the sign-in did not take — an error
+  // to show in the panel. Query and hash are dropped afterwards so a reload
+  // does not replay any of it.
+  const params = new URLSearchParams(location.search);
+  const err = params.get('watch_auth') === 'error' ? params.get('msg') : null;
+  if (location.hash !== '#watch' && !err) return;
+  const tab = document.querySelector('.tab[data-screen="watch"]');
+  if (tab && !tab.hidden) {
+    show('watch');
+    if (err) watchNote($('watch-signin-note'), err, 'error');
+  }
+  history.replaceState(null, '', location.pathname);
 }
 
 function showLogin() {
