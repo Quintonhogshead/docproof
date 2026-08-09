@@ -72,6 +72,7 @@ def test_the_summary_names_the_needs_human_and_the_failed():
 
     subject, body = notify.summary(report)
 
+    assert subject.startswith("[DocProof][High][Action]")   # inbox-sortable
     assert "2" in subject
     assert "Smith.docx" in body and "two Projects are ready" in body
     assert "Jones.docx" in body and "gave up after 3 tries" in body
@@ -191,7 +192,10 @@ def test_completion_renders_every_group(tmp_path):
     subject, text, html = notify.completion(
         _ws(), job, _file(), _rec(), ["Johnson - book 0.docx"], "sf-1")
 
+    assert subject.startswith("[DocProof][Low][Done]")     # inbox-sortable
     assert "Quinton Johnson" in subject and "Book Original" in subject
+    # the tags sort the inbox but stay out of the body a person reads
+    assert not text.startswith("[DocProof]")
     # routing, model, cost, tokens, quality, timing, detail
     assert "Quinton Johnson" in text            # author / subfolder
     assert "hs-Johnson" in text                 # the record
