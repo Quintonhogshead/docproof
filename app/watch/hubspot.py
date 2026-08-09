@@ -37,6 +37,13 @@ class HubSpotAuthError(HubSpotError):
     """The token is wrong or was revoked. Needs a person, not a retry."""
 
 
+class HubSpotGuardError(HubSpotError):
+    """A write DocProof refused to make — caught here, before it left, because a
+    property was not on the short allowlist DocProof is permitted to touch. Not
+    HubSpot's word but ours: the token's write scope bounds which object can be
+    written, and this bounds which properties, which no token can."""
+
+
 @dataclass(frozen=True)
 class HubSpotRecord:
     """One CRM object, as far as the watcher cares about it: an id and the
@@ -172,11 +179,26 @@ def find_by_value(token: str, object_type: str, prop: str, value: str, *,
 
 
 def set_properties(token: str, object_type: str, record_id: str,
-                   props: dict[str, str], *, opener=_open_url) -> None:
+                   props: dict[str, str], *, allow, opener=_open_url) -> None:
     """Write these properties onto the record, leaving the rest as they were.
 
     A patch, so the one boolean DocProof owns is set without disturbing
-    anything an editor put there."""
+    anything an editor put there.
+
+    `allow` is the short set of property names DocProof is permitted to write —
+    the status property, and the output property when one is configured. Any key
+    outside it is refused here, before the request is built, so a bug or a bad
+    config can never make this the wire for touching a property DocProof does
+    not own. `allow` has no default on purpose: every caller, now and later, has
+    to name what it may write, so the guard cannot be inherited-around."""
+    stray = sorted(set(props) - set(allow))
+    if stray:
+        log.warning("Refusing a HubSpot write: %s not in the allowlist %s.",
+                    ", ".join(stray), sorted(allow))
+        raise HubSpotGuardError(
+            "DocProof will not write " + ", ".join(stray) + f" on a "
+            f"{object_type} record: it may only set "
+            + (", ".join(sorted(allow)) or "no property") + ". Nothing was sent.")
     body = json.dumps({"properties": props}).encode()
     request = _request(f"{API}/crm/v3/objects/{object_type}/{record_id}",
                        token, data=body, method="PATCH")
