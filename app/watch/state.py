@@ -47,6 +47,21 @@ class FileRecord:
     # Whether the completion toggle has been set. Recorded before the Drive
     # marker, so a file that is `formatted` in Drive was `done` in HubSpot first.
     hubspot_done: bool = False
+    # Whether the full-log completion email has gone out for this book. Set only
+    # once the send is confirmed, so a book whose Drive marker is lost — or
+    # invisible to a different OAuth client — is not emailed about a second time
+    # when it is reconsidered, while a send that merely failed still retries.
+    completion_emailed: bool = False
+    # Subfolder routing (only written when `subfolders_enabled`). The author's
+    # name as HubSpot gave it and the subfolder it resolved to, stamped before
+    # prep so a job that spans ticks — or crashes mid-flight — is finished into
+    # the same folder it started in, without asking HubSpot or Drive to resolve
+    # it again. Empty on a flat-folder install, which is how those stay routed
+    # to `folder_id`.
+    author_first: str = ""
+    author_last: str = ""
+    subfolder_id: str = ""
+    subfolder_name: str = ""
     modified_time: str = ""
     updated_at: str = ""
 

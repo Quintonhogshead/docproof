@@ -140,6 +140,34 @@ def drive_entry(name: str, *, mime: str = DOCX_MIME, props: dict | None = None,
     return entry
 
 
+def _matches_q(entry: dict, q: str) -> str | bool:
+    """Whether one stored file satisfies a Drive `q` string, the way the real
+    API scopes a listing.
+
+    Only the clauses DocProof actually sends are modelled — `'<id>' in parents`,
+    `name = '...'` (case-sensitive, as Drive is), `name contains '...'`
+    (case-insensitive), `mimeType = '...'`. An entry with no `parents` key
+    matches any parent clause, so a flat-folder fixture that never set one keeps
+    returning everything, exactly as before this filter existed."""
+    def _unescape(s: str) -> str:
+        return s.replace("\\'", "'").replace("\\\\", "\\")
+
+    parent = re.search(r"'([^']+)' in parents", q)
+    if parent and "parents" in entry and parent.group(1) not in entry["parents"]:
+        return False
+    name_eq = re.search(r"name = '((?:[^'\\]|\\.)*)'", q)
+    if name_eq and entry.get("name", "") != _unescape(name_eq.group(1)):
+        return False
+    name_has = re.search(r"name contains '((?:[^'\\]|\\.)*)'", q)
+    if name_has and (_unescape(name_has.group(1)).casefold()
+                     not in entry.get("name", "").casefold()):
+        return False
+    mime = re.search(r"mimeType = '([^']+)'", q)
+    if mime and entry.get("mimeType", "") != mime.group(1):
+        return False
+    return True
+
+
 def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
                fail: dict | None = None, page_size: int | None = None,
                access_token: str = "at-1",
@@ -278,8 +306,10 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             return Response(content.get(path.rsplit("/", 1)[-1], docx))
 
         _maybe_fail("list")
+        kept = [e for e in store.values()
+                if _matches_q(e, query.get("q", [""])[0])]
         items = [{k: v for k, v in entry.items() if k != "parents"}
-                 for entry in store.values()]
+                 for entry in kept]
         start = int(query.get("pageToken", ["0"])[0])
         size = page_size or max(len(items), 1)
         answer: dict = {"files": items[start:start + size]}

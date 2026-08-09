@@ -547,3 +547,35 @@ def test_the_notes_say_what_happened_and_what_to_decide(cfg, prepared,
     assert payload["counts"]["scene_breaks_inserted"] == 1
     assert payload["counts"]["blank_lines_removed"] == 4
     assert payload["style_sheet"]["name"] == prepared.sheet.name
+
+
+# --- the cost estimate is priced at the effort actually used ------------------
+
+def test_prep_json_cost_is_priced_at_the_run_effort(cfg, prepared, tmp_path,
+                                                    monkeypatch):
+    """The recorded cost is an estimate, but not an effort-blind one: the
+    effort dial scales output tokens, so the prep-notes call must pass the
+    effort the run used, not the baseline."""
+    import docproof.prep.notes as notes
+    seen: dict = {}
+    real = notes.estimate_cost
+
+    def spy(model_id, **kw):
+        seen.update(kw)
+        return real(model_id, **kw)
+
+    monkeypatch.setattr(notes, "estimate_cost", spy)
+    cfg.api.effort = "high"
+    run(cfg, prepared, tmp_path)
+
+    assert seen.get("effort") == "high"
+
+
+def test_effort_lifts_the_estimate_for_a_model_that_honours_it():
+    from docproof.providers.catalog import estimate_cost
+
+    low = estimate_cost("claude-opus-5", input_tokens=1000,
+                        output_tokens=1000, effort="low")
+    high = estimate_cost("claude-opus-5", input_tokens=1000,
+                         output_tokens=1000, effort="high")
+    assert low is not None and high is not None and high > low
