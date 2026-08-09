@@ -316,7 +316,7 @@ def test_scheduling_says_when_it_will_run_and_what_it_wrote(home, capsys,
     assert run(home, "schedule") == cli.OK
 
     out = capsys.readouterr().out
-    assert "06:00, 11:00, 16:00, 21:00" in out
+    assert "00:00, 12:00" in out
     assert str(agent) in out
     assert plistlib.loads(agent.read_bytes())["Label"] == schedulelib.LABEL
 

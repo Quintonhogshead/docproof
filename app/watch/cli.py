@@ -5,7 +5,7 @@ Five commands, in the order somebody meets them: `auth` to sign in to Google,
 happened, and `schedule` to stop having to run `once` by hand.
 
 `once` is the whole program, really. Everything else exists so that the thing
-launchd runs four times a day needs no arguments and no attention.
+launchd runs twice a day needs no arguments and no attention.
 """
 from __future__ import annotations
 
