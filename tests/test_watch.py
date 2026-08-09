@@ -77,7 +77,8 @@ def test_something_docproof_wrote_is_never_an_input():
 
 @pytest.mark.parametrize("name", ["tagged_Book.docx", "tracked_Book.docx",
                                   "reviewed_Book.docx", "prep_notes_Book.md",
-                                  "PREP_NOTES_Book.md"])
+                                  "PREP_NOTES_Book.md", "Grest - book 0.docx",
+                                  "Grest - book 0 - notes.md"])
 def test_an_output_is_recognised_by_name_when_its_marker_is_gone(name):
     """Somebody duplicates a file, or re-uploads one out of Downloads, and the
     properties do not come with it. Preparing an already-prepared manuscript is

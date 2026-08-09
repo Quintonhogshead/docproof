@@ -2,8 +2,9 @@
 
 The client is two requests — a search and a patch — and both are built here and
 inspected here: the token that was sent, the filter that was asked, the body a
-completion carries. The other half is the answers a person actually meets: no
-record, two records for one key, a token HubSpot will not take.
+completion carries. The other half is the answers a person actually meets: an
+empty ready list, a surname shared across ready Projects, a token HubSpot will
+not take.
 
 And `keys`, the pure filename→key step the gate leans on, which has to be
 readable and testable without any of the above.
@@ -67,57 +68,79 @@ def hs_error(status: int, message: str = "") -> urllib.error.HTTPError:
                                   io.BytesIO(body))
 
 
-# --- find_record --------------------------------------------------------------
+# --- find_by_value ------------------------------------------------------------
 
 def test_the_search_carries_the_filter_the_properties_and_the_token():
-    opener = fake_drive(hubspot={"9781234567890": {"ready": "true"}})
+    opener = fake_drive(hubspot={"Grest": {"docproof": "Ready for Formatting",
+                                           "author_last_name": "Grest"}})
 
-    record = hubspot.find_record("tok-1", "deals", "isbn", "9781234567890",
-                                 want_properties=["ready", "done"],
-                                 opener=opener)
+    records = hubspot.find_by_value(
+        "tok-1", "0-970", "docproof", "Ready for Formatting",
+        want_properties=["docproof", "author_last_name"], opener=opener)
 
-    assert record is not None and record.id == "hs-9781234567890"
+    assert [r.id for r in records] == ["hs-Grest"]
     request = opener.calls[0]
-    assert request.full_url == ("https://api.hubapi.com/crm/v3/objects/deals/"
+    assert request.full_url == ("https://api.hubapi.com/crm/v3/objects/0-970/"
                                 "search")
     assert request.get_method() == "POST"
     assert request.get_header("Authorization") == "Bearer tok-1"
     sent = body_of(request)
     assert sent["filterGroups"][0]["filters"][0] == {
-        "propertyName": "isbn", "operator": "EQ", "value": "9781234567890"}
-    assert sent["properties"] == ["ready", "done"]
-    assert sent["limit"] == 2
+        "propertyName": "docproof", "operator": "EQ",
+        "value": "Ready for Formatting"}
+    assert sent["properties"] == ["docproof", "author_last_name"]
+    assert sent["limit"] == 100
 
 
-def test_no_record_is_none_not_an_error():
-    """A key that names no book yet is a reason to wait, not to fail."""
+def test_nothing_ready_is_an_empty_list_not_an_error():
+    """No Project flagged ready is a reason to wait, not to fail."""
     opener = fake_drive(hubspot={})
 
-    assert hubspot.find_record("tok-1", "deals", "isbn", "missing",
-                               want_properties=["ready"], opener=opener) is None
+    assert hubspot.find_by_value("tok-1", "0-970", "docproof",
+                                 "Ready for Formatting",
+                                 want_properties=["docproof"],
+                                 opener=opener) == []
 
 
-def test_two_records_for_one_key_is_refused():
-    """Two books cannot share an ISBN; guessing which is worse than stopping."""
+def test_find_by_value_returns_every_match():
+    """A shared surname is fine here: the gate picks among them by name, so all
+    of them come back rather than the search refusing."""
     opener = scripted({"total": 2, "results": [
-        {"id": "1", "properties": {}}, {"id": "2", "properties": {}}]})
+        {"id": "1", "properties": {"author_last_name": "Smith"}},
+        {"id": "2", "properties": {"author_last_name": "Smith"}}]})
 
-    with pytest.raises(HubSpotError, match="More than one"):
-        hubspot.find_record("tok-1", "deals", "isbn", "dup",
-                            want_properties=["ready"], opener=opener)
+    records = hubspot.find_by_value("tok-1", "0-970", "docproof",
+                                    "Ready for Formatting",
+                                    want_properties=["author_last_name"],
+                                    opener=opener)
+    assert [r.id for r in records] == ["1", "2"]
+
+
+def test_find_by_value_pages_until_the_cursor_runs_out():
+    """Two pages: the second request carries the `after` the first handed back."""
+    opener = scripted(
+        {"results": [{"id": "1", "properties": {}}],
+         "paging": {"next": {"after": "100"}}},
+        {"results": [{"id": "2", "properties": {}}]})
+
+    records = hubspot.find_by_value("tok-1", "0-970", "docproof",
+                                    "Ready for Formatting",
+                                    want_properties=[], opener=opener)
+    assert [r.id for r in records] == ["1", "2"]
+    assert body_of(opener.calls[1])["after"] == "100"
 
 
 def test_null_properties_come_back_as_blank_strings():
-    """HubSpot sends an unset property as null; the record reads it as off."""
+    """HubSpot sends an unset property as null; the record reads it as blank."""
     opener = scripted({"total": 1, "results": [
-        {"id": "7", "properties": {"ready": "true", "done": None}}]})
+        {"id": "7", "properties": {"docproof": "Ready for Formatting",
+                                   "author_last_name": None}}]})
 
-    record = hubspot.find_record("tok-1", "deals", "isbn", "x",
-                                 want_properties=["ready", "done"],
-                                 opener=opener)
-
-    assert record.properties["done"] == ""
-    assert hubspot.is_on(record, "done") is False
+    records = hubspot.find_by_value("tok-1", "0-970", "docproof",
+                                    "Ready for Formatting",
+                                    want_properties=["author_last_name"],
+                                    opener=opener)
+    assert records[0].properties["author_last_name"] == ""
 
 
 def test_a_rejected_token_is_an_auth_error_that_names_the_fix():
@@ -125,8 +148,9 @@ def test_a_rejected_token_is_an_auth_error_that_names_the_fix():
                         fail={"hubspot_search": hs_error(401, "bad token")})
 
     with pytest.raises(HubSpotAuthError, match="hubspot-token"):
-        hubspot.find_record("tok-1", "deals", "isbn", "x",
-                            want_properties=["ready"], opener=opener)
+        hubspot.find_by_value("tok-1", "0-970", "docproof",
+                              "Ready for Formatting",
+                              want_properties=["docproof"], opener=opener)
 
 
 def test_a_busy_hubspot_is_a_plain_error_that_says_it_will_retry():
@@ -134,8 +158,9 @@ def test_a_busy_hubspot_is_a_plain_error_that_says_it_will_retry():
                         fail={"hubspot_search": hs_error(503)})
 
     with pytest.raises(HubSpotError, match="try again") as caught:
-        hubspot.find_record("tok-1", "deals", "isbn", "x",
-                            want_properties=["ready"], opener=opener)
+        hubspot.find_by_value("tok-1", "0-970", "docproof",
+                              "Ready for Formatting",
+                              want_properties=["docproof"], opener=opener)
     assert not isinstance(caught.value, HubSpotAuthError)
 
 
@@ -158,20 +183,21 @@ def test_a_completion_patches_only_the_properties_it_is_given():
     assert props == {"ready": "true", "done": "true"}
 
 
-# --- is_on --------------------------------------------------------------------
+# --- name_matches -------------------------------------------------------------
 
-@pytest.mark.parametrize("value,expected", [
-    ("true", True), ("TRUE", True), ("  true  ", True),
-    ("false", False), ("", False), ("1", False), ("yes", False)])
-def test_is_on_treats_only_true_as_on(value, expected):
-    record = HubSpotRecord(id="1", properties={"flag": value})
-    assert hubspot.is_on(record, "flag") is expected
-
-
-def test_is_on_of_a_property_that_was_never_set_is_off():
-    record = HubSpotRecord(id="1", properties={})
-    assert hubspot.is_on(record, "flag") is False
-    assert hubspot.is_on(record, "") is False
+@pytest.mark.parametrize("stored,key,want", [
+    ("Grest", "Grest", True),
+    ("grest", "GREST", True),                       # case-insensitive
+    ("  Grest  ", "Grest", True),                   # trimmed
+    ("Lichtenstein (and Dolores DelBello)", "Lichtenstein", True),  # co-author
+    ("Smith", "Smithson", False),                   # not a loose prefix match
+    ("Smithson", "Smith", False),
+    ("St Denis", "St Denis", True),                 # a space in the surname
+    ("Grest", "", False),
+    ("", "Grest", False)])
+def test_name_matches_pairs_a_filename_key_with_a_stored_surname(
+        stored, key, want):
+    assert hubspot.name_matches(stored, key) is want
 
 
 # --- keys ---------------------------------------------------------------------

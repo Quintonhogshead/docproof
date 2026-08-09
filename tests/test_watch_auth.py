@@ -100,11 +100,15 @@ def test_the_consent_page_asks_for_offline_access_and_a_fresh_approval():
     assert query["state"] == ["st-1"]
 
 
-def test_the_scope_is_the_whole_of_drive_because_nothing_narrower_can_see():
+def test_the_scope_is_the_whole_of_drive_plus_send_only_gmail():
     """`drive.file` grants an application its own files — the ones it created
-    or a person explicitly opened with it. Every manuscript this watcher
-    exists to find was put there by somebody else."""
-    assert auth.SCOPE == "https://www.googleapis.com/auth/drive"
+    or a person explicitly opened with it. Every manuscript this watcher exists
+    to find was put there by somebody else. `gmail.send` is added for the alert
+    email: send-only, so it cannot read a message."""
+    scopes = auth.SCOPE.split()
+    assert "https://www.googleapis.com/auth/drive" in scopes
+    assert "https://www.googleapis.com/auth/gmail.send" in scopes
+    assert "https://www.googleapis.com/auth/gmail.readonly" not in scopes
     assert query_of(auth.consent_url("id-1", "http://x/", "s"))["scope"] == \
         [auth.SCOPE]
 

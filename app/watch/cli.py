@@ -63,6 +63,9 @@ def main(argv=None) -> int:
     ini.add_argument("--model", help="which model prepares the manuscripts")
     ini.add_argument("--output", choices=["indesign", "tracked", "both"],
                      help="which file(s) to put back in the folder")
+    ini.add_argument("--notify-email",
+                     help="email this address when a pass needs a person "
+                          "(sent via Gmail as the signed-in Google account)")
     ini.add_argument("--enable-hubspot", action="store_true",
                      help="gate new manuscripts on a HubSpot record; asks for "
                           "any field left out")
@@ -75,14 +78,25 @@ def main(argv=None) -> int:
     ini.add_argument("--hubspot-key-pattern",
                      help="a regex to pull the key out of the filename "
                           "(default: the whole filename stem)")
-    ini.add_argument("--hubspot-ready-property",
-                     help="the boolean an editor flips to mean 'ready'")
-    ini.add_argument("--hubspot-done-property",
-                     help="the boolean DocProof sets when it has put the file "
-                          "back")
+    ini.add_argument("--hubspot-status-property",
+                     help="the dropdown property a book moves through, e.g. a "
+                          "'DocProof' property (use its internal name)")
+    ini.add_argument("--hubspot-format-ready-value",
+                     help="the status value meaning 'format this now', e.g. "
+                          "'Ready for Formatting' (the option's internal value)")
+    ini.add_argument("--hubspot-format-done-value",
+                     help="the status value DocProof sets once the formatted "
+                          "file is back, e.g. 'Formatting Complete'")
     ini.add_argument("--hubspot-output-property",
                      help="optional: a property to write the output filename "
                           "into")
+    ini.add_argument("--hubspot-read-only", dest="hubspot_write_back",
+                     action="store_false", default=None,
+                     help="gate on HubSpot but never write back to it (a book "
+                          "still marks itself done in Drive)")
+    ini.add_argument("--hubspot-write-back", dest="hubspot_write_back",
+                     action="store_true", default=None,
+                     help="(default) move the record on once the file is back")
 
     ht = sub.add_parser("hubspot-token",
                         help="store the HubSpot private-app token")
@@ -220,15 +234,22 @@ def cmd_init(args, home: Path) -> int:
         ws.model = args.model
     if args.output:
         ws.prep_output = args.output
+    if args.notify_email is not None:
+        ws.notify_email = args.notify_email
     _apply_hubspot(args, ws)
     ws.save(home)
 
     print(f"Watching folder {ws.folder_id or '— not set yet'}")
     print(f"Preparing with {ws.model}, handing back: {ws.prep_output}")
+    if ws.notify_email:
+        print(f"Emailing {ws.notify_email} when a pass needs a person")
     if ws.hubspot_enabled:
         print(f"HubSpot gate on: {ws.hubspot_object}, "
-              f"ready={ws.hubspot_ready_property or '— not set'}, "
-              f"done={ws.hubspot_done_property or '— not set'}")
+              f"{ws.hubspot_status_property or '— property not set'}: "
+              f"'{ws.hubspot_format_ready_value or '— not set'}' → "
+              f"'{ws.hubspot_format_done_value or '— not set'}'"
+              + ("  (READ-ONLY: no write-back)"
+                 if not ws.hubspot_write_back else ""))
     print(f"Keeping its things in {home}")
     missing = _missing(ws)
     if missing:
@@ -243,8 +264,9 @@ _HUBSPOT_FLAGS = (
     ("hubspot_object", "hubspot_object"),
     ("hubspot_key_property", "hubspot_key_property"),
     ("hubspot_key_pattern", "hubspot_key_pattern"),
-    ("hubspot_ready_property", "hubspot_ready_property"),
-    ("hubspot_done_property", "hubspot_done_property"),
+    ("hubspot_status_property", "hubspot_status_property"),
+    ("hubspot_format_ready_value", "hubspot_format_ready_value"),
+    ("hubspot_format_done_value", "hubspot_format_done_value"),
     ("hubspot_output_property", "hubspot_output_property"),
 )
 
@@ -254,8 +276,9 @@ _HUBSPOT_FLAGS = (
 _HUBSPOT_REQUIRED = {
     "hubspot_object": "Which HubSpot object (deals, contacts, or a custom id)",
     "hubspot_key_property": "Which property the filename key matches",
-    "hubspot_ready_property": "Which boolean says a book is ready",
-    "hubspot_done_property": "Which boolean DocProof sets when it is done",
+    "hubspot_status_property": "Which dropdown property a book moves through",
+    "hubspot_format_ready_value": "Which value means 'ready to format'",
+    "hubspot_format_done_value": "Which value means 'formatting complete'",
 }
 
 
@@ -270,6 +293,8 @@ def _apply_hubspot(args, ws: WatchSettings) -> None:
             setattr(ws, attr, value)
     if getattr(args, "enable_hubspot", False):
         ws.hubspot_enabled = True
+    if getattr(args, "hubspot_write_back", None) is not None:
+        ws.hubspot_write_back = args.hubspot_write_back
     if not ws.hubspot_enabled:
         return
     for attr, prompt in _HUBSPOT_REQUIRED.items():
@@ -368,7 +393,9 @@ def _report(report: ticklib.TickReport) -> int:
               f"will take them.")
     for name, reason in report.failed:
         print(f"Could not prepare {name}: {reason}", file=sys.stderr)
-    if not report.prepped and not report.failed:
+    for name, reason in report.needs_human:
+        print(f"Needs a person — {name}: {reason}", file=sys.stderr)
+    if not report.prepped and not report.failed and not report.needs_human:
         print(f"Nothing new in the folder ({report.listed} file(s) looked at).")
     return OK if report.ok else PARTIAL
 

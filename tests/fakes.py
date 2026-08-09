@@ -162,6 +162,7 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     opener to both. `opener.hubspot` is the live record store to assert against.
     """
     calls = []
+    emails: list[dict] = []
     store = {fid: {**meta, "id": fid} for fid, meta in (files or {}).items()}
     content: dict[str, bytes] = {}
     uploads = itertools.count(1)
@@ -217,9 +218,17 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             if path.endswith("/search"):
                 _maybe_fail("hubspot_search")
                 body = json.loads(request.data)
-                value = body["filterGroups"][0]["filters"][0]["value"]
-                results = [{"id": r["id"], "properties": r["properties"]}
-                           for r in hs_records.values() if r["_key"] == value]
+                filt = body["filterGroups"][0]["filters"][0]
+                prop, op = filt.get("propertyName"), filt.get("operator")
+                target = filt.get("value")
+                results = []
+                for r in hs_records.values():
+                    pv = r["properties"].get(prop, "")
+                    hit = (pv not in ("", None) if op == "HAS_PROPERTY"
+                           else pv == target)
+                    if hit:
+                        results.append({"id": r["id"],
+                                        "properties": r["properties"]})
                 return Response(json.dumps({"total": len(results),
                                             "results": results}).encode())
             _maybe_fail("hubspot_patch")     # the only other verb is the PATCH
@@ -229,6 +238,11 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
             rec["properties"].update(
                 json.loads(request.data).get("properties") or {})
             return Response(json.dumps({"id": rid}).encode())
+
+        if "gmail.googleapis.com" in request.full_url:
+            _maybe_fail("gmail_send")
+            emails.append(json.loads(request.data))
+            return Response(json.dumps({"id": "msg-1"}).encode())
 
         if "oauth2.googleapis.com" in request.full_url:
             _maybe_fail("token")
@@ -277,6 +291,7 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     opener.files = store
     opener.content = content
     opener.hubspot = hs_records
+    opener.emails = emails
     return opener
 
 

@@ -9,6 +9,7 @@ Nothing here touches a network or sleeps.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import urllib.error
 from pathlib import Path
@@ -79,9 +80,9 @@ def test_a_new_manuscript_is_prepared_uploaded_and_marked(tmp_path, ws,
 
     assert report.ok and report.prepped == ["Wolves.docx"]
     placed = uploads_in(opener)
-    assert set(placed) == {"tagged_Wolves.docx", "prep_notes_Wolves.md"}
-    assert placed["tagged_Wolves.docx"]["parents"] == [FOLDER]
-    assert placed["tagged_Wolves.docx"]["appProperties"][SOURCE_PROP] == "f-1"
+    assert set(placed) == {"Wolves - book 0.docx", "Wolves - book 0 - notes.md"}
+    assert placed["Wolves - book 0.docx"]["parents"] == [FOLDER]
+    assert placed["Wolves - book 0.docx"]["appProperties"][SOURCE_PROP] == "f-1"
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
     assert opener.files["f-1"]["appProperties"][JOB_PROP]
 
@@ -94,9 +95,9 @@ def test_what_lands_in_the_folder_is_what_prep_wrote(tmp_path, ws, provider):
     run(tmp_path, ws, opener)
 
     job = JobStore(Paths(tmp_path)).all()[0]
-    local = Path(job.results_dir) / "tagged_Wolves.docx"
+    local = Path(job.results_dir) / "tagged_Wolves.docx"   # prep's internal name
     uploaded = [fid for fid, entry in opener.files.items()
-                if entry["name"] == "tagged_Wolves.docx"][0]
+                if entry["name"] == "Wolves - book 0.docx"][0]
     assert opener.content[uploaded] == local.read_bytes()
 
 
@@ -119,8 +120,8 @@ def test_asking_for_both_files_uploads_both(tmp_path, ws, provider):
 
     run(tmp_path, ws, opener)
 
-    assert "tagged_Wolves.docx" in uploads_in(opener)
-    assert "tracked_Wolves.docx" in uploads_in(opener)
+    assert "Wolves - book 0.docx" in uploads_in(opener)
+    assert "Wolves - book 0 - tracked changes.docx" in uploads_in(opener)
 
 
 def test_the_notes_can_be_left_out_of_the_folder(tmp_path, ws, provider):
@@ -130,7 +131,7 @@ def test_the_notes_can_be_left_out_of_the_folder(tmp_path, ws, provider):
 
     run(tmp_path, ws, opener)
 
-    assert set(uploads_in(opener)) == {"tagged_Wolves.docx"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx"}
 
 
 def test_a_native_google_doc_is_exported_and_named_after_its_title(
@@ -143,7 +144,7 @@ def test_a_native_google_doc_is_exported_and_named_after_its_title(
 
     assert any("/f-1/export?" in c.full_url for c in opener.calls)
     assert not any(c.full_url.endswith("alt=media") for c in opener.calls)
-    assert "tagged_Wolves of the Yard.docx" in uploads_in(opener)
+    assert "Wolves of the Yard - book 0.docx" in uploads_in(opener)
 
 
 def test_a_doc_titled_with_a_slash_still_becomes_a_file(tmp_path, ws, provider):
@@ -156,7 +157,25 @@ def test_a_doc_titled_with_a_slash_still_becomes_a_file(tmp_path, ws, provider):
     report = run(tmp_path, ws, opener)
 
     assert report.ok
-    assert "tagged_Draft 3-4.docx" in uploads_in(opener)
+    assert "Draft 3-4 - book 0.docx" in uploads_in(opener)
+
+
+def test_the_house_naming_scheme_end_to_end(tmp_path, ws, provider):
+    """An author manuscript "<surname> - Book Original" comes back as
+    "<surname> - book 0", and the next tick knows that output for its own — it
+    is never handed back to be formatted again."""
+    opener = fake_drive(
+        folder(f_1=drive_entry("Grest - Book Original.docx")), docx=MANUSCRIPT)
+
+    first = run(tmp_path, ws, opener)
+
+    assert first.prepped == ["Grest - Book Original.docx"]
+    assert "Grest - book 0.docx" in uploads_in(opener)
+
+    second = run(tmp_path, ws, opener)          # the folder now holds the output
+
+    assert second.new == 0                      # the output is not a manuscript
+    assert dict(second.plan)["Grest - book 0.docx"] == "output"
 
 
 # --- doing it once ------------------------------------------------------------
@@ -187,7 +206,7 @@ def test_the_files_it_wrote_are_never_read_back_as_manuscripts(tmp_path, ws,
     report = run(tmp_path, ws, opener)
 
     assert all(stage == "output" for name, stage in report.plan
-               if name.startswith(("tagged_", "prep_notes")))
+               if " - book 0" in name)
 
 
 def test_a_manuscript_already_marked_done_is_left_alone(tmp_path, ws, provider):
@@ -220,8 +239,8 @@ def test_a_crash_before_the_upload_does_not_pay_for_the_book_again(
 
     assert second.ok and second.prepped == ["Wolves.docx"]
     assert len(provider.calls) == paid          # not one call more
-    assert set(uploads_in(opener)) == {"tagged_Wolves.docx",
-                                       "prep_notes_Wolves.md"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
+                                       "Wolves - book 0 - notes.md"}
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 
@@ -247,9 +266,9 @@ def test_a_crash_between_two_uploads_only_sends_the_missing_ones(
     run(tmp_path, ws, opener)
 
     assert len(landed) == 1
-    assert set(uploads_in(opener)) == {"tagged_Wolves.docx",
-                                       "tracked_Wolves.docx",
-                                       "prep_notes_Wolves.md"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
+                                       "Wolves - book 0 - tracked changes.docx",
+                                       "Wolves - book 0 - notes.md"}
 
 
 def test_an_upload_the_state_file_lost_is_adopted_not_repeated(tmp_path, ws,
@@ -259,16 +278,16 @@ def test_an_upload_the_state_file_lost_is_adopted_not_repeated(tmp_path, ws,
     about the folder rather than a guess from the name."""
     opener = fake_drive(folder(
         f_1=drive_entry("Wolves.docx"),
-        f_2=drive_entry("tagged_Wolves.docx",
+        f_2=drive_entry("Wolves - book 0.docx",
                         props={OUTPUT_PROP: "1", SOURCE_PROP: "f-1"}),
     ), docx=MANUSCRIPT)
 
     run(tmp_path, ws, opener)
 
     tagged = [e for e in opener.files.values()
-              if e["name"] == "tagged_Wolves.docx"]
+              if e["name"] == "Wolves - book 0.docx"]
     assert len(tagged) == 1                  # adopted, not uploaded beside
-    assert "prep_notes_Wolves.md" in uploads_in(opener)
+    assert "Wolves - book 0 - notes.md" in uploads_in(opener)
 
 
 def test_a_crash_before_the_marker_only_writes_the_marker(tmp_path, ws,
@@ -430,7 +449,7 @@ def test_a_finished_manuscript_is_never_given_up_on(tmp_path, ws, provider,
     report = run(tmp_path, ws, opener)
 
     assert report.ok
-    assert "tagged_Wolves.docx" in uploads_in(opener)
+    assert "Wolves - book 0.docx" in uploads_in(opener)
     assert len(provider.calls) == paid           # delivered, not re-run
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
@@ -453,7 +472,7 @@ def test_one_bad_manuscript_does_not_stop_the_others(tmp_path, ws, provider,
 
     assert report.prepped == ["Wolves.docx"]
     assert [name for name, _ in report.failed] == ["Broken.docx"]
-    assert "tagged_Wolves.docx" in uploads_in(opener)
+    assert "Wolves - book 0.docx" in uploads_in(opener)
 
 
 def test_a_bad_run_counts_against_the_file_that_caused_it(tmp_path, ws,
@@ -527,8 +546,8 @@ def test_a_rehearsal_never_calls_a_model_but_still_fills_the_folder(
     report = run(tmp_path, ws, opener, mock=True)
 
     assert report.ok and report.prepped == ["Wolves.docx"]
-    assert set(uploads_in(opener)) == {"tagged_Wolves.docx",
-                                       "prep_notes_Wolves.md"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
+                                       "Wolves - book 0 - notes.md"}
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 
@@ -702,14 +721,23 @@ def test_a_withdrawn_manuscripts_job_is_parked_not_paid_for(tmp_path, ws,
 
 def hs_ws(**over):
     """A watcher with the HubSpot gate switched on. The filename stem is the
-    key (no pattern), so "Wolves.docx" looks up the record keyed "Wolves"."""
+    author key (no pattern), so "Wolves.docx" is matched to the ready Project
+    whose author_last_name is "Wolves"."""
     fields = dict(folder_id=FOLDER, model="claude-haiku-4-5",
                   client_id="client-1", client_secret="secret-1",
-                  hubspot_enabled=True, hubspot_object="deals",
-                  hubspot_key_property="isbn", hubspot_ready_property="ready",
-                  hubspot_done_property="done")
+                  hubspot_enabled=True, hubspot_object="0-970",
+                  hubspot_key_property="author_last_name",
+                  hubspot_status_property="docproof",
+                  hubspot_format_ready_value="Ready for Formatting",
+                  hubspot_format_done_value="Formatting Complete")
     fields.update(over)
     return WatchSettings(**fields)
+
+
+def ready(last_name, **extra):
+    """A Project record flagged ready, keyed by its author last name."""
+    return {"docproof": "Ready for Formatting",
+            "author_last_name": last_name, **extra}
 
 
 def hs_props(opener, key="Wolves"):
@@ -719,26 +747,49 @@ def hs_props(opener, key="Wolves"):
 def test_a_ready_book_is_prepared_and_marked_done_in_hubspot(tmp_path, provider):
     ws = hs_ws(hubspot_output_property="output_file")
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true", "done": "false"}})
+                        hubspot={"Wolves": ready("Wolves")})
 
     report = run(tmp_path, ws, opener)
 
     assert report.ok and report.prepped == ["Wolves.docx"]
-    assert "tagged_Wolves.docx" in uploads_in(opener)
+    assert "Wolves - book 0.docx" in uploads_in(opener)
     props = hs_props(opener)
-    assert props["done"] == "true"                 # the toggle DocProof owns
-    assert props["output_file"] == "tagged_Wolves.docx"
+    assert props["docproof"] == "Formatting Complete"   # the value DocProof sets
+    assert props["output_file"] == "Wolves - book 0.docx"
     rec = WatchState.load(tmp_path / "state.json").get("f-1")
     assert rec.hubspot_id == "hs-Wolves" and rec.hubspot_done is True
 
 
+def test_read_only_hubspot_prepares_but_never_writes_back(tmp_path, provider):
+    """The gate still reads — a book runs only when its record says ready — but
+    the CRM is left exactly as it was, so a real run can be watched without
+    changing a record. The Drive marker is still written, so it is not run twice."""
+    ws = hs_ws(hubspot_write_back=False, hubspot_output_property="output_file")
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": ready("Wolves")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Wolves.docx"]
+    assert "Wolves - book 0.docx" in uploads_in(opener)     # Drive still written
+    props = hs_props(opener)
+    assert props["docproof"] == "Ready for Formatting"      # CRM unchanged
+    assert "output_file" not in props                       # nothing written
+    assert not any("api.hubapi.com" in c.full_url and c.get_method() == "PATCH"
+                   for c in opener.calls)                    # no write at all
+    rec = WatchState.load(tmp_path / "state.json").get("f-1")
+    assert rec.hubspot_done is False
+    assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
+
+
 def test_a_book_that_is_not_ready_waits_untouched(tmp_path, provider):
-    """Ready off is a reason to wait, and waiting spends nothing, writes no
-    Drive marker, and does not touch HubSpot — so flipping the toggle later is
+    """Not-ready is a reason to wait, and waiting spends nothing, writes no
+    Drive marker, and does not touch HubSpot — so setting the value later is
     all it takes."""
     ws = hs_ws()
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "false", "done": "false"}})
+                        hubspot={"Wolves": {"docproof": "",
+                                            "author_last_name": "Wolves"}})
 
     report = run(tmp_path, ws, opener)
 
@@ -746,7 +797,7 @@ def test_a_book_that_is_not_ready_waits_untouched(tmp_path, provider):
     assert provider.calls == []                    # no model was called
     assert uploads_in(opener) == {}                # nothing put back
     assert STATE_PROP not in opener.files["f-1"].get("appProperties", {})
-    assert hs_props(opener)["done"] == "false"     # HubSpot untouched
+    assert hs_props(opener)["docproof"] == ""      # HubSpot untouched
 
 
 def test_a_book_with_no_hubspot_record_waits(tmp_path, provider):
@@ -762,7 +813,7 @@ def test_a_book_with_no_hubspot_record_waits(tmp_path, provider):
 def test_a_file_whose_name_carries_no_key_waits(tmp_path, provider):
     ws = hs_ws(hubspot_key_pattern=r"ISBN (\d{13})")     # nothing to match
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true"}})
+                        hubspot={"Wolves": ready("Wolves")})
 
     report = run(tmp_path, ws, opener)
 
@@ -770,38 +821,87 @@ def test_a_file_whose_name_carries_no_key_waits(tmp_path, provider):
 
 
 def test_a_book_already_done_elsewhere_is_left_alone(tmp_path, provider):
-    """Marked done in HubSpot but never prepared by us — an editor set it by
-    hand. Skipped rather than re-run: done means done."""
+    """Marked complete in HubSpot but never prepared by us — an editor set it by
+    hand. Skipped rather than re-run: not ready means not a candidate."""
     ws = hs_ws()
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true", "done": "true"}})
+                        hubspot={"Wolves": {"docproof": "Formatting Complete",
+                                            "author_last_name": "Wolves"}})
 
     report = run(tmp_path, ws, opener)
 
     assert report.waiting == 1 and report.prepped == [] and provider.calls == []
 
 
-def test_one_hubspot_lookup_failing_does_not_stop_the_others(tmp_path, provider):
-    """A lookup that could not be reached is one book's bad luck; the rest of
-    the pass goes on, the same rule the prep loop keeps."""
+def test_a_shared_surname_flagged_twice_needs_a_person(tmp_path, provider):
+    """Two ready Projects under one surname: DocProof will not guess. The file
+    waits and the pass records it for a person — the case worth a notification."""
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Smith.docx")), docx=MANUSCRIPT,
+                        hubspot={"a": ready("Smith"), "b": ready("Smith")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and provider.calls == []
+    assert [n for n, _ in report.needs_human] == ["Smith.docx"]
+    assert report.waiting == 1
+    assert STATE_PROP not in opener.files["f-1"].get("appProperties", {})
+    assert opener.emails == []                      # no address set, so no email
+
+
+def test_a_needs_person_pass_emails_the_owner_when_an_address_is_set(
+        tmp_path, provider):
+    """The whole point of `notify_email`: an ambiguous match reaches a person
+    without anyone watching the log."""
+    ws = hs_ws(notify_email="quinton@atmospherepress.com")
+    opener = fake_drive(folder(f_1=drive_entry("Smith.docx")), docx=MANUSCRIPT,
+                        hubspot={"a": ready("Smith"), "b": ready("Smith")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert [n for n, _ in report.needs_human] == ["Smith.docx"]
+    assert len(opener.emails) == 1
+    raw = base64.urlsafe_b64decode(opener.emails[0]["raw"]).decode()
+    assert "Smith.docx" in raw
+    assert "To: quinton@atmospherepress.com" in raw
+
+
+def test_a_co_author_surname_still_matches(tmp_path, provider):
+    """The record stores "Lichtenstein (and Dolores DelBello)"; a file named for
+    "Lichtenstein" still finds it."""
+    ws = hs_ws()
+    opener = fake_drive(folder(f_1=drive_entry("Lichtenstein.docx")),
+                        docx=MANUSCRIPT,
+                        hubspot={"lich": ready("Lichtenstein (and Dolores "
+                                               "DelBello)")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Lichtenstein.docx"]
+    assert hs_props(opener, "lich")["docproof"] == "Formatting Complete"
+
+
+def test_a_transient_ready_lookup_defers_the_whole_pass(tmp_path, provider):
+    """The ready list is fetched once a pass; if HubSpot cannot be reached, every
+    new book waits and the next tick tries again — nothing marked, nothing spent."""
     ws = hs_ws()
     opener = fake_drive(folder(
         f_1=drive_entry("Aardvark.docx", modified="2026-01-01T00:00:00.000Z"),
         f_2=drive_entry("Wolves.docx", modified="2026-01-02T00:00:00.000Z")),
         docx=MANUSCRIPT,
-        hubspot={"Aardvark": {"ready": "true"}, "Wolves": {"ready": "true"}},
-        fail={"hubspot_search": http_error(503)})   # only the first lookup dies
+        hubspot={"Aardvark": ready("Aardvark"), "Wolves": ready("Wolves")},
+        fail={"hubspot_search": http_error(503)})   # the one ready lookup dies
 
     report = run(tmp_path, ws, opener)
 
-    assert report.prepped == ["Wolves.docx"]        # the second still went
-    assert report.waiting == 1 and report.ok        # the first stood aside
+    assert report.prepped == [] and report.waiting == 2 and report.ok
+    assert provider.calls == []                     # no model was called
 
 
 def test_a_rejected_token_stops_the_whole_pass(tmp_path, provider):
     ws = hs_ws()
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true"}},
+                        hubspot={"Wolves": ready("Wolves")},
                         fail={"hubspot_search": http_error(401)})
 
     with pytest.raises(HubSpotAuthError):
@@ -810,23 +910,23 @@ def test_a_rejected_token_stops_the_whole_pass(tmp_path, provider):
 
 def test_enabling_hubspot_without_a_required_field_refuses_the_pass(
         tmp_path, provider):
-    ws = hs_ws(hubspot_ready_property="")           # a gate that cannot ask
+    ws = hs_ws(hubspot_format_ready_value="")       # a gate that cannot ask
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true"}})
+                        hubspot={"Wolves": ready("Wolves")})
 
-    with pytest.raises(ticklib.NotConfigured, match="ready"):
+    with pytest.raises(ticklib.NotConfigured, match="format_ready_value"):
         run(tmp_path, ws, opener)
 
 
 def test_with_hubspot_off_the_crm_is_never_asked(tmp_path, ws, provider):
     """The regression guard: an install that never heard of HubSpot behaves
-    exactly as it did before, ready toggles and all."""
+    exactly as it did before, status property and all."""
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "false"}})
+                        hubspot={"Wolves": {"docproof": ""}})
 
     report = run(tmp_path, ws, opener)              # the default, off ws
 
-    assert report.prepped == ["Wolves.docx"]        # prepped despite ready off
+    assert report.prepped == ["Wolves.docx"]        # prepped despite blank status
     assert not any("api.hubapi.com" in c.full_url for c in opener.calls)
 
 
@@ -837,13 +937,14 @@ def test_a_crash_before_the_drive_marker_is_finished_next_tick(tmp_path,
     and finishes the tail — no re-prep, no redundant HubSpot write."""
     ws = hs_ws()
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
-                        hubspot={"Wolves": {"ready": "true", "done": "false"}},
+                        hubspot={"Wolves": ready("Wolves")},
                         fail={"patch": http_error(500)})   # the marker dies
 
     first = run(tmp_path, ws, opener)
 
     assert not first.ok                             # the marker failed
-    assert hs_props(opener)["done"] == "true"       # but done was set first
+    # but the status was moved on first
+    assert hs_props(opener)["docproof"] == "Formatting Complete"
     rec = WatchState.load(tmp_path / "state.json").get("f-1")
     assert rec.hubspot_done is True and rec.hubspot_id == "hs-Wolves"
     assert STATE_PROP not in opener.files["f-1"].get("appProperties", {})

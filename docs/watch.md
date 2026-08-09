@@ -9,10 +9,16 @@ that looks like a manuscript and has not been prepared yet gets
 [prepped](prep.md) and the results put back beside the original:
 
 ```
-Wolves of the Yard.docx          ← the author's file, untouched
-tagged_Wolves of the Yard.docx   ← what a designer places
-prep_notes_Wolves of the Yard.md ← what prep decided, and what it flagged
+Grest - Book Original.docx   ← the author's file, untouched
+Grest - book 0.docx          ← what a designer places
+Grest - book 0 - notes.md    ← what prep decided, and what it flagged
 ```
+
+The house convention is a stage series: an author manuscript named
+`<surname> - Book Original` comes back as `<surname> - book 0`, with the
+tracked-changes copy (`… - book 0 - tracked changes.docx`) and the notes beside
+it. A file that does not carry the `- Book Original` token keeps its whole name
+and has `- book 0` appended, so there is always one predictable deliverable.
 
 Then it marks the original as done and exits. There is no daemon and nothing
 running in the background: `launchd` starts it, it does what it finds, and it
@@ -130,20 +136,47 @@ which are worth it.
 
 Left off, the watcher prepares every new manuscript it finds. Turned on, it
 prepares a manuscript only when a record in your HubSpot CRM says the book is
-ready, and marks that record done once the formatted file is back — so the
+ready, and moves that record on once the formatted file is back — so the
 decision to format lives where the team already tracks production, and nobody
 has to touch the folder to make it happen.
 
-The two toggles are yours to name. An editor flips a **ready** boolean on a
-book's record; DocProof sets a **done** boolean when it has put the file back.
-Which HubSpot object (a deal, a contact, a custom object) and which properties
-those are is all configuration — DocProof assumes nothing about your schema.
+The gate rides one **status property**: a single dropdown (enumeration) whose
+value walks a book through production — e.g. a "DocProof" property that reads
+`Ready for Formatting`, which DocProof changes to `Formatting Complete` once the
+file is back. An editor sets the ready value; DocProof writes the done value.
+Which HubSpot object (a deal, a contact, a custom object) the property lives on,
+and what the values are called, is all configuration — DocProof assumes nothing
+about your schema.
+
+Two things to get right. First, HubSpot stores a dropdown option's **internal
+value**, which can differ from the label you see (the label `Ready for
+Formatting` may be stored as `ready_for_formatting`); configure the internal
+value, found under **Settings → Properties → the property → each option**.
+Second, DocProof reads *and writes* the same property, so the private-app token
+needs **write** on that object and the done value must be a real option on the
+property — HubSpot rejects a value that is not in the list.
+
+The ready/done values are named `format_*` because proofing is coming: a later
+release adds `Ready for Proofing` → `Proofing Complete` on the same property.
+Today only the formatting pair does work.
 
 **One shared folder, a key in the filename.** There are no per-book folders.
-A manuscript says which book it is through its name: a value — an ISBN, an order
-number, whatever your team already writes there — that matches a property on the
-record. By default the whole filename (without its extension) is the key; give a
-regex if the key is only part of the name.
+A manuscript says which book it is through its name: a value — an author surname,
+an ISBN, an order number, whatever your team already writes there — that matches
+a property on the record. By default the whole filename (without its extension)
+is the key; give a regex if the key is only part of the name (e.g. the surname
+out of `Grest - Book Original`).
+
+**The ready flag disambiguates, so a non-unique key is safe.** DocProof does not
+search every record for the key. It first fetches the short list of records
+currently at the ready value, then matches the filename key against *that* list.
+So eleven authors named "Smith" in the CRM are no problem: only the one an editor
+flagged "Ready for Formatting" is ever a candidate. The key match is
+case-insensitive and ignores a co-author parenthetical, so `Lichtenstein - Book
+Original` matches a record whose surname is stored `Lichtenstein (and Dolores
+DelBello)`. If two records sharing a surname are *both* flagged ready at once,
+DocProof will not guess — that manuscript waits and is reported as needing a
+person, while the rest of the pass goes on.
 
 Setting it up is a token and a handful of fields:
 
@@ -157,8 +190,9 @@ docproof-watch hubspot-token
 docproof-watch init --enable-hubspot \
   --hubspot-object deals \
   --hubspot-key-property isbn \
-  --hubspot-ready-property ready_to_format \
-  --hubspot-done-property formatting_done
+  --hubspot-status-property docproof \
+  --hubspot-format-ready-value ready_for_formatting \
+  --hubspot-format-done-value formatting_complete
 ```
 
 Two optional fields refine it:
@@ -172,6 +206,28 @@ Two optional fields refine it:
 
 Turn it back off with `docproof-watch init --disable-hubspot`. The token stays
 in the Keychain for next time.
+
+## Getting told when a pass needs a person (optional)
+
+Most of what a pass decides is "wait" — nobody need do anything, and the next
+tick reconsiders. A few outcomes are different: a surname that matches two
+Projects both flagged ready (DocProof will not guess which book it is), or a
+manuscript that failed prep. Those go in the pass report as *needs a person*, and
+DocProof can email you when they happen:
+
+```bash
+docproof-watch init --notify-email you@example.com
+```
+
+The mail is sent through Gmail **as the Google account you signed in with** — no
+second password, no mail server to configure. It needs one thing the original
+Drive sign-in did not ask for: the send-only `gmail.send` scope. So after
+upgrading, **run `docproof-watch auth` again** to re-consent (and enable the
+Gmail API in the same Google Cloud project, the way you did for Drive). The scope
+is send-only — DocProof can leave a note in your mailbox and cannot read a
+message. Until you re-consent, a pass that needs a person still logs and reports
+it; only the email is skipped, with a line in the log saying why. A send that
+fails never fails the pass.
 
 **What a book waits on.** A manuscript is left untouched — no download, no model
 call, no Drive marker, so the next pass reconsiders it — whenever its name
@@ -200,8 +256,8 @@ request it makes.
 
   to prepare             Wolves of the Yard.docx
   already prepared       Kestrel.docx
-  DocProof wrote this    tagged_Kestrel.docx
-  DocProof wrote this    prep_notes_Kestrel.md
+  DocProof wrote this    Kestrel - book 0.docx
+  DocProof wrote this    Kestrel - book 0 - notes.md
   not a manuscript       cover art.png
   needs attention        Broken.docx
 
@@ -277,8 +333,8 @@ Runs at: 06:00, 11:00, 16:00, 21:00
 3 manuscript(s) seen:
 
   formatted    Wolves of the Yard.docx  $0.41
-               → tagged_Wolves of the Yard.docx
-               → prep_notes_Wolves of the Yard.md
+               → Wolves of the Yard - book 0.docx
+               → Wolves of the Yard - book 0 - notes.md
   formatted    Kestrel.docx  $0.38
   failed       Broken.docx
 ```
@@ -315,9 +371,10 @@ Mac from re-preparing anything, but a fresh setup on a fresh machine after
 that would start over. Keep the client.
 
 Names are a backstop for markers that get lost some other way — somebody
-duplicates a file, or re-uploads one out of their Downloads. Anything called
-`tagged_…`, `tracked_…`, `reviewed_…`, `prep_notes…` or `prep_failed…` is
-left alone whatever its properties say.
+duplicates a file, or re-uploads one out of their Downloads. Anything named for
+a stage DocProof wrote — a `… - book 0` and its `- tracked changes` and
+`- notes` companions — or an older `tagged_…`, `tracked_…`, `reviewed_…`,
+`prep_notes…` or `prep_failed…` is left alone whatever its properties say.
 
 ## When something goes wrong
 
@@ -414,7 +471,7 @@ None of that needs doing by hand. Run it again, or wait for the schedule.
   ten megabytes. Google's own explanation is repeated in the log; the fix is
   to upload it as a `.docx` instead.
 - **Two manuscripts with the same name** both get prepared, and both write a
-  `tagged_<name>.docx`. Drive allows it; people find it confusing.
+  `<name> - book 0.docx`. Drive allows it; people find it confusing.
 - **Subfolders are not looked in.** One folder, on purpose — see below.
 - **It cannot tell you what changed inside a manuscript.** That is review, and
   review is not wired up yet.

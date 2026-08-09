@@ -23,7 +23,7 @@ from pathlib import Path
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, hubspot, prep
+from . import drive, hubspot, naming, notify, prep
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
@@ -63,6 +63,12 @@ class TickReport:
     prepped: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
+    # Manuscripts a person must sort out before DocProof can act — chiefly a file
+    # whose author key matches more than one Project flagged ready, where guessing
+    # would be worse than waiting. Kept apart from `failed` (nothing broke) and
+    # from plain `waiting` (nobody need do anything) because these are the events
+    # worth a notification. Each is (filename, reason).
+    needs_human: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
     dry_run: bool = False
 
@@ -150,72 +156,77 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
                   report: TickReport) -> list[DriveFile]:
     """Keep only the manuscripts HubSpot says to work on.
 
-    Waiting is the `FolderInUse` posture, not a failure: no key, no record, or
-    "ready" still off leaves the file exactly where it is, with no marker, so
-    the next tick reconsiders — a book becomes eligible the moment an editor
-    flips its toggle, without anyone touching the folder.
+    An editor flags one Project at the status property's "ready" value. Among
+    thousands of Projects only a handful are ever ready at once, so the gate
+    fetches that short list once and matches each new manuscript to it by author
+    key — which is what makes a shared surname safe: eleven "Smith" Projects in
+    the CRM, but only the one an editor flagged is ever a candidate.
 
-    Two failure shapes are kept apart on purpose. A bad token dooms the whole
-    pass, so `HubSpotAuthError` is left to propagate and stop everything. A
-    lookup that merely could not be reached — HubSpot busy, a dropped
-    connection — is one file's bad luck, so it is caught here and that file
-    waits while the rest go on, the same "one book, not the run" rule the prep
-    loop keeps.
+    A book DocProof already started — recognised by a record id it wrote on an
+    earlier tick — is carried straight through to completion without asking
+    again. That is both how a long book spanning several ticks is finished and
+    how a crash between the HubSpot write and the Drive marker is repaired: the
+    id is enough, and `_finish_hubspot`/`mark_source` are each safe to repeat.
 
-    The record id is written onto the file's record *before* it is prepared, so
-    a crash anywhere in the round trip still knows which HubSpot record to
-    finish. That is also what lets a book DocProof already started — recognised
-    by a record id it wrote earlier — be carried through to completion even
-    after a crash between the HubSpot write and the Drive marker."""
-    want = [p for p in (ws.hubspot_ready_property, ws.hubspot_done_property)
+    Waiting is the `FolderInUse` posture, not a failure: no key, no ready
+    Project, or a ready list that could not be fetched leaves the file where it
+    is, with no marker, so the next tick reconsiders. A bad token is the one
+    thing that dooms the whole pass, so `HubSpotAuthError` propagates. And a file
+    whose key matches *two* ready Projects is nobody's to guess: it waits, the
+    pass goes on, and it is recorded in `needs_human` for a person to untangle."""
+    want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property)
             if p]
+    # The ready list is fetched once, and only if some file still needs it: a
+    # pass that is all books we already started asks HubSpot nothing here.
+    ready: list | None = None             # None: not fetched, or unreachable
+    if any(not state.get(f.id).hubspot_id for f in todo):
+        try:
+            ready = hubspot.find_by_value(
+                hs_token, ws.hubspot_object, ws.hubspot_status_property,
+                ws.hubspot_format_ready_value, want_properties=want,
+                opener=opener)
+        except HubSpotAuthError:
+            raise                         # the token is bad — stop the pass
+        except HubSpotError as e:         # transient — the pass's new books wait
+            log.info("Waiting: could not fetch the ready Projects from HubSpot "
+                     "(%s); the next run will try again.", e)
+            ready = None
+
     eligible: list[DriveFile] = []
     for file in todo:
+        rec = state.get(file.id)
+        if rec.hubspot_id:                # a book we already started
+            eligible.append(file)         # carry it to completion, no questions
+            continue
         key = key_from_name(file.name, ws.hubspot_key_pattern)
         if not key:
-            log.info("Waiting: %s carries no HubSpot key in its name.",
+            log.info("Waiting: %s carries no author key in its name.",
                      file.name)
             report.waiting += 1
             continue
-        try:
-            record = hubspot.find_record(
-                hs_token, ws.hubspot_object, ws.hubspot_key_property, key,
-                want_properties=want, opener=opener)
-        except HubSpotAuthError:
-            raise                         # the token is bad — stop the pass
-        except HubSpotError as e:         # this file only — the rest go on
-            log.info("Waiting: could not look up %s in HubSpot (%s); the next "
-                     "run will try again.", file.name, e)
+        if ready is None:                 # the ready list did not land this pass
             report.waiting += 1
             continue
-
-        if record is None:
-            log.info("Waiting: no HubSpot %s has %s = %s.", ws.hubspot_object,
-                     ws.hubspot_key_property, key)
+        matches = [r for r in ready if hubspot.name_matches(
+            r.properties.get(ws.hubspot_key_property, ""), key)]
+        if not matches:
+            log.info("Waiting: no Project is marked '%s' for %s.",
+                     ws.hubspot_format_ready_value, key)
             report.waiting += 1
             continue
-
-        rec = state.get(file.id)
-        ours = bool(rec.hubspot_id)       # a record id we wrote on an earlier tick
-        done = hubspot.is_on(record, ws.hubspot_done_property)
-        ready = hubspot.is_on(record, ws.hubspot_ready_property)
-
-        # done + ours   -> finish our own tail after a crash before the marker
-        # not done+ours -> finish what we already started, ready or not: the
-        #                  spend is already committed and the checkpoint holds
-        # fresh + ready -> start it
-        # anything else -> wait (done elsewhere, or simply not ready yet)
-        proceed = ours if done else (ours or ready)
-        if not proceed:
-            why = "already marked done" if done else "not marked ready"
-            log.info("Waiting: %s is %s in HubSpot.", file.name, why)
+        if len(matches) > 1:
+            reason = (f"{len(matches)} Projects are marked "
+                      f"'{ws.hubspot_format_ready_value}' for "
+                      f"{ws.hubspot_key_property} '{key}', so DocProof cannot "
+                      f"tell which book this file is. Fix the flags in HubSpot "
+                      f"so only one is ready.")
+            log.warning("Needs a person: %s (%s)", file.name, reason)
+            report.needs_human.append((file.name, reason))
             report.waiting += 1
             continue
-
-        if rec.hubspot_id != record.id:
-            rec.hubspot_id = record.id    # written before prep, never after
-            rec.name = file.name
-            state.record(rec)
+        rec.hubspot_id = matches[0].id    # written before prep, never after
+        rec.name = file.name
+        state.record(rec)
         eligible.append(file)
     return eligible
 
@@ -270,18 +281,26 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,
                     rec, state: WatchState, uploaded: list[str], *,
                     opener) -> None:
-    """Flip the completion toggle on the book we just put back.
+    """Move the status property to its "done" value on the book we just put back.
 
     Between `upload_outputs` and `mark_source` on purpose, and the local record
     is written *before* the Drive marker: with the marker last, a file that
     reads `formatted` in Drive was `done` in HubSpot first, so the two can never
     disagree in the direction that would strand a book as done-but-unmarked.
 
-    Setting a boolean that is already true is harmless, which is what makes the
-    whole step safe to repeat when a later tick finishes an interrupted one."""
+    Writing a value the property already holds is harmless, which is what makes
+    the whole step safe to repeat when a later tick finishes an interrupted one.
+
+    In read-only mode nothing is written: the book was still gated on HubSpot and
+    is still marked done in Drive, so it is not prepared twice — the CRM simply
+    keeps whatever value it had."""
     if not (ws.hubspot_enabled and rec.hubspot_id and not rec.hubspot_done):
         return
-    props = {ws.hubspot_done_property: "true"}
+    if not ws.hubspot_write_back:
+        log.info("HubSpot is read-only: leaving %s at its current status.",
+                 file.name)
+        return
+    props = {ws.hubspot_status_property: ws.hubspot_format_done_value}
     if ws.hubspot_output_property:
         name = _output_name(uploaded) or _output_name(list(rec.uploaded))
         if name:
@@ -293,12 +312,14 @@ def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,
 
 
 def _output_name(names: list[str]) -> str:
-    """The deliverable to name in HubSpot: the InDesign-ready file if there is
-    one, otherwise the first thing we uploaded. Chosen by prefix rather than by
-    position so `prep_output="both"` does not name the tracked-changes file."""
-    for name in names:
-        if name.startswith("tagged_"):
-            return name
+    """The deliverable to name in HubSpot: the InDesign-ready file, which is the
+    one uploaded under the bare base name — not the "- tracked changes" copy nor
+    the "- notes". Chosen by suffix rather than by position so `prep_output=both`
+    does not name the redline."""
+    docs = [n for n in names if n.lower().endswith(".docx")
+            and naming.TRACKED_SUFFIX.lower() not in n.lower()]
+    if docs:
+        return docs[0]
     return names[0] if names else ""
 
 
@@ -416,8 +437,9 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
         blanks = [name for name, value in (
             ("hubspot_object", ws.hubspot_object),
             ("hubspot_key_property", ws.hubspot_key_property),
-            ("hubspot_ready_property", ws.hubspot_ready_property),
-            ("hubspot_done_property", ws.hubspot_done_property),
+            ("hubspot_status_property", ws.hubspot_status_property),
+            ("hubspot_format_ready_value", ws.hubspot_format_ready_value),
+            ("hubspot_format_done_value", ws.hubspot_format_done_value),
         ) if not value]
         if blanks:
             raise NotConfigured(
@@ -473,6 +495,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
     run_prep(token, root, ws, listing, state, runner, store, mock=mock,
              opener=opener, hs_token=hs_token, report=report)
+
+    # Last, and on the same Google token the folder was read with: a pass that
+    # left something for a person says so, once, by email. Best-effort — see
+    # notify.maybe_notify — so the work above is never undone by a mail server.
+    notify.maybe_notify(token, ws, report, opener=opener)
     return report
 
 
