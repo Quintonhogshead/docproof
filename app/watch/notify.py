@@ -29,6 +29,13 @@ log = logging.getLogger("docproof.app.watch.notify")
 
 SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 
+# Subject tags, so an inbox can sort on them. Every email carries [DocProof]
+# and one fixed urgency: a pass that needs a person is [High][Action], a
+# finished book is [Low][Done]. The tags lead the subject, ahead of the prose,
+# so a Gmail "subject contains" filter has a stable string to match.
+ALERT_TAGS = "[DocProof][High][Action]"
+DONE_TAGS = "[DocProof][Low][Done]"
+
 DRIVE_FILE = "https://drive.google.com/file/d/{}/view"
 DRIVE_FOLDER = "https://drive.google.com/drive/folders/{}"
 
@@ -85,7 +92,7 @@ def summary(report) -> tuple[str, str] | None:
         lines.append("Manuscripts that failed to prepare:")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = len(report.needs_human) + len(report.failed)
-    subject = f"DocProof needs a look - {count} manuscript(s)"
+    subject = f"{ALERT_TAGS} {count} manuscript(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
             "\n\nThe rest of the pass went on as usual.")
@@ -264,9 +271,12 @@ def completion(ws, job, file, rec, uploaded: list[str],
     """The subject, plain-text body and HTML body for one finished book."""
     prep = _load_prep(job)
     author = rec.subfolder_name or file.name
-    subject = f"DocProof finished {author} — {file.name}"
+    # The tagged subject is for the inbox; the body keeps the plain heading, so
+    # the tags sort the mail without cluttering the log a person reads.
+    title = f"DocProof finished {author} — {file.name}"
+    subject = f"{DONE_TAGS} {author} — {file.name}"
     groups = _groups(ws, job, file, rec, uploaded, dest_folder_id, prep)
-    return subject, _text(subject, groups), _html(subject, groups)
+    return subject, _text(title, groups), _html(title, groups)
 
 
 def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
