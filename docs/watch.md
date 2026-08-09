@@ -70,6 +70,21 @@ At [console.cloud.google.com](https://console.cloud.google.com):
 > never leaves it. It is stored in `watch.json` in plain sight. The thing that
 > *is* worth protecting, the refresh token, goes to the Keychain.
 
+> **On the hosted web app**, one thing differs. A server has no browser to open
+> and no loopback a person can reach, so at step 4 create a **Web application**
+> client instead of a Desktop one, and under **Authorized redirect URIs** add
+> the app's callback: `https://atmosphere-docproof.fly.dev/api/watch/auth/callback`.
+> Then skip the CLI below — sign in from the **DocWatch** tab (an admin-only tab
+> there): paste the client id and secret under *The Google sign-in DocProof
+> uses*, click **Sign in to Google**, approve on Google's own page, and it
+> returns you to the tab signed in. The refresh token is kept in the server's
+> keystore on the volume — so it survives a redeploy — and loaded into the
+> environment where the watcher reads it; a `GOOGLE_REFRESH_TOKEN` fly secret
+> works too and is the fallback. There is no "look while DocProof is closed"
+> schedule on the server (it never closes); the **Look automatically** toggle is
+> the clock, and it runs the same in-app timer described under
+> [Letting it run itself](#letting-it-run-itself).
+
 ### 2. Sign in
 
 ```bash

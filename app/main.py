@@ -90,6 +90,10 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     app.state.rebuild = Rebuilder()
     app.state.lock = lock
     app.state.web = web
+    # The web build's in-browser Google sign-in parks its one pending request
+    # here between the consent redirect and Google's callback. One shared slot,
+    # because the watcher is one shared identity. Desktop never touches it.
+    app.state.watch_auth = None
 
     routes.register(app)
     if web:
@@ -113,6 +117,16 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
             stored = keystore.get(provider)
             if stored:
                 os.environ[ENV_VARS[provider]] = stored
+        # The Drive watcher's refresh token is kept like a provider key but is
+        # not one of the review PROVIDERS, so it is loaded on its own: whatever
+        # a person signed in for through DocWatch lives in the keystore and must
+        # be back in the environment after a redeploy, and the boot env value is
+        # remembered so forgetting a keystore token falls back to a fly secret.
+        from .watch.settings import GOOGLE_KEY
+        app.state.google_env = os.environ.get(ENV_VARS[GOOGLE_KEY])
+        stored_google = keystore.get(GOOGLE_KEY)
+        if stored_google:
+            os.environ[ENV_VARS[GOOGLE_KEY]] = stored_google
         # God Mode: the admin-only routes for managing users, caps and keys.
         # Only the web build has users to manage, so only it registers these.
         routes.register_admin(app)

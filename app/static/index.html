@@ -307,6 +307,10 @@
           Google for permission — five minutes in the Google Cloud console,
           once. <code>docs/watch.md</code> walks through it, including which
           consent screen to pick.</p>
+        <p class="muted small" id="watch-client-web" hidden>On the web, use a
+          <strong>Web application</strong> client and add this app's
+          <code>/api/watch/auth/callback</code> address as an authorized
+          redirect URI.</p>
         <label class="field">
           <span>Client ID</span>
           <input type="text" id="watch-client-id"
@@ -377,26 +381,29 @@
 
     <div class="card">
       <h3>Automatic passes</h3>
-      <p class="muted">Two clocks, and they can't collide: whichever starts
-        first claims the folder and the other stands aside.</p>
+      <p class="muted" id="watch-schedule-intro">Two clocks, and they can't
+        collide: whichever starts first claims the folder and the other stands
+        aside.</p>
 
-      <label class="checkbox">
-        <input type="checkbox" id="watch-agent">
-        Look even when DocProof is closed
-        <small class="muted">A sleeping Mac runs nothing, and a time it slept
-          through isn't made up later.</small>
-      </label>
-      <label class="field sub">
-        <span>at</span>
-        <input type="text" id="watch-times" value="06:00,11:00,16:00,21:00">
-      </label>
+      <div id="watch-closed-schedule">
+        <label class="checkbox">
+          <input type="checkbox" id="watch-agent">
+          Look even when DocProof is closed
+          <small class="muted">A sleeping Mac runs nothing, and a time it slept
+            through isn't made up later.</small>
+        </label>
+        <label class="field sub">
+          <span>at</span>
+          <input type="text" id="watch-times" value="06:00,11:00,16:00,21:00">
+        </label>
+      </div>
 
       <label class="checkbox">
         <input type="checkbox" id="watch-auto">
-        Look while DocProof is open
-        <small class="muted">This is what picks up a time the Mac was asleep
-          for. Closing DocProof stops a pass; the next one carries on where it
-          left off.</small>
+        <span id="watch-auto-label">Look while DocProof is open</span>
+        <small class="muted" id="watch-auto-hint">This is what picks up a time
+          the Mac was asleep for. Closing DocProof stops a pass; the next one
+          carries on where it left off.</small>
       </label>
 
       <p id="watch-schedule-note" class="action-note" hidden></p>
