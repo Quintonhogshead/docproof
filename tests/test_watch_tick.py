@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import logging
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ import pytest
 from app.jobs import JobRunner, JobStore
 from app.settings import Paths
 from app.watch import tick as ticklib
-from app.watch.drive import GOOGLE_DOC_MIME
+from app.watch.drive import FOLDER_MIME, GOOGLE_DOC_MIME
 from app.watch.hubspot import HubSpotAuthError
 from app.watch.settings import WatchSettings
 from app.watch.stages import (FAILED, FORMATTED, JOB_PROP, OUTPUT_PROP,
@@ -958,3 +959,196 @@ def test_a_crash_before_the_drive_marker_is_finished_next_tick(tmp_path,
     patches = [c for c in opener.calls if "api.hubapi.com" in c.full_url
                and c.get_method() == "PATCH"]
     assert len(patches) == 1                        # done was written once
+
+
+# --- per-author subfolders ----------------------------------------------------
+#
+# `subfolders_enabled` inverts the pass: instead of listing the watched folder,
+# `_discover` asks HubSpot who is ready and looks only in those authors' own
+# subfolders, routing each book's outputs back into the subfolder it came from.
+# The properties worth holding this to: outputs never land in the parent, an
+# author who is not ready is never looked at, and a folder DocProof cannot name
+# with confidence is left for a person rather than guessed.
+
+SUB = "sf-johnson"
+
+
+def sub_ws(**over):
+    fields = dict(subfolders_enabled=True, hubspot_first_property="firstname",
+                  hubspot_last_property="lastname")
+    fields.update(over)
+    return hs_ws(**fields)
+
+
+def author_folder(name, parent=FOLDER):
+    entry = drive_entry(name, mime=FOLDER_MIME)
+    entry["parents"] = [parent]
+    return entry
+
+
+def in_sub(name, sub=SUB, **kw):
+    entry = drive_entry(name, **kw)
+    entry["parents"] = [sub]
+    return entry
+
+
+def ready_author(first, last, **extra):
+    return {"docproof": "Ready for Formatting", "author_last_name": last,
+            "firstname": first, "lastname": last, **extra}
+
+
+def _queries(opener):
+    out = []
+    for c in opener.calls:
+        q = urllib.parse.parse_qs(
+            urllib.parse.urlparse(c.full_url).query).get("q")
+        if q:
+            out.append(q[0])
+    return out
+
+
+def test_a_subfolder_book_is_routed_into_its_own_subfolder(tmp_path, provider):
+    ws = sub_ws(hubspot_output_property="output_file")
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+        # A decoy author, not flagged ready: proves the parent is never swept.
+        "sf-2": author_folder("Jane Smith"),
+        "d-1": in_sub("Smith - Book Original.docx", sub="sf-2"),
+    }, docx=MANUSCRIPT, hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson - Book Original.docx"]
+    placed = uploads_in(opener)
+    assert placed                                   # something was written
+    for entry in placed.values():
+        assert entry["parents"] == [SUB]            # never FOLDER, never sf-2
+    assert not any("Smith" in name for name in placed)   # decoy untouched
+
+    rec = WatchState.load(tmp_path / "state.json").get("m-1")
+    assert rec.hubspot_id == "hs-Johnson"
+    assert rec.subfolder_id == SUB
+    assert rec.subfolder_name == "Quinton Johnson"
+    assert rec.author_first == "Quinton" and rec.author_last == "Johnson"
+    assert hs_props(opener, "Johnson")["docproof"] == "Formatting Complete"
+
+    # A scoped name query was used; the flat parent listing never was.
+    assert any("name = 'Quinton Johnson'" in q for q in _queries(opener))
+    assert f"'{FOLDER}' in parents and trashed = false" not in _queries(opener)
+
+
+def test_a_record_missing_a_name_is_left_for_a_person(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive(
+        {SUB: author_folder("Quinton Johnson"),
+         "m-1": in_sub("Johnson - Book Original.docx")},
+        docx=MANUSCRIPT,
+        hubspot={"Johnson": {"docproof": "Ready for Formatting",
+                             "author_last_name": "Johnson",
+                             "lastname": "Johnson"}})   # no firstname
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert report.needs_human and report.waiting >= 1
+
+
+def test_a_ready_author_with_no_folder_is_left_for_a_person(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({}, docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == []
+    assert report.needs_human
+    assert "Quinton Johnson" in report.needs_human[0][0]
+
+
+def test_two_folders_for_one_author_is_left_for_a_person(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "sf-x": author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert report.needs_human
+
+
+def test_two_manuscripts_in_a_subfolder_is_left_for_a_person(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx"),
+                         "m-2": in_sub("Johnson - Draft Two.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert report.needs_human
+
+
+def test_a_dry_run_in_subfolder_mode_writes_no_state(tmp_path, provider):
+    ws = sub_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener, dry_run=True)
+
+    assert report.new == 1                          # it found the book
+    assert not uploads_in(opener)
+    rec = WatchState.load(tmp_path / "state.json").get("m-1")
+    assert rec.hubspot_id == "" and rec.subfolder_id == ""
+
+
+def test_an_in_flight_book_is_readopted_even_when_not_ready(tmp_path, provider):
+    """A book a previous tick started, whose status has since moved off ready,
+    is re-listed from the subfolder it recorded — so `_drain` and resume still
+    find its manuscript instead of parking it as gone from the folder."""
+    ws = sub_ws()
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx")},
+                        docx=MANUSCRIPT, hubspot={})   # nothing ready now
+
+    state = WatchState(tmp_path / "state.json")
+    rec = state.get("m-1")
+    rec.hubspot_id, rec.subfolder_id, rec.marked = "hs-Johnson", SUB, ""
+    state.record(rec)
+
+    listing, routes = ticklib._discover("tok", "hs", ws, state, opener=opener,
+                                        report=ticklib.TickReport(),
+                                        dry_run=False)
+
+    assert any(f.id == "m-1" for f in listing)
+    assert routes.get("m-1") == SUB
+
+
+# --- the completion email is gated on being asked for -------------------------
+
+def test_a_finished_book_emails_the_full_log_when_asked(tmp_path, ws, provider):
+    ws.notify_email = "quinton@atmospherepress.com"
+    ws.notify_on_complete = True
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and len(opener.emails) == 1
+    decoded = base64.urlsafe_b64decode(opener.emails[0]["raw"]).decode()
+    assert "Wolves" in decoded and "estimated" in decoded.lower()
+
+
+def test_no_completion_email_unless_the_flag_is_set(tmp_path, ws, provider):
+    ws.notify_email = "quinton@atmospherepress.com"   # address set, flag off
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT)
+
+    run(tmp_path, ws, opener)
+
+    assert opener.emails == []

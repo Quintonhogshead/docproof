@@ -47,6 +47,16 @@ class FileRecord:
     # Whether the completion toggle has been set. Recorded before the Drive
     # marker, so a file that is `formatted` in Drive was `done` in HubSpot first.
     hubspot_done: bool = False
+    # Subfolder routing (only written when `subfolders_enabled`). The author's
+    # name as HubSpot gave it and the subfolder it resolved to, stamped before
+    # prep so a job that spans ticks — or crashes mid-flight — is finished into
+    # the same folder it started in, without asking HubSpot or Drive to resolve
+    # it again. Empty on a flat-folder install, which is how those stay routed
+    # to `folder_id`.
+    author_first: str = ""
+    author_last: str = ""
+    subfolder_id: str = ""
+    subfolder_name: str = ""
     modified_time: str = ""
     updated_at: str = ""
 

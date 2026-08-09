@@ -58,10 +58,15 @@ def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
     author_breaks = sum(1 for p in plan.plans
                         if p.style == sheet.role("scene_break").name
                         and not p.insert_glyph)
+    # Priced at the effort the run actually used, not the baseline: the effort
+    # dial scales only output tokens (see catalog.EFFORT_MULTIPLIER), and a
+    # high-effort run whose estimate ignored it reads too low. Still an estimate
+    # — list rates on real token counts — but no longer an effort-blind one.
     cost = estimate_cost(cfg.api.model,
                          input_tokens=usage.input_tokens
                          + usage.cache_creation_input_tokens,
-                         output_tokens=usage.output_tokens)
+                         output_tokens=usage.output_tokens,
+                         effort=cfg.api.effort)
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),

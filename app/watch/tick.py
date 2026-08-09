@@ -23,7 +23,7 @@ from pathlib import Path
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, hubspot, naming, notify, prep
+from . import drive, folders, hubspot, naming, notify, prep
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
@@ -96,7 +96,11 @@ def collect_finished(token: str, ws: WatchSettings, listing: list[DriveFile],
     writes the tracked-changes file into the folder for a human editor.
 
     Prep never waits — its windows have to be read in order, so it cannot be
-    a batch — which is why today there is nothing to collect."""
+    a batch — which is why today there is nothing to collect.
+
+    When it is built: in subfolder mode the tracked-changes file must be written
+    into the book's own subfolder, the same as `run_prep` — take the destination
+    from the routing map `_discover` returns, not from `ws.folder_id`."""
 
 
 def submit_ready(token: str, ws: WatchSettings, listing: list[DriveFile],
@@ -108,22 +112,29 @@ def submit_ready(token: str, ws: WatchSettings, listing: list[DriveFile],
     question for `stages.classify`: first a subfolder an editor drops the
     developmental-edit-complete file into, later a deal stage read from
     HubSpot. Either way this slot submits the overnight batch and returns —
-    the answer arrives at some later tick, in `collect_finished`."""
+    the answer arrives at some later tick, in `collect_finished`.
+
+    When it is built: in subfolder mode it reads and writes the book's own
+    subfolder from the routing map `_discover` returns, never `ws.folder_id`."""
 
 
 def run_prep(token: str, home: Path, ws: WatchSettings,
              listing: list[DriveFile], state: WatchState, runner: JobRunner,
              store: JobStore, *, mock: bool, opener, hs_token: str | None = None,
+             routes: dict[str, str] | None = None,
              report: TickReport) -> None:
     """Prepare every manuscript nobody has prepared yet."""
+    routes = routes or {}
     todo = [f for f in listing if classify(f) is Stage.NEW_MANUSCRIPT]
     todo.sort(key=lambda f: (f.modified_time, f.name))
     report.new = len(todo)
 
     # When HubSpot is the gate, only the books it says are ready go on. The
     # token was resolved once in `tick`, the same road the Google one takes, so
-    # a test can drive the gate through the injected key reader.
-    if ws.hubspot_enabled:
+    # a test can drive the gate through the injected key reader. Subfolder mode
+    # has already gated in `_discover` — every manuscript in `listing` came from
+    # a ready record — so the gate is not run again over it.
+    if ws.hubspot_enabled and not ws.subfolders_enabled:
         todo = _gate_hubspot(hs_token, ws, todo, state, opener=opener,
                              report=report)
 
@@ -139,7 +150,9 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
     for file in todo:
         try:
             _one(token, home, ws, file, listing, state, runner, store,
-                 mock=mock, opener=opener, hs_token=hs_token, report=report)
+                 mock=mock, opener=opener, hs_token=hs_token,
+                 dest_folder_id=routes.get(file.id, ws.folder_id),
+                 report=report)
         except Exception as e:            # noqa: BLE001 - one book, not the run
             # A manuscript that cannot be prepared must not take the four
             # behind it down with it.
@@ -231,10 +244,139 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     return eligible
 
 
+def _discover(token: str, hs_token: str | None, ws: WatchSettings,
+              state: WatchState, *, opener, report: TickReport,
+              dry_run: bool) -> tuple[list[DriveFile], dict[str, str]]:
+    """Subfolder mode's answer to "what is there": ask HubSpot who is ready,
+    then look only in those authors' folders.
+
+    HubSpot drives; Drive is touched once per author with a book to do, never
+    once per author. The parent may hold a thousand subfolders — a flat listing
+    of it is exactly the enumeration the design forbids — so nothing here lists
+    it. Each ready record names an author, `folders.resolve` turns that into one
+    scoped query for one subfolder, and only that subfolder is listed.
+
+    Returns the pass's working listing — each ready author's subfolder contents,
+    manuscript and the outputs beside it, so the existing orphan and `OUTPUT`
+    logic still works — and a routing map from a manuscript's id to the
+    subfolder its outputs belong in. A book a previous tick already started is
+    re-listed from the subfolder it recorded, so `_drain` and resume still find
+    it after its status has moved off "ready"."""
+    want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property,
+                        ws.hubspot_first_property, ws.hubspot_last_property)
+            if p]
+    try:
+        ready = hubspot.find_by_value(
+            hs_token, ws.hubspot_object, ws.hubspot_status_property,
+            ws.hubspot_format_ready_value, want_properties=want, opener=opener)
+    except HubSpotAuthError:
+        raise                             # the token is bad — stop the pass
+    except HubSpotError as e:             # transient — the pass's books wait
+        log.info("Waiting: could not fetch the ready Projects from HubSpot "
+                 "(%s); the next run will try again.", e)
+        ready = []
+
+    listing: list[DriveFile] = []
+    routes: dict[str, str] = {}
+    cache: dict[tuple[str, str], str | None] = {}
+    seen_records: set[str] = set()
+    for record in ready:
+        seen_records.add(record.id)
+        _discover_ready(token, ws, record, state, listing, routes, cache,
+                        opener=opener, report=report, dry_run=dry_run)
+
+    # A book already in flight — its record id is on the state file and it is
+    # not yet delivered — is re-listed from the folder it recorded, whether or
+    # not it is still flagged ready. Without this a job spanning ticks would
+    # have its manuscript read as "gone from the folder" and be parked.
+    for rec in list(state.files.values()):
+        if (rec.hubspot_id and rec.hubspot_id not in seen_records
+                and rec.subfolder_id and rec.marked != "formatted"):
+            _adopt(token, rec.subfolder_id, listing, routes, opener=opener)
+
+    uniq = {f.id: f for f in listing}     # a subfolder seen twice, deduped
+    return list(uniq.values()), routes
+
+
+def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
+                    listing: list[DriveFile], routes: dict[str, str],
+                    cache: dict[tuple[str, str], str | None], *, opener,
+                    report: TickReport, dry_run: bool) -> None:
+    """One ready record: resolve its author's folder, find the one manuscript in
+    it, and route that manuscript's outputs back into the same folder.
+
+    Never writes into a guessed folder. A missing name, a name that resolves to
+    zero folders or to more than one, or a folder holding more than one new
+    manuscript are each nobody's to guess: the book is left where it is and a
+    person is told."""
+    first = (record.properties.get(ws.hubspot_first_property) or "").strip()
+    last = (record.properties.get(ws.hubspot_last_property) or "").strip()
+    if not first or not last:
+        reason = ("its HubSpot record has no first or last name, so DocProof "
+                  "cannot tell which folder is the author's.")
+        log.warning("Needs a person: record %s (%s)", record.id, reason)
+        report.needs_human.append((f"HubSpot record {record.id}", reason))
+        report.waiting += 1
+        return
+
+    key = (first.casefold(), last.casefold())
+    if key not in cache:
+        cache[key] = folders.resolve(first, last, ws.folder_id, token,
+                                     opener=opener)
+    subfolder_id = cache[key]
+    author = folders.compose(first, last)
+    if subfolder_id is None:
+        reason = (f"no single folder named '{author}' is in the Author Folder, "
+                  f"so DocProof will not guess where the book goes.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return
+
+    contents = drive.list_folder(token, subfolder_id, opener=opener)
+    manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+    if not manuscripts:
+        log.info("Waiting: %s is flagged ready but has no new manuscript yet.",
+                 author)
+        report.waiting += 1
+        return
+    if len(manuscripts) > 1:
+        reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
+                  f"folder, so DocProof cannot tell which is the book to do.")
+        log.warning("Needs a person: %s (%s)", author, reason)
+        report.needs_human.append((author, reason))
+        report.waiting += 1
+        return
+
+    book = manuscripts[0]
+    if not dry_run:
+        rec = state.get(book.id)
+        rec.name = book.name
+        rec.hubspot_id = record.id        # written before prep, never after
+        rec.author_first = first
+        rec.author_last = last
+        rec.subfolder_id = subfolder_id
+        rec.subfolder_name = author
+        state.record(rec)
+    listing.extend(contents)              # manuscript and its outputs
+    routes[book.id] = subfolder_id
+
+
+def _adopt(token: str, subfolder_id: str, listing: list[DriveFile],
+           routes: dict[str, str], *, opener) -> None:
+    """Re-list an in-flight book's recorded subfolder so the pass still sees it.
+    Route every new manuscript it holds back into it, the same as discovery."""
+    contents = drive.list_folder(token, subfolder_id, opener=opener)
+    for f in contents:
+        if classify(f) is Stage.NEW_MANUSCRIPT:
+            routes[f.id] = subfolder_id
+    listing.extend(contents)
+
+
 def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
          listing: list[DriveFile], state: WatchState, runner: JobRunner,
          store: JobStore, *, mock: bool, opener, hs_token: str | None,
-         report: TickReport) -> None:
+         dest_folder_id: str, report: TickReport) -> None:
     rec = state.get(file.id)
     rec.name = file.name
     rec.modified_time = file.modified_time
@@ -260,8 +402,8 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
                    opener=opener)
 
     if job.state == "failed" and job.verified is False:
-        _refuse(token, ws, file, job, rec, state, listing, opener=opener,
-                report=report)
+        _refuse(token, ws, file, job, rec, state, listing,
+                dest_folder_id=dest_folder_id, opener=opener, report=report)
         return
     if job.state != "done":
         # Something transient — a model that would not answer, a disk that
@@ -270,12 +412,20 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 
     report.prepped.append(file.name)
     uploaded = prep.upload_outputs(token, file, job, ws, rec, state, listing,
-                                   opener=opener)
+                                   dest_folder_id=dest_folder_id, opener=opener)
     report.uploaded.extend(uploaded)
 
     _finish_hubspot(hs_token, ws, file, rec, state, uploaded, opener=opener)
 
     prep.mark_source(token, file, job, rec, state, opener=opener)
+
+    # The book is in the folder, marked, and moved on in HubSpot: a pass that
+    # was asked to says so, once, with the whole log. Best-effort like the
+    # needs-a-person mail — a send that fails is logged, never raised, so an
+    # email server never undoes finished work.
+    if ws.notify_on_complete and ws.notify_email:
+        notify.maybe_complete(token, ws, job, file, rec, uploaded,
+                              dest_folder_id, opener=opener)
 
 
 def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,
@@ -364,8 +514,8 @@ def _prepare(token: str, home: Path, ws: WatchSettings, file: DriveFile,
 
 
 def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
-            state: WatchState, listing: list[DriveFile], *, opener,
-            report: TickReport) -> None:
+            state: WatchState, listing: list[DriveFile], *, dest_folder_id: str,
+            opener, report: TickReport) -> None:
     """Prep wrote a file and then proved it no longer said what the author
     said, so the file was deleted rather than shipped.
 
@@ -387,7 +537,7 @@ def _refuse(token: str, ws: WatchSettings, file: DriveFile, job: Job, rec,
                 rec.uploaded[note.name] = orphan.id
                 state.record(rec)
             else:
-                new_id = drive.upload(token, ws.folder_id, note,
+                new_id = drive.upload(token, dest_folder_id, note,
                                       name=note.name,
                                       mime_type=prep.MARKDOWN_MIME,
                                       app_properties={OUTPUT_PROP: "1",
@@ -451,6 +601,26 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "`docproof-watch hubspot-token` on the desktop, or set the "
                 "HUBSPOT_TOKEN secret on the server.")
 
+    if ws.subfolders_enabled:
+        # Routing into per-author subfolders needs a name to route by, and that
+        # name comes from HubSpot — so subfolder mode without HubSpot, or
+        # without the two name properties, is refused rather than left to guess
+        # folders from filenames.
+        if not ws.hubspot_enabled:
+            raise NotConfigured(
+                "Subfolders are switched on but HubSpot is not. The author's "
+                "folder is named from the CRM record, so HubSpot has to be on. "
+                "Run `docproof-watch init` to set it up, or turn subfolders off.")
+        missing = [name for name, value in (
+            ("hubspot_first_property", ws.hubspot_first_property),
+            ("hubspot_last_property", ws.hubspot_last_property),
+        ) if not value]
+        if missing:
+            raise NotConfigured(
+                "Subfolders are switched on but " + ", ".join(missing)
+                + " is not set — DocProof needs the author's name to find the "
+                "folder. Run `docproof-watch init` to fill it in.")
+
     if not dry_run:
         # Stamped before the first network call, not after it — see
         # state.note_tick. Two clocks ask when this last happened, and a pass
@@ -461,7 +631,25 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
 
     token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
                                        opener=opener)
-    listing = drive.list_folder(token, ws.folder_id, opener=opener)
+
+    # The state file and the HubSpot token are read before the listing because
+    # subfolder mode's `_discover` needs both to decide what to list at all: a
+    # dry run reads them the same way, and both reads are read-only, so nothing
+    # below the dry-run return has changed anything.
+    state = WatchState.load(root / STATE_FILE)
+    hs_token = ((get_key or get_api_key)(HUBSPOT_KEY)
+                if ws.hubspot_enabled else None)
+
+    if ws.subfolders_enabled:
+        # HubSpot-first: the parent Author Folder is never listed. `_discover`
+        # asks who is ready and looks only in those authors' folders, handing
+        # back the same shape of listing the flat path builds plus a map of
+        # where each book's outputs belong.
+        listing, routes = _discover(token, hs_token, ws, state, opener=opener,
+                                    report=report, dry_run=dry_run)
+    else:
+        listing = drive.list_folder(token, ws.folder_id, opener=opener)
+        routes = {}
     report.listed = len(listing)
     report.plan = [(f.name, classify(f).value) for f in listing]
     report.skipped = sum(1 for _, stage in report.plan
@@ -477,24 +665,17 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     paths = Paths(root).ensure()
     store = JobStore(paths)
     runner = JobRunner(store, ws.app_settings(root), config_path=config_path())
-    state = WatchState.load(root / STATE_FILE)
     if not mock:
         # A rehearsal leaves real leftovers alone: _drain finishes whatever a
         # dead pass left mid-flight through the real provider, and
         # `--mock-tags` is documented as costing nothing.
         _drain(runner, state, listing)
 
-    # Resolved the same way the Google token is — through the injected reader,
-    # so a test drives the gate without a keychain. The preflight above has
-    # already refused the pass if it is enabled and missing.
-    hs_token = ((get_key or get_api_key)(HUBSPOT_KEY)
-                if ws.hubspot_enabled else None)
-
     collect_finished(token, ws, listing, state, store, opener=opener,
                      report=report)
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
     run_prep(token, root, ws, listing, state, runner, store, mock=mock,
-             opener=opener, hs_token=hs_token, report=report)
+             opener=opener, hs_token=hs_token, routes=routes, report=report)
 
     # Last, and on the same Google token the folder was read with: a pass that
     # left something for a person says so, once, by email. Best-effort — see

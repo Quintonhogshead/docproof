@@ -76,6 +76,13 @@ class WatchSettings:
     """What to watch and what to do with it. No secrets."""
 
     folder_id: str = ""
+    # Off by default, so the flat single-folder behaviour is unchanged. On, the
+    # folder above is read as the parent "Author Folder" — one subfolder per
+    # author, named `First Last` — and each book is routed into its author's own
+    # subfolder rather than sitting loose. Requires HubSpot: the author's name
+    # comes from the record's first/last properties, never guessed from the
+    # filename. See `folders.py`, `tick._discover` and docs/watch.md.
+    subfolders_enabled: bool = False
     model: str = "claude-sonnet-5"
     # Which file prep hands back: the InDesign-ready .docx, the tracked-changes
     # one, or both. Same vocabulary as the app's own setting.
@@ -110,6 +117,11 @@ class WatchSettings:
     # account (see `notify.py`), which needs the gmail.send scope — so re-run
     # `docproof-watch auth` after upgrading, or the send answers 403.
     notify_email: str = ""
+    # Off by default. On, a full-log email is sent to `notify_email` on every
+    # book that finishes — cost, model, tokens, effort, timing, routing, quality
+    # and the links — so a successful pass is legible and a book routed into the
+    # wrong author's folder is visible the same morning. See `notify.completion`.
+    notify_on_complete: bool = False
 
     # -- HubSpot ---------------------------------------------------------------
     # All off by default: an install that has never heard of HubSpot behaves
@@ -122,6 +134,12 @@ class WatchSettings:
     # The property the filename key is matched against — an ISBN, an order
     # number, whatever the press already writes into the name.
     hubspot_key_property: str = ""
+    # The two structured properties holding the author's name, used only when
+    # `subfolders_enabled` is on: the record says QUINTON / JOHNSON, the folder
+    # is `Quinton Johnson`. Kept apart from the key property, which stays the
+    # thing the filename is matched against.
+    hubspot_first_property: str = ""
+    hubspot_last_property: str = ""
     # How to pull that key out of the filename. Empty means the whole stem;
     # otherwise a regex, and the first capture group (or the whole match).
     hubspot_key_pattern: str = ""

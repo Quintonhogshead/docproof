@@ -195,12 +195,19 @@ def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
 
 def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
                    rec: FileRecord, state: WatchState,
-                   listing: list[DriveFile], *, opener=drive._open_url) -> list[str]:
+                   listing: list[DriveFile], *, dest_folder_id: str | None = None,
+                   opener=drive._open_url) -> list[str]:
     """Put this run's files in the folder, once each.
+
+    `dest_folder_id` is where they land: the watched folder in the flat model,
+    or the author's own subfolder in subfolder mode. It defaults to
+    `ws.folder_id`, so a caller that has not been taught about subfolders keeps
+    writing exactly where it did.
 
     Recorded one at a time: an upload that landed and was not written down
     would be uploaded again on the next tick, which is how a folder ends up
     with three copies of the same formatted manuscript."""
+    dest = dest_folder_id or ws.folder_id
     placed = []
     for artifact in artifacts(job, ws):
         if artifact.name in rec.uploaded:
@@ -212,7 +219,7 @@ def upload_outputs(token: str, file: DriveFile, job: Job, ws: WatchSettings,
             rec.uploaded[artifact.name] = orphan.id
             state.record(rec)
             continue
-        new_id = drive.upload(token, ws.folder_id, artifact.path,
+        new_id = drive.upload(token, dest, artifact.path,
                               name=artifact.name, mime_type=artifact.mime,
                               app_properties={OUTPUT_PROP: "1",
                                               SOURCE_PROP: file.id,

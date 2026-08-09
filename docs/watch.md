@@ -207,6 +207,40 @@ Two optional fields refine it:
 Turn it back off with `docproof-watch init --disable-hubspot`. The token stays
 in the Keychain for next time.
 
+## Per-author subfolders (optional)
+
+By default the watched folder is flat: manuscripts and the files DocProof writes
+beside them all live in the one folder. Turn on **subfolders** and that folder
+becomes a parent **Author Folder** instead — one subfolder per author, named
+`First Last` (`Quinton Johnson`, `Jane Smith`), each holding that author's book
+and its outputs. A manuscript appears inside the author's own subfolder; the
+formatted file, the tracked-changes copy and the notes go back into the *same*
+subfolder.
+
+This needs HubSpot on, because the folder name comes from the record, never from
+a guess at the filename. Point DocProof at the two properties holding the
+author's first and last name:
+
+```bash
+docproof-watch init --enable-subfolders \
+  --hubspot-first-property firstname \
+  --hubspot-last-property lastname
+```
+
+The record says `QUINTON` / `JOHNSON`; DocProof looks for a folder `Quinton
+Johnson`. Case and stray spaces are forgiven. What is **not** forgiven is doubt:
+if no folder matches, or more than one does, or the folder holds more than one
+new manuscript, DocProof will not guess — it leaves the book where it is and
+emails you (see below). A book is never written into a folder it had to guess at.
+
+**It stays fast at scale.** A parent with a thousand author folders is never
+listed. Each pass asks HubSpot which books are ready — a short list — and asks
+Drive for *only* those authors' folders by name. The work a pass does scales
+with how many books are ready, not with how many authors exist.
+
+Turn it back off with `docproof-watch init --disable-subfolders`; the folder is
+read flat again.
+
 ## Getting told when a pass needs a person (optional)
 
 Most of what a pass decides is "wait" — nobody need do anything, and the next
@@ -238,6 +272,29 @@ flips its ready toggle; nothing in the folder has to change.
 
 **On the server**, there is no Keychain: set the token as a secret instead —
 `fly secrets set HUBSPOT_TOKEN=…` — and see [DEPLOY.md](../DEPLOY.md#33-set-the-secrets).
+
+### A full log on every finished book (optional)
+
+The mail above only fires when something needs a person. Turn on
+`--notify-on-complete` (with a `--notify-email` set) to also get an email on
+*every* book that finishes — the whole record in one message: the author and the
+exact subfolder it was routed to (with Drive links), the model, effort and mode,
+token counts, timing, the quality figures, and the raw `prep.json` attached.
+
+```bash
+docproof-watch init --notify-email you@example.com --notify-on-complete
+```
+
+Besides being a receipt, it is a drift tripwire: in subfolder mode the routing
+block shows exactly where the outputs landed, so a book put in the wrong author's
+folder is obvious the same morning rather than found weeks later.
+
+**About the cost figure.** The "estimated cost" in the email — and in
+`docproof-watch status` — is priced from the run's *real* token counts at the
+model catalog's *list* rates, and now reflects the reasoning effort the run used.
+It is an accurate estimate, not a vendor invoice: it does not know negotiated
+pricing, and it is always labelled "estimated" so it is never mistaken for a
+bill.
 
 ## Trying it before trusting it
 

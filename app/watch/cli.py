@@ -66,6 +66,24 @@ def main(argv=None) -> int:
     ini.add_argument("--notify-email",
                      help="email this address when a pass needs a person "
                           "(sent via Gmail as the signed-in Google account)")
+    ini.add_argument("--notify-on-complete", dest="notify_on_complete",
+                     action="store_true", default=None,
+                     help="also email a full log on every book that finishes")
+    ini.add_argument("--no-notify-on-complete", dest="notify_on_complete",
+                     action="store_false", default=None,
+                     help="stop emailing on every finished book")
+    ini.add_argument("--enable-subfolders", action="store_true",
+                     help="treat the watched folder as a parent Author Folder "
+                          "and route each book into its author's 'First Last' "
+                          "subfolder (needs HubSpot on)")
+    ini.add_argument("--disable-subfolders", action="store_true",
+                     help="read the watched folder flat again")
+    ini.add_argument("--hubspot-first-property",
+                     help="the property holding the author's first name "
+                          "(subfolder mode)")
+    ini.add_argument("--hubspot-last-property",
+                     help="the property holding the author's last name "
+                          "(subfolder mode)")
     ini.add_argument("--enable-hubspot", action="store_true",
                      help="gate new manuscripts on a HubSpot record; asks for "
                           "any field left out")
@@ -236,13 +254,23 @@ def cmd_init(args, home: Path) -> int:
         ws.prep_output = args.output
     if args.notify_email is not None:
         ws.notify_email = args.notify_email
+    if args.notify_on_complete is not None:
+        ws.notify_on_complete = args.notify_on_complete
     _apply_hubspot(args, ws)
+    _apply_subfolders(args, ws)
     ws.save(home)
 
     print(f"Watching folder {ws.folder_id or '— not set yet'}")
     print(f"Preparing with {ws.model}, handing back: {ws.prep_output}")
     if ws.notify_email:
-        print(f"Emailing {ws.notify_email} when a pass needs a person")
+        on_complete = " (and on every finished book)" if ws.notify_on_complete \
+            else ""
+        print(f"Emailing {ws.notify_email} when a pass needs a person"
+              f"{on_complete}")
+    if ws.subfolders_enabled:
+        print(f"Routing into per-author subfolders of {ws.folder_id}, named "
+              f"from {ws.hubspot_first_property or '— first not set'} / "
+              f"{ws.hubspot_last_property or '— last not set'}")
     if ws.hubspot_enabled:
         print(f"HubSpot gate on: {ws.hubspot_object}, "
               f"{ws.hubspot_status_property or '— property not set'}: "
@@ -263,6 +291,8 @@ def cmd_init(args, home: Path) -> int:
 _HUBSPOT_FLAGS = (
     ("hubspot_object", "hubspot_object"),
     ("hubspot_key_property", "hubspot_key_property"),
+    ("hubspot_first_property", "hubspot_first_property"),
+    ("hubspot_last_property", "hubspot_last_property"),
     ("hubspot_key_pattern", "hubspot_key_pattern"),
     ("hubspot_status_property", "hubspot_status_property"),
     ("hubspot_format_ready_value", "hubspot_format_ready_value"),
@@ -298,6 +328,31 @@ def _apply_hubspot(args, ws: WatchSettings) -> None:
     if not ws.hubspot_enabled:
         return
     for attr, prompt in _HUBSPOT_REQUIRED.items():
+        if not getattr(ws, attr):
+            setattr(ws, attr, _ask(prompt))
+
+
+# The name properties subfolder mode cannot resolve a folder without.
+_SUBFOLDER_REQUIRED = {
+    "hubspot_first_property": "Which property holds the author's first name",
+    "hubspot_last_property": "Which property holds the author's last name",
+}
+
+
+def _apply_subfolders(args, ws: WatchSettings) -> None:
+    """Fold the subfolder flags in, and fill the name properties when the mode
+    is switched on and left blank — the same posture the HubSpot gate takes."""
+    if getattr(args, "disable_subfolders", False):
+        ws.subfolders_enabled = False
+    if getattr(args, "enable_subfolders", False):
+        ws.subfolders_enabled = True
+    if not ws.subfolders_enabled:
+        return
+    if not ws.hubspot_enabled:
+        print("Note: subfolders need the HubSpot gate on — the folder name "
+              "comes from the record. Enable it with --enable-hubspot.",
+              file=sys.stderr)
+    for attr, prompt in _SUBFOLDER_REQUIRED.items():
         if not getattr(ws, attr):
             setattr(ws, attr, _ask(prompt))
 

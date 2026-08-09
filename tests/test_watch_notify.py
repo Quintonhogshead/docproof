@@ -118,3 +118,124 @@ def test_a_send_that_fails_is_swallowed_not_raised():
     report.needs_human.append(("Smith.docx", "x"))
 
     notify.maybe_notify("at-1", ws, report, opener=opener)   # must not raise
+
+
+# --- the completion log -------------------------------------------------------
+#
+# A full record for a finished book. Built here against a populated Job and a
+# sample prep.json, so every group renders, the estimated cost is labelled, and
+# a missing prep.json degrades to an email rather than an exception.
+
+import json as _json
+from pathlib import Path
+
+from app.jobs import Job
+from app.watch.drive import DOCX_MIME, DriveError, DriveFile
+from app.watch.state import FileRecord
+
+PREP = {
+    "counts": {"paragraphs": 4200, "blank_lines": 120,
+               "scene_breaks_inserted": 8, "scene_breaks_from_author": 2,
+               "unanswered": 0, "untouched_outside_body": 5},
+    "styles": {"body": 4000, "chapter": 30},
+    "usage": {"input_tokens": 100000, "output_tokens": 5000, "api_calls": 13},
+    "style_sheet": {"name": "house", "version": 7},
+    "tagging_prompt": {"name": "prep", "version": 3},
+}
+
+
+def _job(results_dir=None, **over):
+    fields = dict(
+        id="job-1", filename="Johnson - Book Original.docx", source_path="/x",
+        model="claude-opus-4-8", mode="now", state="done", effort="high",
+        kind="prep", done=12, total=12, api_calls=13, input_tokens=100000,
+        output_tokens=5000, cache_read_tokens=80000, cache_write_tokens=2000,
+        cost=4.13, words=90000, tagged=1200, flags=3, verified=True,
+        created_at="2026-08-09T10:00:00+00:00",
+        updated_at="2026-08-09T10:07:30+00:00",
+        results_dir=str(results_dir) if results_dir else None)
+    fields.update(over)
+    return Job(**fields)
+
+
+def _rec(**over):
+    fields = dict(file_id="m-1", name="Johnson - Book Original.docx",
+                  hubspot_id="hs-Johnson", author_first="Quinton",
+                  author_last="Johnson", subfolder_id="sf-1",
+                  subfolder_name="Quinton Johnson",
+                  uploaded={"Johnson - book 0.docx": "up-1",
+                            "Johnson - book 0 - notes.md": "up-2"})
+    fields.update(over)
+    return FileRecord(**fields)
+
+
+def _file():
+    return DriveFile(id="m-1", name="Johnson - Book Original.docx",
+                     mime_type=DOCX_MIME)
+
+
+def _ws(**over):
+    fields = dict(notify_email="quinton@atmospherepress.com",
+                  notify_on_complete=True, hubspot_object="0-970")
+    fields.update(over)
+    return WatchSettings(**fields)
+
+
+def _with_prep(tmp_path):
+    (tmp_path / "prep.json").write_text(_json.dumps(PREP), encoding="utf-8")
+    return tmp_path
+
+
+def test_completion_renders_every_group(tmp_path):
+    job = _job(_with_prep(tmp_path))
+    subject, text, html = notify.completion(
+        _ws(), job, _file(), _rec(), ["Johnson - book 0.docx"], "sf-1")
+
+    assert "Quinton Johnson" in subject and "Book Original" in subject
+    # routing, model, cost, tokens, quality, timing, detail
+    assert "Quinton Johnson" in text            # author / subfolder
+    assert "hs-Johnson" in text                 # the record
+    assert "claude-opus-4-8" in text and "high" in text
+    assert "$4.13" in text and "estimated" in text.lower()
+    assert "100,000" in text                    # input tokens, grouped
+    assert "7m 30s" in text                     # elapsed, derived
+    assert "Johnson - book 0.docx" in text      # an output name
+    assert "https://drive.google.com/drive/folders/sf-1" in text
+    assert "4,200" in text                      # a prep.json count
+    # the HTML mirror carries a table and a live link
+    assert "<table" in html
+    assert 'href="https://drive.google.com/file/d/up-1/view"' in html
+
+
+def test_a_missing_prep_json_still_makes_an_email(tmp_path):
+    job = _job(results_dir=None, cost=None)     # nothing on disk, no cost
+    subject, text, html = notify.completion(
+        _ws(), job, _file(), _rec(uploaded={}), [], "sf-1")
+
+    assert subject and text and "<table" in html
+    assert "unavailable" in text                # cost degrades, not crashes
+    assert "—" in text                          # optional fields as em dashes
+
+
+def test_maybe_complete_sends_multipart_with_the_prep_json_attached(tmp_path):
+    opener = _opener()
+    job = _job(_with_prep(tmp_path))
+
+    notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
+                          ["Johnson - book 0.docx"], "sf-1", opener=opener)
+
+    raw = _json.loads(opener.calls[0].data)["raw"]
+    decoded = base64.urlsafe_b64decode(raw).decode()
+    assert "text/html" in decoded               # the alternative
+    assert "prep.json" in decoded               # the attachment filename
+    assert "application/json" in decoded
+
+
+def test_a_completion_send_that_fails_is_swallowed(tmp_path):
+    def opener(request, timeout=60):
+        raise DriveError("Gmail refused the scope")
+
+    job = _job(_with_prep(tmp_path))
+    # No exception escapes — a finished book is never undone by a mail server.
+    notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
+                          ["Johnson - book 0.docx"], "sf-1", opener=opener)
