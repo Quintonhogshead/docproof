@@ -1,9 +1,9 @@
 """Handing the watcher to launchd, so nobody has to remember it.
 
-Four times a day is a `StartCalendarInterval` with four entries, and the rest
+Twice a day is a `StartCalendarInterval` with two entries, and the rest
 of this file is the small print around that: which executable, where its
-output goes, and the honest caveat that a Mac asleep at six in the morning
-does not run anything at six in the morning.
+output goes, and the honest caveat that a Mac asleep at midnight
+does not run anything at midnight.
 
 `RunAtLoad` is false on purpose. Installing a schedule should not immediately
 spend money — the first run happens at the first scheduled time, and anybody
@@ -22,7 +22,7 @@ from pathlib import Path
 log = logging.getLogger("docproof.app.watch.schedule")
 
 LABEL = "com.atmospherepress.docproof.watch"
-DEFAULT_TIMES = ("06:00", "11:00", "16:00", "21:00")
+DEFAULT_TIMES = ("00:00", "12:00")
 LAUNCHD_LOG = "launchd.log"
 # What a packaged DocProof answers to when it should do one pass and stop.
 # Spelled the same here and in docproof_desktop.py, which reads it.
