@@ -420,12 +420,17 @@ def _one(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     prep.mark_source(token, file, job, rec, state, opener=opener)
 
     # The book is in the folder, marked, and moved on in HubSpot: a pass that
-    # was asked to says so, once, with the whole log. Best-effort like the
-    # needs-a-person mail — a send that fails is logged, never raised, so an
-    # email server never undoes finished work.
-    if ws.notify_on_complete and ws.notify_email:
-        notify.maybe_complete(token, ws, job, file, rec, uploaded,
-                              dest_folder_id, opener=opener)
+    # was asked to says so, once, with the whole log. `completion_emailed`
+    # guards the "once" — a book reconsidered after a lost marker is not emailed
+    # again — and is set only on a confirmed send, so a mail that failed retries.
+    # Best-effort like the needs-a-person mail: a send that fails is logged,
+    # never raised, so an email server never undoes finished work.
+    if (ws.notify_on_complete and ws.notify_email
+            and not rec.completion_emailed):
+        if notify.maybe_complete(token, ws, job, file, rec, uploaded,
+                                 dest_folder_id, opener=opener):
+            rec.completion_emailed = True
+            state.record(rec)
 
 
 def _finish_hubspot(hs_token: str | None, ws: WatchSettings, file: DriveFile,

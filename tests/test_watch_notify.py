@@ -221,9 +221,11 @@ def test_maybe_complete_sends_multipart_with_the_prep_json_attached(tmp_path):
     opener = _opener()
     job = _job(_with_prep(tmp_path))
 
-    notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
-                          ["Johnson - book 0.docx"], "sf-1", opener=opener)
+    sent = notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
+                                 ["Johnson - book 0.docx"], "sf-1",
+                                 opener=opener)
 
+    assert sent is True
     raw = _json.loads(opener.calls[0].data)["raw"]
     decoded = base64.urlsafe_b64decode(raw).decode()
     assert "text/html" in decoded               # the alternative
@@ -236,6 +238,9 @@ def test_a_completion_send_that_fails_is_swallowed(tmp_path):
         raise DriveError("Gmail refused the scope")
 
     job = _job(_with_prep(tmp_path))
-    # No exception escapes — a finished book is never undone by a mail server.
-    notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
-                          ["Johnson - book 0.docx"], "sf-1", opener=opener)
+    # No exception escapes, and it reports the miss so the caller retries.
+    sent = notify.maybe_complete("at-1", _ws(), job, _file(), _rec(),
+                                 ["Johnson - book 0.docx"], "sf-1",
+                                 opener=opener)
+
+    assert sent is False

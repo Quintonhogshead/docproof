@@ -270,13 +270,15 @@ def completion(ws, job, file, rec, uploaded: list[str],
 
 
 def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
-                   dest_folder_id: str, *, opener=drive._open_url) -> None:
+                   dest_folder_id: str, *, opener=drive._open_url) -> bool:
     """Email the whole log for a book that just finished, if asked to.
 
-    Gated by the caller on `notify_on_complete` and `notify_email`. Best-effort
-    like `maybe_notify`: a send that fails is logged with its fix, never raised,
-    so a mail server never undoes a finished book. The raw prep.json rides along
-    as an attachment when it is on disk."""
+    Gated by the caller on `notify_on_complete` and `notify_email`. Returns
+    whether the mail went out, so the caller marks the book emailed only on a
+    real send and a failure is retried. Best-effort like `maybe_notify`: a send
+    that fails is logged with its fix, never raised, so a mail server never
+    undoes a finished book. The raw prep.json rides along as an attachment when
+    it is on disk."""
     prep_path = Path(job.results_dir or "") / "prep.json"
     attachment = None
     try:
@@ -290,10 +292,12 @@ def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
              attachment=attachment, opener=opener)
         log.info("Emailed %s the completion log for %s.", ws.notify_email,
                  file.name)
+        return True
     except DriveError as e:
         log.warning("Could not email %s the completion log for %s (%s). If "
                     "Gmail refused the scope, run `docproof-watch auth` again.",
                     ws.notify_email, file.name, e)
+        return False
 
 
 def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:

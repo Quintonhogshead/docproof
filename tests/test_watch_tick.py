@@ -1152,3 +1152,26 @@ def test_no_completion_email_unless_the_flag_is_set(tmp_path, ws, provider):
     run(tmp_path, ws, opener)
 
     assert opener.emails == []
+
+
+def test_a_finished_book_is_not_emailed_twice(tmp_path, ws, provider):
+    """The completion email fires once. A book reconsidered after its Drive
+    marker is lost — the same class of re-run `uploaded` and `hubspot_done`
+    guard against — is not emailed about again, because `completion_emailed`
+    is kept in the watcher's own state, not only in Drive."""
+    ws.notify_email = "quinton@atmospherepress.com"
+    ws.notify_on_complete = True
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT)
+
+    run(tmp_path, ws, opener)
+    assert len(opener.emails) == 1
+    assert WatchState.load(tmp_path / "state.json").get("f-1").completion_emailed
+
+    # The marker vanishes (a different OAuth client, a manual edit): the book
+    # looks new again and is reconsidered, but the email does not repeat.
+    opener.files["f-1"]["appProperties"] = {}
+    second = run(tmp_path, ws, opener)
+
+    assert second.prepped == ["Wolves.docx"]        # it was reconsidered
+    assert len(provider.calls) == 1                 # without re-spending
+    assert len(opener.emails) == 1                  # and without a second email
