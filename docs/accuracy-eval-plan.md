@@ -169,6 +169,43 @@ cheaply while iterating on its prompt. No args runs the full corpus.
 Steps 1–6 are the engine. Step 7 is the first real accuracy number for today's
 pipeline — and the line every later phase has to beat.
 
+## Known corpus artifacts
+
+**`tense_shift` is bimodal on the full corpus — 100% or 0% per run, nothing in
+between.** Investigated 2026-08-10 after the P2.5 matrix scored it 0% in all
+three configs while the same-day P0.2 baseline scored it 5/5 with exact
+corrections. It is not a detection gap and not a prompt regression (the pass's
+system prompt was byte-identical across both runs):
+
+- Narrowed to its own 10-case corpus (5 seeds + 5 traps, including the
+  sustained-historical-present trap): **7/7 runs at 100% recall, 100%
+  precision, 0% trap-FP** (4 runs single-type, 3 runs with its full 4-type
+  pass grouping, 40 cases).
+- Only the full 232-case corpus triggers the failure, and then for all five
+  seeds at once.
+
+The mechanism: the full corpus interleaves all 24 types' cases, so the
+document hops between past and present tense every few paragraphs. The
+`tense_shift` do-not-flag rules are deliberately loaded with document-level
+cautions (sustained historical present; "a present-tense narrative you cannot
+see the rest of") — so the model makes a *document-level* judgment call once
+per run: either the mixing is deliberate style (suppress everything) or it
+isn't (catch everything). On a real manuscript the narrative tense is
+coherent, so the "deliberate mixed-tense document" read never arises; this is
+an artifact of the corpus's artificial construction, not a production risk.
+
+Consequences for reading scorecards:
+
+- A full-corpus run's micro recall carries ~±2pts of tense_shift coin-flip.
+  Before treating a tense_shift 0% as real, re-run
+  `docproof eval --error-types tense_shift` (cents) — if that scores 100%,
+  it's this artifact.
+- Do **not** fix this by weakening the prompt's document-level cautions; they
+  are what protects deliberate historical-present prose in production. If the
+  flakiness becomes annoying, the fix is corpus-side (e.g. seeding the tense
+  cases inside a run of tense-consistent filler paragraphs so the local
+  neighborhood reads as coherent narration).
+
 ## What it costs
 
 The corpus authoring is the real cost: human time on the traps and the authored
