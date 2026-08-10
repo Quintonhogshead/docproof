@@ -25,7 +25,7 @@ jobs:
     name: Deploy app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: superfly/flyctl-actions/setup-flyctl@master
       # --remote-only builds on Fly's builders, so the runner needs no Docker.
       - run: flyctl deploy --remote-only
