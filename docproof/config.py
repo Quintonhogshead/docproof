@@ -17,10 +17,12 @@ class APIConfig(BaseModel):
     max_retries: int = Field(default=2, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     prompt_caching: bool = True
-    # Reasoning depth. Grammar detection is a precise, well-specified task, so
-    # a low setting is both cheaper and no less accurate here. Ignored on
+    # Reasoning depth. Medium is the shipped default: on a real manuscript it
+    # caught ~40% more in-taxonomy errors than low for ~$0.16 more per book,
+    # with trap false positives unchanged; high tripled output tokens for zero
+    # further recall (Johnson Book 1 compare-vs-human, 2026-08). Ignored on
     # models that don't accept it. null omits the parameter entirely.
-    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     # How many chunk requests a synchronous ("right now") review has in flight
     # at once. A review is one call per (pass, chunk), and they are independent,
     # so fetching several concurrently is most of the wall-clock win. Ordering,

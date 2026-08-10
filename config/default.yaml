@@ -4,7 +4,7 @@ api:
   max_retries: 2
   max_output_tokens: 16000
   prompt_caching: true
-  effort: low                # low | medium | high | xhigh | max | null
+  effort: medium             # low | medium | high | xhigh | max | null
 
 chunking:
   token_budget: 2500        # soft target per chunk (attention quality, not capacity)
