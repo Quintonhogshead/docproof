@@ -53,8 +53,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         findings: list[Finding], usage: Usage, cfg: Config,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
-                        normalization=None, audit=None, consistency=None
-                        ) -> None:
+                        normalization=None, audit=None, consistency=None,
+                        coverage=None) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -96,6 +96,11 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                        if spell is not None else None),
         "usage": dataclasses.asdict(usage),
         "batch": batch,
+        "coverage": ({"total": coverage.total, "reviewed": coverage.reviewed,
+                      "gaps": [{"pass": g.pass_label, "chunk_id": g.chunk_id,
+                                "para_ids": list(g.para_ids)}
+                               for g in coverage.gaps]}
+                     if coverage is not None else None),
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
@@ -112,16 +117,33 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
     log.info("Wrote %s", path)
 
 
+def _gap_preview(gap, paras) -> str:
+    """A human handle for an unreviewed section: the paragraph span and a
+    snippet of where it starts, so an editor can find it in the manuscript."""
+    ids = [pid for pid in gap.para_ids if pid in paras]
+    if not ids:
+        return gap.chunk_id
+    first = paras[ids[0]]
+    text = " ".join(first.text.split())
+    snippet = text[:60] + ("…" if len(text) > 60 else "")
+    span = ids[0] if len(ids) == 1 else f"{ids[0]}–{ids[-1]}"
+    return f"{span}: “{snippet}”"
+
+
 def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
-                     audit=None, consistency=None) -> None:
+                     audit=None, consistency=None, coverage=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     queries = [f for f in findings if f.status == "query"]
-    rejected = [f for f in findings if f.status.startswith("rejected")]
+    # Oversized findings are a real catch with too large a fix; they get their
+    # own section (and a margin comment) rather than the terse rejected list.
+    oversized = [f for f in findings if f.status == "rejected_oversized"]
+    rejected = [f for f in findings if f.status.startswith("rejected")
+                and f.status != "rejected_oversized"]
     in_margin = (f", and each is a margin {fmt.comment_noun} in the reviewed "
                  f"file" if cfg.query_comments else "")
 
@@ -148,6 +170,24 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              ", ".join(f"{k} {v}" for k, v in stats.items()) +
              f". Paragraphs reviewed: {len(doc.paragraphs)}; "
              f"skipped: {len(doc.skipped)}.\n")
+
+    if coverage is not None:
+        L.append("## Coverage\n")
+        if coverage.complete:
+            L.append(f"All {coverage.total} pass×section unit(s) were reviewed "
+                     f"— no section was lost to a provider refusal, a truncated "
+                     f"reply, or a dropped result.\n")
+        else:
+            L.append(f"**{len(coverage.gaps)} of {coverage.total} pass×section "
+                     f"unit(s) could not be reviewed**, even after a retry: the "
+                     f"model refused, ran out of output room, or returned "
+                     f"nothing. The paragraphs below were **not checked** for "
+                     f"the listed error type(s) — treat them as unreviewed, not "
+                     f"as clean:\n")
+            for g in coverage.gaps:
+                L.append(f"- **{g.pass_label}** — {len(g.para_ids)} "
+                         f"paragraph(s), {_gap_preview(g, paras)}")
+            L.append("")
 
     if by_type:
         L.append("Applied changes by error type: " +
@@ -298,6 +338,22 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         for f in low:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
+        L.append("")
+
+    if oversized:
+        L.append("## Caught, but too large to auto-correct\n")
+        L.append(f"{len(oversized)} finding(s) name a real problem whose "
+                 f"suggested fix rewrites more than a minimal proofreading edit "
+                 f"should — a run-on split into two sentences, a restructured "
+                 f"list. Applying that as a tracked change would be the model "
+                 f"rewriting rather than correcting, so it is left for you to "
+                 f"make by hand{in_margin}.\n")
+        for f in oversized:
+            suggestion = (f" → {f.corrected_text}"
+                          if f.corrected_text
+                          and f.corrected_text != f.original_text else "")
+            L.append(f"- **{f.para_id}** ({f.error_type}): "
+                     f"{f.original_text!r}{suggestion}")
         L.append("")
 
     if rejected:

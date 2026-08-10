@@ -339,11 +339,13 @@ def test_a_repeated_sentence_anchors_by_occurrence():
 
 
 def test_sweeps_reach_paragraphs_too_short_for_a_model_pass(tmp_path):
-    """A paragraph under min_paragraph_chars costs too much to send to a model
-    and rarely holds a grammar error — but in fiction it is usually a line of
-    dialogue, which is exactly where a stray "?!" or a mispunctuated tag
+    """When a press sets a min_paragraph_chars floor, short lines skip the model
+    pass — but the sweeps must still reach them, because in fiction a short line
+    is usually dialogue, exactly where a stray "?!" or a mispunctuated tag
     lives. If the sweeps could not see those, every "zero remaining" would
-    quietly mean "zero remaining in the long paragraphs"."""
+    quietly mean "zero remaining in the long paragraphs". (The floor is off by
+    default now — see test_short_dialogue_reaches_a_model_pass — so this exercises
+    the knob explicitly.)"""
     import docx
     from docproof.config import load_config
     from docproof.models import Usage
@@ -359,8 +361,9 @@ def test_sweeps_reach_paragraphs_too_short_for_a_model_pass(tmp_path):
     d.save(src)
 
     cfg = load_config("config/default.yaml")
+    cfg.chunking.min_paragraph_chars = 20      # opt into a floor for this test
     prepared = prepare(cfg, src, "config/error_types")
-    # The model still only pays for the long one.
+    # With the floor set, the model still only pays for the long one.
     assert sum(len(c.paragraphs) for c in prepared.chunks) == 1
     assert len(prepared.doc.paragraphs) == 3
 
@@ -370,6 +373,29 @@ def test_sweeps_reach_paragraphs_too_short_for_a_model_pass(tmp_path):
                 for wp in walk_package(DocxPackage(out.reviewed_path))]
     assert "“Stop!”" in accepted
     assert any("He waited …" == t for t in accepted)
+
+
+def test_short_dialogue_reaches_a_model_pass(tmp_path):
+    """The default min_paragraph_chars floor is 0, so a short line of dialogue is
+    reviewed by a model pass, not merely swept. Under the old 20-char floor a
+    homophone in a line like "Their here." never reached a model — a silent
+    recall hole."""
+    import docx
+    from docproof.config import load_config
+    from docproof.pipeline import prepare
+
+    d = docx.Document()
+    d.add_paragraph('"Their here."')     # ~13 chars; below the old floor
+    d.add_paragraph("A paragraph comfortably over any old minimum, for contrast.")
+    src = tmp_path / "d.docx"
+    d.save(src)
+
+    cfg = load_config("config/default.yaml")
+    assert cfg.chunking.min_paragraph_chars == 0        # the new default
+    prepared = prepare(cfg, src, "config/error_types")
+    reviewable = {p.para_id for c in prepared.chunks for p in c.paragraphs}
+    assert len(prepared.doc.paragraphs) == 2
+    assert len(reviewable) == 2          # both the short line and the long one
 
 
 def test_sweep_findings_use_their_own_id_series():

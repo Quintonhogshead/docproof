@@ -93,6 +93,22 @@ def run_eval(cfg: Config, cases: list[Case], error_dir: str | Path, work_dir: Pa
         model_findings, usage = run_sync(cfg, prepared, provider,
                                          progress=progress)
 
+    # The ensemble's merge and verifier live in finish(), which the eval skips —
+    # so mirror them here, or a 2x-detector run would score its raw union
+    # (double-counted, unverified) instead of the pipeline the app would ship.
+    if cfg.ensemble.enabled and mock_findings is None:
+        from ..agreement import merge
+        model_findings = merge(list(model_findings), prepared.doc)
+        ens = cfg.ensemble
+        if ens.verifier_model and ens.verify_policy != "none":
+            from ..providers import build_provider
+            from ..verifier import verify_findings
+            vcfg = cfg.model_copy(deep=True)
+            vcfg.api.model = ens.verifier_model
+            vcfg.api.effort = ens.verifier_effort
+            model_findings, _ = verify_findings(
+                cfg, prepared, model_findings, build_provider(vcfg), usage)
+
     # Same order finish() uses: sweeps, then consistency, then model — earliest
     # to claim a span wins. (Consistency is empty here; it is disabled.)
     validated = validate_findings(

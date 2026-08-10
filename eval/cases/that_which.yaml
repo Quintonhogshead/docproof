@@ -1,0 +1,34 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: restrictive "which" with no comma (-> that), and "that" set off
+# by commas (-> which). Traps: "which" after a preposition, "which" referring to
+# a whole clause, "that" as a conjunction, and "that" as a demonstrative. No
+# paragraph is a calibration example.
+error_type: that_which
+
+cases:
+  - id: tw-001
+    text: "The road which led to the coast had washed out."
+    expect: { span: "which led", correction: "that led", confidence: high }
+  - id: tw-002
+    text: "The letter which she burned held the only proof."
+    expect: { span: "which she", correction: "that she", confidence: high }
+  - id: tw-003
+    text: "The old mill, that stood by the weir, had long since closed."
+    expect: { span: "that stood", correction: "which stood", confidence: high }
+  - id: tw-004
+    text: "The ship which carried the mail was three days late."
+    expect: { span: "which carried", correction: "that carried", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: tw-101
+    text: "He left before dawn, which surprised no one at the inn."
+    expect: clean          # "which" refers back to the whole clause
+  - id: tw-102
+    text: "She described the cottage in which she was born."
+    expect: clean          # "which" after a preposition is always correct
+  - id: tw-103
+    text: "He swore that he would return before the thaw."
+    expect: clean          # "that" is a conjunction, not a relative pronoun
+  - id: tw-104
+    text: "That was the last anyone saw of the grey mare."
+    expect: clean          # "that" is a demonstrative

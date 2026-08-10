@@ -12,6 +12,11 @@ log = logging.getLogger("docproof.chunker")
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 
+# Even under a generous token budget, context is meant to be the paragraph or
+# two right before — never a wall of preceding text. This caps the count so a
+# run of very short paragraphs can't quietly fill the budget with a dozen.
+_MAX_CONTEXT_PARAS = 3
+
 
 def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
     budget = cfg.chunking.token_budget
@@ -46,7 +51,39 @@ def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
     log.info("Packed %d of %d paragraphs into %d chunks (budget %d tokens)",
              sum(1 for p in doc.paragraphs if p.reviewable),
              len(doc.paragraphs), len(chunks), budget)
-    return tuple(chunks)
+    return _attach_context(chunks, cfg.chunking.context_token_budget)
+
+
+def _attach_context(chunks: list[Chunk], budget: int) -> tuple[Chunk, ...]:
+    """Give each chunk (after the first) the tail of the one before it as
+    read-only context. Populated here rather than during packing so the context
+    is always the immediately preceding text in document order, whatever a later
+    selection keeps: a reaching-back pronoun's antecedent does not move because
+    the caller chose to review only chapter three."""
+    if budget <= 0 or len(chunks) < 2:
+        return tuple(chunks)
+    out = [chunks[0]]
+    for prev, chunk in zip(chunks, chunks[1:]):
+        out.append(dataclasses.replace(
+            chunk, context_paragraphs=_trailing(prev.paragraphs, budget)))
+    return tuple(out)
+
+
+def _trailing(paragraphs: tuple[ParagraphRef, ...], budget: int
+              ) -> tuple[ParagraphRef, ...]:
+    """The last few paragraphs that fit inside the token budget, in order. If
+    even the single preceding paragraph is larger than the budget, the context
+    is empty — better no antecedent than paying to resend a dense paragraph on
+    every chunk."""
+    picked: list[ParagraphRef] = []
+    used = 0
+    for p in reversed(paragraphs):
+        t = estimate_tokens(p.text)
+        if used + t > budget or len(picked) >= _MAX_CONTEXT_PARAS:
+            break
+        picked.append(p)
+        used += t
+    return tuple(reversed(picked))
 
 
 def _oversized_pieces(p: ParagraphRef, cfg: Config) -> list[ParagraphRef]:

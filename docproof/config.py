@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_validator,
+                      model_validator)
 
 
 class APIConfig(BaseModel):
@@ -32,7 +33,20 @@ class APIConfig(BaseModel):
 class ChunkingConfig(BaseModel):
     token_budget: int = Field(default=2500, ge=1)         # soft target per chunk
     hard_cap_tokens: int = Field(default=8000, ge=1)      # beyond this, split paragraph
-    min_paragraph_chars: int = Field(default=20, ge=0)
+    # Paragraphs shorter than this reach the sweeps but not a model pass. The
+    # default is 0 — every non-empty paragraph is reviewed — because in fiction
+    # the short lines are dialogue ("“Who?” he asked."), which is exactly where
+    # a missing word, a homophone slip, or a mispunctuated tag hides. A floor
+    # skips them silently, and that was a recall hole. Raise it to reintroduce a
+    # floor if 1–3 character fragments prove noisy — a call the eval scorecard
+    # should drive, not a guess.
+    min_paragraph_chars: int = Field(default=0, ge=0)
+    # How many tokens of the previous chunk's trailing paragraphs to prepend to
+    # each chunk as read-only context, so a pronoun or name whose antecedent
+    # sits in the paragraph before still resolves. 0 disables it. Kept small on
+    # purpose: context rides the user turn, so — unlike the cached system
+    # prompt — it is billed on every chunk of every pass.
+    context_token_budget: int = Field(default=300, ge=0)
 
 
 class SkipConfig(BaseModel):
@@ -215,6 +229,60 @@ class ConsistencyConfig(BaseModel):
     name_min_count: int = Field(default=20, ge=2)
 
 
+class DetectorSpec(BaseModel):
+    """One reviewer in an ensemble: a model and how hard it thinks. The provider
+    is read from the catalog, exactly as api.model is, so a detector is just a
+    model id. Two identical specs is a self-ensemble (the same model sampled
+    twice); different vendors is the diverse one — both are configuration, not
+    code."""
+    model: str
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
+
+
+class EnsembleConfig(BaseModel):
+    """Several detectors reviewing each chunk, their findings merged by
+    agreement, then a stronger verifier adjudicating before anything reaches the
+    author. UNION for recall, verifier for precision — a miss problem is not
+    solved by voting (intersection would only lower recall).
+
+    An empty `detectors` list is the default and means single-detector mode:
+    api.model runs once, nothing is merged, no verifier runs — byte-for-byte the
+    behaviour that shipped before the ensemble existed. The moment `detectors`
+    is non-empty the fan-out, merge and (optional) verifier turn on."""
+    detectors: list[DetectorSpec] = Field(default_factory=list)
+    # The overseer. None disables verification whatever verify_policy says.
+    # Meant to be a stronger model than the detectors, thinking harder — it sees
+    # far fewer calls (one per disputed finding, not per chunk), so it is a small
+    # fraction of the spend even at a premium tier.
+    verifier_model: str | None = None
+    verifier_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # Which findings the verifier judges: only those the detectors disagree on
+    # (cheapest, and consensus precision is measured before it is trusted),
+    # every finding, or nothing.
+    verify_policy: Literal["disputed", "all", "none"] = "disputed"
+    # Raise a consensus finding's confidence one notch (low->medium->high) — the
+    # more detectors agree, the surer the finding. Off until the eval says the
+    # promotion is earned.
+    consensus_confidence_bump: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return len(self.detectors) > 0
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        unknown = [d.model for d in self.detectors if lookup(d.model) is None]
+        if self.verifier_model and lookup(self.verifier_model) is None:
+            unknown.append(self.verifier_model)
+        if unknown:
+            raise ValueError(
+                f"ensemble references model(s) the catalog does not know: "
+                f"{', '.join(sorted(set(unknown)))}. Add them to "
+                f"providers/catalog.py or fix the ids.")
+        return self
+
+
 class PricingConfig(BaseModel):
     """Optional $/MTok rates for the cost estimate in summary.md.
     Leave unset to omit the estimate."""
@@ -236,6 +304,7 @@ class Config(BaseModel):
     edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
+    ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent

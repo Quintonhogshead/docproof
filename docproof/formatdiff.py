@@ -37,7 +37,8 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 
-from .trackdiff import TrackDiffError, _fold, extract_paragraph_edits, open_docx
+from .agreement import fold as _fold
+from .trackdiff import TrackDiffError, extract_paragraph_edits, open_docx
 from .utils.xml_helpers import DocxPackage, qn, walk_package
 
 STYLES_PART = "word/styles.xml"

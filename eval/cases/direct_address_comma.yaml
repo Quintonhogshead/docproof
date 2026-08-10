@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a vocative (name or title used to address someone) not set off
+# by a comma, in dialogue. Traps: names used as subject/object, an appositive, a
+# name in narration, and a letter salutation. No paragraph is a calibration
+# example.
+error_type: direct_address_comma
+
+cases:
+  - id: dac-001
+    text: "\"You're late again Marcus,\" the foreman snapped."
+    expect: { span: "again Marcus", correction: "again, Marcus", confidence: high }
+  - id: dac-002
+    text: "\"Come along Captain, we haven't got all night.\""
+    expect: { span: "along Captain", correction: "along, Captain", confidence: high }
+  - id: dac-003
+    text: "\"Dad the engine's smoking again,\" the boy shouted."
+    expect: { span: "Dad the", correction: "Dad, the", confidence: high }
+  - id: dac-004
+    text: "\"I told you Rosa it wouldn't hold,\" he said."
+    expect: { span: "you Rosa it", correction: "you, Rosa, it", confidence: high }
+  - id: dac-005
+    text: "\"Yes sir, right away,\" the steward replied."
+    expect: { span: "Yes sir", correction: "Yes, sir", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: dac-101
+    text: "Marcus left the harbour before anyone could stop him."
+    expect: clean          # the name is the subject, in narration
+  - id: dac-102
+    text: "She waited for Dad by the churchyard gate."
+    expect: clean          # the name is the object of a preposition
+  - id: dac-103
+    text: "My sister Rosa had already packed the trunk."
+    expect: clean          # an appositive naming someone, not address
+  - id: dac-104
+    text: "\"I gave Marcus the message myself,\" she said."
+    expect: clean          # the name is the object, even inside dialogue
+  - id: dac-105
+    text: "The letter began, Dear Sarah, and went no further."
+    expect: clean          # a salutation follows its own convention

@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors cover the rule table: period-before-tag, capitalized tag
+# pronoun, both-wrong, name-subject (comma only, keep the capital), and
+# punctuation outside the closing quote. Traps: action beats, a ? before a tag,
+# the pronoun "I", and resumed dialogue. No paragraph is a calibration example.
+error_type: dialogue_tag
+
+cases:
+  - id: dt-001
+    text: "\"Wait by the gate.\" he said, and turned away."
+    expect: { span: "gate.\" he", correction: "gate,\" he", confidence: high }
+  - id: dt-002
+    text: "\"You promised me that.\" She said, and looked away."
+    expect: { span: "that.\" She", correction: "that,\" she", confidence: high }
+  - id: dt-003
+    text: "\"Not a word of it,\" She hissed across the table."
+    expect: { span: "it,\" She", correction: "it,\" she", confidence: high }
+  - id: dt-004
+    text: "\"Put it down.\" Delia said without turning."
+    expect: { span: "down.\" Delia", correction: "down,\" Delia", confidence: high }
+  - id: dt-005
+    text: "\"Wait here\", he said, blocking the doorway."
+    expect: { span: "here\", he", correction: "here,\" he", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: dt-101
+    text: "\"I told you already.\" She turned toward the window."
+    expect: clean          # an action beat — the period is correct
+  - id: dt-102
+    text: "\"Who's out there?\" he asked, lifting the lamp."
+    expect: clean          # a question mark before a tag stays
+  - id: dt-103
+    text: "\"Wait here,\" I said, and pulled the door shut."
+    expect: clean          # the pronoun "I" is always capitalized
+  - id: dt-104
+    text: "\"Don't move.\" Sarah reached slowly for the light."
+    expect: clean          # an action beat with a named subject
+  - id: dt-105
+    text: "\"I know,\" she said, \"and I don't care who hears it.\""
+    expect: clean          # dialogue resuming after an interrupting tag

@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a compound modifier led by an -ly ADVERB, wrongly hyphenated.
+# Traps: -ly ADJECTIVES (friendly, early, deadly) whose hyphens are correct, an
+# -ly NOUN (family), and a non-ly adverb (well-known) whose hyphen stays. No
+# paragraph is a calibration example.
+error_type: ly_adverb_hyphen
+
+cases:
+  - id: ly-001
+    text: "She was a highly-regarded surgeon before the scandal."
+    expect: { span: "highly-regarded", correction: "highly regarded", confidence: high }
+  - id: ly-002
+    text: "It was a beautifully-written account of the siege."
+    expect: { span: "beautifully-written", correction: "beautifully written", confidence: high }
+  - id: ly-003
+    text: "They lived in a rapidly-growing town on the river."
+    expect: { span: "rapidly-growing", correction: "rapidly growing", confidence: high }
+  - id: ly-004
+    text: "He gave a carefully-worded answer to the coroner."
+    expect: { span: "carefully-worded", correction: "carefully worded", confidence: high }
+  - id: ly-005
+    text: "It was a widely-held belief in those parts."
+    expect: { span: "widely-held", correction: "widely held", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ly-101
+    text: "A friendly-looking collie waited at the gate."
+    expect: clean          # "friendly" is an adjective — the hyphen is correct
+  - id: ly-102
+    text: "The early-morning fog had not yet lifted from the fields."
+    expect: clean          # "early" is an adjective — the hyphen is correct
+  - id: ly-103
+    text: "He was a well-known troublemaker in three counties."
+    expect: clean          # "well" is not an -ly adverb — the hyphen stays
+  - id: ly-104
+    text: "It was a family-owned inn with a crooked sign."
+    expect: clean          # "family" is a noun, not an -ly adverb
+  - id: ly-105
+    text: "A deadly-quiet room met them at the top of the stairs."
+    expect: clean          # "deadly" is an adjective — the hyphen is correct

@@ -1,0 +1,437 @@
+{
+  "model": "claude-haiku-4-5",
+  "total_findings": 181,
+  "rejected_no_anchor": 43,
+  "failures": [
+    {
+      "case_id": "ap-003",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "The grocer chalked fresh apple's on the board outside.",
+      "paragraph": "The grocer chalked fresh apple’s on the board outside."
+    },
+    {
+      "case_id": "hp-001",
+      "error_type": "homophone_confusion",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "The cat licked it's paws by the cold hearth.",
+      "paragraph": "The cat licked it’s paws by the cold hearth."
+    },
+    {
+      "case_id": "hp-101",
+      "error_type": "homophone_confusion",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "It's been a hard winter, and its end is nowhere in sight.",
+      "paragraph": "It’s been a hard winter, and its end is nowhere in sight."
+    },
+    {
+      "case_id": "hp-103",
+      "error_type": "homophone_confusion",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "\"You was always quicker then me,\" the old sailor muttered.",
+      "paragraph": "“You was always quicker then me,” the old sailor muttered."
+    },
+    {
+      "case_id": "sp-105",
+      "error_type": "homophone_confusion",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "The ransom note read: I have you're cat.",
+      "paragraph": "The ransom note read: I have you’re cat. Leeve the muny by the oek tree."
+    },
+    {
+      "case_id": "tq-001",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You're coming to the launch aren't you?\" she asked.",
+      "paragraph": "“You’re coming to the launch aren’t you?” she asked."
+    },
+    {
+      "case_id": "tq-002",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"It's colder up here isn't it?\" he murmured.",
+      "paragraph": "“It’s colder up here isn’t it?” he murmured."
+    },
+    {
+      "case_id": "tq-003",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Let's leave the rest for morning shall we?\"",
+      "paragraph": "“Let’s leave the rest for morning shall we?”"
+    },
+    {
+      "case_id": "tq-004",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"He never signed the papers did he?\" she pressed.",
+      "paragraph": "“He never signed the papers did he?” she pressed."
+    },
+    {
+      "case_id": "tq-005",
+      "error_type": "apostrophe_error",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You did lock the gate right?\" he asked.",
+      "paragraph": "“You did lock the gate right?” he asked."
+    },
+    {
+      "case_id": "dt-001",
+      "error_type": "introductory_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Wait by the gate.\" he said, and turned away.",
+      "paragraph": "“Wait by the gate.” he said, and turned away."
+    },
+    {
+      "case_id": "dt-002",
+      "error_type": "introductory_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You promised me that.\" She said, and looked away.",
+      "paragraph": "“You promised me that.” She said, and looked away."
+    },
+    {
+      "case_id": "dt-003",
+      "error_type": "introductory_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Not a word of it,\" She hissed across the table.",
+      "paragraph": "“Not a word of it,” She hissed across the table."
+    },
+    {
+      "case_id": "dt-004",
+      "error_type": "introductory_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Put it down.\" Delia said without turning.",
+      "paragraph": "“Put it down.” Delia said without turning."
+    },
+    {
+      "case_id": "dt-005",
+      "error_type": "introductory_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Wait here\", he said, blocking the doorway.",
+      "paragraph": "“Wait here”, he said, blocking the doorway."
+    },
+    {
+      "case_id": "dt-101",
+      "error_type": "introductory_comma",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "\"I told you already.\" She turned toward the window.",
+      "paragraph": "“I told you already.” She turned toward the window."
+    },
+    {
+      "case_id": "dt-104",
+      "error_type": "introductory_comma",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "\"Don't move.\" Sarah reached slowly for the light.",
+      "paragraph": "“Don’t move.” Sarah reached slowly for the light."
+    },
+    {
+      "case_id": "dac-001",
+      "error_type": "direct_address_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You're late again Marcus,\" the foreman snapped.",
+      "paragraph": "“You’re late again Marcus,” the foreman snapped."
+    },
+    {
+      "case_id": "dac-002",
+      "error_type": "direct_address_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Come along Captain, we haven't got all night.\"",
+      "paragraph": "“Come along Captain, we haven’t got all night.”"
+    },
+    {
+      "case_id": "dac-003",
+      "error_type": "direct_address_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Dad the engine's smoking again,\" the boy shouted.",
+      "paragraph": "“Dad the engine’s smoking again,” the boy shouted."
+    },
+    {
+      "case_id": "dac-004",
+      "error_type": "direct_address_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"I told you Rosa it wouldn't hold,\" he said.",
+      "paragraph": "“I told you Rosa it wouldn’t hold,” he said."
+    },
+    {
+      "case_id": "tq-001",
+      "error_type": "tag_question_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You're coming to the launch aren't you?\" she asked.",
+      "paragraph": "“You’re coming to the launch aren’t you?” she asked."
+    },
+    {
+      "case_id": "tq-002",
+      "error_type": "tag_question_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"It's colder up here isn't it?\" he murmured.",
+      "paragraph": "“It’s colder up here isn’t it?” he murmured."
+    },
+    {
+      "case_id": "tq-003",
+      "error_type": "tag_question_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Let's leave the rest for morning shall we?\"",
+      "paragraph": "“Let’s leave the rest for morning shall we?”"
+    },
+    {
+      "case_id": "tq-004",
+      "error_type": "tag_question_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"He never signed the papers did he?\" she pressed.",
+      "paragraph": "“He never signed the papers did he?” she pressed."
+    },
+    {
+      "case_id": "tq-005",
+      "error_type": "tag_question_comma",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You did lock the gate right?\" he asked.",
+      "paragraph": "“You did lock the gate right?” he asked."
+    },
+    {
+      "case_id": "spk-001",
+      "error_type": "speaker_change",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"I won't sign it.\" \"You will, and gladly.\"",
+      "paragraph": "“I won’t sign it.” “You will, and gladly.”"
+    },
+    {
+      "case_id": "spk-002",
+      "error_type": "speaker_change",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Where have you been?\" I asked, and \"Out,\" he said.",
+      "paragraph": "“Where have you been?” I asked, and “Out,” he said."
+    },
+    {
+      "case_id": "spk-003",
+      "error_type": "speaker_change",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"It's late.\" \"It's always late here,\" she said.",
+      "paragraph": "“It’s late.” “It’s always late here,” she said."
+    },
+    {
+      "case_id": "spk-004",
+      "error_type": "speaker_change",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You could have told me.\" \"When?\" he shot back.",
+      "paragraph": "“You could have told me.” “When?” he shot back."
+    },
+    {
+      "case_id": "cur-001",
+      "error_type": "currency_style",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"The room is $40.00 a night,\" the landlady said flatly.",
+      "paragraph": "“The room is $40.00 a night,” the landlady said flatly."
+    },
+    {
+      "case_id": "cur-003",
+      "error_type": "currency_style",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"I wouldn't give $2.00 for the lot,\" the dealer scoffed.",
+      "paragraph": "“I wouldn’t give $2.00 for the lot,” the dealer scoffed."
+    },
+    {
+      "case_id": "cur-004",
+      "error_type": "currency_style",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You owe me $15.00 and not a penny less,\" she said.",
+      "paragraph": "“You owe me $15.00 and not a penny less,” she said."
+    },
+    {
+      "case_id": "dt-001",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Wait by the gate.\" he said, and turned away.",
+      "paragraph": "“Wait by the gate.” he said, and turned away."
+    },
+    {
+      "case_id": "dt-002",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You promised me that.\" She said, and looked away.",
+      "paragraph": "“You promised me that.” She said, and looked away."
+    },
+    {
+      "case_id": "dt-004",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Put it down.\" Delia said without turning.",
+      "paragraph": "“Put it down.” Delia said without turning."
+    },
+    {
+      "case_id": "dt-005",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Wait here\", he said, blocking the doorway.",
+      "paragraph": "“Wait here”, he said, blocking the doorway."
+    },
+    {
+      "case_id": "dt-101",
+      "error_type": "comma_splice",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "\"I told you already.\" She turned toward the window.",
+      "paragraph": "“I told you already.” She turned toward the window."
+    },
+    {
+      "case_id": "dt-104",
+      "error_type": "comma_splice",
+      "is_trap": true,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "would_be_false_positive",
+      "quote": "\"Don't move.\" Sarah reached slowly for the light.",
+      "paragraph": "“Don’t move.” Sarah reached slowly for the light."
+    },
+    {
+      "case_id": "dac-001",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"You're late again Marcus,\" the foreman snapped.",
+      "paragraph": "“You’re late again Marcus,” the foreman snapped."
+    },
+    {
+      "case_id": "dac-002",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Come along Captain, we haven't got all night.\"",
+      "paragraph": "“Come along Captain, we haven’t got all night.”"
+    },
+    {
+      "case_id": "dac-003",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"Dad the engine's smoking again,\" the boy shouted.",
+      "paragraph": "“Dad the engine’s smoking again,” the boy shouted."
+    },
+    {
+      "case_id": "dac-004",
+      "error_type": "comma_splice",
+      "is_trap": false,
+      "coverage": 1.0,
+      "recover_level": "punctuation",
+      "outcome": "recall_gain",
+      "quote": "\"I told you Rosa it wouldn't hold,\" he said.",
+      "paragraph": "“I told you Rosa it wouldn’t hold,” he said."
+    }
+  ]
+}

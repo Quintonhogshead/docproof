@@ -55,6 +55,19 @@ def test_wholesale_retype_of_a_run_on_is_rejected():
     assert _status(original, corrected) == "rejected_oversized"
 
 
+def test_an_oversized_finding_keeps_its_anchor_for_the_comment_channel():
+    """Rejected as a tracked change, but not thrown away: the anchor is retained
+    so the reassembler can surface it as a margin comment for a human to make by
+    hand (the round trip is in tests/test_queries.py). Dropping the anchor would
+    put the catch back in the silent-rejection bucket this fix exists to empty."""
+    doc = _doc("She left at noon.'")
+    out = validate_findings(
+        [_finding("She left at noon.'", "She left at noon,' the captain said.")],
+        doc, "medium", edit_guard=GUARD)
+    assert out[0].status == "rejected_oversized"
+    assert out[0].anchor is not None
+
+
 # --- what the guard lets through ---------------------------------------------
 
 def test_a_missing_small_word_passes():

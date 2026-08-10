@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a bare integer 1-100, an attributive age, an ordinal-numeral
+# century, and an adjectival fraction, all in prose. Traps: dates, times,
+# measurements (101+), addresses, and page numbers — the legitimate numeral
+# contexts. No paragraph is a calibration example.
+error_type: number_style
+
+cases:
+  - id: ns-001
+    text: "She waited 40 minutes on the platform for a train that never came."
+    expect: { span: "40", correction: "forty", confidence: high }
+  - id: ns-002
+    text: "A 60-year-old woman kept the lighthouse alone."
+    expect: { span: "60-year-old", correction: "sixty-year-old", confidence: high }
+  - id: ns-003
+    text: "He collected 19th century maps of the coast."
+    expect: { span: "19th", correction: "nineteenth", confidence: high }
+  - id: ns-004
+    text: "There were only 7 of them left by nightfall."
+    expect: { span: "7", correction: "seven", confidence: high }
+  - id: ns-005
+    text: "A 2/3 majority carried the vote easily."
+    expect: { span: "2/3", correction: "two-thirds", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: ns-101
+    text: "The letter was postmarked March 3, 1911, and never answered."
+    expect: clean          # a date and year
+  - id: ns-102
+    text: "The train left at 8:15 sharp, and she was not on it."
+    expect: clean          # a time of day
+  - id: ns-103
+    text: "The recipe called for 250 grams of flour and a pinch of salt."
+    expect: clean          # a measurement, and 101+ is already house style
+  - id: ns-104
+    text: "They lived at 14 Mercer Street through the war years."
+    expect: clean          # a street address
+  - id: ns-105
+    text: "Turn to page 47 and read the passage aloud."
+    expect: clean          # a page number

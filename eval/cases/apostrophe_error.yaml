@@ -1,0 +1,42 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Injected (mechanical) error cases for this type can be mass-produced with
+# eval/tools/generate_injected.py; this file carries hand-authored errors plus
+# adversarial traps. No paragraph here is a shipped calibration example.
+error_type: apostrophe_error
+
+cases:
+  - id: ap-001
+    text: "He left his brothers hat on the train to Dover."
+    expect: { span: "brothers hat", correction: "brother's hat", confidence: medium }
+  - id: ap-002
+    text: "The captains orders were ignored by the whole crew."
+    expect: { span: "captains orders", correction: "captain's orders", confidence: medium }
+  - id: ap-003
+    text: "The grocer chalked fresh apple's on the board outside."
+    expect: { span: "apple's", correction: "apples", confidence: high }
+  - id: ap-004
+    text: "I dont recall the man ever raising his voice."
+    expect: { span: "dont", correction: "don't", confidence: high }
+  - id: ap-005
+    text: "She wasnt at the harbour when the ship came in."
+    expect: { span: "wasnt", correction: "wasn't", confidence: high }
+  - id: ap-006
+    text: "The childrens shoes were lined up by the door."
+    expect: { span: "childrens shoes", correction: "children's shoes", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ap-101
+    text: "He was still runnin' hard when the whistle blew."
+    expect: clean          # apostrophe marks a dropped letter in dialect
+  - id: ap-102
+    text: "They moved here sometime in the 1970s, before the mill closed."
+    expect: clean          # a decade without an apostrophe is correct
+  - id: ap-103
+    text: "James' handwriting slanted hard to the left."
+    expect: clean          # s-ending singular possessive, accepted style
+  - id: ap-104
+    text: "It's a pity about its cracked spine, she said of the book."
+    expect: clean          # its/it's belong to homophone_confusion, not here
+  - id: ap-105
+    text: "The band played rock 'n' roll until the small hours."
+    expect: clean          # apostrophes marking dropped letters

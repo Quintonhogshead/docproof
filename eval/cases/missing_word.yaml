@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# The highest false-positive-risk type: seeded errors are a single clearly
+# dropped word (article, preposition, auxiliary, correlative). Traps: telegraphic
+# style, dialogue, a zero relative pronoun, a zero-article idiom, and an
+# imperative. No paragraph is a calibration example.
+error_type: missing_word
+
+cases:
+  - id: mw-001
+    text: "She hurried to station before the last train left."
+    expect: { span: "to station", correction: "to the station", confidence: high }
+  - id: mw-002
+    text: "He was terrified the dark for most of his childhood."
+    expect: { span: "terrified the", correction: "terrified of the", confidence: high }
+  - id: mw-003
+    text: "He going to leave before the others woke."
+    expect: { span: "He going", correction: "He was going", confidence: high }
+  - id: mw-004
+    text: "He picked up phone and dialed the operator."
+    expect: { span: "up phone", correction: "up the phone", confidence: high }
+  - id: mw-005
+    text: "The bridge ran between the mill the old church."
+    expect: { span: "mill the", correction: "mill and the", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: mw-101
+    text: "Rain. No lantern. A long walk down to the shore."
+    expect: clean          # telegraphic style, deliberate fragments
+  - id: mw-102
+    text: "\"You coming or not?\" she called from the cart."
+    expect: clean          # dropped words are how people speak
+  - id: mw-103
+    text: "The book I read that winter has stayed with me."
+    expect: clean          # a zero relative pronoun is always optional
+  - id: mw-104
+    text: "He went to bed hungry and woke hungrier still."
+    expect: clean          # "to bed" is a correct zero-article idiom
+  - id: mw-105
+    text: "Close the door and mind the step."
+    expect: clean          # imperatives have no stated subject

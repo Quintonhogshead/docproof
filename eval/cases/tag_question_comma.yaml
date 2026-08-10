@@ -1,0 +1,36 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a missing comma before a tag question. Traps: an embedded
+# question, "right"/"okay"/"then" as ordinary adverbs, and a dialect fused tag.
+# No paragraph is a calibration example.
+error_type: tag_question_comma
+
+cases:
+  - id: tq-001
+    text: "\"You're coming to the launch aren't you?\" she asked."
+    expect: { span: "launch aren't", correction: "launch, aren't", confidence: high }
+  - id: tq-002
+    text: "\"It's colder up here isn't it?\" he murmured."
+    expect: { span: "here isn't", correction: "here, isn't", confidence: high }
+  - id: tq-003
+    text: "\"Let's leave the rest for morning shall we?\""
+    expect: { span: "morning shall", correction: "morning, shall", confidence: high }
+  - id: tq-004
+    text: "\"He never signed the papers did he?\" she pressed."
+    expect: { span: "papers did", correction: "papers, did", confidence: high }
+  - id: tq-005
+    text: "\"You did lock the gate right?\" he asked."
+    expect: { span: "gate right", correction: "gate, right", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: tq-101
+    text: "She asked whether it was cold enough to freeze the pond."
+    expect: clean          # an embedded question, not a tag
+  - id: tq-102
+    text: "\"Do it right now, before he changes his mind,\" she said."
+    expect: clean          # "right" is an adverb here, not a tag
+  - id: tq-103
+    text: "\"Okay, let's get started then,\" the coach called."
+    expect: clean          # "okay" and "then" are interjection/adverb, not tags
+  - id: tq-104
+    text: "\"You'll manage it somehow, innit,\" the boy said."
+    expect: clean          # a dialect fused tag the author plainly intends

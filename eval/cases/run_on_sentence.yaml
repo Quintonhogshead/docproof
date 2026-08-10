@@ -1,0 +1,37 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: two independent clauses fused with NO punctuation between them.
+# Traps: a comma splice (comma_splice owns it), a comma+conjunction join, and
+# two genuinely long but correctly built sentences. No paragraph is a
+# calibration example.
+error_type: run_on_sentence
+
+cases:
+  - id: ro-001
+    text: "She opened the shutters the room was full of light."
+    expect: { span: "shutters the", correction: "shutters. The", confidence: high }
+  - id: ro-002
+    text: "I knocked twice no one came to the door."
+    expect: { span: "twice no", correction: "twice. No", confidence: high }
+  - id: ro-003
+    text: "The lantern went out we felt our way down the stairs."
+    expect: { span: "out we", correction: "out. We", confidence: high }
+  - id: ro-004
+    text: "He read the telegram his face went white."
+    expect: { span: "telegram his", correction: "telegram. His", confidence: high }
+  - id: ro-005
+    text: "The tide turned the boats swung on their moorings."
+    expect: { span: "turned the", correction: "turned. The", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ro-101
+    text: "The letter was written, no one troubled to post it."
+    expect: clean          # a comma splice — comma_splice owns it, not this type
+  - id: ro-102
+    text: "It was nearly midnight, so they let the fire die down."
+    expect: clean          # a comma plus a coordinating conjunction
+  - id: ro-103
+    text: "Because the bridge was out before we reached the ford, we turned back and waited for the water to fall."
+    expect: clean          # long but correctly subordinated
+  - id: ro-104
+    text: "She stood at the rail and watched the harbour lights blur and shrink and vanish into the fog."
+    expect: clean          # long but correctly coordinated

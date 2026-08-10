@@ -19,6 +19,40 @@ def find_nth(haystack: str, needle: str, n: int) -> int:
     return start
 
 
+# Curly quotes, dashes and non-breaking spaces, each folded to its ASCII form
+# ONE character for one. The manuscript's normalizer curls quotes before ingest,
+# so the canonical text holds “ ” ‘ ’; a weaker model routinely re-types the
+# sentence with "straight" punctuation, and an exact substring search then fails
+# and the finding is discarded as unanchorable even though it is the same
+# sentence character for character. Folding both sides recovers it. The fold is
+# deliberately length-preserving — ellipsis (…→...) and whitespace runs are NOT
+# folded — so an offset found in the folded text still indexes the real text,
+# and the tracked change lands on the manuscript's own characters.
+_ANCHOR_FOLD = str.maketrans({
+    "“": '"', "”": '"',      # “ ”
+    "‘": "'", "’": "'",      # ‘ ’
+    "–": "-", "—": "-",      # – —
+    " ": " ",                     # non-breaking space
+})
+
+
+def _fold_punct(s: str) -> str:
+    return s.translate(_ANCHOR_FOLD)
+
+
+def anchor_offset(haystack: str, needle: str, n: int) -> int:
+    """Start offset of the n-th occurrence of `needle` in `haystack`, or -1.
+
+    Exact first; on failure, a punctuation-tolerant retry that folds curly
+    quotes, dashes and nbsp on both sides (see `_ANCHOR_FOLD`). Because the fold
+    never moves a character, the offset it returns indexes the ORIGINAL
+    `haystack`, so callers slice the real text for the edit."""
+    s = find_nth(haystack, needle, n)
+    if s != -1:
+        return s
+    return find_nth(_fold_punct(haystack), _fold_punct(needle), n)
+
+
 def shrink(original: str, corrected: str) -> tuple[int, str, str]:
     """Trim common prefix and suffix; return (prefix_len, deleted, inserted).
     shrink('It was late, we left.', 'It was late. We left.')
@@ -73,8 +107,9 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             log.debug("%s: unknown paragraph %s", f.finding_id, f.para_id)
             continue
 
-        # 1 — anchor the verbatim quote
-        s = find_nth(para.text, f.original_text, f.occurrence)
+        # 1 — anchor the quote, tolerating a model that re-typed the
+        # manuscript's curly punctuation as straight (see anchor_offset)
+        s = anchor_offset(para.text, f.original_text, f.occurrence)
         if s == -1:
             out.append(_status(f, "rejected_no_anchor"))
             log.debug("%s: quote not found in %s (occurrence %d): %r",
@@ -93,6 +128,9 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                 continue
             start = s + off
             end = start + len(f.corrected_text)
+            # The span comes from the real paragraph, not the model's quote, so
+            # a fold-recovered match still marks the manuscript's own characters.
+            marked = para.text[start:end]
             # Formatting claims its own register: marking a title italic and
             # correcting a typo inside it are not in conflict, but marking the
             # same title twice is.
@@ -102,28 +140,34 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                 continue
             if CONFIDENCE_RANK[f.confidence] < threshold:
                 out.append(_status(f, "skipped_low_confidence", Anchor(
-                    start=start, end=end, delete_text=f.corrected_text,
-                    insert_text=f.corrected_text)))
+                    start=start, end=end, delete_text=marked,
+                    insert_text=marked)))
                 continue
             spans.append((start, end))
             out.append(dataclasses.replace(
                 f, status="validated", format=format_types[f.error_type],
                 anchor=Anchor(start=start, end=end,
-                              delete_text=f.corrected_text,
-                              insert_text=f.corrected_text)))
+                              delete_text=marked, insert_text=marked)))
             continue
 
-        if f.error_type in query_types:
+        if f.error_type in query_types or f.force_query:
             # The whole quoted sentence is the anchor: a question is about a
             # passage, not about the characters someone would have changed.
-            key = (f.para_id, s, "query")
+            # force_query is the verifier's downgrade — a finding it would not
+            # keep as a change but did not reject either, sent to the margin.
+            # The error type is part of the key so two *different* questions
+            # about one sentence — a term-consistency query and a speaker-change
+            # query, say — both survive; only the same question asked twice is a
+            # duplicate.
+            key = (f.para_id, s, "query", f.error_type)
             if key in seen:
                 out.append(_status(f, "rejected_duplicate"))
                 continue
             seen.add(key)
+            end = s + len(f.original_text)
             out.append(_status(f, "query", Anchor(
-                start=s, end=s + len(f.original_text),
-                delete_text=f.original_text, insert_text="")))
+                start=s, end=end,
+                delete_text=para.text[s:end], insert_text="")))
             continue
 
         # 2 — shrink to the minimal edit
@@ -132,8 +176,14 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             out.append(_status(f, "rejected_noop"))
             continue
         start, end = s + pre, s + pre + len(deleted)
+        # delete_text is the manuscript's own characters at that span, not the
+        # model's quote: when the anchor matched only after folding punctuation
+        # the two differ (straight vs curly), and the reassembler re-asserts the
+        # slice before it edits. The fold is length-preserving, so this is the
+        # same characters in the manuscript's form. (For an exact match it is
+        # byte-identical to `deleted`, so nothing changes on that path.)
         anchor = Anchor(start=start, end=end,
-                        delete_text=deleted, insert_text=inserted)
+                        delete_text=para.text[start:end], insert_text=inserted)
 
         # 2.5 — overreach guard. A proofreading fix is minimal; an edit that
         # re-types a large span or adds a lot of new text is the model

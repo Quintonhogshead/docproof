@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from .agreement import canonical_anchors, fold
 from .models import Anchor
 from .utils.xml_helpers import (DELTEXT_TAG, DEL_TAG, DocxPackage, INS_TAG,
                                 T_TAG, walk_package)
@@ -73,13 +74,6 @@ def open_docx(path: str | Path) -> DocxPackage:
 
 
 # --- extracting edits as anchors in reject-coordinates -----------------------
-
-def _fold(s: str) -> str:
-    """Quote-fold, length-preserving, so straight/curly differences don't
-    misalign offsets or hide agreement."""
-    return (s.replace("“", '"').replace("”", '"')
-             .replace("‘", "'").replace("’", "'"))
-
 
 def extract_paragraph_edits(p) -> tuple[str, list[Anchor]]:
     """Return (reject_text, edits) for one paragraph element.
@@ -173,7 +167,7 @@ def _overlaps(a: Anchor, b: Anchor) -> bool:
 
 
 def _apply(base: str, a: Anchor) -> str:
-    return _fold(base[:a.start] + a.insert_text + base[a.end:])
+    return fold(base[:a.start] + a.insert_text + base[a.end:])
 
 
 def _same_effect(base: str, a: Anchor, b: Anchor) -> bool:
@@ -197,40 +191,6 @@ def _apply_all(base: str, edits: list[Anchor]) -> str:
     return "".join(out)
 
 
-# Two change regions separated by this few unchanged characters or fewer count
-# as one edit. It keeps a single logical fix that touches more than one spot —
-# a period turned to a comma plus the pronoun it lowercases, across the closing
-# quote and space between them — from splitting into an agreement and a phantom
-# extra. Wider than this and two genuinely separate edits would fuse.
-_CANON_GAP = 3
-
-
-def _canonical_anchors(base: str, target: str) -> list[Anchor]:
-    """`base` → `target` as a minimal set of replacement anchors in base
-    coordinates, independent of how either document happened to record the
-    change.
-
-    This is the whole reason a word-level retype and a one-character fix can
-    compare equal: both sides are re-derived from their accept-all text to the
-    *same* granularity, so a change one document wrote as a single wide edit and
-    the other split into several narrow ones line up instead of landing in
-    'different fix' with a phantom 'only in B' left over. Quote-folded so a
-    straight/curly difference is not mistaken for an edit."""
-    fb, ft = _fold(base), _fold(target)
-    ops = [op for op in
-           SequenceMatcher(None, fb, ft, autojunk=False).get_opcodes()
-           if op[0] != "equal"]
-    anchors: list[Anchor] = []
-    i = 0
-    while i < len(ops):
-        _, i1, i2, j1, j2 = ops[i]
-        # Absorb the next change when only a short unchanged run separates them.
-        while i + 1 < len(ops) and ops[i + 1][1] - i2 <= _CANON_GAP:
-            i2, j2 = ops[i + 1][2], ops[i + 1][4]
-            i += 1
-        anchors.append(Anchor(i1, i2, base[i1:i2], target[j1:j2]))
-        i += 1
-    return anchors
 
 
 @dataclass
@@ -309,8 +269,8 @@ def compare_edits(a: DocEdits, b: DocEdits, *, label_a: str = "A",
     # bases are identical (quote-fold aside) — otherwise the offsets are not in
     # the same coordinate system and a "match" would be luck — so diff the two
     # sequences of base texts and take difflib's runs of equal paragraphs.
-    a_keys = [_fold(base) for _, base in a_items]
-    b_keys = [_fold(base) for _, base in b_items]
+    a_keys = [fold(base) for _, base in a_items]
+    b_keys = [fold(base) for _, base in b_items]
     sm = SequenceMatcher(a=a_keys, b=b_keys, autojunk=False)
     matched_a: set[int] = set()
     matched_b: set[int] = set()
@@ -344,8 +304,8 @@ def _compare_para(para_id: str, base: str, a_edits: list[Anchor],
     # re-derive both sides from their accept-all result to one canonical
     # granularity first, so a word-level retype and a minimal fix that reach the
     # same text agree instead of splitting into a disagreement and a phantom.
-    a_canon = _canonical_anchors(base, _apply_all(base, a_edits))
-    b_canon = _canonical_anchors(base, _apply_all(base, b_edits))
+    a_canon = canonical_anchors(base, _apply_all(base, a_edits))
+    b_canon = canonical_anchors(base, _apply_all(base, b_edits))
     unmatched_b = list(b_canon)
     for a in a_canon:
         overlapping = [b for b in unmatched_b if _overlaps(a, b)]

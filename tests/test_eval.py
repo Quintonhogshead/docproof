@@ -123,7 +123,12 @@ def test_runner_validates_a_correct_finding(tmp_path):
                    "corrected_text": "The committee met in secret and reached no consensus before midnight.",
                    "confidence": "high", "explanation": "x"},
     })
-    hit = [f for f in run.findings if f.status == "validated"]
+    # The deterministic sweeps run over the whole corpus and legitimately fire
+    # on unrelated cases (doubled words, em dashes, dialogue tags) now that the
+    # corpus spans every type; they carry chunk_id "sweep". Count only the
+    # model's own findings, which is what this test is about.
+    hit = [f for f in run.findings
+           if f.status == "validated" and f.chunk_id != "sweep"]
     assert len(hit) == 1 and hit[0].error_type == "spelling"
 
 

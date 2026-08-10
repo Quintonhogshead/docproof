@@ -29,6 +29,7 @@ from docproof.audit import AuditError
 from docproof.ingest import IngestError
 from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
                                run_sync)
+from docproof.models import CoverageLedger
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
@@ -483,14 +484,15 @@ class JobRunner:
         # _ReplayOnly guarantees this makes no API calls: if the checkpoint is
         # somehow incomplete, it raises rather than silently charging for a
         # re-review.
+        coverage = CoverageLedger()
         findings, usage = run_sync(cfg, prepared, _ReplayOnly(),
-                                   checkpoint=checkpoint)
+                                   checkpoint=checkpoint, coverage=coverage)
 
         cfg.audit = "warn"                              # now let the write pass
         out = (Path(job.results_dir) if job.results_dir
                else self._claim_results_dir(job))
         outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                         source_path=job.source_path)
+                         source_path=job.source_path, coverage=coverage)
         checkpoint.delete()
         updated = self.store.update(job_id, state="done", audit_overridden=True,
                                     applied=outputs.applied,
@@ -659,10 +661,11 @@ class JobRunner:
         # a crash or a mid-run exception resumes instead of paying again. Only
         # a finished job deletes it.
         checkpoint = self._checkpoint(job, cfg, prepared)
+        coverage = CoverageLedger()
         try:
             findings, usage = run_sync(
                 cfg, prepared, provider, progress=progress,
-                checkpoint=checkpoint,
+                checkpoint=checkpoint, coverage=coverage,
                 should_cancel=lambda: self._cancel_pending(job_id))
         except JobCancelled:
             self._abort(job_id)
@@ -670,7 +673,7 @@ class JobRunner:
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                             source_path=job.source_path)
+                             source_path=job.source_path, coverage=coverage)
         except AuditError as e:
             # No reviewed document was written — that is the point — but the
             # summary and findings were, and they name the paragraph that did

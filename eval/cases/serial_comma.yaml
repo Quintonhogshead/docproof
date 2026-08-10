@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a 3+ item list missing the serial comma before the final
+# conjunction. Traps: two-item lists, compound predicates, lists that already
+# carry it, and a firm name containing "and". No paragraph is a calibration
+# example.
+error_type: serial_comma
+
+cases:
+  - id: sc-001
+    text: "He packed a compass, a knife and a coil of rope for the climb."
+    expect: { span: "knife and", correction: "knife, and", confidence: high }
+  - id: sc-002
+    text: "The garden gave them beans, tomatoes and a glut of squash."
+    expect: { span: "tomatoes and", correction: "tomatoes, and", confidence: high }
+  - id: sc-003
+    text: "They could travel by train, by coach or on foot from there."
+    expect: { span: "coach or", correction: "coach, or", confidence: high }
+  - id: sc-004
+    text: "She locked the door, latched the shutters and blew out the lamp."
+    expect: { span: "shutters and", correction: "shutters, and", confidence: high }
+  - id: sc-005
+    text: "The shelf held a Bible, a ledger and a single tin whistle."
+    expect: { span: "ledger and", correction: "ledger, and", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: sc-101
+    text: "She bought salt and pepper for the long crossing."
+    expect: clean          # a two-item list takes no comma
+  - id: sc-102
+    text: "He opened the gate and walked into the yard without a word."
+    expect: clean          # a compound predicate, not a list
+  - id: sc-103
+    text: "The box held bandages, a torch, and a coil of wire."
+    expect: clean          # already carries the serial comma
+  - id: sc-104
+    text: "The firm of Marsh, Colley and Root had offices on the quay."
+    expect: clean          # a firm name spelled the way its owner spells it
+  - id: sc-105
+    text: "He stumbled, caught the rail and steadied himself against the wall."
+    expect: clean          # three coordinate verbs, one subject — not a list

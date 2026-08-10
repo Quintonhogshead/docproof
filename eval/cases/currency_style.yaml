@@ -1,0 +1,37 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a currency symbol inside dialogue (spell it out), and a plain
+# price written out in narration (use the symbol). Traps: idioms, an attributive
+# compound, hyperbole, and a receipt/artifact. No paragraph is a calibration
+# example.
+error_type: currency_style
+
+cases:
+  - id: cur-001
+    text: "\"The room is $40.00 a night,\" the landlady said flatly."
+    expect: { span: "$40.00", correction: "forty dollars", confidence: high }
+  - id: cur-002
+    text: "The crossing set them back thirty dollars in all."
+    expect: { span: "thirty dollars", correction: "$30", confidence: medium }
+  - id: cur-003
+    text: "\"I wouldn't give $2.00 for the lot,\" the dealer scoffed."
+    expect: { span: "$2.00", correction: "two dollars", confidence: high }
+  - id: cur-004
+    text: "\"You owe me $15.00 and not a penny less,\" she said."
+    expect: { span: "$15.00", correction: "fifteen dollars", confidence: high }
+  - id: cur-005
+    text: "The old clock fetched forty dollars at the estate sale."
+    expect: { span: "forty dollars", correction: "$40", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: cur-101
+    text: "\"It isn't worth two cents to me,\" she muttered."
+    expect: clean          # an idiom, not an amount
+  - id: cur-102
+    text: "He pulled a five-dollar bill from the lining of his coat."
+    expect: clean          # an attributive compound, not a price
+  - id: cur-103
+    text: "For a moment she felt like a million dollars."
+    expect: clean          # hyperbolic idiom
+  - id: cur-104
+    text: "The receipt listed $3.00 for bread and $1.50 for milk."
+    expect: clean          # a quoted artifact; symbols in narration are correct

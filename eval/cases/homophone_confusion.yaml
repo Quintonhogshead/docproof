@@ -1,0 +1,42 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Injected (mechanical) error cases for this type can be mass-produced with
+# eval/tools/generate_injected.py; this file carries hand-authored errors plus
+# adversarial traps. No paragraph here is a shipped calibration example.
+error_type: homophone_confusion
+
+cases:
+  - id: hp-001
+    text: "The cat licked it's paws by the cold hearth."
+    expect: { span: "it's", correction: "its", confidence: high }
+  - id: hp-002
+    text: "Their going to miss the last ferry if they wait."
+    expect: { span: "Their", correction: "They're", confidence: high }
+  - id: hp-003
+    text: "She was far more patient then her older sister."
+    expect: { span: "patient then", correction: "patient than", confidence: high }
+  - id: hp-004
+    text: "Your the reason the whole plan fell apart."
+    expect: { span: "Your", correction: "You're", confidence: high }
+  - id: hp-005
+    text: "The horses were to frightened to cross the bridge."
+    expect: { span: "to frightened", correction: "too frightened", confidence: high }
+  - id: hp-006
+    text: "She was terrified she would loose the necklace in the crowd."
+    expect: { span: "loose", correction: "lose", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: hp-101
+    text: "It's been a hard winter, and its end is nowhere in sight."
+    expect: clean          # both members correct: it's (it has), its (possessive)
+  - id: hp-102
+    text: "She knew the difference between then and than perfectly well."
+    expect: clean          # both words named, both correct
+  - id: hp-103
+    text: "\"You was always quicker then me,\" the old sailor muttered."
+    expect: clean          # dialect voice in dialogue characterizes the speaker
+  - id: hp-104
+    text: "He wanted to effect real change in the department."
+    expect: clean          # "effect" as a verb is correct
+  - id: hp-105
+    text: "The past is a country you can never quite revisit."
+    expect: clean          # "past" is the correct member here
