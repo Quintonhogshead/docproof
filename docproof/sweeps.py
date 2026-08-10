@@ -414,6 +414,60 @@ def _sweep_dialogue_tag(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- terminal punctuation ----------------------------------------------------
+
+# Sentence-ending marks (and their close-quote/bracket tails) that mean the
+# paragraph already ends cleanly, plus the marks whose absence is deliberate:
+# an em dash is an interruption, an ellipsis a trailing-off, a colon a label.
+_ENDS_CLEAN = tuple(".!?…:—–-*")
+_CLOSERS = "”’\"')]"
+_INTERNAL_END = re.compile(r"[.!?…][\"”’')\]]?\s")
+
+
+def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
+    """A body paragraph of prose that runs off the end without terminal
+    punctuation — "…Alex just crossed his arms" — wants a period.
+
+    Every guard here is there to keep the sweep off the things that legitimately
+    end without one: chapter and poem titles, glossary labels ("Mortal: a…"),
+    dialogue fragments, and interrupted lines (— or …). The sweep only fires on
+    something that unmistakably reads as a finished narrative sentence, because a
+    period is a silent edit and a period on a title is a wrong one."""
+    s = text.rstrip()
+    if not s:
+        return []
+    end = len(s)
+    # Step back over any closing quote/bracket so the period lands inside them.
+    while end > 0 and s[end - 1] in _CLOSERS:
+        end -= 1
+    if end == 0:
+        return []
+    last = s[end - 1]
+    if last in _ENDS_CLEAN or not (last.isalpha() or last.isdigit()):
+        return []
+    words = s.split()
+    if len(words) < 5:                              # too short to be sure it is prose
+        return []
+    if not (s[0].isupper() or s[0] in "\"“‘'"):     # sentences open like sentences
+        return []
+    if ":" in s:                                    # a label or definition, not prose
+        return []
+    tail = words[-1]
+    if tail.isupper() and len(tail) <= 3:           # an acronym or initial, not a word
+        return []
+    # Prose, not a title: it either carries an internal sentence break (so it is
+    # clearly more than a label) or a closing quote (dialogue), or it is simply
+    # long. And a title capitalises most of its words; prose does not.
+    has_prose_shape = (bool(_INTERNAL_END.search(s)) or any(q in s for q in "”’\"")
+                       or len(words) >= 12)
+    if not has_prose_shape:
+        return []
+    if sum(1 for w in words if w[:1].isupper()) / len(words) > 0.6:
+        return []
+    return [Hit(end, end, ".",
+                "A sentence ends without terminal punctuation.")]
+
+
 # --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
@@ -427,6 +481,8 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_compound_number),
     Sweep("sweep_dialogue_tag", "Dialogue tag punctuation and case",
           _sweep_dialogue_tag),
+    Sweep("sweep_terminal_period", "Missing sentence-final period",
+          _sweep_terminal_period),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}
