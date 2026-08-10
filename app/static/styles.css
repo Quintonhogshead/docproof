@@ -594,6 +594,22 @@ details.sections > summary {
 .table th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
 .table td:first-child { white-space: normal; }
 .table td:last-child, .table th:last-child { text-align: right; padding-right: 0; }
+/* The model the picker has chosen, in the promo cost comparison. */
+.table tr.chosen td { color: var(--accent); font-weight: 600; }
+
+/* ── promo cost estimate & oversize override ─────────────────────────────── */
+
+#promo-cost-line { margin: 0.3rem 0; }
+#promo-cost-compare { margin-top: 0.4rem; }
+#promo-cost-compare summary { cursor: pointer; }
+.notice.warn {
+  margin-top: 0.7rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.notice.warn p { margin: 0 0 0.5rem; color: var(--warn); font-weight: 600; }
 
 /* ── spending ────────────────────────────────────────────────────────────── */
 

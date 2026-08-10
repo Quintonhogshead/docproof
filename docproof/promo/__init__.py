@@ -10,13 +10,15 @@ from __future__ import annotations
 from .ingest import Manuscript, read_manuscript
 from .model import PromoResult, SocialPost
 from .pipeline import (OUTPUT_KINDS, PreparedPromo, PromoError, PromoOutputs,
-                       finish, prepare, run, run_mock)
+                       PromoTooLarge, estimate_output_tokens, finish, prepare,
+                       run, run_mock)
 from .verify import ClaimCheck, verify_claims, verify_grounding
 
 __all__ = [
     "Manuscript", "read_manuscript",
     "PromoResult", "SocialPost",
-    "PreparedPromo", "PromoOutputs", "PromoError", "OUTPUT_KINDS",
-    "prepare", "run", "run_mock", "finish",
+    "PreparedPromo", "PromoOutputs", "PromoError", "PromoTooLarge",
+    "OUTPUT_KINDS",
+    "prepare", "run", "run_mock", "finish", "estimate_output_tokens",
     "verify_grounding", "verify_claims", "ClaimCheck",
 ]

@@ -132,13 +132,36 @@ def register(app: FastAPI) -> None:
     def _promo_preflight(cfg, paths: Paths,
                          path: Path) -> tuple[dict | None, str | None]:
         # Promo only reads, so it opens what prep would turn away (a manuscript
-        # with tracked changes in it, say). A word count is enough for the drop
-        # card; the run reads it in full.
+        # with tracked changes in it, say). We render the same prompt the run
+        # will, so the token figure behind the cost estimate is the real one, not
+        # a word-count guess. `allow_oversize=True` is not the run override — it
+        # only stops a book too big for one pass from becoming a drop-time error:
+        # the card reports the size and the over-limit flag, and a person decides.
         try:
-            book = promolib.read_manuscript(path)
-        except (IngestError, ValueError) as e:
+            prepared = promolib.prepare(cfg, path, config_dir=CONFIG_PATH.parent,
+                                        override_dir=paths.promo,
+                                        allow_oversize=True)
+        except (IngestError, promolib.PromoError, ValueError) as e:
             return None, str(e)
-        return {"words": book.word_count}, None
+        # The claim-check pass, when it is on, re-sends the whole book — so a run
+        # with it enabled is two large calls over the manuscript, not one. Price
+        # the estimate for what will actually run.
+        calls = 2 if cfg.promo.verify_claims else 1
+        limit = cfg.promo.max_input_tokens
+        return {
+            "words": prepared.manuscript.word_count,
+            # One call's worth of input — what the single-pass limit is measured
+            # against, and what the over-limit note quotes.
+            "pass_tokens": prepared.est_input_tokens,
+            # Billed input across the run: doubled when the claim-check re-reads
+            # the book. This is what the cost estimate multiplies by the rate.
+            "input_tokens": prepared.est_input_tokens * calls,
+            "output_tokens": promolib.estimate_output_tokens(
+                cfg.promo.post_count) * calls,
+            "max_input_tokens": limit,
+            "over_limit": prepared.est_input_tokens > limit,
+            "verify_claims": cfg.promo.verify_claims,
+        }, None
 
     @app.get("/api/formats")
     def formats() -> dict:

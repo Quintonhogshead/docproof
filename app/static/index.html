@@ -210,6 +210,25 @@
         </label>
 
         <p class="field muted small" id="prep-cost" hidden></p>
+
+        <div class="field" id="promo-cost" hidden>
+          <p class="muted small" id="promo-cost-line"></p>
+          <details id="promo-cost-compare" hidden>
+            <summary class="muted small">Compare the models</summary>
+            <table class="table">
+              <tbody id="promo-cost-rows"></tbody>
+            </table>
+          </details>
+          <div class="notice warn" id="promo-oversize" hidden>
+            <p class="small" id="promo-oversize-note"></p>
+            <label class="radio">
+              <input type="checkbox" id="promo-oversize-ok">
+              <span><strong>Write it anyway</strong> — send the whole book in
+                one call. The models take far more than the limit; DocProof is
+                just being cautious.</span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <button id="start" class="primary big-button">Start review</button>
@@ -449,6 +468,34 @@
         <span>Which model should write it?</span>
         <select id="promo-model"></select>
       </label>
+      <label class="field">
+        <span>How hard should it think?</span>
+        <select id="pp-effort">
+          <option value="low" selected>Low — cheapest, and all promo copy needs</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="xhigh">Extra high</option>
+          <option value="max">Max — deepest, most expensive</option>
+        </select>
+      </label>
+      <div class="field" id="pp-cost" hidden>
+        <p class="muted small" id="pp-cost-line"></p>
+        <details id="pp-cost-compare" hidden>
+          <summary class="muted small">Compare the models</summary>
+          <table class="table">
+            <tbody id="pp-cost-rows"></tbody>
+          </table>
+        </details>
+        <div class="notice warn" id="pp-oversize" hidden>
+          <p class="small" id="pp-oversize-note"></p>
+          <label class="radio">
+            <input type="checkbox" id="pp-oversize-ok">
+            <span><strong>Write it anyway</strong> — send the whole book in one
+              call. The models take far more than the limit; DocProof is just
+              being cautious.</span>
+          </label>
+        </div>
+      </div>
       <button id="promo-run" class="primary" disabled>Write promo copy</button>
       <p id="promo-run-status" class="muted" hidden></p>
     </div>

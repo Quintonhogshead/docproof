@@ -124,8 +124,26 @@ def test_prepare_refuses_a_book_over_the_limit(tmp_path, cfg):
     src = tmp_path / "Rowan - book 1.docx"
     _make_novel(src)
     cfg.promo.max_input_tokens = 5           # smaller than any real manuscript
-    with pytest.raises(PromoError):
+    from docproof.promo import PromoTooLarge
+    with pytest.raises(PromoTooLarge) as excinfo:
         promo.prepare(cfg, src, config_dir=CONFIG_DIR)
+    # It is a PromoError too, so every existing handler still catches it.
+    assert isinstance(excinfo.value, PromoError)
+    # And it carries the numbers a caller needs to act (email, or the override).
+    assert excinfo.value.limit == 5
+    assert excinfo.value.tokens > 5
+    assert excinfo.value.words > 0
+
+
+def test_allow_oversize_runs_a_book_over_the_limit(tmp_path, cfg):
+    """The human override: past the single-pass limit, prepare goes through
+    instead of raising, so a person who chose to run anyway can."""
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    cfg.promo.max_input_tokens = 5
+    prepared = promo.prepare(cfg, src, config_dir=CONFIG_DIR, allow_oversize=True)
+    assert prepared.est_input_tokens > cfg.promo.max_input_tokens
+    assert "Aldous bridge" in prepared.user   # the whole book still went in
 
 
 def test_prepare_refuses_non_docx(tmp_path, cfg):

@@ -29,10 +29,38 @@ log = logging.getLogger("docproof.promo.pipeline")
 
 OUTPUT_KINDS = ("teaser", "posts")
 
+# Rough size of what a promo run writes back, for the pre-run cost hint only.
+# Output is a fixed deliverable — one teaser and post_count posts — so, unlike
+# the manuscript, it does not grow with book length. These are estimate
+# constants, not billed figures: the real spend is measured from usage after a
+# run, like every other cost hint in the app.
+TEASER_OUTPUT_TOKENS = 200
+POST_OUTPUT_TOKENS = 120
+
+
+def estimate_output_tokens(post_count: int) -> int:
+    """A guess at the teaser-plus-posts the model writes back, for the drop-time
+    cost estimate. Small next to a whole novel of input, and it does not scale
+    with the book — the deliverable is fixed regardless of manuscript length."""
+    return TEASER_OUTPUT_TOKENS + max(0, post_count) * POST_OUTPUT_TOKENS
+
 
 class PromoError(RuntimeError):
     """A promo run that cannot go on — too large for one pass, or an answer that
     did not come back usable. Carries a sentence meant for a person to read."""
+
+
+class PromoTooLarge(PromoError):
+    """A book over the single-pass token limit, with the numbers behind the
+    refusal so a caller can act on it — the watched folder emails them, the app
+    offers the human override. Subclasses PromoError, so every existing
+    `except PromoError` still catches it."""
+
+    def __init__(self, message: str, *, tokens: int, limit: int, words: int):
+        super().__init__(message)
+        self.tokens = tokens
+        self.limit = limit
+        self.words = words
 
 
 @dataclass
@@ -69,14 +97,23 @@ def resolve(config_dir: str | Path, value: str) -> Path:
 
 
 def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
-            override_dir: str | Path | None = None) -> PreparedPromo:
+            override_dir: str | Path | None = None,
+            allow_oversize: bool = False) -> PreparedPromo:
     """Read the whole manuscript and render the prompt, or refuse a book too big
     for a single pass.
 
     Raises IngestError on a document promo cannot open, PromoError on one whose
     estimated size overflows the single-pass limit. Splitting a novel across
     calls (chapter by chapter) is a planned extension, not silent behaviour — a
-    book that would need it stops here with a sentence saying so."""
+    book that would need it stops here with a sentence saying so.
+
+    `allow_oversize` is the human override: a person who has seen the size at
+    drop time and chosen to run anyway sends the whole book past the limit. The
+    limit is DocProof's own caution, not a model ceiling — the current models all
+    take far more than 180k tokens — so overriding sends one large call and lets
+    the provider be the judge. It only lifts the pre-check; a book that genuinely
+    exceeds the chosen model's context window still fails at the call, with the
+    provider's own error."""
     manuscript = read_manuscript(input_path)
     prompt = load_promo_prompt(resolve(config_dir, cfg.promo.generation_prompt),
                                override_dir=override_dir)
@@ -84,11 +121,18 @@ def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
     user = prompt.render_user(title=manuscript.title, manuscript=manuscript.text)
     tokens = estimate_tokens(system) + estimate_tokens(user)
     if tokens > cfg.promo.max_input_tokens:
-        raise PromoError(
-            f"{Path(input_path).name} is about {tokens:,} tokens, over the "
-            f"{cfg.promo.max_input_tokens:,}-token single-pass limit for promo. "
-            f"Promo reads the whole book in one call; splitting a long novel "
-            f"across calls is a planned extension not yet built.")
+        if not allow_oversize:
+            raise PromoTooLarge(
+                f"{Path(input_path).name} is about {tokens:,} tokens, over the "
+                f"{cfg.promo.max_input_tokens:,}-token single-pass limit for "
+                f"promo. Promo reads the whole book in one call; splitting a "
+                f"long novel across calls is a planned extension not yet built.",
+                tokens=tokens, limit=cfg.promo.max_input_tokens,
+                words=manuscript.word_count)
+        log.warning(
+            "Promo running oversize by human override: %s is about %d tokens, "
+            "over the %d-token single-pass limit — sending it anyway.",
+            Path(input_path).name, tokens, cfg.promo.max_input_tokens)
     log.info("Promo ready: %d words, ~%d input tokens, %d post(s) requested.",
              manuscript.word_count, tokens, cfg.promo.post_count)
     return PreparedPromo(manuscript=manuscript, prompt=prompt, system=system,

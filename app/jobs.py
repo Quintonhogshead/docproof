@@ -32,7 +32,7 @@ from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
-from docproof.promo import PromoError
+from docproof.promo import PromoError, PromoTooLarge
 from docproof.providers import ProviderError, build_provider, estimate_cost, \
     provider_for
 
@@ -118,6 +118,16 @@ class Job:
     # gate, "pending" waits in the panel for a person, "approved" once one has
     # okayed it. The generation itself doesn't read this — the delivery step does.
     approval: str = ""                 # "" | auto | pending | approved
+    # Promo only: the human override for a book over the single-pass token limit.
+    # False keeps the size guard; True was set by a person who saw the size at
+    # drop time and chose to send the whole book in one call anyway. Older
+    # records have no such field and were never overridden.
+    allow_oversize: bool = False
+    # Why a job failed, as a machine-readable tag when the reason needs handling
+    # beyond the message string. Currently "oversize" for a promo book past the
+    # single-pass limit, so the watcher can email a person about that case
+    # specifically. "" on success and on ordinary failures.
+    error_kind: str = ""
     # Which door this job came in by: somebody dropping a file on the window,
     # or the watcher finding one in a Drive folder. Two job stores adding up to
     # one bill, and a spending figure that cannot say which is a figure nobody
@@ -786,11 +796,18 @@ class JobRunner:
             provider = self._provider(cfg)
             prepared = promolib.prepare(
                 cfg, job.source_path, config_dir=self.config_path.parent,
-                override_dir=self.store.paths.promo)
+                override_dir=self.store.paths.promo,
+                allow_oversize=job.allow_oversize)
         except (ProviderError, IngestError, PromoError,
                 FileNotFoundError, ValueError) as e:
+            # An oversize book carries its numbers so the watcher can email a
+            # person the size and how to run it by hand, rather than just logging
+            # a generic failure.
+            extra = ({"error_kind": "oversize", "words": e.words,
+                      "input_tokens": e.tokens}
+                     if isinstance(e, PromoTooLarge) else {})
             self.store.update_if(job_id, expect=job.state, state="failed",
-                                 error=str(e))
+                                 error=str(e), **extra)
             return
 
         # Same compare-and-swap as the other pipelines: reading a whole novel
