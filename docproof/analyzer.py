@@ -87,6 +87,17 @@ ONE FINDING PER ERROR
 - Do not report the same error twice under two different error types. Pick the
   section that defines it most precisely.
 
+BE EXHAUSTIVE
+- Finding one error does not end your work. Read every paragraph in the batch,
+  and every sentence within it, on its own — an error late in a paragraph is as
+  real as one early, and a paragraph with one error often has another.
+- Check each sentence against every error type this pass defines, not just the
+  first that comes to mind. Coverage is the job; a missed error is a failure the
+  same as a wrong one.
+- This is not licence to invent. The do-not-flag rules for each type are
+  absolute — being thorough means not overlooking a real error, never manufacturing
+  a borderline one. When a case is genuinely clean, the finding count is zero.
+
 SCOPE
 - Report only the error types defined below.
 - Each user message is a batch of paragraphs to review, each one wrapped in a
