@@ -176,6 +176,21 @@ sweeps:
   - sweep_compound_number
   - sweep_dialogue_tag
 
+# Ensemble review. Empty `detectors` (the default) is single-detector mode:
+# api.model runs once, nothing is merged, no verifier runs — exactly the
+# behaviour that shipped before. List two or more detectors to fan out: each
+# reviews every chunk, their findings are merged by agreement (union, for
+# recall), then a stronger `verifier_model` adjudicates before anything reaches
+# the author (for precision). Two identical detectors is a self-ensemble; a
+# different vendor each is the diverse one. Every detector's cost is the whole
+# review over again, so this multiplies spend — the cost preview shows it.
+ensemble:
+  detectors: []             # e.g. [{model: gpt-5.6-luna}, {model: claude-haiku-4-5}]
+  verifier_model:           # null = no verifier; a stronger model when set
+  verifier_effort: high
+  verify_policy: disputed   # disputed (only where detectors disagree) | all | none
+  consensus_confidence_bump: false
+
 tracked_changes_policy: abort   # abort | accept_all_first | ignore
 
 # Rejecting every tracked change must reproduce the document as ingested.

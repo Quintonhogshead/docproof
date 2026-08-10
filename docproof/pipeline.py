@@ -67,6 +67,10 @@ class Prepared:
     # belongs here rather than to any chunk, and it costs no API call.
     consistency: ConsistencyReport = field(default_factory=ConsistencyReport)
     consistency_findings: list = field(default_factory=list)
+    # How many detectors review each chunk. 1 unless the ensemble is on, and the
+    # multiplier the request count and token estimate need — every detector is
+    # the whole review over again.
+    n_detectors: int = 1
 
     @property
     def conventions(self) -> str:
@@ -101,18 +105,19 @@ class Prepared:
 
     @property
     def request_count(self) -> int:
-        return len(self.chunks) * len(self.groups)
+        return len(self.chunks) * len(self.groups) * self.n_detectors
 
     @property
     def est_document_tokens(self) -> int:
         # Context paragraphs ride the user turn and are billed on every chunk of
         # every pass, so they belong in the tokens-sent estimate even though
-        # they are not the document's own text.
+        # they are not the document's own text. Every detector sends the whole
+        # thing again, hence the n_detectors multiplier.
         from .utils.tokens import estimate_tokens
         own = sum(c.est_tokens for c in self.chunks)
         context = sum(estimate_tokens(p.text)
                       for c in self.chunks for p in c.context_paragraphs)
-        return (own + context) * len(self.groups)
+        return (own + context) * len(self.groups) * self.n_detectors
 
 
 @dataclass(frozen=True)
@@ -258,7 +263,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
                     variant=variant, consistency=consistency,
-                    consistency_findings=consistency_findings)
+                    consistency_findings=consistency_findings,
+                    n_detectors=len(cfg.ensemble.detectors) or 1)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -365,19 +371,41 @@ def analyze_with_retry(analyzer: Analyzer, chunk: Chunk, usage: Usage
     return _retry_failed(analyzer, chunk, result, usage)
 
 
-def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
-             progress=None, checkpoint=None, should_cancel=None,
-             coverage=None) -> tuple[list, Usage]:
-    """Review every chunk now, one API call per (pass, chunk).
+def _detector_specs(cfg: Config) -> list[tuple[str, str | None]]:
+    """(model, effort) per detector to run. Single-detector mode — the default —
+    yields exactly api.model/api.effort, so the fan-out collapses to today's one
+    call per (pass, chunk) and nothing downstream can tell the difference."""
+    if not cfg.ensemble.enabled:
+        return [(cfg.api.model, cfg.api.effort)]
+    return [(d.model, d.effort) for d in cfg.ensemble.detectors]
 
-    The calls are independent, so up to `cfg.api.concurrency` of them are in
-    flight at once — most of a review's wall-clock is waiting on the network,
-    and this is where that time goes. Only the *fetch* is concurrent, though:
-    the results are folded back in strict document order, because the validator
-    gives an earlier finding first claim on a span, the id counter must hand out
-    stable f-NNNN, and the token accounting and resumable checkpoint both depend
-    on that order. So a big manuscript comes back far sooner, byte-for-byte the
-    same as if it had run serially.
+
+def _ckpt_key(pass_index: int, chunk_id: str, detector: int) -> str:
+    """Checkpoint key for one (pass, chunk, detector). Detector 0 keeps the
+    legacy two-part key so a checkpoint written before the ensemble existed —
+    or by a single-detector run — still resumes; later detectors get a suffix."""
+    from .batch import custom_id
+    base = custom_id(pass_index, chunk_id)
+    return base if detector == 0 else f"{base}-d{detector}"
+
+
+def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
+             *, progress=None, checkpoint=None, should_cancel=None,
+             coverage=None, provider_factory=None) -> tuple[list, Usage]:
+    """Review every chunk now, one API call per (pass, chunk, detector).
+
+    In single-detector mode (the default) that is one call per (pass, chunk),
+    exactly as before. When the ensemble is on, every detector reviews every
+    chunk; the calls are still independent, so up to `cfg.api.concurrency` are in
+    flight at once, and results are folded back in strict (pass, chunk, detector)
+    order — the order the id counter, the token accounting and the resumable
+    checkpoint all depend on. So a big manuscript comes back far sooner,
+    byte-for-byte the same as if it had run serially.
+
+    `provider` is the single detector's client in legacy mode; when the ensemble
+    is on it is ignored and `provider_factory` (default `build_provider`) builds
+    one client per detector model up front, so a missing key fails before any
+    call rather than mid-run.
 
     `progress` is called with (done, total) as each call is folded in, in order.
 
@@ -392,22 +420,52 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
     pool can't recall them — but their results are dropped."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from .batch import custom_id
     from .checkpoint import (add_usage, finding_from_dict, finding_to_dict,
                              snapshot, usage_delta)
 
+    if provider_factory is None:
+        from .providers import build_provider
+        provider_factory = build_provider
+
     start = (checkpoint.max_finding_id() + 1) if checkpoint else 1
     ids = itertools.count(start)
-    analyzers = build_analyzers(cfg, prepared.groups, provider, ids,
-                               prepared.vocabulary, prepared.conventions)
-    # The work list, in the order results must be folded back in.
-    work = [(analyzer, chunk, custom_id(i, chunk.chunk_id))
-            for i, analyzer in enumerate(analyzers)
-            for chunk in prepared.chunks]
+
+    # One set of per-pass analyzers per detector. In legacy mode the single
+    # detector reuses the caller's cfg and provider unchanged; in ensemble mode
+    # each detector gets a cfg copy with its own model/effort and its own client
+    # (built now, so a missing key raises before a single token is spent).
+    specs = _detector_specs(cfg)
+    ensemble = cfg.ensemble.enabled
+    det_analyzers = []
+    for model, effort in specs:
+        if not ensemble:
+            dcfg = cfg
+            dprov = provider if provider is not None else provider_factory(cfg)
+        else:
+            dcfg = cfg.model_copy(deep=True)
+            dcfg.api.model = model
+            dcfg.api.effort = effort
+            dprov = provider_factory(dcfg)
+        det_analyzers.append(build_analyzers(
+            dcfg, prepared.groups, dprov, ids,
+            prepared.vocabulary, prepared.conventions))
+
+    # The work list, in the order results must be folded back in: pass, then
+    # chunk, then detector. With one detector this is (pass, chunk), the legacy
+    # order and legacy keys.
+    work = []
+    for pass_i in range(len(prepared.groups)):
+        for chunk in prepared.chunks:
+            for d in range(len(specs)):
+                work.append((det_analyzers[d][pass_i], chunk,
+                             _ckpt_key(pass_i, chunk.chunk_id, d), d, pass_i))
 
     usage = Usage()
     findings: list = []
     total = prepared.request_count
+    # Coverage is per (pass, chunk), not per call: a section is reviewed if ANY
+    # detector answered for it, and a gap only when every detector failed it.
+    covered: dict = {}
 
     with ThreadPoolExecutor(max_workers=cfg.api.concurrency) as pool:
         # Fetch every uncached chunk concurrently; a cached call needs no
@@ -415,9 +473,9 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
         futures = [
             None if (checkpoint and checkpoint.get(key) is not None)
             else pool.submit(analyzer.fetch, chunk)
-            for analyzer, chunk, key in work]
+            for analyzer, chunk, key, _, _ in work]
 
-        for done, ((analyzer, chunk, key), future) in enumerate(
+        for done, ((analyzer, chunk, key, d, pass_i), future) in enumerate(
                 zip(work, futures), start=1):
             if should_cancel and should_cancel():
                 # Drop every call not already running so the abort stops the
@@ -429,7 +487,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                 raise JobCancelled()
             if future is None:                       # replay a cached call
                 cached = checkpoint.get(key)
-                findings.extend(finding_from_dict(d) for d in cached.items)
+                findings.extend(finding_from_dict(x) for x in cached.items)
                 add_usage(usage, cached.usage)
                 ok = True                            # only ok calls are cached
             else:
@@ -450,38 +508,74 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                 # them; whatever it can't is recorded below as a coverage gap.
                 if not ok:
                     found, ok = _retry_failed(analyzer, chunk, result, usage)
+                if ensemble:
+                    found = [dataclasses.replace(f, detector=d) for f in found]
                 findings.extend(found)
                 if checkpoint:
                     checkpoint.put(
                         key, items=[finding_to_dict(f) for f in found],
                         usage=usage_delta(before, usage), ok=ok)
             if coverage is not None:
-                coverage.record(analyzer.label, chunk, ok)
+                pc = (pass_i, chunk.chunk_id)
+                prev = covered.get(pc)
+                covered[pc] = (analyzer.label, chunk,
+                               (prev[2] if prev else False) or ok)
             if progress:
                 progress(done, total)
+
+    if coverage is not None:
+        for label, chunk, ok in covered.values():
+            coverage.record(label, chunk, ok)
     return findings, usage
 
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
-           batch: bool = False, coverage=None) -> Outputs:
+           batch: bool = False, coverage=None, verify_provider=None) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
     (pass, chunk) units were actually reviewed, so the report can name any that
-    the model never answered rather than letting the gap pass silently."""
+    the model never answered rather than letting the gap pass silently.
+
+    `verify_provider` is the overseer-verifier's client; when the ensemble
+    configures a verifier and none is passed, one is built from
+    ensemble.verifier_model. Ignored entirely in single-detector mode."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    # With the ensemble on, fold the detectors' findings into one list first,
+    # counting agreement, so the validator downstream sees a single already-
+    # merged set rather than N near-duplicates competing for the same span.
+    # Sweeps and consistency are deterministic single sources and skip the merge.
+    model_findings = list(findings)
+    verifier_rejected: list = []
+    if cfg.ensemble.enabled:
+        from .agreement import merge
+        model_findings = merge(model_findings, prepared.doc)
+        ens = cfg.ensemble
+        if ens.verifier_model and ens.verify_policy != "none":
+            from .verifier import verify_findings
+            if verify_provider is None:
+                from .providers import build_provider
+                vcfg = cfg.model_copy(deep=True)
+                vcfg.api.model = ens.verifier_model
+                vcfg.api.effort = ens.verifier_effort
+                verify_provider = build_provider(vcfg)
+            model_findings, verifier_rejected = verify_findings(
+                cfg, prepared, model_findings, verify_provider, usage)
     # Sweep findings go first: the validator gives the earliest finding to
     # claim a span the right to it, and a scripted rule is more certain than
     # anything the model reports about the same characters.
     validated = validate_findings(list(prepared.sweep_findings)
                                   + list(prepared.consistency_findings)
-                                  + list(findings),
+                                  + model_findings,
                                   prepared.doc, cfg.min_confidence,
                                   query_types=prepared.query_types,
                                   format_types=prepared.format_types,
                                   edit_guard=cfg.edit_guard)
+    # Verifier rejections were never candidates for a tracked change, but they
+    # belong in the report so the author sees what the overseer set aside.
+    validated = validated + verifier_rejected
     fmt = prepared.fmt
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 

@@ -16,6 +16,9 @@ STATUSES = (
     "rejected_overlap",
     "rejected_duplicate",
     "rejected_noop",
+    # The overseer-verifier judged this finding a false positive; kept for the
+    # report with the verifier's reason, never applied.
+    "rejected_by_verifier",
     "skipped_low_confidence",
 )
 
@@ -80,6 +83,19 @@ class Finding:
     # finding applies ("italic"), for a finding that changes how text is set
     # rather than what it says.
     format: str = ""
+    # Ensemble bookkeeping, all inert in single-detector mode. `detector` tags
+    # which detector produced a raw finding during fan-out (and is the one field
+    # that rides the resumable checkpoint); the rest are set by the agreement
+    # merge — how many detectors found this edit, whether they proposed
+    # different fixes for the same span, and which detectors those were.
+    detector: int = 0
+    agreement: int = 1
+    disputed_fix: bool = False
+    provenance: tuple[int, ...] = ()
+    # Set by the overseer-verifier to route a finding it wasn't sure enough to
+    # keep as a change down the query channel instead — a margin comment, not a
+    # tracked edit. Inert unless the verifier ran.
+    force_query: bool = False
 
 
 @dataclass(frozen=True)

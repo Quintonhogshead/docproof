@@ -150,9 +150,11 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                               delete_text=marked, insert_text=marked)))
             continue
 
-        if f.error_type in query_types:
+        if f.error_type in query_types or f.force_query:
             # The whole quoted sentence is the anchor: a question is about a
             # passage, not about the characters someone would have changed.
+            # force_query is the verifier's downgrade — a finding it would not
+            # keep as a change but did not reject either, sent to the margin.
             # The error type is part of the key so two *different* questions
             # about one sentence — a term-consistency query and a speaker-change
             # query, say — both survive; only the same question asked twice is a
