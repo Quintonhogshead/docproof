@@ -265,12 +265,12 @@ class GlossaryConfig(BaseModel):
     priced for its own model since a frontier reader earns its cost here. See
     docproof/glossary.py."""
     enabled: bool = True
-    # A stronger reviewer than the detectors: it is a one-time read, cacheable
-    # per draft, and it is the only pass that catches valid-word-for-valid-word
-    # errors — worth a frontier model. Any catalog model id; the app offers a
-    # picker in the submission panel. Opus is the measured sweet spot (a bigger
-    # model adds little; the mid tier oddly under-produces).
-    model: str = "claude-opus-5"
+    # The one-time whole-book reader, cacheable per draft, and the only pass that
+    # catches valid-word-for-valid-word errors. Luna is the shipped default:
+    # cheap (~$0.04/book) and enough for the obvious real-word errors. A frontier
+    # model (Opus) adds the subtle semantic tail (providence/provenance) at ~40x
+    # the cost; the app's submission panel offers the pick per book.
+    model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     max_output_tokens: int = Field(default=8000, ge=1)
     # Raise the glossary's casing drift as margin queries. Off leaves only the

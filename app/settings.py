@@ -150,10 +150,10 @@ class Settings:
     # and to manuscript prep alike, since both make model calls.
     effort: str = "medium"
     # Which model reads the whole manuscript for the glossary pass (proper-noun
-    # casing + suspected real-word errors). Opus is the measured sweet spot;
-    # "off" disables the pass. The submission panel offers a picker defaulting
-    # here. See docproof.config.GlossaryConfig.
-    glossary_model: str = "claude-opus-5"
+    # casing + suspected real-word errors). Luna is the cheap default; Opus adds
+    # the subtle semantic tail at ~40x the cost. "off" disables the pass. The
+    # submission panel offers a picker defaulting here. See GlossaryConfig.
+    glossary_model: str = "gpt-5.6-luna"
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     # Which file manuscript prep hands back by default: the InDesign-ready
