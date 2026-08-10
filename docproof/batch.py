@@ -242,16 +242,36 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     coverage = CoverageLedger()
     findings, usage = _assemble(cfg, prepared, results, provider, coverage)
 
-    # The adjudication pass is a synchronous post-step: the detector work rode
-    # the batch, but ruling on a few dozen typo candidates is two ordinary calls,
-    # so it runs here at collect time rather than needing its own batch stage.
-    # Without this, a batch review (the production path) would silently skip it.
-    if cfg.adjudicate.enabled and prepared.adjudicate_candidates:
-        from .adjudicate import adjudicate
-        findings = list(findings) + adjudicate(
-            prepared.adjudicate_candidates, prepared.doc.paragraphs, provider,
+    # The glossary and adjudication passes are synchronous post-steps: the
+    # detector work rode the batch, but the whole-book glossary read is one call
+    # and ruling on the typo candidates is a few more, so they run here at
+    # collect time rather than needing their own batch stage. Without this, a
+    # batch review (the production path) would silently skip them.
+    ids = itertools.count(1)
+    findings = list(findings)
+    glossary_cands: list = []
+    if cfg.glossary.enabled and prepared.whole_document:
+        from .glossary import (build_glossary, case_drift_findings,
+                               suspects_to_candidates)
+        from .providers import build_provider
+        gcfg = cfg.model_copy(deep=True)
+        gcfg.api.model = cfg.glossary.model
+        gcfg.api.effort = cfg.glossary.effort
+        glossary = build_glossary(
+            prepared.doc.paragraphs, build_provider(gcfg),
+            model=cfg.glossary.model,
+            max_tokens=cfg.glossary.max_output_tokens, usage=usage)
+        glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
+        if cfg.glossary.case_drift:
+            findings += case_drift_findings(glossary, prepared.doc.paragraphs, ids)
+
+    if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
+        from .adjudicate import adjudicate, merge_candidates
+        cands = merge_candidates(prepared.adjudicate_candidates, glossary_cands)
+        findings += adjudicate(
+            cands, prepared.doc.paragraphs, provider,
             model=cfg.api.model, max_tokens=cfg.api.max_output_tokens,
-            usage=usage, ids=itertools.count(1),
+            usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
             edit_confidence=cfg.adjudicate.edit_confidence)
 

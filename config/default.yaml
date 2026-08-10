@@ -98,6 +98,19 @@ consistency:
   name_dominance: 5         # majority lead before a stray is corrected, not asked
   name_min_count: 20        # how established the dominant spelling must be
 
+# A strong model reads the whole manuscript once, before the detector passes,
+# and returns the book's proper nouns (canonical casing) + suspected
+# misspellings — including valid-word-for-valid-word errors (calvary/cavalry)
+# that a dictionary and a frequency signal both miss. Suspects become
+# adjudication candidates (ruled on in context); casing feeds a query-channel
+# drift check. One cacheable read; priced for its own (frontier) model.
+glossary:
+  enabled: true
+  model: claude-opus-5      # any catalog id; the app panel offers a picker
+  effort: medium
+  max_output_tokens: 8000
+  case_drift: true          # raise proper-noun casing drift as margin queries
+
 # Real-word typos the plain passes glide over (staired, a protected repeated
 # misspelling), found by local signals and ruled on by the model in context.
 # Only a high-confidence affirmed fix becomes a tracked change; softer calls are

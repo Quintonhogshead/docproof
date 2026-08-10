@@ -255,6 +255,22 @@ def _build_user(batch: list[tuple[int, Candidate, str]]) -> str:
     return "\n\n".join(lines)
 
 
+def merge_candidates(*groups: Sequence[Candidate]) -> list[Candidate]:
+    """One candidate per site across sources. When the deterministic generator
+    and the glossary both land on a word, the first-listed group wins the
+    suggestion — callers pass the better-sourced group first."""
+    seen: set[tuple[str, int, int]] = set()
+    out: list[Candidate] = []
+    for group in groups:
+        for c in group:
+            k = (c.para_id, c.start, c.end)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(c)
+    return out
+
+
 def adjudicate(candidates: Sequence[Candidate],
                paragraphs: Sequence[ParagraphRef],
                provider: Provider, *, model: str, max_tokens: int,

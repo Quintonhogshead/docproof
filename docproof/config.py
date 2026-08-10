@@ -255,6 +255,37 @@ class AdjudicateConfig(BaseModel):
     edit_confidence: Literal["low", "medium", "high"] = "high"
 
 
+class GlossaryConfig(BaseModel):
+    """The whole-book glossary pass: a strong model reads the entire manuscript
+    once, before the detector passes, and returns the book's proper nouns (with
+    canonical casing) plus suspected misspellings — including real-word errors
+    both a dictionary and a frequency signal are blind to. The suspects become
+    adjudication candidates (ruled on in context, soft calls asked not applied);
+    the casing feeds a query-channel case-drift check. Whole-document only, and
+    priced for its own model since a frontier reader earns its cost here. See
+    docproof/glossary.py."""
+    enabled: bool = True
+    # A stronger reviewer than the detectors: it is a one-time read, cacheable
+    # per draft, and it is the only pass that catches valid-word-for-valid-word
+    # errors — worth a frontier model. Any catalog model id; the app offers a
+    # picker in the submission panel. Opus is the measured sweet spot (a bigger
+    # model adds little; the mid tier oddly under-produces).
+    model: str = "claude-opus-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    max_output_tokens: int = Field(default=8000, ge=1)
+    # Raise the glossary's casing drift as margin queries. Off leaves only the
+    # suspected-misspelling half (which the adjudication pass carries).
+    case_drift: bool = True
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"glossary.model '{self.model}' is not in the catalog")
+        return self
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -338,6 +369,7 @@ class Config(BaseModel):
     edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
+    glossary: GlossaryConfig = Field(default_factory=GlossaryConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)

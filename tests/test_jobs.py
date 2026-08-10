@@ -33,7 +33,11 @@ def runner(tmp_path):
 def _job(store, **over) -> Job:
     fields = {"id": "j1", "filename": "simple.docx",
              "source_path": str(FIXTURES / "simple.docx"),
-             "model": "claude-sonnet-5", "mode": "now"}
+             "model": "claude-sonnet-5", "mode": "now",
+             # These tests exercise the review worker, resume, and checkpoints;
+             # the whole-book glossary pass is a separate model call and off here
+             # unless a test opts in.
+             "glossary_model": "off"}
     fields.update(over)
     return store.save(Job(**fields))
 
@@ -622,3 +626,14 @@ def test_clearing_does_not_free_monthly_cap_headroom(runner):
 
     assert r.delete_job("j1") is True
     assert common.month_spend(store, "") == pytest.approx(before)
+
+
+def test_the_jobs_glossary_model_reaches_the_run_config(runner):
+    """The submission panel's glossary pick becomes the pass's model, and "off"
+    turns the pass off — without touching the page-by-page reviewer model."""
+    store, r = runner
+    cfg = r.config_for(_job(store, glossary_model="claude-opus-5"))
+    assert cfg.glossary.enabled is True and cfg.glossary.model == "claude-opus-5"
+
+    off = r.config_for(_job(store, id="j2", glossary_model="off"))
+    assert off.glossary.enabled is False

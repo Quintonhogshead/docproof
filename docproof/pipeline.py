@@ -71,6 +71,10 @@ class Prepared:
     # document only (it reads the spell scan's lexicon), and consumed on the
     # synchronous path; empty otherwise. See docproof/adjudicate.py.
     adjudicate_candidates: list = field(default_factory=list)
+    # Whether this run covers the whole manuscript. The document-wide model work
+    # (the glossary pass) only means something on a full run, the same way the
+    # consistency scan does; a two-chapter review must not spend on it.
+    whole_document: bool = True
     # How many detectors review each chunk. 1 unless the ensemble is on, and the
     # multiplier the request count and token estimate need — every detector is
     # the whole review over again.
@@ -293,6 +297,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     variant=variant, consistency=consistency,
                     consistency_findings=consistency_findings,
                     adjudicate_candidates=adjudicate_candidates,
+                    whole_document=whole,
                     n_detectors=len(cfg.ensemble.detectors) or 1)
 
 
@@ -556,16 +561,34 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         for label, chunk, ok in covered.values():
             coverage.record(label, chunk, ok)
 
-    # The adjudication pass: put the deterministically-found typo candidates to
-    # the model and fold its confident corrections in with the rest. Runs after
-    # the detector loop (it is not per-chunk), on the base model — so a resume
-    # whose detector calls all replay from the checkpoint re-runs only this,
-    # cheaply. Sync path only; the batch path does not carry it yet.
-    if cfg.adjudicate.enabled and prepared.adjudicate_candidates:
-        from .adjudicate import adjudicate
+    # Two post-loop passes, run once (not per-chunk) after the detectors. The
+    # glossary reads the whole book with its own (stronger) model; its casing
+    # drift is asked, and its suspected misspellings join the adjudication
+    # candidates. The adjudication pass then rules on every candidate in context.
+    glossary_cands: list = []
+    if cfg.glossary.enabled and prepared.whole_document:
+        from .glossary import (build_glossary, case_drift_findings,
+                               suspects_to_candidates)
+        gcfg = cfg.model_copy(deep=True)
+        gcfg.api.model = cfg.glossary.model
+        gcfg.api.effort = cfg.glossary.effort
+        glossary = build_glossary(
+            prepared.doc.paragraphs, provider_factory(gcfg),
+            model=cfg.glossary.model,
+            max_tokens=cfg.glossary.max_output_tokens, usage=usage)
+        glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
+        if cfg.glossary.case_drift:
+            findings.extend(case_drift_findings(
+                glossary, prepared.doc.paragraphs, ids))
+
+    if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
+        from .adjudicate import adjudicate, merge_candidates
         adj_provider = provider if provider is not None else provider_factory(cfg)
+        # The deterministic generator's suggestions are listed first, so on a
+        # shared site its (dictionary-checked) correction wins over the glossary's.
+        cands = merge_candidates(prepared.adjudicate_candidates, glossary_cands)
         findings.extend(adjudicate(
-            prepared.adjudicate_candidates, prepared.doc.paragraphs,
+            cands, prepared.doc.paragraphs,
             adj_provider, model=cfg.api.model,
             max_tokens=cfg.api.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
