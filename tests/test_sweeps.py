@@ -428,3 +428,47 @@ def test_shipped_config_enables_sweeps():
     cfg = load_config(CONFIG_PATH)
     assert cfg.sweeps, "the shipped config ships with sweeps turned off"
     assert set(cfg.sweeps) <= set(SWEEPS_BY_KEY)
+
+
+# --- terminal period ---------------------------------------------------------
+
+from docproof.sweeps import _sweep_terminal_period
+
+
+@pytest.mark.parametrize("text", [
+    "Annie managed a curtsy. Alex just crossed his arms",
+    "“It might be sick,” Victor warned",
+    "“Stay still, damn it!” She shouted",
+    "He followed the others down the long corridor toward the far light ahead",  # 13 words, no internal mark
+])
+def test_terminal_period_fixes_a_run_off_narrative_sentence(text):
+    hits = _sweep_terminal_period(text)
+    assert len(hits) == 1
+    assert apply_hits(text, hits) == text + "."
+
+
+def test_terminal_period_lands_inside_a_closing_quote():
+    text = 'He turned away and muttered, “I never wanted any of this”'
+    assert apply_hits(text, _sweep_terminal_period(text)) == \
+        'He turned away and muttered, “I never wanted any of this.”'
+
+
+@pytest.mark.parametrize("text", [
+    "Tides of The Squall",                       # a song/poem title
+    "The Grey Elegy, Stanza One",                # a title
+    "Mortal: A regular person of any species",   # a glossary definition (colon)
+    "He said",                                   # too short to be sure it is prose
+    "She turned away and left—",                 # an interruption, deliberate
+    "I don’t know what to say…",                 # a trailing-off, deliberate
+    "The room was cold.",                        # already punctuated
+    "Chapter Twenty-Four",                       # a heading (title case, short)
+    "The Star Thief and the Winter Court",       # title case, no prose shape
+])
+def test_terminal_period_leaves_these_alone(text):
+    assert _sweep_terminal_period(text) == []
+
+
+def test_terminal_period_is_idempotent():
+    text = "The horses bolted at the sudden crack of the whip behind them"
+    once = apply_hits(text, _sweep_terminal_period(text))
+    assert _sweep_terminal_period(once) == []

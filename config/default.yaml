@@ -187,6 +187,7 @@ sweeps:
   - sweep_century
   - sweep_compound_number
   - sweep_dialogue_tag
+  - sweep_terminal_period
 
 # Ensemble review. Empty `detectors` (the default) is single-detector mode:
 # api.model runs once, nothing is merged, no verifier runs — exactly the
