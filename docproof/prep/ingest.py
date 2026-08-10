@@ -29,6 +29,10 @@ WS = " \t　"
 _URL = re.compile(r"(https?://|www\.)\S", re.IGNORECASE)
 _HYPERLINK = qn("w:hyperlink")
 _ITALIC = qn("w:i")
+# An image can arrive three ways: a modern DrawingML picture, a legacy VML
+# shape (`w:pict`), or an embedded OLE object. A paragraph holding only one of
+# these has no text, and prep must not mistake it for a blank line.
+_IMAGE_TAGS = (qn("w:drawing"), qn("w:pict"), qn("w:object"))
 
 # The styles Word and LibreOffice give the *entries* of a generated contents
 # list. "TOCHeading"/"Contents Heading" is the word "Contents" itself, which is
@@ -122,14 +126,19 @@ def build_structure(pkg: DocxPackage) -> Structure:
         style_el = wp.element.find(style_path)
         style = style_el.get(qn("w:val")) if style_el is not None else "Normal"
         stripped = text.strip(WS)
+        # A picture on its own line has no text but is content, not spacing:
+        # calling it blank would route it to the blank-line drop and delete the
+        # image from the formatted document.
+        has_image = _has_image(wp.element)
         paragraphs.append(StructureParagraph(
             para_id=wp.para_id, part=wp.part, index=len(paragraphs),
             location=wp.location, text=text, style=style,
-            is_blank=not text.strip(),
+            is_blank=(not text.strip()) and not has_image,
             leading_ws=len(text) - len(text.lstrip(WS)),
             trailing_ws=len(text) - len(text.rstrip(WS)) if stripped else 0,
             has_italics=_has_italics(wp.element),
             has_link=_has_link(wp.element, text),
+            has_image=has_image,
             is_list=wp.element.find(f"{qn('w:pPr')}/{qn('w:numPr')}") is not None,
             is_toc=_is_toc(wp.element, style),
         ))
@@ -176,3 +185,10 @@ def _has_italics(p: etree._Element) -> bool:
 
 def _has_link(p: etree._Element, text: str) -> bool:
     return p.find(f".//{_HYPERLINK}") is not None or bool(_URL.search(text))
+
+
+def _has_image(p: etree._Element) -> bool:
+    """Does a picture, VML shape, or embedded object live anywhere in this
+    paragraph? A drawing sits inside a run, so the search is over descendants,
+    not direct children."""
+    return any(p.find(f".//{tag}") is not None for tag in _IMAGE_TAGS)

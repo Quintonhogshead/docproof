@@ -108,6 +108,74 @@ def test_typed_whitespace_and_italics_are_noticed(prepared):
     assert prepared.structure.paragraphs[10].has_link
 
 
+# A picture, a legacy VML shape and an embedded object, each alone on its line
+# with no text, between two ordinary paragraphs and one genuinely blank line.
+# An image run carries no text, so without image detection each of these reads
+# as a blank line and prep deletes it — taking the image out of the file.
+_IMAGE_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>A body paragraph before the image.</w:t></w:r></w:p>
+    <w:p/>
+    <w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"/></w:drawing></w:r></w:p>
+    <w:p><w:r><w:pict/></w:r></w:p>
+    <w:p><w:r><w:object/></w:r></w:p>
+    <w:p><w:r><w:t>A body paragraph after the image.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+
+def _write_docx(path, document_xml: str):
+    """A minimal well-formed .docx around a document.xml, the way the raw-XML
+    fixtures are built."""
+    import zipfile
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml",
+                   """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>""")
+        z.writestr("_rels/.rels",
+                   """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>""")
+        z.writestr("word/document.xml", document_xml)
+    return path
+
+
+def test_an_image_on_its_own_line_is_read_as_content_not_blank(tmp_path):
+    """A picture, a legacy VML shape and an embedded object each sit alone on a
+    line with no text. Each is content, not a blank line, so none may be dropped
+    — and all three image containers Word writes have to be recognised."""
+    structure = build_structure(preflight(_write_docx(tmp_path / "img.docx",
+                                                       _IMAGE_DOC)))
+    drawing, pict, obj = structure.paragraphs[2:5]
+    assert [p.has_image for p in (drawing, pict, obj)] == [True, True, True]
+    assert not any(p.is_blank for p in (drawing, pict, obj))
+    # The real blank line and the text paragraphs are unaffected.
+    assert structure.paragraphs[1].is_blank
+    assert not structure.paragraphs[1].has_image
+    assert not structure.paragraphs[0].is_blank
+    assert not structure.paragraphs[0].has_image
+
+
+def test_an_image_on_its_own_line_survives_the_clean_file(cfg, tmp_path):
+    """End to end: the drawing, the VML shape and the object are all still in the
+    InDesign-ready file, not removed as blank lines."""
+    prepared = preplib.prepare(cfg, _write_docx(tmp_path / "img.docx", _IMAGE_DOC),
+                               config_dir=CONFIG_DIR)
+    tags, usage = preplib.run_mock(prepared)
+    outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                             source_path=tmp_path / "img.docx",
+                             outputs=["indesign"])
+    body = DocxPackage(outputs.documents["indesign"]).tree("word/document.xml")
+    for tag in ("w:drawing", "w:pict", "w:object"):
+        assert body.find(f".//{qn(tag)}") is not None, f"{tag} was dropped"
+
+
 def test_tracked_changes_are_refused_outright():
     """Prep restyles every paragraph and deletes blank lines. Doing that on top
     of somebody's unresolved edit would bury it."""
