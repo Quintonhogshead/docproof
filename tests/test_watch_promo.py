@@ -168,6 +168,43 @@ def test_promo_on_without_its_values_refuses_the_pass(tmp_path):
         run(tmp_path, ws, opener)
 
 
+def test_oversize_book_emails_a_person_and_stops_retrying(tmp_path, monkeypatch):
+    """A book too big for one-pass promo is not retried three times: the tick
+    emails a person the size and how to run it by hand, marks the book failed so
+    the next tick leaves it be, and does not count it as a blind failure."""
+    from app.watch import notify
+    from app.watch.stages import PROMO_FAILED
+    from docproof.promo import PromoTooLarge
+
+    def too_big(*a, **k):
+        raise PromoTooLarge("way over", tokens=250_000, limit=180_000,
+                            words=190_000)
+    monkeypatch.setattr("docproof.promo.prepare", too_big)
+
+    calls = []
+    monkeypatch.setattr(notify, "promo_too_large",
+                        lambda token, ws, file, job, **kw: calls.append(
+                            (file.name, job.error_kind, job.words,
+                             job.input_tokens)) or True)
+
+    ws = promo_ws(promo_auto_upload=True)
+    opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")), docx=MANUSCRIPT,
+                        hubspot={"Wolves": promo_ready("Wolves")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert calls == [("Wolves.docx", "oversize", 190_000, 250_000)]
+    assert report.promoted == []
+    assert report.failed == []             # emailed directly, not a blind fail
+    assert opener.files["f-1"]["appProperties"][PROMO_PROP] == PROMO_FAILED
+
+    # A second pass leaves it alone — the marker keeps it out, so no retry and no
+    # second email.
+    report2 = run(tmp_path, ws, opener)
+    assert report2.promoted == []
+    assert len(calls) == 1
+
+
 def test_promo_stands_aside_under_subfolder_mode(tmp_path):
     ws = promo_ws(promo_auto_upload=True, subfolders_enabled=True,
                   hubspot_first_property="first", hubspot_last_property="last")

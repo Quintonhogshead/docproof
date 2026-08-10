@@ -26,7 +26,11 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 effortMultipliers: {}, defaultModel: null,
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
-                formatChoice: 'all', formats: [], extraSuffixes: [] };
+                formatChoice: 'all', formats: [], extraSuffixes: [],
+                // The Promo tab stages its file on selection (not at run time)
+                // so it can price it before the run; this holds that staged
+                // entry, with its preflight token counts, until the run uses it.
+                promoStaged: null };
 
 // Web build only, set once at boot from /api/me. The desktop app has no such
 // route, so WEB stays false and every desktop path below is untouched.
@@ -85,6 +89,7 @@ function renderKind() {
   });
   $('prep-options').hidden = !prep;
   $('prep-cost').hidden = !prep;
+  $('promo-cost').hidden = !promo;
   $('model-label').textContent = promo ? 'Which model should write it?'
     : prep ? 'Which model should read it?' : 'Which reviewer?';
   $('start').textContent = promo ? 'Write promo copy'
@@ -833,6 +838,8 @@ function renderEffort() {
 // Both the description and the price move with the dial: a deeper effort costs
 // more, and the estimate must say so as the slider slides.
 $('effort').addEventListener('input', () => { renderEffort(); renderCost(); });
+// The oversize override gates the promo run — re-price and re-check when it flips.
+$('promo-oversize-ok').addEventListener('change', renderCost);
 // Releasing the slider makes this the saved default. Fire-and-forget: on the
 // web build only an administrator may change shared defaults, and the 403 there
 // is harmless — the value still rides along with the job below either way.
@@ -907,6 +914,21 @@ function pricePrep(m) {
   return cost;
 }
 
+// Promo is one call over the whole book — priced like prep (input plus a fixed
+// teaser-and-posts output), with the reasoning dial scaling the output half. No
+// batch column: promo is always a single synchronous call. The server has
+// already folded the claim-check pass into these token figures when it is on.
+function pricePromo(m) {
+  let cost = 0;
+  const factor = effortFactor(m);
+  filesToRun().forEach((f) => {
+    if (!f.promo) return;
+    cost += (f.promo.input_tokens * m.input_per_mtok
+      + f.promo.output_tokens * m.output_per_mtok * factor) / 1e6;
+  });
+  return cost;
+}
+
 function renderCost() {
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
@@ -914,11 +936,7 @@ function renderCost() {
     ? `about $${v < 0.01 ? v.toFixed(3) : v.toFixed(2)}` : '');
 
   if (isPromo()) {
-    // Promo's cost is one large call over the whole book; the copy specs that
-    // would let us estimate it are still to come, so the button just gates on a
-    // usable file and a model with a key.
-    const ready = m && m.available && filesToRun().length > 0;
-    $('start').disabled = !ready;
+    renderPromoCost(m, money);
     modelHint(m);
     return;
   }
@@ -944,6 +962,70 @@ function renderCost() {
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
   modelHint(m);
+}
+
+// The drop-time promo estimate: what this book costs to turn into a teaser and
+// posts — on the chosen model, and across all of them so the comparison is a
+// real cross-provider choice. Plus the human override when a book runs past the
+// single-pass limit: until a person ticks the box, the run stays blocked.
+function renderPromoCost(m, money) {
+  const files = filesToRun().filter((f) => f.promo);
+  const line = $('promo-cost-line');
+  const compare = $('promo-cost-compare');
+  const warn = $('promo-oversize');
+  const ok = $('promo-oversize-ok');
+
+  if (!files.length) {
+    line.textContent = '';
+    compare.hidden = true;
+    warn.hidden = true;
+    $('start').disabled = true;
+    return;
+  }
+
+  const words = files.reduce((n, f) => n + (f.promo.words || 0), 0);
+  const claimCheck = files.some((f) => f.promo.verify_claims);
+  line.textContent = m
+    ? `About ${words.toLocaleString()} words on ${m.display} costs `
+      + `${money(pricePromo(m))}`
+      + `${claimCheck ? ' with the claim-check on' : ''}. One call over the `
+      + `whole book — there is no overnight rate.`
+    : '';
+
+  // Every model, cheapest first, so the picker sees the full cross-provider
+  // spread rather than only the model already chosen.
+  const rows = $('promo-cost-rows');
+  rows.innerHTML = '';
+  state.models
+    .map((x) => ({ x, cost: pricePromo(x) }))
+    .sort((a, b) => a.cost - b.cost)
+    .forEach(({ x, cost }) => {
+      const tr = document.createElement('tr');
+      if (m && x.id === m.id) tr.className = 'chosen';
+      const name = document.createElement('td');
+      name.textContent = x.display + (x.available ? '' : ' — no key yet');
+      const price = document.createElement('td');
+      price.textContent = money(cost);
+      tr.append(name, price);
+      rows.append(tr);
+    });
+  compare.hidden = false;
+
+  // Over the single-pass limit: show the size and hold the run until a person
+  // chooses. The limit is DocProof's caution, not a model ceiling.
+  const over = files.find((f) => f.promo.over_limit);
+  if (over) {
+    $('promo-oversize-note').textContent =
+      `This book is about ${over.promo.pass_tokens.toLocaleString()} tokens, `
+      + `over the ${over.promo.max_input_tokens.toLocaleString()}-token `
+      + `single-pass limit for promo.`;
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+    ok.checked = false;
+  }
+
+  $('start').disabled = !(m && m.available && (!over || ok.checked));
 }
 
 // A disabled button with no explanation is the worst first-run experience
@@ -992,6 +1074,8 @@ $('start').addEventListener('click', async () => {
         body: JSON.stringify({
           file_ids: filesToRun().map((f) => f.id),
           model: $('model').value,
+          effort: effortValue(),
+          allow_oversize: $('promo-oversize-ok').checked,
         }),
       });
     } else {
@@ -1824,7 +1908,7 @@ async function loadPromo() {
   }
   fillPromoModels($('promo-model'));
   fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
-  updatePromoRunEnabled();
+  renderPromoPanelCost();
   await refreshPromoJobs();
   loadPromoSettings().catch(() => {});
 }
@@ -1845,15 +1929,15 @@ function fillPromoModels(select, blank) {
   if (chosen) select.value = chosen;
 }
 
-function updatePromoRunEnabled() {
-  $('promo-run').disabled =
-    !($('promo-file').files.length && $('promo-model').value);
-}
-
-async function runPromo() {
+// Stage the picked manuscript straight away — the same drop-and-preflight the
+// main screen does — so the Promo tab can price it and flag an oversize book
+// before the run, not just discover it when the run fails. The staged id is
+// kept for the run to reuse.
+async function stagePromoFile() {
   const file = $('promo-file').files[0];
-  if (!file) return;
   const status = $('promo-run-status');
+  state.promoStaged = null;
+  if (!file) { renderPromoPanelCost(); return; }
   status.hidden = false; status.textContent = 'Reading the manuscript…';
   $('promo-run').disabled = true;
   try {
@@ -1861,20 +1945,110 @@ async function runPromo() {
     form.append('files', file);
     const staged = (await api('/api/files',
                               { method: 'POST', body: form })).files[0];
-    if (!staged.ok) throw new Error(staged.error || 'That file cannot be used.');
-    status.textContent = 'Writing your copy…';
+    if (!staged.ok || !staged.promo) {
+      throw new Error(staged.promo_error || staged.error
+                      || 'That file cannot be used for promo.');
+    }
+    state.promoStaged = staged;
+    status.hidden = true;
+  } catch (e) {
+    status.hidden = false; status.textContent = e.message;
+  }
+  renderPromoPanelCost();
+}
+
+// One model's promo cost on the Promo tab: input plus the fixed teaser-and-posts
+// output, the reasoning level scaling the output half only. Mirrors pricePromo
+// on the main screen, against this tab's own staged file and effort control.
+function promoModelCost(m, promo, level) {
+  const factor = (m && m.supports_effort)
+    ? (state.effortMultipliers[level] || 1) : 1;
+  return (promo.input_tokens * m.input_per_mtok
+    + promo.output_tokens * m.output_per_mtok * factor) / 1e6;
+}
+
+// The Promo tab's cost estimate, model comparison, and oversize override — the
+// parity match for the main drop screen's renderPromoCost.
+function renderPromoPanelCost() {
+  const staged = state.promoStaged;
+  const models = state.promoModels || [];
+  const m = models.find((x) => x.id === $('promo-model').value);
+  const level = $('pp-effort').value;
+  const warn = $('pp-oversize');
+  const ok = $('pp-oversize-ok');
+
+  if (!staged || !staged.promo) {
+    $('pp-cost').hidden = true;
+    warn.hidden = true;
+    $('promo-run').disabled = true;
+    return;
+  }
+
+  const promo = staged.promo;
+  $('pp-cost').hidden = false;
+  $('pp-cost-line').textContent = m
+    ? `About ${(promo.words || 0).toLocaleString()} words on ${m.display} costs `
+      + `about ${money(promoModelCost(m, promo, level))}`
+      + `${promo.verify_claims ? ' with the claim-check on' : ''}. One call `
+      + `over the whole book.`
+    : '';
+
+  const rows = $('pp-cost-rows');
+  rows.innerHTML = '';
+  models
+    .map((x) => ({ x, cost: promoModelCost(x, promo, level) }))
+    .sort((a, b) => a.cost - b.cost)
+    .forEach(({ x, cost }) => {
+      const tr = document.createElement('tr');
+      if (m && x.id === m.id) tr.className = 'chosen';
+      const name = document.createElement('td');
+      name.textContent = x.display + (x.available ? '' : ' — no key yet');
+      const price = document.createElement('td');
+      price.textContent = `about ${money(cost)}`;
+      tr.append(name, price);
+      rows.append(tr);
+    });
+  $('pp-cost-compare').hidden = false;
+
+  if (promo.over_limit) {
+    $('pp-oversize-note').textContent =
+      `This book is about ${promo.pass_tokens.toLocaleString()} tokens, over `
+      + `the ${promo.max_input_tokens.toLocaleString()}-token single-pass `
+      + `limit for promo.`;
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+    ok.checked = false;
+  }
+
+  $('promo-run').disabled =
+    !(m && m.available && (!promo.over_limit || ok.checked));
+}
+
+async function runPromo() {
+  const staged = state.promoStaged;
+  if (!staged || !staged.ok) return;
+  const status = $('promo-run-status');
+  status.hidden = false; status.textContent = 'Writing your copy…';
+  $('promo-run').disabled = true;
+  try {
     await api('/api/promo/run', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_ids: [staged.id],
-                             model: $('promo-model').value }),
+      body: JSON.stringify({
+        file_ids: [staged.id],
+        model: $('promo-model').value,
+        effort: $('pp-effort').value,
+        allow_oversize: $('pp-oversize-ok').checked,
+      }),
     });
     $('promo-file').value = '';
+    state.promoStaged = null;
     status.hidden = true;
+    renderPromoPanelCost();
     await refreshPromoJobs();
   } catch (e) {
-    status.textContent = e.message;
-  } finally {
-    updatePromoRunEnabled();
+    status.hidden = false; status.textContent = e.message;
+    renderPromoPanelCost();
   }
 }
 
@@ -2081,8 +2255,10 @@ async function savePromoSettings() {
   } catch (e) { status.textContent = e.message; }
 }
 
-$('promo-file').addEventListener('change', updatePromoRunEnabled);
-$('promo-model').addEventListener('change', updatePromoRunEnabled);
+$('promo-file').addEventListener('change', stagePromoFile);
+$('promo-model').addEventListener('change', renderPromoPanelCost);
+$('pp-effort').addEventListener('change', renderPromoPanelCost);
+$('pp-oversize-ok').addEventListener('change', renderPromoPanelCost);
 $('promo-run').addEventListener('click', runPromo);
 $('promo-settings-save').addEventListener('click', savePromoSettings);
 

@@ -75,7 +75,13 @@ def run_job(runner: JobRunner, store: JobStore, job: Job, *,
             runner.run_one(job.id)
     except Exception as e:                # noqa: BLE001 - mirrors _work
         log.exception("Writing promo copy for %s failed", job.filename)
-        store.update(job.id, state="failed", error=str(e))
+        # An oversize book (raised straight from prepare in the mock path)
+        # carries its numbers, so the tick can email a person the size and how to
+        # run it by hand rather than counting a blind failure.
+        extra = ({"error_kind": "oversize", "words": e.words,
+                  "input_tokens": e.tokens}
+                 if isinstance(e, promolib.PromoTooLarge) else {})
+        store.update(job.id, state="failed", error=str(e), **extra)
     return store.get(job.id) or job
 
 

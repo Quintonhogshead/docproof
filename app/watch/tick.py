@@ -337,6 +337,19 @@ def _one_promo(token: str, home: Path, ws: WatchSettings, file: DriveFile,
     job = _prepare_promo(token, home, ws, file, rec, state, runner, store,
                          mock=mock, opener=opener)
 
+    if job.state == "failed" and job.error_kind == "oversize":
+        # Too big for one pass. Retrying will not change the size, and the model
+        # was never called, so this is not a transient failure to count against
+        # the book. Email a person the numbers and how to run it by hand, mark it
+        # so the next tick leaves it be, and stop.
+        notify.promo_too_large(token, ws, file, job, opener=opener)
+        promo.mark_source(token, file, rec, state, status=PROMO_FAILED,
+                          reason="Too big for one-pass promo; run it by hand.",
+                          opener=opener)
+        log.info("Promo skipped for %s: over the single-pass limit; emailed a "
+                 "person to run it by hand.", file.name)
+        return
+
     if job.state != "done":
         # Something transient — a model that would not answer, a disk that
         # filled. Raised so the caller counts an attempt against it.

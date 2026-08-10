@@ -11,3 +11,8 @@ dist/
 
 # HubSpot CLI credentials
 hubspot.config.yml
+
+# Local secrets / keystore
+.env
+.env.*
+secrets.db

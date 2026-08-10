@@ -445,5 +445,43 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
                     "to add send permission.", ws.notify_email, e)
 
 
+def promo_too_large(token: str, ws, file, job, *,
+                    opener=drive._open_url) -> bool:
+    """Tell a person a watched book was too big for automatic promo, with the
+    numbers and how to run it by hand.
+
+    The watched folder writes promo in a single call over the whole book; a book
+    past that limit can't go through automatically, but a person can still run it
+    from the app with the override. This is the email that hands it to them.
+    Best-effort and gated on an address, exactly like the other mail here — no
+    address set, no mail, and a send that fails is logged, never raised."""
+    if not ws.notify_email:
+        return False
+    words = _int(job.words)
+    tokens = _int(job.input_tokens)
+    subject = f"Promo needs a hand: {file.name} is too big for one pass"
+    body = (
+        f"DocProof could not write promo copy for “{file.name}” automatically.\n\n"
+        f"The book is about {words} words (~{tokens} tokens), over the "
+        f"single-pass limit. The watched folder writes promo in one call over "
+        f"the whole book, and this manuscript is too large for that.\n\n"
+        f"Nothing about the manuscript was changed, and it will not be tried "
+        f"again automatically.\n\n"
+        f"To run it by hand: open DocProof and go to the Promo tab (or drop the "
+        f"book on the main screen and choose “Write promo copy”). Pick a model, "
+        f"then tick “Write it anyway” to send the whole book in one call.\n")
+    try:
+        send(token, ws.notify_email, subject, body, opener=opener)
+        log.info("Emailed %s that %s is too big for automatic promo.",
+                 ws.notify_email, file.name)
+        return True
+    except DriveError as e:
+        log.warning("Could not email %s about an oversize promo book (%s). If "
+                    "Gmail refused the scope, run `docproof-watch auth` again to "
+                    "add send permission.", ws.notify_email, e)
+        return False
+
+
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
-           "maybe_complete", "completion_for_job", "send_job_completion"]
+           "maybe_complete", "completion_for_job", "send_job_completion",
+           "promo_too_large"]

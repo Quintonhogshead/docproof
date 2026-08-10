@@ -138,6 +138,35 @@ def test_staging_reports_promo_eligibility(client):
     assert entry["can_promo"] is True and entry["ok"] is True
 
 
+def test_staging_reports_a_promo_cost_estimate(client):
+    """The drop card carries the tokens the cost hint is built from, the
+    single-pass size the limit is measured against, and the over-limit flag."""
+    with (FIXTURES / "simple.docx").open("rb") as fh:
+        promo = client.post(
+            "/api/files",
+            files={"files": ("simple.docx", fh.read())}
+        ).json()["files"][0]["promo"]
+    assert promo["words"] > 0
+    assert promo["pass_tokens"] > 0
+    assert promo["input_tokens"] >= promo["pass_tokens"]
+    assert promo["max_input_tokens"] > 0
+    assert promo["over_limit"] is False       # a fixture, comfortably under
+
+
+def test_promo_run_carries_effort_and_override(client):
+    """The reasoning dial and the oversize override reach the job record, so the
+    run honours the slider and the human's choice to run a big book anyway."""
+    file_id = upload(client)
+    r = client.post("/api/promo/run",
+                    json={"file_ids": [file_id], "model": MODEL,
+                          "effort": "high", "allow_oversize": True})
+    assert r.status_code == 200, r.text
+    client.app_state.runner.wait_idle()
+    job = client.app_state.store.get(r.json()["jobs"][0]["id"])
+    assert job.effort == "high"
+    assert job.allow_oversize is True
+
+
 def test_promo_jobs_stay_out_of_the_results_list(client):
     """A drop routed to promo lands in the Promo panel, not in Results."""
     job_id = run_one(client)

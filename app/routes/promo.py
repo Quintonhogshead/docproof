@@ -41,6 +41,13 @@ from ..watch.settings import WatchSettings
 class PromoRunRequest(BaseModel):
     file_ids: list[str] = Field(min_length=1)
     model: str
+    # The reasoning dial, same levels the review and prep pipelines use. Promo
+    # honours it too — it scales what the model writes back — so the panel's
+    # slider is not decorative. Defaults to the shipped "low".
+    effort: str = "low"
+    # The human override for a book over the single-pass token limit: set by a
+    # person who saw the size at drop time and chose to run it anyway.
+    allow_oversize: bool = False
 
 
 class PromoDraft(BaseModel):
@@ -135,6 +142,7 @@ def register(app: FastAPI) -> None:
                 id=batchlib.new_job_id(source.name),
                 filename=source.name, source_path=str(source),
                 model=req.model, mode="now", kind="promo", group_id=group_id,
+                effort=req.effort, allow_oversize=req.allow_oversize,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 owner_id=owner)
             created.append(runner.enqueue(job).to_api())
