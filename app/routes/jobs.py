@@ -24,6 +24,7 @@ from ..jobs import Job, JobRunner, JobStore, read_usage
 from ..prompts import list_prompts
 from ..report import build_report
 from ..settings import CONFIG_PATH, ERROR_DIR, Paths
+from ..spending import SpendingLedger, merge_live
 from ..usage import build_usage
 from ..watch.runner import WatchRunner
 
@@ -397,10 +398,14 @@ def register(app: FastAPI) -> None:
         comes off the same card, so leaving half of it out would be the wrong
         figure. On the web it is this user's own jobs only; the watcher isn't
         theirs, so it has no place in their total."""
+        ledger = SpendingLedger(app.state.store.paths.spending_db)
         if app.state.web:
-            return build_usage(app.state.store.all(owner), read_usage)
+            live = app.state.store.all(owner)
+            return build_usage(merge_live(live, ledger.entries(owner)),
+                               read_usage)
         watch: WatchRunner = app.state.watch
-        return build_usage([*app.state.store.all(), *watch.jobs()], read_usage)
+        live = [*app.state.store.all(), *watch.jobs()]
+        return build_usage(merge_live(live, ledger.entries()), read_usage)
 
     @app.get("/api/jobs/{job_id}/report")
     def report(job_id: str, owner: str = Depends(owner_for)) -> dict:

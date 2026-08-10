@@ -35,6 +35,8 @@ from docproof.providers import ProviderError, build_provider, estimate_cost, \
     provider_for
 
 from .settings import Paths, Settings, get_api_key
+from .spending import LedgerEntry, SpendingLedger
+from .usage import _totals_for
 
 log = logging.getLogger("docproof.app.jobs")
 
@@ -270,6 +272,7 @@ class JobRunner:
                  config_path: str | Path, poll_seconds: int = POLL_SECONDS):
         self.store = store
         self.settings = settings
+        self.ledger = SpendingLedger(store.paths.spending_db)
         self.config_path = Path(config_path)
         self.error_dir = self.config_path.parent / "error_types"
         self.poll_seconds = poll_seconds
@@ -516,6 +519,7 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None:
             return False
+        self._record_spending(job)
         if job.results_dir:
             results = Path(job.results_dir)
             base = Path(self.settings.output_dir).expanduser().resolve()
@@ -530,6 +534,23 @@ class JobRunner:
                             "place: %s", job.results_dir)
         self._clear_cancel(job_id)
         return self.store.delete(job_id)
+
+    def _record_spending(self, job: Job) -> None:
+        """Snapshot a job's cost to the ledger before its folder is removed, so
+        clearing jobs frees disk without erasing the bill. Only jobs that
+        actually spent are kept — a cancelled job that never called the API
+        leaves nothing worth a row — and the snapshot is taken while
+        `results_dir` is still there, so its cost no longer depends on it."""
+        numbers = _totals_for(job, read_usage)
+        if not (numbers["api_calls"] or numbers["input_tokens"]):
+            return
+        try:
+            self.ledger.record(LedgerEntry.from_job(job, numbers))
+        except OSError as e:
+            # A ledger write that fails must not block the delete the user
+            # asked for; losing one job's snapshot is better than a job that
+            # won't clear.
+            log.warning("Could not record spending for %s: %s", job.id, e)
 
     # -- worker ---------------------------------------------------------------
 

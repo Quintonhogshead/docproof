@@ -26,6 +26,7 @@ class StructureParagraph:
     trailing_ws: int
     has_italics: bool
     has_link: bool
+    has_image: bool = False  # an image lives here, even if there is no text
     is_list: bool = False   # a numbered or bulleted item
     # A line of the manuscript's own table of contents. Read from the file
     # rather than from the words, because "Chapter One" in a contents list and

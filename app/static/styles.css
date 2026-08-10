@@ -342,6 +342,38 @@ button.danger:hover { background: var(--warn); color: var(--bg); border-color: v
 }
 #update-banner[hidden] { display: none; }
 
+/* ── DocWatch working-now banner ───────────────────────────────────────── */
+
+#watch-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background: var(--accent-soft);
+  border: none;
+  border-bottom: 1px solid var(--line);
+  font: inherit;
+  font-size: 0.9rem;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+#watch-banner[hidden] { display: none; }
+#watch-banner .watch-banner-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: watch-pulse 1.4s ease-in-out infinite;
+}
+#watch-banner .watch-banner-bar { flex: 1; max-width: 260px; margin: 0; }
+@keyframes watch-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) {
+  #watch-banner .watch-banner-dot { animation: none; }
+}
+
 /* ── what kind of document are we starting with ────────────────────────── */
 
 .segmented {

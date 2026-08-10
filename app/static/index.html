@@ -73,6 +73,14 @@
   <button type="button" id="update-later" class="quiet">Later</button>
 </div>
 
+<!-- Shown on every screen while a DocWatch pass is running, so an admin working
+     elsewhere can see it at a glance. Click to jump to the DocWatch tab. -->
+<button type="button" id="watch-banner" hidden aria-live="polite">
+  <span class="watch-banner-dot" aria-hidden="true"></span>
+  <span id="watch-banner-text"></span>
+  <span class="bar watch-banner-bar" id="watch-banner-bar" hidden><i></i></span>
+</button>
+
 <main>
   <!-- ── Drop ─────────────────────────────────────────────────────────── -->
   <section id="screen-drop" class="screen">

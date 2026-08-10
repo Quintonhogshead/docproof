@@ -16,6 +16,7 @@ from ..accounts import AccountError, User
 from ..auth import require_admin
 from ..jobs import JobStore, read_usage
 from ..settings import ENV_VARS, PROVIDERS
+from ..spending import SpendingLedger, merge_live
 from ..usage import build_usage
 
 log = logging.getLogger("docproof.app")
@@ -104,9 +105,12 @@ def register(app: FastAPI) -> None:
     @app.get("/api/admin/usage", dependencies=[Depends(require_admin)])
     def admin_usage() -> dict:
         """Every user's month-to-date spend, for the God Mode dashboard."""
+        ledger = SpendingLedger(store.paths.spending_db)
         rows = []
         for u in accounts.list_users():
-            totals = build_usage(store.all(u.id), read_usage)["totals"]
+            live = store.all(u.id)
+            merged = merge_live(live, ledger.entries(u.id))
+            totals = build_usage(merged, read_usage)["totals"]
             rows.append({"id": u.id, "email": u.email,
                          "monthly_cap": u.monthly_cap,
                          "effective_cap": common.cap_for(u), **totals})
