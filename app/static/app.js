@@ -23,7 +23,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // The reasoning-effort → output-cost factors and the house
                 // default model, both sent by /api/models so the picker never
                 // hardcodes a server-owned number.
-                effortMultipliers: {}, defaultModel: null,
+                effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [],
@@ -780,6 +780,8 @@ async function loadModels() {
   state.outputGuess = body.output_token_guess || state.outputGuess;
   state.effortMultipliers = body.effort_multipliers || state.effortMultipliers;
   state.defaultModel = body.default_model || state.defaultModel;
+  state.defaultGlossaryModel = body.default_glossary_model
+    || state.defaultGlossaryModel;
 
   const select = $('model');
   const previous = select.value;
@@ -799,10 +801,32 @@ async function loadModels() {
     || (models.find((m) => m.available) || models[0] || {}).id
     || '';
   select.value = usable(previous) ? previous : fallback;
+
+  // The glossary reader: the same catalog, plus an "Off" choice, defaulting to
+  // the house setting (Opus). Its own read is one whole-book call, so it is a
+  // separate pick from the page-by-page reviewer above.
+  const gloss = $('glossary-model');
+  const gprev = gloss.value;
+  gloss.innerHTML = '';
+  models.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+    opt.disabled = !m.available;
+    gloss.append(opt);
+  });
+  const off = document.createElement('option');
+  off.value = 'off';
+  off.textContent = 'Off — skip the glossary read';
+  gloss.append(off);
+  const gdefault = (usable(state.defaultGlossaryModel) && state.defaultGlossaryModel)
+    || 'off';
+  gloss.value = usable(gprev) || gprev === 'off' ? gprev : gdefault;
   renderCost();
 }
 
 $('model').addEventListener('change', renderCost);
+$('glossary-model').addEventListener('change', renderCost);
 
 // ── reasoning effort ──────────────────────────────────────────────────────
 // A 1-based slider over these, cheapest → deepest, mirroring EFFORT_LEVELS on
@@ -1093,6 +1117,7 @@ $('start').addEventListener('click', async () => {
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
           effort: effortValue(),
+          glossary_model: $('glossary-model').value,
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });

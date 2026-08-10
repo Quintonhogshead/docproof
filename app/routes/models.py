@@ -48,4 +48,5 @@ def register(app: FastAPI) -> None:
         return {"models": out, "keys": keys,
                 "output_token_guess": common.OUTPUT_TOKEN_GUESS,
                 "effort_multipliers": EFFORT_MULTIPLIER,
-                "default_model": app.state.settings.model}
+                "default_model": app.state.settings.model,
+                "default_glossary_model": app.state.settings.glossary_model}

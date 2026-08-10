@@ -106,6 +106,9 @@ class Job:
     # Reasoning depth for the model. Older records predate this field; the
     # default keeps them on the shipped "low" behaviour.
     effort: str = "low"
+    # Which model reads the whole book for the glossary pass, "off" to skip it,
+    # or None on older records (config_for then leaves the config default).
+    glossary_model: str | None = None
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -424,6 +427,12 @@ class JobRunner:
         cfg.api.model = job.model
         cfg.api.effort = job.effort
         cfg.min_confidence = job.min_confidence
+        # The glossary pass runs its own (usually stronger) model. "off" skips
+        # it; None leaves the shipped config default for older job records.
+        if job.glossary_model == "off":
+            cfg.glossary.enabled = False
+        elif job.glossary_model:
+            cfg.glossary.model = job.glossary_model
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
         # Prompts the user has edited win over the shipped ones, per key.

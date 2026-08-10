@@ -49,6 +49,10 @@ def _prepared(tmp_path, models, n=3):
     cfg = load_config("config/default.yaml")
     cfg.error_types = [["spelling"]]
     cfg.chunking.token_budget = 1              # one paragraph per chunk
+    # These tests isolate the detector fan-out; the post-loop model passes
+    # (glossary, adjudication) would add their own calls and findings.
+    cfg.glossary.enabled = False
+    cfg.adjudicate.enabled = False
     cfg.ensemble = EnsembleConfig(
         detectors=[DetectorSpec(model=m) for m in models])
     return cfg, prepare(cfg, str(src), "config/error_types")

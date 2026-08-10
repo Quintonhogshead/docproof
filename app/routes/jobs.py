@@ -36,6 +36,9 @@ class JobRequest(BaseModel):
     # Reasoning depth for this run. None falls back to the saved default, so an
     # older page that doesn't send it keeps whatever the defaults screen set.
     effort: str | None = None
+    # Which model reads the whole book for the glossary pass. None falls back to
+    # the saved default; "off" turns the pass off for this run.
+    glossary_model: str | None = None
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
@@ -177,6 +180,7 @@ def register(app: FastAPI) -> None:
                 schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
                 effort=effort,
+                glossary_model=req.glossary_model or app.state.settings.glossary_model,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,

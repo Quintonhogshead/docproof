@@ -54,6 +54,9 @@ def client(tmp_path, provider, monkeypatch):
     def one_pass(self, job):
         cfg = base(self, job)
         cfg.error_types = ["comma_splice"]
+        # The whole-book glossary pass is its own model call; these end-to-end
+        # tests are about the review/job machinery, not that pass.
+        cfg.glossary.enabled = False
         return cfg
 
     monkeypatch.setattr(JobRunner, "config_for", one_pass)

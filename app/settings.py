@@ -149,6 +149,11 @@ class Settings:
     # unchanged; high cost 2.3x for zero further recall. Applies to reviews
     # and to manuscript prep alike, since both make model calls.
     effort: str = "medium"
+    # Which model reads the whole manuscript for the glossary pass (proper-noun
+    # casing + suspected real-word errors). Opus is the measured sweet spot;
+    # "off" disables the pass. The submission panel offers a picker defaulting
+    # here. See docproof.config.GlossaryConfig.
+    glossary_model: str = "claude-opus-5"
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     # Which file manuscript prep hands back by default: the InDesign-ready

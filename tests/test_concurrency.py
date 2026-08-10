@@ -59,6 +59,10 @@ def _prepared(tmp_path):
     cfg = load_config(CONFIG)
     cfg.error_types = [["spelling"]]
     cfg.chunking.token_budget = 1        # force one paragraph per chunk
+    # This exercises the concurrent detector loop; the post-loop model passes
+    # (glossary, adjudication) are single serial calls and not under test here.
+    cfg.glossary.enabled = False
+    cfg.adjudicate.enabled = False
     return cfg, prepare(cfg, str(src), ERROR_DIR)
 
 
