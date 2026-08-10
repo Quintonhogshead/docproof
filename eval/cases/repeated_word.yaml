@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Injected (mechanical) error cases for this type can be mass-produced with
+# eval/tools/generate_injected.py; this file carries hand-authored errors plus
+# the adversarial traps that defend the trust metric. No paragraph here is a
+# shipped calibration example.
+error_type: repeated_word
+
+cases:
+  - id: rw-001
+    text: "He crossed the the courtyard before the bells began to ring."
+    expect: { span: "the the", correction: "the", confidence: high }
+  - id: rw-002
+    text: "She folded the letter and and slipped it beneath the candlestick."
+    expect: { span: "and and", correction: "and", confidence: high }
+  - id: rw-003
+    text: "They waited by the harbour for for most of the grey afternoon."
+    expect: { span: "for for", correction: "for", confidence: high }
+  - id: rw-004
+    text: "The old clerk read the notice to to the gathered tenants twice."
+    expect: { span: "to to", correction: "to", confidence: high }
+  - id: rw-005
+    text: "A cold wind came down from the the northern ridge at nightfall."
+    expect: { span: "the the", correction: "the", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: rw-101
+    text: "It was a long, long way down to the water below."
+    expect: clean          # deliberate repetition for emphasis
+  - id: rw-102
+    text: "I knew that that was the wrong road to take."
+    expect: clean          # grammatical "that that" (conjunction + demonstrative)
+  - id: rw-103
+    text: "\"No, no, no,\" she said, backing toward the door."
+    expect: clean          # deliberate repetition separated by punctuation
+  - id: rw-104
+    text: "The will will be read after the funeral, the lawyer said."
+    expect: clean          # grammatical "will will" (noun + auxiliary)
+  - id: rw-105
+    text: "\"I— I didn't mean it,\" he stammered at the threshold."
+    expect: clean          # stammer/hesitation in dialogue

@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a verb whose number does not match its subject, including
+# agreement lost across an intervening phrase and an inverted "there is". Traps:
+# nonstandard dialect voice, the subjunctive, notional agreement, a collective
+# noun, and nearer-agreement with "nor". No paragraph is a calibration example.
+error_type: subject_verb_agreement
+
+cases:
+  - id: sva-001
+    text: "The crate of old tools were too heavy to lift."
+    expect: { span: "tools were", correction: "tools was", confidence: high }
+  - id: sva-002
+    text: "The row of houses face the grey sea."
+    expect: { span: "houses face", correction: "houses faces", confidence: high }
+  - id: sva-003
+    text: "They was waiting at the station when I arrived."
+    expect: { span: "They was", correction: "They were", confidence: high }
+  - id: sva-004
+    text: "There is four letters still unanswered on the desk."
+    expect: { span: "is four", correction: "are four", confidence: high }
+  - id: sva-005
+    text: "The cat and the old dog sleeps by the stove."
+    expect: { span: "dog sleeps", correction: "dog sleep", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: sva-101
+    text: "\"She don't know the first thing about it,\" he muttered."
+    expect: clean          # nonstandard agreement as dialect voice
+  - id: sva-102
+    text: "If I were you, I would not sign anything tonight."
+    expect: clean          # the subjunctive
+  - id: sva-103
+    text: "Ten miles is a long way to row against the current."
+    expect: clean          # notional agreement with a measured quantity
+  - id: sva-104
+    text: "The team are quarrelling among themselves again."
+    expect: clean          # a collective noun taking the plural
+  - id: sva-105
+    text: "Neither the boys nor the girl was ready to leave."
+    expect: clean          # the verb agrees with the nearer subject

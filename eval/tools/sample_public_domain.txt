@@ -1,0 +1,52 @@
+# Clean source prose for generate_injected.py. One sentence per line, each a
+# correct, IP-clean sentence >= 25 chars with no embedded newline. This is a MIX
+# of (a) genuine public-domain lines from pre-1928 works (Austen 1813, Dickens
+# 1859/1861, Tolstoy in Garnett's pre-1928 translation, the King James Bible)
+# and (b) freshly-composed clean sentences added only to cover the trigger words
+# the mechanical corruptions need (contractions, month names, standalone "I",
+# common misspell-able words, homophone pairs). Everything here is clean and
+# correct on purpose: the generator introduces the single error, and the
+# expected fix is to restore the original. Nothing on this list is a shipped
+# calibration example. Replace or extend it with stripped Project Gutenberg text
+# to scale the injected tier — see the module docstring.
+It is a truth universally acknowledged that a single man in possession of a good fortune must be in want of a wife.
+It was the best of times, it was the worst of times, it was the age of wisdom.
+Each unhappy family is unhappy in its own way, and the house on the hill was no exception.
+Whether I shall turn out to be the hero of my own life, these pages must show.
+In the beginning the harbour was quiet and the boats had not yet gone out.
+She had always believed that the letter would arrive before the frost.
+The government of the island was a business no one wished to inherit.
+He was taller than his brother, and quicker on the stairs as well.
+They were too tired to finish the work before the light failed.
+The children could not find their coats in the crowded hall.
+You're the only one who still remembers the road to the old mill.
+They're coming down from the north before the first snow falls.
+I don't know what he wanted, and I did not think to ask.
+She didn't believe a word of the story he told at supper.
+It isn't the cold that troubles me but the silence after.
+The necessary papers were different from the ones he expected.
+A beautiful surprise waited for them at the end of the lane.
+We would receive the guests in the long room until the rain stopped.
+In January the river froze, and in February it froze again.
+On Monday the market was empty, though the morning was fine.
+He promised to come back tomorrow and settle the account.
+The captain would not lose the ship for want of a lantern.
+The occasion called for silence, which no one in the room could keep.
+There was a friend of mine who lived out beyond the marsh.
+The old dog wagged its tail and would not leave the doorway.
+It's a long way to the station, and the last train has gone.
+She waited until the very last moment, then walked out alone.
+The old house kept its secrets better than the neighbours did.
+We couldn't hear the bell over the noise of the rising wind.
+The address on the letter had been smudged by the rain.
+They spent the whole of December mending the nets by the fire.
+He wouldn't say where he had been, and no one pressed him.
+The argument lasted an hour and settled absolutely nothing.
+Every calendar in the office still showed the wrong month.
+The independent little shop had outlasted all the grand ones.
+By Friday the whole town had heard the news from the coast.
+He always spoke of the sea as though it were a person.
+The two of them walked to the harbour and watched the tide come in.
+She was quite certain the door had been locked at dusk.
+The letters were kept in a drawer no one else ever opened.
+The doors wouldn't open, and the hall hadn't been swept in days.

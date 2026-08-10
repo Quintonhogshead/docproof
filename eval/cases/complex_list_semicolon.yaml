@@ -1,0 +1,34 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: list items that carry internal commas and so need semicolons
+# between them. Traps: plain lists (serial_comma owns those), a single
+# appositive, a list already using semicolons. No paragraph is a calibration
+# example.
+error_type: complex_list_semicolon
+
+cases:
+  - id: cls-001
+    text: "She wrote to Anna, her cousin, Beth, her landlady, and Cole, her clerk."
+    expect: { span: "cousin, Beth", correction: "cousin; Beth", confidence: high }
+  - id: cls-002
+    text: "We passed through Denver, Colorado, Topeka, Kansas, and Reno, Nevada."
+    expect: { span: "Colorado, Topeka", correction: "Colorado; Topeka", confidence: high }
+  - id: cls-003
+    text: "The trunk held a shawl, moth-eaten, a fan, half broken, and a locket."
+    expect: { span: "moth-eaten, a fan", correction: "moth-eaten; a fan", confidence: high }
+  - id: cls-004
+    text: "On the panel sat Reyes, the chair, Okafor, the treasurer, and Lund."
+    expect: { span: "the chair, Okafor", correction: "the chair; Okafor", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: cls-101
+    text: "The kit held bandages, a torch, and a length of cord."
+    expect: clean          # items have no internal commas — a plain list
+  - id: cls-102
+    text: "She invited Maria, her sister, and then left the party early."
+    expect: clean          # a single appositive, not a list
+  - id: cls-103
+    text: "We stopped in Austin, Texas; Boise, Idaho; and Reno, Nevada."
+    expect: clean          # already separated by semicolons
+  - id: cls-104
+    text: "He brought his brother, a doctor, to look at the wound."
+    expect: clean          # a single appositive, not a list

@@ -1,0 +1,42 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Injected (mechanical) error cases for this type can be mass-produced with
+# eval/tools/generate_injected.py; this file carries hand-authored errors plus
+# adversarial traps. No paragraph here is a shipped calibration example.
+error_type: capitalization
+
+cases:
+  - id: cp-001
+    text: "The lantern guttered and died. she did not move to relight it."
+    expect: { span: "died. she", correction: "died. She", confidence: high }
+  - id: cp-002
+    text: "By the time we reached the summit, i could barely breathe."
+    expect: { span: "i could", correction: "I could", confidence: high }
+  - id: cp-003
+    text: "They crossed into france in the last week of autumn."
+    expect: { span: "france", correction: "France", confidence: high }
+  - id: cp-004
+    text: "The letter was dated the third of april, nineteen years back."
+    expect: { span: "april", correction: "April", confidence: high }
+  - id: cp-005
+    text: "She had learned to read spanish from an old missal."
+    expect: { span: "spanish", correction: "Spanish", confidence: high }
+  - id: cp-006
+    text: "The Door swung open before he could knock twice."
+    expect: { span: "Door", correction: "door", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: cp-101
+    text: "\"I know,\" she said, \"and I don't much care.\""
+    expect: clean          # dialogue resuming after attribution — "and" is lowercase
+  - id: cp-102
+    text: "We drove north until the road gave out at the shore."
+    expect: clean          # a direction used as a direction
+  - id: cp-103
+    text: "The long summer ended the way every summer there did."
+    expect: clean          # seasons are lowercase
+  - id: cp-104
+    text: "Everyone in the office still used their old iPhone that year."
+    expect: clean          # a brand name with an intentional interior capital
+  - id: cp-105
+    text: "The president of the gardening club called the meeting to order."
+    expect: clean          # a job title used generically

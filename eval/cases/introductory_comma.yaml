@@ -1,0 +1,41 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a missing comma after an introductory subordinate clause,
+# participial phrase, long prepositional phrase, or transitional. Traps: short
+# adverbs and short prepositional phrases (no comma wanted), inverted sentences,
+# a participial subject, and an opening coordinating conjunction. No paragraph
+# is a calibration example.
+error_type: introductory_comma
+
+cases:
+  - id: ic-001
+    text: "When the whistle finally blew the whole yard fell silent."
+    expect: { span: "blew the", correction: "blew, the", confidence: high }
+  - id: ic-002
+    text: "Hearing the latch lift she reached for the poker."
+    expect: { span: "lift she", correction: "lift, she", confidence: high }
+  - id: ic-003
+    text: "In the last cold week of November the river froze solid."
+    expect: { span: "November the", correction: "November, the", confidence: high }
+  - id: ic-004
+    text: "If you leave before dawn you will beat the tide."
+    expect: { span: "dawn you", correction: "dawn, you", confidence: high }
+  - id: ic-005
+    text: "On the other hand nobody had asked her opinion."
+    expect: { span: "hand nobody", correction: "hand, nobody", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ic-101
+    text: "Then she left without so much as a backward glance."
+    expect: clean          # a short introductory adverb takes no comma
+  - id: ic-102
+    text: "In the morning he was gone and the boat with him."
+    expect: clean          # a short prepositional phrase, no misreading
+  - id: ic-103
+    text: "Down the long hill ran the boy who had rung the bell."
+    expect: clean          # an inverted sentence takes no comma
+  - id: ic-104
+    text: "Running down the hill was harder than she had expected."
+    expect: clean          # the participial phrase is the subject
+  - id: ic-105
+    text: "But nobody came to the door, however long they knocked."
+    expect: clean          # opens with a coordinating conjunction

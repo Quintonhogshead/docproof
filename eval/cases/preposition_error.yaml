@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a single wrong preposition that leaves no sensible reading and
+# has exactly one replacement, in narration. Traps: regional variants (wait on,
+# different than, at the weekend), a phrasal verb, and an idiom that varies
+# (centre on). No paragraph is a calibration example.
+error_type: preposition_error
+
+cases:
+  - id: pe-001
+    text: "She was married with a sailor from the north coast."
+    expect: { span: "married with", correction: "married to", confidence: high }
+  - id: pe-002
+    text: "The yoke pressed of the necks of the lead oxen."
+    expect: { span: "pressed of", correction: "pressed on", confidence: high }
+  - id: pe-003
+    text: "He was afraid from the dark long into his old age."
+    expect: { span: "afraid from", correction: "afraid of", confidence: high }
+  - id: pe-004
+    text: "The engine consists in three separate parts."
+    expect: { span: "consists in", correction: "consists of", confidence: high }
+  - id: pe-005
+    text: "He was accused for the theft of the silver candlesticks."
+    expect: { span: "accused for", correction: "accused of", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: pe-101
+    text: "She waited on her brother outside the courthouse steps."
+    expect: clean          # "wait on" is a regional variant, correct
+  - id: pe-102
+    text: "\"I'm different than I was back then,\" he admitted."
+    expect: clean          # "different than" is an accepted variant
+  - id: pe-103
+    text: "He put up with the leaking roof for another winter."
+    expect: clean          # "put up with" is a phrasal verb
+  - id: pe-104
+    text: "They met at the weekend to settle the accounts."
+    expect: clean          # "at the weekend" is British, correct
+  - id: pe-105
+    text: "They centre their hopes on the spring planting."
+    expect: clean          # "centre on" is an accepted idiom

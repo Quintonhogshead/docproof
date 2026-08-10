@@ -1,0 +1,40 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: case errors (Him and me / between you and I), a reflexive
+# misuse, and a singular pronoun for a plural antecedent. Traps: singular "they"
+# with generic/indefinite/named antecedents (all correct English), dialogue
+# case, and collective "they". No paragraph is a calibration example.
+error_type: pronoun_agreement
+
+cases:
+  - id: pa-001
+    text: "Him and me walked the long way back from town."
+    expect: { span: "Him and me", correction: "He and I", confidence: high }
+  - id: pa-002
+    text: "The children could not find his way in the dark."
+    expect: { span: "find his", correction: "find their", confidence: high }
+  - id: pa-003
+    text: "She handed the ledgers to myself and left."
+    expect: { span: "myself", correction: "me", confidence: medium }
+  - id: pa-004
+    text: "It stayed a secret between you and I for years."
+    expect: { span: "you and I", correction: "you and me", confidence: high }
+  - id: pa-005
+    text: "Her and her cousin ran the shop together."
+    expect: { span: "Her and her cousin", correction: "She and her cousin", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: pa-101
+    text: "Everyone took their seat before the curtain rose."
+    expect: clean          # singular "they" with a generic antecedent
+  - id: pa-102
+    text: "Somebody had left their umbrella in the stand."
+    expect: clean          # singular "they" with an indefinite antecedent
+  - id: pa-103
+    text: "Riley pulled their scarf tight and stepped into the wind."
+    expect: clean          # a named character whose pronoun is "they"
+  - id: pa-104
+    text: "\"Me and him go back a long way,\" the old man said."
+    expect: clean          # case in dialogue is how people speak
+  - id: pa-105
+    text: "The team lost their nerve at the final bend."
+    expect: clean          # a collective noun taking "they"

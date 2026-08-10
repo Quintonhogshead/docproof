@@ -1,0 +1,35 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# This type ASKS, never edits (channel: query), so seeded cases carry a span but
+# no correction — the expected output is a margin comment, not a change. Seeded:
+# two speakers sharing one paragraph. Traps: one speaker with a narrated
+# reaction, a speaker quoting someone, a crowd line, and pure narration. No
+# paragraph is a calibration example.
+error_type: speaker_change
+
+cases:
+  - id: spk-001
+    text: "\"I won't sign it.\" \"You will, and gladly.\""
+    expect: { span: "it.\" \"You", confidence: high }
+  - id: spk-002
+    text: "\"Where have you been?\" I asked, and \"Out,\" he said."
+    expect: { span: "I asked, and", confidence: high }
+  - id: spk-003
+    text: "\"It's late.\" \"It's always late here,\" she said."
+    expect: { span: "late.\" \"It's", confidence: high }
+  - id: spk-004
+    text: "\"You could have told me.\" \"When?\" he shot back."
+    expect: { span: "me.\" \"When", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: spk-101
+    text: "\"I won't go.\" She stared at the floor. \"You can't make me.\""
+    expect: clean          # one speaker with a narrated reaction between lines
+  - id: spk-102
+    text: "\"He said 'come home' and hung up,\" she told the officer."
+    expect: clean          # one speaker quoting someone else inside her line
+  - id: spk-103
+    text: "\"Fire!\" someone shouted, and then the whole street was shouting."
+    expect: clean          # an unattributed crowd line the author lets float
+  - id: spk-104
+    text: "They argued about the rent until well past midnight."
+    expect: clean          # narration describing speech, nothing quoted

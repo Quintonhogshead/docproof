@@ -1,0 +1,37 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# A formatting type (channel: format): corrected_text is the TITLE ALONE, which
+# docproof italicises. Seeded: long-work titles (book, play, opera, painting).
+# Traps: a short work in quotes, a building/place name, a ship name, and
+# scripture (set roman). No paragraph is a calibration example.
+error_type: title_italics
+
+cases:
+  - id: ti-001
+    text: "She had never once finished Bleak House."
+    expect: { span: "Bleak House", correction: "Bleak House", confidence: high }
+  - id: ti-002
+    text: "They queued all evening to see Macbeth at the Lyceum."
+    expect: { span: "Macbeth", correction: "Macbeth", confidence: high }
+  - id: ti-003
+    text: "A dog-eared copy of Great Expectations lay on the sill."
+    expect: { span: "Great Expectations", correction: "Great Expectations", confidence: high }
+  - id: ti-004
+    text: "She hummed a tune from The Magic Flute all afternoon."
+    expect: { span: "The Magic Flute", correction: "The Magic Flute", confidence: high }
+  - id: ti-005
+    text: "The painting they came to see was The Night Watch."
+    expect: { span: "The Night Watch", correction: "The Night Watch", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: ti-101
+    text: "He read \"The Tell-Tale Heart\" aloud by candlelight."
+    expect: clean          # a short story takes quotation marks, not italics
+  - id: ti-102
+    text: "She had worked at the Grove Street Theatre for years."
+    expect: clean          # a building/place name, not a title
+  - id: ti-103
+    text: "The old whaler Essex had sailed from Nantucket."
+    expect: clean          # a ship's name, not a title
+  - id: ti-104
+    text: "He quoted the book of Job from memory at the graveside."
+    expect: clean          # scripture is set in roman, not italics
