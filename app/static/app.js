@@ -39,6 +39,10 @@ document.querySelectorAll('.tab').forEach((tab) => {
   tab.addEventListener('click', () => show(tab.dataset.screen));
 });
 
+// The working-now banner jumps to the DocWatch tab, where the full run detail
+// and per-file table live.
+$('watch-banner').addEventListener('click', () => show('watch'));
+
 function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
@@ -1975,6 +1979,7 @@ function renderWatch(body, quiet) {
   const w = body.watch;
   renderWatchSignIn(body);
   renderWatchRun(body);
+  renderWatchBanner(body);
   renderWatchFiles(w.files);
   applyWatchSchedule(body.can_schedule);
   if (quiet) return;
@@ -2141,6 +2146,56 @@ function renderWatchRun(body) {
   if (last.waiting) {
     line.textContent += ` ${last.waiting} waiting on HubSpot.`;
   }
+}
+
+// The slim strip at the top of every screen. It reuses the same run state the
+// DocWatch tab's bar reads, so the two never disagree, and shows only while a
+// pass is in flight. The whole /api/watch surface is admin-only, so this is too
+// — which is why it may name the manuscript it is on; a regular web user's poll
+// never calls the endpoint and never sees the banner (see watchAvailable).
+function renderWatchBanner(body) {
+  const banner = $('watch-banner');
+  if (!banner) return;
+  const run = body && body.run;
+  if (!run || !run.busy) { banner.hidden = true; return; }
+  banner.hidden = false;
+
+  const doing = run.progress[0];
+  const bar = $('watch-banner-bar');
+  const hasProgress = !!(doing && doing.total);
+  bar.hidden = !hasProgress;
+  if (hasProgress) {
+    bar.firstElementChild.style.width =
+      `${Math.round((doing.done / doing.total) * 100)}%`;
+  }
+  $('watch-banner-text').textContent = watchBannerSummary(body);
+}
+
+function watchBannerSummary(body) {
+  const run = body.run;
+  const doing = run.progress[0];
+  const attention = (body.watch.files || []).filter((f) => f.error).length;
+  let text = doing
+    ? `DocWatch: ${doing.filename} — ${doing.plain_state.toLowerCase()}`
+    : 'DocWatch: looking in the folder…';
+  if (run.progress.length > 1) text += ` (+${run.progress.length - 1} more)`;
+  if (attention) text += ` · ${attention} need attention`;
+  return text;
+}
+
+// Off the DocWatch tab there is nothing to redraw but the banner, so the poll
+// fetches the status alone rather than re-rendering the whole hidden screen.
+async function refreshWatchBanner() {
+  try {
+    renderWatchBanner(await api('/api/watch'));
+  } catch (_) { /* a poll that fails is a poll skipped */ }
+}
+
+// DocWatch is desktop-wide, and on the web it is an admin-only surface. The
+// banner follows the same rule, so a regular web user's poll never calls the
+// admin-only endpoint and the banner stays hidden for them.
+function watchAvailable() {
+  return !WEB || (ME && ME.is_admin);
 }
 
 // The library writes for somebody holding a terminal. In here there are cards.
@@ -2904,9 +2959,11 @@ function startApp() {
   renderKind();
   refreshJobs();
   resumeWatchReturn();
+  if (watchAvailable()) refreshWatchBanner();
   state.pollTimer = setInterval(() => {
     if (!$('screen-jobs').hidden) refreshJobs();
     if (!$('screen-watch').hidden) loadWatch({ quiet: true }).catch(() => {});
+    else if (watchAvailable()) refreshWatchBanner();
   }, 5000);
 }
 
