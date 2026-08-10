@@ -269,6 +269,14 @@ class EnsembleConfig(BaseModel):
     def enabled(self) -> bool:
         return len(self.detectors) > 0
 
+    @property
+    def verifies(self) -> bool:
+        """Whether a verifier will actually run. This is the condition that
+        makes relaxing a detector prompt safe — the recall-tuned variant is only
+        used when a second reviewer is there to catch its false positives."""
+        return (self.enabled and bool(self.verifier_model)
+                and self.verify_policy != "none")
+
     @model_validator(mode="after")
     def _known_models(self):
         from .providers.catalog import lookup

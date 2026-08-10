@@ -102,9 +102,10 @@ SCOPE
 """
 
 
-def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
+def _render_error_type(et: ErrorType, *, explanations: bool = True,
+                       ensemble: bool = False) -> str:
     parts = [f"=== ERROR TYPE: {et.key} — {et.name} (v{et.version}) ===",
-             et.detection_prompt]
+             et.detection(ensemble)]
     if et.is_query:
         parts.append(
             "CHANNEL: QUERY. This type asks; it never corrects. Its findings "
@@ -143,7 +144,8 @@ def _render_error_type(et: ErrorType, *, explanations: bool = True) -> str:
 def build_system_prompt(types: Sequence[ErrorType], *,
                         explanations: bool = True,
                         vocabulary: str = "",
-                        conventions: str = "") -> str:
+                        conventions: str = "",
+                        ensemble: bool = False) -> str:
     parts = [base_rules(explanations=explanations)]
     if len(types) > 1:
         index = "\n".join(f"- {et.key}: {et.name}" for et in types)
@@ -163,7 +165,8 @@ def build_system_prompt(types: Sequence[ErrorType], *,
         # It goes to every pass because "these words are the author's" is
         # never the wrong thing to know.
         parts.append(vocabulary)
-    parts.extend(_render_error_type(et, explanations=explanations)
+    parts.extend(_render_error_type(et, explanations=explanations,
+                                    ensemble=ensemble)
                  for et in types)
     return "\n\n".join(parts)
 
@@ -205,7 +208,8 @@ class Analyzer:
         self.system_prompt = build_system_prompt(self.types,
                                                  explanations=explanations,
                                                  vocabulary=vocabulary,
-                                                 conventions=conventions)
+                                                 conventions=conventions,
+                                                 ensemble=cfg.ensemble.verifies)
         self.output_model = build_output_model(self.keys,
                                                explanations=explanations)
         self.schema = strict_json_schema(self.output_model)

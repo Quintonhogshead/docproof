@@ -330,3 +330,41 @@ def test_verifier_reject_blocks_the_tracked_change_end_to_end(tmp_path):
     assert out.applied == 0                          # nothing survived the overseer
     stats = json.loads(out.findings_json.read_text())["stats"]
     assert stats.get("rejected_by_verifier", 0) >= 1
+
+
+# --- recall-tuned prompt hook (inert until a YAML fills it in) ----------------
+
+from docproof.analyzer import build_system_prompt                    # noqa: E402
+from docproof.error_registry import ErrorType, load_error_types      # noqa: E402
+
+from .test_error_types import ERROR_DIR                              # noqa: E402
+
+
+def test_ensemble_prompt_hook_is_inert_until_a_type_sets_it():
+    """No shipped type carries an ensemble_detection_prompt, so the system
+    prompt is byte-identical whether or not the ensemble+verifier is active —
+    the hook changes nothing until a human fills one in."""
+    types = list(load_error_types(ERROR_DIR, ["comma_splice", "spelling"]).values())
+    assert (build_system_prompt(types, ensemble=False)
+            == build_system_prompt(types, ensemble=True))
+
+
+def test_ensemble_prompt_used_only_in_ensemble_mode_when_set():
+    et = ErrorType(key="x", name="X", version=1,
+                   detection_prompt="STANDARD RULE", fix_guidance="fix",
+                   confidence_guidance="", examples=(),
+                   ensemble_detection_prompt="RELAXED RULE")
+    assert et.detection(False) == "STANDARD RULE"
+    assert et.detection(True) == "RELAXED RULE"
+    assert "RELAXED RULE" in build_system_prompt([et], ensemble=True)
+    assert "RELAXED RULE" not in build_system_prompt([et], ensemble=False)
+
+
+def test_verifies_property_gates_the_hook():
+    from docproof.config import EnsembleConfig, DetectorSpec
+    two = [DetectorSpec(model="gpt-5.6-luna"), DetectorSpec(model="claude-haiku-4-5")]
+    assert not EnsembleConfig().verifies                      # single-detector
+    assert not EnsembleConfig(detectors=two).verifies         # no verifier
+    assert not EnsembleConfig(detectors=two, verifier_model="claude-opus-5",
+                              verify_policy="none").verifies   # verifier off
+    assert EnsembleConfig(detectors=two, verifier_model="claude-opus-5").verifies
