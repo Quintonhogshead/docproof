@@ -57,18 +57,26 @@ run_cfg() {        # $1 = label, $2 = config path, $3 = model for the cost line
 mkdir -p output
 DET="[{'model':'gpt-5.6-luna'},{'model':'claude-haiku-4-5'}]"
 
+# The patched configs MUST live beside default.yaml: cmd_eval resolves the
+# error-types dir as `dirname(--config)/error_types` (docproof/__main__.py), so a
+# config written to output/ would look for a non-existent output/error_types/.
+# Write them into config/ and remove them on exit.
+UNION2="config/_eval_union2.yaml"
+VERIFIED2="config/_eval_verified2.yaml"
+trap 'rm -f "$UNION2" "$VERIFIED2"' EXIT
+
 # 1. baseline (single detector) — default.yaml as shipped
 run_cfg baseline config/default.yaml gpt-5.6-luna
 
 # 2. union2 — two detectors, no verifier
-patch_config output/eval_union2.yaml \
+patch_config "$UNION2" \
   "{'detectors':$DET,'verifier_model':None,'verify_policy':'none','verifier_effort':'high','consensus_confidence_bump':False}"
-run_cfg union2 output/eval_union2.yaml gpt-5.6-luna
+run_cfg union2 "$UNION2" gpt-5.6-luna
 
 # 3. verified2 — two detectors + overseer-verifier on disputed findings
-patch_config output/eval_verified2.yaml \
+patch_config "$VERIFIED2" \
   "{'detectors':$DET,'verifier_model':'$VERIFIER','verify_policy':'disputed','verifier_effort':'high','consensus_confidence_bump':False}"
-run_cfg verified2 output/eval_verified2.yaml gpt-5.6-luna
+run_cfg verified2 "$VERIFIED2" gpt-5.6-luna
 
 echo
 echo "Done. Diff the three scorecards in $DEST/ against the P0.2 baseline and"
