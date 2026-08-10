@@ -22,6 +22,7 @@ from docproof.pipeline import prepare
 from ..accounts import User
 from ..jobs import JobStore
 from ..settings import CONFIG_PATH, ERROR_DIR, Paths
+from ..spending import SpendingLedger, merge_live
 
 log = logging.getLogger("docproof.app")
 
@@ -57,9 +58,13 @@ def cap_for(user: User | None) -> float | None:
 
 
 def month_spend(store: JobStore, owner: str) -> float:
-    """What this owner's jobs have cost so far in the current calendar month."""
+    """What this owner's jobs have cost so far in the current calendar month,
+    including jobs since cleared — their cost lives on in the ledger, so
+    clearing the results list can never free cap headroom."""
     prefix = datetime.now(timezone.utc).strftime("%Y-%m")
-    return sum(j.cost or 0.0 for j in store.all(owner)
+    ledger = SpendingLedger(store.paths.spending_db).entries(owner)
+    rows = merge_live(store.all(owner), ledger)
+    return sum(j.cost or 0.0 for j in rows
                if (j.created_at or "").startswith(prefix))
 
 

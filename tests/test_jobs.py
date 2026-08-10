@@ -11,8 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from app.jobs import Job, JobRunner, JobStore
+from app.jobs import Job, JobRunner, JobStore, read_usage
 from app.settings import Paths, Settings
+from app.spending import LedgerEntry, SpendingLedger, merge_live
+from app.usage import _totals_for, build_usage
 from docproof.config import load_config
 from .conftest import FIXTURES
 from .fakes import FakeProvider
@@ -543,3 +545,80 @@ def test_delete_job_spares_a_results_dir_outside_the_output_base(runner,
     assert r.delete_job("j1") is True
     assert store.get("j1") is None
     assert (outside / "precious.txt").exists(), "files outside the base survive"
+
+
+# --- the spending ledger: clearing jobs must not erase the bill --------------
+
+def _spent_job(store, **over) -> Job:
+    """A finished job that actually cost something."""
+    from datetime import datetime, timezone
+    fields = {"state": "done", "input_tokens": 1000, "output_tokens": 500,
+              "cache_read_tokens": 0, "cache_write_tokens": 0, "api_calls": 3,
+              "cost": 0.42, "words": 1200,
+              "created_at": datetime.now(timezone.utc).isoformat()}
+    fields.update(over)
+    return _job(store, **fields)
+
+
+def test_clearing_a_job_keeps_its_spending(runner):
+    """Deleting a job reclaims its disk but not its cost: the ledger holds the
+    totals so the spending screen reads the same before and after a clear."""
+    store, r = runner
+    _spent_job(store)
+    before = build_usage(store.all(), read_usage)["totals"]
+
+    assert r.delete_job("j1") is True
+    assert store.get("j1") is None, "the job leaves the results list"
+
+    ledger = SpendingLedger(store.paths.spending_db)
+    after = build_usage(merge_live(store.all(), ledger.entries()),
+                        read_usage)["totals"]
+    assert after["cost"] == before["cost"]
+    assert after["input_tokens"] == before["input_tokens"]
+    assert after["jobs"] == before["jobs"]
+
+
+def test_recording_the_same_job_twice_does_not_double_count(runner):
+    """Idempotent by id: a job cleared, its spend read, and (somehow) cleared
+    again is one row, not two."""
+    store, r = runner
+    job = _spent_job(store)
+    entry = LedgerEntry.from_job(job, _totals_for(job, read_usage))
+    ledger = SpendingLedger(store.paths.spending_db)
+    ledger.record(entry)
+    ledger.record(entry)
+    assert len(ledger.entries()) == 1
+
+
+def test_a_job_that_never_spent_leaves_no_ledger_row(runner):
+    """A cancelled job that never reached the API has no cost worth keeping, so
+    it does not litter the ledger."""
+    store, r = runner
+    _job(store, state="cancelled")
+    assert r.delete_job("j1") is True
+    assert SpendingLedger(store.paths.spending_db).entries() == []
+
+
+def test_a_live_job_wins_over_its_ledger_row(runner):
+    """If a job is somehow both live and in the ledger, the live record is
+    authoritative and the stale row is dropped — no double counting."""
+    store, r = runner
+    job = _spent_job(store)
+    entry = LedgerEntry.from_job(job, _totals_for(job, read_usage))
+    SpendingLedger(store.paths.spending_db).record(entry)
+    merged = merge_live(store.all(),
+                        SpendingLedger(store.paths.spending_db).entries())
+    assert [j.id for j in merged] == ["j1"]
+
+
+def test_clearing_does_not_free_monthly_cap_headroom(runner):
+    """The cap gate reads month_spend; a cleared job's cost still counts, so a
+    user cannot reset their limit by clearing the results list."""
+    from app.routes import common
+    store, r = runner
+    _spent_job(store)
+    before = common.month_spend(store, "")
+    assert before == pytest.approx(0.42)
+
+    assert r.delete_job("j1") is True
+    assert common.month_spend(store, "") == pytest.approx(before)

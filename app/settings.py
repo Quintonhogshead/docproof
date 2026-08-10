@@ -101,6 +101,14 @@ class Paths:
         this."""
         return self.root / "secrets.db"
 
+    @property
+    def spending_db(self) -> Path:
+        """A job's cost, kept after its folder is gone. Spending is otherwise
+        pure arithmetic over live job records, so clearing a job would erase its
+        share of the bill; a snapshot is written here just before the folder is
+        removed. One JSON object per line, appended, keyed by job id."""
+        return self.root / "spending.jsonl"
+
     def ensure(self) -> "Paths":
         for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep):
             d.mkdir(parents=True, exist_ok=True)
