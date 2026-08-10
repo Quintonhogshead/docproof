@@ -211,3 +211,21 @@ def test_desktop_house_style_needs_no_admin(tmp_path):
         assert c.post("/api/prep/styles/sheet",
                       files={"file": ("house.yaml", shipped, "application/x-yaml")}
                       ).status_code == 200
+
+
+def test_admin_usage_dashboard_includes_a_docwatch_line(app):
+    """The God Mode dashboard adds up to the whole bill: each user's spend, plus
+    the watcher's own line — otherwise the total is short by DocWatch."""
+    from app.jobs import Job, JobStore
+    _seed_job(app, "editor@press.com", "job-e", cost=2.0, api_calls=1)
+    JobStore(Paths(app.state.watch.home)).save(Job(
+        id="w-1", filename="Wolves.docx", source_path="/x",
+        model="claude-haiku-4-5", mode="now", kind="promo", state="done",
+        source="watch", api_calls=1, cost=6.0,
+        created_at=datetime.now(timezone.utc).isoformat()))
+
+    rows = _as(app, "boss@press.com").get("/api/admin/usage").json()["users"]
+    docwatch = [r for r in rows if r["id"] == "docwatch"]
+    assert len(docwatch) == 1
+    assert docwatch[0]["email"] == "DocWatch (automated)"
+    assert docwatch[0]["cost"] == pytest.approx(6.0)

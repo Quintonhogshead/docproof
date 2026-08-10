@@ -509,6 +509,26 @@ def test_the_dashboard_adds_the_watchers_spending_to_the_apps(client):
     assert usage["recent"][0]["source"] == "watch"
 
 
+def test_the_dashboard_counts_a_cleared_watch_job_from_its_own_ledger(client):
+    """The watcher's spend outlives its jobs: a DocWatch job that has been
+    cleared lives on only in the watch store's own ledger. The bill still counts
+    it — before, only the app ledger was read, so a cleared watch job vanished."""
+    from app.spending import LedgerEntry, SpendingLedger
+    store = JobStore(Paths(client.home))
+    SpendingLedger(store.paths.spending_db).record(LedgerEntry(
+        id="w-cleared", filename="Bears.docx", kind="promo",
+        model="claude-haiku-4-5", mode="now", source="watch", owner_id="",
+        created_at="2026-08-10T00:00:00+00:00", words=0, input_tokens=0,
+        output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
+        api_calls=1, cost=0.41))
+
+    usage = client.get("/api/usage").json()
+
+    assert usage["totals"]["jobs"] == 1
+    assert usage["totals"]["cost"] == pytest.approx(0.41)
+    assert [row["source"] for row in usage["by_source"]] == ["watch"]
+
+
 def test_a_dashboard_with_no_watcher_at_all_is_still_zeros(client):
     usage = client.get("/api/usage").json()
 

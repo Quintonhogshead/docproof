@@ -114,6 +114,14 @@ def register(app: FastAPI) -> None:
             rows.append({"id": u.id, "email": u.email,
                          "monthly_cap": u.monthly_cap,
                          "effective_cap": common.cap_for(u), **totals})
+        # The watcher's spend is nobody's user total, but it is on the same card,
+        # so it gets its own line — otherwise the dashboard adds up to less than
+        # the bill.
+        watch_rows = common.watch_spend(app.state.watch)
+        if watch_rows:
+            totals = build_usage(watch_rows, read_usage)["totals"]
+            rows.append({"id": "docwatch", "email": "DocWatch (automated)",
+                         "monthly_cap": None, "effective_cap": None, **totals})
         return {"users": rows, "default_cap": common.default_cap()}
 
     # -- provider API keys ----------------------------------------------------

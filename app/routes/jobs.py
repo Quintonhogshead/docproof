@@ -24,9 +24,7 @@ from ..jobs import Job, JobRunner, JobStore, read_usage
 from ..prompts import list_prompts
 from ..report import build_report
 from ..settings import CONFIG_PATH, ERROR_DIR, Paths
-from ..spending import SpendingLedger, merge_live
 from ..usage import build_usage
-from ..watch.runner import WatchRunner
 
 
 class JobRequest(BaseModel):
@@ -394,22 +392,23 @@ def register(app: FastAPI) -> None:
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:
-        """Tokens, calls and estimated spend.
+        """Tokens, calls and estimated spend, from every source on the one card.
 
-        On the desktop it is every job on this machine: two job stores, one
-        bill — the watcher keeps its own home (a separate folder is a separate
-        lock, which lets a pass and this window run at once), but the money
-        comes off the same card, so leaving half of it out would be the wrong
-        figure. On the web it is this user's own jobs only; the watcher isn't
-        theirs, so it has no place in their total."""
-        ledger = SpendingLedger(app.state.store.paths.spending_db)
-        if app.state.web:
-            live = app.state.store.all(owner)
-            return build_usage(merge_live(live, ledger.entries(owner)),
+        Both job stores count — the app's and the watcher's — and within each,
+        live jobs and the ledger snapshots of cleared ones alike, because a
+        cleared job's cost still came off the card. On the desktop that is the
+        whole machine. On the web it is scoped: a regular user sees their own app
+        jobs, and an administrator sees the full bill — every user's jobs and the
+        watcher's — because the watcher belongs to the organisation, not to any
+        one user."""
+        web = app.state.web
+        user = app.state.accounts.get_user(owner) if web else None
+        if web and not (user and user.is_admin):
+            return build_usage(common.store_spend(app.state.store, owner),
                                read_usage)
-        watch: WatchRunner = app.state.watch
-        live = [*app.state.store.all(), *watch.jobs()]
-        return build_usage(merge_live(live, ledger.entries()), read_usage)
+        rows = (common.store_spend(app.state.store)
+                + common.watch_spend(app.state.watch))
+        return build_usage(rows, read_usage)
 
     @app.get("/api/jobs/{job_id}/report")
     def report(job_id: str, owner: str = Depends(owner_for)) -> dict:
