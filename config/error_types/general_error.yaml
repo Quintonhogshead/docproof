@@ -1,0 +1,61 @@
+key: general_error
+name: General proofreading (catch-all)
+version: 1
+channel: query
+detection_prompt: |
+  A safety net for real errors that no other error type in this pass defines.
+  Reading for sense, a proofreader sometimes catches something no narrow rule
+  names: a garbled or incomplete clause, a word swapped for a different one
+  that is NOT a spelling or homophone slip (nodded her "hand" for "head"), a
+  dropped negation that flips the meaning, a phrase duplicated across a clause
+  boundary, a fact that contradicts itself inside the sentence. Flag the
+  sentence so a human can look.
+
+  This type only ASKS — it never proposes a fix, and it never applies one. Its
+  findings are margin questions, so the bar is "a careful reader would pause
+  here", not certainty.
+
+  Do NOT flag:
+  - Anything another error type owns. Spelling, punctuation, commas, hyphens,
+    capitalization, number and currency style, subject-verb and pronoun
+    agreement, tense, dialogue tags, that/which, run-ons and comma splices, and
+    repeated adjacent words all have their own passes. Report them there, never
+    here — a doubled "the the" or a missing serial comma is not this type's.
+  - Style, voice, or word choice you would merely prefer. This is not a line
+    edit. Dialect, deliberate fragments, coined names, and unusual-but-
+    intentional phrasing are the author's, not errors.
+  - Anything you are not fairly sure a proofreader would mark. When a sentence
+    only reads a little oddly but is defensible, leave it. A wrong flag here is
+    a margin comment the author must stop to read and dismiss.
+fix_guidance: |
+  This is a query type: it changes nothing. Set corrected_text to the flagged
+  sentence exactly as written — repeat it unchanged, character for character —
+  and put the concern itself in explanation, phrased as a question the author
+  can answer.
+confidence_guidance: |
+  high: a clear error of sense a proofreader would certainly mark.
+  medium: very likely an error, but a human should confirm before acting.
+  low: reads oddly and might be deliberate — surface it quietly, do not insist.
+examples:
+  - text: "She nodded her hand slowly, unwilling to agree out loud."
+    finding:
+      original_text: "She nodded her hand slowly, unwilling to agree out loud."
+      corrected_text: "She nodded her hand slowly, unwilling to agree out loud."
+      confidence: high
+      explanation: "'nodded her hand' — did you mean 'head'? No listed rule covers this."
+  - text: "He counted the coins twice and still came up came up short that night."
+    finding:
+      original_text: "He counted the coins twice and still came up came up short that night."
+      corrected_text: "He counted the coins twice and still came up came up short that night."
+      confidence: medium
+      explanation: "The phrase 'came up' seems duplicated across the clause — intended?"
+  - text: "The witness said she was were at home when the alarm first sounded."
+    finding:
+      original_text: "The witness said she was were at home when the alarm first sounded."
+      corrected_text: "The witness said she was were at home when the alarm first sounded."
+      confidence: high
+      explanation: "'was were' is a garbled verb — which one did you mean?"
+  - text: "The road wound down through the pines toward the quiet grey lake."
+    finding: null
+  - text: "She recieved the letter at dawn but did not open it until dusk."
+    finding: null

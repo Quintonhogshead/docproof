@@ -27,6 +27,20 @@ class ErrorType:
     # What a format channel applies. Only "italic" today; the field exists so
     # the reassembler is told rather than assuming.
     format: str = "italic"
+    # An optional recall-tuned variant of detection_prompt, used only when the
+    # ensemble runs with a verifier: with a second reviewer checking every
+    # finding, a detector can report a borderline case at low confidence instead
+    # of staying silent. Empty (the default) means the standard prompt is used
+    # in every mode, so a type without one behaves identically — this is the
+    # inert hook the Phase 3 prompt work fills in, one type at a time.
+    ensemble_detection_prompt: str = ""
+
+    def detection(self, ensemble: bool) -> str:
+        """The detection prompt to send. Falls back to the standard one, so an
+        untuned type is unaffected whether or not the ensemble is on."""
+        if ensemble and self.ensemble_detection_prompt:
+            return self.ensemble_detection_prompt
+        return self.detection_prompt
 
     @property
     def is_query(self) -> bool:
@@ -83,5 +97,7 @@ def load_error_types(dir_path: str | Path, enabled: list[str], *,
             confidence_guidance=data.get("confidence_guidance", "").strip(),
             examples=tuple(data.get("examples", [])),
             channel=channel, format=data.get("format", "italic"),
+            ensemble_detection_prompt=data.get(
+                "ensemble_detection_prompt", "").strip(),
         )
     return registry

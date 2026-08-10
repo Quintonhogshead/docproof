@@ -1,0 +1,34 @@
+# UNVERIFIED LLM-drafted, pending human review.
+# The catch-all type is a query channel (comments only) and is NOT in the
+# default passes — these cases are scored only when general_error is enabled.
+error_type: general_error
+cases:
+  # --- out-of-taxonomy errors no narrow rule owns ---
+  - id: ge-001
+    text: "The general ordered his troops to retreat forward into the valley."
+    expect: { span: "retreat forward", confidence: high }
+  - id: ge-002
+    text: "After the scandal she said she could care less about their opinion."
+    expect: { span: "could care less", confidence: medium }
+  - id: ge-003
+    text: "She said she would meet him at noon at noon, whichever came first."
+    expect: { span: "at noon at noon", confidence: medium }
+  - id: ge-004
+    text: "The twins, both aged nine, were seven years apart in age that spring."
+    expect: { span: "seven years apart", confidence: high }
+  - id: ge-005
+    text: "She poured the coffee into the mug and drank the newspaper instead."
+    expect: { span: "drank the newspaper", confidence: high }
+  # --- traps: general_error must stay silent ---
+  - id: ge-101
+    text: "The lighthouse threw its beam across the water every twelve seconds."
+    expect: clean                       # clean prose
+  - id: ge-102
+    text: "'I ain't got no quarrel with him,' the old sailor muttered darkly."
+    expect: clean                       # dialect double negative — voice, not error
+  - id: ge-103
+    text: "She recieved a letter from an old freind early that grey morning."
+    expect: clean                       # spelling owns these; not this type's to flag
+  - id: ge-104
+    text: "Rain. Then more rain. Then the long grey silence of the afternoon."
+    expect: clean                       # deliberate fragments

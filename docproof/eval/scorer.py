@@ -25,10 +25,19 @@ from ..models import CONFIDENCE_RANK, Finding
 from ..providers import estimate_cost
 from .runner import EvalRun
 
-# Error types that legitimately claim each other's spans. Empty today; when the
-# run_on_sentence / comma_splice boundary or similar needs to count as a catch
-# for either label, add it here rather than smearing it through the matcher.
-ALIASES: dict[str, set[str]] = {}
+# Error types that legitimately claim each other's spans. A deterministic sweep
+# catches some errors before any model pass, and its finding carries the sweep's
+# key, not the model error type — so a repeated_word caught by sweep_doubled_word
+# reads as a repeated_word MISS under strict per-type scoring even though it was
+# fixed end to end. Crediting the sweep to the type it fixes corrects that, and
+# symmetrically counts a sweep that fires on a trap (the grammatical "will will",
+# say) as that type's false positive, which it honestly is. Only the two sweeps
+# the baseline confirmed dominate a model type are listed; add others when an
+# actual scorecard shows the same artifact, not on suspicion.
+ALIASES: dict[str, set[str]] = {
+    "repeated_word": {"sweep_doubled_word"},
+    "dialogue_tag": {"sweep_dialogue_tag"},
+}
 
 # A finding has "acted" — reached the author — when validated or written as a
 # margin query. Everything else (rejected_*, skipped_*) changed nothing.
