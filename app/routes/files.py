@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, UploadFile
 
 from docproof import prep as preplib
+from docproof import promo as promolib
 from docproof.config import load_config
 from docproof.formats import SUFFIXES, describe, get_format
 from docproof.ingest import IngestError
@@ -78,12 +79,16 @@ def register(app: FastAPI) -> None:
 
         review, review_error = _review_preflight(cfg, dest)
         prep, prep_error = _prep_preflight(cfg, paths, dest)
+        promo, promo_error = _promo_preflight(cfg, paths, dest)
         entry.update(review or {}, review_error=review_error,
                      prep=prep, prep_error=prep_error,
-                     can_review=review is not None, can_prep=prep is not None)
-        entry["ok"] = review is not None or prep is not None
+                     promo=promo, promo_error=promo_error,
+                     can_review=review is not None, can_prep=prep is not None,
+                     can_promo=promo is not None)
+        entry["ok"] = (review is not None or prep is not None
+                       or promo is not None)
         if not entry["ok"]:
-            entry["error"] = review_error or prep_error
+            entry["error"] = review_error or prep_error or promo_error
         return entry
 
     def _review_preflight(cfg, path: Path) -> tuple[dict | None, str | None]:
@@ -123,6 +128,17 @@ def register(app: FastAPI) -> None:
             "output_tokens": prepared.est_output_tokens,
             "style_sheet": prepared.sheet.name,
         }, None
+
+    def _promo_preflight(cfg, paths: Paths,
+                         path: Path) -> tuple[dict | None, str | None]:
+        # Promo only reads, so it opens what prep would turn away (a manuscript
+        # with tracked changes in it, say). A word count is enough for the drop
+        # card; the run reads it in full.
+        try:
+            book = promolib.read_manuscript(path)
+        except (IngestError, ValueError) as e:
+            return None, str(e)
+        return {"words": book.word_count}, None
 
     @app.get("/api/formats")
     def formats() -> dict:

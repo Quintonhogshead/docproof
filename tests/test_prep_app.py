@@ -75,10 +75,14 @@ def test_a_layout_can_be_reviewed_but_never_prepped(client):
     assert "INTO InDesign" in staged["prep_error"]
 
 
-def test_a_manuscript_with_tracked_changes_is_refused(client):
+def test_a_manuscript_with_tracked_changes_is_refused_by_prep(client):
     staged = upload(client, "tracked.docx")
-    assert not staged["ok"]
-    assert "tracked changes" in staged["error"]
+    # Review and prep both refuse a manuscript with unresolved tracked changes.
+    assert staged["can_review"] is False and staged["can_prep"] is False
+    assert "tracked changes" in staged["prep_error"]
+    # Promo only reads, so it takes the file as it stands — which means the file
+    # is usable, but for promo alone.
+    assert staged["can_promo"] is True and staged["ok"] is True
 
 
 # --- running ------------------------------------------------------------------

@@ -47,8 +47,8 @@ function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === name));
   });
-  ['drop', 'jobs', 'report', 'compare', 'watch', 'spending', 'prompts',
-   'settings', 'admin'].forEach((s) => {
+  ['drop', 'jobs', 'report', 'compare', 'watch', 'promo', 'spending',
+   'prompts', 'settings', 'admin'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
   if (name === 'jobs') refreshJobs({ tick: true });
@@ -56,6 +56,7 @@ function show(name) {
   if (name === 'prompts') loadPrompts();
   if (name === 'spending') loadSpending();
   if (name === 'watch') loadWatch();
+  if (name === 'promo') loadPromo();
   if (name === 'admin') loadAdmin();
 }
 
@@ -65,6 +66,7 @@ const kind = () => document.querySelector('input[name="kind"]:checked').value;
 const prepOutput = () =>
   document.querySelector('input[name="prep-output"]:checked').value;
 const isPrep = () => kind() === 'prep';
+const isPromo = () => kind() === 'promo';
 
 document.querySelectorAll('input[name="kind"]').forEach((r) =>
   r.addEventListener('change', () => { renderFiles(); renderKind(); }));
@@ -75,17 +77,22 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
 // the button says, and which files can go at all.
 function renderKind() {
   const prep = isPrep();
+  const promo = isPromo();
+  // Review's options (confidence, sections, batch schedule) belong to neither
+  // prep nor promo; prep's output options belong only to prep.
   document.querySelectorAll('.review-only').forEach((el) => {
-    el.hidden = prep;
+    el.hidden = prep || promo;
   });
   $('prep-options').hidden = !prep;
   $('prep-cost').hidden = !prep;
-  $('model-label').textContent = prep ? 'Which model should read it?'
-                                      : 'Which reviewer?';
-  $('start').textContent = prep ? 'Prepare for layout' : 'Start review';
-  $('staged-title').textContent = prep ? 'Ready to prepare' : 'Ready to review';
+  $('model-label').textContent = promo ? 'Which model should write it?'
+    : prep ? 'Which model should read it?' : 'Which reviewer?';
+  $('start').textContent = promo ? 'Write promo copy'
+    : prep ? 'Prepare for layout' : 'Start review';
+  $('staged-title').textContent = promo ? 'Ready to write copy'
+    : prep ? 'Ready to prepare' : 'Ready to review';
   document.querySelectorAll('details.sections').forEach((el) => {
-    el.hidden = prep;                 // prep always reads the whole manuscript
+    el.hidden = prep || promo;        // both always read the whole manuscript
   });
 
   const blocked = usableFiles().filter((f) => !canRun(f));
@@ -98,9 +105,13 @@ function renderKind() {
   renderCost();
 }
 
-const canRun = (f) => (isPrep() ? f.can_prep !== false : f.can_review !== false);
+const canRun = (f) => {
+  if (isPromo()) return f.can_promo !== false;
+  return isPrep() ? f.can_prep !== false : f.can_review !== false;
+};
 const reasonBlocked = (f) =>
-  (isPrep() ? f.prep_error : f.review_error) || 'cannot be used for this.';
+  (isPromo() ? f.promo_error : isPrep() ? f.prep_error : f.review_error)
+  || 'cannot be used for this.';
 
 // ── dropping files ────────────────────────────────────────────────────────
 
@@ -742,7 +753,7 @@ const usableIds = () => usableFiles().map((f) => f.id);
 // Files with nothing ticked are simply left out of the run — as are files this
 // job can't be done to at all, like an InDesign layout you asked to prep.
 const filesToRun = () => usableFiles().filter(
-  (f) => canRun(f) && (isPrep() || keptFor(f).size > 0));
+  (f) => canRun(f) && (isPrep() || isPromo() || keptFor(f).size > 0));
 
 function selectionPayload() {
   const out = {};
@@ -902,6 +913,16 @@ function renderCost() {
   const money = (v) => (typeof v === 'number'
     ? `about $${v < 0.01 ? v.toFixed(3) : v.toFixed(2)}` : '');
 
+  if (isPromo()) {
+    // Promo's cost is one large call over the whole book; the copy specs that
+    // would let us estimate it are still to come, so the button just gates on a
+    // usable file and a model with a key.
+    const ready = m && m.available && filesToRun().length > 0;
+    $('start').disabled = !ready;
+    modelHint(m);
+    return;
+  }
+
   if (isPrep()) {
     const files = filesToRun();
     const note = $('prep-cost');
@@ -961,26 +982,41 @@ $('start').addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Starting…';
   try {
-    await api('/api/jobs', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        file_ids: filesToRun().map((f) => f.id),
-        model: $('model').value,
-        kind: kind(),
-        prep_output: prepOutput(),
-        mode: isPrep() ? 'now' : mode(),
-        schedule_at: (!isPrep() && mode() === 'batch' && $('schedule-on').checked)
-          ? $('schedule-at').value : null,
-        min_confidence: $('confidence').value,
-        effort: effortValue(),
-        selections: isPrep() ? {} : selectionPayload(),
-      }),
-    });
+    // Promo is its own pipeline with its own page: the same dropped files, sent
+    // to /api/promo/run, and the Promo tab shows them being written.
+    const promoRun = isPromo();
+    if (promoRun) {
+      await api('/api/promo/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          file_ids: filesToRun().map((f) => f.id),
+          model: $('model').value,
+        }),
+      });
+    } else {
+      await api('/api/jobs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          file_ids: filesToRun().map((f) => f.id),
+          model: $('model').value,
+          kind: kind(),
+          prep_output: prepOutput(),
+          mode: isPrep() ? 'now' : mode(),
+          schedule_at: (!isPrep() && mode() === 'batch'
+                        && $('schedule-on').checked)
+            ? $('schedule-at').value : null,
+          min_confidence: $('confidence').value,
+          effort: effortValue(),
+          selections: isPrep() ? {} : selectionPayload(),
+        }),
+      });
+    }
     state.files = [];
     state.selected.clear();
     renderFiles();
-    show('jobs');
+    show(promoRun ? 'promo' : 'jobs');
   } catch (err) {
     fail(err.message);
   } finally {
@@ -1770,6 +1806,285 @@ function bodyRow(cells) {
 const money = (v) => (typeof v !== 'number' ? '—'
   : v === 0 ? '$0.00' : v < 0.01 ? '<$0.01' : `$${v.toFixed(2)}`);
 const count = (v) => (v || 0).toLocaleString();
+
+// ── promo ───────────────────────────────────────────────────────────────────
+//
+// A new page, but the same two ideas as everywhere else: drop a manuscript and
+// watch a job, and a settings form for the automatic pipeline. The copy a run
+// produces is editable in place — a person tidies the teaser, saves, and the
+// two .docx are re-made from what they approved.
+
+let promoPollTimer = null;
+const PROMO_TERMINAL = ['done', 'failed', 'cancelled'];
+
+async function loadPromo() {
+  if (!state.promoModels) {
+    try { state.promoModels = (await api('/api/models')).models; }
+    catch (_) { state.promoModels = []; }
+  }
+  fillPromoModels($('promo-model'));
+  fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
+  updatePromoRunEnabled();
+  await refreshPromoJobs();
+  loadPromoSettings().catch(() => {});
+}
+
+function fillPromoModels(select, blank) {
+  const chosen = select.value;
+  select.innerHTML = '';
+  if (blank) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = blank; select.append(o);
+  }
+  (state.promoModels || []).forEach((m) => {
+    const o = document.createElement('option');
+    o.value = m.id;
+    o.textContent = m.available ? m.display : `${m.display} — no key yet`;
+    select.append(o);
+  });
+  if (chosen) select.value = chosen;
+}
+
+function updatePromoRunEnabled() {
+  $('promo-run').disabled =
+    !($('promo-file').files.length && $('promo-model').value);
+}
+
+async function runPromo() {
+  const file = $('promo-file').files[0];
+  if (!file) return;
+  const status = $('promo-run-status');
+  status.hidden = false; status.textContent = 'Reading the manuscript…';
+  $('promo-run').disabled = true;
+  try {
+    const form = new FormData();
+    form.append('files', file);
+    const staged = (await api('/api/files',
+                              { method: 'POST', body: form })).files[0];
+    if (!staged.ok) throw new Error(staged.error || 'That file cannot be used.');
+    status.textContent = 'Writing your copy…';
+    await api('/api/promo/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_ids: [staged.id],
+                             model: $('promo-model').value }),
+    });
+    $('promo-file').value = '';
+    status.hidden = true;
+    await refreshPromoJobs();
+  } catch (e) {
+    status.textContent = e.message;
+  } finally {
+    updatePromoRunEnabled();
+  }
+}
+
+async function refreshPromoJobs() {
+  let jobs = [];
+  try { jobs = (await api('/api/promo/jobs')).jobs; } catch (_) {}
+  renderPromoJobs(jobs);
+  // Keep polling only while something is still being written, and only while
+  // this page is the one on screen.
+  clearTimeout(promoPollTimer);
+  const active = jobs.some((j) => !PROMO_TERMINAL.includes(j.state));
+  if (active && !$('screen-promo').hidden) {
+    promoPollTimer = setTimeout(refreshPromoJobs, 2500);
+  }
+}
+
+function renderPromoJobs(jobs) {
+  $('promo-empty').hidden = jobs.length > 0;
+  const box = $('promo-jobs');
+  box.innerHTML = '';
+  jobs.forEach((job) => box.append(promoCard(job)));
+}
+
+function promoCard(job) {
+  const card = document.createElement('div');
+  card.className = 'promo-job';
+
+  const head = document.createElement('div');
+  head.className = 'promo-job-head';
+  const name = document.createElement('strong');
+  name.textContent = job.filename;
+  const state = document.createElement('span');
+  state.className = 'muted';
+  const flags = job.state === 'done' && job.unverified
+    ? ` · ${job.unverified} to check` : '';
+  state.textContent = ` ${job.plain_state}${flags}`;
+  head.append(name, state);
+  card.append(head);
+
+  if (job.state === 'failed' && job.error) {
+    const err = document.createElement('p');
+    err.className = 'muted'; err.textContent = job.error;
+    card.append(err);
+  }
+
+  if (job.state === 'done') {
+    card.append(promoEditor(job), promoActions(job));
+  } else if (PROMO_TERMINAL.includes(job.state)) {
+    card.append(promoActions(job));
+  }
+  return card;
+}
+
+function promoEditor(job) {
+  const details = document.createElement('details');
+  details.className = 'promo-edit';
+  const summary = document.createElement('summary');
+  summary.textContent = 'Read & edit the copy';
+  const body = document.createElement('div');
+  const loading = document.createElement('p');
+  loading.className = 'muted'; loading.textContent = 'Loading…';
+  body.append(loading);
+  details.append(summary, body);
+
+  let loaded = false;
+  details.addEventListener('toggle', () => {
+    if (details.open && !loaded) { loaded = true; buildPromoEditor(job, body); }
+  });
+  return details;
+}
+
+async function buildPromoEditor(job, body) {
+  let draft;
+  try { draft = await api(`/api/promo/jobs/${job.id}/draft`); }
+  catch (e) { body.textContent = e.message; return; }
+  body.innerHTML = '';
+
+  const grounding = promoGrounding(draft);
+  if (grounding) body.append(grounding);
+
+  const teaser = promoField('Teaser', draft.teaser, 4);
+  body.append(teaser.label);
+  const posts = draft.posts.map((post, i) => {
+    const tag = post.platform ? ` · ${post.platform}` : '';
+    const f = promoField(`Post ${i + 1}${tag}`, post.text, 2);
+    body.append(f.label);
+    return f.input;
+  });
+
+  const save = document.createElement('button');
+  save.className = 'primary'; save.textContent = 'Save changes';
+  const note = document.createElement('span');
+  note.className = 'muted'; note.hidden = true;
+  save.addEventListener('click', async () => {
+    save.disabled = true; note.hidden = false; note.textContent = 'Saving…';
+    const edited = draft.posts.map((p, i) => ({
+      platform: p.platform || '', text: posts[i].value, hashtags: p.hashtags || [],
+    }));
+    try {
+      await api(`/api/promo/jobs/${job.id}/draft`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teaser: teaser.input.value, posts: edited }),
+      });
+      note.textContent = 'Saved — the documents were re-made.';
+    } catch (e) { note.textContent = e.message; }
+    finally { save.disabled = false; }
+  });
+  const row = document.createElement('div');
+  row.className = 'promo-job-actions';
+  row.append(save, note);
+  body.append(row);
+}
+
+function promoGrounding(draft) {
+  const terms = draft.flagged_terms || [];
+  const claims = draft.unsupported_claims || [];
+  if (!terms.length && !claims.length) return null;
+  const box = document.createElement('div');
+  box.className = 'promo-grounding';
+  const title = document.createElement('strong');
+  title.textContent = 'Worth a check before this ships';
+  box.append(title);
+  if (terms.length) {
+    const p = document.createElement('p');
+    p.textContent = `Not found in the book: ${terms.join(', ')}`;
+    box.append(p);
+  }
+  claims.forEach((c) => {
+    const p = document.createElement('p');
+    p.textContent = c.note ? `“${c.claim}” — ${c.note}` : `“${c.claim}”`;
+    box.append(p);
+  });
+  return box;
+}
+
+function promoField(labelText, value, rows) {
+  const label = document.createElement('label');
+  label.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = labelText;
+  const input = document.createElement('textarea');
+  input.rows = rows; input.value = value;
+  label.append(span, input);
+  return { label, input };
+}
+
+function promoActions(job) {
+  const row = document.createElement('div');
+  row.className = 'promo-job-actions';
+  if (job.state === 'done') {
+    row.append(promoDownload(job, 'teaser', 'Download teaser'),
+               promoDownload(job, 'posts', 'Download posts'));
+  }
+  const remove = document.createElement('button');
+  remove.className = 'link'; remove.textContent = 'Remove';
+  remove.addEventListener('click', async () => {
+    if (!confirm(`Remove the promo copy for ${job.filename}?`)) return;
+    try { await api(`/api/jobs/${job.id}`, { method: 'DELETE' }); }
+    catch (e) { alert(e.message); return; }
+    await refreshPromoJobs();
+  });
+  row.append(remove);
+  return row;
+}
+
+function promoDownload(job, which, label) {
+  const a = document.createElement('a');
+  a.className = 'link';
+  a.href = `/api/promo/jobs/${job.id}/file/${which}`;
+  a.setAttribute('download', '');
+  a.textContent = label;
+  return a;
+}
+
+async function loadPromoSettings() {
+  const s = await api('/api/promo/settings');
+  $('promo-enabled').checked = s.promo_enabled;
+  $('promo-ready').value = s.hubspot_promo_ready_value || '';
+  $('promo-done').value = s.hubspot_promo_done_value || '';
+  $('promo-auto-upload').checked = s.promo_auto_upload;
+  $('promo-auto-needs-hubspot').hidden = s.hubspot_enabled;
+  $('promo-model-fallback').textContent = s.promo_model
+    ? '' : `— using the DocWatch model, ${s.fallback_model}`;
+  fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
+  $('promo-auto-model').value = s.promo_model || '';
+}
+
+async function savePromoSettings() {
+  const status = $('promo-settings-status');
+  status.hidden = false; status.textContent = 'Saving…';
+  try {
+    await api('/api/promo/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        promo_enabled: $('promo-enabled').checked,
+        hubspot_promo_ready_value: $('promo-ready').value.trim(),
+        hubspot_promo_done_value: $('promo-done').value.trim(),
+        promo_auto_upload: $('promo-auto-upload').checked,
+        promo_model: $('promo-auto-model').value,
+      }),
+    });
+    status.textContent = 'Saved.';
+    await loadPromoSettings();
+  } catch (e) { status.textContent = e.message; }
+}
+
+$('promo-file').addEventListener('change', updatePromoRunEnabled);
+$('promo-model').addEventListener('change', updatePromoRunEnabled);
+$('promo-run').addEventListener('click', runPromo);
+$('promo-settings-save').addEventListener('click', savePromoSettings);
 
 async function loadSpending() {
   let d;

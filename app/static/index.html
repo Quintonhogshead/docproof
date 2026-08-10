@@ -50,6 +50,7 @@
     <button class="tab" data-screen="jobs">Results <span id="jobs-badge" hidden></span></button>
     <button class="tab" data-screen="compare">Compare</button>
     <button class="tab" data-screen="watch">DocWatch</button>
+    <button class="tab" data-screen="promo">Promo</button>
     <button class="tab" data-screen="spending">Spending</button>
     <button class="tab" data-screen="prompts">What it looks for</button>
     <button class="tab" data-screen="settings">Settings</button>
@@ -125,6 +126,11 @@
           <span><strong>Prepare for layout</strong> — tag every paragraph with
             a house InDesign style, ready to place
             <em id="prep-sheet-note" class="muted"></em></span>
+        </label>
+        <label class="radio">
+          <input type="radio" name="kind" value="promo">
+          <span><strong>Write promo copy</strong> — a teaser and twelve social
+            posts, drawn from the whole book; lands in the Promo tab</span>
         </label>
         <p id="kind-warning" class="muted small" hidden></p>
       </fieldset>
@@ -422,6 +428,73 @@
       <p id="watch-files-empty" class="muted" hidden>Nothing yet.</p>
       <table class="table" id="watch-files"></table>
     </div>
+  </section>
+
+  <!-- ── Promo ────────────────────────────────────────────────────────── -->
+  <section id="screen-promo" class="screen" hidden>
+    <h2>Promo</h2>
+    <p class="muted">A teaser and twelve social posts, written from a finished
+      manuscript. Drop a book to write copy for it now, read it back and edit
+      it, then download the two documents. The automatic pipeline — books
+      flagged in HubSpot — is set up at the bottom.</p>
+
+    <div class="card">
+      <h3>Write copy for a manuscript</h3>
+      <label class="field">
+        <span>The manuscript <small class="muted">— a finished Word
+          document</small></span>
+        <input type="file" id="promo-file" accept=".docx">
+      </label>
+      <label class="field">
+        <span>Which model should write it?</span>
+        <select id="promo-model"></select>
+      </label>
+      <button id="promo-run" class="primary" disabled>Write promo copy</button>
+      <p id="promo-run-status" class="muted" hidden></p>
+    </div>
+
+    <div class="card">
+      <h3>Your promo copy</h3>
+      <p id="promo-empty" class="muted">Nothing yet. Drop a manuscript above to
+        write its copy.</p>
+      <div id="promo-jobs"></div>
+    </div>
+
+    <details class="card" id="promo-auto">
+      <summary>Automatic promo from the watched folder</summary>
+      <p class="muted">When a book's HubSpot status reaches the ready value,
+        DocProof writes its copy and — depending on the setting below — either
+        delivers the two documents to the Drive folder or holds them for
+        approval. Needs DocWatch's HubSpot connection switched on.</p>
+      <p id="promo-auto-needs-hubspot" class="muted" hidden>HubSpot is off in
+        DocWatch, so the automatic pipeline cannot run yet. Turn it on there
+        first.</p>
+      <label class="checkbox">
+        <input type="checkbox" id="promo-enabled">
+        Write promo copy automatically
+      </label>
+      <label class="field">
+        <span>HubSpot status value that means "write promo now"</span>
+        <input type="text" id="promo-ready" placeholder="Ready for Promo text">
+      </label>
+      <label class="field">
+        <span>Status value to set once the copy is delivered</span>
+        <input type="text" id="promo-done" placeholder="Promo text finished">
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="promo-auto-upload">
+        Deliver to Drive without waiting for approval
+        <small class="muted">— off holds each book's copy for a person to
+          approve first</small>
+      </label>
+      <label class="field">
+        <span>Model for automatic runs
+          <small class="muted" id="promo-model-fallback"></small></span>
+        <select id="promo-auto-model"></select>
+      </label>
+      <button id="promo-settings-save" class="primary">Save promo settings</button>
+      <p id="promo-settings-status" class="muted" hidden></p>
+    </details>
   </section>
 
   <!-- ── Spending ─────────────────────────────────────────────────────── -->

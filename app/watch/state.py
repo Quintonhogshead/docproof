@@ -62,6 +62,17 @@ class FileRecord:
     author_last: str = ""
     subfolder_id: str = ""
     subfolder_name: str = ""
+    # Promo lives on the same file id but its own lifecycle, so it keeps its own
+    # fields rather than sharing formatting's. All empty on a record written
+    # before promo existed, which is how those stay formatting-only. The Drive
+    # `docproof.promo` marker is the durable record; these are the local shortcut
+    # that stops a crash mid-flight from re-paying for the copy.
+    promo_job_id: str = ""
+    promo_hubspot_id: str = ""          # the ready record promo matched
+    promo_hubspot_done: bool = False    # the "finished" value has been written
+    promo_marked: str = ""             # "" | "pending" | "delivered" | "failed"
+    promo_attempts: int = 0
+    promo_uploaded: dict[str, str] = field(default_factory=dict)
     modified_time: str = ""
     updated_at: str = ""
 

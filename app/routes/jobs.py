@@ -190,8 +190,12 @@ def register(app: FastAPI) -> None:
 
     @app.get("/api/jobs")
     def list_jobs(owner: str = Depends(owner_for)) -> dict:
+        # Promo has its own panel, so its jobs stay out of the Results list —
+        # a promo run is not a reviewed document and its card would not render
+        # as one. It is still reachable by id (download, delete) from there.
         scope = owner if app.state.web else None
-        return {"jobs": [j.to_api() for j in app.state.store.all(scope)]}
+        return {"jobs": [j.to_api() for j in app.state.store.all(scope)
+                         if not j.is_promo]}
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str, owner: str = Depends(owner_for)) -> dict:
@@ -431,4 +435,5 @@ def register(app: FastAPI) -> None:
         /api/jobs."""
         app.state.runner.tick_once()
         scope = owner if app.state.web else None
-        return {"jobs": [j.to_api() for j in app.state.store.all(scope)]}
+        return {"jobs": [j.to_api() for j in app.state.store.all(scope)
+                         if not j.is_promo]}

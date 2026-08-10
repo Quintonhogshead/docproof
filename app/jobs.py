@@ -20,6 +20,7 @@ from pathlib import Path
 
 from docproof import batch as batchlib
 from docproof import prep as preplib
+from docproof import promo as promolib
 from docproof.batch import pass_prompts
 from docproof.checkpoint import Checkpoint
 from docproof.config import Config, load_config
@@ -31,6 +32,7 @@ from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
+from docproof.promo import PromoError
 from docproof.providers import ProviderError, build_provider, estimate_cost, \
     provider_for
 
@@ -59,6 +61,12 @@ PLAIN_STATE = {
 # Prep does a different job, so it says so. Only the states that differ.
 PREP_STATE = {
     "running": "Reading your manuscript ({done} of {total})",
+    "collecting": "Almost done — writing your files",
+}
+
+# Promo, likewise: one call over the whole book, then two documents written.
+PROMO_STATE = {
+    "running": "Reading the book and writing your copy",
     "collecting": "Almost done — writing your files",
 }
 
@@ -103,8 +111,13 @@ class Job:
     updated_at: str = ""
     # What this job is: a grammar review, or manuscript prep for the house
     # InDesign template. Older records have no `kind` and are reviews.
-    kind: str = "review"
+    kind: str = "review"               # review | prep | promo
     prep_output: str = "indesign"      # indesign | tracked | both
+    # Promo only: whether the generated copy still needs a human's sign-off
+    # before it ships. "" on review and prep; on promo, "auto" ships with no
+    # gate, "pending" waits in the panel for a person, "approved" once one has
+    # okayed it. The generation itself doesn't read this — the delivery step does.
+    approval: str = ""                 # "" | auto | pending | approved
     # Which door this job came in by: somebody dropping a file on the window,
     # or the watcher finding one in a Drive folder. Two job stores adding up to
     # one bill, and a spending figure that cannot say which is a figure nobody
@@ -118,6 +131,9 @@ class Job:
     tagged: int | None = None          # paragraphs given a style
     flags: int | None = None           # things prep wants a human to decide
     verified: bool | None = None       # the author's words came through intact
+    # Promo only: how many capitalised terms in the copy appear nowhere in the
+    # manuscript — the grounding check's count, surfaced so a card can flag it.
+    unverified: int | None = None
     words: int | None = None
     # What this job actually cost, recorded when it finishes so the dashboard
     # doesn't have to re-read every results folder to add it up.
@@ -140,8 +156,14 @@ class Job:
     def is_prep(self) -> bool:
         return self.kind == "prep"
 
+    @property
+    def is_promo(self) -> bool:
+        return self.kind == "promo"
+
     def plain_state(self) -> str:
-        states = {**PLAIN_STATE, **(PREP_STATE if self.is_prep else {})}
+        extra = (PREP_STATE if self.is_prep
+                 else PROMO_STATE if self.is_promo else {})
+        states = {**PLAIN_STATE, **extra}
         template = states.get(self.state, self.state)
         return template.format(done=self.done, total=self.total,
                                when=self.schedule_at or "later")
@@ -151,6 +173,7 @@ class Job:
         d["plain_state"] = self.plain_state()
         d["ready"] = self.state == "done"
         d["is_prep"] = self.is_prep
+        d["is_promo"] = self.is_promo
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -269,11 +292,16 @@ class JobRunner:
     clock: scheduled submissions and batch polling."""
 
     def __init__(self, store: JobStore, settings: Settings, *,
-                 config_path: str | Path, poll_seconds: int = POLL_SECONDS):
+                 config_path: str | Path, poll_seconds: int = POLL_SECONDS,
+                 notify_home: str | Path | None = None):
         self.store = store
         self.settings = settings
         self.ledger = SpendingLedger(store.paths.spending_db)
         self.config_path = Path(config_path)
+        # Where DocWatch keeps its email settings and Google sign-in. When set, a
+        # finished job emails the completion log through that account — see
+        # `_notify_done`. None (a runner told nothing about it) sends nothing.
+        self.notify_home = Path(notify_home) if notify_home else None
         self.error_dir = self.config_path.parent / "error_types"
         self.poll_seconds = poll_seconds
         self.queue: queue.Queue[str] = queue.Queue()
@@ -314,11 +342,13 @@ class JobRunner:
         that no longer happens. Batch jobs need nothing: the ticker finds them
         by their manifest."""
         for job in self.store.all():
-            # Prep is included at "collecting" too: it has no vendor-side state
-            # either way, and it claimed its results folder before writing, so
-            # starting again lands in the same place rather than orphaning it.
+            # Prep and promo are included at "collecting" too: neither has
+            # vendor-side state, and both claim their results folder before
+            # writing, so starting again lands in the same place rather than
+            # orphaning it. A re-run promo pays for its one call again — it keeps
+            # no checkpoint — which is a rare price for a crash mid-write.
             interrupted = (job.state == "running" and job.mode == "now") or (
-                job.is_prep and job.state == "collecting")
+                (job.is_prep or job.is_promo) and job.state == "collecting")
             if interrupted:
                 log.info("Re-queueing %s, interrupted by a restart", job.id)
                 self.store.update(job.id, state="queued")
@@ -456,6 +486,7 @@ class JobRunner:
                                     applied=outputs.applied,
                                     results_dir=str(out), error=job.error)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
+        self._notify_done(job_id)
         return updated
 
     def _provider(self, cfg: Config):
@@ -582,6 +613,8 @@ class JobRunner:
             return
         if job.is_prep:
             self._run_prep(job_id)
+        elif job.is_promo:
+            self._run_promo(job_id)
         elif job.mode == "batch":
             self._submit_batch(job_id)
         else:
@@ -650,6 +683,7 @@ class JobRunner:
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
+        self._notify_done(job_id)
 
     # -- prep -----------------------------------------------------------------
 
@@ -730,6 +764,126 @@ class JobRunner:
                           verified=all(c.ok for c in outputs.verifications),
                           words=outputs.words)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
+        self._notify_done(job_id)
+
+    # -- promo ----------------------------------------------------------------
+
+    def _run_promo(self, job_id: str) -> None:
+        """Write a teaser and a set of social posts from a finished manuscript.
+
+        Synchronous like prep, but for a simpler reason: it is a single call
+        with the whole book in front of the model, so there is nothing to run in
+        parallel and no batch to wait on. What it produces — promo.json (the
+        editable copy) and the two .docx — lands in the results folder. Whether
+        that then ships to Drive or waits in the panel for a human is the
+        approval field's business, settled by the caller above this run, not
+        here: this method only generates."""
+        job = self.store.get(job_id)
+        if job is None or job.state not in ("queued", "running"):
+            return
+        cfg = self.config_for(job)
+        try:
+            provider = self._provider(cfg)
+            prepared = promolib.prepare(
+                cfg, job.source_path, config_dir=self.config_path.parent,
+                override_dir=self.store.paths.promo)
+        except (ProviderError, IngestError, PromoError,
+                FileNotFoundError, ValueError) as e:
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e))
+            return
+
+        # Same compare-and-swap as the other pipelines: reading a whole novel
+        # leaves room for a cancel to land before the paid call goes out.
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=1,
+                                words=prepared.manuscript.word_count) is None:
+            return
+
+        # One call, so cancellation is a single check right before it: past this
+        # point there is no safe seam to interrupt a request already in flight.
+        if self._cancel_pending(job_id):
+            self._abort(job_id)
+            return
+        try:
+            result, usage = promolib.run(cfg, prepared, provider)
+        except PromoError as e:
+            # A refusal, or an answer that did not fit the schema. Nothing was
+            # written and no results folder was claimed; fail with the sentence.
+            self.store.update(job_id, state="failed", error=str(e))
+            return
+
+        # The opt-in second pass: a model check that each claim follows from the
+        # book. It never fails the run — a grounding check that broke must not
+        # sink the copy it was checking — and its tokens fold into `usage`.
+        claims = ()
+        if cfg.promo.verify_claims:
+            claims = tuple(promolib.verify_claims(
+                cfg, prepared, result, provider, usage,
+                config_dir=self.config_path.parent,
+                override_dir=self.store.paths.promo))
+
+        self.store.update(job_id, state="collecting")
+        out = self._claim_results_dir(job)
+        try:
+            outputs = promolib.finish(prepared, result, usage, cfg, out_dir=out,
+                                      source_path=job.source_path, claims=claims)
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+
+        self.store.update(
+            job_id, state="done", results_dir=str(out), error=None,
+            words=outputs.words, unverified=outputs.flag_count,
+            # Reuse the prep card's clean/flagged light: grounding-clean copy
+            # reads as "verified", flagged copy invites a look before it ships.
+            verified=outputs.flag_count == 0)
+        self._record_usage_inline(job_id, usage, cfg.api.model)
+        self._notify_done(job_id)
+
+    def _record_usage_inline(self, job_id: str, usage, model: str) -> None:
+        """Copy token counts straight onto the record from the run in hand.
+
+        Review and prep re-read what the engine wrote to disk; promo has the
+        counts in memory (one call, no checkpoint to reconcile), so it records
+        them directly. `_totals_for` reads the record before the folder, so the
+        dashboard and the ledger see these with no re-read."""
+        cost = estimate_cost(
+            model,
+            input_tokens=usage.input_tokens + usage.cache_creation_input_tokens,
+            output_tokens=usage.output_tokens, batch=False)
+        self.store.update(
+            job_id,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_input_tokens,
+            cache_write_tokens=usage.cache_creation_input_tokens,
+            api_calls=usage.api_calls, cost=cost)
+
+    # -- telling a person it finished -----------------------------------------
+
+    def _notify_done(self, job_id: str) -> None:
+        """Email the completion log for a job that just finished.
+
+        One address and one switch for every pipeline, reused from DocWatch —
+        see `notify.send_job_completion`. Watched *format* jobs are the one
+        exception: the tick emails those itself, with the routing and Drive links
+        a watched book carries and this record does not, so they are left to it
+        and not emailed twice. Everything else — every app job, and watched promo
+        — goes through here. Best-effort: a mail that will not send is logged,
+        never raised, so it can never undo a finished job."""
+        if self.notify_home is None:
+            return
+        job = self.store.get(job_id)
+        if job is None or job.state != "done":
+            return
+        if job.source == "watch" and job.is_prep:
+            return                            # the tick emails these, richer
+        try:
+            from .watch import notify
+            notify.send_job_completion(self.notify_home, job)
+        except Exception:                     # noqa: BLE001 - never over a job
+            log.exception("Completion email for %s failed", job_id)
 
     # -- what it cost ---------------------------------------------------------
 
@@ -900,3 +1054,4 @@ class JobRunner:
         self.store.update(job.id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None)
         self._record_usage(job.id, out, cfg.api.model, batch=True)
+        self._notify_done(job.id)

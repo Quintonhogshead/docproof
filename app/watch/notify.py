@@ -310,6 +310,117 @@ def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
         return False
 
 
+# --- the completion log for any job, watched or not ---------------------------
+#
+# The watched-book log above is the richest form, because a watched book has
+# routing and Drive links to show. A job dropped in the app has none of that —
+# no author folder, no HubSpot record, no Drive file — so this builds the same
+# grouped schema from the job record alone, and adapts the middle group to what
+# the pipeline actually did: a proofread reports changes, a format reports styled
+# paragraphs, promo reports the copy and its grounding flags.
+
+PIPELINE_LABEL = {"review": "Proofread", "prep": "Format", "promo": "Promo copy"}
+SOURCE_LABEL = {"app": "Dropped in the app", "watch": "Watched folder"}
+
+
+def _result_group(job) -> tuple[str, list]:
+    """The one group that differs by pipeline: what this job produced."""
+    if job.kind == "promo":
+        return ("Promo copy", [
+            ("Words read", _int(job.words), None),
+            ("Grounding flags to check", _int(job.unverified), None),
+        ])
+    if job.kind == "prep":
+        return ("Manuscript", [
+            ("Words", _int(job.words), None),
+            ("Paragraphs styled", _int(job.tagged), None),
+            ("Flags for a human", _int(job.flags), None),
+            ("Author's words verified intact",
+             "yes" if job.verified else "no", None),
+        ])
+    return ("Review", [
+        ("Changes applied", _int(job.applied), None),
+        ("Reject-all check",
+         "failed — see the results card" if job.audit_failed else "passed",
+         None),
+    ])
+
+
+def completion_for_job(job) -> tuple[str, str, str]:
+    """Subject, plain-text body and HTML body for one finished job, from the job
+    record alone. The same schema as `completion`, minus the routing a watched
+    book carries and an app job does not."""
+    label = PIPELINE_LABEL.get(job.kind, job.kind)
+    title = f"DocProof finished {label.lower()} for {job.filename}"
+    subject = f"{DONE_TAGS} {job.filename} — {label}"
+    groups: list[tuple[str, list]] = [
+        ("Job", [
+            ("Document", job.filename, None),
+            ("Pipeline", label, None),
+            ("Started from", SOURCE_LABEL.get(job.source, job.source), None),
+        ]),
+        ("Model run", [
+            ("Model", job.model, None),
+            ("Effort", job.effort, None),
+            ("Mode", job.mode, None),
+            ("API calls", _int(job.api_calls), None),
+        ]),
+        ("Cost & tokens", [
+            ("Estimated cost", _cost(job), None),
+            ("Input tokens", _int(job.input_tokens), None),
+            ("Output tokens", _int(job.output_tokens), None),
+            ("Cache read", _int(job.cache_read_tokens), None),
+            ("Cache write", _int(job.cache_write_tokens), None),
+        ]),
+        _result_group(job),
+        ("Timing", [
+            ("Started", job.created_at or "—", None),
+            ("Finished", job.updated_at or "—", None),
+            ("Elapsed", _elapsed(job), None),
+        ]),
+    ]
+    return subject, _text(title, groups), _html(title, groups)
+
+
+def send_job_completion(watch_home, job, *, get_key=None,
+                        opener=drive._open_url) -> bool:
+    """Email the completion log for a finished job, if it is switched on.
+
+    Reuses DocWatch's own `notify_email` and `notify_on_complete`, and its Google
+    sign-in, so there is one address and one switch for every pipeline. Anything
+    missing — the switch off, no address, no sign-in, a token without the
+    gmail.send scope — is a quiet skip, logged and never raised: a job that did
+    its work must not fail over an email."""
+    from app.settings import get_api_key
+    from .settings import GOOGLE_KEY, WatchSettings
+
+    ws = WatchSettings.load(watch_home)
+    if not (ws.notify_on_complete and ws.notify_email):
+        return False
+    if not (ws.client_id and ws.client_secret):
+        log.info("Completion email skipped for %s: Google sign-in is not set up.",
+                 job.filename)
+        return False
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
+    if not refresh:
+        log.info("Completion email skipped for %s: DocProof is not signed in to "
+                 "Google.", job.filename)
+        return False
+    try:
+        token = drive.refresh_access_token(ws.client_id, ws.client_secret,
+                                           refresh, opener=opener)
+        subject, body, html = completion_for_job(job)
+        send(token, ws.notify_email, subject, body, html=html, opener=opener)
+        log.info("Emailed %s the completion log for %s.", ws.notify_email,
+                 job.filename)
+        return True
+    except DriveError as e:
+        log.warning("Could not email the completion log for %s (%s). If Gmail "
+                    "refused the scope, run `docproof-watch auth` again.",
+                    job.filename, e)
+        return False
+
+
 def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
     """Email the watcher's owner when a pass needs a person and an address is set.
 
@@ -335,4 +446,4 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
 
 
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
-           "maybe_complete"]
+           "maybe_complete", "completion_for_job", "send_job_completion"]

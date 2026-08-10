@@ -83,6 +83,13 @@ class Paths:
         return self.root / "prep"
 
     @property
+    def promo(self) -> Path:
+        """An edited promo generation prompt the publisher dropped in. A
+        generation.yaml here shadows the shipped one, the way `prep` does for
+        the house style set — so the copy voice can be tuned without a build."""
+        return self.root / "promo"
+
+    @property
     def settings_file(self) -> Path:
         return self.root / "settings.json"
 
@@ -110,7 +117,8 @@ class Paths:
         return self.root / "spending.jsonl"
 
     def ensure(self) -> "Paths":
-        for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep):
+        for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep,
+                  self.promo):
             d.mkdir(parents=True, exist_ok=True)
         return self
 

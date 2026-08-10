@@ -168,6 +168,30 @@ class WatchSettings:
     # itself done in Drive, so it is not prepared twice.
     hubspot_write_back: bool = True
 
+    # -- Promo -----------------------------------------------------------------
+    # The third pipeline: a teaser and social posts from a finished manuscript.
+    # Off by default and entirely independent of formatting — its own HubSpot
+    # values, its own Drive marker, its own state — so an install that never
+    # turns it on behaves exactly as before. Gates on the same status dropdown
+    # (`hubspot_status_property`) as formatting, moved to its own value pair, and
+    # so requires `hubspot_enabled`. Flat-folder mode only for now: under
+    # `subfolders_enabled` the promo stage stands aside. See docs/promo.md.
+    promo_enabled: bool = False
+    # The status value that means "write promo copy for this book now", and the
+    # value DocProof moves it to once the copy is delivered. The client's dropdown
+    # reads "Ready for Promo text" -> "Promo text finished".
+    hubspot_promo_ready_value: str = ""
+    hubspot_promo_done_value: str = ""
+    # Whether the generated copy ships to Drive with no human in the loop. Off by
+    # default — the safer posture for public-facing copy: a hold run generates,
+    # marks the book "pending" so it is not generated twice, and waits for a
+    # person to approve it in the panel before the two .docx go to the folder and
+    # HubSpot moves on. On, a run uploads and writes back in the same tick.
+    promo_auto_upload: bool = False
+    # Which model writes the copy. Empty falls back to `model` (the formatting
+    # one); set it to run promo on a stronger model without changing formatting.
+    promo_model: str = ""
+
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":
         path = Path(home) / WATCH_SETTINGS
@@ -187,6 +211,12 @@ class WatchSettings:
         root.mkdir(parents=True, exist_ok=True)
         (root / WATCH_SETTINGS).write_text(
             json.dumps(self.__dict__, indent=2), encoding="utf-8")
+
+    @property
+    def promo_model_or_default(self) -> str:
+        """The model promo runs on: its own if set, otherwise the formatting
+        model, so an install that never touches `promo_model` still works."""
+        return self.promo_model or self.model
 
     # -- what the rest of DocProof needs ---------------------------------------
 

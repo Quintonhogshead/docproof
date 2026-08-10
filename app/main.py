@@ -62,13 +62,17 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         # An administrator who set output_dir themselves is left untouched.
         settings.output_dir = str(paths.results)
     store = JobStore(paths)
+    # The watcher's home holds the one email address and Google sign-in every
+    # pipeline's completion mail goes through, so the app's runner is told where
+    # it is: a finished app job emails the same log a watched book does.
+    wh = watch_home or watch_home_for(paths.root)
     runner = JobRunner(store, settings, config_path=CONFIG_PATH,
-                       poll_seconds=poll_seconds)
+                       poll_seconds=poll_seconds, notify_home=wh)
     # Deliberately not given the watch home's lock here. The app claims its own
     # folder for as long as it is open; the watcher's is claimed only for the
     # length of a pass, because a scheduled run started by macOS has to be able
     # to take it while a window is open.
-    watch = WatchRunner(watch_home or watch_home_for(paths.root))
+    watch = WatchRunner(wh)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

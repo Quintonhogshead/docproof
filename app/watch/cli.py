@@ -68,10 +68,11 @@ def main(argv=None) -> int:
                           "(sent via Gmail as the signed-in Google account)")
     ini.add_argument("--notify-on-complete", dest="notify_on_complete",
                      action="store_true", default=None,
-                     help="also email a full log on every book that finishes")
+                     help="also email a full log on every finished job — a "
+                          "watched book, a dropped review, prep or promo, alike")
     ini.add_argument("--no-notify-on-complete", dest="notify_on_complete",
                      action="store_false", default=None,
-                     help="stop emailing on every finished book")
+                     help="stop emailing on every finished job")
     ini.add_argument("--enable-subfolders", action="store_true",
                      help="treat the watched folder as a parent Author Folder "
                           "and route each book into its author's 'First Last' "
@@ -263,8 +264,8 @@ def cmd_init(args, home: Path) -> int:
     print(f"Watching folder {ws.folder_id or '— not set yet'}")
     print(f"Preparing with {ws.model}, handing back: {ws.prep_output}")
     if ws.notify_email:
-        on_complete = " (and on every finished book)" if ws.notify_on_complete \
-            else ""
+        on_complete = (" (and a full log on every finished job)"
+                       if ws.notify_on_complete else "")
         print(f"Emailing {ws.notify_email} when a pass needs a person"
               f"{on_complete}")
     if ws.subfolders_enabled:
