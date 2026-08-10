@@ -23,6 +23,15 @@ cases:
   - id: cp-006
     text: "The Door swung open before he could knock twice."
     expect: { span: "Door", correction: "door", confidence: high }
+  - id: cp-007
+    text: "\"I'm sorry, father, but I can't stay here any longer.\""
+    expect: { span: "father", correction: "Father", confidence: high }
+  - id: cp-008
+    text: "She bowed her head. \"Thank you, your highness.\""
+    expect: { span: "your highness", correction: "Your Highness", confidence: high }
+  - id: cp-009
+    text: "\"Did mother send you to fetch me?\" he asked."
+    expect: { span: "mother", correction: "Mother", confidence: high }
 
   # Traps ---------------------------------------------------------------
   - id: cp-101
@@ -40,3 +49,15 @@ cases:
   - id: cp-105
     text: "The president of the gardening club called the meeting to order."
     expect: clean          # a job title used generically
+  - id: cp-106
+    text: "He had not spoken to his father since the day of the funeral."
+    expect: clean          # possessive "his" — an ordinary noun, stays lowercase
+  - id: cp-107
+    text: "The old queen had outlived three kings and buried two of them."
+    expect: clean          # descriptive common noun, not a name or address
+  - id: cp-108
+    text: "She had always wanted to be captain of the harbor guard."
+    expect: clean          # descriptive, not direct address — "captain" is lowercase
+  - id: cp-109
+    text: "My mother kept the letters in a tin under the floorboards."
+    expect: clean          # possessive "My" — the naming test fails, stays lowercase
