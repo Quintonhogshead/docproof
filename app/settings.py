@@ -143,11 +143,12 @@ class Settings:
     # default_model) on every load.
     model: str = "gpt-5.6-luna"
     min_confidence: str = "medium"
-    # Reasoning depth for the model, one of EFFORT_LEVELS. Low is the shipped
-    # default: grammar detection is precise and well-specified, so a low
-    # setting is both cheaper and no less accurate. Applies to reviews and to
-    # manuscript prep alike, since both make model calls.
-    effort: str = "low"
+    # Reasoning depth for the model, one of EFFORT_LEVELS. Medium is the
+    # shipped default: on a real manuscript it caught ~40% more in-taxonomy
+    # errors than low for ~$0.16 more per book, with trap false positives
+    # unchanged; high cost 2.3x for zero further recall. Applies to reviews
+    # and to manuscript prep alike, since both make model calls.
+    effort: str = "medium"
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     # Which file manuscript prep hands back by default: the InDesign-ready
