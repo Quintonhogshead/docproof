@@ -295,6 +295,43 @@ button.danger:hover { background: var(--warn); color: var(--bg); border-color: v
   gap: 0.9rem;
 }
 
+/* ── promo ─────────────────────────────────────────────────────────────── */
+
+textarea {
+  width: 100%;
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: inherit;
+  resize: vertical;
+}
+
+.promo-job {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 0.7rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.promo-job-head { display: flex; justify-content: space-between; gap: 1rem; }
+.promo-job-actions { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.promo-edit > summary { cursor: pointer; color: var(--muted); }
+.promo-edit[open] > summary { margin-bottom: 0.6rem; }
+.promo-edit .field { margin-top: 0.5rem; }
+.promo-grounding {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent, #b89);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.9rem;
+}
+.promo-grounding p { margin: 0.3rem 0 0; color: var(--muted); }
+
 /* ── jobs ──────────────────────────────────────────────────────────────── */
 
 .jobs-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }

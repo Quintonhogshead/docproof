@@ -87,6 +87,40 @@ class PrepConfig(BaseModel):
     verify: bool = True
 
 
+class PromoConfig(BaseModel):
+    """Marketing copy from a finished manuscript: a teaser and a set of social
+    posts, generated in one pass over the whole book. Like prep, the prompt is a
+    file, so tuning the voice — or dropping in the house copy specs when they
+    land — is a YAML edit, not a code change. The model is not set here: promo
+    reads api.model like the other pipelines, so it is provider-agnostic and the
+    app picks the model per run."""
+    generation_prompt: str = "promo/generation.yaml"
+    # How many social posts to ask for. The platform split across the twelve is
+    # deferred to the copy specs; until then the model writes this many varied
+    # posts. The count lives in the prompt and is checked after the answer comes
+    # back — a strict JSON schema cannot carry a list length — so a stray count
+    # is surfaced for a human, never a hard failure.
+    post_count: int = Field(default=12, ge=1)
+    # A whole novel goes to the model in a single call: best coherence, and the
+    # volume is low. Beyond this estimated input size promo refuses rather than
+    # send a request that would overflow the context window. Splitting a book
+    # across calls is a planned extension, not silent behaviour.
+    max_input_tokens: int = Field(default=180_000, ge=1)
+    # Which files a run writes.
+    outputs: list[Literal["teaser", "posts"]] = Field(
+        default_factory=lambda: ["teaser", "posts"])
+    # Flag capitalised terms in the copy that appear nowhere in the manuscript —
+    # a cheap, deterministic guard against invented names. Surfaces, never blocks.
+    verify: bool = True
+    # The stronger, opt-in grounding check: a second model call that reads the
+    # book and the copy and reports which factual claims the manuscript does not
+    # support. Off by default because it re-reads the whole novel — a second
+    # large-context call per run — so it is worth its cost only when a title
+    # needs the extra assurance. Like `verify`, it surfaces, never blocks.
+    verify_claims: bool = False
+    verify_prompt: str = "promo/verify.yaml"
+
+
 class NormalizeConfig(BaseModel):
     """The two edits the house brief allows outside the tracked-changes
     system. They are applied before ingest, so everything downstream measures
@@ -196,6 +230,7 @@ class Config(BaseModel):
     chunking: ChunkingConfig = Field(default_factory=ChunkingConfig)
     skip: SkipConfig = Field(default_factory=SkipConfig)
     prep: PrepConfig = Field(default_factory=PrepConfig)
+    promo: PromoConfig = Field(default_factory=PromoConfig)
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
     style: StyleConfig = Field(default_factory=StyleConfig)
     edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)

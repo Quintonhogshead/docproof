@@ -48,9 +48,17 @@ AT_PROP = "docproof.at"
 REASON_PROP = "docproof.reason"
 OUTPUT_PROP = "docproof.output"
 SOURCE_PROP = "docproof.src"
+# Promo's own marker, deliberately separate from STATE_PROP: a book can be
+# formatted and not yet promo'd, or the other way round, so the two lifecycles
+# must not share one "done" flag. "pending" is written when a hold-mode run has
+# generated copy that is waiting for a person; "done" once it is delivered.
+PROMO_PROP = "docproof.promo"
 
 FORMATTED = "formatted"
 FAILED = "failed"
+PROMO_PENDING = "pending"
+PROMO_DONE = "done"
+PROMO_FAILED = "failed"
 
 
 class Stage(Enum):
@@ -81,6 +89,27 @@ def classify(file: DriveFile) -> Stage:
     if file.is_google_doc or _is_manuscript(file.name):
         return Stage.NEW_MANUSCRIPT
     return Stage.SKIP
+
+
+def is_promo_candidate(file: DriveFile) -> bool:
+    """Whether promo should consider this file — a manuscript it has not already
+    written copy for.
+
+    Deliberately blind to the formatting marker (`STATE_PROP`): a book that has
+    been formatted is still a book promo can write about, and the two stages
+    gate on different HubSpot values anyway. What it does exclude is anything
+    promo already touched (`PROMO_PROP`, whatever its value), anything DocProof
+    wrote, and anything that is not a manuscript. The HubSpot gate is the real
+    control over which of these actually runs; this only keeps outputs and
+    finished books out of the running."""
+    if file.is_folder:
+        return False
+    props = file.app_properties
+    if props.get(OUTPUT_PROP) or props.get(PROMO_PROP):
+        return False
+    if _looks_like_output(file.name):
+        return False
+    return file.is_google_doc or _is_manuscript(file.name)
 
 
 def _looks_like_output(name: str) -> bool:

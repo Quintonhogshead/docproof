@@ -23,12 +23,14 @@ from pathlib import Path
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, folders, hubspot, naming, notify, prep
+from . import drive, folders, hubspot, naming, notify, prep, promo
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
 from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
-from .stages import JOB_PROP, OUTPUT_PROP, SOURCE_PROP, Stage, classify
+from .stages import (JOB_PROP, OUTPUT_PROP, PROMO_DONE, PROMO_FAILED,
+                     PROMO_PENDING, SOURCE_PROP, Stage, classify,
+                     is_promo_candidate)
 from .state import WatchState, note_tick
 
 log = logging.getLogger("docproof.app.watch.tick")
@@ -61,6 +63,9 @@ class TickReport:
     # tick reconsiders — so it is counted apart from `failed`.
     waiting: int = 0
     prepped: list[str] = field(default_factory=list)
+    # Books promo wrote copy for this pass, kept apart from `prepped` (which is
+    # formatting) so a pass can say which stage did what.
+    promoted: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
     # Manuscripts a person must sort out before DocProof can act — chiefly a file
@@ -135,8 +140,11 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
     # has already gated in `_discover` — every manuscript in `listing` came from
     # a ready record — so the gate is not run again over it.
     if ws.hubspot_enabled and not ws.subfolders_enabled:
-        todo = _gate_hubspot(hs_token, ws, todo, state, opener=opener,
-                             report=report)
+        todo = _gate_hubspot(hs_token, ws, todo, state,
+                             ready_value=ws.hubspot_format_ready_value,
+                             id_get=lambda r: r.hubspot_id,
+                             id_set=lambda r, v: setattr(r, "hubspot_id", v),
+                             opener=opener, report=report)
 
     if len(todo) > ws.max_files_per_tick:
         # Said out loud, not swallowed: a cap that quietly drops work reads
@@ -165,9 +173,9 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
 
 
 def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
-                  state: WatchState, *, opener,
-                  report: TickReport) -> list[DriveFile]:
-    """Keep only the manuscripts HubSpot says to work on.
+                  state: WatchState, *, ready_value: str, id_get, id_set,
+                  opener, report: TickReport) -> list[DriveFile]:
+    """Keep only the manuscripts HubSpot says to work on, for one stage.
 
     An editor flags one Project at the status property's "ready" value. Among
     thousands of Projects only a handful are ever ready at once, so the gate
@@ -175,11 +183,17 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     key — which is what makes a shared surname safe: eleven "Smith" Projects in
     the CRM, but only the one an editor flagged is ever a candidate.
 
+    The stage is what `ready_value` and the `id_get`/`id_set` pair select:
+    formatting reads its ready value and stores the matched record on the state
+    record's `hubspot_id`; promo reads its own value and uses `promo_hubspot_id`.
+    The status property and the key property are the same dropdown either way —
+    one book, one row in the CRM, two values it moves through.
+
     A book DocProof already started — recognised by a record id it wrote on an
     earlier tick — is carried straight through to completion without asking
     again. That is both how a long book spanning several ticks is finished and
     how a crash between the HubSpot write and the Drive marker is repaired: the
-    id is enough, and `_finish_hubspot`/`mark_source` are each safe to repeat.
+    id is enough, and the finish/mark steps are each safe to repeat.
 
     Waiting is the `FolderInUse` posture, not a failure: no key, no ready
     Project, or a ready list that could not be fetched leaves the file where it
@@ -192,12 +206,11 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     # The ready list is fetched once, and only if some file still needs it: a
     # pass that is all books we already started asks HubSpot nothing here.
     ready: list | None = None             # None: not fetched, or unreachable
-    if any(not state.get(f.id).hubspot_id for f in todo):
+    if any(not id_get(state.get(f.id)) for f in todo):
         try:
             ready = hubspot.find_by_value(
                 hs_token, ws.hubspot_object, ws.hubspot_status_property,
-                ws.hubspot_format_ready_value, want_properties=want,
-                opener=opener)
+                ready_value, want_properties=want, opener=opener)
         except HubSpotAuthError:
             raise                         # the token is bad — stop the pass
         except HubSpotError as e:         # transient — the pass's new books wait
@@ -208,7 +221,7 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     eligible: list[DriveFile] = []
     for file in todo:
         rec = state.get(file.id)
-        if rec.hubspot_id:                # a book we already started
+        if id_get(rec):                   # a book we already started
             eligible.append(file)         # carry it to completion, no questions
             continue
         key = key_from_name(file.name, ws.hubspot_key_pattern)
@@ -224,12 +237,11 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
             r.properties.get(ws.hubspot_key_property, ""), key)]
         if not matches:
             log.info("Waiting: no Project is marked '%s' for %s.",
-                     ws.hubspot_format_ready_value, key)
+                     ready_value, key)
             report.waiting += 1
             continue
         if len(matches) > 1:
-            reason = (f"{len(matches)} Projects are marked "
-                      f"'{ws.hubspot_format_ready_value}' for "
+            reason = (f"{len(matches)} Projects are marked '{ready_value}' for "
                       f"{ws.hubspot_key_property} '{key}', so DocProof cannot "
                       f"tell which book this file is. Fix the flags in HubSpot "
                       f"so only one is ready.")
@@ -237,11 +249,210 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
             report.needs_human.append((file.name, reason))
             report.waiting += 1
             continue
-        rec.hubspot_id = matches[0].id    # written before prep, never after
+        id_set(rec, matches[0].id)        # written before work, never after
         rec.name = file.name
         state.record(rec)
         eligible.append(file)
     return eligible
+
+
+# --- promo --------------------------------------------------------------------
+
+def run_promo(token: str, home: Path, ws: WatchSettings,
+              listing: list[DriveFile], state: WatchState, runner: JobRunner,
+              store: JobStore, *, mock: bool, opener, hs_token: str | None,
+              report: TickReport) -> None:
+    """Write promo copy for every book HubSpot flagged for it, and deliver any
+    a person has since approved.
+
+    Two steps, in the tick's collect-then-start order: first ship anything a
+    hold-mode run generated on an earlier pass and a person has now approved,
+    then generate copy for newly-ready books. Independent of formatting end to
+    end — its own marker, its own state, its own HubSpot value — so it neither
+    reads nor writes anything the format stage owns."""
+    if not ws.promo_enabled:
+        return
+    if ws.subfolders_enabled:
+        # Flat-folder only for now: routing promo outputs into per-author
+        # subfolders is not wired yet, so rather than guess a destination the
+        # stage stands aside and says so, once, in the log.
+        log.info("Promo is on but so is subfolder mode; the promo stage is "
+                 "flat-folder only for now and stands aside this pass.")
+        return
+
+    _deliver_approved_promo(token, ws, listing, state, store, hs_token,
+                            opener=opener, report=report)
+
+    todo = [f for f in listing if is_promo_candidate(f)]
+    todo.sort(key=lambda f: (f.modified_time, f.name))
+    todo = _gate_hubspot(hs_token, ws, todo, state,
+                         ready_value=ws.hubspot_promo_ready_value,
+                         id_get=lambda r: r.promo_hubspot_id,
+                         id_set=lambda r, v: setattr(r, "promo_hubspot_id", v),
+                         opener=opener, report=report)
+    if len(todo) > ws.max_files_per_tick:
+        report.deferred += len(todo) - ws.max_files_per_tick
+        log.info("%d books are waiting for promo; writing %d this run and "
+                 "leaving the rest.", len(todo), ws.max_files_per_tick)
+        todo = todo[:ws.max_files_per_tick]
+
+    for file in todo:
+        try:
+            _one_promo(token, home, ws, file, listing, state, runner, store,
+                       mock=mock, opener=opener, hs_token=hs_token,
+                       dest_folder_id=ws.folder_id, report=report)
+        except Exception as e:            # noqa: BLE001 - one book, not the run
+            log.exception("Could not write promo for %s", file.name)
+            report.failed.append((file.name, str(e)))
+            rec = state.get(file.id)
+            rec.name = file.name
+            rec.promo_attempts += 1
+            state.record(rec)
+
+
+def _one_promo(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+               listing: list[DriveFile], state: WatchState, runner: JobRunner,
+               store: JobStore, *, mock: bool, opener, hs_token: str | None,
+               dest_folder_id: str, report: TickReport) -> None:
+    rec = state.get(file.id)
+    rec.name = file.name
+    rec.modified_time = file.modified_time
+
+    job = store.get(rec.promo_job_id) if rec.promo_job_id else None
+    paid_for = (job is not None and job.state == "done" and job.results_dir
+                and Path(job.results_dir).is_dir())
+
+    if rec.promo_attempts >= ws.max_attempts and not paid_for:
+        # The same three-strikes rule the format stage keeps: a book that failed
+        # the same way on three separate runs stops being tried and starts being
+        # visible. A generated job is exempt — the copy exists, only delivery
+        # failed, which is free to retry.
+        reason = f"Gave up after {rec.promo_attempts} attempts."
+        log.error("%s: %s", file.name, reason)
+        promo.mark_source(token, file, rec, state, status=PROMO_FAILED,
+                          reason=reason, opener=opener)
+        report.failed.append((file.name, reason))
+        return
+
+    job = _prepare_promo(token, home, ws, file, rec, state, runner, store,
+                         mock=mock, opener=opener)
+
+    if job.state != "done":
+        # Something transient — a model that would not answer, a disk that
+        # filled. Raised so the caller counts an attempt against it.
+        raise PrepFailed(job.error or "Writing the promo copy did not finish.")
+
+    report.promoted.append(file.name)
+
+    if ws.promo_auto_upload:
+        _deliver_promo(token, ws, file, job, rec, state, listing, hs_token,
+                       dest_folder_id=dest_folder_id, opener=opener,
+                       report=report)
+    else:
+        # Hold: the copy is generated and waiting. Mark the book `pending` so
+        # the next tick doesn't rewrite it, and leave the two .docx for a person
+        # to approve in the panel. Delivery happens once approval lands — the
+        # panel may do it, or `_deliver_approved_promo` does on a later tick.
+        promo.mark_source(token, file, rec, state, status=PROMO_PENDING,
+                          opener=opener)
+        log.info("Promo copy for %s is written and waiting for approval.",
+                 file.name)
+
+
+def _prepare_promo(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+                   rec, state: WatchState, runner: JobRunner, store: JobStore, *,
+                   mock: bool, opener) -> Job:
+    """The manuscript's promo job, run or resumed. The shortcut is the point of
+    the state file: a job that already wrote its copy is not run again, because
+    running it again means paying a model to read the whole novel twice."""
+    existing = store.get(rec.promo_job_id) if rec.promo_job_id else None
+    if existing is not None:
+        finished = (existing.state == "done" and existing.results_dir
+                    and Path(existing.results_dir).is_dir())
+        if finished:
+            log.info("%s already has promo copy; picking up from there.",
+                     file.name)
+            return existing
+        existing.state = "queued"
+        existing.error = None
+        return promo.run_job(runner, store, existing, mock=mock)
+
+    local = promo.fetch(token, file, home / DOWNLOADS / file.id, opener=opener)
+    job = promo.make_job(local, ws)
+    rec.promo_job_id = job.id
+    state.record(rec)              # before the model is called, never after
+    return promo.run_job(runner, store, job, mock=mock)
+
+
+def _deliver_promo(token: str, ws: WatchSettings, file: DriveFile, job: Job,
+                   rec, state: WatchState, listing: list[DriveFile],
+                   hs_token: str | None, *, dest_folder_id: str, opener,
+                   report: TickReport) -> None:
+    """Ship a generated book: the two .docx to the folder, the status property
+    to its done value, and the `done` marker last. Safe to repeat — every upload
+    is recorded, a writeback of a value already set is a no-op, and the marker is
+    written after both — so it does not matter whether this runs from an auto
+    tick, a later approving tick, or the panel."""
+    uploaded = promo.upload_outputs(token, file, job, ws, rec, state, listing,
+                                    dest_folder_id=dest_folder_id, opener=opener)
+    report.uploaded.extend(uploaded)
+    _finish_hubspot_promo(hs_token, ws, file, rec, state, opener=opener)
+    promo.mark_source(token, file, rec, state, status=PROMO_DONE, opener=opener)
+
+
+def _deliver_approved_promo(token: str, ws: WatchSettings,
+                            listing: list[DriveFile], state: WatchState,
+                            store: JobStore, hs_token: str | None, *, opener,
+                            report: TickReport) -> None:
+    """Ship any book a hold-mode run generated earlier and a person has since
+    approved. Idempotent: a book the panel already delivered reads `done` in
+    Drive and is out of `is_promo_candidate`, and its record is no longer
+    `pending` here."""
+    by_id = {f.id: f for f in listing}
+    for rec in list(state.files.values()):
+        if rec.promo_marked != "pending" or not rec.promo_job_id:
+            continue
+        job = store.get(rec.promo_job_id)
+        if job is None or job.approval != "approved" or job.state != "done":
+            continue
+        file = by_id.get(rec.file_id)
+        if file is None:
+            continue                      # the manuscript left the folder
+        try:
+            _deliver_promo(token, ws, file, job, rec, state, listing, hs_token,
+                           dest_folder_id=ws.folder_id, opener=opener,
+                           report=report)
+        except Exception as e:            # noqa: BLE001 - one book, not the run
+            log.exception("Delivering approved promo for %s failed", file.name)
+            report.failed.append((file.name, str(e)))
+
+
+def _finish_hubspot_promo(hs_token: str | None, ws: WatchSettings,
+                          file: DriveFile, rec, state: WatchState, *,
+                          opener) -> None:
+    """Move the status property to its promo done value on the book just shipped.
+
+    The promo twin of `_finish_hubspot`, on promo's own record id and value, with
+    the same guards: read-only mode leaves the CRM untouched, and a blank done
+    value is refused rather than blanking the property. Writing a value already
+    set is harmless, which is what makes delivery safe to repeat."""
+    if not (ws.hubspot_enabled and rec.promo_hubspot_id
+            and not rec.promo_hubspot_done):
+        return
+    if not ws.hubspot_write_back:
+        log.info("HubSpot is read-only: leaving %s at its current status.",
+                 file.name)
+        return
+    if not ws.hubspot_promo_done_value:
+        log.warning("HubSpot promo done-value is empty: leaving %s at its "
+                    "current status rather than blanking it.", file.name)
+        return
+    props = {ws.hubspot_status_property: ws.hubspot_promo_done_value}
+    hubspot.set_properties(hs_token, ws.hubspot_object, rec.promo_hubspot_id,
+                           props, allow={ws.hubspot_status_property},
+                           opener=opener)
+    rec.promo_hubspot_done = True
+    state.record(rec)
 
 
 def _discover(token: str, hs_token: str | None, ws: WatchSettings,
@@ -619,6 +830,24 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "`docproof-watch hubspot-token` on the desktop, or set the "
                 "HUBSPOT_TOKEN secret on the server.")
 
+    if ws.promo_enabled:
+        # Promo is driven by a HubSpot status value, so HubSpot must be on and
+        # its own value pair set — half-configured would either write copy for
+        # everything or never move a book on.
+        if not ws.hubspot_enabled:
+            raise NotConfigured(
+                "Promo is switched on but HubSpot is not. Promo is triggered by "
+                "a HubSpot status value, so HubSpot has to be on. Run "
+                "`docproof-watch init`, or turn promo off.")
+        blanks = [name for name, value in (
+            ("hubspot_promo_ready_value", ws.hubspot_promo_ready_value),
+            ("hubspot_promo_done_value", ws.hubspot_promo_done_value),
+        ) if not value]
+        if blanks:
+            raise NotConfigured(
+                "Promo is switched on but " + ", ".join(blanks)
+                + " is not set. Run `docproof-watch init` to fill it in.")
+
     if ws.subfolders_enabled:
         # Routing into per-author subfolders needs a name to route by, and that
         # name comes from HubSpot — so subfolder mode without HubSpot, or
@@ -682,7 +911,12 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
 
     paths = Paths(root).ensure()
     store = JobStore(paths)
-    runner = JobRunner(store, ws.app_settings(root), config_path=config_path())
+    # notify_home is the watch home itself: a watched promo job emails its
+    # completion log through the runner, the same as an app job. Watched format
+    # jobs are left to `_one`'s richer mail (routing, Drive links) and the runner
+    # skips them — see JobRunner._notify_done.
+    runner = JobRunner(store, ws.app_settings(root), config_path=config_path(),
+                       notify_home=root)
     if not mock:
         # A rehearsal leaves real leftovers alone: _drain finishes whatever a
         # dead pass left mid-flight through the real provider, and
@@ -694,6 +928,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     submit_ready(token, ws, listing, state, store, opener=opener, report=report)
     run_prep(token, root, ws, listing, state, runner, store, mock=mock,
              opener=opener, hs_token=hs_token, routes=routes, report=report)
+    # Promo runs after formatting and only in flat mode. It gates on its own
+    # HubSpot value, so a book is never in both stages at once — one dropdown,
+    # one value at a time — and it never touches the format stage's markers.
+    run_promo(token, root, ws, listing, state, runner, store, mock=mock,
+              opener=opener, hs_token=hs_token, report=report)
 
     # Last, and on the same Google token the folder was read with: a pass that
     # left something for a person says so, once, by email. Best-effort — see
@@ -716,6 +955,11 @@ def _drain(runner: JobRunner, state: WatchState,
     already bought."""
     present = {f.id for f in listing}
     owner = {rec.job_id: fid for fid, rec in state.files.items() if rec.job_id}
+    # Promo jobs hang off their own field, so a resumed one is tied back to its
+    # manuscript the same way — otherwise a promo whose book left the folder
+    # would be finished at cost with nowhere to deliver it.
+    owner.update({rec.promo_job_id: fid for fid, rec in state.files.items()
+                  if rec.promo_job_id})
     runner.resume_interrupted()
     while True:
         try:
