@@ -15,6 +15,12 @@ dependencies = [
     # in the shipped config, and docproof degrades gracefully without it, but
     # a default that quietly does nothing is worse than a dependency.
     "spylls>=0.1.7",
+    # Word-frequency data (bundled, offline) for the candidate-adjudication
+    # pass: a real-word typo like "staired" (freq ~0) next to "stared" (common)
+    # is invisible to a membership-only dictionary. wordfreq generates the
+    # candidate; the model still adjudicates it in context, so nothing is
+    # corrected on frequency alone.
+    "wordfreq>=3.0",
     # The change log is a Word document the press hands to authors alongside
     # the manuscript. Everything else here edits .docx files that already
     # exist; this is the one thing docproof writes from nothing, and

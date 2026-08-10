@@ -67,6 +67,10 @@ class Prepared:
     # belongs here rather than to any chunk, and it costs no API call.
     consistency: ConsistencyReport = field(default_factory=ConsistencyReport)
     consistency_findings: list = field(default_factory=list)
+    # Suspected real-word typos to put to the model, one per occurrence. Whole-
+    # document only (it reads the spell scan's lexicon), and consumed on the
+    # synchronous path; empty otherwise. See docproof/adjudicate.py.
+    adjudicate_candidates: list = field(default_factory=list)
     # How many detectors review each chunk. 1 unless the ensemble is on, and the
     # multiplier the request count and token estimate need — every detector is
     # the whole review over again.
@@ -261,18 +265,34 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             name_dominance=cfg.consistency.name_dominance,
             name_min_count=cfg.consistency.name_min_count)
         consistency_findings = to_findings(consistency, doc.paragraphs)
+
+        # Suspected typos to adjudicate later, generated now off the same spell
+        # scan. Whole-document only (it reads the lexicon) and consumed on the
+        # synchronous path; producing it here keeps every deterministic,
+        # document-wide signal in one place.
+        adjudicate_candidates = []
+        if cfg.adjudicate.enabled and whole:
+            from .adjudicate import generate
+            adjudicate_candidates = generate(
+                doc.paragraphs, protected=spell.lexicon,
+                dictionary=cfg.spellcheck.dictionary or variant.dictionary,
+                near_miss_gap=cfg.adjudicate.near_miss_gap,
+                min_len=cfg.adjudicate.min_word_len,
+                max_candidates=cfg.adjudicate.max_candidates)
     else:
         # Counts-only preflight: none of the discardable whole-document work.
         sweep_findings, sweep_reports = [], []
         spell = SpellScan()
         consistency = ConsistencyReport()
         consistency_findings = []
+        adjudicate_candidates = []
 
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
                     variant=variant, consistency=consistency,
                     consistency_findings=consistency_findings,
+                    adjudicate_candidates=adjudicate_candidates,
                     n_detectors=len(cfg.ensemble.detectors) or 1)
 
 
@@ -535,6 +555,21 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     if coverage is not None:
         for label, chunk, ok in covered.values():
             coverage.record(label, chunk, ok)
+
+    # The adjudication pass: put the deterministically-found typo candidates to
+    # the model and fold its confident corrections in with the rest. Runs after
+    # the detector loop (it is not per-chunk), on the base model — so a resume
+    # whose detector calls all replay from the checkpoint re-runs only this,
+    # cheaply. Sync path only; the batch path does not carry it yet.
+    if cfg.adjudicate.enabled and prepared.adjudicate_candidates:
+        from .adjudicate import adjudicate
+        adj_provider = provider if provider is not None else provider_factory(cfg)
+        findings.extend(adjudicate(
+            prepared.adjudicate_candidates, prepared.doc.paragraphs,
+            adj_provider, model=cfg.api.model,
+            max_tokens=cfg.api.max_output_tokens, usage=usage, ids=ids,
+            batch_size=cfg.adjudicate.batch_size,
+            edit_confidence=cfg.adjudicate.edit_confidence))
     return findings, usage
 
 
