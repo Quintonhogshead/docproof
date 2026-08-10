@@ -238,3 +238,31 @@ def test_load_all_skips_an_unreadable_manifest(tmp_path):
 
     jobs = batchlib.load_all(tmp_path)
     assert len(jobs) == 1
+
+
+def test_a_full_review_collected_from_its_manifest_stays_whole(tmp_path):
+    """submit records the resolved chunk ids even for a full review, and
+    collect re-prepares from that manifest. A selection that names every chunk
+    must still count as a whole-document run — treating it as partial silently
+    dropped the consistency scan (and sweeps on paragraphs no chunk covers)
+    from every collected batch job, while the sync path kept them."""
+    cfg = _split_cfg()
+    whole = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR)
+    assert len(whole.chunks) > 1, "fixture must split for this test to mean anything"
+    assert whole.consistency.ran is True
+
+    provider = ScriptedBatchProvider([_splice_result()], pending_polls=0)
+    job = batchlib.submit(cfg, FIXTURES / "simple.docx", ERROR_DIR, provider,
+                          tmp_path)
+    # The manifest records the resolved ids of a FULL review...
+    assert set(job.selection) == {c.chunk_id for c in whole.chunks}
+
+    # ...and re-preparing from that manifest is still a whole-document run.
+    replayed = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR,
+                       selection=job.selection)
+    assert replayed.consistency.ran is True
+
+    # A genuinely partial selection stays partial.
+    partial = prepare(cfg, FIXTURES / "simple.docx", ERROR_DIR,
+                      selection=[whole.chunks[0].chunk_id])
+    assert partial.consistency.ran is False

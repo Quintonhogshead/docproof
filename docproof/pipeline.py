@@ -188,15 +188,17 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     baseline = fmt.snapshot(pkg, "current") if (analyses and fmt.snapshot) else {}
     doc = fmt.build_document_model(pkg, cfg)
     chunks = list(chunk_document(doc, cfg))
+    all_chunk_ids = {c.chunk_id for c in chunks}
     if selection is not None:
         wanted = set(selection)
-        unknown = wanted - {c.chunk_id for c in chunks}
+        unknown = wanted - all_chunk_ids
         if unknown:
             raise ValueError(
                 f"No such section(s) in this document: "
                 f"{', '.join(sorted(unknown))}")
         chunks = [c for c in chunks if c.chunk_id in wanted]
-        log.info("Reviewing %d selected section(s)", len(chunks))
+        if len(chunks) < len(all_chunk_ids):
+            log.info("Reviewing %d selected section(s)", len(chunks))
     if max_chunks:
         chunks = chunks[:max_chunks]
         log.info("Reviewing only the first %d chunk(s)", len(chunks))
@@ -206,7 +208,14 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
              len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
 
-    whole = selection is None and not max_chunks
+    # A selection that names every chunk IS a whole-document run. The batch
+    # manifest deliberately records the resolved chunk ids of a full review
+    # (reproducibility), and collect re-prepares from that manifest — treating
+    # the explicit-but-complete list as a partial run silently dropped the
+    # whole-document analyses (the consistency scan, sweeps on paragraphs no
+    # chunk covers) from every collected batch job.
+    whole = not max_chunks and (selection is None
+                                or set(selection) >= all_chunk_ids)
     if analyses:
         # Sweeps read the whole paragraph from the document model, not the
         # chunk, so their offsets and occurrence counts are measured against
