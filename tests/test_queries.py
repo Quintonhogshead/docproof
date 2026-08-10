@@ -132,6 +132,22 @@ def test_duplicate_queries_are_dropped():
     assert [f.status for f in out] == ["query", "rejected_duplicate"]
 
 
+def test_two_different_queries_on_one_sentence_both_survive():
+    """A speaker-change question and a term-consistency question about the same
+    sentence are different questions. The dedupe key includes the error type, so
+    the second is not thrown away as a duplicate — the old key collided them and
+    silently dropped one."""
+    doc = _doc("Two speakers here.")
+    kw = dict(original_text="Two speakers here.",
+              corrected_text="Two speakers here.")
+    out = validate_findings(
+        [_finding(**kw),
+         _finding(finding_id="f-0002", error_type="term_consistency", **kw)],
+        doc, "medium",
+        query_types=frozenset({"speaker_change", "term_consistency"}))
+    assert [f.status for f in out] == ["query", "query"]
+
+
 def test_a_query_that_cannot_anchor_is_rejected():
     doc = _doc("Nothing like that here.")
     out = validate_findings([_finding(original_text="Absent sentence.",
@@ -222,6 +238,45 @@ def test_a_below_gate_finding_becomes_a_query_comment(tmp_path):
     assert any("left as written" in t for t in texts)
     # The suggestion travels with the question, so the author can judge it.
     assert any("Suggested:" in t for t in texts)
+
+
+def test_an_oversized_edit_becomes_a_comment_not_a_silent_rejection(tmp_path):
+    """The edit guard blocks a wholesale re-type from becoming a tracked change,
+    but the catch is real — the fix is just too large to apply as a minimal
+    edit. It is surfaced as a margin comment so nothing is lost silently."""
+    original = ("i had some of that i dont know how much and found myself on "
+                "the dance floor beside the bonfire")
+    corrected = ("I had some of that; I don't know how much, and found myself "
+                 "on the dance floor, beside the bonfire.")
+    out = _run(tmp_path, [original],
+               [{"para_id": "body-0000", "error_type": "comma_splice",
+                 "original_text": original, "corrected_text": corrected,
+                 "explanation": "Run-on.", "confidence": "high"}],
+               error_types=["comma_splice"])
+    assert out.applied == 0                       # never a tracked change
+    texts = _comment_texts(out.reviewed_path)
+    assert any("too large to apply" in t for t in texts)
+    # The whole sentence is highlighted, not the scattered edit sites.
+    assert list(_comment_ranges(out.reviewed_path).values()) == [original]
+    # And it has its own summary section, not the terse rejected list.
+    assert "too large to auto-correct" in out.summary_md.read_text()
+
+
+def test_an_oversized_edit_is_reported_even_with_comments_off(tmp_path):
+    """With query_comments off there is no margin comment, but the finding is
+    still named in the summary — the information is never dropped silently."""
+    original = ("i had some of that i dont know how much and found myself on "
+                "the dance floor beside the bonfire")
+    corrected = ("I had some of that; I don't know how much, and found myself "
+                 "on the dance floor, beside the bonfire.")
+    out = _run(tmp_path, [original],
+               [{"para_id": "body-0000", "error_type": "comma_splice",
+                 "original_text": original, "corrected_text": corrected,
+                 "explanation": "Run-on.", "confidence": "high"}],
+               error_types=["comma_splice"], query_comments=False)
+    assert out.applied == 0
+    assert _comment_texts(out.reviewed_path) == []
+    assert "too large to auto-correct" in out.summary_md.read_text()
 
 
 def test_a_query_comment_highlights_the_sentence_not_the_edit_site(tmp_path):

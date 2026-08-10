@@ -32,7 +32,20 @@ class APIConfig(BaseModel):
 class ChunkingConfig(BaseModel):
     token_budget: int = Field(default=2500, ge=1)         # soft target per chunk
     hard_cap_tokens: int = Field(default=8000, ge=1)      # beyond this, split paragraph
-    min_paragraph_chars: int = Field(default=20, ge=0)
+    # Paragraphs shorter than this reach the sweeps but not a model pass. The
+    # default is 0 — every non-empty paragraph is reviewed — because in fiction
+    # the short lines are dialogue ("“Who?” he asked."), which is exactly where
+    # a missing word, a homophone slip, or a mispunctuated tag hides. A floor
+    # skips them silently, and that was a recall hole. Raise it to reintroduce a
+    # floor if 1–3 character fragments prove noisy — a call the eval scorecard
+    # should drive, not a guess.
+    min_paragraph_chars: int = Field(default=0, ge=0)
+    # How many tokens of the previous chunk's trailing paragraphs to prepend to
+    # each chunk as read-only context, so a pronoun or name whose antecedent
+    # sits in the paragraph before still resolves. 0 disables it. Kept small on
+    # purpose: context rides the user turn, so — unlike the cached system
+    # prompt — it is billed on every chunk of every pass.
+    context_token_budget: int = Field(default=300, ge=0)
 
 
 class SkipConfig(BaseModel):

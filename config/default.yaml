@@ -9,7 +9,8 @@ api:
 chunking:
   token_budget: 2500        # soft target per chunk (attention quality, not capacity)
   hard_cap_tokens: 8000     # oversized paragraphs split at sentence boundaries beyond this
-  min_paragraph_chars: 20
+  min_paragraph_chars: 0    # 0 = review every non-empty paragraph, dialogue lines included; raise to skip short lines from model passes
+  context_token_budget: 300 # read-only trailing context from the previous chunk so antecedents resolve (0 disables); billed per chunk
 
 skip:
   styles:                   # skipped outright — not reviewed, not swept

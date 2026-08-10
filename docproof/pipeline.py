@@ -6,6 +6,7 @@ sends chunks to a provider now, the other picks results up hours later.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import itertools
 import logging
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .analyzer import Analyzer
-from .chunker import chunk_document
+from .chunker import _SENTENCE_SPLIT, chunk_document
 from .config import Config
 from .consistency import (CONSISTENCY_KEY, ConsistencyReport,
                           find_inconsistencies, to_findings)
@@ -104,7 +105,14 @@ class Prepared:
 
     @property
     def est_document_tokens(self) -> int:
-        return sum(c.est_tokens for c in self.chunks) * len(self.groups)
+        # Context paragraphs ride the user turn and are billed on every chunk of
+        # every pass, so they belong in the tokens-sent estimate even though
+        # they are not the document's own text.
+        from .utils.tokens import estimate_tokens
+        own = sum(c.est_tokens for c in self.chunks)
+        context = sum(estimate_tokens(p.text)
+                      for c in self.chunks for p in c.context_paragraphs)
+        return (own + context) * len(self.groups)
 
 
 @dataclass(frozen=True)
@@ -281,9 +289,85 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
             for group in groups]
 
 
+def _subchunk(chunk: Chunk, paragraphs, suffix: str) -> Chunk:
+    from .utils.tokens import estimate_tokens
+    return Chunk(f"{chunk.chunk_id}-{suffix}", tuple(paragraphs),
+                 sum(estimate_tokens(p.text) for p in paragraphs))
+
+
+def _split_for_retry(chunk: Chunk) -> list[Chunk]:
+    """Two smaller chunks to re-ask after a truncation. Prefer halving the
+    paragraph list; for a lone paragraph that truncated on its own, halve its
+    sentences — the same last resort the chunker uses for an oversized
+    paragraph, and it inherits the same occurrence caveat. Empty means there is
+    nothing left to split, and the caller gives up rather than loop."""
+    paras = chunk.paragraphs
+    if len(paras) > 1:
+        mid = len(paras) // 2
+        return [_subchunk(chunk, paras[:mid], "a"),
+                _subchunk(chunk, paras[mid:], "b")]
+    sents = [s for s in _SENTENCE_SPLIT.split(paras[0].text) if s]
+    if len(sents) < 2:
+        return []
+    mid = len(sents) // 2
+    left = dataclasses.replace(paras[0], text=" ".join(sents[:mid]))
+    right = dataclasses.replace(paras[0], text=" ".join(sents[mid:]))
+    return [_subchunk(chunk, (left,), "a"), _subchunk(chunk, (right,), "b")]
+
+
+def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage
+                  ) -> tuple[list, bool]:
+    """One bounded semantic retry for a (pass, chunk) the provider did not
+    answer, so a single hiccup no longer drops a whole section silently.
+
+    Only the two failures a fresh attempt *in this run* can fix are acted on: a
+    truncation — where re-sending the same request would truncate at the same
+    place, so the chunk is split and each half asked again — and a refusal,
+    which is stochastic and re-asked once. A transport error has already
+    outlived the SDK's own retries, and a schema-invalid reply is usually a
+    persistent quirk of the request; re-asking either immediately tends to buy
+    the same failure at twice the price, so both are left for the resumable
+    checkpoint to re-call on the next run and are recorded as a coverage gap in
+    the meantime. Bounded to one level so a failing chunk cannot loop; every
+    attempt's tokens are counted into `usage`."""
+    if result.stop_reason == "max_tokens":
+        parts = _split_for_retry(chunk)
+        if not parts:
+            return [], False
+        out: list = []
+        ok_any = False
+        for part in parts:
+            found, ok = analyzer.process_result(analyzer.fetch(part), part, usage)
+            out.extend(found)
+            ok_any = ok_any or ok
+        if ok_any:
+            log.info("%s [%s]: recovered by splitting the chunk after a "
+                     "truncation", chunk.chunk_id, analyzer.label)
+        return out, ok_any
+    if result.stop_reason == "refusal":
+        found, ok = analyzer.process_result(analyzer.fetch(chunk), chunk, usage)
+        if ok:
+            log.info("%s [%s]: recovered on a second attempt", chunk.chunk_id,
+                     analyzer.label)
+        return found, ok
+    return [], False
+
+
+def analyze_with_retry(analyzer: Analyzer, chunk: Chunk, usage: Usage
+                       ) -> tuple[list, bool]:
+    """A fresh synchronous fetch for one (pass, chunk), with the same one-shot
+    retry as the concurrent path. Used to recover a batch request the provider
+    never returned, without duplicating the retry policy."""
+    result = analyzer.fetch(chunk)
+    found, ok = analyzer.process_result(result, chunk, usage)
+    if ok:
+        return found, ok
+    return _retry_failed(analyzer, chunk, result, usage)
+
+
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
-             progress=None, checkpoint=None, should_cancel=None
-             ) -> tuple[list, Usage]:
+             progress=None, checkpoint=None, should_cancel=None,
+             coverage=None) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk).
 
     The calls are independent, so up to `cfg.api.concurrency` of them are in
@@ -347,6 +431,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                 cached = checkpoint.get(key)
                 findings.extend(finding_from_dict(d) for d in cached.items)
                 add_usage(usage, cached.usage)
+                ok = True                            # only ok calls are cached
             else:
                 before = snapshot(usage)
                 # A failed earlier attempt at this call still paid for its
@@ -358,13 +443,20 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
                     add_usage(usage, burned)
                 # .result() blocks only until THIS call lands; later ones keep
                 # fetching in the pool meanwhile. Bookkeeping stays in order.
-                found, ok = analyzer.process_result(future.result(), chunk,
-                                                    usage)
+                result = future.result()
+                found, ok = analyzer.process_result(result, chunk, usage)
+                # A provider non-answer used to drop the whole (pass, chunk)
+                # here with only a log line. One bounded retry recovers most of
+                # them; whatever it can't is recorded below as a coverage gap.
+                if not ok:
+                    found, ok = _retry_failed(analyzer, chunk, result, usage)
                 findings.extend(found)
                 if checkpoint:
                     checkpoint.put(
                         key, items=[finding_to_dict(f) for f in found],
                         usage=usage_delta(before, usage), ok=ok)
+            if coverage is not None:
+                coverage.record(analyzer.label, chunk, ok)
             if progress:
                 progress(done, total)
     return findings, usage
@@ -372,8 +464,12 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider, *,
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
-           batch: bool = False) -> Outputs:
-    """Validate, write tracked changes, save, and report."""
+           batch: bool = False, coverage=None) -> Outputs:
+    """Validate, write tracked changes, save, and report.
+
+    `coverage` (a CoverageLedger, if the caller tracked one) records which
+    (pass, chunk) units were actually reviewed, so the report can name any that
+    the model never answered rather than letting the gap pass silently."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     # Sweep findings go first: the validator gives the earliest finding to
@@ -404,13 +500,14 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         applied_ids=stats.applied, batch=batch,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
-                        audit=audit_report, consistency=prepared.consistency)
+                        audit=audit_report, consistency=prepared.consistency,
+                        coverage=coverage)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,
-                     consistency=prepared.consistency)
+                     consistency=prepared.consistency, coverage=coverage)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)

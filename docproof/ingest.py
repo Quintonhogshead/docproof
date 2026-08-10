@@ -129,14 +129,15 @@ def build_document_model(pkg: DocxPackage, cfg: Config) -> DocumentModel:
         elif cfg.skip.fully_skipped(style):
             skipped.append((wp.para_id, f"style:{style}"))
         else:
-            # A paragraph the model does not review but the sweeps still reach.
-            # Two reasons land here: a heading style (a chapter title carries a
+            # A heading is swept but never reviewed: a chapter title carries a
             # compound-number or punctuation fix, but is not the model's to
-            # rewrite), and a paragraph too short to be worth a model request —
-            # "“Who?” he asked." is sixteen characters and carries a dialogue
-            # tag. Dropping either would make every sweep's "zero remaining"
-            # mean "zero remaining in the long body paragraphs", which is not
-            # what anyone reading that number would take it to mean.
+            # rewrite. Short lines used to land here too, on the theory that a
+            # two-word line rarely holds a grammar error — but in fiction it is
+            # usually dialogue ("“Who?” he asked."), which is exactly where a
+            # missing word or a homophone slip hides, so skipping it was a
+            # silent recall hole. min_paragraph_chars now defaults to 0, so the
+            # `short` gate is off unless a press configures a floor; the sweeps
+            # still reach every paragraph either way.
             sweep_only = cfg.skip.is_sweep_only(style)
             short = len(text) < cfg.chunking.min_paragraph_chars
             paragraphs.append(ParagraphRef(
@@ -149,7 +150,8 @@ def build_document_model(pkg: DocxPackage, cfg: Config) -> DocumentModel:
 
     n_sweep_only = sum(1 for p in paragraphs if not p.reviewable)
     log.info("Ingested %d paragraph(s) from %s: %d for the model, %d swept "
-             "only (headings and short lines), %d skipped entirely",
+             "only (headings, and short lines only if a floor is set), "
+             "%d skipped entirely",
              len(paragraphs), pkg.path.name, len(paragraphs) - n_sweep_only,
              n_sweep_only, len(skipped))
     return DocumentModel(source_path=str(pkg.path),

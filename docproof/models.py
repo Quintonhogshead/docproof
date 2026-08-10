@@ -27,12 +27,13 @@ class ParagraphRef:
     location: str     # "body" | "table" | "header" | "footer" | "footnote" | "endnote"
     text: str         # canonical text — THE text Claude sees and anchors quote from
     style: str        # Word style ID, e.g. "Heading1", "Normal"
-    # Whether this paragraph is worth spending a model pass on. Short ones are
-    # not: a two-word line costs a request and rarely holds a grammar error.
-    # They are still docproof's to edit, though — in fiction a short paragraph
-    # is usually a line of dialogue, which is exactly where a stray "?!" or a
-    # mispunctuated tag lives. So the scripted sweeps read every paragraph and
-    # only the model passes skip these.
+    # Whether this paragraph is worth spending a model pass on. Headings are
+    # not — a chapter title is the sweeps' to fix, not the model's to rewrite —
+    # and short lines are excluded only when a press sets a min_paragraph_chars
+    # floor (the default is 0, so dialogue lines like "“Who?” he asked." are
+    # reviewed: that is exactly where a missing word or homophone slip hides).
+    # The scripted sweeps read every paragraph regardless; only the model
+    # passes honour this flag.
     reviewable: bool = True
 
 
@@ -41,8 +42,14 @@ class Chunk:
     chunk_id: str                                   # "chunk-007"
     paragraphs: tuple[ParagraphRef, ...]
     est_tokens: int
-    context_paragraphs: tuple[ParagraphRef, ...] = ()   # reserved for future
-                                                        # cross-paragraph error types
+    # The trailing paragraphs of the previous chunk, sent read-only ahead of
+    # this chunk's own so an error here can be judged with its antecedent in
+    # view — a pronoun's referent, a name's spelling, the speaker of a quote
+    # that reaches back across the chunk boundary. The model is told never to
+    # report on them, and any finding that lands on one is dropped by the
+    # para_id guard in the analyzer. Populated by the chunker; empty when
+    # context is disabled or there is no previous chunk.
+    context_paragraphs: tuple[ParagraphRef, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,4 +108,40 @@ class Usage:
         for f in ("input_tokens", "output_tokens",
                   "cache_creation_input_tokens", "cache_read_input_tokens"):
             setattr(self, f, getattr(self, f) + (getattr(resp_usage, f, 0) or 0))
+
+
+@dataclass(frozen=True)
+class CoverageGap:
+    """A (pass, chunk) unit the model never answered — a refusal, a truncation,
+    or a dropped batch result — that a retry could not recover. Kept so the
+    report can name the paragraphs that went unreviewed instead of letting the
+    gap read as 'nothing found here'."""
+    pass_label: str                    # the pass's error types, e.g. "spelling"
+    chunk_id: str
+    para_ids: tuple[str, ...]
+
+
+@dataclass
+class CoverageLedger:
+    """Which (pass, chunk) units a run actually reviewed. `total` counts every
+    unit attempted; `gaps` are the ones no answer (or retry) could cover. A run
+    with gaps under-reports by definition, so the ledger is what turns that from
+    a silent hole into a line in the report."""
+    total: int = 0
+    gaps: list[CoverageGap] = field(default_factory=list)
+
+    def record(self, pass_label: str, chunk, ok: bool) -> None:
+        self.total += 1
+        if not ok:
+            self.gaps.append(CoverageGap(
+                pass_label, chunk.chunk_id,
+                tuple(p.para_id for p in chunk.paragraphs)))
+
+    @property
+    def complete(self) -> bool:
+        return not self.gaps
+
+    @property
+    def reviewed(self) -> int:
+        return self.total - len(self.gaps)
         

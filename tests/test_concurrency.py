@@ -35,7 +35,10 @@ class ScramblingProvider:
         self._lock_free_counter = iter(range(total))
 
     def complete_structured(self, *, user, **kwargs) -> ProviderResult:
-        pid = re.search(r'id="([^"]+)"', user).group(1)
+        # The user turn now leads with a read-only <context> block; the
+        # paragraph under review is the first one after it, so match there.
+        body = user.split("</context>")[-1]
+        pid = re.search(r'id="([^"]+)"', body).group(1)
         n = int(pid.split("-")[-1])
         time.sleep(0.02 * (self.total - n))     # earlier paragraphs finish later
         return ProviderResult(

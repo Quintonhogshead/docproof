@@ -425,7 +425,15 @@ def _query_text(f: Finding) -> str:
     if f.status == "query":
         return f.explanation or f"{f.error_type.replace('_', ' ')}: worth a look."
     kind = f.error_type.replace("_", " ")
-    parts = [f"Possibly {kind} — left as written, because it may be deliberate."]
+    if f.status == "rejected_oversized":
+        # A real catch whose fix rewrites more than a minimal edit should — a
+        # run-on split in two, a restructured list. Not applied automatically,
+        # but the author should still see it and make the change by hand.
+        parts = [f"Possibly {kind} — the suggested fix was too large to apply "
+                 f"as a minimal tracked change, so it is left for you to make "
+                 f"by hand."]
+    else:
+        parts = [f"Possibly {kind} — left as written, because it may be deliberate."]
     if f.explanation:
         parts.append(f.explanation)
     if f.corrected_text and f.corrected_text != f.original_text:
@@ -440,10 +448,13 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     # Two channels, never blurred: a correction the author accepts or rejects,
     # and a question that edits nothing. Below-gate findings join the second —
     # the model thought something was wrong but not confidently enough to
-    # touch it, which is exactly what a margin query is for.
+    # touch it, which is exactly what a margin query is for. An oversized edit
+    # joins it too: the catch is real, only its fix is too large to auto-apply,
+    # so surfacing it as a comment beats dropping the information silently.
     wanted = {"query"}
     if cfg.query_comments:
         wanted.add("skipped_low_confidence")
+        wanted.add("rejected_oversized")
     queries = [f for f in findings if f.status in wanted and f.anchor]
     if not validated and not queries:
         log.info("No validated findings; document untouched.")

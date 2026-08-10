@@ -136,10 +136,13 @@ def build_document_model(pkg: IdmlPackage, cfg: Config) -> DocumentModel:
             skipped.append((wp.para_id, "footnote:tracked-changes-unsupported"))
         elif cfg.skip.fully_skipped(wp.style) or cfg.skip.is_sweep_only(wp.style):
             # IDML has no sweep-only channel — there is no reviewable=False
-            # tier and short paragraphs are skipped outright too — so a heading
-            # style is skipped here just as it always was.
+            # tier — so a heading style is skipped outright here, as it always
+            # was.
             skipped.append((wp.para_id, f"style:{wp.style}"))
         elif len(text) < cfg.chunking.min_paragraph_chars:
+            # Off by default (min_paragraph_chars is 0): a floor skips short
+            # lines outright on the IDML path, since there is no sweep-only tier
+            # to catch them the way the .docx path does.
             skipped.append((wp.para_id, f"short:{len(text)}"))
         else:
             paragraphs.append(ParagraphRef(

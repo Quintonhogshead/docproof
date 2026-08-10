@@ -19,8 +19,9 @@ from pathlib import Path
 from typing import Sequence
 
 from .config import Config
-from .models import Usage
-from .pipeline import Outputs, Prepared, build_analyzers, finish, prepare
+from .models import CoverageLedger, Usage
+from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
+                       finish, prepare)
 from .providers import BatchRequest, BatchStatus, Provider
 
 log = logging.getLogger("docproof.batch")
@@ -238,11 +239,12 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
             f"Start a new review of the current version.")
 
     results = provider.collect_batch(job.batch_id)
-    findings, usage = _assemble(cfg, prepared, results)
+    coverage = CoverageLedger()
+    findings, usage = _assemble(cfg, prepared, results, provider, coverage)
 
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                     source_path=source, batch=True)
+                     source_path=source, batch=True, coverage=coverage)
     job.state = "done"
     save(job, workspace)
     log.info("Job %s collected: %d change(s) applied", job.job_id,
@@ -250,32 +252,55 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     return outputs
 
 
-def _assemble(cfg: Config, prepared: Prepared, results: dict) -> tuple[list, Usage]:
+def _assemble(cfg: Config, prepared: Prepared, results: dict,
+              provider: Provider | None = None,
+              coverage: CoverageLedger | None = None) -> tuple[list, Usage]:
     """Map batch results back onto (pass, chunk) and run them through the same
-    finding checks the synchronous path uses."""
+    finding checks the synchronous path uses.
+
+    A request the batch never returned — or returned as a refusal or a
+    truncation — used to be dropped with only a warning, silently under-
+    reporting those paragraphs. When a `provider` is given, each such gap is
+    recovered with one synchronous call now (the batch discount is lost on the
+    few that failed, but a dropped section is worse than a small bill); whatever
+    still fails is recorded in `coverage` so the report names it."""
     ids = itertools.count(1)
     usage = Usage()
-    analyzers = build_analyzers(cfg, prepared.groups, None, ids,
+    analyzers = build_analyzers(cfg, prepared.groups, provider, ids,
                                 prepared.vocabulary, prepared.conventions)
     findings: list = []
-    missing = 0
+    recovered = 0
+    unrecovered = 0
 
     # Ordered by pass then chunk so finding IDs come out in the same order a
-    # synchronous run would produce.
+    # synchronous run would produce — including any recovered inline, which
+    # keeps the validator's span-claim precedence between passes intact.
     for i, analyzer in enumerate(analyzers):
         for chunk in prepared.chunks:
             result = results.get(custom_id(i, chunk.chunk_id))
-            if result is None:
-                missing += 1
-                continue
-            findings.extend(analyzer.findings_from(result, chunk, usage))
+            found: list = []
+            ok = False
+            if result is not None:
+                found, ok = analyzer.process_result(result, chunk, usage)
+            if not ok and provider is not None:
+                found, ok = analyze_with_retry(analyzer, chunk, usage)
+                if ok:
+                    recovered += 1
+            if not ok:
+                unrecovered += 1
+            findings.extend(found)
+            if coverage is not None:
+                coverage.record(analyzer.label, chunk, ok)
 
     unknown = set(results) - {custom_id(i, c.chunk_id)
                               for i in range(len(analyzers))
                               for c in prepared.chunks}
-    if missing:
-        log.warning("%d request(s) had no result in the batch; those sections "
-                    "were not reviewed.", missing)
+    if recovered:
+        log.info("%d batch request(s) had no usable result and were recovered "
+                 "with a synchronous call.", recovered)
+    if unrecovered:
+        log.warning("%d request(s) could not be reviewed even after recovery; "
+                    "those sections are reported as unreviewed.", unrecovered)
     if unknown:
         log.warning("Batch returned %d result(s) for unknown requests: %s",
                     len(unknown), sorted(unknown)[:5])

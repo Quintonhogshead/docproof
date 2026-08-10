@@ -13,7 +13,7 @@ from .analyzer import MockAnalyzer
 from .config import load_config
 from .ingest import IngestError
 from .logging_setup import setup_logging
-from .models import Usage
+from .models import CoverageLedger, Usage
 from .pipeline import chunk_outline, finish, prepare, run_sync
 from .providers import ProviderError, build_provider, estimate_cost
 
@@ -241,16 +241,18 @@ def cmd_review(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    coverage = None
     if args.mock_findings:
         canned = _load_mocks(args.mock_findings)
         if canned is None:
             return 2
         findings, usage = _run_mock(cfg, prepared, canned)
     else:
-        findings, usage = run_sync(cfg, prepared, provider)
+        coverage = CoverageLedger()
+        findings, usage = run_sync(cfg, prepared, provider, coverage=coverage)
 
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                     source_path=args.input)
+                     source_path=args.input, coverage=coverage)
     print(f"\n{outputs.applied} tracked change(s) applied.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
