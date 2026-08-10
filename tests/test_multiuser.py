@@ -8,9 +8,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.accounts import Accounts
-from app.jobs import Job
+from app.jobs import Job, JobStore
 from app.main import create_app
 from app.settings import Paths
+from app.spending import LedgerEntry, SpendingLedger
 from .conftest import FIXTURES
 
 SECRET = "test-session-secret"
@@ -101,6 +102,47 @@ def test_usage_counts_only_your_own_jobs(app):
     a = _as(app, "a@press.com")
     total = a.get("/api/usage").json()
     # A's bill reflects A's $3 job, never B's $99 one.
+    assert total["totals"]["cost"] == pytest.approx(3.0)
+
+
+def _seed_watch(app, *, live_cost=0.0, cleared_cost=0.0):
+    """Give the watcher its own store — a live job and a cleared (ledger-only)
+    one — so a test can check whether the watcher's spend is counted."""
+    store = JobStore(Paths(app.state.watch.home))
+    if live_cost:
+        store.save(Job(id="w-live", filename="w.docx", source_path="/tmp/w.docx",
+                       model="claude-sonnet-5", mode="now", kind="promo",
+                       source="watch", state="done", cost=live_cost, api_calls=1,
+                       created_at="2026-08-10T00:00:00+00:00"))
+    if cleared_cost:
+        SpendingLedger(store.paths.spending_db).record(LedgerEntry(
+            id="w-cleared", filename="w2.docx", kind="promo",
+            model="claude-sonnet-5", mode="now", source="watch", owner_id="",
+            created_at="2026-08-10T00:00:00+00:00", words=0, input_tokens=0,
+            output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
+            api_calls=1, cost=cleared_cost))
+
+
+def test_admin_usage_shows_the_full_bill_including_the_watcher(app):
+    """An admin's Spending is every source on the one card: every user's app
+    jobs, plus the watcher's spend, live and cleared."""
+    app.state.accounts.create_user("admin@press.com", "password1",
+                                    is_admin=True)
+    _seed_job(app, "a@press.com", "job-a", cost=3.0, api_calls=1)
+    _seed_job(app, "b@press.com", "job-b", cost=99.0, api_calls=1)
+    _seed_watch(app, live_cost=5.0, cleared_cost=7.0)
+
+    total = _as(app, "admin@press.com").get("/api/usage").json()
+    assert total["totals"]["cost"] == pytest.approx(3.0 + 99.0 + 5.0 + 7.0)
+
+
+def test_regular_user_usage_still_excludes_the_watcher(app):
+    """The watcher is the organisation's, not a user's — a regular user's bill
+    stays their own app jobs, never the watcher's."""
+    _seed_job(app, "a@press.com", "job-a", cost=3.0, api_calls=1)
+    _seed_watch(app, live_cost=5.0, cleared_cost=7.0)
+
+    total = _as(app, "a@press.com").get("/api/usage").json()
     assert total["totals"]["cost"] == pytest.approx(3.0)
 
 

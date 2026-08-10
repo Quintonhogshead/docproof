@@ -57,6 +57,26 @@ def cap_for(user: User | None) -> float | None:
     return user.monthly_cap if user.monthly_cap is not None else default_cap()
 
 
+def store_spend(store: JobStore, owner: str | None = None) -> list:
+    """Every job a store still holds, plus the ledger snapshots of the ones it
+    has since cleared — merged so a re-recorded job counts once. `owner` scopes
+    both halves; None is every owner. The ledger read is what keeps a cleared
+    job's cost in the bill, on whichever store it lived in."""
+    ledger = SpendingLedger(store.paths.spending_db)
+    return merge_live(store.all(owner), ledger.entries(owner))
+
+
+def watch_spend(watcher) -> list:
+    """The watcher's own spend — its live jobs and its own ledger, a separate
+    store from the app's. Empty when no watch home exists yet: like
+    `WatchRunner.jobs`, this never creates one, so opening the Spending tab on a
+    machine that was never pointed at a folder does not grow a watch home."""
+    home = Path(watcher.home)
+    if not (home / "jobs").is_dir():
+        return []
+    return store_spend(JobStore(Paths(home)))
+
+
 def month_spend(store: JobStore, owner: str) -> float:
     """What this owner's jobs have cost so far in the current calendar month,
     including jobs since cleared — their cost lives on in the ledger, so
