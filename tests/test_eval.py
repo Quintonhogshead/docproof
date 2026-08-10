@@ -155,6 +155,21 @@ def test_scorer_counts_catch_miss_and_trap_fp(tmp_path):
     assert score(run, "medium").types["comma_splice"].trap_cases_flagged == 0
 
 
+def test_sweeps_are_credited_to_the_type_they_fix(tmp_path):
+    """repeated_word and dialogue_tag are caught by deterministic sweeps whose
+    findings carry the sweep's key, not the model type. With no model findings at
+    all the scorer must still credit them (via ALIASES) rather than read the
+    types as 0% recall — the artifact the baseline exposed."""
+    from docproof.eval.scorer import score
+    run = _run_mock(tmp_path, {})                    # sweeps only, no model
+    card = score(run, "low")
+    assert card.types["repeated_word"].caught > 0
+    assert card.types["dialogue_tag"].caught > 0
+    # And the crediting is honest both ways: a sweep firing on a trap (the
+    # grammatical "will will") now counts as that type's false positive.
+    assert card.types["repeated_word"].trap_cases_flagged >= 1
+
+
 def test_threshold_sweep_is_monotone_on_this_fixture(tmp_path):
     from docproof.eval.scorer import score_curve
     run = _run_mock(tmp_path, {
