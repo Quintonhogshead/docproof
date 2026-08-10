@@ -14,8 +14,25 @@ detection_prompt: |
     "she spoke french".
   - A random interior capital from a stuck shift key: "the Door swung open",
     "he WAlked away".
+  - A kinship term used AS a name — as direct address, or standing where the
+    person's name would — written lowercase: "Yes, father." → "Father",
+    "I asked mom where she'd been." → "Mom", "Did grandmother know?" →
+    "Grandmother". The test is substitution: if the name could replace the word
+    ("Yes, Sarah."), it is a name and takes a capital.
+  - A title of address used TO address someone, written lowercase: "As you
+    wish, your majesty." → "Your Majesty", "Thank you, your highness." →
+    "Your Highness", "Right away, captain." → "Captain".
 
   Do NOT flag:
+  - A kinship term used as an ordinary noun, not as a name: preceded by a
+    possessive (my, his, her, your, their, its) or an article (the, a, an), or
+    otherwise describing rather than naming. "my father", "her mom", "the aunt
+    he never met", "a grandmother of four" all stay lowercase. The possessive or
+    article is the tell — a name never takes one.
+  - A title used to describe or refer to someone rather than to address them:
+    "the captain gave the order", "she wanted to be queen", "he served the
+    king". Only the direct-address or naming use is capitalized; leave the
+    descriptive use alone.
   - Stylized lowercase used consistently: a character who texts in lowercase,
     poetry, a brand name like "iPhone" or "eBay", an author who lowercases a
     word deliberately. If a word is lowercase in more than one place, treat it
@@ -70,3 +87,19 @@ examples:
       confidence: high
   - text: "The car drove north until the road ended."
     finding: null
+  - text: "\"I already told you, mom.\""
+    finding:
+      original_text: "\"I already told you, mom.\""
+      corrected_text: "\"I already told you, Mom.\""
+      explanation: "\"Mom\" is direct address here, used as a name."
+      confidence: high
+  - text: "She had not seen her father in nearly ten years."
+    finding: null          # a possessive precedes it: an ordinary noun, lowercase
+  - text: "\"As you command, your majesty,\" the guard said."
+    finding:
+      original_text: "\"As you command, your majesty,\" the guard said."
+      corrected_text: "\"As you command, Your Majesty,\" the guard said."
+      explanation: "A title of address is capitalized: \"Your Majesty\"."
+      confidence: high
+  - text: "He had served the old king faithfully for thirty years."
+    finding: null          # descriptive, not address — "king" stays lowercase
