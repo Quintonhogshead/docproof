@@ -242,6 +242,19 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     coverage = CoverageLedger()
     findings, usage = _assemble(cfg, prepared, results, provider, coverage)
 
+    # The adjudication pass is a synchronous post-step: the detector work rode
+    # the batch, but ruling on a few dozen typo candidates is two ordinary calls,
+    # so it runs here at collect time rather than needing its own batch stage.
+    # Without this, a batch review (the production path) would silently skip it.
+    if cfg.adjudicate.enabled and prepared.adjudicate_candidates:
+        from .adjudicate import adjudicate
+        findings = list(findings) + adjudicate(
+            prepared.adjudicate_candidates, prepared.doc.paragraphs, provider,
+            model=cfg.api.model, max_tokens=cfg.api.max_output_tokens,
+            usage=usage, ids=itertools.count(1),
+            batch_size=cfg.adjudicate.batch_size,
+            edit_confidence=cfg.adjudicate.edit_confidence)
+
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=source, batch=True, coverage=coverage)

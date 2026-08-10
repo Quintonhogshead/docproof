@@ -98,6 +98,18 @@ consistency:
   name_dominance: 5         # majority lead before a stray is corrected, not asked
   name_min_count: 20        # how established the dominant spelling must be
 
+# Real-word typos the plain passes glide over (staired, a protected repeated
+# misspelling), found by local signals and ruled on by the model in context.
+# Only a high-confidence affirmed fix becomes a tracked change; softer calls are
+# margin queries — so a wrong candidate costs at most a question. Whole-doc only.
+adjudicate:
+  enabled: true
+  near_miss_gap: 2.5         # zipf lead a common word needs to un-protect a coinage
+  min_word_len: 4           # short tokens are too edit-close to judge cheaply
+  max_candidates: 500       # bound on sites sent to the model, logged when it bites
+  batch_size: 40            # candidates per adjudication request
+  edit_confidence: high     # at/above this an affirmed fix edits; softer -> query
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

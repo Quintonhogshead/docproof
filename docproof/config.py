@@ -231,6 +231,30 @@ class ConsistencyConfig(BaseModel):
     name_min_count: int = Field(default=20, ge=2)
 
 
+class AdjudicateConfig(BaseModel):
+    """The candidate-adjudication pass: real-word typos the plain passes glide
+    over, found by cheap local signals (a non-word one edit from a common word;
+    a spell-scan-protected word with a common twin) and ruled on by the model in
+    context. Precision lives in the routing — only a model-affirmed correction
+    at edit_confidence becomes a tracked change; a softer call is a margin query,
+    a "keep" is nothing — so a wrong candidate costs at most a question.
+    Whole-document only, like the consistency scan. See docproof/adjudicate.py."""
+    enabled: bool = True
+    # How far a common word must outnumber a protected coinage (in zipf points,
+    # ~each point is 10x) before the coinage is treated as a possible
+    # misspelling rather than the author's own word.
+    near_miss_gap: float = Field(default=2.5, ge=0)
+    # Short tokens are too edit-close to everything to judge cheaply.
+    min_word_len: int = Field(default=4, ge=3)
+    # A bound on how many sites go to the model, logged when it bites.
+    max_candidates: int = Field(default=500, ge=1)
+    # Candidates per adjudication request.
+    batch_size: int = Field(default=40, ge=1)
+    # The confidence at or above which an affirmed correction is applied as a
+    # tracked change; anything softer is routed to the margin as a query.
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -314,6 +338,7 @@ class Config(BaseModel):
     edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
+    adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
