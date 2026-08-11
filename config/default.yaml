@@ -153,6 +153,9 @@ rewrite:
   max_output_tokens: 8000
   max_span: 48              # a diff whose delete or insert exceeds this is a paraphrase
   max_added: 24             # ...or that adds more than this many net chars — dropped
+  samples: 1                # independent retypes per chunk, unioned. >1 lifts recall
+                            # (a stochastic retype misses different errors each pass);
+                            # each extra sample is another whole retype in cost
   workers: 8               # concurrency for the SYNC path only (run_sync, or the
                             # different-model fallback); the batch handles its own
   batch_size: 40            # candidates per confirm request

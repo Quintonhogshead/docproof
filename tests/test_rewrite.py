@@ -77,6 +77,31 @@ def test_propose_ignores_a_hallucinated_paragraph_id():
                    usage=Usage(), workers=1) == []
 
 
+def test_propose_unions_independent_samples():
+    # Two retypes of the same chunk catch different errors; the union carries
+    # both (one candidate per distinct span), so recall is additive.
+    p = _para("body-0", "He holds out hand for teh bottle.")
+    prov = FakeProvider([
+        _rewritten(**{"body-0": "He holds out a hand for teh bottle."}),  # +"a"
+        _rewritten(**{"body-0": "He holds out hand for the bottle."}),    # teh->the
+    ])
+    cands = propose([_chunk(p)], prov, model="m", max_tokens=100,
+                    usage=Usage(), workers=1, samples=2)
+    assert len(cands) == 2
+    assert len({(c.start, c.end) for c in cands}) == 2      # two different sites
+
+
+def test_dedup_candidates_unions_by_span_and_replacement():
+    from docproof.rewrite import dedup_candidates
+    a = RewriteCandidate("body-0", 3, 11, "recieved", "received")
+    a2 = RewriteCandidate("body-0", 3, 11, "recieved", "received")   # exact dup
+    b = RewriteCandidate("body-0", 3, 11, "recieved", "receive")     # same span, other fix
+    c = RewriteCandidate("body-0", 20, 23, "teh", "the")             # other span
+    out = dedup_candidates([a, a2, b, c])
+    assert len(out) == 3                             # a2 collapses into a
+    assert a in out and b in out and c in out
+
+
 # --- confirm (the valve) ------------------------------------------------------
 
 def test_a_high_confidence_affirmation_becomes_an_edit():
@@ -181,3 +206,17 @@ def test_build_requests_adds_a_rewrite_request_per_chunk(tmp_path):
     cfg.rewrite.model = "claude-opus-5"            # not batchable -> stays sync
     assert not [r for r in build_requests(cfg, prep)
                 if r.custom_id.startswith(REWRITE_PREFIX)]
+
+
+def test_build_requests_multiplies_rewrite_requests_by_samples(tmp_path):
+    from docproof.batch import REWRITE_PREFIX, build_requests
+    cfg, prep = _prepared(["An ordinary reviewable sentence goes here."],
+                          tmp_path)
+    n_chunks = len(prep.chunks)
+    cfg.rewrite.enabled = True
+    cfg.rewrite.model = None
+    cfg.rewrite.samples = 3
+    rw = [r for r in build_requests(cfg, prep)
+          if r.custom_id.startswith(REWRITE_PREFIX)]
+    assert len(rw) == 3 * n_chunks
+    assert len({r.custom_id for r in rw}) == 3 * n_chunks    # distinct ids per sample

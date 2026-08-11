@@ -106,8 +106,8 @@ def parse_custom_id(value: str) -> tuple[int, str]:
 REWRITE_PREFIX = "rw-"
 
 
-def custom_id_rewrite(chunk_id: str) -> str:
-    return f"{REWRITE_PREFIX}{chunk_id}"
+def custom_id_rewrite(chunk_id: str, sample: int = 0) -> str:
+    return f"{REWRITE_PREFIX}{sample}-{chunk_id}"
 
 
 def rewrite_batched(cfg: Config) -> bool:
@@ -226,9 +226,10 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
         from .rewrite import PROPOSE_SYSTEM, render, rewrite_schema
         schema = rewrite_schema()
         requests += [
-            BatchRequest(custom_id=custom_id_rewrite(chunk.chunk_id),
+            BatchRequest(custom_id=custom_id_rewrite(chunk.chunk_id, s),
                          system=PROPOSE_SYSTEM, user=render(chunk.paragraphs),
                          schema=schema, schema_name="rewritten")
+            for s in range(cfg.rewrite.samples)
             for chunk in prepared.chunks if chunk.paragraphs
         ]
     return requests
@@ -317,7 +318,8 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     # light confirm pass runs here.
     if cfg.rewrite.enabled and prepared.whole_document:
         from .providers import build_provider
-        from .rewrite import candidates_from_result, confirm, propose
+        from .rewrite import (candidates_from_result, confirm,
+                              dedup_candidates, propose)
         rcfg = cfg.model_copy(deep=True)
         rcfg.api.model = cfg.rewrite.model or cfg.api.model
         rcfg.api.effort = cfg.rewrite.effort
@@ -325,20 +327,23 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
         if rewrite_batched(cfg):
             rcands = []
             for chunk in prepared.chunks:
-                res = results.get(custom_id_rewrite(chunk.chunk_id))
-                if res is None:
-                    continue
-                usage.add(res.usage)
-                rcands += candidates_from_result(
-                    chunk, res.parsed, max_add=cfg.rewrite.max_added,
-                    max_span=cfg.rewrite.max_span)
-            log.info("Rewrite: %d candidate diff(s) from the batch", len(rcands))
+                for s in range(cfg.rewrite.samples):
+                    res = results.get(custom_id_rewrite(chunk.chunk_id, s))
+                    if res is None:
+                        continue
+                    usage.add(res.usage)
+                    rcands += candidates_from_result(
+                        chunk, res.parsed, max_add=cfg.rewrite.max_added,
+                        max_span=cfg.rewrite.max_span)
+            rcands = dedup_candidates(rcands)
+            log.info("Rewrite: %d candidate diff(s) from the batch "
+                     "(%d sample(s))", len(rcands), cfg.rewrite.samples)
         else:
             rcands = propose(
                 prepared.chunks, rw_provider, model=rcfg.api.model,
                 max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
                 max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
-                workers=cfg.rewrite.workers)
+                workers=cfg.rewrite.workers, samples=cfg.rewrite.samples)
         findings += confirm(
             rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,

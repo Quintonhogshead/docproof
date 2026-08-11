@@ -610,7 +610,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             prepared.chunks, rw_provider, model=rcfg.api.model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
             max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
-            workers=cfg.rewrite.workers)
+            workers=cfg.rewrite.workers, samples=cfg.rewrite.samples)
         findings.extend(confirm(
             rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
