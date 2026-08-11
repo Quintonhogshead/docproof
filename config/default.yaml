@@ -126,6 +126,31 @@ adjudicate:
   batch_size: 40            # candidates per adjudication request
   edit_confidence: high     # at/above this an affirmed fix edits; softer -> query
 
+# Rewrite-then-diff: the model retypes each paragraph minimal-edit, the diff
+# against the source becomes candidates, and a skeptical confirm pass rules on
+# each in context (high -> tracked edit, softer -> margin query, keep -> nothing).
+# Reshapes detection into generation to surface the missing-word / letter-typo /
+# agreement misses the detector glides over. OFF by default: a strong recall
+# lever but a whole extra (output-heavy) pass in cost, shipping opt-in until
+# proven on a real-manuscript compare. Whole-document only. The retype calls
+# RIDE THE BATCH when `model` matches api.model (the default) — half price, and
+# clear of the sync rate-limit wall; only the light confirm runs at collect.
+# A different `model` cannot share the one-model batch, so it falls back to
+# synchronous retyping at collect. See docproof/rewrite.py.
+rewrite:
+  enabled: false
+  model:                    # unset = api.model (the detector's); a cheap one is plenty.
+                            # Set it to a DIFFERENT model and the retype runs sync
+                            # (can't share the review's batch), losing the discount.
+  effort: medium
+  max_output_tokens: 8000
+  max_span: 48              # a diff whose delete or insert exceeds this is a paraphrase
+  max_added: 24             # ...or that adds more than this many net chars — dropped
+  workers: 8               # concurrency for the SYNC path only (run_sync, or the
+                            # different-model fallback); the batch handles its own
+  batch_size: 40            # candidates per confirm request
+  edit_confidence: high     # at/above this an affirmed fix edits; softer -> query
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

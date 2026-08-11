@@ -593,6 +593,26 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             max_tokens=cfg.api.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
             edit_confidence=cfg.adjudicate.edit_confidence))
+
+    # Rewrite-then-diff: retype each paragraph minimal-edit, diff for candidates,
+    # confirm each in context. Its own model, so a cheap rewriter can run under a
+    # dearer detector. Whole-document only, like the two passes above.
+    if cfg.rewrite.enabled and prepared.whole_document:
+        from .rewrite import confirm, propose
+        rcfg = cfg.model_copy(deep=True)
+        rcfg.api.model = cfg.rewrite.model or cfg.api.model
+        rcfg.api.effort = cfg.rewrite.effort
+        rw_provider = provider_factory(rcfg)
+        rcands = propose(
+            prepared.chunks, rw_provider, model=rcfg.api.model,
+            max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
+            max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
+            workers=cfg.rewrite.workers)
+        findings.extend(confirm(
+            rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
+            max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
+            batch_size=cfg.rewrite.batch_size,
+            edit_confidence=cfg.rewrite.edit_confidence))
     return findings, usage
 
 

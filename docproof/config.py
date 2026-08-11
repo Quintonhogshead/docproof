@@ -286,6 +286,45 @@ class GlossaryConfig(BaseModel):
         return self
 
 
+class RewriteConfig(BaseModel):
+    """The rewrite-then-diff pass: the model retypes each paragraph minimal-edit,
+    the diff against the source becomes candidates, and a skeptical confirm pass
+    rules on each in context — precision in the routing, like adjudication. Off
+    by default: a strong recall lever (locates ~25% of the detector's misses on
+    Johnson) but a whole extra pass in cost, so it ships opt-in until proven on a
+    real-manuscript compare. The output-heavy retype rides the review batch when
+    `model` matches api.model (the default), so it gets the batch discount and
+    avoids the sync rate-limit wall; only the light confirm runs at collect.
+    Whole-document only. See docproof/rewrite.py."""
+    enabled: bool = False
+    # The rewriter's own model (a cheap one is enough — retyping is far easier
+    # than needle-finding). Defaults to whatever api.model is when unset.
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    max_output_tokens: int = Field(default=8000, ge=1)
+    # Candidate size guards: a diff bigger than these is a paraphrase, not a fix.
+    max_span: int = Field(default=48, ge=1)     # chars in the delete or insert
+    max_added: int = Field(default=24, ge=0)    # net chars a fix may add
+    # Concurrency for the SYNCHRONOUS retype path only (run_sync, or the
+    # different-model fallback at collect). When the retype rides the review
+    # batch — the default, model unset — the batch handles concurrency and this
+    # is unused.
+    workers: int = Field(default=8, ge=1)
+    # Candidates per confirm request.
+    batch_size: int = Field(default=40, ge=1)
+    # The confidence at or above which an affirmed correction edits; softer is a
+    # margin query. High by default — a rewrite fix can be right-place-wrong-word.
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and self.model is not None and lookup(self.model) is None:
+            raise ValueError(
+                f"rewrite.model '{self.model}' is not in the catalog")
+        return self
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -371,6 +410,7 @@ class Config(BaseModel):
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     glossary: GlossaryConfig = Field(default_factory=GlossaryConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
+    rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
