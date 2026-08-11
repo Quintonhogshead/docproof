@@ -100,6 +100,24 @@ def parse_custom_id(value: str) -> tuple[int, str]:
     return int(head[1:]), chunk_id
 
 
+# The rewrite pass rides the same batch as the detectors when its model matches
+# the review model (the default — rewrite.model unset). A distinct id namespace
+# keeps its per-chunk requests from colliding with the detector passes'.
+REWRITE_PREFIX = "rw-"
+
+
+def custom_id_rewrite(chunk_id: str) -> str:
+    return f"{REWRITE_PREFIX}{chunk_id}"
+
+
+def rewrite_batched(cfg: Config) -> bool:
+    """Whether the rewrite propose calls can ride the batch. They can only when
+    the pass is on and its model is the batch's model (a batch is one model);
+    a different rewrite.model falls back to synchronous propose at collect."""
+    return cfg.rewrite.enabled and (cfg.rewrite.model is None
+                                    or cfg.rewrite.model == cfg.api.model)
+
+
 # --- persistence --------------------------------------------------------------
 
 def save(job: Job, workspace: str | Path) -> Path:
@@ -186,13 +204,16 @@ def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
 
 def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
     """One request per (pass, chunk). All passes share a single batch — each
-    request carries its own system prompt, so nothing forces them apart."""
+    request carries its own system prompt, so nothing forces them apart. The
+    rewrite pass adds one request per chunk when it can ride the batch, so its
+    output-heavy calls get the batch discount instead of running (and hitting
+    the rate limit) synchronously at collect."""
     from .analyzer import render_chunk
 
     analyzers = build_analyzers(cfg, prepared.groups, None,
                                 itertools.count(1), prepared.vocabulary,
                                 prepared.conventions)
-    return [
+    requests = [
         BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
                      system=analyzer.system_prompt,
                      user=render_chunk(chunk),
@@ -201,6 +222,16 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
         for i, analyzer in enumerate(analyzers)
         for chunk in prepared.chunks
     ]
+    if rewrite_batched(cfg) and prepared.whole_document:
+        from .rewrite import PROPOSE_SYSTEM, render, rewrite_schema
+        schema = rewrite_schema()
+        requests += [
+            BatchRequest(custom_id=custom_id_rewrite(chunk.chunk_id),
+                         system=PROPOSE_SYSTEM, user=render(chunk.paragraphs),
+                         schema=schema, schema_name="rewritten")
+            for chunk in prepared.chunks if chunk.paragraphs
+        ]
+    return requests
 
 
 def poll(job: Job, provider: Provider, workspace: str | Path) -> BatchStatus:
@@ -275,6 +306,41 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
             batch_size=cfg.adjudicate.batch_size,
             edit_confidence=cfg.adjudicate.edit_confidence)
 
+    # Rewrite-then-diff. When it can ride the batch (the default: rewrite.model
+    # matches the review model), its output-heavy propose calls already rode the
+    # batch above — here we just diff those results into candidates. Otherwise
+    # (a different rewrite.model) they run synchronously now. Either way the
+    # light confirm pass runs here.
+    if cfg.rewrite.enabled and prepared.whole_document:
+        from .providers import build_provider
+        from .rewrite import candidates_from_result, confirm, propose
+        rcfg = cfg.model_copy(deep=True)
+        rcfg.api.model = cfg.rewrite.model or cfg.api.model
+        rcfg.api.effort = cfg.rewrite.effort
+        rw_provider = build_provider(rcfg)
+        if rewrite_batched(cfg):
+            rcands = []
+            for chunk in prepared.chunks:
+                res = results.get(custom_id_rewrite(chunk.chunk_id))
+                if res is None:
+                    continue
+                usage.add(res.usage)
+                rcands += candidates_from_result(
+                    chunk, res.parsed, max_add=cfg.rewrite.max_added,
+                    max_span=cfg.rewrite.max_span)
+            log.info("Rewrite: %d candidate diff(s) from the batch", len(rcands))
+        else:
+            rcands = propose(
+                prepared.chunks, rw_provider, model=rcfg.api.model,
+                max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
+                max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
+                workers=cfg.rewrite.workers)
+        findings += confirm(
+            rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
+            max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
+            batch_size=cfg.rewrite.batch_size,
+            edit_confidence=cfg.rewrite.edit_confidence)
+
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=source, batch=True, coverage=coverage)
@@ -325,9 +391,12 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
             if coverage is not None:
                 coverage.record(analyzer.label, chunk, ok)
 
-    unknown = set(results) - {custom_id(i, c.chunk_id)
-                              for i in range(len(analyzers))
-                              for c in prepared.chunks}
+    # Rewrite requests (rw-*) ride this batch but are assembled separately, in
+    # collect(); they are not "unknown", so keep them out of the warning.
+    unknown = {r for r in set(results) - {custom_id(i, c.chunk_id)
+                                          for i in range(len(analyzers))
+                                          for c in prepared.chunks}
+               if not r.startswith(REWRITE_PREFIX)}
     if recovered:
         log.info("%d batch request(s) had no usable result and were recovered "
                  "with a synchronous call.", recovered)
