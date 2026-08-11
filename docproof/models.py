@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 
 CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
-# Every value `status` can take. The design doc's five, plus one honest
-# addition (rejected_noop — see Step 8).
+# Every value `status` can take. The design doc's five, plus the honest
+# additions the pipeline actually emits (rejected_noop — see Step 8; and
+# rejected_oversized, the edit-guard's refusal of an over-large re-type).
 STATUSES = (
     "pending",
     "validated",
@@ -16,6 +17,9 @@ STATUSES = (
     "rejected_overlap",
     "rejected_duplicate",
     "rejected_noop",
+    # The overreach guard refused a fix that re-types too large a span or adds
+    # too much new text — a rewrite, not a minimal proofreading edit.
+    "rejected_oversized",
     # The overseer-verifier judged this finding a false positive; kept for the
     # report with the verifier's reason, never applied.
     "rejected_by_verifier",

@@ -310,6 +310,51 @@ def test_findings_anchor_and_apply_cleanly_through_the_validator():
         "He went to the twentieth century door!")
 
 
+def test_overlaps_treats_a_boundary_touching_insertion_as_a_conflict():
+    """VAL-001 unit guard. An insertion at a span's START enters the half-open
+    range [start, end) and conflicts (both orders); one that abuts the END sits
+    after the span and composes cleanly, so it does not."""
+    from docproof.validator import _overlaps
+
+    assert _overlaps(3, 3, 3, 8)          # insertion at the span's start
+    assert _overlaps(3, 8, 3, 3)          # ...and the symmetric check order
+    assert _overlaps(5, 5, 3, 8)          # insertion strictly inside
+    assert not _overlaps(8, 8, 3, 8)      # insertion abutting the span's end
+    assert not _overlaps(3, 8, 8, 8)      # ...symmetric
+    assert _overlaps(4, 4, 4, 4)          # two insertions at the same point
+    assert not _overlaps(4, 4, 5, 5)      # two insertions at different points
+    assert _overlaps(3, 6, 5, 8)          # two spans that intersect
+    assert not _overlaps(3, 5, 5, 8)      # two spans that only touch end-to-start
+
+
+def test_a_boundary_touching_insertion_and_retype_do_not_both_apply():
+    """VAL-001 regression. A pure insertion at offset X and a replacement whose
+    span starts at X used to BOTH validate and compose to duplicated text on
+    accept-all ("to to", ",," — seen in the Johnson run's body-0856/body-0445).
+    They now conflict: the first claims the span, the second is rejected, and
+    the single surviving edit leaves coherent text."""
+    from docproof.models import Finding
+
+    doc, _ = _doc("He could go.")
+    common = dict(chunk_id="c", para_id="body-0000", original_text="He could go.",
+                  occurrence=1, explanation="", confidence="high")
+    insert_to = Finding(finding_id="f-0001", error_type="missing_word",
+                        corrected_text="He to could go.", **common)   # insert "to " at 3
+    retype = Finding(finding_id="r-0001", error_type="rewrite",
+                     corrected_text="He to go.", **common)            # replace [3,8] "could"->"to"
+
+    out = validate_findings([insert_to, retype], doc, "medium")
+    assert [f.status for f in out] == ["validated", "rejected_overlap"]
+
+    # The one applied edit composes to coherent text — never the "to to" dupe.
+    text = "He could go."
+    applied = [f for f in out if f.status == "validated"]
+    assert len(applied) == 1
+    a = applied[0].anchor
+    assert text[a.start:a.end] == a.delete_text
+    assert text[:a.start] + a.insert_text + text[a.end:] == "He to could go."
+
+
 def test_an_identical_edit_reported_twice_is_a_duplicate_not_an_overlap():
     """Two copies of one finding used to both come back `rejected_overlap`:
     an identical edit necessarily overlaps the accepted copy of itself, so
