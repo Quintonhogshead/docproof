@@ -240,16 +240,26 @@ def _oversteps(deleted: str, inserted: str, guard) -> bool:
 
 
 def _overlaps(s1: int, e1: int, s2: int, e2: int) -> bool:
-    """True if spans intersect. Pure insertions (s == e) conflict only when
-    strictly inside another span — or with another insertion at the same
-    offset; edits that merely touch may coexist."""
-    if s1 == e1 and s2 == e2:
+    """True if two edits conflict and cannot both apply to one paragraph.
+
+    Two insertions conflict only at the same point. An insertion conflicts with
+    a replacement or deletion when its point is the span's START or lies inside
+    it — the half-open range [start, end) — because both then act at the same
+    offset and compose order-dependently into duplicated or garbled text:
+    inserting "to " at the start of a "could"->"to" replacement composes to
+    "to to", and a comma inserted at the start of a " they were"->", he was"
+    replacement composes to ",,". An insertion that merely abuts a span's END
+    sits after it and composes cleanly ("colour"->"color" with a "," inserted at
+    the close gives "color,"), so it does not conflict. Two non-empty spans
+    conflict when their intervals intersect; spans that only touch end-to-start
+    (a [3, 5] beside a [5, 8]) do not."""
+    if s1 == e1 and s2 == e2:          # two insertions: only at the same point
         return s1 == s2
-    if s1 == e1:
-        return s2 < s1 < e2
-    if s2 == e2:
-        return s1 < s2 < e1
-    return s1 < e2 and s2 < e1
+    if s1 == e1:                        # s1 an insertion into the s2..e2 span
+        return s2 <= s1 < e2
+    if s2 == e2:                        # s2 an insertion into the s1..e1 span
+        return s1 <= s2 < e1
+    return s1 < e2 and s2 < e1         # two spans: half-open interval overlap
 
 
 def _status(f: Finding, status: str, anchor: Anchor | None = None) -> Finding:
