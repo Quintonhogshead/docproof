@@ -305,6 +305,13 @@ class RewriteConfig(BaseModel):
     # Candidate size guards: a diff bigger than these is a paraphrase, not a fix.
     max_span: int = Field(default=48, ge=1)     # chars in the delete or insert
     max_added: int = Field(default=24, ge=0)    # net chars a fix may add
+    # How many independent retypes to take of each chunk. The retype is
+    # stochastic — two passes catch overlapping but not identical errors — so
+    # taking several and unioning their diffs lifts recall (the confirm step
+    # still rules on each candidate, so extra candidates cost precision nothing,
+    # only tokens). 1 is a single pass (no ensemble); each extra sample is
+    # another whole retype in cost. Rides the batch like the first.
+    samples: int = Field(default=1, ge=1)
     # Concurrency for the SYNCHRONOUS retype path only (run_sync, or the
     # different-model fallback at collect). When the retype rides the review
     # batch — the default, model unset — the batch handles concurrency and this

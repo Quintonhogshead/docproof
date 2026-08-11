@@ -133,16 +133,38 @@ def candidates_from_result(chunk: Chunk, parsed: dict | None, *,
     return cands
 
 
+def dedup_candidates(cands: Sequence[RewriteCandidate]) -> list[RewriteCandidate]:
+    """The union of candidates from independent retypes: an exact duplicate (same
+    span AND replacement, from two samples that caught the same error) collapses
+    to one, while two different fixes for the same span are both kept — the
+    confirm pass rules on each and the validator keeps the first to claim it. So
+    ensembling only ever adds coverage, never a contradiction the router can't
+    settle."""
+    seen: set[tuple[str, int, int, str]] = set()
+    out: list[RewriteCandidate] = []
+    for c in cands:
+        key = (c.para_id, c.start, c.end, c.replacement)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
 def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
             max_tokens: int, usage: Usage, max_add: int = 24,
-            max_span: int = 48, workers: int = 8) -> list[RewriteCandidate]:
-    """Rewrite every paragraph live (one call per chunk) and return the
-    size-guarded diffs as candidates. The synchronous path; batch review builds
+            max_span: int = 48, workers: int = 8, samples: int = 1
+            ) -> list[RewriteCandidate]:
+    """Rewrite every paragraph live and return the size-guarded diffs as
+    candidates. With `samples` > 1 each chunk is retyped that many times and the
+    diffs are unioned — a stochastic retype catches overlapping but not identical
+    errors, so the union lifts recall. The synchronous path; batch review builds
     the same requests into its batch and calls `candidates_from_result` at
     collect. Calls are independent, so they run concurrently."""
     schema = rewrite_schema()
 
-    def do(chunk: Chunk):
+    def do(job: tuple[Chunk, int]):
+        chunk, _sample = job
         if not chunk.paragraphs:
             return []
         res = provider.complete_structured(
@@ -156,12 +178,14 @@ def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
         return candidates_from_result(chunk, res.parsed, max_add=max_add,
                                       max_span=max_span)
 
+    jobs = [(chunk, s) for s in range(max(1, samples)) for chunk in chunks]
     cands: list[RewriteCandidate] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for group in ex.map(do, chunks):
+        for group in ex.map(do, jobs):
             cands.extend(group)
-    log.info("Rewrite: %d candidate diff(s) from %d chunk(s)", len(cands),
-             len(chunks))
+    cands = dedup_candidates(cands)
+    log.info("Rewrite: %d candidate diff(s) from %d chunk(s) x %d sample(s)",
+             len(cands), len(chunks), max(1, samples))
     return cands
 
 
