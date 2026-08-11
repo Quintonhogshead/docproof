@@ -579,7 +579,10 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings.extend(case_drift_findings(
-                glossary, prepared.doc.paragraphs, ids))
+                glossary, prepared.doc.paragraphs, ids,
+                scan=cfg.glossary.case_drift_scan,
+                edit_dominance=cfg.glossary.case_edit_dominance,
+                edit_min_count=cfg.glossary.case_edit_min_count))
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         from .adjudicate import adjudicate, merge_candidates

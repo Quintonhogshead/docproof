@@ -138,50 +138,174 @@ def suspects_to_candidates(glossary: Glossary,
 
 # --- case drift ---------------------------------------------------------------
 
+_ARTICLES = {"the", "a", "an"}
+
+
+def _canon_core(canon: str) -> str:
+    """The canonical proper noun with a leading article dropped: "The Upper
+    City" -> "Upper City". An article's casing tracks sentence position, not the
+    name — comparing it would flag every correct mid-sentence "the Upper City"
+    against a "The Upper City" canonical — so only the content words are the
+    signal. Whitespace is collapsed so a match's spacing never reads as drift."""
+    toks = re.sub(r"\s+", " ", canon).strip().split(" ")
+    if len(toks) > 1 and toks[0].lower() in _ARTICLES:
+        toks = toks[1:]
+    return " ".join(toks)
+
+
+def _carries_casing(core: str) -> bool:
+    """A phrase whose casing is worth enforcing: multi-word, or a single word
+    with a capital past its first letter (McCoy). A lone leading-capital word
+    (Squall, Voyager) is indistinguishable from a common noun — a weather
+    "squall" is not a drift of "The Squall" — so it is left alone."""
+    return " " in core or any(c.isupper() for c in core[1:])
+
+
+def _core_pattern(core: str) -> "re.Pattern[str]":
+    """A word-bounded, case-insensitive match for the core's token sequence,
+    tolerant of the whitespace between tokens."""
+    body = r"\s+".join(re.escape(t) for t in core.split(" "))
+    return re.compile(r"(?<![A-Za-z’'])" + body + r"(?![A-Za-z’'])", re.I)
+
+
 def _casing_only_variants(entry: GlossaryEntry) -> list[str]:
     """The entry's variants that differ from the canonical form ONLY in casing —
-    "Upper city" against "Upper City", not "Annie" against "Anastasia". Case
-    drift is the one thing safe to raise from a glossary; a different name is a
-    judgment we do not have."""
+    "Upper city" against "Upper City", not "Annie" against "Anastasia". Used when
+    deterministic scanning is off; a different name is a judgment we do not
+    have."""
     canon_key = entry.canonical.lower()
     return [v for v in entry.variants
             if v.lower() == canon_key and v != entry.canonical]
 
 
 def case_drift_findings(glossary: Glossary, paragraphs: Sequence[ParagraphRef],
-                        ids) -> list[Finding]:
+                        ids, *, scan: bool = True,
+                        edit_dominance: int = 5,
+                        edit_min_count: int = 8) -> list[Finding]:
     """Where a proper noun the glossary gives a canonical casing for appears in
-    another casing, ask. A query, never a silent edit: "the upper city" may be a
-    common-noun description rather than the place, and only the author knows —
-    the glossary raises it, it does not decide it."""
+    another casing, correct it or ask.
+
+    With `scan` (the default), each catalogued proper noun's casings are tallied
+    across the whole book, so a stray is caught whether or not the glossary model
+    listed it as a variant — which it usually does not. A stray is a margin query
+    by default ("the upper city" may be a description, not the place), but a
+    tracked change when the canonical casing overwhelmingly owns the book (a
+    multi-word name seen `edit_min_count`+ times and leading its strays
+    `edit_dominance`-to-one), the way the consistency scan corrects a dominant
+    name spelling. Without `scan`, only the model's self-reported casing variants
+    are raised, always as queries."""
     findings: list[Finding] = []
+    seen_cores: set[str] = set()
     for entry in glossary.entries:
-        canon = entry.canonical
-        # Only proper nouns with a capital past the first character carry real
-        # casing information; a plain "Sword" tells us nothing a common noun
-        # would not. This keeps the check off ordinary words.
-        if not any(c.isupper() for c in canon[1:]) and " " not in canon:
+        core = _canon_core(entry.canonical)
+        if not _carries_casing(core):
             continue
-        for variant in _casing_only_variants(entry):
-            pat = re.compile(_WORD_BOUND.format(re.escape(variant)))
-            for p in paragraphs:
-                for m in pat.finditer(p.text):
-                    window, lo, occ = _window(p.text, m.start(), m.end())
-                    corrected = (window[:m.start() - lo] + canon
-                                 + window[m.end() - lo:])
-                    findings.append(Finding(
-                        finding_id=f"g-{next(ids):04d}",
-                        chunk_id="glossary",
-                        para_id=p.para_id,
-                        error_type="capitalization",
-                        original_text=window,
-                        occurrence=occ,
-                        corrected_text=corrected,
-                        explanation=f'Elsewhere written "{canon}"; is this the '
-                                    f'same name?',
-                        confidence="medium",
-                        force_query=True))       # ask; never silently recase
+        key = core.lower()
+        if key in seen_cores:            # two entries, one name — count it once
+            continue
+        seen_cores.add(key)
+        if scan:
+            findings += _scan_drift(core, paragraphs, ids,
+                                    edit_dominance=edit_dominance,
+                                    edit_min_count=edit_min_count)
+        else:
+            for variant in _casing_only_variants(entry):
+                findings += _emit_drift(core, variant, paragraphs, ids,
+                                        force_query=True)
     return findings
+
+
+def _proper_styled(form: str) -> bool:
+    """Whether a casing reads as a deliberate proper noun rather than an ordinary
+    phrase. A capital on a word past the first is the tell — the first word is
+    capitalised by sentence position too, but "of Force" or "Upper City" is not.
+    A single word counts only on an internal capital (McCoy)."""
+    words = form.split()
+    if len(words) == 1:
+        return any(c.isupper() for c in words[0][1:])
+    return any(w[:1].isupper() for w in words[1:])
+
+
+# How much of a catalogued phrase's usage must be styled as a proper noun before
+# its lowercase spellings read as strays rather than the author's convention. A
+# genuine name split ("Upper City" 5 / "upper city" 8) clears this and is asked
+# about; a phrase the author overwhelmingly lowercases ("domino cloak" 75 / 2)
+# does not, and is left alone. Sentence-initial capitals do not count toward it —
+# they only capitalise the first word, which is not proper-noun styling.
+_MIN_PROPER_FRACTION = 0.25
+
+
+def _scan_drift(core: str, paragraphs: Sequence[ParagraphRef], ids, *,
+                edit_dominance: int, edit_min_count: int) -> list[Finding]:
+    """Tally every casing `core` takes in the book and raise the strays that
+    deviate from the intended proper-noun styling.
+
+    Direction follows the text, not the glossary's canonical: the model
+    over-catalogs, tagging a phrase the author deliberately lowercases ("domino
+    cloak", 75×) as a proper noun. So the check fires only when a real share of
+    the usage (`_MIN_PROPER_FRACTION`) is styled as a proper noun; below that the
+    book's convention is lowercase and there is nothing to fix. The intended form
+    is the most common proper-noun styling; occurrences that differ are corrected
+    when it owns the book decisively (a multi-word name seen edit_min_count+
+    times, leading edit_dominance-to-one) and asked about otherwise, since a
+    near-even split is a real question the author must settle."""
+    pat = _core_pattern(core)
+    hits: list[tuple[ParagraphRef, "re.Match[str]"]] = []
+    counts: dict[str, int] = {}
+    for p in paragraphs:
+        for m in pat.finditer(p.text):
+            hits.append((p, m))
+            form = re.sub(r"\s+", " ", m.group(0))
+            counts[form] = counts.get(form, 0) + 1
+    if len(counts) < 2:                       # one casing only — no drift
+        return []
+    total = sum(counts.values())
+    proper = {f: n for f, n in counts.items() if _proper_styled(f)}
+    if not proper or sum(proper.values()) < _MIN_PROPER_FRACTION * total:
+        return []                             # the book's convention is lowercase
+    # The intended form is the most common proper-noun styling.
+    target = max(proper, key=lambda f: counts[f])
+    target_n = counts[target]
+    stray_n = total - target_n
+    dominant = (" " in target and target_n >= edit_min_count
+                and target_n >= edit_dominance * stray_n)
+    findings: list[Finding] = []
+    for p, m in hits:
+        if re.sub(r"\s+", " ", m.group(0)) == target:
+            continue
+        findings += _finding_for(target, p, m, ids, force_query=not dominant)
+    return findings
+
+
+def _emit_drift(core: str, variant: str, paragraphs: Sequence[ParagraphRef],
+                ids, *, force_query: bool) -> list[Finding]:
+    """The model-listed-variant path: recase every occurrence of one known
+    casing variant to the core."""
+    pat = re.compile(_WORD_BOUND.format(re.escape(variant)))
+    findings: list[Finding] = []
+    for p in paragraphs:
+        for m in pat.finditer(p.text):
+            findings += _finding_for(core, p, m, ids, force_query=force_query)
+    return findings
+
+
+def _finding_for(core: str, p: ParagraphRef, m: "re.Match[str]", ids, *,
+                 force_query: bool) -> list[Finding]:
+    window, lo, occ = _window(p.text, m.start(), m.end())
+    corrected = window[:m.start() - lo] + core + window[m.end() - lo:]
+    explanation = (f'Styled "{core}" elsewhere in the book.' if not force_query
+                   else f'Elsewhere written "{core}"; is this the same name?')
+    return [Finding(
+        finding_id=f"g-{next(ids):04d}",
+        chunk_id="glossary",
+        para_id=p.para_id,
+        error_type="capitalization",
+        original_text=window,
+        occurrence=occ,
+        corrected_text=corrected,
+        explanation=explanation,
+        confidence="medium",
+        force_query=force_query)]
 
 
 def _window(text: str, start: int, end: int) -> tuple[str, int, int]:

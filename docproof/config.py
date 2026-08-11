@@ -276,6 +276,25 @@ class GlossaryConfig(BaseModel):
     # Raise the glossary's casing drift as margin queries. Off leaves only the
     # suspected-misspelling half (which the adjudication pass carries).
     case_drift: bool = True
+    # How the case-drift check finds a proper noun's stray casings. scan (the
+    # default) discovers them deterministically — for each catalogued proper
+    # noun it reads the whole book and tallies every casing the phrase actually
+    # takes, so a stray is caught whether or not the glossary model happened to
+    # list it as a variant (it usually does not). Off falls back to the model's
+    # self-reported variants only. A leading article (the/a/an) is normalised
+    # out before comparing, so "the Upper City" is never flagged against a
+    # "The Upper City" canonical — only a content word's casing counts.
+    case_drift_scan: bool = True
+    # Routing for a discovered stray. By default a stray is asked about (a
+    # margin query, never a silent recase — "the upper city" may be a common
+    # description, not the place). But when the canonical casing overwhelmingly
+    # owns the book — a multi-word proper noun seen at least case_edit_min_count
+    # times and outnumbering its strays case_edit_dominance-to-one — the stray
+    # is corrected as a tracked change instead, the way the consistency scan
+    # corrects a clearly-dominant name spelling. Single-word terms are always
+    # asked (they collide with common nouns: a weather "squall" vs "The Squall").
+    case_edit_dominance: int = Field(default=5, ge=2)
+    case_edit_min_count: int = Field(default=8, ge=2)
 
     @model_validator(mode="after")
     def _known_model(self):

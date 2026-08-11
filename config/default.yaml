@@ -113,6 +113,13 @@ glossary:
   effort: medium
   max_output_tokens: 8000
   case_drift: true          # raise proper-noun casing drift as margin queries
+  case_drift_scan: true     # discover strays across the whole book (not just the
+                            # variants the model self-reports); leading article
+                            # normalised out so "the Upper City" is never flagged
+  case_edit_dominance: 5    # a multi-word name leading its strays this many to
+                            # one (and seen case_edit_min_count+ times) corrects
+                            # the stray as a tracked change; otherwise it asks
+  case_edit_min_count: 8
 
 # Real-word typos the plain passes glide over (staired, a protected repeated
 # misspelling), found by local signals and ruled on by the model in context.
