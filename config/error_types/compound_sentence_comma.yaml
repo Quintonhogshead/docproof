@@ -1,6 +1,6 @@
 key: compound_sentence_comma
 name: Comma before a coordinating conjunction (compound sentence)
-version: 1
+version: 2
 
 detection_prompt: |
   When a coordinating conjunction (and, but, or, nor, for, yet, so) joins two
@@ -23,6 +23,14 @@ detection_prompt: |
     nothing." / "I wondered where this was going but decided not to ask." take
     NO comma. This is by far the most common false positive — if you cannot
     point to a distinct subject after the conjunction, do not flag.
+  - A COMPOUND SUBJECT: two subjects joined by the conjunction but sharing one
+    verb, where the FIRST half is not a finished clause. "Cameron and I are on
+    the way." / "My family and I decided to stay." / "You and I have met
+    before." A pronoun right after the conjunction ("and I", "and we", "and
+    you") reads like a new subject, but if nothing before the conjunction can
+    stand alone as a sentence, the conjunction is joining two subjects, not two
+    clauses — no comma. This is the mirror of the compound predicate: check that
+    BOTH sides are independent, not only the half after the conjunction.
   - Two very short independent clauses, where CMOS lets the comma go: "He ran
     and she followed." Report at most at low confidence.
   - The conjunction joining words, phrases, or list items rather than clauses:
@@ -67,3 +75,7 @@ examples:
       corrected_text: "The council would not move, so the envoy went alone."
       explanation: "Independent clauses joined by 'so' take a comma before it."
       confidence: high
+  - text: "Cameron and I are on the way to the meeting."
+    finding: null
+  - text: "My family and I were grateful for everything they had done."
+    finding: null
