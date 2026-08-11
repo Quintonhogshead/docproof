@@ -74,6 +74,30 @@ for character. Preserve all original spacing and quotation marks. Return every
 paragraph by its given id, in the `corrected` field."""
 
 
+# Prompt-diverse sampling: when several retypes are taken (rewrite.samples > 1),
+# each looks hardest for a different class of error rather than asking the same
+# question twice. They share the same FIX/DON'T contract — only the emphasis
+# differs — so precision is unchanged and the union covers more. Lens 0 is the
+# plain pass, so a single-sample run is byte-for-byte the original prompt.
+_LENS_FOCUS = [
+    "",
+    "\n\nFOCUS especially on small, easily-skipped omissions — the errors that "
+    "read as correct at a glance: a missing \"a\"/\"an\"/\"the\"/\"of\"/\"to\", a "
+    "dropped plural -s, a missing -ly on an adverb, a letter left out of a word "
+    "or a name, a missing \"it\"/\"is\"/\"not\". Look for them deliberately.",
+    "\n\nFOCUS especially on agreement and word form: subject-verb agreement, "
+    "pronoun case (\"between her and me\", not \"her and I\"), "
+    "pronoun-antecedent agreement, verb-tense consistency, and the correct "
+    "preposition for the idiom. Flag only a clear error, never a style choice.",
+]
+
+
+def lens_system(sample: int) -> str:
+    """The propose system prompt for one sample. Lens 0 is the plain prompt;
+    later samples add a focus, cycling if there are more samples than lenses."""
+    return PROPOSE_SYSTEM + _LENS_FOCUS[sample % len(_LENS_FOCUS)]
+
+
 class _Para(BaseModel):
     id: str = Field(description="the paragraph id exactly as given")
     corrected: str = Field(description="the minimally-corrected paragraph")
@@ -153,22 +177,24 @@ def dedup_candidates(cands: Sequence[RewriteCandidate]) -> list[RewriteCandidate
 
 def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
             max_tokens: int, usage: Usage, max_add: int = 24,
-            max_span: int = 48, workers: int = 8, samples: int = 1
-            ) -> list[RewriteCandidate]:
+            max_span: int = 48, workers: int = 8, samples: int = 1,
+            diverse: bool = True) -> list[RewriteCandidate]:
     """Rewrite every paragraph live and return the size-guarded diffs as
     candidates. With `samples` > 1 each chunk is retyped that many times and the
     diffs are unioned — a stochastic retype catches overlapping but not identical
-    errors, so the union lifts recall. The synchronous path; batch review builds
-    the same requests into its batch and calls `candidates_from_result` at
-    collect. Calls are independent, so they run concurrently."""
+    errors, so the union lifts recall. With `diverse`, each sample looks hardest
+    for a different error class (see lens_system); without it they share the plain
+    prompt. The synchronous path; batch review builds the same requests into its
+    batch and calls `candidates_from_result` at collect. Calls run concurrently."""
     schema = rewrite_schema()
 
     def do(job: tuple[Chunk, int]):
-        chunk, _sample = job
+        chunk, sample = job
         if not chunk.paragraphs:
             return []
+        system = lens_system(sample) if diverse else PROPOSE_SYSTEM
         res = provider.complete_structured(
-            model=model, system=PROPOSE_SYSTEM, user=render(chunk.paragraphs),
+            model=model, system=system, user=render(chunk.paragraphs),
             schema=schema, schema_name="rewritten", max_tokens=max_tokens)
         usage.add(res.usage)
         if res.stop_reason != "ok" or not res.parsed:
@@ -249,11 +275,18 @@ def _explanation(c: RewriteCandidate) -> str:
 def confirm(candidates: Sequence[RewriteCandidate],
             paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             model: str, max_tokens: int, usage: Usage, ids,
-            batch_size: int = 40, edit_confidence: str = "high") -> list[Finding]:
+            batch_size: int = 40, edit_confidence: str = "high",
+            reject_sink: list | None = None) -> list[Finding]:
     """Skeptically rule on each candidate in context and turn the affirmed ones
     into Findings. Only an error affirmed at `edit_confidence` becomes a tracked
     change; a softer affirmation is force_query'd to the margin, a "keep" yields
-    nothing — the same routing that makes the adjudication pass safe."""
+    nothing — the same routing that makes the adjudication pass safe.
+
+    `reject_sink`, if given, collects every candidate the confirm step KEPT (ruled
+    not-an-error). These are where recall dies at the gate: a candidate the rewrite
+    pass surfaced and confirm then discarded. Persisting them lets a compare say
+    how many were real errors confirm wrongly rejected — the evidence for whether
+    a stronger confirm model is worth its cost."""
     if not candidates:
         return []
     text_of = {p.para_id: p.text for p in paragraphs}
@@ -287,6 +320,11 @@ def confirm(candidates: Sequence[RewriteCandidate],
                 continue
             c = window[v.index - 1]
             if not v.is_error:
+                if reject_sink is not None:
+                    reject_sink.append({
+                        "para_id": c.para_id, "start": c.start, "end": c.end,
+                        "original": c.original, "replacement": c.replacement,
+                        "confidence": v.confidence})
                 continue
             para_text = text_of[c.para_id]
             conf = v.confidence if v.confidence in _RANK else "low"
@@ -303,6 +341,8 @@ def confirm(candidates: Sequence[RewriteCandidate],
                 confidence=conf,
                 # Only a beyond-doubt affirmation edits; softer ones ask.
                 force_query=_RANK[conf] < edit_floor))
-    log.info("Rewrite: %d correction(s) from %d candidate(s)", len(findings),
-             len(candidates))
+    kept = len(reject_sink) if reject_sink is not None else 0
+    log.info("Rewrite: %d correction(s) from %d candidate(s)%s", len(findings),
+             len(candidates),
+             f" ({kept} kept as not-an-error)" if reject_sink is not None else "")
     return findings

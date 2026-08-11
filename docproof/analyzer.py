@@ -156,6 +156,7 @@ def build_system_prompt(types: Sequence[ErrorType], *,
                         explanations: bool = True,
                         vocabulary: str = "",
                         conventions: str = "",
+                        story: str = "",
                         ensemble: bool = False) -> str:
     parts = [base_rules(explanations=explanations)]
     if len(types) > 1:
@@ -165,6 +166,11 @@ def build_system_prompt(types: Sequence[ErrorType], *,
             f"against all of them:\n{index}\n\nEach type is defined in its own "
             f"section below. A section's do-not-flag list applies only to that "
             f"section — it never licenses ignoring a different type's error.")
+    if story:
+        # Whole-book narrative facts (narrator, tense, character pronouns), so a
+        # per-paragraph pass can catch a pronoun/name/tense wrong for the story.
+        # Caches with the rest of the system prompt; billed once per document.
+        parts.append(story)
     if conventions:
         # Before the vocabulary and before the type sections: a rule that
         # differs by variant has to be settled before the model reads a type
@@ -206,7 +212,7 @@ class Analyzer:
 
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
                  provider: Provider, finding_ids: itertools.count,
-                 vocabulary: str = "", conventions: str = ""):
+                 vocabulary: str = "", conventions: str = "", story: str = ""):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
@@ -220,6 +226,7 @@ class Analyzer:
                                                  explanations=explanations,
                                                  vocabulary=vocabulary,
                                                  conventions=conventions,
+                                                 story=story,
                                                  ensemble=cfg.ensemble.verifies)
         self.output_model = build_output_model(self.keys,
                                                explanations=explanations)

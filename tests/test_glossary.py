@@ -148,3 +148,42 @@ def test_case_drift_can_be_absent_when_no_variants():
                                         variants=[])])
     assert case_drift_findings(g, [_para("body-0", "The Squall grew.")],
                                itertools.count(1)) == []
+
+
+# --- cache --------------------------------------------------------------------
+
+def test_glossary_cache_writes_then_reuses_without_a_second_call(tmp_path):
+    prov = FakeProvider([ProviderResult(parsed={
+        "entries": [{"canonical": "Upper City", "kind": "place", "variants": []}],
+        "suspected_misspellings": []})])
+    paras = [_para("body-0", "The Upper City gleamed above the plain.")]
+    g1 = build_glossary(paras, prov, model="m", max_tokens=100, usage=Usage(),
+                        cache_dir=str(tmp_path))
+    assert g1.entries[0].canonical == "Upper City"
+    assert len(prov.results) == 0                     # the one scripted result was used
+    # A second build with NO scripted results must still succeed — served from
+    # cache, no API call. (FakeProvider with an empty queue returns an empty
+    # findings payload, which would NOT parse as a Glossary, so a cache miss
+    # here would surface as an empty glossary, not this one.)
+    prov2 = FakeProvider([])
+    g2 = build_glossary(paras, prov2, model="m", max_tokens=100, usage=Usage(),
+                        cache_dir=str(tmp_path))
+    assert [e.canonical for e in g2.entries] == ["Upper City"]
+    assert prov2.calls == []                           # never called the provider
+
+
+def test_glossary_cache_key_changes_with_the_model(tmp_path):
+    paras = [_para("body-0", "The Upper City gleamed above the plain.")]
+    prov = FakeProvider([ProviderResult(parsed={
+        "entries": [{"canonical": "Upper City", "kind": "place", "variants": []}],
+        "suspected_misspellings": []})])
+    build_glossary(paras, prov, model="model-a", max_tokens=100, usage=Usage(),
+                   cache_dir=str(tmp_path))
+    # A different model must miss the cache and read again (here: a fresh result).
+    prov2 = FakeProvider([ProviderResult(parsed={
+        "entries": [{"canonical": "Lower City", "kind": "place", "variants": []}],
+        "suspected_misspellings": []})])
+    g = build_glossary(paras, prov2, model="model-b", max_tokens=100, usage=Usage(),
+                       cache_dir=str(tmp_path))
+    assert [e.canonical for e in g.entries] == ["Lower City"]
+    assert prov2.calls != []                           # the different model re-read

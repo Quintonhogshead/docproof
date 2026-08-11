@@ -110,6 +110,19 @@ def custom_id_rewrite(chunk_id: str, sample: int = 0) -> str:
     return f"{REWRITE_PREFIX}{sample}-{chunk_id}"
 
 
+def _write_rewrite_rejects(out_dir: str | Path, rejects: list) -> None:
+    """Persist the candidates confirm kept-as-not-an-error, for a compare to
+    overlay on a human proofread. Diagnostic only — never part of the review."""
+    try:
+        d = Path(out_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "rewrite_rejects.json").write_text(
+            json.dumps({"rejects": rejects}, indent=1), encoding="utf-8")
+        log.info("Wrote %d rewrite reject(s) to rewrite_rejects.json", len(rejects))
+    except OSError as e:
+        log.warning("could not write rewrite_rejects.json: %s", e)
+
+
 def rewrite_batched(cfg: Config) -> bool:
     """Whether the rewrite propose calls can ride the batch. They can only when
     the pass is on and its model is the batch's model (a batch is one model);
@@ -198,7 +211,7 @@ def pass_prompts(cfg: Config, prepared: Prepared) -> dict[str, str]:
     """The system prompt each pass will send, keyed by the pass label."""
     analyzers = build_analyzers(cfg, prepared.groups, None,
                                 itertools.count(1), prepared.vocabulary,
-                                prepared.conventions)
+                                prepared.conventions, prepared.story_sheet)
     return {a.label: a.system_prompt for a in analyzers}
 
 
@@ -212,7 +225,7 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
 
     analyzers = build_analyzers(cfg, prepared.groups, None,
                                 itertools.count(1), prepared.vocabulary,
-                                prepared.conventions)
+                                prepared.conventions, prepared.story_sheet)
     requests = [
         BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
                      system=analyzer.system_prompt,
@@ -223,12 +236,14 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
         for chunk in prepared.chunks
     ]
     if rewrite_batched(cfg) and prepared.whole_document:
-        from .rewrite import PROPOSE_SYSTEM, render, rewrite_schema
+        from .rewrite import PROPOSE_SYSTEM, lens_system, render, rewrite_schema
         schema = rewrite_schema()
         requests += [
-            BatchRequest(custom_id=custom_id_rewrite(chunk.chunk_id, s),
-                         system=PROPOSE_SYSTEM, user=render(chunk.paragraphs),
-                         schema=schema, schema_name="rewritten")
+            BatchRequest(
+                custom_id=custom_id_rewrite(chunk.chunk_id, s),
+                system=lens_system(s) if cfg.rewrite.diverse else PROPOSE_SYSTEM,
+                user=render(chunk.paragraphs),
+                schema=schema, schema_name="rewritten")
             for s in range(cfg.rewrite.samples)
             for chunk in prepared.chunks if chunk.paragraphs
         ]
@@ -292,7 +307,8 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
         glossary = build_glossary(
             prepared.doc.paragraphs, build_provider(gcfg),
             model=cfg.glossary.model,
-            max_tokens=cfg.glossary.max_output_tokens, usage=usage)
+            max_tokens=cfg.glossary.max_output_tokens, usage=usage,
+            cache_dir=cfg.glossary.cache_dir)
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings += case_drift_findings(
@@ -344,13 +360,23 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
                 max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
                 max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
                 workers=cfg.rewrite.workers, samples=cfg.rewrite.samples)
+        confirm_provider, confirm_model = rw_provider, rcfg.api.model
+        if cfg.rewrite.confirm_model:
+            ccfg = cfg.model_copy(deep=True)
+            ccfg.api.model = cfg.rewrite.confirm_model
+            ccfg.api.effort = cfg.rewrite.confirm_effort
+            confirm_provider, confirm_model = build_provider(ccfg), cfg.rewrite.confirm_model
+        rewrite_rejects = [] if cfg.rewrite.log_rejects else None
         findings += confirm(
-            rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
+            rcands, prepared.doc.paragraphs, confirm_provider, model=confirm_model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
-            edit_confidence=cfg.rewrite.edit_confidence)
+            edit_confidence=cfg.rewrite.edit_confidence,
+            reject_sink=rewrite_rejects)
 
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
+    if cfg.rewrite.enabled and prepared.whole_document and rewrite_rejects:
+        _write_rewrite_rejects(out, rewrite_rejects)
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=source, batch=True, coverage=coverage)
     job.state = "done"
@@ -375,7 +401,8 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
     ids = itertools.count(1)
     usage = Usage()
     analyzers = build_analyzers(cfg, prepared.groups, provider, ids,
-                                prepared.vocabulary, prepared.conventions)
+                                prepared.vocabulary, prepared.conventions,
+                                prepared.story_sheet)
     findings: list = []
     recovered = 0
     unrecovered = 0

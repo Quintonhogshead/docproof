@@ -112,6 +112,10 @@ glossary:
                             # subtle semantic tail at ~40x the cost — pick per book.
   effort: medium
   max_output_tokens: 8000
+  cache_dir:                # a path pins the read per draft (keyed by text+model+
+                            # prompt): re-runs of an unchanged draft skip the cost
+                            # and see the SAME glossary, so case-drift stops
+                            # wobbling run to run. Unset = no cache.
   case_drift: true          # raise proper-noun casing drift as margin queries
   case_drift_scan: true     # discover strays across the whole book (not just the
                             # variants the model self-reports); leading article
@@ -120,6 +124,21 @@ glossary:
                             # one (and seen case_edit_min_count+ times) corrects
                             # the stray as a tracked change; otherwise it asks
   case_edit_min_count: 8
+
+# The whole-book story sheet: one read that gives the detector passes the
+# narrative facts a per-paragraph check cannot know — who narrates, in what
+# person and tense, and each character's pronouns — injected into every
+# detector's system prompt (cached per document, like the vocabulary). It lets a
+# paragraph-in-isolation pass catch a pronoun, name, or tense that is wrong for
+# the STORY (his/her, I/you, a tense slip), the wrong-word errors it otherwise
+# glides over. Off by default: a whole extra read, opt-in until proven.
+# Whole-document only. See docproof/storysheet.py.
+storysheet:
+  enabled: false
+  model: gpt-5.6-luna
+  effort: medium
+  max_output_tokens: 4000
+  cache_dir:                # a path pins the read per draft (text+model+prompt)
 
 # Real-word typos the plain passes glide over (staired, a protected repeated
 # misspelling), found by local signals and ruled on by the model in context.
@@ -156,10 +175,19 @@ rewrite:
   samples: 1                # independent retypes per chunk, unioned. >1 lifts recall
                             # (a stochastic retype misses different errors each pass);
                             # each extra sample is another whole retype in cost
+  diverse: true             # point each sample at a different error class (small
+                            # omissions, agreement, ...) instead of asking twice;
+                            # covers more at the same cost. No effect at samples=1
   workers: 8               # concurrency for the SYNC path only (run_sync, or the
                             # different-model fallback); the batch handles its own
   batch_size: 40            # candidates per confirm request
   edit_confidence: high     # at/above this an affirmed fix edits; softer -> query
+  confirm_model:            # unset = the rewrite model confirms its own diffs. A
+                            # stronger id here (any vendor) gates recall better for
+                            # little cost — confirm prompts are short. Runs sync.
+  confirm_effort: medium
+  log_rejects: false        # write confirm's kept-as-not-an-error candidates to
+                            # rewrite_rejects.json (diagnostic; batch collect only)
 
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset

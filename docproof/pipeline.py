@@ -71,6 +71,10 @@ class Prepared:
     # document only (it reads the spell scan's lexicon), and consumed on the
     # synchronous path; empty otherwise. See docproof/adjudicate.py.
     adjudicate_candidates: list = field(default_factory=list)
+    # The whole-book story sheet as a ready-to-inject system-prompt section
+    # (narrator, tense, character pronouns), or "" when the pass is off. Built at
+    # prepare time because it feeds the detector prompts. See docproof/storysheet.py.
+    story_sheet: str = ""
     # Whether this run covers the whole manuscript. The document-wide model work
     # (the glossary pass) only means something on a full run, the same way the
     # consistency scan does; a two-chapter review must not spend on it.
@@ -283,6 +287,24 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                 near_miss_gap=cfg.adjudicate.near_miss_gap,
                 min_len=cfg.adjudicate.min_word_len,
                 max_candidates=cfg.adjudicate.max_candidates)
+
+        # The story sheet is the one whole-book read that happens HERE, at
+        # prepare time, not at collect: it feeds the detector system prompts,
+        # which are built (and, for a batch, sent) now. One cacheable call.
+        story_sheet = ""
+        if cfg.storysheet.enabled and whole:
+            from .providers import build_provider
+            from .storysheet import build_storysheet, prompt_section
+            scfg = cfg.model_copy(deep=True)
+            scfg.api.model = cfg.storysheet.model
+            scfg.api.effort = cfg.storysheet.effort
+            usage = Usage()
+            sheet = build_storysheet(
+                doc.paragraphs, build_provider(scfg),
+                model=cfg.storysheet.model,
+                max_tokens=cfg.storysheet.max_output_tokens, usage=usage,
+                cache_dir=cfg.storysheet.cache_dir)
+            story_sheet = prompt_section(sheet)
     else:
         # Counts-only preflight: none of the discardable whole-document work.
         sweep_findings, sweep_reports = [], []
@@ -290,6 +312,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         consistency = ConsistencyReport()
         consistency_findings = []
         adjudicate_candidates = []
+        story_sheet = ""
 
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
@@ -297,6 +320,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     variant=variant, consistency=consistency,
                     consistency_findings=consistency_findings,
                     adjudicate_candidates=adjudicate_candidates,
+                    story_sheet=story_sheet,
                     whole_document=whole,
                     n_detectors=len(cfg.ensemble.detectors) or 1)
 
@@ -324,8 +348,10 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     provider: Provider | None,
                     finding_ids: itertools.count,
                     vocabulary: str = "",
-                    conventions: str = "") -> list[Analyzer]:
-    return [Analyzer(cfg, group, provider, finding_ids, vocabulary, conventions)
+                    conventions: str = "",
+                    story: str = "") -> list[Analyzer]:
+    return [Analyzer(cfg, group, provider, finding_ids, vocabulary, conventions,
+                     story)
             for group in groups]
 
 
@@ -482,7 +508,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             dprov = provider_factory(dcfg)
         det_analyzers.append(build_analyzers(
             dcfg, prepared.groups, dprov, ids,
-            prepared.vocabulary, prepared.conventions))
+            prepared.vocabulary, prepared.conventions, prepared.story_sheet))
 
     # The work list, in the order results must be folded back in: pass, then
     # chunk, then detector. With one detector this is (pass, chunk), the legacy
@@ -575,7 +601,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         glossary = build_glossary(
             prepared.doc.paragraphs, provider_factory(gcfg),
             model=cfg.glossary.model,
-            max_tokens=cfg.glossary.max_output_tokens, usage=usage)
+            max_tokens=cfg.glossary.max_output_tokens, usage=usage,
+            cache_dir=cfg.glossary.cache_dir)
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings.extend(case_drift_findings(
@@ -610,9 +637,17 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             prepared.chunks, rw_provider, model=rcfg.api.model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
             max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
-            workers=cfg.rewrite.workers, samples=cfg.rewrite.samples)
+            workers=cfg.rewrite.workers, samples=cfg.rewrite.samples,
+            diverse=cfg.rewrite.diverse)
+        confirm_provider, confirm_model = rw_provider, rcfg.api.model
+        if cfg.rewrite.confirm_model:
+            ccfg = cfg.model_copy(deep=True)
+            ccfg.api.model = cfg.rewrite.confirm_model
+            ccfg.api.effort = cfg.rewrite.confirm_effort
+            confirm_provider = provider_factory(ccfg)
+            confirm_model = cfg.rewrite.confirm_model
         findings.extend(confirm(
-            rcands, prepared.doc.paragraphs, rw_provider, model=rcfg.api.model,
+            rcands, prepared.doc.paragraphs, confirm_provider, model=confirm_model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
             edit_confidence=cfg.rewrite.edit_confidence))
