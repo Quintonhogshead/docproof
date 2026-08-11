@@ -1,0 +1,69 @@
+key: compound_sentence_comma
+name: Comma before a coordinating conjunction (compound sentence)
+version: 1
+
+detection_prompt: |
+  When a coordinating conjunction (and, but, or, nor, for, yet, so) joins two
+  INDEPENDENT clauses — each with its own subject and verb, each able to stand
+  alone as a sentence — a comma goes before the conjunction. This is the missing
+  comma in a compound sentence, which no other type here covers (comma_splice
+  owns a comma with NO conjunction; serial_comma owns lists of three or more).
+
+  FLAG only when BOTH sides are genuinely independent — there is a NEW SUBJECT
+  after the conjunction:
+  - "The rain had stopped but the streets were still empty." (streets -> comma
+    before "but")
+  - "She could take the train or she could walk." (she -> comma before "or")
+  - "He knocked twice and no one answered." (no one -> comma before "and")
+
+  Do NOT flag — the do-not-flag list is the whole game, because the wrong
+  version of this rule buries a novel in commas:
+  - A COMPOUND PREDICATE: one subject, two verbs, no new subject after the
+    conjunction. "She stood and walked to the window." / "He turned but said
+    nothing." / "I wondered where this was going but decided not to ask." take
+    NO comma. This is by far the most common false positive — if you cannot
+    point to a distinct subject after the conjunction, do not flag.
+  - Two very short independent clauses, where CMOS lets the comma go: "He ran
+    and she followed." Report at most at low confidence.
+  - The conjunction joining words, phrases, or list items rather than clauses:
+    "cold and tired", "over the wall and through the gate".
+  - A conjunction starting a sentence: "But he never came.", "And then it
+    rained."
+  - Anything inside quoted dialogue, where the breathless unbroken rhythm may be
+    deliberate — report low confidence at most.
+  - A comma already present before the conjunction.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one comma
+  inserted immediately before the coordinating conjunction. Add nothing else,
+  reword nothing, and change no other punctuation.
+
+confidence_guidance: |
+  high   — a clear new subject after the conjunction, both clauses substantial,
+           in narration, and no plausible compound-predicate reading.
+  medium — the clauses are on the short side, or which reading is intended
+           (independent clause vs compound predicate) is arguable.
+  low    — inside dialogue or first-person voice where the rhythm may be
+           deliberate, the clauses are very short, or the second clause might
+           share the first subject. When unsure whether the second half is
+           truly independent, stay at low so it asks rather than edits.
+
+examples:
+  - text: "The rain had stopped but the streets were still empty."
+    finding:
+      original_text: "The rain had stopped but the streets were still empty."
+      corrected_text: "The rain had stopped, but the streets were still empty."
+      explanation: "Two independent clauses joined by 'but' take a comma before it."
+      confidence: high
+  - text: "She stood and walked to the window without a word."
+    finding: null
+  - text: "I wondered where this was going but decided not to ask."
+    finding: null
+  - text: "He packed a coat and a map and left before dawn."
+    finding: null
+  - text: "The council would not move so the envoy went alone."
+    finding:
+      original_text: "The council would not move so the envoy went alone."
+      corrected_text: "The council would not move, so the envoy went alone."
+      explanation: "Independent clauses joined by 'so' take a comma before it."
+      confidence: high
