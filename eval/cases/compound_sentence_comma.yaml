@@ -1,0 +1,54 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a missing comma before a coordinating conjunction joining two
+# INDEPENDENT clauses (a new subject on each side). Traps (the whole point of
+# this type): compound predicates (one subject, two verbs — NO comma), phrase-
+# and word-level conjunctions, sentence-initial conjunctions, and very short
+# clause pairs. No paragraph is a calibration example.
+error_type: compound_sentence_comma
+
+cases:
+  - id: csc-001
+    text: "The gate had closed but the guards were still at their posts."
+    expect: { span: "closed but", correction: "closed, but", confidence: high }
+  - id: csc-002
+    text: "She could take the train or she could walk the long way home."
+    expect: { span: "train or", correction: "train, or", confidence: high }
+  - id: csc-003
+    text: "He knocked twice and no one answered from inside."
+    expect: { span: "twice and", correction: "twice, and", confidence: high }
+  - id: csc-004
+    text: "The council would not move so the envoy went on alone."
+    expect: { span: "move so", correction: "move, so", confidence: high }
+  - id: csc-005
+    text: "The lamp had burned out yet she read on by the last of the fire."
+    expect: { span: "out yet", correction: "out, yet", confidence: high }
+
+  # Traps — compound predicate (one subject, two verbs): NO comma ------------
+  - id: csc-101
+    text: "She rose and crossed to the hearth without a sound."
+    expect: clean
+  - id: csc-102
+    text: "He turned but said nothing to the waiting crowd."
+    expect: clean
+  - id: csc-103
+    text: "I could tell where this was headed but chose to stay quiet."
+    expect: clean
+  - id: csc-104
+    text: "The old dog stretched and yawned and settled back down."
+    expect: clean
+
+  # Traps — conjunction joins words/phrases, not clauses --------------------
+  - id: csc-105
+    text: "She was cold and tired and more than a little afraid."
+    expect: clean
+  - id: csc-106
+    text: "They climbed over the wall and through the tangled garden."
+    expect: clean
+
+  # Traps — sentence-initial conjunction, and a very short clause pair ------
+  - id: csc-107
+    text: "But nobody had thought to ask her first."
+    expect: clean
+  - id: csc-108
+    text: "He ran and she followed."
+    expect: clean
