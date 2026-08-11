@@ -220,3 +220,57 @@ def test_build_requests_multiplies_rewrite_requests_by_samples(tmp_path):
           if r.custom_id.startswith(REWRITE_PREFIX)]
     assert len(rw) == 3 * n_chunks
     assert len({r.custom_id for r in rw}) == 3 * n_chunks    # distinct ids per sample
+
+
+# --- confirm reject sink ------------------------------------------------------
+
+def test_confirm_records_kept_candidates_in_the_reject_sink():
+    p = _para("body-0", "advantages to being a bastard")
+    keep = RewriteCandidate("body-0", 11, 13, "to", "of")     # ruled not-an-error
+    edit = RewriteCandidate("body-0", 0, 0, "", "The ")       # ruled a real error
+    prov = FakeProvider([_verdicts(
+        {"index": 1, "is_error": False, "confidence": "high"},
+        {"index": 2, "is_error": True, "confidence": "high"})])
+    sink = []
+    out = confirm([keep, edit], [p], prov, model="m", max_tokens=100,
+                  usage=Usage(), ids=itertools.count(1), reject_sink=sink)
+    assert len(out) == 1                                       # only the affirmed edit
+    assert len(sink) == 1                                      # the kept one is captured
+    assert sink[0]["original"] == "to" and sink[0]["replacement"] == "of"
+
+
+def test_confirm_reject_sink_is_optional():
+    p = _para("body-0", "advantages to being a bastard")
+    keep = RewriteCandidate("body-0", 11, 13, "to", "of")
+    prov = FakeProvider([_verdicts({"index": 1, "is_error": False, "confidence": "high"})])
+    # No sink passed: kept candidates simply vanish, as before.
+    out = confirm([keep], [p], prov, model="m", max_tokens=100,
+                  usage=Usage(), ids=itertools.count(1))
+    assert out == []
+
+
+# --- diverse sampling (lenses) ------------------------------------------------
+
+def test_lens_system_zero_is_the_plain_prompt():
+    from docproof.rewrite import PROPOSE_SYSTEM, lens_system
+    assert lens_system(0) == PROPOSE_SYSTEM
+    assert lens_system(1) != PROPOSE_SYSTEM and lens_system(1).startswith(PROPOSE_SYSTEM)
+    assert lens_system(2) != lens_system(1)
+
+
+def test_build_requests_gives_diverse_samples_distinct_prompts(tmp_path):
+    from docproof.batch import REWRITE_PREFIX, build_requests
+    cfg, prep = _prepared(["An ordinary reviewable sentence goes here."], tmp_path)
+    cfg.rewrite.enabled = True
+    cfg.rewrite.model = None
+    cfg.rewrite.samples = 3
+    cfg.rewrite.diverse = True
+    rw = [r for r in build_requests(cfg, prep)
+          if r.custom_id.startswith(REWRITE_PREFIX)]
+    # one chunk x 3 samples -> 3 requests, each with a distinct system prompt
+    assert len({r.system for r in rw}) == 3
+    # diverse off -> all share the plain prompt
+    cfg.rewrite.diverse = False
+    rw2 = [r for r in build_requests(cfg, prep)
+           if r.custom_id.startswith(REWRITE_PREFIX)]
+    assert len({r.system for r in rw2}) == 1

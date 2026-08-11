@@ -273,6 +273,12 @@ class GlossaryConfig(BaseModel):
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     max_output_tokens: int = Field(default=8000, ge=1)
+    # Pin the whole-book read per draft. A path enables a content-addressed
+    # cache (keyed by text + model + prompt): re-reviewing an unchanged draft
+    # reuses the read instead of paying for it again, and — since the read is
+    # stochastic — every run of that draft sees the same glossary, so case-drift
+    # findings stop wobbling run to run. Unset (the default) disables the cache.
+    cache_dir: str | None = None
     # Raise the glossary's casing drift as margin queries. Off leaves only the
     # suspected-misspelling half (which the adjudication pass carries).
     case_drift: bool = True
@@ -331,6 +337,11 @@ class RewriteConfig(BaseModel):
     # only tokens). 1 is a single pass (no ensemble); each extra sample is
     # another whole retype in cost. Rides the batch like the first.
     samples: int = Field(default=1, ge=1)
+    # When taking several samples, point each at a different class of error
+    # (small omissions, agreement, ...) rather than asking the same question
+    # twice — diverse sampling covers more than redundant sampling at the same
+    # cost. Off makes every sample the plain prompt. No effect at samples=1.
+    diverse: bool = True
     # Concurrency for the SYNCHRONOUS retype path only (run_sync, or the
     # different-model fallback at collect). When the retype rides the review
     # batch — the default, model unset — the batch handles concurrency and this
@@ -341,10 +352,25 @@ class RewriteConfig(BaseModel):
     # The confidence at or above which an affirmed correction edits; softer is a
     # margin query. High by default — a rewrite fix can be right-place-wrong-word.
     edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The confirm step is the gate: every real error it wrongly rejects is a miss
+    # we paid to generate and threw away. It is cheap (short prompts), so a
+    # stronger model here can recover recall for little cost. Unset = the rewrite
+    # model does its own confirming (current behaviour). A different vendor's id
+    # is fine — confirm runs synchronously, it never has to share the batch.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    # Write the candidates confirm KEPT (ruled not-an-error) to
+    # rewrite_rejects.json beside the findings. Diagnostic: overlaying them on a
+    # human proofread shows how much real recall the gate is discarding.
+    log_rejects: bool = False
 
     @model_validator(mode="after")
     def _known_model(self):
         from .providers.catalog import lookup
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"rewrite.confirm_model '{self.confirm_model}' is not in the catalog")
         if self.enabled and self.model is not None and lookup(self.model) is None:
             raise ValueError(
                 f"rewrite.model '{self.model}' is not in the catalog")
@@ -420,6 +446,31 @@ class PricingConfig(BaseModel):
     output_per_mtok: float | None = None
 
 
+class StorySheetConfig(BaseModel):
+    """The whole-book story sheet: a strong model reads the manuscript once,
+    before the detector passes, and returns the narrative facts a per-paragraph
+    check cannot know — who narrates, in what person and tense, and each
+    character's pronouns. Injected into every detector's system prompt (cached
+    per document, like the vocabulary), it lets a paragraph-in-isolation pass
+    catch a pronoun, name, or tense that is wrong for the STORY — the wrong-word
+    errors it otherwise glides over. Off by default: a whole extra read, shipping
+    opt-in until proven. Whole-document only. See docproof/storysheet.py."""
+    enabled: bool = False
+    model: str = "gpt-5.6-luna"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    max_output_tokens: int = Field(default=4000, ge=1)
+    # A path pins the read per draft, like glossary.cache_dir.
+    cache_dir: str | None = None
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"storysheet.model '{self.model}' is not in the catalog")
+        return self
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -435,6 +486,7 @@ class Config(BaseModel):
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     glossary: GlossaryConfig = Field(default_factory=GlossaryConfig)
+    storysheet: StorySheetConfig = Field(default_factory=StorySheetConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)

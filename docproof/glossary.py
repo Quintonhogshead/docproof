@@ -23,8 +23,10 @@ recall without spending the trust the do-not-flag brief is built to protect.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
+from pathlib import Path
 from typing import Sequence
 
 from pydantic import BaseModel, Field
@@ -82,14 +84,44 @@ to catalogue.\
 """
 
 
+def _cache_key(doc_text: str, model: str) -> str:
+    """A fingerprint of everything that determines the glossary: the manuscript
+    text, the reader model, and the prompt itself. Changing any of the three
+    misses the cache and re-reads, so a stale prompt or a swapped model can never
+    return an out-of-date glossary."""
+    h = hashlib.sha256()
+    for part in (model, _SYSTEM, doc_text):
+        h.update(part.encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()[:16]
+
+
 def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
-                   model: str, max_tokens: int, usage: Usage) -> Glossary:
+                   model: str, max_tokens: int, usage: Usage,
+                   cache_dir: str | None = None) -> Glossary:
     """One whole-manuscript read. Additive and best-effort: on any failure
     (context overflow, refusal, malformed output) it logs and returns an empty
-    glossary, so the review proceeds exactly as it would without the pass."""
+    glossary, so the review proceeds exactly as it would without the pass.
+
+    With `cache_dir`, the read is pinned per draft: the result is keyed by
+    (text, model, prompt) and reused, so re-reviewing an unchanged draft skips
+    the read (and its cost) and — because the read is stochastic — every run of
+    that draft sees the SAME glossary, which is what keeps case-drift findings
+    stable run to run instead of wobbling with the model's mood."""
     doc_text = "\n\n".join(p.text for p in paragraphs)
     if not doc_text.strip():
         return Glossary()
+    cache_path = None
+    if cache_dir:
+        cache_path = Path(cache_dir) / f"glossary-{_cache_key(doc_text, model)}.json"
+        if cache_path.is_file():
+            try:
+                g = Glossary.model_validate_json(cache_path.read_text("utf-8"))
+                log.info("Glossary: %d entr(y/ies), %d suspected misspelling(s) "
+                         "(cached)", len(g.entries), len(g.suspected_misspellings))
+                return g
+            except Exception as e:               # corrupt cache — re-read, don't crash
+                log.warning("glossary cache unreadable (%s); re-reading", e)
     result = provider.complete_structured(
         model=model, system=_SYSTEM, user=doc_text,
         schema=strict_json_schema(Glossary), schema_name="glossary",
@@ -104,6 +136,12 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     except Exception as e:                               # malformed structured output
         log.error("glossary pass: bad response (%s); proceeding without one", e)
         return Glossary()
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(g.model_dump_json(indent=1), "utf-8")
+        except OSError as e:                             # unwritable cache is non-fatal
+            log.warning("could not write glossary cache: %s", e)
     log.info("Glossary: %d entr(y/ies), %d suspected misspelling(s)",
              len(g.entries), len(g.suspected_misspellings))
     return g
