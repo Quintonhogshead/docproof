@@ -457,10 +457,17 @@ def cmd_compare(args) -> int:
     print(f"\n  agree {report.agree}  ·  different fix {report.diff_fix}  ·  "
           f"only {args.label_a} {report.only_a}  ·  "
           f"only {args.label_b} {report.only_b}")
+    if report.query_located:
+        print(f"  ({report.query_located} of the only-{args.label_a} were "
+              f"flagged by a {args.label_b} query)")
     print(f"\nScored against {args.label_a} as ground truth:")
     print(f"  located recall {pct(report.located_recall)}  ·  "
           f"exact recall {pct(report.exact_recall)}  ·  "
           f"precision {pct(report.precision)}  ·  F1 {pct(report.f1)}")
+    if report.query_located:
+        print(f"  located recall + queries "
+              f"{pct(report.located_recall_with_queries)} "
+              f"(crediting a query that points at the right span)")
     print(f"\n  {md_path}\n  {json_path}")
     return 0
 

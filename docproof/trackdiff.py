@@ -37,7 +37,11 @@ from pathlib import Path
 from .agreement import canonical_anchors, fold
 from .models import Anchor
 from .utils.xml_helpers import (DELTEXT_TAG, DEL_TAG, DocxPackage, INS_TAG,
-                                T_TAG, walk_package)
+                                T_TAG, qn, walk_package)
+
+COMMENT_START_TAG = qn("w:commentRangeStart")
+COMMENT_END_TAG = qn("w:commentRangeEnd")
+_ID_ATTR = qn("w:id")
 
 _ZIP_MAGIC = b"PK\x03\x04"
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0"
@@ -112,6 +116,75 @@ def extract_paragraph_edits(p) -> tuple[str, list[Anchor]]:
     return "".join(base), _coalesce(raw)
 
 
+def extract_paragraph_comments(p) -> list[tuple[int, int, str]]:
+    """Return each Word comment range in this paragraph as
+    ``(start, end, comment_id)`` in the same reject-all base coordinates the
+    edits use. DocProof writes its *query channel* as comments that change
+    nothing, so a comment range marks a span the reviewer flagged without
+    editing — the thing a tracked-changes diff cannot otherwise see.
+
+    The commentRangeStart/End markers sit inline among the runs (attached in
+    canonical offsets, before any revision), so counting base length exactly as
+    `extract_paragraph_edits` does — advancing over kept and deleted text,
+    never over inserted text — puts each marker at its base offset.
+
+    Only the *query channel* is returned: DocProof also writes a per-edit
+    explanation comment (when `comments` is on) that wraps the very runs it
+    revised, and those would spuriously look like a comment on a span. A comment
+    whose range contains any tracked change is therefore dropped — a pure query
+    changes nothing, so its range is clean text."""
+    starts: dict[str, int] = {}
+    ends: dict[str, int] = {}
+    order: list[str] = []
+    open_ids: set[str] = set()
+    dirty: set[str] = set()          # comments with a revision inside their range
+    pos = 0
+
+    def walk(el, in_ins: bool, in_del: bool):
+        nonlocal pos
+        for c in el:
+            if c.tag == COMMENT_START_TAG:
+                cid = c.get(_ID_ATTR)
+                if cid is not None and cid not in starts:
+                    starts[cid] = pos
+                    order.append(cid)
+                    open_ids.add(cid)
+            elif c.tag == COMMENT_END_TAG:
+                cid = c.get(_ID_ATTR)
+                if cid is not None:
+                    ends[cid] = pos
+                    open_ids.discard(cid)
+            elif c.tag == INS_TAG:
+                walk(c, True, in_del)
+            elif c.tag == DEL_TAG:
+                walk(c, in_ins, True)
+            elif c.tag in (T_TAG, DELTEXT_TAG):
+                txt = c.text or ""
+                if (in_ins or in_del) and txt:
+                    dirty.update(open_ids)   # a revision lives in these comments
+                if not in_ins:               # inserted text is absent from base
+                    pos += len(txt)
+            else:
+                walk(c, in_ins, in_del)
+
+    walk(p, False, False)
+    return [(starts[cid], ends.get(cid, starts[cid]), cid)
+            for cid in order if cid in starts and cid not in dirty]
+
+
+def _comment_texts(pkg: DocxPackage) -> dict[str, str]:
+    """Map comment id -> its text, read once from word/comments.xml."""
+    name = "word/comments.xml"
+    if not pkg.has(name):
+        return {}
+    out: dict[str, str] = {}
+    for c in pkg.tree(name).iter(qn("w:comment")):
+        cid = c.get(_ID_ATTR)
+        if cid is not None:
+            out[cid] = "".join(t.text or "" for t in c.iter(T_TAG))
+    return out
+
+
 def _coalesce(raw: list[Anchor]) -> list[Anchor]:
     """Merge an adjacent pure-delete and pure-insert into one replacement."""
     out: list[Anchor] = []
@@ -137,6 +210,8 @@ def _coalesce(raw: list[Anchor]) -> list[Anchor]:
 class DocEdits:
     base: dict[str, str]                 # para_id -> reject-all text
     edits: dict[str, list[Anchor]]      # para_id -> edits, in base coordinates
+    # para_id -> query comments as (start, end, text) in base coordinates
+    comments: dict[str, list[tuple[int, int, str]]] = field(default_factory=dict)
 
     @property
     def edit_count(self) -> int:
@@ -146,12 +221,19 @@ class DocEdits:
 def extract_edits(pkg: DocxPackage) -> DocEdits:
     base: dict[str, str] = {}
     edits: dict[str, list[Anchor]] = {}
+    comments: dict[str, list[tuple[int, int, str]]] = {}
+    texts = _comment_texts(pkg)
     for wp in walk_package(pkg):
         text, anchors = extract_paragraph_edits(wp.element)
         base[wp.para_id] = text
         if anchors:
             edits[wp.para_id] = anchors
-    return DocEdits(base=base, edits=edits)
+        if texts:
+            spans = extract_paragraph_comments(wp.element)
+            if spans:
+                comments[wp.para_id] = [(s, e, texts.get(cid, ""))
+                                        for s, e, cid in spans]
+    return DocEdits(base=base, edits=edits, comments=comments)
 
 
 # --- comparison --------------------------------------------------------------
@@ -200,6 +282,9 @@ class ParaCompare:
     diff_fix: list[tuple[Anchor, Anchor]] = field(default_factory=list)
     only_a: list[Anchor] = field(default_factory=list)
     only_b: list[Anchor] = field(default_factory=list)
+    # Subset of only_a that a B *query comment* points at: B did not edit the
+    # span, but it flagged it for the author. Each carries the comment text.
+    query_located: list[tuple[Anchor, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -227,11 +312,25 @@ class CompareReport:
     def only_b(self) -> int:
         return sum(len(p.only_b) for p in self.paras)
 
+    @property
+    def query_located(self) -> int:
+        return sum(len(p.query_located) for p in self.paras)
+
     # -- manuscript-mode score (A is ground truth) ------------------------
     @property
     def located_recall(self) -> float | None:
         found, missed = self.agree + self.diff_fix, self.only_a
         d = found + missed
+        return found / d if d else None
+
+    @property
+    def located_recall_with_queries(self) -> float | None:
+        """Located recall crediting a B *query* that points at an A edit as a
+        located-by-pointing hit. `query_located` is a subset of `only_a`, so the
+        denominator is unchanged — a margin question that lands on the right span
+        is most of a proofreader's value even when B changed nothing."""
+        found = self.agree + self.diff_fix + self.query_located
+        d = self.agree + self.diff_fix + self.only_a
         return found / d if d else None
 
     @property
@@ -283,7 +382,8 @@ def compare_edits(a: DocEdits, b: DocEdits, *, label_a: str = "A",
             pb_id, _ = b_items[ib]
             report.aligned_paras += 1
             report.paras.append(_compare_para(
-                pa_id, base, a.edits.get(pa_id, []), b.edits.get(pb_id, [])))
+                pa_id, base, a.edits.get(pa_id, []), b.edits.get(pb_id, []),
+                b.comments.get(pb_id, [])))
     # A paragraph that carries edits but found no content match is unaligned:
     # its base differs between the two files, so it has no comparable partner.
     unaligned = {pid for idx, (pid, _) in enumerate(a_items)
@@ -298,7 +398,8 @@ def compare_edits(a: DocEdits, b: DocEdits, *, label_a: str = "A",
 
 
 def _compare_para(para_id: str, base: str, a_edits: list[Anchor],
-                  b_edits: list[Anchor]) -> ParaCompare:
+                  b_edits: list[Anchor],
+                  b_comments: list[tuple[int, int, str]] = ()) -> ParaCompare:
     pc = ParaCompare(para_id=para_id)
     # Compare by resulting text, not by how each document recorded its edits:
     # re-derive both sides from their accept-all result to one canonical
@@ -321,6 +422,13 @@ def _compare_para(para_id: str, base: str, a_edits: list[Anchor],
             pc.diff_fix.append((a, chosen))
             unmatched_b.remove(chosen)
     pc.only_b = unmatched_b
+    # An A edit B did not make as a tracked change may still have been flagged by
+    # a B query comment on the same span — credit that as located-by-pointing.
+    for a in pc.only_a:
+        for (cs, ce, ctext) in b_comments:
+            if _overlaps(a, Anchor(cs, ce, "", "")):
+                pc.query_located.append((a, ctext))
+                break
     return pc
 
 
@@ -362,9 +470,12 @@ def report_json(report: CompareReport, base_a: dict[str, str]) -> dict:
         "aligned_paragraphs": report.aligned_paras,
         "unaligned_paragraphs": report.unaligned,
         "totals": {"agree": report.agree, "different_fix": report.diff_fix,
-                   "only_a": report.only_a, "only_b": report.only_b},
+                   "only_a": report.only_a, "only_b": report.only_b,
+                   "query_located": report.query_located},
         "score_a_as_truth": {
             "located_recall": _round(report.located_recall),
+            "located_recall_with_queries":
+                _round(report.located_recall_with_queries),
             "exact_recall": _round(report.exact_recall),
             "precision": _round(report.precision),
             "f1": _round(report.f1)},
@@ -375,7 +486,10 @@ def report_json(report: CompareReport, base_a: dict[str, str]) -> dict:
              "different_fix": [pair(base_a.get(p.para_id, ""), a, b)
                                for a, b in p.diff_fix],
              "only_a": [edit(base_a.get(p.para_id, ""), a) for a in p.only_a],
-             "only_b": [edit(base_a.get(p.para_id, ""), a) for a in p.only_b]}
+             "only_b": [edit(base_a.get(p.para_id, ""), a) for a in p.only_b],
+             "query_located": [
+                 {**edit(base_a.get(p.para_id, ""), a), "query": ctext}
+                 for a, ctext in p.query_located]}
             for p in report.paras],
     }
 
@@ -399,7 +513,9 @@ def render_markdown(report: CompareReport, base_a: dict[str, str]) -> str:
     L.append(f"- **Agree** (same place, same fix): {report.agree}")
     L.append(f"- **Different fix** (same place, different text): "
              f"{report.diff_fix}")
-    L.append(f"- **Only in {a}**: {report.only_a}")
+    L.append(f"- **Only in {a}**: {report.only_a}"
+             + (f" (of which {report.query_located} were flagged by a {b} query)"
+                if report.query_located else ""))
     L.append(f"- **Only in {b}**: {report.only_b}\n")
 
     # Treat A as ground truth — the manuscript-mode scorecard.
@@ -407,6 +523,9 @@ def render_markdown(report: CompareReport, base_a: dict[str, str]) -> str:
     L.append(f"| metric | value |")
     L.append(f"|---|---|")
     L.append(f"| located recall (found the spot) | {pct(report.located_recall)} |")
+    if report.query_located:
+        L.append(f"| located recall + queries (pointed at it) | "
+                 f"{pct(report.located_recall_with_queries)} |")
     L.append(f"| exact recall (same fix too) | {pct(report.exact_recall)} |")
     L.append(f"| precision | {pct(report.precision)} |")
     L.append(f"| F1 | {pct(report.f1)} |")
@@ -414,6 +533,14 @@ def render_markdown(report: CompareReport, base_a: dict[str, str]) -> str:
              f"an edit may be a real error {a} missed rather than a false "
              f"alarm. Treat precision here as a floor and eyeball the "
              f"*only in {b}* list.\n")
+    if report.query_located:
+        L.append(f"> *Located recall + queries* credits a {b} query comment that "
+                 f"overlaps an {a} edit as located-by-pointing — a margin "
+                 f"question on the right span is most of a proofreader's value. "
+                 f"A query about a whole sentence (a comma splice, a shared "
+                 f"dialogue paragraph) can overlap an unrelated small edit in "
+                 f"that sentence, so treat this as a *ceiling* and eyeball the "
+                 f"*pointed at (query)* lines below.\n")
 
     if report.only_a or report.diff_fix:
         L.append(f"## Misses & disagreements ({a} caught, {b} did not match)\n")
@@ -422,8 +549,14 @@ def render_markdown(report: CompareReport, base_a: dict[str, str]) -> str:
                 continue
             base = base_a.get(p.para_id, "")
             L.append(f"**{p.para_id}**")
+            queried = {id(a): ctext for a, ctext in p.query_located}
             for edit in p.only_a:
-                L.append(f"- miss: {_edit_str(base, edit)}")
+                ctext = queried.get(id(edit))
+                if ctext:
+                    L.append(f"- pointed at (query): {_edit_str(base, edit)}  "
+                             f"— {b} asked: “{ctext}”")
+                else:
+                    L.append(f"- miss: {_edit_str(base, edit)}")
             for ea, eb in p.diff_fix:
                 L.append(f"- differ: {a} {_edit_str(base, ea)}  ·  "
                          f"{b} {_edit_str(base, eb)}")

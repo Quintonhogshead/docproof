@@ -177,6 +177,71 @@ def test_open_docx_rejects_non_docx(tmp_path):
         open_docx(bad)
 
 
+def test_query_that_points_at_a_miss_is_credited():
+    """A B *query* comment overlapping an A edit B did not make is located-by-
+    pointing: it stays a miss for plain recall, but the with-queries recall
+    credits it, and the denominator is unchanged."""
+    base = "We don't yet."                       # human inserts a missing word
+    a = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(8, 8, "", " know")]})
+    b = DocEdits(base={"body-0000": base}, edits={},
+                 # a missing-word query highlights the phrase around the gap
+                 comments={"body-0000": [(3, 12, "Possibly missing word?")]})
+    r = compare_edits(a, b, label_a="human", label_b="docproof")
+    assert (r.agree, r.only_a, r.only_b, r.query_located) == (0, 1, 0, 1)
+    assert r.located_recall == 0.0               # B changed nothing — a miss
+    assert r.located_recall_with_queries == 1.0  # …but it pointed at the spot
+    p = next(p for p in r.paras if p.para_id == "body-0000")
+    assert p.query_located[0][1] == "Possibly missing word?"
+
+
+def test_a_query_far_from_the_edit_is_not_credited():
+    base = "We don't yet."
+    a = DocEdits(base={"body-0000": base},
+                 edits={"body-0000": [Anchor(8, 8, "", " know")]})
+    b = DocEdits(base={"body-0000": base}, edits={},
+                 comments={"body-0000": [(0, 2, "unrelated")]})  # on "We"
+    r = compare_edits(a, b)
+    assert (r.only_a, r.query_located) == (1, 0)
+    assert r.located_recall_with_queries == 0.0
+
+
+def test_extract_comments_keeps_queries_and_drops_edit_explanations():
+    """A pure query comment (clean text in its range) is returned in base
+    coordinates; a per-edit explanation comment — whose range wraps a tracked
+    insertion — is dropped, so it cannot masquerade as a comment on a span."""
+    from lxml import etree
+    from docproof.trackdiff import extract_paragraph_comments
+    from docproof.utils.xml_helpers import (INS_TAG, P_TAG, R_TAG, T_TAG, W_NS,
+                                             qn)
+
+    def run(text):
+        r = etree.Element(R_TAG)
+        etree.SubElement(r, T_TAG).text = text
+        return r
+
+    def marker(tag, cid):
+        return etree.Element(qn(tag), {qn("w:id"): cid})
+
+    p = etree.Element(P_TAG, nsmap={"w": W_NS})
+    p.append(run("Hello "))
+    p.append(marker("w:commentRangeStart", "0"))    # query on "world" (clean)
+    p.append(run("world"))
+    p.append(marker("w:commentRangeEnd", "0"))
+    p.append(run(", "))
+    p.append(marker("w:commentRangeStart", "1"))     # explanation wrapping an ins
+    ins = etree.SubElement(p, INS_TAG)
+    ins.append(run("brave "))
+    p.append(marker("w:commentRangeEnd", "1"))
+    p.append(run("people"))
+
+    spans = extract_paragraph_comments(p)
+    # base (reject-all) text is "Hello world, people"; only the clean query,
+    # on "world" at [6, 11], survives — the inserted "brave " is absent from the
+    # base and its wrapping explanation comment is excluded.
+    assert spans == [(6, 11, "0")]
+
+
 def test_render_markdown_smoke(tmp_path):
     fix0 = _fix("body-0000", SPLICE_0, SPLICE_0.replace(", nobody", "; nobody"))
     fix1 = _fix("body-0001", SPLICE_1, SPLICE_1.replace(", her", "; her"))
