@@ -47,6 +47,11 @@ class WatchUpdate(BaseModel):
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
     auto_ticks: bool | None = None
     tick_every_minutes: int | None = Field(default=None, ge=5, le=1440)
+    # The Drive output archive. A separate folder box (an address or a bare id,
+    # parsed like the watched folder), a switch, and whether to keep the source.
+    archive_enabled: bool | None = None
+    archive_folder: str | None = None
+    archive_include_source: bool | None = None
 
 
 class WatchAuth(BaseModel):
@@ -140,8 +145,17 @@ def register(app: FastAPI) -> None:
                 raise HTTPException(400, "prep_output must be 'indesign', "
                                          "'tracked' or 'both'")
             ws.prep_output = update.prep_output
+        # The archive folder is pasted the same way the watched one is: an empty
+        # box means "unchanged", so a person can flip the switch without
+        # re-pasting the address every time.
+        if update.archive_folder:
+            try:
+                ws.archive_folder_id = folder_id_from(update.archive_folder)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
         for name in ("upload_notes", "upload_failure_note",
-                     "max_files_per_tick", "auto_ticks", "tick_every_minutes"):
+                     "max_files_per_tick", "auto_ticks", "tick_every_minutes",
+                     "archive_enabled", "archive_include_source"):
             value = getattr(update, name)
             if value is not None:
                 setattr(ws, name, value)

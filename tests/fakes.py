@@ -165,6 +165,13 @@ def _matches_q(entry: dict, q: str) -> str | bool:
     mime = re.search(r"mimeType = '([^']+)'", q)
     if mime and entry.get("mimeType", "") != mime.group(1):
         return False
+    # `appProperties has { key='k' and value='v' }` — how the archive finds a
+    # job's folder by the id stamped on it rather than by a name two books share.
+    prop = re.search(
+        r"appProperties has \{ key='([^']+)' and value='((?:[^'\\]|\\.)*)' \}", q)
+    if prop and (entry.get("appProperties", {}).get(prop.group(1))
+                 != _unescape(prop.group(2))):
+        return False
     return True
 
 
@@ -223,17 +230,20 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
     def _multipart(request) -> tuple[dict, bytes]:
         boundary = request.get_header("Content-type", "").split(
             "boundary=", 1)[1]
-        meta, media = {}, b""
+        parts = []
         for part in request.data.split(f"--{boundary}".encode()):
             headers, sep, payload = part.partition(b"\r\n\r\n")
             if not sep:
                 continue
             if payload.endswith(b"\r\n"):
                 payload = payload[:-2]   # exactly the separator, not the bytes
-            if b"application/json" in headers:
-                meta = json.loads(payload)
-            else:
-                media = payload
+            parts.append(payload)
+        # multipart/related order is fixed: the first part is the JSON metadata,
+        # the second is the media — whatever its own content type. Sniffing for
+        # "application/json" instead would mistake a JSON artifact (the archive
+        # manifest) for the metadata and lose its bytes.
+        meta = json.loads(parts[0]) if parts else {}
+        media = parts[1] if len(parts) > 1 else b""
         return meta, media
 
     def opener(request, timeout=60):
@@ -279,6 +289,15 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
 
         if "/upload/drive/v3/files" in path:
             _maybe_fail("upload")
+            # A media update (PATCH ?uploadType=media) replaces one file's bytes
+            # in place, keeping its id — how the archive rewrites its manifest.
+            if request.get_method() == "PATCH" or query.get("uploadType") == ["media"]:
+                file_id = path.rsplit("/", 1)[-1]
+                entry = store.setdefault(
+                    file_id, {"id": file_id, "name": "", "mimeType": DOCX_MIME,
+                              "appProperties": {}})
+                content[file_id] = request.data
+                return Response(json.dumps({"id": entry["id"]}).encode())
             meta, media = _multipart(request)
             new_id = f"up-{next(uploads)}"
             store[new_id] = {"id": new_id, "name": meta.get("name", ""),
@@ -287,6 +306,21 @@ def fake_drive(files: dict[str, dict] | None = None, *, docx: bytes = b"",
                              "parents": meta.get("parents", []),
                              "modifiedTime": "2026-01-02T03:04:05.000Z"}
             content[new_id] = media
+            return Response(json.dumps({"id": new_id}).encode())
+
+        # `files.create` with a JSON body and no media — a folder. A plain POST
+        # to the API (not the upload endpoint), which is how the archive lays
+        # down its Reviews/YYYY-MM/<book> tree.
+        if (request.get_method() == "POST" and path.endswith("/drive/v3/files")
+                and request.data):
+            _maybe_fail("create")
+            meta = json.loads(request.data)
+            new_id = f"fold-{next(uploads)}"
+            store[new_id] = {"id": new_id, "name": meta.get("name", ""),
+                             "mimeType": meta.get("mimeType", DOCX_MIME),
+                             "appProperties": meta.get("appProperties", {}),
+                             "parents": meta.get("parents", []),
+                             "modifiedTime": "2026-01-02T03:04:05.000Z"}
             return Response(json.dumps({"id": new_id}).encode())
 
         if request.get_method() == "PATCH":

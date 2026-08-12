@@ -131,6 +131,28 @@ def test_on_progress_reports_each_round_then_its_sections(tmp_path, cfg):
     assert calls == [(1, 2, 0, 0), (1, 2, 1, 1), (2, 2, 0, 0), (2, 2, 1, 1)]
 
 
+def test_rounds_run_leaves_a_composed_snapshot(tmp_path, cfg):
+    """The driver snapshots its composed findings before finish — the rebuild
+    source for download-anyway when the audit fails after the paid rounds."""
+    from docproof.checkpoint import finding_from_dict
+
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                    review_provider=review, judge_provider=_ApproveJudge())
+    snap = json.loads((tmp_path / "rounds" / "composed.json").read_text("utf-8"))
+    findings = [finding_from_dict(d) for d in snap["findings"]]
+    assert {f.para_id for f in findings} == {"body-0000", "body-0001"}
+    assert snap["usage"]["api_calls"] >= 2       # both rounds' spend recorded
+
+
 def test_sync_rounds_aborts_at_a_round_boundary(tmp_path, cfg):
     # should_cancel true at the round boundary stops before any model call.
     _minimal(cfg)

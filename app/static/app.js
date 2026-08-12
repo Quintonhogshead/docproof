@@ -1526,6 +1526,14 @@ function renderJobs(jobs) {
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
       actions.append(doc, read);
+      // The change log is a prose .docx the press can hand to an author. It is
+      // written per config, so the server says whether this review has one —
+      // on the web there is no Finder to find it in otherwise.
+      if (job.has_change_log) {
+        actions.append(openButton(job, 'changes',
+          WEB ? 'Download the change log' : 'Open the change log', note,
+          { quiet: true }));
+      }
       // "Show in Finder" only means something on the Mac the file lives on.
       if (!WEB) {
         actions.append(
@@ -1543,6 +1551,41 @@ function renderJobs(jobs) {
         meta.className = 'file-meta';
         meta.textContent = bits.join(' · ');
         actions.append(meta);
+      }
+      // The Drive archive: a link to the folder once the copy lands, a quiet
+      // note while it is saving, and — if Drive kept refusing — the reason and a
+      // way to try again. Nothing shows when the archive is off: `archive` stays
+      // '' then, so this whole block is skipped.
+      if (job.archive === 'done' && job.drive_link) {
+        const link = document.createElement('a');
+        link.className = 'file-link';
+        link.href = job.drive_link;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'In Drive ↗';
+        actions.append(link);
+      } else if (job.archive === 'pending') {
+        const saving = document.createElement('span');
+        saving.className = 'file-meta muted';
+        saving.textContent = 'saving to Drive…';
+        actions.append(saving);
+      } else if (job.archive === 'failed') {
+        note.textContent = job.archive_error || 'The Drive copy did not finish.';
+        note.hidden = false;
+        const retryArchive = document.createElement('button');
+        retryArchive.className = 'quiet';
+        retryArchive.textContent = 'Retry Drive copy';
+        retryArchive.addEventListener('click', async () => {
+          retryArchive.disabled = true;
+          try {
+            await api(`/api/jobs/${job.id}/archive`, { method: 'POST' });
+            refreshJobs();
+          } catch (err) {
+            note.textContent = err.message || 'Could not save to Drive.';
+            retryArchive.disabled = false;
+          }
+        });
+        actions.append(retryArchive);
       }
       li.append(actions, note);
       // Tracked changes are invisible until you know which panel shows them,
@@ -1705,10 +1748,10 @@ function confirmInline(button, prompt, onConfirm) {
 // one, so "Open in Word" asks the app to hand the file to Word — it is sitting
 // in the user's own Documents folder already. Run in an ordinary browser, the
 // app says so and the file is downloaded instead.
-function openButton(job, which, text, note, { reveal = false } = {}) {
+function openButton(job, which, text, note, { reveal = false, quiet = false } = {}) {
   const button = document.createElement('button');
   button.textContent = text;
-  if (reveal) button.className = 'quiet';
+  if (reveal || quiet) button.className = 'quiet';
   button.addEventListener('click', async () => {
     // In the browser build there is no local app to hand the file to, and no
     // Finder to reveal it in — the honest thing is to download it.
@@ -2826,6 +2869,9 @@ function renderWatch(body, quiet) {
   $('watch-output').value = w.prep_output || 'indesign';
   $('watch-notes').checked = w.upload_notes;
   $('watch-failure-note').checked = w.upload_failure_note;
+  $('watch-archive-enabled').checked = w.archive_enabled;
+  $('watch-archive-folder').value = w.archive_folder_id || '';
+  $('watch-archive-source').checked = w.archive_include_source;
   $('watch-auto').checked = w.auto_ticks;
   $('watch-agent').checked = w.times.length > 0;
   if (w.times.length) $('watch-times').value = w.times.join(',');
@@ -3112,6 +3158,31 @@ $('watch-save').addEventListener('click', async () => {
         prep_output: $('watch-output').value,
         upload_notes: $('watch-notes').checked,
         upload_failure_note: $('watch-failure-note').checked,
+      }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('watch-archive-save').addEventListener('click', async () => {
+  const button = $('watch-archive-save');
+  const note = $('watch-archive-note');
+  note.hidden = true;
+  button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        archive_enabled: $('watch-archive-enabled').checked,
+        // null, not '': an empty box is "no change", the same as the folder.
+        archive_folder: $('watch-archive-folder').value.trim() || null,
+        archive_include_source: $('watch-archive-source').checked,
       }),
     });
     renderWatch(body);
@@ -4062,6 +4133,30 @@ $('admin-settings-save').addEventListener('click', async () => {
   } catch (err) {
     alert(err.message);
   } finally { btn.disabled = false; }
+});
+
+$('admin-restore').addEventListener('click', async () => {
+  const btn = $('admin-restore');
+  const note = $('admin-restore-note');
+  note.hidden = true;
+  btn.disabled = true;
+  btn.textContent = 'Rebuilding…';
+  try {
+    await api('/api/admin/archive/restore', { method: 'POST' });
+    // The rebuild runs in the background; the list fills in as it goes, so a
+    // reload a moment later shows what came back.
+    note.textContent = 'Rebuilding from Drive — your jobs will reappear shortly.';
+    note.className = 'action-note ok';
+    note.hidden = false;
+    setTimeout(() => { refreshJobs().catch(() => {}); }, 2500);
+  } catch (err) {
+    note.textContent = err.message || 'Could not start the rebuild.';
+    note.className = 'action-note error';
+    note.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Rebuild from Drive';
+  }
 });
 
 // -- house style guide (prep tags manuscripts into it) ------------------------

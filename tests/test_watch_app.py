@@ -171,6 +171,28 @@ def test_both_clocks_can_be_set_from_the_panel(client):
     assert ws.auto_ticks is True and ws.tick_every_minutes == 30
 
 
+def test_the_archive_can_be_set_up_from_the_panel(client):
+    body = client.put("/api/watch", json={
+        "archive_enabled": True,
+        "archive_folder": "https://drive.google.com/drive/folders/ARCH1234567",
+        "archive_include_source": False,
+    }).json()
+
+    ws = WatchSettings.load(client.home)
+    assert ws.archive_enabled is True
+    assert ws.archive_folder_id == "ARCH1234567"   # parsed out of the address
+    assert ws.archive_include_source is False
+    # And the panel reads the settings back for the page to show.
+    assert body["watch"]["archive_enabled"] is True
+    assert body["watch"]["archive_folder_id"] == "ARCH1234567"
+
+
+def test_a_bad_archive_folder_is_refused(client):
+    answer = client.put("/api/watch", json={"archive_folder": "my documents"})
+    assert answer.status_code == 400
+    assert WatchSettings.load(client.home).archive_folder_id == ""
+
+
 # --- signing in ---------------------------------------------------------------
 
 def test_signing_in_reports_while_it_waits_then_says_it_is_done(client):

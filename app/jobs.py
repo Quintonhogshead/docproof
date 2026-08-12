@@ -14,7 +14,7 @@ import queue
 import shutil
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -222,6 +222,22 @@ class Job:
     # counts, and capped at MAX_COLLECT_ATTEMPTS so a repeating crash becomes a
     # failure the user can see and recover, not "almost done" with no end.
     collect_attempts: int = 0
+    # The Drive output archive: whether this job's produced files have been
+    # pushed to the durable off-box record, and where. "" is the default and
+    # means "not looked at yet" — an install with the archive off leaves every
+    # record here, inert; the moment it is switched on, the ticker's sweep finds
+    # them by this very emptiness and backfills. "pending" is an attempt that hit
+    # a Drive hiccup and will be retried with backoff; "done" is safely archived;
+    # "failed" is given up on (Drive kept refusing, or the results were already
+    # gone). See app/watch/archive.py.
+    archive: str = ""                  # "" | pending | done | failed
+    archive_error: str = ""
+    archive_attempts: int = 0
+    # This job's own folder in the archive, and the Drive id of every file put
+    # there (artifact name -> id), so a resumed or repeated archive uploads only
+    # what is missing rather than a second copy of it. Empty until first tried.
+    drive_folder_id: str = ""
+    drive_files: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_prep(self) -> bool:
@@ -276,6 +292,21 @@ class Job:
         # each says which folder its results went to.
         d["results_name"] = (Path(self.results_dir).name
                              if self.results_dir else None)
+        # Whether this review wrote a change log — a config choice, so the card
+        # offers the download only when the file is actually there. One stat on
+        # a local disk, only for finished reviews.
+        d["has_change_log"] = bool(
+            d["format"] and self.kind == "review" and self.state == "done"
+            and self.results_dir
+            and (Path(self.results_dir)
+                 / get_format(self.filename).change_log_name(self.filename)
+                 ).is_file())
+        # A click-through to this job's folder in the Drive archive, once it has
+        # one. The card shows "In Drive" when archived, so the deliverable is one
+        # link away even after the local copy is recycled on a redeploy.
+        d["drive_link"] = (
+            f"https://drive.google.com/drive/folders/{self.drive_folder_id}"
+            if self.drive_folder_id else None)
         return d
 
 
@@ -400,6 +431,11 @@ class JobRunner:
         self._stop = threading.Event()
         self._busy = threading.Event()
         self._tick_mutex = threading.Lock()
+        # Serialises Drive archiving across the two threads that trigger it — an
+        # inline attempt on the worker when a job finishes, and the ticker's
+        # sweep — so the same job can never have two attempts creating two
+        # folders for it at once. Best-effort work, so a brief wait is fine.
+        self._archive_lock = threading.Lock()
         self._threads: list[threading.Thread] = []
         # Ids the user has asked to abort mid-run. The worker polls this as it
         # folds each call in; a set + lock rather than per-job Events so the
@@ -584,6 +620,10 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None or job.is_prep or job.state != "failed":
             return None
+        if job.rounds > 1:
+            # A multi-round run has no checkpoint to replay; it rebuilds from
+            # the composed snapshot its driver left beside the working files.
+            return self._download_anyway_rounds(job)
 
         cfg = self.config_for(job)                      # original: audit strict
         prepared = prepare(cfg, job.source_path, self.error_dir,
@@ -606,7 +646,51 @@ class JobRunner:
                                     applied=outputs.applied,
                                     results_dir=str(out), error=job.error)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
-        self._notify_done(job_id)
+        self._finish(job_id)
+        return updated
+
+    def _download_anyway_rounds(self, job: Job) -> Job | None:
+        """`download_anyway` for a multi-round review.
+
+        Costs nothing: the rounds driver snapshots its composed, original-
+        coordinate findings (rounds/composed.json) before the finish that can
+        fail the audit, so this rebuilds the deliverable exactly the way
+        _finalize does — a fresh package off the normalized base, the audit
+        downgraded to a warning for the write — without touching a provider.
+        Returns None (the route's 409) for a run from before the snapshot
+        existed, or one whose working files were cleaned away."""
+        from docproof.checkpoint import finding_from_dict
+        from docproof.models import Usage
+        from docproof.utils.xml_helpers import DocxPackage
+
+        out = Path(job.results_dir) if job.results_dir else None
+        composed = out / "rounds" / "composed.json" if out else None
+        base = out / "rounds" / "base.docx" if out else None
+        if not (composed and composed.is_file() and base.is_file()):
+            return None
+        try:
+            data = json.loads(composed.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("Unreadable rounds snapshot for %s: %s", job.id, e)
+            return None
+        findings = [finding_from_dict(d) for d in data["findings"]]
+        usage = Usage(**data.get("usage", {}))
+
+        cfg = self.config_for(job)
+        # The same deterministic ingest the run used; base.docx was saved from
+        # it, so paragraph ids line up. No provider is built or called.
+        prepared0 = prepare(cfg, job.source_path, self.error_dir)
+        cfg.audit = "warn"                              # let the write pass
+        prepared_final = replace(prepared0, pkg=DocxPackage(base),
+                                 sweep_findings=[], consistency_findings=[])
+        outputs = finish(prepared_final, findings, usage, cfg, out_dir=out,
+                         source_path=job.source_path)
+        updated = self.store.update(job.id, state="done", audit_overridden=True,
+                                    applied=outputs.applied,
+                                    results_dir=str(out), error=job.error)
+        self._record_usage(job.id, out, cfg.api.model,
+                           batch=job.mode == "batch")
+        self._finish(job.id)
         return updated
 
     def recover(self, job_id: str) -> Job | None:
@@ -854,6 +938,7 @@ class JobRunner:
                               results_dir=str(out), audit_failed=True)
             self._record_usage(job_id, out, cfg.api.model,
                                batch=job.mode == "batch")
+            self._archive_done(job_id)        # a failed review still has notes
             return
         except (ProviderError, IngestError, batchlib.BatchError,
                 FileNotFoundError, ValueError) as e:
@@ -867,7 +952,7 @@ class JobRunner:
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None, stage="")
         self._record_usage(job_id, out, cfg.api.model, batch=job.mode == "batch")
-        self._notify_done(job_id)
+        self._finish(job_id)
 
     def _run_now(self, job_id: str) -> None:
         job = self.store.get(job_id)
@@ -936,6 +1021,7 @@ class JobRunner:
             self.store.update(job_id, state="failed", error=str(e),
                               results_dir=str(out), audit_failed=True)
             self._record_usage(job_id, out, cfg.api.model, batch=False)
+            self._archive_done(job_id)        # a failed review still has notes
             return
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
@@ -944,7 +1030,7 @@ class JobRunner:
         self.store.update(job_id, state="done", applied=outputs.applied,
                           results_dir=str(out), error=None, stage="")
         self._record_usage(job_id, out, cfg.api.model, batch=False)
-        self._notify_done(job_id)
+        self._finish(job_id)
 
     # -- prep -----------------------------------------------------------------
 
@@ -1013,6 +1099,7 @@ class JobRunner:
             self.store.update(job_id, state="failed", error=str(e),
                               results_dir=str(out), verified=False)
             self._record_usage(job_id, out, cfg.api.model, batch=False)
+            self._archive_done(job_id)        # the notes are worth keeping
             return
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
@@ -1025,7 +1112,7 @@ class JobRunner:
                           verified=all(c.ok for c in outputs.verifications),
                           words=outputs.words)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
-        self._notify_done(job_id)
+        self._finish(job_id)
 
     # -- promo ----------------------------------------------------------------
 
@@ -1107,7 +1194,7 @@ class JobRunner:
             # reads as "verified", flagged copy invites a look before it ships.
             verified=outputs.flag_count == 0)
         self._record_usage_inline(job_id, usage, cfg.api.model)
-        self._notify_done(job_id)
+        self._finish(job_id)
 
     def _record_usage_inline(self, job_id: str, usage, model: str) -> None:
         """Copy token counts straight onto the record from the run in hand.
@@ -1128,7 +1215,56 @@ class JobRunner:
             cache_write_tokens=usage.cache_creation_input_tokens,
             api_calls=usage.api_calls, cost=cost)
 
-    # -- telling a person it finished -----------------------------------------
+    # -- finishing: archive, then tell a person -------------------------------
+
+    def _finish(self, job_id: str) -> None:
+        """Everything a job does once it has reached a terminal state with its
+        files on disk: push them to the Drive archive, then email the completion
+        log — in that order, so the email can carry the archive link when the
+        first attempt lands. Both are best-effort and never raise back into the
+        run; a job that did its work must not fail over an upload or a mail.
+
+        Used at every terminal transition, success or a failure that still left
+        artifacts (an audit or verification failure keeps its notes). The email
+        step no-ops on anything but a finished job, so a failed-with-artifacts
+        job is archived here without being announced as done."""
+        self._archive_done(job_id)
+        self._notify_done(job_id)
+
+    def archive_job(self, job_id: str) -> None:
+        """Archive one job now, through the same locked, best-effort path a
+        completing job takes. The "Retry archive" route's entry point."""
+        self._archive_done(job_id)
+
+    def _archive_done(self, job_id: str) -> None:
+        """Push a finished job's outputs to the Drive archive, if it is switched
+        on. One inline attempt; a Drive hiccup leaves the job "pending" for the
+        ticker's sweep to retry. Best-effort and silent when off: an install
+        that never configured an archive pays nothing here. See
+        app/watch/archive.py."""
+        if self.notify_home is None:
+            return
+        try:
+            from .watch import archive
+            with self._archive_lock:
+                archive.archive_done(self.notify_home, self.store, job_id)
+        except Exception:                     # noqa: BLE001 - never over a job
+            log.exception("Archiving %s failed", job_id)
+
+    def _archive_sweep(self) -> None:
+        """The ticker's Drive-archive pass: retry inline attempts that hit a
+        hiccup, and backfill everything that finished before the archive was
+        switched on. Bounded per tick (see archive.PER_TICK) so a large backfill
+        drains over several passes rather than holding the ticker. Best-effort;
+        a failure here never derails the batch work the tick also does."""
+        if self.notify_home is None:
+            return
+        try:
+            from .watch import archive
+            with self._archive_lock:
+                archive.sweep_once(self.notify_home, self.store)
+        except Exception:                     # noqa: BLE001 - never over a tick
+            log.exception("Archive sweep failed")
 
     def _notify_done(self, job_id: str) -> None:
         """Email the completion log for a job that just finished.
@@ -1255,6 +1391,12 @@ class JobRunner:
                 # that isn't there.
                 elif job.state in ("waiting", "collecting") and not job.is_prep:
                     self._advance_batch(job)
+            # After the batch work, the Drive archive's retry-and-backfill pass.
+            # Held inside the same mutex as the loop above, so an inline archive
+            # attempt from the worker thread and this sweep can never race to
+            # upload one job twice. Bounded per pass; a large backfill drains
+            # over several ticks.
+            self._archive_sweep()
         finally:
             self._tick_mutex.release()
 

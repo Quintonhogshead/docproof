@@ -353,12 +353,20 @@ def completion_for_job(job) -> tuple[str, str, str]:
     label = PIPELINE_LABEL.get(job.kind, job.kind)
     title = f"DocProof finished {label.lower()} for {job.filename}"
     subject = f"{DONE_TAGS} {job.filename} — {label}"
+    job_rows = [
+        ("Document", job.filename, None),
+        ("Pipeline", label, None),
+        ("Started from", SOURCE_LABEL.get(job.source, job.source), None),
+    ]
+    # The archive folder, when this job made it into Drive. It is the one link an
+    # app job has — its deliverable outlives the container's disk here — and it
+    # doubles as a tripwire: a job filed under the wrong folder is visible the
+    # same morning. Empty when the archive is off or has not landed yet.
+    if getattr(job, "drive_folder_id", ""):
+        job_rows.append(("Drive archive", "Open folder",
+                         DRIVE_FOLDER.format(job.drive_folder_id)))
     groups: list[tuple[str, list]] = [
-        ("Job", [
-            ("Document", job.filename, None),
-            ("Pipeline", label, None),
-            ("Started from", SOURCE_LABEL.get(job.source, job.source), None),
-        ]),
+        ("Job", job_rows),
         ("Model run", [
             ("Model", job.model, None),
             ("Effort", job.effort, None),

@@ -229,3 +229,34 @@ def test_admin_usage_dashboard_includes_a_docwatch_line(app):
     assert len(docwatch) == 1
     assert docwatch[0]["email"] == "DocWatch (automated)"
     assert docwatch[0]["cost"] == pytest.approx(6.0)
+
+
+# -- rebuilding the job list from the Drive archive ---------------------------
+
+def test_restore_route_is_refused_when_the_archive_is_off(app):
+    # Off by default: nothing to restore from, so it says so rather than spinning.
+    assert _as(app, "boss@press.com").post(
+        "/api/admin/archive/restore").status_code == 400
+
+
+def test_restore_route_starts_a_rebuild_when_the_archive_is_on(app, monkeypatch):
+    from app.watch.settings import WatchSettings
+    from .fakes import fake_drive
+    # Route every Drive call to the fake so the background rebuild never reaches
+    # Google, and switch the archive on where the runner looks for it.
+    monkeypatch.setattr("app.watch.drive._open_url", fake_drive())
+    WatchSettings(archive_enabled=True, archive_folder_id="root-archive",
+                  client_id="c", client_secret="s").save(
+                      app.state.runner.notify_home)
+
+    r = _as(app, "boss@press.com").post("/api/admin/archive/restore")
+    assert r.status_code == 200 and r.json()["started"] is True
+    # Don't let the daemon thread outlive the test.
+    thread = getattr(app.state, "restore_thread", None)
+    if thread is not None:
+        thread.join(timeout=5)
+
+
+def test_restore_route_is_admin_only(app):
+    assert _as(app, "editor@press.com").post(
+        "/api/admin/archive/restore").status_code == 403

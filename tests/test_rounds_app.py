@@ -156,6 +156,56 @@ def test_run_rounds_reports_progress_onto_the_job(runner, monkeypatch):
     assert store.get("j1").state == "done"
 
 
+def test_download_anyway_rebuilds_an_audit_failed_rounds_review(runner, cfg,
+                                                               tmp_path):
+    """The full recovery path: a paid two-round run whose deliverable is gone
+    (as after an audit failure) is rebuilt from rounds/composed.json — no
+    provider is touched, and the job lands done with the override recorded."""
+    from docproof.rounds import run_sync_rounds
+    from tests.fakes import FakeProvider, finding_result
+
+    from .test_rounds_sync import _ApproveJudge, _docx, _minimal
+
+    store, r = runner
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    out = tmp_path / "results"
+    out.mkdir()
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    outputs = run_sync_rounds(cfg, str(src), CONFIG.parent / "error_types",
+                              out_dir=out, review_provider=review,
+                              judge_provider=_ApproveJudge())
+    outputs.reviewed_path.unlink()               # the audit withheld the file
+
+    job = _job(store, id="ra", filename=Path(src).name, source_path=str(src),
+               rounds=2, state="failed", audit_failed=True,
+               results_dir=str(out), error="audit failed")
+    updated = r.download_anyway("ra")
+    assert updated is not None
+    assert updated.state == "done" and updated.audit_overridden
+    assert outputs.reviewed_path.is_file()       # rebuilt, no model calls
+    assert len(review.calls) == 2                # still just the original rounds
+
+
+def test_download_anyway_refuses_a_rounds_run_without_a_snapshot(runner,
+                                                                 tmp_path):
+    # A run from before the snapshot existed (or with its working files cleaned
+    # away) returns None — the route's 409 — instead of erroring or spending.
+    store, r = runner
+    out = tmp_path / "results"
+    (out / "rounds").mkdir(parents=True)
+    job = _job(store, id="old", rounds=3, state="failed", audit_failed=True,
+               results_dir=str(out), error="audit failed")
+    assert r.download_anyway("old") is None
+    assert store.get("old").state == "failed"    # untouched
+
+
 def test_abort_marks_a_multiround_run_cancelled_not_failed(runner, monkeypatch):
     """Abort on a multi-round run must stop it cleanly. The driver gets a
     should_cancel that reflects the request, and a JobCancelled out of it lands

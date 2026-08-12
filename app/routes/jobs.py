@@ -73,6 +73,7 @@ def _result_name(job: Job, which: str) -> str | None:
         # across an upgrade keeps working.
         "document": get_format(job.filename).reviewed_name(job.filename),
         "docx": get_format(job.filename).reviewed_name(job.filename),
+        "changes": get_format(job.filename).change_log_name(job.filename),
         "summary": "summary.md",
         "findings": "findings.json",
         "indesign": f"tagged_{stem}.docx",
@@ -82,11 +83,16 @@ def _result_name(job: Job, which: str) -> str | None:
         "placed": f"placed_{stem}.indd",
     }
     if job.is_prep and which in ("document", "docx"):
-        # Whatever this job actually wrote, so one "open it" button works
-        # for either output choice.
-        return next(
-            (n for n in (names["indesign"], names["tracked"])
-             if (Path(job.results_dir) / n).is_file()), names["indesign"])
+        # Whatever this job actually wrote, so one "open it" button works for
+        # either output choice — counting the archive as well as the disk, so a
+        # restored prep job (no local results yet) still resolves to the file it
+        # really produced rather than crashing on a None results_dir.
+        def _present(n: str) -> bool:
+            if job.results_dir and (Path(job.results_dir) / n).is_file():
+                return True
+            return n in job.drive_files
+        return next((n for n in (names["indesign"], names["tracked"])
+                     if _present(n)), names["indesign"])
     return names.get(which)
 
 
@@ -117,6 +123,53 @@ def register(app: FastAPI) -> None:
             return None
         if app.state.web and job.owner_id != owner:
             return None
+        return job
+
+    def _resolve_result(job: Job, name: str) -> Path | None:
+        """The local path for one of a job's files, fetched back from the Drive
+        archive and re-cached if the local copy is gone — the thing that lets a
+        results tab still work after a redeploy wiped the folder, or after a
+        volume loss left the record with no local results at all. None only when
+        the file is in neither place; the caller answers the 404.
+
+        The happy path — the file is on disk — costs one `is_file` and never
+        touches Drive."""
+        from ..watch import archive as archivelib
+        if job.results_dir and (Path(job.results_dir) / name).is_file():
+            return Path(job.results_dir) / name
+        runner = app.state.runner
+        if runner.notify_home is None or not job.drive_files.get(name):
+            return None
+        # A restored job has no results folder yet; claim one on the volume so the
+        # fetched file (and its siblings, next click) has a durable home.
+        dest_dir = (Path(job.results_dir) if job.results_dir
+                    else runner.results_dir(job))
+        fetched = archivelib.fetch_file(runner.notify_home, job, name, dest_dir)
+        if fetched is not None and fetched.is_file():
+            if not job.results_dir:
+                app.state.store.update(job.id, results_dir=str(dest_dir))
+            return fetched
+        return None
+
+    def _ensure_source(job: Job) -> Job:
+        """Make sure the submitted manuscript is on disk before a re-run needs
+        it, fetching `source - <name>` back from the archive when a wipe took the
+        original. Leaves the job untouched when the source is already there or the
+        archive cannot supply it — the run then fails as it would have."""
+        from ..watch import archive as archivelib
+        if job.source_path and Path(job.source_path).is_file():
+            return job
+        runner = app.state.runner
+        original = Path(job.filename).name
+        if runner.notify_home is None or not job.drive_files.get(f"source - {original}"):
+            return job
+        dest_dir = (app.state.paths.uploads / (job.owner_id or "local")
+                    / f"restored-{job.id}")
+        got = archivelib.fetch_file(runner.notify_home, job,
+                                    f"source - {original}", dest_dir,
+                                    save_as=original)
+        if got is not None and got.is_file():
+            return app.state.store.update(job.id, source_path=str(got)) or job
         return job
 
     @app.post("/api/jobs")
@@ -284,6 +337,10 @@ def register(app: FastAPI) -> None:
         if job.state != "failed":
             raise HTTPException(400, "Only reviews that need attention can be "
                                      "retried.")
+        # A retry re-runs from the manuscript, so make sure it is on disk — a
+        # wipe (or a restore from the archive) may have taken it; the archive has
+        # a copy when the source was kept.
+        _ensure_source(job)
         store.update(job_id, state="queued", error=None, done=0)
         return runner.enqueue(store.get(job_id)).to_api()
 
@@ -309,6 +366,32 @@ def register(app: FastAPI) -> None:
                 400, "There is no completed overnight batch to recover for this "
                      "review — use Retry to run it again.")
         return updated.to_api()
+
+    @app.post("/api/jobs/{job_id}/archive")
+    def archive_now(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        """Try pushing a job's outputs to the Drive archive again, now.
+
+        For the "Retry archive" affordance on a job whose automatic attempts
+        gave up (Drive kept refusing). Resets the attempt count so the try is
+        fresh, then archives inline — the same idempotent write the ticker does,
+        so a partial earlier attempt is resumed, not duplicated. Best-effort:
+        the card comes back with the new archive state either way."""
+        store: JobStore = app.state.store
+        runner: JobRunner = app.state.runner
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review")
+        if runner.notify_home is None:
+            raise HTTPException(400, "The Drive archive is not set up.")
+        from ..watch import archive as archivelib
+        from ..watch.settings import WatchSettings
+        if not archivelib.is_enabled(WatchSettings.load(runner.notify_home)):
+            raise HTTPException(
+                400, "The Drive archive is switched off. Turn it on under "
+                     "DocWatch first.")
+        store.update(job_id, archive="", archive_attempts=0, archive_error="")
+        runner.archive_job(job_id)
+        return _card(store.get(job_id))
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str, owner: str = Depends(owner_for)) -> dict:
@@ -395,6 +478,11 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "No such review.")
         if job.state != "failed":
             raise HTTPException(409, "This review did not fail the audit.")
+        # The replay re-ingests the manuscript, so fetch it back from the archive
+        # if a wipe took it (the checkpoint the replay also needs is another
+        # matter — one that survived only a results wipe, not a whole-volume loss,
+        # still has its checkpoint in the job folder).
+        _ensure_source(job)
         updated = app.state.runner.download_anyway(job_id)
         if updated is None:
             raise HTTPException(409, "This review can't be written out.")
@@ -403,11 +491,21 @@ def register(app: FastAPI) -> None:
     @app.get("/api/jobs/{job_id}/file/{which}")
     def download(job_id: str, which: str, owner: str = Depends(owner_for)):
         """Serve a result over HTTP — the browser build's way of handing a file
-        over, and the fallback when the desktop window cannot open one."""
+        over, and the fallback when the desktop window cannot open one.
+
+        Not gated on a local results folder any more: a job whose folder was
+        wiped by a redeploy, or one restored from the archive with no local
+        results at all, still serves — `_resolve_result` fetches the file back
+        from Drive and re-caches it."""
         job = _owned_job(job_id, owner)
-        if job is None or not job.results_dir:
+        if job is None:
             raise HTTPException(404, "No results for this review yet")
-        path = _result_path(job, which)
+        name = _result_name(job, which)
+        if name is None:
+            raise HTTPException(404, "Unknown file")
+        path = _resolve_result(job, name)
+        if path is None:
+            raise HTTPException(404, f"{name} is missing")
         return FileResponse(path, filename=path.name)
 
     @app.post("/api/jobs/{job_id}/open/{which}")
@@ -473,13 +571,19 @@ def register(app: FastAPI) -> None:
     def prep_notes(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """What prep did, read back for the results screen."""
         job = _owned_job(job_id, owner)
-        if job is None or not job.results_dir:
+        if job is None:
             raise HTTPException(404, "No results for this job yet")
-        path = Path(job.results_dir) / "prep.json"
-        if not path.is_file():
+        path = _resolve_result(job, "prep.json")
+        if path is None:
             raise HTTPException(404, "This job has no prep notes")
         data = json.loads(path.read_text("utf-8"))
-        data["files"] = {kind: (Path(job.results_dir) / name).is_file()
+        # Which deliverables exist, counting the archive so a restored job's
+        # buttons still light up (their first click fetches the file back).
+        def _present(name: str) -> bool:
+            if job.results_dir and (Path(job.results_dir) / name).is_file():
+                return True
+            return name in job.drive_files
+        data["files"] = {kind: _present(name)
                          for kind, name in
                          (("indesign", f"tagged_{Path(job.filename).stem}.docx"),
                           ("tracked", f"tracked_{Path(job.filename).stem}.docx"))}
@@ -509,10 +613,10 @@ def register(app: FastAPI) -> None:
     def report(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """The findings, read back as prose rather than as a record."""
         job = _owned_job(job_id, owner)
-        if job is None or not job.results_dir:
+        if job is None:
             raise HTTPException(404, "No results for this review yet")
-        path = Path(job.results_dir) / "findings.json"
-        if not path.is_file():
+        path = _resolve_result(job, "findings.json")
+        if path is None:
             raise HTTPException(404, "This review has no findings file")
         cfg = load_config(CONFIG_PATH)
         rows = list_prompts(ERROR_DIR, app.state.paths.prompts,

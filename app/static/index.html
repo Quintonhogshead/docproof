@@ -461,6 +461,40 @@
     </div>
 
     <div class="card">
+      <h3>Output archive</h3>
+      <p class="muted small">Every finished job — reviews, formatting, promo,
+        from the app or the watched folder — is copied into one Drive folder,
+        sorted into <code>Reviews</code>, <code>Prep</code> and <code>Promo</code>
+        by month. It is the durable record: the deliverables outlive a redeploy,
+        and the whole list can be rebuilt from it. Turning it on also files
+        everything already finished.</p>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-archive-enabled">
+        Keep a copy of every output in Drive
+      </label>
+
+      <label class="field">
+        <span>The archive folder <small class="muted">— open it in a browser and
+          paste the whole address from the bar</small></span>
+        <input type="text" id="watch-archive-folder"
+               placeholder="https://drive.google.com/drive/folders/…">
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" id="watch-archive-source" checked>
+        Keep the original manuscript too
+        <small class="muted">So a job can be re-run after a loss, not just read.
+          Off keeps originals only in their own folders.</small>
+      </label>
+
+      <div class="job-actions">
+        <button id="watch-archive-save" class="primary">Save</button>
+      </div>
+      <p id="watch-archive-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
       <h3>A pass</h3>
       <p id="watch-run-state" class="muted">—</p>
       <div class="bar" id="watch-progress" hidden><i></i></div>
@@ -845,6 +879,21 @@
         the server, and never shown again once saved. A key set in the server's
         environment is used until you override it here.</p>
       <div id="admin-keys"></div>
+    </div>
+
+    <div class="card">
+      <h3>Drive archive recovery</h3>
+      <p class="muted">If this server ever comes up with its job list gone — a
+        lost or replaced disk — rebuild it from the Drive output archive. Every
+        job's record is recreated from its saved copy; documents come back the
+        first time anyone opens them. Nothing already here is touched, and it is
+        safe to run more than once. A fresh, empty server does this on its own;
+        this is the button for doing it by hand. Set the archive up under
+        <strong>DocWatch</strong> first.</p>
+      <div class="job-actions">
+        <button type="button" id="admin-restore">Rebuild from Drive</button>
+      </div>
+      <p id="admin-restore-note" class="action-note" hidden></p>
     </div>
 
     <div class="card">
