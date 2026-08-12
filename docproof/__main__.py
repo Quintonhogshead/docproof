@@ -47,6 +47,11 @@ def main(argv=None) -> int:
                                     "(e.g. chunk-003,chunk-007)")
     rev.add_argument("--mock-findings",
                      help="JSON file of raw findings; skips the API entirely")
+    rev.add_argument("--rounds", type=int,
+                     help="review this many times, each round reading the "
+                          "previous round's corrections, with a strong judge "
+                          "ruling on every change between rounds "
+                          "(default: config rounds.count)")
 
     sub_batch = sub.add_parser(
         "submit", help="queue a review at batch prices (50%% cheaper, "
@@ -224,6 +229,29 @@ def cmd_review(args) -> int:
     cfg, error_dir = _configure(args)
     out = Path(cfg.output_dir)
     setup_logging(out)
+
+    if args.rounds is not None:
+        cfg.rounds.count = args.rounds
+    if cfg.rounds.count > 1:                          # multi-round review
+        from .rounds import run_sync_rounds
+        canned = None
+        if args.mock_findings:
+            canned = _load_mocks(args.mock_findings)
+            if canned is None:
+                return 2
+        try:
+            outputs = run_sync_rounds(cfg, args.input, error_dir, out_dir=out,
+                                      source_path=args.input,
+                                      mock_findings=canned)
+        except (IngestError, FileNotFoundError, ValueError, ProviderError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        print(f"\n{outputs.applied} tracked change(s) applied.")
+        for p in (outputs.reviewed_path, outputs.change_log,
+                  outputs.summary_md, outputs.findings_json, out / "run.log"):
+            if p is not None:
+                print(f"  {p}")
+        return 0
 
     provider = None
     if not args.mock_findings:
