@@ -154,6 +154,11 @@ class Settings:
     # the subtle semantic tail at ~40x the cost. "off" disables the pass. The
     # submission panel offers a picker defaulting here. See GlossaryConfig.
     glossary_model: str = "gpt-5.6-luna"
+    # Default number of review rounds for a new submission. 1 is the ordinary
+    # single review; higher runs multi-round review (each round reads the
+    # previous round's corrections, with a strong judge between them). The
+    # submission panel offers a picker defaulting here. See RoundsConfig.
+    rounds: int = 1
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
     # Which file manuscript prep hands back by default: the InDesign-ready

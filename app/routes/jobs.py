@@ -50,6 +50,12 @@ class JobRequest(BaseModel):
     # Per-run pass toggles, {feature_id: on}. Omitted or empty leaves the config
     # defaults. Unknown ids are refused, not ignored — see create_jobs.
     features: dict[str, bool] | None = None
+    # Multi-round review: review the manuscript this many times, each round
+    # reading the previous round's corrections. None falls back to the saved
+    # default; 1 is the ordinary single review. judge_prompt is the panel-edited
+    # judge instructions; empty means the built-in default.
+    rounds: int | None = None
+    judge_prompt: str = ""
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -134,6 +140,12 @@ def register(app: FastAPI) -> None:
             raise HTTPException(
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
         effort = req.effort or app.state.settings.effort
+        # Multi-round review is a review-only knob; prep is always a single pass.
+        rounds = req.rounds if req.rounds is not None else app.state.settings.rounds
+        if req.kind == "prep":
+            rounds = 1
+        if not 1 <= rounds <= 4:
+            raise HTTPException(400, "rounds must be between 1 and 4")
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -190,6 +202,8 @@ def register(app: FastAPI) -> None:
                 effort=effort,
                 glossary_model=req.glossary_model or app.state.settings.glossary_model,
                 features=req.features or {},
+                rounds=rounds,
+                judge_prompt=req.judge_prompt,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -208,7 +222,14 @@ def register(app: FastAPI) -> None:
         cfg = load_config(CONFIG_PATH)
         cfg.comments = app.state.settings.comments
         cfg.report_explanations = app.state.settings.explanations
-        return {"features": featureslib.feature_catalog(cfg)}
+        # Rounds is not a boolean feature (a count + an editable prompt), so it
+        # rides alongside the catalog rather than in it. judge_prompt_default is
+        # what the panel pre-fills its textarea placeholder with; an empty submit
+        # keeps the engine's built-in default.
+        from docproof.verifier import default_judge_prompt
+        return {"features": featureslib.feature_catalog(cfg),
+                "rounds": {"default": app.state.settings.rounds, "max": 4,
+                           "judge_prompt_default": default_judge_prompt()}}
 
     def _card(job: Job) -> dict:
         """A job as the results card needs it: its own fields plus whether the

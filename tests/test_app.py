@@ -85,6 +85,36 @@ def _run(client, file_id, **body):
     return resp.json()["jobs"][0]
 
 
+# --- multi-round review (stage F) --------------------------------------------
+
+def test_features_endpoint_exposes_the_rounds_default(client):
+    body = client.get("/api/features").json()
+    assert body["rounds"]["default"] == 1
+    assert body["rounds"]["max"] == 4
+    assert body["rounds"]["judge_prompt_default"]      # the built-in prompt, for prefill
+
+
+def test_rounds_out_of_range_is_refused(client):
+    fid = _upload(client)["id"]
+    resp = client.post("/api/jobs", json={
+        "file_ids": [fid], "model": "claude-sonnet-5", "mode": "now", "rounds": 9})
+    assert resp.status_code == 400
+    assert "rounds" in resp.text
+
+
+def test_a_review_runs_multiple_rounds(client, provider):
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    fid = _upload(client)["id"]
+    job = _run(client, fid, rounds=2, judge_prompt="Keep only sure fixes.")
+    assert job["rounds"] == 2 and job["judge_prompt"] == "Keep only sure fixes."
+    client.app_state.runner.wait_idle()
+    final = client.get(f"/api/jobs/{job['id']}").json()
+    assert final["state"] == "done", final.get("error")     # ran the multi-round path
+    assert final["applied"] >= 1                            # round 1's fix survived
+
+
 # --- upload -------------------------------------------------------------------
 
 def test_upload_preflights_at_drop_time(client):

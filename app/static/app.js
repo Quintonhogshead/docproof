@@ -831,6 +831,7 @@ async function loadModels() {
 
 $('model').addEventListener('change', renderCost);
 $('glossary-model').addEventListener('change', renderCost);
+$('rounds').addEventListener('change', () => { syncRounds(); renderCost(); });
 
 // ── passes & features ─────────────────────────────────────────────────────
 // The submission panel's switches, one per togglable pass, grouped and each
@@ -848,10 +849,27 @@ async function loadFeatures() {
   try {
     const body = await api('/api/features');
     state.features = body.features || [];
+    if (body.rounds) {
+      // Prefill the rounds default and the judge-prompt placeholder. The
+      // placeholder (not the value) carries the built-in default, so an
+      // untouched submit stays empty and the engine falls back to it.
+      if ($('rounds')) $('rounds').value = String(body.rounds.default || 1);
+      if ($('judge-prompt')) {
+        $('judge-prompt').placeholder = body.rounds.judge_prompt_default || '';
+      }
+      syncRounds();
+    }
   } catch (_) {
     state.features = [];               // panel stays empty; the review still runs
   }
   renderFeatures();
+}
+
+function syncRounds() {
+  // The judge instructions only matter with 2+ rounds; reveal them then.
+  const n = Number(($('rounds') || {}).value || 1);
+  const judge = $('judge-field');
+  if (judge) judge.hidden = n < 2;
 }
 
 function renderFeatures() {
@@ -1281,6 +1299,8 @@ $('start').addEventListener('click', async () => {
           effort: effortValue(),
           glossary_model: $('glossary-model').value,
           features: collectFeatures(),
+          rounds: Number($('rounds').value),
+          judge_prompt: $('judge-prompt').value,
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
