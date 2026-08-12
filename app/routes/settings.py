@@ -16,6 +16,7 @@ class SettingsUpdate(BaseModel):
     model: str | None = None
     min_confidence: str | None = None
     effort: str | None = None
+    rounds: int | None = None
     output_dir: str | None = None
     default_mode: str | None = None
     comments: bool | None = None
@@ -45,9 +46,11 @@ def register(app: FastAPI) -> None:
         if update.effort is not None and update.effort not in settingslib.EFFORT_LEVELS:
             raise HTTPException(
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
-        for field_name in ("model", "min_confidence", "effort", "output_dir",
-                           "default_mode", "prep_output", "comments",
-                           "explanations", "indesign_template"):
+        if update.rounds is not None and not 1 <= update.rounds <= 4:
+            raise HTTPException(400, "rounds must be between 1 and 4")
+        for field_name in ("model", "min_confidence", "effort", "rounds",
+                           "output_dir", "default_mode", "prep_output",
+                           "comments", "explanations", "indesign_template"):
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)

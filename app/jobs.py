@@ -142,6 +142,13 @@ class Job:
     # Per-run pass toggles: {feature_id: on}. Empty (older records, or a run that
     # touched nothing) means "use the config defaults". See app/features.py.
     features: dict[str, bool] = field(default_factory=dict)
+    # Multi-round review: review the manuscript this many times, each round
+    # reading the previous round's corrections, with a strong judge between
+    # rounds. 1 (older records, or the ordinary run) is a single review. The
+    # judge's instructions, edited on the panel; empty means the built-in
+    # default. See docproof/rounds.py and docproof/verifier.py.
+    rounds: int = 1
+    judge_prompt: str = ""
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -408,8 +415,15 @@ class JobRunner:
             # writing, so starting again lands in the same place rather than
             # orphaning it. A re-run promo pays for its one call again — it keeps
             # no checkpoint — which is a rare price for a crash mid-write.
+            # A multi-round review owns its whole run on the worker (both modes),
+            # so a batch one interrupted mid-run is re-queued here too — it is not
+            # ticker-owned and would otherwise sit "running" forever. It restarts
+            # from round 1 (the driver is not round-level resumable); any vendor
+            # batches it had in flight are abandoned.
+            multiround = job.rounds > 1 and job.state == "running"
             interrupted = (job.state == "running" and job.mode == "now") or (
-                (job.is_prep or job.is_promo) and job.state == "collecting")
+                (job.is_prep or job.is_promo) and job.state == "collecting"
+                ) or multiround
             if interrupted:
                 log.info("Re-queueing %s, interrupted by a restart", job.id)
                 self.store.update(job.id, state="queued")
@@ -480,6 +494,11 @@ class JobRunner:
             cfg.glossary.enabled = False
         elif job.glossary_model:
             cfg.glossary.model = job.glossary_model
+        # Multi-round review. count 1 is the ordinary single review; an empty
+        # judge_prompt is the engine's "use the built-in default" sentinel, so
+        # it passes through verbatim.
+        cfg.rounds.count = job.rounds
+        cfg.rounds.judge_prompt = job.judge_prompt
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
         # Per-run feature switches land last, so a toggle the user set on the
@@ -722,10 +741,81 @@ class JobRunner:
             self._run_prep(job_id)
         elif job.is_promo:
             self._run_promo(job_id)
+        elif job.rounds > 1:
+            # Multi-round review owns its whole run on the worker thread (the
+            # rounds are sequential — round k+1 reads round k's corrections — so
+            # a batch run cannot be spread across ticker passes the way a single
+            # batch is). It runs to completion here, sync or batch by mode.
+            self._run_rounds(job_id)
         elif job.mode == "batch":
             self._submit_batch(job_id)
         else:
             self._run_now(job_id)
+
+    def _run_rounds(self, job_id: str) -> None:
+        """Run a multi-round review to completion on the worker thread.
+
+        The rounds driver (docproof.rounds) does the whole pipeline per round and
+        assembles the deliverable with finish, so this is thinner than _run_now:
+        build the two providers (the detector model, and the judge model/effort
+        from rounds config), then block in the driver. Sync or batch by mode; a
+        batch run polls its own rounds rather than yielding to the ticker."""
+        from docproof.rounds import run_batch_rounds, run_sync_rounds
+
+        job = self.store.get(job_id)
+        if job is None or job.state not in ("queued", "running"):
+            return
+        cfg = self.config_for(job)
+        self.store.update(job_id, stage="preparing")
+        try:
+            review_provider = self._provider(cfg)
+            jcfg = cfg.model_copy(deep=True)
+            jcfg.api.model = cfg.rounds.judge_model
+            jcfg.api.effort = cfg.rounds.judge_effort
+            judge_provider = self._provider(jcfg)
+        except (ProviderError, ValueError) as e:
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e))
+            return
+
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=0) is None:
+            return
+        self.store.update(job_id, stage="reviewing")
+        out = self._claim_results_dir(job)
+        try:
+            if job.mode == "batch":
+                outputs = run_batch_rounds(
+                    cfg, job.source_path, self.error_dir,
+                    str(out / "rounds-ws"), out_dir=out,
+                    review_provider=review_provider,
+                    judge_provider=judge_provider)
+            else:
+                outputs = run_sync_rounds(
+                    cfg, job.source_path, self.error_dir, out_dir=out,
+                    review_provider=review_provider,
+                    judge_provider=judge_provider)
+        except AuditError as e:
+            log.error("Multi-round review for %s failed its reject-all audit: "
+                      "%s", job.id, e)
+            self.store.update(job_id, state="failed", error=str(e),
+                              results_dir=str(out), audit_failed=True)
+            self._record_usage(job_id, out, cfg.api.model,
+                               batch=job.mode == "batch")
+            return
+        except (ProviderError, IngestError, batchlib.BatchError,
+                FileNotFoundError, ValueError) as e:
+            self._release_results_dir(job_id)
+            self.store.update_if(job_id, expect="running", state="failed",
+                                 error=str(e))
+            return
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+        self.store.update(job_id, state="done", applied=outputs.applied,
+                          results_dir=str(out), error=None, stage="")
+        self._record_usage(job_id, out, cfg.api.model, batch=job.mode == "batch")
+        self._notify_done(job_id)
 
     def _run_now(self, job_id: str) -> None:
         job = self.store.get(job_id)

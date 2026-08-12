@@ -165,6 +165,31 @@
             pass misses. Opus is the default; “Off” skips it.</small>
         </label>
 
+        <label class="field review-only" id="rounds-field">
+          <span>Review rounds</span>
+          <select id="rounds">
+            <option value="1">1 — standard</option>
+            <option value="2">2</option>
+            <option value="3">3 — intensive</option>
+            <option value="4">4</option>
+          </select>
+          <small class="muted">Review the manuscript several times, each round
+            reading the previous round's corrections, with a strong judge ruling
+            on every change between rounds. Catches errors a single pass misses;
+            costs more and takes longer. You still get one document with all the
+            tracked changes.</small>
+        </label>
+
+        <details class="field review-only" id="judge-field" hidden>
+          <summary>Judge instructions<span class="muted"> — how the
+            between-round judge decides</span></summary>
+          <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
+          <small class="muted">The instructions the between-round judge follows
+            when deciding which corrections to keep. Leave blank to use the
+            built-in default (shown here as the placeholder). Only used with 2+
+            rounds.</small>
+        </details>
+
         <details class="field review-only" id="features-field">
           <summary>Passes &amp; features<span class="muted"> — what runs on this
             review</span></summary>
