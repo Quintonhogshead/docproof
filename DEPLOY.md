@@ -231,6 +231,24 @@ code changes never need this.
 - An admin sees everyone's month-to-date in the **Admin** tab, and the raw
   per-user totals at `GET /api/admin/usage`.
 
+### Enabling the LanguageTool pass
+
+LanguageTool is an optional local mechanical-floor pass — a Java rules checker
+that proposes commas / missing words / hyphenation the model misses, routed
+through the same confirm valve. It ships **off** and stays off until a paired
+Johnson compare proves it earns its keep (see `docs/measuring-recall.md`).
+
+The image and machine are already prepared: the Docker image carries a headless
+JRE and the `[languagetool]` extra, the machine is sized at 2 GB for the JVM, and
+`LTP_JAR_DIR_PATH` points the ~260 MB jar at the `/data` volume. To turn it on:
+
+1. Set `languagetool.enabled: true` in the config the server loads, and redeploy.
+2. The **first review after enabling** downloads the jar to `/data/languagetool`
+   (one-time, ~30–60 s, then cached and surviving redeploys).
+
+Everything above the config flag is done; do **not** flip it until the measurement
+says so.
+
 ---
 
 ## 5. Backups and restore
