@@ -263,10 +263,26 @@ def poll(job: Job, provider: Provider, workspace: str | Path) -> BatchStatus:
     return status
 
 
-def collect(job: Job, provider: Provider, error_dir: str | Path,
-            workspace: str | Path, *,
-            out_dir: str | Path | None = None) -> Outputs:
-    """Fetch results and run the rest of the pipeline.
+@dataclass(frozen=True)
+class CollectResult:
+    """A batch's raw findings plus everything needed to finish them: the config
+    and prepared document the requests were built from, the accumulated usage and
+    coverage, the source path, and any rewrite rejects to log."""
+    cfg: Config
+    prepared: Prepared
+    findings: list
+    usage: Usage
+    coverage: CoverageLedger
+    source: Path
+    rewrite_rejects: list | None
+
+
+def collect_findings(job: Job, provider: Provider,
+                     error_dir: str | Path) -> CollectResult:
+    """Fetch a batch's results and run every synchronous post-step, returning
+    the RAW findings before the document is assembled — the point a caller can
+    act on them. `collect` wraps this with finish; the multi-round driver runs
+    the judge over these findings and folds them, finishing once at the end.
 
     The source document is re-ingested here: the walker is deterministic, so
     re-reading an unchanged file reproduces the exact paragraph list the
@@ -288,6 +304,7 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     results = provider.collect_batch(job.batch_id)
     coverage = CoverageLedger()
     findings, usage = _assemble(cfg, prepared, results, provider, coverage)
+    rewrite_rejects = None
 
     # The glossary and adjudication passes are synchronous post-steps: the
     # detector work rode the batch, but the whole-book glossary read is one call
@@ -401,11 +418,20 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
         finally:
             lt_shutdown()
 
+    return CollectResult(cfg, prepared, findings, usage, coverage, source,
+                         rewrite_rejects)
+
+
+def collect(job: Job, provider: Provider, error_dir: str | Path,
+            workspace: str | Path, *,
+            out_dir: str | Path | None = None) -> Outputs:
+    """Fetch a batch's results and assemble the reviewed document."""
+    r = collect_findings(job, provider, error_dir)
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
-    if cfg.rewrite.enabled and prepared.whole_document and rewrite_rejects:
-        _write_rewrite_rejects(out, rewrite_rejects)
-    outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                     source_path=source, batch=True, coverage=coverage)
+    if r.cfg.rewrite.enabled and r.prepared.whole_document and r.rewrite_rejects:
+        _write_rewrite_rejects(out, r.rewrite_rejects)
+    outputs = finish(r.prepared, r.findings, r.usage, r.cfg, out_dir=out,
+                     source_path=r.source, batch=True, coverage=r.coverage)
     job.state = "done"
     save(job, workspace)
     log.info("Job %s collected: %d change(s) applied", job.job_id,
