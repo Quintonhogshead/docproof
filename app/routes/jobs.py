@@ -210,13 +210,23 @@ def register(app: FastAPI) -> None:
         cfg.report_explanations = app.state.settings.explanations
         return {"features": featureslib.feature_catalog(cfg)}
 
+    def _card(job: Job) -> dict:
+        """A job as the results card needs it: its own fields plus whether the
+        "Finish collecting" affordance applies (a failed batch whose vendor
+        results are still there to re-collect, cheaply, instead of resubmitting).
+        The flag is computed here because it depends on batch state on disk that
+        the plain `to_api` can't see."""
+        d = job.to_api()
+        d["recoverable"] = app.state.runner.can_recover(job)
+        return d
+
     @app.get("/api/jobs")
     def list_jobs(owner: str = Depends(owner_for)) -> dict:
         # Promo has its own panel, so its jobs stay out of the Results list —
         # a promo run is not a reviewed document and its card would not render
         # as one. It is still reachable by id (download, delete) from there.
         scope = owner if app.state.web else None
-        return {"jobs": [j.to_api() for j in app.state.store.all(scope)
+        return {"jobs": [_card(j) for j in app.state.store.all(scope)
                          if not j.is_promo]}
 
     @app.get("/api/jobs/{job_id}")
@@ -224,7 +234,7 @@ def register(app: FastAPI) -> None:
         job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No such review")
-        return job.to_api()
+        return _card(job)
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str, owner: str = Depends(owner_for)) -> dict:
@@ -238,6 +248,29 @@ def register(app: FastAPI) -> None:
                                      "retried.")
         store.update(job_id, state="queued", error=None, done=0)
         return runner.enqueue(store.get(job_id)).to_api()
+
+    @app.post("/api/jobs/{job_id}/recover")
+    def recover(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        """Finish an overnight review that failed *after* its batch completed.
+
+        The batch is already billed and its results still sit at the vendor, so
+        this re-collects them instead of running the review again — unlike
+        Retry, which resubmits a fresh batch and pays twice. Only offered for a
+        failed review that still has a completed batch waiting to be collected;
+        an audit failure is refused here (that one has "Download anyway")."""
+        runner: JobRunner = app.state.runner
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review")
+        if job.state != "failed":
+            raise HTTPException(400, "Only reviews that need attention can be "
+                                     "recovered.")
+        updated = runner.recover(job_id)
+        if updated is None:
+            raise HTTPException(
+                400, "There is no completed overnight batch to recover for this "
+                     "review — use Retry to run it again.")
+        return updated.to_api()
 
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str, owner: str = Depends(owner_for)) -> dict:

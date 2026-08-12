@@ -47,7 +47,9 @@ languagetool = [
     # The local rules-based mechanical-floor pass (docproof/languagetool.py). Opt
     # in and off by default: enabling it also needs a Java runtime, and the
     # library downloads the LanguageTool jar (~260 MB, cached) on first use.
-    "language_tool_python>=2.8",
+    # Pinned to the 3.x line: 3.3 relocated the jar-cache env var to LTP_PATH
+    # (see fly.toml), so an unbounded pin risks another silent semantics shift.
+    "language_tool_python>=3.4,<4",
 ]
 build = [
     "pyinstaller>=6.0",

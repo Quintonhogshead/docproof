@@ -275,6 +275,75 @@ def test_update_if_only_wins_when_the_state_still_matches(runner):
         == "cancelled"
 
 
+# --- recovering a batch that landed after the collect failed ------------------
+#
+# The batch is billed and its results sit at the vendor, so a collect-time
+# failure must be finished by re-collecting, not resubmitted (that is `retry`,
+# which pays for the same batch twice).
+
+def _failed_batch_job(store, **over):
+    """A review that failed with a completed batch still at the vendor: the
+    batch_job_id file is what marks "there is a batch to collect"."""
+    job = _job(store, mode="batch", state="failed",
+               error="LanguageTool not found in /root/.cache/language_tool_python.",
+               **over)
+    (store.dir(job.id) / "batch_job_id").write_text("batch-1", "utf-8")
+    return job
+
+
+def test_recover_sends_a_failed_batch_back_to_be_collected(runner):
+    store, r = runner
+    _failed_batch_job(store)
+
+    updated = r.recover("j1")
+
+    assert updated is not None
+    # Back on the ticker's collect path (waiting/collecting), not resubmitted
+    # (queued), so the paid batch is reused instead of billed again.
+    assert updated.state == "waiting"
+    assert updated.error is None
+    assert store.get("j1").state == "waiting"
+
+
+def test_recover_refuses_a_failure_with_no_batch_at_the_vendor(runner):
+    """A "now" run, or a batch that died before it was ever submitted, has
+    nothing at the vendor — recover leaves it failed for Retry to rerun."""
+    store, r = runner
+    _job(store, mode="batch", state="failed", error="ingest blew up")
+
+    assert r.recover("j1") is None
+    assert store.get("j1").state == "failed"
+
+
+def test_recover_refuses_an_audit_failure(runner):
+    """A reject-all audit failure would only fail the same audit again; it has
+    its own Download-anyway path, so recover declines it."""
+    store, r = runner
+    _failed_batch_job(store, audit_failed=True)
+
+    assert r.recover("j1") is None
+    assert store.get("j1").state == "failed"
+
+
+def test_recover_ignores_a_job_that_did_not_fail(runner):
+    store, r = runner
+    _job(store, mode="batch", state="waiting")
+    (store.dir("j1") / "batch_job_id").write_text("batch-1", "utf-8")
+
+    assert r.recover("j1") is None
+
+
+def test_can_recover_matches_what_recover_will_do(runner):
+    store, r = runner
+    recoverable = _failed_batch_job(store, id="good")
+    no_batch = _job(store, id="nobatch", mode="batch", state="failed")
+    audit = _failed_batch_job(store, id="audit", audit_failed=True)
+
+    assert r.can_recover(recoverable) is True
+    assert r.can_recover(no_batch) is False
+    assert r.can_recover(audit) is False
+
+
 # --- resuming what was already paid for ---------------------------------------
 #
 # The afternoon this exists because of: a 192-call review was interrupted and

@@ -20,7 +20,13 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # LanguageTool caches its ~260 MB jar here, on the mounted /data volume, so it
   # downloads once and survives redeploys. Harmless while the pass is disabled
   # (the default); only read when languagetool.enabled is set.
-  LTP_JAR_DIR_PATH = "/data/languagetool"
+  #
+  # This MUST be LTP_PATH, not LTP_JAR_DIR_PATH: in language_tool_python >=3.3 the
+  # server-start path locates the jar via LTP_PATH (default ~/.cache), while
+  # LTP_JAR_DIR_PATH only suppresses the download and is otherwise ignored — set
+  # alone it makes the library skip the download AND look in ~/.cache, which is
+  # empty on Fly ("LanguageTool not found in /root/.cache/language_tool_python").
+  LTP_PATH = "/data/languagetool"
 
 [http_service]
   internal_port = 8000

@@ -8,7 +8,7 @@ WORKDIR /app
 # the image carries a headless JRE and installs the [languagetool] extra. This
 # only makes the image CAPABLE of running the pass — it stays off by default
 # (languagetool.enabled: false). The ~260 MB LanguageTool jar is NOT baked in; it
-# downloads on first use to LTP_JAR_DIR_PATH, which fly.toml points at the mounted
+# downloads on first use to LTP_PATH, which fly.toml points at the mounted
 # /data volume so it downloads once and survives redeploys. Before enabling the
 # pass, bump the machine memory (see fly.toml) — the JVM needs its own heap.
 RUN apt-get update \
