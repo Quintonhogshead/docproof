@@ -53,8 +53,11 @@ document.querySelectorAll('.tab').forEach((tab) => {
 $('watch-banner').addEventListener('click', () => show('watch'));
 
 function show(name) {
+  // The report has no tab of its own; it is reached from Results, so keep that
+  // tab lit while it is open rather than leaving the nav with nothing current.
+  const current = name === 'report' ? 'jobs' : name;
   document.querySelectorAll('.tab').forEach((t) => {
-    t.setAttribute('aria-current', String(t.dataset.screen === name));
+    t.setAttribute('aria-current', String(t.dataset.screen === current));
   });
   ['drop', 'jobs', 'report', 'compare', 'watch', 'promo', 'spending',
    'prompts', 'settings', 'admin'].forEach((s) => {
@@ -1156,6 +1159,21 @@ function pricePromo(m) {
   return cost;
 }
 
+// The compact figure echoed beside the sticky Start button, so the price is in
+// reach without scrolling back up to the "When?" or cost lines. Empty when
+// there is nothing to price yet; "~ $X" otherwise, marked rough when the
+// estimate is.
+function setStartPrice(value, { approx = false } = {}) {
+  const el = $('start-price');
+  if (!el) return;
+  if (typeof value !== 'number' || !filesToRun().length) {
+    el.textContent = '';
+    return;
+  }
+  const dollars = value < 0.01 ? value.toFixed(3) : value.toFixed(2);
+  el.textContent = `${approx ? '≈' : '~'} $${dollars}`;
+}
+
 function renderCost() {
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
@@ -1178,6 +1196,7 @@ function renderCost() {
       : '';
     const ready = m && m.available && files.length > 0;
     $('start').disabled = !ready;
+    setStartPrice(m && files.length ? pricePrep(m) : null);
     modelHint(m);
     return;
   }
@@ -1197,6 +1216,10 @@ function renderCost() {
 
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
+  // The sticky echo follows the chosen timing — overnight or now — since that
+  // is the price the button is about to spend.
+  setStartPrice(mode() === 'batch' ? price.batch : price.now,
+                { approx: price.approx });
   modelHint(m);
 }
 
@@ -1216,6 +1239,7 @@ function renderPromoCost(m, money) {
     compare.hidden = true;
     warn.hidden = true;
     $('start').disabled = true;
+    setStartPrice(null);
     return;
   }
 
@@ -1262,6 +1286,7 @@ function renderPromoCost(m, money) {
   }
 
   $('start').disabled = !(m && m.available && (!over || ok.checked));
+  setStartPrice(m ? pricePromo(m) : null);
 }
 
 // A disabled button with no explanation is the worst first-run experience
@@ -1290,6 +1315,7 @@ $('schedule-on').addEventListener('change', () => {
 document.querySelectorAll('input[name="mode"]').forEach((r) =>
   r.addEventListener('change', () => {
     $('schedule-wrap').hidden = mode() !== 'batch';
+    renderCost();          // the sticky price echoes the chosen timing
   }));
 
 const mode = () => document.querySelector('input[name="mode"]:checked').value;
@@ -1598,16 +1624,12 @@ function renderJobs(jobs) {
       remove.className = 'link job-remove';
       remove.textContent = 'Remove';
       remove.title = 'Remove from this list and delete its downloaded files';
-      remove.addEventListener('click', async () => {
-        if (!confirm(`Remove “${job.filename}” from the list? This also `
-          + `deletes its downloaded files, and can't be undone.`)) return;
-        remove.disabled = true;
+      confirmInline(remove, 'Remove this and delete its files?', async (row) => {
         try {
           await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
-          refreshJobs();
+          refreshJobs();                     // the whole list redraws; row goes
         } catch (err) {
-          remove.disabled = false;
-          alert(err.message || 'Could not remove this one.');
+          row.fail(err.message || 'Could not remove this one.');
         }
       });
       li.append(remove);
@@ -1640,6 +1662,43 @@ function actionNote() {
   p.className = 'action-note error';
   p.hidden = true;
   return p;
+}
+
+// A two-step confirm in place of a native dialog, for a destructive button that
+// deletes files. The first click swaps the button for a short warning and
+// Remove / Keep; Keep restores the button, Remove runs `onConfirm(row)`. `row`
+// carries a `.fail(message)` so a failed deletion reports where it happened
+// instead of a system alert. On success the caller usually redraws the list, so
+// the transient row simply goes with it.
+function confirmInline(button, prompt, onConfirm) {
+  button.addEventListener('click', () => {
+    const row = document.createElement('span');
+    row.className = 'confirm-inline';
+    const msg = document.createElement('span');
+    msg.className = 'confirm-msg';
+    msg.textContent = prompt;
+    const yes = document.createElement('button');
+    yes.className = 'danger';
+    yes.textContent = 'Remove';
+    const no = document.createElement('button');
+    no.className = 'quiet';
+    no.textContent = 'Keep';
+    row.append(msg, yes, no);
+    row.fail = (message) => {
+      msg.textContent = message;
+      yes.hidden = true;
+      no.textContent = 'Dismiss';
+      no.disabled = false;
+    };
+    no.addEventListener('click', () => row.replaceWith(button));
+    yes.addEventListener('click', async () => {
+      yes.disabled = true;
+      no.disabled = true;
+      await onConfirm(row);
+    });
+    button.replaceWith(row);
+  });
+  return button;
 }
 
 // The window this app runs in cannot display a Word file and will not download
@@ -2335,8 +2394,14 @@ async function refreshPromoJobs() {
 }
 
 function renderPromoJobs(jobs) {
-  $('promo-empty').hidden = jobs.length > 0;
   const box = $('promo-jobs');
+  // While an editor is open, don't rebuild the list. A poll fires every couple
+  // of seconds; replacing the cards would wipe the unsaved teaser and post
+  // edits — and the caret with them — mid-keystroke. The open job is already
+  // 'done' and its content can't change underneath the editor, and the next
+  // poll after it closes catches everything else up.
+  if (box.querySelector('.promo-edit[open]')) return;
+  $('promo-empty').hidden = jobs.length > 0;
   box.innerHTML = '';
   jobs.forEach((job) => box.append(promoCard(job)));
 }
@@ -2473,11 +2538,13 @@ function promoActions(job) {
   }
   const remove = document.createElement('button');
   remove.className = 'link'; remove.textContent = 'Remove';
-  remove.addEventListener('click', async () => {
-    if (!confirm(`Remove the promo copy for ${job.filename}?`)) return;
-    try { await api(`/api/jobs/${job.id}`, { method: 'DELETE' }); }
-    catch (e) { alert(e.message); return; }
-    await refreshPromoJobs();
+  confirmInline(remove, 'Remove this promo copy?', async (confirmRow) => {
+    try {
+      await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
+      await refreshPromoJobs();            // redraws; the transient row goes
+    } catch (e) {
+      confirmRow.fail(e.message || 'Could not remove this one.');
+    }
   });
   row.append(remove);
   return row;
@@ -2635,8 +2702,19 @@ function renderMonths(months) {
 // ── prompts ───────────────────────────────────────────────────────────────
 
 async function loadPrompts() {
-  const data = await api('/api/prompts');
   const list = $('prompt-list');
+  let data;
+  try {
+    data = await api('/api/prompts');
+  } catch (err) {
+    // Without this the tab just goes blank on a failed load; say what happened.
+    list.innerHTML = '';
+    const p = document.createElement('p');
+    p.className = 'error';
+    p.textContent = err.message;
+    list.append(p);
+    return;
+  }
   list.innerHTML = '';
   data.types.forEach((t) => list.append(promptCard(t)));
 
@@ -2804,7 +2882,9 @@ function renderWatchSignIn(body) {
   line.textContent = w.signed_in
     ? (w.token_source === 'environment'
       ? 'Signed in — the sign-in came from your environment.'
-      : 'Signed in. The sign-in is in your Keychain, not in a file.')
+      : WEB
+        ? 'Signed in. The sign-in is held on the server, not in a file.'
+        : 'Signed in. The sign-in is in your Keychain, not in a file.')
     : 'Not signed in to Google yet.';
 
   const go = document.createElement('button');

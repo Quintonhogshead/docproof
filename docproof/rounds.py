@@ -274,7 +274,7 @@ def _merge_usage(dst: Usage, src) -> None:
 
 def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
                     review_provider=None, judge_provider=None,
-                    mock_findings=None, on_progress=None):
+                    mock_findings=None, on_progress=None, should_cancel=None):
     """Run multi-round review synchronously and write the deliverable.
 
     Returns the same `Outputs` as a single review. `review_provider` and
@@ -287,10 +287,15 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     once as each round starts (done and total both 0 — the working document is
     still being rebuilt and re-ingested then), and again per folded call as that
     round's run_sync counts its sections. The section count starts over every
-    round; the round number is what keeps that legible on a card."""
+    round; the round number is what keeps that legible on a card.
+
+    `should_cancel`, if given, is polled at each round's start and forwarded into
+    that round's run_sync (which polls it per folded call); when it first returns
+    true the run raises `JobCancelled`, so an abort stops before the next round's
+    spend rather than only hiding the result."""
     from pathlib import Path
 
-    from .pipeline import prepare, run_sync
+    from .pipeline import JobCancelled, prepare, run_sync
     from .providers import build_provider
 
     out_dir = Path(out_dir)
@@ -313,6 +318,8 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     captured: dict = {"format": []}
 
     def review(k, edits_by_para):
+        if should_cancel and should_cancel():
+            raise JobCancelled()
         if on_progress:
             on_progress(k, cfg.rounds.count, 0, 0)
         rcfg = _round_config(cfg, k, reuse)
@@ -332,7 +339,7 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
                 lambda done, total: on_progress(k, cfg.rounds.count,
                                                 done, total))
             raw, u = run_sync(rcfg, prepared, review_provider,
-                              progress=progress)
+                              progress=progress, should_cancel=should_cancel)
         _merge_usage(usage, u)
         rr, fmt = _round_review(prepared, raw)
         if k == 1:
@@ -347,7 +354,7 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
 def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
                      source_path=None, review_provider=None,
                      judge_provider=None, poll_interval=30.0,
-                     on_progress=None):
+                     on_progress=None, should_cancel=None):
     """Run multi-round review on the batch path and write the deliverable.
 
     Each round submits a review batch on the current working document, waits for
@@ -360,12 +367,17 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
 
     `on_progress`, if given, is called with (round, total_rounds, done, total)
     as each round starts. A vendor batch reports no per-section progress while
-    it runs, so done and total stay 0 here — the round boundary is the signal."""
+    it runs, so done and total stay 0 here — the round boundary is the signal.
+
+    `should_cancel`, if given, is polled at each round's start and between polls
+    of the current round's batch; when it first returns true the run raises
+    `JobCancelled`. The batch already submitted has been paid for, but no further
+    round is submitted — the abort caps the spend at the round in flight."""
     import time
     from pathlib import Path
 
     from . import batch as batchlib
-    from .pipeline import prepare
+    from .pipeline import JobCancelled, prepare
     from .providers import build_provider
 
     out_dir = Path(out_dir)
@@ -388,6 +400,8 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
     captured: dict = {"format": []}
 
     def review(k, edits_by_para):
+        if should_cancel and should_cancel():
+            raise JobCancelled()
         if on_progress:
             on_progress(k, cfg.rounds.count, 0, 0)
         rcfg = _round_config(cfg, k, reuse)
@@ -401,6 +415,8 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
             if job.state == "failed":
                 raise batchlib.BatchError(
                     job.error or f"batch {job.batch_id} failed")
+            if should_cancel and should_cancel():
+                raise JobCancelled()
             time.sleep(poll_interval)
         r = batchlib.collect_findings(job, review_provider, error_dir)
         _merge_usage(usage, r.usage)
