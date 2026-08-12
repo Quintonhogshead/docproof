@@ -14,7 +14,7 @@ import queue
 import shutil
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -276,6 +276,15 @@ class Job:
         # each says which folder its results went to.
         d["results_name"] = (Path(self.results_dir).name
                              if self.results_dir else None)
+        # Whether this review wrote a change log — a config choice, so the card
+        # offers the download only when the file is actually there. One stat on
+        # a local disk, only for finished reviews.
+        d["has_change_log"] = bool(
+            d["format"] and self.kind == "review" and self.state == "done"
+            and self.results_dir
+            and (Path(self.results_dir)
+                 / get_format(self.filename).change_log_name(self.filename)
+                 ).is_file())
         return d
 
 
@@ -584,6 +593,10 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None or job.is_prep or job.state != "failed":
             return None
+        if job.rounds > 1:
+            # A multi-round run has no checkpoint to replay; it rebuilds from
+            # the composed snapshot its driver left beside the working files.
+            return self._download_anyway_rounds(job)
 
         cfg = self.config_for(job)                      # original: audit strict
         prepared = prepare(cfg, job.source_path, self.error_dir,
@@ -607,6 +620,50 @@ class JobRunner:
                                     results_dir=str(out), error=job.error)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._notify_done(job_id)
+        return updated
+
+    def _download_anyway_rounds(self, job: Job) -> Job | None:
+        """`download_anyway` for a multi-round review.
+
+        Costs nothing: the rounds driver snapshots its composed, original-
+        coordinate findings (rounds/composed.json) before the finish that can
+        fail the audit, so this rebuilds the deliverable exactly the way
+        _finalize does — a fresh package off the normalized base, the audit
+        downgraded to a warning for the write — without touching a provider.
+        Returns None (the route's 409) for a run from before the snapshot
+        existed, or one whose working files were cleaned away."""
+        from docproof.checkpoint import finding_from_dict
+        from docproof.models import Usage
+        from docproof.utils.xml_helpers import DocxPackage
+
+        out = Path(job.results_dir) if job.results_dir else None
+        composed = out / "rounds" / "composed.json" if out else None
+        base = out / "rounds" / "base.docx" if out else None
+        if not (composed and composed.is_file() and base.is_file()):
+            return None
+        try:
+            data = json.loads(composed.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("Unreadable rounds snapshot for %s: %s", job.id, e)
+            return None
+        findings = [finding_from_dict(d) for d in data["findings"]]
+        usage = Usage(**data.get("usage", {}))
+
+        cfg = self.config_for(job)
+        # The same deterministic ingest the run used; base.docx was saved from
+        # it, so paragraph ids line up. No provider is built or called.
+        prepared0 = prepare(cfg, job.source_path, self.error_dir)
+        cfg.audit = "warn"                              # let the write pass
+        prepared_final = replace(prepared0, pkg=DocxPackage(base),
+                                 sweep_findings=[], consistency_findings=[])
+        outputs = finish(prepared_final, findings, usage, cfg, out_dir=out,
+                         source_path=job.source_path)
+        updated = self.store.update(job.id, state="done", audit_overridden=True,
+                                    applied=outputs.applied,
+                                    results_dir=str(out), error=job.error)
+        self._record_usage(job.id, out, cfg.api.model,
+                           batch=job.mode == "batch")
+        self._notify_done(job.id)
         return updated
 
     def recover(self, job_id: str) -> Job | None:

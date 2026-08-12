@@ -73,6 +73,7 @@ def _result_name(job: Job, which: str) -> str | None:
         # across an upgrade keeps working.
         "document": get_format(job.filename).reviewed_name(job.filename),
         "docx": get_format(job.filename).reviewed_name(job.filename),
+        "changes": get_format(job.filename).change_log_name(job.filename),
         "summary": "summary.md",
         "findings": "findings.json",
         "indesign": f"tagged_{stem}.docx",

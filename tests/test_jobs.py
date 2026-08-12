@@ -845,3 +845,30 @@ def test_the_jobs_glossary_model_reaches_the_run_config(runner):
 
     off = r.config_for(_job(store, id="j2", glossary_model="off"))
     assert off.glossary.enabled is False
+
+
+def test_the_change_log_is_a_named_result(runner):
+    """The change log the review writes is reachable by name — the web build
+    has no Finder, so the download route is the only way to it."""
+    from app.routes.jobs import _result_name
+
+    store, _ = runner
+    job = _job(store, filename="Book.docx")
+    assert (_result_name(job, "changes")
+            == "Book - Pre-Proofread Change Log.docx")
+
+
+def test_to_api_flags_the_change_log_only_when_present(runner, tmp_path):
+    store, _ = runner
+    out = tmp_path / "results"
+    out.mkdir()
+    job = _job(store, filename="Book.docx", state="done",
+               results_dir=str(out))
+    assert job.to_api()["has_change_log"] is False    # config had it off
+
+    (out / "Book - Pre-Proofread Change Log.docx").write_bytes(b"x")
+    assert job.to_api()["has_change_log"] is True
+
+    prep = _job(store, id="j2", filename="Book.docx", state="done",
+                results_dir=str(out), kind="prep")
+    assert prep.to_api()["has_change_log"] is False   # reviews only

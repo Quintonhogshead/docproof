@@ -1526,6 +1526,14 @@ function renderJobs(jobs) {
       read.textContent = 'See what changed';
       read.addEventListener('click', () => openReport(job));
       actions.append(doc, read);
+      // The change log is a prose .docx the press can hand to an author. It is
+      // written per config, so the server says whether this review has one —
+      // on the web there is no Finder to find it in otherwise.
+      if (job.has_change_log) {
+        actions.append(openButton(job, 'changes',
+          WEB ? 'Download the change log' : 'Open the change log', note,
+          { quiet: true }));
+      }
       // "Show in Finder" only means something on the Mac the file lives on.
       if (!WEB) {
         actions.append(
@@ -1705,10 +1713,10 @@ function confirmInline(button, prompt, onConfirm) {
 // one, so "Open in Word" asks the app to hand the file to Word — it is sitting
 // in the user's own Documents folder already. Run in an ordinary browser, the
 // app says so and the file is downloaded instead.
-function openButton(job, which, text, note, { reveal = false } = {}) {
+function openButton(job, which, text, note, { reveal = false, quiet = false } = {}) {
   const button = document.createElement('button');
   button.textContent = text;
-  if (reveal) button.className = 'quiet';
+  if (reveal || quiet) button.className = 'quiet';
   button.addEventListener('click', async () => {
     // In the browser build there is no local app to hand the file to, and no
     // Finder to reveal it in — the honest thing is to download it.

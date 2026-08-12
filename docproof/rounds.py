@@ -512,14 +512,28 @@ def _finalize(cfg, prepared0, base_path, result, fmt_findings, usage, out_dir,
     already contain the sweep and consistency edits (folded every round), so this
     prepared has those emptied to avoid applying them twice; a fresh package off
     the normalized-original base receives the tracked changes."""
+    import dataclasses
+    import json
     from dataclasses import replace as dc_replace
 
+    from .checkpoint import finding_to_dict
     from .pipeline import finish
     from .utils.xml_helpers import DocxPackage
     final_pkg = DocxPackage(base_path)
     prepared_final = dc_replace(prepared0, pkg=final_pkg,
                                 sweep_findings=[], consistency_findings=[])
     findings = result.edits + result.queries + fmt_findings
+
+    # The composed result, kept beside the working files BEFORE finish runs: if
+    # finish fails its reject-all audit, download-anyway rebuilds the deliverable
+    # from this snapshot — the N rounds are already paid for, and this path has
+    # no checkpoint to replay the way a single review does. Original-coordinate
+    # findings; the same serialisation the checkpoint round-trips.
+    snapshot = {"version": 1,
+                "findings": [finding_to_dict(f) for f in findings],
+                "usage": dataclasses.asdict(usage)}
+    (base_path.parent / "composed.json").write_text(
+        json.dumps(snapshot), encoding="utf-8")
     log.info("Multi-round review: %d round(s), %d change(s), %d quer(y/ies), "
              "%d rejected", result.rounds_run, len(result.edits),
              len(result.queries), len(result.rejected))
