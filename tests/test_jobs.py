@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from app.jobs import Job, JobRunner, JobStore, read_usage
+from app.jobs import (MAX_COLLECT_ATTEMPTS, Job, JobRunner, JobStore,
+                      read_usage)
 from app.settings import Paths, Settings
 from app.spending import LedgerEntry, SpendingLedger, merge_live
 from app.usage import _totals_for, build_usage
@@ -342,6 +343,90 @@ def test_can_recover_matches_what_recover_will_do(runner):
     assert r.can_recover(recoverable) is True
     assert r.can_recover(no_batch) is False
     assert r.can_recover(audit) is False
+
+
+def test_recover_hands_back_a_fresh_collect_budget(runner):
+    """A job often lands in failed because its collect attempts ran out; recover
+    must zero the counter or the very next tick would give up again at once."""
+    store, r = runner
+    _failed_batch_job(store, collect_attempts=MAX_COLLECT_ATTEMPTS)
+
+    assert r.recover("j1").state == "waiting"
+    assert store.get("j1").collect_attempts == 0
+
+
+# --- a collect that keeps crashing must not read "almost done" forever --------
+#
+# A collect that RAISES is already turned into a visible failure. The other way
+# it ends is the process dying mid-write (an OOM under the LanguageTool JVM, a
+# restart): the except never runs, the job stays "collecting", and the ticker
+# retries it every pass — "Almost done — writing your document" with no end. The
+# attempt counter, written before each try so a crash still counts, converges on
+# a failure the user can see and recover instead.
+
+def _ready_batch(store, batch_id="vendor-1", **over):
+    """An app job wired to a batch the vendor calls ready to collect."""
+    import docproof.batch as batchlib
+    job = _job(store, mode="batch", **over)
+    (store.dir(job.id) / "batch_job_id").write_text("b1", "utf-8")
+    bjob = batchlib.Job(job_id="b1", source_path=job.source_path,
+                        source_name=Path(job.filename).name, content_hash="h",
+                        model=job.model, provider="anthropic",
+                        batch_id=batch_id, state="ready")
+    batchlib.save(bjob, store.paths.jobs)
+    return job
+
+
+def _stub_vendor(monkeypatch):
+    """Make _advance_batch reach the collect step without a real vendor: a
+    provider it never calls, and a poll that reports the batch ready."""
+    from types import SimpleNamespace
+    monkeypatch.setattr("app.jobs.build_provider",
+                        lambda cfg, api_key=None: object())
+    monkeypatch.setattr("app.jobs.get_api_key", lambda p: "k")
+
+    def ready_poll(bj, provider, ws):
+        bj.state = "ready"
+        return SimpleNamespace(succeeded=1, errored=0, total=1)
+
+    monkeypatch.setattr("app.jobs.batchlib.poll", ready_poll)
+
+
+def test_collecting_gives_up_after_the_cap_instead_of_looping(runner,
+                                                              monkeypatch):
+    store, r = runner
+    _ready_batch(store, state="waiting", collect_attempts=MAX_COLLECT_ATTEMPTS)
+    _stub_vendor(monkeypatch)
+
+    def no_collect(*a, **k):
+        raise AssertionError("collect must not run once the cap is spent")
+
+    monkeypatch.setattr("app.jobs.batchlib.collect", no_collect)
+
+    r._advance_batch(store.get("j1"))
+
+    updated = store.get("j1")
+    assert updated.state == "failed"
+    assert "Finish collecting" in (updated.error or "")
+
+
+def test_each_collect_attempt_is_counted_before_it_runs(runner, monkeypatch):
+    """So a crash that leaves no trace still spends one of the tries — otherwise
+    the counter never moves and the loop is back."""
+    store, r = runner
+    _ready_batch(store, state="waiting", collect_attempts=0)
+    _stub_vendor(monkeypatch)
+
+    def crash(*a, **k):
+        raise RuntimeError("OOM mid-write")
+
+    monkeypatch.setattr("app.jobs.batchlib.collect", crash)
+
+    r._advance_batch(store.get("j1"))
+
+    # The attempt was persisted before collect ran, so the count advanced even
+    # though the collect itself blew up.
+    assert store.get("j1").collect_attempts == 1
 
 
 # --- resuming what was already paid for ---------------------------------------
