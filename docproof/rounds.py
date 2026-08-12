@@ -232,3 +232,154 @@ def _join_reasons(contribs) -> str:
         if e and e not in seen:
             seen.append(e)
     return " ".join(seen)
+
+
+# --- the synchronous review adapter ------------------------------------------
+#
+# Drives `run_rounds` against the real pipeline on the sync path: each round
+# builds the working document from the current layers, reviews it with
+# prepare + run_sync, and the final result is assembled by the existing
+# `finish` (validate -> apply -> save -> reports, including the audit that
+# checks rejecting every change reproduces the original). The whole-book reads
+# (glossary, story sheet) are done once and reused for later rounds when
+# `rounds.reuse_whole_book_reads` is set — mechanical fixes change no names or
+# narration, and it drops both the re-read cost and the run-to-run wobble.
+
+
+class _ApproveAllJudge:
+    """A judge stand-in used only when no real judge provider is available (a
+    mock/offline run): approves every candidate, so the multi-round wiring can
+    be exercised without a model call."""
+
+    name = "approve-all"
+
+    def complete_structured(self, *, user, **kwargs):
+        import re
+
+        from .providers import ProviderResult
+        ids = re.findall(r"finding_id=(\S+)", user)
+        return ProviderResult(parsed={"verdicts": [
+            {"finding_id": fid, "verdict": "approve", "reason": ""}
+            for fid in ids]})
+
+
+def _merge_usage(dst: Usage, src) -> None:
+    if src is None:
+        return
+    dst.api_calls += getattr(src, "api_calls", 0)
+    for f in ("input_tokens", "output_tokens",
+              "cache_creation_input_tokens", "cache_read_input_tokens"):
+        setattr(dst, f, getattr(dst, f) + getattr(src, f, 0))
+
+
+def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
+                    review_provider=None, judge_provider=None,
+                    mock_findings=None):
+    """Run multi-round review synchronously and write the deliverable.
+
+    Returns the same `Outputs` as a single review. `review_provider` and
+    `judge_provider` are injectable for testing; in production they are built
+    from `cfg` (the detector model, and the judge model/effort from
+    `cfg.rounds`). `mock_findings`, if given, feeds each round the canned
+    findings instead of calling the detector model (for an offline smoke run)."""
+    from dataclasses import replace as dc_replace
+    from pathlib import Path
+
+    from .pipeline import finish, prepare, run_sync
+    from .providers import build_provider
+    from .reassembler import apply_untracked
+    from .utils.xml_helpers import DocxPackage
+
+    out_dir = Path(out_dir)
+    source_path = source_path or input_path
+    rounds_dir = out_dir / "rounds"
+    rounds_dir.mkdir(parents=True, exist_ok=True)
+
+    prepared0 = prepare(cfg, input_path, error_dir)
+    orig_doc = prepared0.doc
+    base_path = rounds_dir / "base.docx"
+    prepared0.pkg.save(base_path)                    # clean normalized original (W0)
+
+    if review_provider is None and mock_findings is None:
+        review_provider = build_provider(cfg)
+    if judge_provider is None:
+        if mock_findings is not None:
+            judge_provider = _ApproveAllJudge()
+        else:
+            jcfg = cfg.model_copy(deep=True)
+            jcfg.api.model = cfg.rounds.judge_model
+            jcfg.api.effort = cfg.rounds.judge_effort
+            judge_provider = build_provider(jcfg)
+
+    usage = Usage()
+    reuse = cfg.rounds.reuse_whole_book_reads
+    captured: dict = {"format": []}
+
+    def review(k, edits_by_para):
+        if k == 1:
+            prepared, rcfg = prepared0, cfg
+        else:
+            wpkg = DocxPackage(base_path)
+            apply_untracked(wpkg, orig_doc, edits_by_para)
+            wpkg.save(rounds_dir / f"round-{k - 1}.docx")
+            rcfg = cfg
+            if reuse:                                # skip the whole-book re-reads
+                rcfg = cfg.model_copy(deep=True)
+                rcfg.glossary.enabled = False
+                rcfg.storysheet.enabled = False
+            prepared = prepare(rcfg, rounds_dir / f"round-{k - 1}.docx", error_dir)
+            if reuse:                                # give detectors round 1's sheet
+                prepared.story_sheet = prepared0.story_sheet
+
+        if mock_findings is not None:
+            from .__main__ import _run_mock
+            raw, u = _run_mock(rcfg, prepared, mock_findings)
+        else:
+            raw, u = run_sync(rcfg, prepared, review_provider)
+        _merge_usage(usage, u)
+
+        query_types = prepared.query_types
+        format_types = set(prepared.format_types or {})
+        candidates, forwarded, fmt = [], [], []
+        for f in raw:
+            if f.error_type in format_types:         # italic etc.: apply at the end
+                fmt.append(f)
+            elif f.force_query or f.error_type in query_types:
+                forwarded.append(f)
+            else:
+                candidates.append(f)
+        if k == 1:                                   # format doesn't change round to round
+            captured["format"] = fmt
+
+        para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
+        types = {et.key: et for group in prepared.groups for et in group}
+        context = "\n\n".join(x for x in (prepared.conventions,
+                                          prepared.vocabulary,
+                                          prepared.story_sheet) if x)
+        return RoundReview(
+            model_findings=candidates, para_text=para_text, types=types,
+            sweep_findings=list(prepared.sweep_findings)
+            + list(prepared.consistency_findings),
+            query_findings=forwarded, context=context)
+
+    result = run_rounds(
+        orig_doc, review, judge_provider, count=cfg.rounds.count,
+        judge_model=cfg.rounds.judge_model, judge_prompt=cfg.rounds.judge_prompt,
+        min_confidence=cfg.min_confidence, query_types=prepared0.query_types,
+        format_types=prepared0.format_types, edit_guard=cfg.edit_guard,
+        min_new_edits=cfg.rounds.min_new_edits, concurrency=cfg.api.concurrency,
+        usage=usage)
+
+    # Assemble with the existing finish. The composed layers already contain the
+    # sweep and consistency edits (folded in every round), so this prepared has
+    # those emptied to avoid applying them twice; a fresh package off the
+    # normalized-original base receives the tracked changes.
+    final_pkg = DocxPackage(base_path)
+    prepared_final = dc_replace(prepared0, pkg=final_pkg,
+                                sweep_findings=[], consistency_findings=[])
+    findings = result.edits + result.queries + captured["format"]
+    log.info("Multi-round review: %d round(s), %d change(s), %d quer(y/ies), "
+             "%d rejected", result.rounds_run, len(result.edits),
+             len(result.queries), len(result.rejected))
+    return finish(prepared_final, findings, usage, cfg,
+                  out_dir=out_dir, source_path=source_path)

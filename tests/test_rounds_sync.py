@@ -1,0 +1,142 @@
+"""The synchronous multi-round adapter and the `--rounds` CLI (design stage E2).
+
+These drive the REAL pipeline (prepare -> run_sync -> finish) with only the model
+calls faked, so they check the wiring the pure orchestrator test cannot: working
+documents are built and re-reviewed each round, whole-book reads are reused, and
+the deliverable is assembled by `finish` (including its audit that rejecting
+every change reproduces the original).
+"""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import docx
+
+from docproof.__main__ import main
+from docproof.providers import ProviderResult
+from docproof.reassembler import paragraph_view_text
+from docproof.rounds import run_sync_rounds
+from docproof.utils.xml_helpers import DocxPackage, paragraph_text, walk_package
+from tests.fakes import FakeProvider, finding_result
+
+ERROR_DIR = Path(__file__).parent.parent / "config" / "error_types"
+
+
+def _docx(tmp_path, *paras):
+    d = docx.Document()
+    for p in paras:
+        d.add_paragraph(p)
+    path = tmp_path / "src.docx"
+    d.save(path)
+    return path
+
+
+def _views(path):
+    pkg = DocxPackage(path)
+    return ({wp.para_id: paragraph_view_text(wp.element, "reject")
+             for wp in walk_package(pkg)},
+            {wp.para_id: paragraph_view_text(wp.element, "accept")
+             for wp in walk_package(pkg)})
+
+
+class _ApproveJudge:
+    name = "fake-judge"
+
+    def complete_structured(self, *, user, **kwargs):
+        ids = re.findall(r"finding_id=(\S+)", user)
+        return ProviderResult(parsed={"verdicts": [
+            {"finding_id": i, "verdict": "approve", "reason": ""} for i in ids]})
+
+
+def _minimal(cfg):
+    """A config that makes each round a single detector pass with no whole-book
+    passes or sweeps, so run_sync makes exactly one (fake) call per round."""
+    cfg.error_types = ["comma_splice"]
+    cfg.sweeps = []
+    for block in (cfg.glossary, cfg.storysheet, cfg.rewrite, cfg.languagetool,
+                  cfg.adjudicate, cfg.consistency, cfg.spellcheck):
+        block.enabled = False
+    return cfg
+
+
+# --- the adapter, two real rounds with injected fakes ------------------------
+
+def test_two_rounds_apply_edits_from_both_rounds(tmp_path, cfg):
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    # round 1 fixes P0, round 2 fixes P1 (unchanged in round 2, so it anchors)
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    out = run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                          review_provider=review, judge_provider=_ApproveJudge())
+    reject, accept = _views(out.reviewed_path)
+    assert reject == {"body-0000": "the cat sat", "body-0001": "He ran he fell"}
+    assert accept == {"body-0000": "the dog sat", "body-0001": "He ran, he fell"}
+    assert review.calls and len(review.calls) == 2        # one detector call per round
+
+
+def test_a_judge_rejection_keeps_the_original(tmp_path, cfg):
+    _minimal(cfg)
+    cfg.rounds.count = 2
+
+    class _RejectP0:
+        name = "fake-judge"
+
+        def complete_structured(self, *, user, **kwargs):
+            ids = re.findall(r"finding_id=(\S+)", user)
+            # reject the P0 finding (its paragraph text is quoted), approve else
+            reject = "cat" in user
+            return ProviderResult(parsed={"verdicts": [
+                {"finding_id": i, "verdict": "reject" if reject else "approve",
+                 "reason": "no"} for i in ids]})
+
+    src = _docx(tmp_path, "the cat sat", "plain line")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat")])
+    out = run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                          review_provider=review, judge_provider=_RejectP0())
+    reject, accept = _views(out.reviewed_path)
+    assert accept["body-0000"] == "the cat sat"           # rejected fix not applied
+    assert out.applied == 0
+
+
+# --- the CLI, offline via --mock-findings + --rounds -------------------------
+
+def test_cli_rounds_with_mock_findings(tmp_path):
+    src = _docx(tmp_path, "the cat sat", "second line")
+    mocks = tmp_path / "mocks.json"
+    mocks.write_text(json.dumps([
+        {"para_id": "body-0000", "original_text": "the cat sat",
+         "corrected_text": "the dog sat", "explanation": "x", "confidence": "high"},
+    ]))
+    rc = main(["review", str(src), "--mock-findings", str(mocks),
+               "--rounds", "2", "--out", str(tmp_path)])
+    assert rc == 0
+    reviewed = tmp_path / "src - Pre-Proofread.docx"
+    assert reviewed.exists()
+    for name in ("summary.md", "findings.json"):
+        assert (tmp_path / name).exists(), name
+    reject, accept = _views(reviewed)
+    assert reject["body-0000"] == "the cat sat"           # fidelity: rejects to original
+    assert accept["body-0000"] == "the dog sat"
+
+
+def test_cli_rounds_1_is_the_ordinary_single_path(tmp_path):
+    # --rounds 1 must not take the multi-round path (byte-for-byte single review)
+    src = _docx(tmp_path, "the cat sat")
+    mocks = tmp_path / "m.json"
+    mocks.write_text(json.dumps([
+        {"para_id": "body-0000", "original_text": "the cat sat",
+         "corrected_text": "the dog sat", "explanation": "x", "confidence": "high"}]))
+    rc = main(["review", str(src), "--mock-findings", str(mocks),
+               "--rounds", "1", "--out", str(tmp_path)])
+    assert rc == 0
+    assert not (tmp_path / "rounds").exists()             # no working-doc scratch dir
