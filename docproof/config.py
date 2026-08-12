@@ -197,8 +197,11 @@ class SpellcheckConfig(BaseModel):
     # useful when a variant's dictionary is not bundled and the press has its
     # own copy.
     dictionary: str | None = None
-    # Seen this often, or written as a name, and an unknown word is the
-    # author's coined term rather than a typo.
+    # How often a lower-case unknown word must recur before it counts as "used
+    # throughout" rather than "seldom". It no longer buys protection — only a
+    # name earns that — so this just sorts the model's evidence: a word seen at
+    # least this often is passed on as the book's vocabulary, a word seen less
+    # is raised as something to look at. See docproof/spellscan.py.
     min_occurrences: int = Field(default=2, ge=1)
     # suggest() costs about a quarter-second a word, so only this many
     # candidates get dictionary guesses. 0 skips them entirely; the
@@ -206,6 +209,15 @@ class SpellcheckConfig(BaseModel):
     suggestion_limit: int = Field(default=25, ge=0)
     # Words that are always correct for this house, whatever the dictionary says.
     allowlist: list[str] = Field(default_factory=list)
+    # Spellings the house never accepts, mapped to their correction. Never the
+    # author's own, never merely noted: always raised as something to look at,
+    # with the fix supplied directly because the right form is often two words
+    # (a lot, as well) that a dictionary suggestion would not reach.
+    denylist: dict[str, str] = Field(default_factory=lambda: {
+        "alot": "a lot", "aswell": "as well", "infact": "in fact",
+        "eachother": "each other", "atleast": "at least", "incase": "in case",
+        "everytime": "every time", "abit": "a bit", "inspite": "in spite",
+        "ofcourse": "of course"})
 
 
 class ConsistencyConfig(BaseModel):
@@ -590,6 +602,12 @@ class Config(BaseModel):
     # error types always do; this decides whether below-gate findings join
     # them, or stay in summary.md where only an editor will see them.
     query_comments: bool = True
+    # A single comment at the top of the reviewed file naming the words the
+    # spell scan left out of the check — protected as the author's own and never
+    # flagged. It puts "these were taken on trust, verify them" in front of the
+    # proofreader instead of only in the change log. Rides on `comments`: a run
+    # with Word comments off writes none of these either.
+    excluded_words_comment: bool = True
     # The Word change log the press hands to an author alongside the
     # manuscript: what changed, what was only asked about, and — the part the
     # house brief insists on — what this pass did not cover.

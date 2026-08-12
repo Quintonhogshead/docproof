@@ -158,6 +158,29 @@ def content_hash(doc: DocumentModel) -> str:
     return h.hexdigest()
 
 
+def _unprotect_near_miss(spell: SpellScan, candidates) -> SpellScan:
+    """Drop from the protected lexicon every word that generation escalated to a
+    near-miss candidate.
+
+    A near-miss is a word the spell scan PROTECTED as the author's own, but which
+    sits one edit from a common word by a wide margin — the model is now being
+    asked to rule on whether it is a repeated typo. Left in the lexicon, that same
+    word would also appear in the vocabulary prompt's "words this author owns,
+    never report" list, so every judge that reads it (the adjudicator, the
+    multi-round Opus judge) is told to keep the word and to question it at once.
+    That contradiction biases the verdict toward keeping, and is what let a
+    protected misspelling survive its own correction. A word under review is no
+    longer taken on trust, so it leaves the lexicon — and, with it, the
+    never-report list, the change log's "author's own" count, and the
+    top-of-document excluded-words note, all of which then read honestly."""
+    near = {c.word.lower() for c in candidates
+            if getattr(c, "kind", "") == "near_miss"}
+    if not near:
+        return spell
+    return dataclasses.replace(spell, lexicon=tuple(
+        w for w in spell.lexicon if w.lower() not in near))
+
+
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             max_chunks: int | None = None,
             selection: Sequence[str] | None = None,
@@ -257,6 +280,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                            min_occurrences=cfg.spellcheck.min_occurrences,
                            suggestion_limit=cfg.spellcheck.suggestion_limit,
                            allowlist=cfg.spellcheck.allowlist,
+                           denylist=cfg.spellcheck.denylist,
                            # An explicit dictionary wins; otherwise the variant
                            # picks one, which is the whole point of stating it.
                            dictionary=cfg.spellcheck.dictionary
@@ -283,10 +307,15 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             from .adjudicate import generate
             adjudicate_candidates = generate(
                 doc.paragraphs, protected=spell.lexicon,
+                denylist=cfg.spellcheck.denylist,
                 dictionary=cfg.spellcheck.dictionary or variant.dictionary,
                 near_miss_gap=cfg.adjudicate.near_miss_gap,
                 min_len=cfg.adjudicate.min_word_len,
                 max_candidates=cfg.adjudicate.max_candidates)
+            # A word we are now asking about is no longer one we protect: take
+            # every near-miss candidate out of the lexicon, so no judge is told
+            # to keep the word and to question it in the same breath.
+            spell = _unprotect_near_miss(spell, adjudicate_candidates)
 
         # The story sheet is the one whole-book read that happens HERE, at
         # prepare time, not at collect: it feeds the detector system prompts,
@@ -749,6 +778,15 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # belong in the report so the author sees what the overseer set aside.
     validated = validated + verifier_rejected
     fmt = prepared.fmt
+    # A note at the top of the file naming the words the spell scan took on
+    # trust — placed before the edits, since it only inserts comment range
+    # markers and those leave every later offset untouched. Format-optional and
+    # gated on Word comments being on at all.
+    if (cfg.comments and cfg.excluded_words_comment
+            and fmt.annotate_excluded_words and prepared.spell.available
+            and prepared.spell.lexicon):
+        fmt.annotate_excluded_words(prepared.pkg, prepared.doc,
+                                    prepared.spell.lexicon, cfg.revision_author)
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
     audit_report = AuditReport()

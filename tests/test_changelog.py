@@ -187,8 +187,10 @@ def test_queries_are_listed_and_marked_as_questions(tmp_path):
 
 
 def test_the_authors_own_words_are_named_as_protected(tmp_path):
-    out = _run(tmp_path, ["Kaelith crossed the marches.",
-                          "Kaelith did not look back."])
+    # Mid-sentence capitalization is what marks a coinage as a name, so it is
+    # protected however high the length-scaled repeat floor climbs.
+    out = _run(tmp_path, ["The cold marches were where Kaelith crossed at dawn.",
+                          "By dusk Kaelith had not returned home."])
     text, _ = _read(out.change_log)
     assert "Kaelith" in text
     assert "protected from correction" in text

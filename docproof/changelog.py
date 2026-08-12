@@ -274,11 +274,20 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"rather than applied.")
     if spell is not None and spell.available and spell.lexicon:
         d.add_paragraph(
-            f"{len(spell.lexicon)} word(s) not in the dictionary were treated "
-            f"as this author's own — coined terms, invented places, character "
-            f"names — and protected from correction: "
+            f"{len(spell.lexicon)} word(s) not in the dictionary were written "
+            f"as names — coined terms, invented places, characters — and so "
+            f"protected from correction: "
             f"{', '.join(spell.lexicon[:30])}"
             + ("…" if len(spell.lexicon) > 30 else "") + ".")
+    if spell is not None and spell.available and spell.recurring:
+        d.add_paragraph(
+            f"{len(spell.recurring)} word(s) not in the dictionary were used "
+            f"more than once but are not written as names. These were shown to "
+            f"the model as the book's likely vocabulary — evidence, not "
+            f"protection — and read in context rather than corrected, because a "
+            f"misspelling an author repeats reads the same as a coinage: "
+            f"{', '.join(c.word for c in spell.recurring[:30])}"
+            + ("…" if len(spell.recurring) > 30 else "") + ".")
 
     # --- coverage and honesty ------------------------------------------------
     d.add_heading("Footnotes and endnotes", level=1)
@@ -315,8 +324,9 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     if spell is not None and spell.available:
         d.add_paragraph(
             f"Dictionary scan: {spell.tokens:,} words read, {spell.unknown:,} "
-            f"not in the dictionary, {len(spell.lexicon)} treated as the "
-            f"author's own and {len(spell.candidates)} raised for a look.")
+            f"not in the dictionary, {len(spell.lexicon)} protected as names, "
+            f"{len(spell.candidates)} raised for a look, and "
+            f"{len(spell.recurring)} noted as repeated vocabulary.")
 
     d.save(path)
     log.info("Wrote %s", path)

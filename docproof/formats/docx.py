@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from ..ingest import build_document_model, preflight
 from ..normalize import normalize_package as normalize
-from ..reassembler import apply_tracked_changes, paragraph_view_text
+from ..reassembler import (annotate_excluded_words, apply_tracked_changes,
+                           paragraph_view_text)
 from ..utils.xml_helpers import paragraph_text, walk_package
 
 
@@ -27,4 +28,4 @@ def snapshot(pkg, mode: str = "current") -> dict[str, str]:
 
 
 __all__ = ["preflight", "build_document_model", "apply_tracked_changes",
-           "normalize", "snapshot"]
+           "annotate_excluded_words", "normalize", "snapshot"]
