@@ -882,6 +882,12 @@ async function loadFeatures() {
       if ($('judge-prompt')) {
         $('judge-prompt').placeholder = body.rounds.judge_prompt_default || '';
       }
+      // Same idea for the continuity reader's prompt: the built-in default is
+      // the placeholder, so an untouched submit stays empty and the engine
+      // falls back to it.
+      if ($('continuity-prompt') && body.continuity) {
+        $('continuity-prompt').placeholder = body.continuity.prompt_default || '';
+      }
       syncRounds();
     }
   } catch (_) {
@@ -1360,6 +1366,8 @@ $('start').addEventListener('click', async () => {
           rounds: Number($('rounds').value),
           judge_prompt: $('judge-prompt').value,
           judge_model: ($('judge-model') || {}).value || null,
+          continuity_prompt: ($('continuity-prompt') || {}).value || '',
+          continuity_only: !!(($('continuity-only') || {}).checked),
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });

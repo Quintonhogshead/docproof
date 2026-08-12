@@ -216,6 +216,26 @@ def cmd_inventory(args) -> int:
     if now is not None:
         print(f"\nRough cost on {cfg.api.model}: ~${now:.2f} now, "
               f"~${now / 2:.2f} as a batch (50% cheaper, results within hours)")
+
+    # The continuity read is one whole-book pass on its own model, added on top of
+    # the review above — priced once at the document's own token count, not the
+    # per-chunk total, and not batchable (a different model can't ride the review
+    # batch). The deterministic calendar check is free. Over max_input_tokens the
+    # pipeline skips the read, so the estimate says so rather than quoting a cost
+    # for a call that won't be made.
+    if cfg.continuity.enabled:
+        if doc_tokens > cfg.continuity.max_input_tokens:
+            print(f"  + continuity: book exceeds max_input_tokens "
+                  f"({cfg.continuity.max_input_tokens:,}); the read is skipped, "
+                  f"only the free calendar check runs")
+        else:
+            cont = estimate_cost(cfg.continuity.model, input_tokens=doc_tokens,
+                                 output_tokens=cfg.continuity.max_output_tokens)
+            if cont is not None:
+                print(f"  + continuity read on {cfg.continuity.model}: "
+                      f"~${cont:.2f} (one whole-book read, query-only, "
+                      f"not batchable)")
+
     print("\nSections (pass any of these to --only):")
     for row in chunk_outline(prepared):
         print(f"  {row['chunk_id']:<12} {row['paragraphs']:>3} para "

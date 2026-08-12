@@ -727,6 +727,44 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 error_type="languagetool", chunk_id="languagetool", id_prefix="lt"))
         finally:
             lt_shutdown()
+
+    # Whole-book continuity read: one frontier read of the whole manuscript for
+    # facts it contradicts about itself — timeline slips, age/date arithmetic,
+    # attribute drift, object continuity — the class the chunked detectors are
+    # structurally blind to (they never see two distant passages together). Every
+    # finding is force_query: a margin comment, never an edit, because which fact
+    # is right is the author's call. A deterministic date->weekday check rides
+    # along at no API cost. Additive and best-effort like the glossary; whole-
+    # document only. See docproof/continuity.py.
+    if cfg.continuity.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("continuity")
+        from .continuity import (build_continuity, calendar_findings,
+                                 report_to_findings)
+        from .utils.tokens import estimate_tokens
+        doc_tokens = sum(estimate_tokens(p.text) for p in prepared.doc.paragraphs)
+        if doc_tokens > cfg.continuity.max_input_tokens:
+            log.warning("continuity: ~%d tokens over max_input_tokens %d — "
+                        "skipping the read to avoid a truncated (silently "
+                        "incomplete) one; the calendar check still runs",
+                        doc_tokens, cfg.continuity.max_input_tokens)
+        else:
+            ccfg = cfg.model_copy(deep=True)
+            ccfg.api.model = cfg.continuity.model
+            ccfg.api.effort = cfg.continuity.effort
+            report = build_continuity(
+                prepared.doc.paragraphs, provider_factory(ccfg),
+                model=cfg.continuity.model,
+                max_tokens=cfg.continuity.max_output_tokens, usage=usage,
+                prompt=cfg.continuity.prompt,
+                cache_dir=cfg.continuity.cache_dir)
+            findings.extend(report_to_findings(
+                report, prepared.doc.paragraphs, ids,
+                min_confidence=cfg.continuity.min_confidence,
+                max_queries=cfg.continuity.max_queries))
+        if cfg.continuity.calendar_check:
+            findings.extend(calendar_findings(prepared.doc.paragraphs, ids))
+
     return findings, usage
 
 

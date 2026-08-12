@@ -80,6 +80,7 @@ STAGE_STATE = {
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",
+    "continuity": "Reading the whole book for continuity",
     "writing": "Almost done — writing your document",
 }
 
@@ -152,6 +153,13 @@ class Job:
     # Which model rules on corrections between rounds. Empty (older records, or a
     # run that didn't touch the picker) means the config default. See catalog.py.
     judge_model: str = ""
+    # The continuity read's editable system prompt, edited on the panel; empty
+    # (older records, or a run that left it alone) means the built-in default.
+    # And whether this run is continuity-only — the whole-book contradiction read
+    # by itself, with every detector pass and sweep stripped off. See
+    # docproof/continuity.py and JobStore.config_for.
+    continuity_prompt: str = ""
+    continuity_only: bool = False
     # Multi-round progress: which round a running multi-round review is on, and
     # how many it will run. Both 0 on single reviews and older records; the card
     # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
@@ -570,6 +578,20 @@ class JobRunner:
         # submission panel wins over both the shipped config and the two
         # settings-backed defaults above (comments, explanations).
         features.apply_features(cfg, job.features)
+        # The continuity read's editable prompt (empty = built-in default),
+        # applied like the round judge's — the sentinel passes through verbatim.
+        cfg.continuity.prompt = job.continuity_prompt
+        # "Continuity only" strips the run to that one whole-book read: no
+        # detector passes, no sweeps, none of the other whole-book passes — just
+        # the contradiction check and its margin queries. The continuity switch is
+        # forced on regardless of the feature toggle, because it IS the run now.
+        if job.continuity_only:
+            cfg.error_types = []
+            cfg.sweeps = []
+            for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
+                          "consistency", "spellcheck"):
+                getattr(cfg, _pass).enabled = False
+            cfg.continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:

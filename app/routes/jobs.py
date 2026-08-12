@@ -58,6 +58,11 @@ class JobRequest(BaseModel):
     judge_prompt: str = ""
     # The between-round judge model. None/empty falls back to the config default.
     judge_model: str | None = None
+    # The continuity read's editable system prompt; empty means the built-in
+    # default. continuity_only runs that whole-book contradiction read on its
+    # own, with every detector pass and sweep stripped off.
+    continuity_prompt: str = ""
+    continuity_only: bool = False
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -274,6 +279,8 @@ def register(app: FastAPI) -> None:
                 rounds=rounds,
                 judge_prompt=req.judge_prompt,
                 judge_model=req.judge_model or "",
+                continuity_prompt=req.continuity_prompt,
+                continuity_only=req.continuity_only,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -297,9 +304,14 @@ def register(app: FastAPI) -> None:
         # what the panel pre-fills its textarea placeholder with; an empty submit
         # keeps the engine's built-in default.
         from docproof.verifier import default_judge_prompt
+        # Continuity likewise carries an editable prompt (its reader's system
+        # prompt) and a run-alone switch, so its default rides alongside the
+        # catalog the same way the round judge's does.
+        from docproof.continuity import default_continuity_prompt
         return {"features": featureslib.feature_catalog(cfg),
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
-                           "judge_prompt_default": default_judge_prompt()}}
+                           "judge_prompt_default": default_judge_prompt()},
+                "continuity": {"prompt_default": default_continuity_prompt()}}
 
     def _card(job: Job) -> dict:
         """A job as the results card needs it: its own fields plus whether the

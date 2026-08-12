@@ -71,6 +71,13 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "slip or wrong pronoun that reads fine in a single paragraph. Adds a "
         "whole-book read.", "pass", ("storysheet", "enabled"), heavy=True),
     FeatureSpec(
+        "continuity", "Continuity read — contradictions across the book",
+        "One whole-book read that flags facts the manuscript contradicts about "
+        "itself — a timeline that doesn't add up, an age or date that breaks, an "
+        "eye colour or a name that drifts. Asks, never edits. Adds a whole-book "
+        "read; a free date-versus-weekday check rides along.",
+        "pass", ("continuity", "enabled"), heavy=True),
+    FeatureSpec(
         "rewrite", "Rewrite-and-compare pass",
         "The model retypes each paragraph with the smallest possible edits, and "
         "the differences become candidates a skeptical confirm step rules on. A "
@@ -177,6 +184,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
                their number tracks the book's candidates — approximate."""
     if fid == "storysheet":
         return {"kind": "read", "model": cfg.storysheet.model}
+    if fid == "continuity":
+        return {"kind": "read", "model": cfg.continuity.model}
     if fid == "rewrite":
         return {"kind": "retype", "model": cfg.rewrite.model,
                 "samples": cfg.rewrite.samples}

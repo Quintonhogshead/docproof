@@ -158,6 +158,24 @@ storysheet:
   max_output_tokens: 4000
   cache_dir:                # a path pins the read per draft (text+model+prompt)
 
+# Whole-book continuity read: one frontier read of the entire manuscript that
+# flags facts the book contradicts about itself — timeline slips, age/date
+# arithmetic, attribute drift, object continuity. Query-only by design: every
+# finding is a margin comment, never a tracked change (which fact is right is the
+# author's call). A deterministic date->weekday checker rides along at no API
+# cost. OFF by default until proven on a real-manuscript compare, like rewrite.
+# Whole-document only. See docproof/continuity.py.
+continuity:
+  enabled: false
+  model: claude-fable-5     # frontier work; opus-5 half-price, sonnet-5 cheaper
+  effort: high
+  max_output_tokens: 8000
+  max_queries: 40           # cap on margin comments; most significant first
+  min_confidence: medium    # drop "low" — a wrong continuity flag costs trust
+  calendar_check: true      # deterministic date->weekday math; no API, query-only
+  max_input_tokens: 400000  # refuse a book too big for one read — never truncate
+  cache_dir:                # a path pins the read per draft (text+model+prompt)
+
 # Multi-round review: review the manuscript `count` times, each round reading the
 # previous round's corrected text, with a strong judge ruling on every correction
 # between rounds. All approved changes are composed into one tracked-change file

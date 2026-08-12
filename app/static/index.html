@@ -204,6 +204,27 @@
           <small class="muted">Only used with 2+ rounds.</small>
         </details>
 
+        <details class="field review-only" id="continuity-field">
+          <summary>Continuity read<span class="muted"> — contradictions across
+            the whole book</span></summary>
+          <label class="field checkbox">
+            <span><input type="checkbox" id="continuity-only"> Continuity only —
+              run just this read, skip the full review</span>
+            <small class="muted">The whole-book contradiction read on its own: no
+              detector passes, no sweeps. You get margin queries — timeline slips,
+              age or date breaks, an attribute that drifts — and nothing is
+              edited. Leave off to run it as one pass inside a normal review
+              (switch it on under Passes &amp; features for that).</small>
+          </label>
+          <label class="field">
+            <span>Continuity instructions</span>
+            <textarea id="continuity-prompt" rows="8" spellcheck="false"></textarea>
+            <small class="muted">The instructions the continuity reader follows.
+              Leave blank to use the built-in default (shown here as the
+              placeholder).</small>
+          </label>
+        </details>
+
         <details class="field review-only" id="features-field">
           <summary>Passes &amp; features<span class="muted"> — what runs on this
             review</span></summary>
