@@ -46,6 +46,13 @@ log = logging.getLogger("docproof.app.jobs")
 
 APP_MANIFEST = "app.json"
 POLL_SECONDS = 120
+# How many times the ticker will start collecting one batch before giving up and
+# marking it failed. A collect that raises fails on the first try; this cap is
+# for a collect that keeps killing the process (an OOM under the LanguageTool
+# JVM, a machine restart) and so never reaches the except — without it the ticker
+# retries forever and the card reads "almost done" the whole time. Three leaves
+# room for a transient blip while still converging on a visible failure.
+MAX_COLLECT_ATTEMPTS = 3
 
 # State → what the user reads. Keep the vocabulary out of the vendor's world:
 # no "batch", no "API", no "chunks".
@@ -191,6 +198,14 @@ class Job:
     # written with the audit downgraded to a warning, so it is clear the
     # integrity check did not pass.
     audit_overridden: bool = False
+    # How many times we have started collecting this batch's results. A collect
+    # that RAISES becomes a visible "failed"; this counts the other way it can
+    # end — the process dying mid-collect (an OOM under the LanguageTool JVM, a
+    # machine restart) — which leaves the job stuck in "collecting" for the
+    # ticker to retry forever. Counted before each attempt so a crash still
+    # counts, and capped at MAX_COLLECT_ATTEMPTS so a repeating crash becomes a
+    # failure the user can see and recover, not "almost done" with no end.
+    collect_attempts: int = 0
 
     @property
     def is_prep(self) -> bool:
@@ -568,8 +583,10 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None or not self.can_recover(job):
             return None
+        # A fresh collect budget: the user is asking to try again, and the last
+        # run may have exhausted the cap (often why it is failed here at all).
         return self.store.update_if(job_id, expect="failed", state="waiting",
-                                    error=None, error_kind="")
+                                    error=None, error_kind="", collect_attempts=0)
 
     def can_recover(self, job: Job) -> bool:
         """Whether `recover` has something to do — used to decide the results
@@ -1143,10 +1160,25 @@ class JobRunner:
         if batch_job.state != "ready":
             return
 
+        # Give up rather than retry forever when collecting keeps killing the
+        # process before it can record a failure (an OOM under the LanguageTool
+        # JVM, a machine restart mid-write). The count is written with the
+        # collecting transition below — before the attempt — so a crash still
+        # spends one; once they run out, the job becomes a visible, recoverable
+        # failure instead of "almost done" with no end.
+        attempt = job.collect_attempts + 1
+        if attempt > MAX_COLLECT_ATTEMPTS:
+            self.store.update(
+                job.id, state="failed",
+                error="Writing the reviewed document didn't finish after "
+                      "several tries — the results are still here to collect. "
+                      "Use “Finish collecting” to try again.")
+            return
+
         # CAS for the same reason the scheduled→queued promotion has one: the
         # job was read at the top of the pass, and its state may have moved on.
-        if self.store.update_if(job.id, expect=job.state,
-                                state="collecting") is None:
+        if self.store.update_if(job.id, expect=job.state, state="collecting",
+                                collect_attempts=attempt) is None:
             return
         out = self._claim_results_dir(job)
         try:
