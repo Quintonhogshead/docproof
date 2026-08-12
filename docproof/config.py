@@ -323,6 +323,60 @@ class GlossaryConfig(BaseModel):
         return self
 
 
+class ContinuityConfig(BaseModel):
+    """The whole-book continuity read: one frontier read of the entire manuscript
+    that flags facts the book contradicts about itself — a timeline that does not
+    add up, an age or date the arithmetic breaks, an attribute that drifts, an
+    object whose state changes with no cause. The one class of error the chunked
+    detectors are structurally blind to: a per-chunk pass never sees chapter 1 and
+    chapter 20 together. Query-only by design — every finding is a margin comment,
+    never a tracked change, because which of two contradictory facts is right is
+    the author's to settle, not the pipeline's. A deterministic date->weekday
+    checker rides along at no API cost. OFF by default until proven on a
+    real-manuscript compare, like rewrite. Whole-document only, and priced for its
+    own model since a frontier reader earns its cost here. See
+    docproof/continuity.py."""
+    enabled: bool = False
+    # The whole-book reader. Cross-book contradiction-finding is frontier work;
+    # claude-opus-5 is the half-price alternative and claude-sonnet-5 cheaper
+    # still — the app's submission panel offers the pick per book, like the
+    # glossary's. Cacheable per draft via cache_dir.
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    max_output_tokens: int = Field(default=8000, ge=1)
+    # A cap on margin comments, most significant first — the model is asked to
+    # order them, and any past this many are dropped.
+    max_queries: int = Field(default=40, ge=1)
+    # Drop anything softer than this. A wrong continuity question costs an editor
+    # more trust than a missed one earns, so "low" is dropped by default.
+    min_confidence: Literal["low", "medium", "high"] = "medium"
+    # The deterministic date->weekday check: no API, no cost, always a query (a
+    # story may run on its own calendar). Runs even when the model read is off.
+    calendar_check: bool = True
+    # Refuse a book too big for one read rather than truncating it — a truncated
+    # read would silently miss every contradiction past the cut. Mirrors promo's
+    # refuse-don't-overflow guard.
+    max_input_tokens: int = Field(default=400_000, ge=1)
+    # A path pins the read per draft (text + model + prompt): re-reviewing an
+    # unchanged draft reuses the read instead of paying again, and — since the
+    # read is stochastic — every run of that draft sees the same questions.
+    cache_dir: str | None = None
+    # The reader's system prompt, editable per job in the panel the way the
+    # round judge's is. Empty (the default) uses the built-in one in
+    # continuity.py; a non-empty value replaces it wholesale, and — being part
+    # of the cache key — a changed prompt re-reads rather than returning a
+    # result the old prompt produced.
+    prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"continuity.model '{self.model}' is not in the catalog")
+        return self
+
+
 class RewriteConfig(BaseModel):
     """The rewrite-then-diff pass: the model retypes each paragraph minimal-edit,
     the diff against the source becomes candidates, and a skeptical confirm pass
@@ -567,6 +621,7 @@ class Config(BaseModel):
     consistency: ConsistencyConfig = Field(default_factory=ConsistencyConfig)
     glossary: GlossaryConfig = Field(default_factory=GlossaryConfig)
     storysheet: StorySheetConfig = Field(default_factory=StorySheetConfig)
+    continuity: ContinuityConfig = Field(default_factory=ContinuityConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)

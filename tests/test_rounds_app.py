@@ -57,6 +57,30 @@ def test_a_record_without_rounds_is_a_single_review(runner):
     assert r.config_for(job).rounds.count == 1
 
 
+def test_continuity_prompt_reaches_the_run_config(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, continuity_prompt="Only eye-colour drift."))
+    assert cfg.continuity.prompt == "Only eye-colour drift."
+
+
+def test_continuity_only_strips_the_run_to_that_one_read(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, continuity_only=True))
+    assert cfg.continuity.enabled is True              # forced on, it IS the run
+    assert cfg.error_types == [] and cfg.sweeps == []
+    for p in ("glossary", "adjudicate", "rewrite", "languagetool",
+              "consistency", "spellcheck"):
+        assert getattr(cfg, p).enabled is False
+
+
+def test_a_record_without_continuity_flags_is_a_normal_review(runner):
+    store, r = runner
+    job = _job(store)                          # older record / untouched panel
+    assert job.continuity_prompt == "" and job.continuity_only is False
+    cfg = r.config_for(job)
+    assert cfg.continuity.prompt == "" and cfg.error_types != []
+
+
 def test_run_one_sends_a_multiround_job_to_the_rounds_driver(runner, monkeypatch):
     store, r = runner
     seen = []
