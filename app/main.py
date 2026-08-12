@@ -16,6 +16,31 @@ from fastapi.staticfiles import StaticFiles
 from . import routes
 from .jobs import JobRunner, JobStore
 from .lock import FolderLock
+
+from starlette.types import Scope
+
+
+class FreshStaticFiles(StaticFiles):
+    """StaticFiles that makes the browser revalidate every load.
+
+    The frontend ships app.js / styles.css / index.html at fixed URLs with no
+    content hash, so without an explicit policy a browser caches them
+    heuristically and, after a deploy, keeps rendering the OLD page while the
+    footer version — a live /api/version call — already reads the NEW one. That
+    split is exactly the "it deployed but I don't see my change" confusion.
+
+    `Cache-Control: no-cache` does not mean "don't cache"; it means "cache, but
+    revalidate before use". Starlette already sends an ETag and Last-Modified and
+    answers a conditional request with a 304, so an ordinary load is a tiny
+    revalidation that transfers nothing when the file is unchanged — and the
+    first load after a deploy sees the new ETag and gets the fresh file. Cheap,
+    and no hard refresh required. setdefault so an explicit header (a 404's, say)
+    is left alone."""
+
+    async def get_response(self, path: str, scope: Scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 from .settings import (CONFIG_PATH, ENV_VARS, PROVIDERS, Paths, Settings,
                        default_root, field_in_settings_file, resource_root)
 from .update import Rebuilder
@@ -136,7 +161,7 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         routes.register_admin(app)
     static = resource_root() / "app" / "static"
     if static.is_dir():
-        app.mount("/", StaticFiles(directory=static, html=True), name="static")
+        app.mount("/", FreshStaticFiles(directory=static, html=True), name="static")
     return app
 
 

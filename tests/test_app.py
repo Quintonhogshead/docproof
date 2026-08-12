@@ -411,6 +411,16 @@ def test_a_features_map_is_stored_on_the_job(client):
     assert job["features"] == {"storysheet": True}
 
 
+def test_static_assets_are_served_no_cache(client):
+    """The page and its script/style carry no content hash, so they ship
+    no-cache — a deploy is picked up on the next load, not left stale behind a
+    version number that already reads new."""
+    for path in ("/", "/app.js", "/styles.css"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert resp.headers.get("cache-control") == "no-cache", path
+
+
 def test_failed_job_reports_plainly_and_can_be_retried(client, monkeypatch):
     staged = _upload(client)
     from docproof.providers import ProviderError
