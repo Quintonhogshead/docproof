@@ -18,6 +18,7 @@ from docproof.prep.place import PlaceError
 from docproof.providers import estimate_cost, lookup
 
 from . import common
+from .. import features as featureslib
 from .. import settings as settingslib
 from ..auth import owner_for
 from ..jobs import Job, JobRunner, JobStore, read_usage
@@ -46,6 +47,9 @@ class JobRequest(BaseModel):
     # for the house InDesign template.
     kind: str = "review"                      # "review" | "prep"
     prep_output: str = "indesign"             # "indesign" | "tracked" | "both"
+    # Per-run pass toggles, {feature_id: on}. Omitted or empty leaves the config
+    # defaults. Unknown ids are refused, not ignored — see create_jobs.
+    features: dict[str, bool] | None = None
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -119,6 +123,10 @@ def register(app: FastAPI) -> None:
         if req.prep_output not in ("indesign", "tracked", "both"):
             raise HTTPException(
                 400, "prep_output must be 'indesign', 'tracked' or 'both'")
+        unknown = featureslib.unknown_features(req.features)
+        if unknown:
+            raise HTTPException(
+                400, f"Unknown feature(s): {', '.join(sorted(unknown))}")
         # Prep reads its windows in order — a paragraph's meaning depends on
         # what came before it — so there is no batch form of it to offer.
         mode = "now" if req.kind == "prep" else req.mode
@@ -181,6 +189,7 @@ def register(app: FastAPI) -> None:
                 min_confidence=req.min_confidence,
                 effort=effort,
                 glossary_model=req.glossary_model or app.state.settings.glossary_model,
+                features=req.features or {},
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -189,6 +198,17 @@ def register(app: FastAPI) -> None:
             )
             created.append(runner.enqueue(job).to_api())
         return {"jobs": created, "group_id": group_id}
+
+    @app.get("/api/features")
+    def features() -> dict:
+        """The per-run pass switches to render, each with the value this run
+        would take if left untouched. Read off a config built the way a review's
+        is — the shipped defaults plus the two settings-backed toggles — so the
+        panel shows the real baseline, not the bare code default."""
+        cfg = load_config(CONFIG_PATH)
+        cfg.comments = app.state.settings.comments
+        cfg.report_explanations = app.state.settings.explanations
+        return {"features": featureslib.feature_catalog(cfg)}
 
     @app.get("/api/jobs")
     def list_jobs(owner: str = Depends(owner_for)) -> dict:

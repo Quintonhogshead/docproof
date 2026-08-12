@@ -55,6 +55,60 @@ def test_a_record_from_before_effort_existed_runs_at_low(runner):
     assert r.config_for(job).api.effort == "low"
 
 
+def test_per_run_features_reach_the_run_config(runner):
+    """A switch flipped on the submission panel becomes an enabled pass."""
+    store, r = runner
+    cfg = r.config_for(_job(store, features={"storysheet": True, "rewrite": True}))
+    assert cfg.storysheet.enabled is True
+    assert cfg.rewrite.enabled is True
+
+
+def test_a_feature_toggle_can_turn_a_pass_or_safety_net_off(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, features={"adjudicate": False, "audit": False}))
+    assert cfg.adjudicate.enabled is False   # a default-on pass, switched off
+    assert cfg.audit == "off"                # the tri-state audit reads as a toggle
+
+
+def test_a_record_without_features_keeps_the_config_defaults(runner):
+    """Old job records (and untouched panels) carry no features and change
+    nothing — storysheet stays off, adjudicate stays on."""
+    store, r = runner
+    job = _job(store)
+    assert job.features == {}
+    cfg = r.config_for(job)
+    assert cfg.storysheet.enabled is False
+    assert cfg.adjudicate.enabled is True
+
+
+def test_a_running_review_names_the_step_it_is_on():
+    """plain_state reads the stage while a whole-book pass runs after the loop,
+    so the card doesn't say "reviewing" during the rewrite pass."""
+    common = dict(id="j", filename="a.docx", source_path="a.docx",
+                  model="m", mode="now", state="running")
+    assert Job(**common, stage="reviewing", done=3, total=10).plain_state() \
+        == "Reviewing (3 of 10 sections)"
+    assert "Rewriting" in Job(**common, stage="rewrite").plain_state()
+    assert "glossary" in Job(**common, stage="glossary").plain_state()
+
+
+def test_a_record_without_a_stage_keeps_the_plain_running_message():
+    """Older records (and the moment before the first stage lands) fall back to
+    the generic running message with its count."""
+    job = Job(id="j", filename="a.docx", source_path="a.docx", model="m",
+              mode="now", state="running", done=2, total=5)   # stage ""
+    assert job.plain_state() == "Reviewing (2 of 5 sections)"
+
+
+def test_a_per_run_feature_wins_over_the_settings_default(tmp_path):
+    """comments is a settings-backed default; a per-run switch overrides it."""
+    paths = Paths(tmp_path).ensure()
+    store = JobStore(paths)
+    r = JobRunner(store, Settings(comments=True), config_path=CONFIG)
+    cfg = r.config_for(_job(store, features={"comments": False}))
+    assert cfg.comments is False
+
+
 def test_a_queued_job_still_in_the_worker_queue_does_not_run(runner,
                                                              monkeypatch):
     """The id can still be in `queue.Queue` after cancelling — nothing removes

@@ -24,6 +24,10 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // default model, both sent by /api/models so the picker never
                 // hardcodes a server-owned number.
                 effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
+                // The per-run pass switches, as sent by /api/features: [{id,
+                // label, blurb, group, heavy, default}]. The live on/off state
+                // lives in the rendered checkboxes; collectFeatures() reads it.
+                features: [],
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [],
@@ -828,6 +832,94 @@ async function loadModels() {
 $('model').addEventListener('change', renderCost);
 $('glossary-model').addEventListener('change', renderCost);
 
+// ── passes & features ─────────────────────────────────────────────────────
+// The submission panel's switches, one per togglable pass, grouped and each
+// opening at what the pipeline does today (the server sends that as `default`).
+// The catalogue is the server's — this only renders it — so the panel can never
+// offer a switch the config cannot honour. glossary is deliberately not here:
+// the "First-pass glossary reader" picker above already carries its on/off.
+const FEATURE_GROUPS = [
+  ['pass', 'Passes'],
+  ['output', 'What it writes'],
+  ['safety', 'Safety nets — leave on unless you know why'],
+];
+
+async function loadFeatures() {
+  try {
+    const body = await api('/api/features');
+    state.features = body.features || [];
+  } catch (_) {
+    state.features = [];               // panel stays empty; the review still runs
+  }
+  renderFeatures();
+}
+
+function renderFeatures() {
+  const host = $('features-groups');
+  if (!host) return;
+  host.innerHTML = '';
+  FEATURE_GROUPS.forEach(([group, title]) => {
+    const items = state.features.filter((f) => f.group === group);
+    if (!items.length) return;
+    const section = document.createElement('div');
+    section.className = 'feature-group';
+    const head = document.createElement('div');
+    head.className = 'feature-group-title';
+    head.textContent = title;
+    section.append(head);
+    items.forEach((f) => section.append(featureRow(f)));
+    host.append(section);
+  });
+  updateFeatureCostNote();
+}
+
+function featureRow(f) {
+  const row = document.createElement('label');
+  row.className = 'switch' + (f.group === 'safety' ? ' switch-safety' : '');
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.setAttribute('role', 'switch');
+  input.dataset.feature = f.id;
+  if (f.heavy) input.dataset.heavy = '1';
+  input.checked = !!f.default;
+  const track = document.createElement('span');
+  track.className = 'track';
+  const thumb = document.createElement('span');
+  thumb.className = 'thumb';
+  track.append(thumb);
+  const text = document.createElement('span');
+  text.className = 'switch-text';
+  const name = document.createElement('span');
+  name.className = 'switch-label';
+  name.textContent = f.label;
+  const blurb = document.createElement('small');
+  blurb.className = 'muted';
+  blurb.textContent = f.blurb;
+  text.append(name, blurb);
+  input.addEventListener('change', () => { updateFeatureCostNote(); renderCost(); });
+  row.append(input, track, text);
+  return row;
+}
+
+// The {id: on} map the run sends. Reads the live switch state, so a toggle the
+// user never touched is sent at its default — a harmless no-op on the server.
+function collectFeatures() {
+  const out = {};
+  document.querySelectorAll('#features-groups input[data-feature]')
+    .forEach((el) => { out[el.dataset.feature] = el.checked; });
+  return out;
+}
+
+// The cost estimate can't yet price a whole-book read or a second pass, so when
+// one is switched on the panel says so rather than showing a figure that's low.
+function updateFeatureCostNote() {
+  const note = $('features-cost-note');
+  if (!note) return;
+  const heavyOn = [...document.querySelectorAll(
+    '#features-groups input[data-heavy="1"]')].some((el) => el.checked);
+  note.hidden = !heavyOn;
+}
+
 // ── reasoning effort ──────────────────────────────────────────────────────
 // A 1-based slider over these, cheapest → deepest, mirroring EFFORT_LEVELS on
 // the server. Low is the shipped default: grammar detection is precise, so a
@@ -1118,6 +1210,7 @@ $('start').addEventListener('click', async () => {
           min_confidence: $('confidence').value,
           effort: effortValue(),
           glossary_model: $('glossary-model').value,
+          features: collectFeatures(),
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
@@ -1191,11 +1284,20 @@ function renderJobs(jobs) {
     head.append(name, status);
     li.append(head);
 
-    if (job.state === 'running' && job.total) {
+    if (job.state === 'running') {
       const bar = document.createElement('div');
       bar.className = 'bar';
       const fill = document.createElement('i');
-      fill.style.width = `${Math.round((job.done / job.total) * 100)}%`;
+      // The per-chunk loop ("reviewing") has a real count; the whole-book passes
+      // after it do not, so the bar runs indeterminate while the step name in
+      // the status carries the truth. A record with no stage — from before
+      // stages existed — keeps the old numeric bar.
+      const numeric = (job.stage === 'reviewing' || !job.stage) && job.total;
+      if (numeric) {
+        fill.style.width = `${Math.round((job.done / job.total) * 100)}%`;
+      } else {
+        bar.classList.add('indeterminate');
+      }
       bar.append(fill);
       li.append(bar);
     }
@@ -3469,6 +3571,7 @@ function startApp() {
   applyMode();
   loadFormats().catch(() => {});
   loadModels().catch(() => {});
+  loadFeatures().catch(() => {});
   loadStyleSheet().catch(() => {});
   applyDefaults().catch(() => {});
   if (!WEB) offerUpdateIfBehind();
