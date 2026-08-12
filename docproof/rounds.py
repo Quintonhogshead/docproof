@@ -282,13 +282,10 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     from `cfg` (the detector model, and the judge model/effort from
     `cfg.rounds`). `mock_findings`, if given, feeds each round the canned
     findings instead of calling the detector model (for an offline smoke run)."""
-    from dataclasses import replace as dc_replace
     from pathlib import Path
 
-    from .pipeline import finish, prepare, run_sync
+    from .pipeline import prepare, run_sync
     from .providers import build_provider
-    from .reassembler import apply_untracked
-    from .utils.xml_helpers import DocxPackage
 
     out_dir = Path(out_dir)
     source_path = source_path or input_path
@@ -303,66 +300,169 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     if review_provider is None and mock_findings is None:
         review_provider = build_provider(cfg)
     if judge_provider is None:
-        if mock_findings is not None:
-            judge_provider = _ApproveAllJudge()
-        else:
-            jcfg = cfg.model_copy(deep=True)
-            jcfg.api.model = cfg.rounds.judge_model
-            jcfg.api.effort = cfg.rounds.judge_effort
-            judge_provider = build_provider(jcfg)
+        judge_provider = _build_judge(cfg, mock_findings is not None)
 
     usage = Usage()
     reuse = cfg.rounds.reuse_whole_book_reads
     captured: dict = {"format": []}
 
     def review(k, edits_by_para):
+        rcfg = _round_config(cfg, k, reuse)
         if k == 1:
-            prepared, rcfg = prepared0, cfg
+            prepared = prepared0
         else:
-            wpkg = DocxPackage(base_path)
-            apply_untracked(wpkg, orig_doc, edits_by_para)
-            wpkg.save(rounds_dir / f"round-{k - 1}.docx")
-            rcfg = cfg
-            if reuse:                                # skip the whole-book re-reads
-                rcfg = cfg.model_copy(deep=True)
-                rcfg.glossary.enabled = False
-                rcfg.storysheet.enabled = False
-            prepared = prepare(rcfg, rounds_dir / f"round-{k - 1}.docx", error_dir)
+            wpath = _working_docx(rounds_dir, orig_doc, base_path, k,
+                                  edits_by_para)
+            prepared = prepare(rcfg, wpath, error_dir)
             if reuse:                                # give detectors round 1's sheet
                 prepared.story_sheet = prepared0.story_sheet
-
         if mock_findings is not None:
             from .__main__ import _run_mock
             raw, u = _run_mock(rcfg, prepared, mock_findings)
         else:
             raw, u = run_sync(rcfg, prepared, review_provider)
         _merge_usage(usage, u)
-
-        query_types = prepared.query_types
-        format_types = set(prepared.format_types or {})
-        candidates, forwarded, fmt = [], [], []
-        for f in raw:
-            if f.error_type in format_types:         # italic etc.: apply at the end
-                fmt.append(f)
-            elif f.force_query or f.error_type in query_types:
-                forwarded.append(f)
-            else:
-                candidates.append(f)
-        if k == 1:                                   # format doesn't change round to round
+        rr, fmt = _round_review(prepared, raw)
+        if k == 1:
             captured["format"] = fmt
+        return rr
 
-        para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
-        types = {et.key: et for group in prepared.groups for et in group}
-        context = "\n\n".join(x for x in (prepared.conventions,
-                                          prepared.vocabulary,
-                                          prepared.story_sheet) if x)
-        return RoundReview(
-            model_findings=candidates, para_text=para_text, types=types,
-            sweep_findings=list(prepared.sweep_findings)
-            + list(prepared.consistency_findings),
-            query_findings=forwarded, context=context)
+    result = _drive(cfg, prepared0, orig_doc, review, judge_provider, usage)
+    return _finalize(cfg, prepared0, base_path, result, captured["format"],
+                     usage, out_dir, source_path)
 
-    result = run_rounds(
+
+def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
+                     source_path=None, review_provider=None,
+                     judge_provider=None, poll_interval=30.0):
+    """Run multi-round review on the batch path and write the deliverable.
+
+    Each round submits a review batch on the current working document, waits for
+    it, and collects the raw findings; the judge and the fold happen in this
+    process between rounds. Runs in a single process (the poll loop blocks), so
+    it is meant to be driven from a background worker rather than an interactive
+    command. `review_provider`/`judge_provider` are injectable for testing;
+    `poll_interval` is the seconds between polls (a fake batch completes on the
+    first poll, so tests never sleep)."""
+    import time
+    from pathlib import Path
+
+    from . import batch as batchlib
+    from .pipeline import prepare
+    from .providers import build_provider
+
+    out_dir = Path(out_dir)
+    source_path = source_path or input_path
+    rounds_dir = out_dir / "rounds"
+    rounds_dir.mkdir(parents=True, exist_ok=True)
+
+    prepared0 = prepare(cfg, input_path, error_dir)
+    orig_doc = prepared0.doc
+    base_path = rounds_dir / "base.docx"
+    prepared0.pkg.save(base_path)
+
+    if review_provider is None:
+        review_provider = build_provider(cfg)
+    if judge_provider is None:
+        judge_provider = _build_judge(cfg, False)
+
+    usage = Usage()
+    reuse = cfg.rounds.reuse_whole_book_reads
+    captured: dict = {"format": []}
+
+    def review(k, edits_by_para):
+        rcfg = _round_config(cfg, k, reuse)
+        wpath = _working_docx(rounds_dir, orig_doc, base_path, k, edits_by_para)
+        job = batchlib.submit(rcfg, str(wpath), error_dir, review_provider,
+                              workspace)
+        while True:
+            batchlib.poll(job, review_provider, workspace)
+            if job.state == "ready":
+                break
+            if job.state == "failed":
+                raise batchlib.BatchError(
+                    job.error or f"batch {job.batch_id} failed")
+            time.sleep(poll_interval)
+        r = batchlib.collect_findings(job, review_provider, error_dir)
+        _merge_usage(usage, r.usage)
+        if reuse and k > 1:                          # judge context; detectors already ran
+            r.prepared.story_sheet = prepared0.story_sheet
+        rr, fmt = _round_review(r.prepared, r.findings)
+        if k == 1:
+            captured["format"] = fmt
+        return rr
+
+    result = _drive(cfg, prepared0, orig_doc, review, judge_provider, usage)
+    return _finalize(cfg, prepared0, base_path, result, captured["format"],
+                     usage, out_dir, source_path)
+
+
+# --- shared driver helpers (sync and batch) ----------------------------------
+
+def _build_judge(cfg, mock: bool):
+    from .providers import build_provider
+    if mock:
+        return _ApproveAllJudge()
+    jcfg = cfg.model_copy(deep=True)
+    jcfg.api.model = cfg.rounds.judge_model
+    jcfg.api.effort = cfg.rounds.judge_effort
+    return build_provider(jcfg)
+
+
+def _round_config(cfg, k: int, reuse: bool):
+    """Round k's config: round 1 uses cfg as-is; later rounds skip the
+    whole-book re-reads (glossary, story sheet) when reuse is on — round 1
+    already caught them, and mechanical fixes create no new ones."""
+    if k == 1 or not reuse:
+        return cfg
+    rcfg = cfg.model_copy(deep=True)
+    rcfg.glossary.enabled = False
+    rcfg.storysheet.enabled = False
+    return rcfg
+
+
+def _working_docx(rounds_dir, orig_doc, base_path, k: int, edits_by_para):
+    """The document round k reviews: the normalized-original base for round 1,
+    else that base with the cumulative edits applied untracked."""
+    from .reassembler import apply_untracked
+    from .utils.xml_helpers import DocxPackage
+    if k == 1:
+        return base_path
+    wpkg = DocxPackage(base_path)
+    apply_untracked(wpkg, orig_doc, edits_by_para)
+    wpath = rounds_dir / f"round-{k - 1}.docx"
+    wpkg.save(wpath)
+    return wpath
+
+
+def _round_review(prepared, raw):
+    """Split a round's raw findings into tracked-change candidates (judged),
+    forwarded queries, and format findings (returned separately, applied once at
+    the end), and build the RoundReview the orchestrator consumes."""
+    query_types = prepared.query_types
+    format_types = set(prepared.format_types or {})
+    candidates, forwarded, fmt = [], [], []
+    for f in raw:
+        if f.error_type in format_types:             # italic etc.: apply at the end
+            fmt.append(f)
+        elif f.force_query or f.error_type in query_types:
+            forwarded.append(f)
+        else:
+            candidates.append(f)
+    para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
+    types = {et.key: et for group in prepared.groups for et in group}
+    context = "\n\n".join(x for x in (prepared.conventions, prepared.vocabulary,
+                                      prepared.story_sheet) if x)
+    rr = RoundReview(
+        model_findings=candidates, para_text=para_text, types=types,
+        sweep_findings=list(prepared.sweep_findings)
+        + list(prepared.consistency_findings),
+        query_findings=forwarded, context=context)
+    return rr, fmt
+
+
+def _drive(cfg, prepared0, orig_doc, review, judge_provider, usage):
+    return run_rounds(
         orig_doc, review, judge_provider, count=cfg.rounds.count,
         judge_model=cfg.rounds.judge_model, judge_prompt=cfg.rounds.judge_prompt,
         min_confidence=cfg.min_confidence, query_types=prepared0.query_types,
@@ -370,14 +470,21 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
         min_new_edits=cfg.rounds.min_new_edits, concurrency=cfg.api.concurrency,
         usage=usage)
 
-    # Assemble with the existing finish. The composed layers already contain the
-    # sweep and consistency edits (folded in every round), so this prepared has
-    # those emptied to avoid applying them twice; a fresh package off the
-    # normalized-original base receives the tracked changes.
+
+def _finalize(cfg, prepared0, base_path, result, fmt_findings, usage, out_dir,
+              source_path):
+    """Assemble the deliverable with the existing finish. The composed layers
+    already contain the sweep and consistency edits (folded every round), so this
+    prepared has those emptied to avoid applying them twice; a fresh package off
+    the normalized-original base receives the tracked changes."""
+    from dataclasses import replace as dc_replace
+
+    from .pipeline import finish
+    from .utils.xml_helpers import DocxPackage
     final_pkg = DocxPackage(base_path)
     prepared_final = dc_replace(prepared0, pkg=final_pkg,
                                 sweep_findings=[], consistency_findings=[])
-    findings = result.edits + result.queries + captured["format"]
+    findings = result.edits + result.queries + fmt_findings
     log.info("Multi-round review: %d round(s), %d change(s), %d quer(y/ies), "
              "%d rejected", result.rounds_run, len(result.edits),
              len(result.queries), len(result.rejected))
