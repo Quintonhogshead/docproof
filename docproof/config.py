@@ -509,6 +509,36 @@ class StorySheetConfig(BaseModel):
         return self
 
 
+class RoundsConfig(BaseModel):
+    """Multi-round review. The manuscript is reviewed `count` times; each round
+    reads the previous round's corrected text, and a strong judge adjudicates
+    every model-generated correction between rounds. All rounds' approved changes
+    are composed into one tracked-change document against the original at the end
+    (docproof/editlayer.py). Off by default: count 1 is a single ordinary review,
+    byte-for-byte. See docproof/verifier.py (the judge) and docproof/editlayer.py."""
+    count: int = Field(default=1, ge=1, le=4)
+    judge_model: str = "claude-opus-5"
+    judge_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # The judge's instructions, meant to be edited per job in the review panel.
+    # Empty uses the built-in default (docproof.verifier.default_judge_prompt()),
+    # so clearing the field reverts to it.
+    judge_prompt: str = ""
+    # Stop early once a round approves fewer than this many new corrections.
+    min_new_edits: int = Field(default=1, ge=0)
+    # Reuse round 1's whole-book reads (glossary, story sheet) in later rounds:
+    # mechanical fixes change no names or narration, and it kills the run-to-run
+    # glossary wobble.
+    reuse_whole_book_reads: bool = True
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.count > 1 and lookup(self.judge_model) is None:
+            raise ValueError(
+                f"rounds.judge_model '{self.judge_model}' is not in the catalog")
+        return self
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -529,6 +559,7 @@ class Config(BaseModel):
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
+    rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent

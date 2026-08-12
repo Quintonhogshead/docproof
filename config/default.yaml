@@ -140,6 +140,18 @@ storysheet:
   max_output_tokens: 4000
   cache_dir:                # a path pins the read per draft (text+model+prompt)
 
+# Multi-round review: review the manuscript `count` times, each round reading the
+# previous round's corrected text, with a strong judge ruling on every correction
+# between rounds. All approved changes are composed into one tracked-change file
+# against the original. count 1 = a single ordinary review (default, inert).
+rounds:
+  count: 1
+  judge_model: claude-opus-5
+  judge_effort: high
+  judge_prompt: ""         # empty = built-in default (editable in the review panel)
+  min_new_edits: 1         # stop early once a round approves fewer than this
+  reuse_whole_book_reads: true
+
 # Real-word typos the plain passes glide over (staired, a protected repeated
 # misspelling), found by local signals and ruled on by the model in context.
 # Only a high-confidence affirmed fix becomes a tracked change; softer calls are
