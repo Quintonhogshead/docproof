@@ -43,6 +43,12 @@ desktop = [
     "docproof[app]",
     "pywebview>=5.0",
 ]
+languagetool = [
+    # The local rules-based mechanical-floor pass (docproof/languagetool.py). Opt
+    # in and off by default: enabling it also needs a Java runtime, and the
+    # library downloads the LanguageTool jar (~260 MB, cached) on first use.
+    "language_tool_python>=2.8",
+]
 build = [
     "pyinstaller>=6.0",
 ]
