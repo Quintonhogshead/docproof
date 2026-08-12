@@ -17,6 +17,10 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # A monthly spend ceiling, in USD, for every ordinary account without one of
   # its own. Admins are never capped. Remove to leave ordinary users uncapped.
   DOCPROOF_DEFAULT_CAP = "20"
+  # LanguageTool caches its ~260 MB jar here, on the mounted /data volume, so it
+  # downloads once and survives redeploys. Harmless while the pass is disabled
+  # (the default); only read when languagetool.enabled is set.
+  LTP_JAR_DIR_PATH = "/data/languagetool"
 
 [http_service]
   internal_port = 8000
@@ -34,4 +38,8 @@ primary_region = "iad"        # pick one near your users: fly platform regions
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1gb"
+  # 2gb so the LanguageTool pass has room: its JVM wants a ~512 MB heap alongside
+  # the Python web app, and 1gb would OOM under a review. The pass itself is still
+  # off by default (languagetool.enabled: false) — this is headroom for when it's
+  # turned on.
+  memory = "2gb"
