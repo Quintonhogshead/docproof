@@ -870,7 +870,7 @@ function renderFeatures() {
     items.forEach((f) => section.append(featureRow(f)));
     host.append(section);
   });
-  updateFeatureCostNote();
+  renderCost();
 }
 
 function featureRow(f) {
@@ -896,7 +896,7 @@ function featureRow(f) {
   blurb.className = 'muted';
   blurb.textContent = f.blurb;
   text.append(name, blurb);
-  input.addEventListener('change', () => { updateFeatureCostNote(); renderCost(); });
+  input.addEventListener('change', renderCost);
   row.append(input, track, text);
   return row;
 }
@@ -910,15 +910,6 @@ function collectFeatures() {
   return out;
 }
 
-// The cost estimate can't yet price a whole-book read or a second pass, so when
-// one is switched on the panel says so rather than showing a figure that's low.
-function updateFeatureCostNote() {
-  const note = $('features-cost-note');
-  if (!note) return;
-  const heavyOn = [...document.querySelectorAll(
-    '#features-groups input[data-heavy="1"]')].some((el) => el.checked);
-  note.hidden = !heavyOn;
-}
 
 // ── reasoning effort ──────────────────────────────────────────────────────
 // A 1-based slider over these, cheapest → deepest, mirroring EFFORT_LEVELS on
@@ -999,22 +990,97 @@ function effortFactor(m) {
   return state.effortMultipliers[effortValue()] || 1;
 }
 
+// Output the model writes scales with whether it must explain each change: the
+// explanations are most of what it emits, so turning them off drops the output
+// roughly to the applied changes alone. A rough factor.
+const EXPLANATIONS_OFF_OUTPUT = 0.35;
+// A whole-book read (story sheet, glossary) answers with a compact structured
+// summary, not prose, so its output is small next to the book it reads — the
+// input dominates and a flat output guess is close enough.
+const READ_OUTPUT_TOKENS = 2000;
+// LanguageTool's confirm calls scale with how many candidates the book throws,
+// which isn't known before the run, so price it as a small share of one read.
+const LT_CONFIRM_SHARE = 0.15;
+
+function modelById(id) {
+  return state.models.find((x) => x.id === id) || null;
+}
+
+// The whole book once — every chunk, not the per-pass multiple. Only the
+// whole-document passes read it, and only when the file is fully selected.
+function bookTokensFor(f) {
+  return (f.chunks || []).reduce((n, c) => n + c.est_tokens, 0);
+}
+
+// The review estimate, moving with the switches. The per-chunk detector passes
+// and the rewrite retype ride the overnight batch (its discount); the whole-book
+// reads and the confirm calls are synchronous — full price in both columns.
+// `approx` is set when a pass whose size the book decides (rewrite, LanguageTool)
+// is on, so the panel can say the figure is rough.
 function priceSelection(m) {
-  let tokens = 0;
-  let requests = 0;
+  const feats = collectFeatures();
+  const glossaryId = $('glossary-model').value;
+  const outFactor = feats.report_explanations === false
+    ? EXPLANATIONS_OFF_OUTPUT : 1;
+  let batched = 0;                 // rides the batch discount
+  let full = 0;                    // synchronous, full price both columns
+  let approx = false;
+  let any = false;
+
   filesToRun().forEach((f) => {
     const kept = keptFor(f);
     const passes = f.passes || 1;
-    (f.chunks || []).forEach((c) => {
+    const chunks = f.chunks || [];
+    let inTok = 0, reqs = 0;
+    chunks.forEach((c) => {
       if (!kept.has(c.chunk_id)) return;
-      tokens += c.est_tokens * passes;
-      requests += passes;
+      inTok += c.est_tokens * passes;
+      reqs += passes;
+    });
+    if (reqs) any = true;
+    batched += (inTok * m.input_per_mtok
+      + reqs * state.outputGuess * m.output_per_mtok * effortFactor(m) * outFactor)
+      / 1e6;
+
+    // The whole-document passes run only when the file is reviewed whole.
+    if (kept.size !== chunks.length || !chunks.length) return;
+    const book = bookTokensFor(f);
+
+    // glossary is priced from its own reader picker, not a switch.
+    if (glossaryId && glossaryId !== 'off') {
+      const gm = modelById(glossaryId) || m;
+      full += (book * gm.input_per_mtok
+        + READ_OUTPUT_TOKENS * gm.output_per_mtok) / 1e6;
+      any = true;
+    }
+    // The switch-driven passes carry their pricing model from /api/features; a
+    // null model means the pass runs on the detector's own model.
+    state.features.forEach((spec) => {
+      if (!spec.cost || feats[spec.id] !== true) return;
+      const pm = modelById(spec.cost.model) || m;
+      any = true;
+      if (spec.cost.kind === 'read') {
+        full += (book * pm.input_per_mtok
+          + READ_OUTPUT_TOKENS * pm.output_per_mtok) / 1e6;
+      } else if (spec.cost.kind === 'retype') {
+        const s = spec.cost.samples || 1;
+        batched += s * (book * pm.input_per_mtok
+          + book * pm.output_per_mtok * effortFactor(pm)) / 1e6;
+        approx = true;
+      } else if (spec.cost.kind === 'confirm') {
+        full += LT_CONFIRM_SHARE * book
+          * (pm.input_per_mtok + pm.output_per_mtok) / 1e6;
+        approx = true;
+      }
     });
   });
-  if (!requests) return { now: null, batch: null };
-  const full = (tokens * m.input_per_mtok
-    + requests * state.outputGuess * m.output_per_mtok * effortFactor(m)) / 1e6;
-  return { now: full, batch: full * m.batch_discount };
+
+  if (!any) return { now: null, batch: null, approx: false };
+  return {
+    now: batched + full,
+    batch: batched * (m.batch_discount || 1) + full,
+    approx,
+  };
 }
 
 // Prep sends the whole manuscript once, so its price is simply what the files
@@ -1071,9 +1137,13 @@ function renderCost() {
     return;
   }
 
-  const price = m ? priceSelection(m) : { now: null, batch: null };
+  const price = m ? priceSelection(m) : { now: null, batch: null, approx: false };
   $('cost-now').textContent = money(price.now);
   $('cost-batch').textContent = money(price.batch);
+  // The estimate now includes the switched-on passes; the note only stays to
+  // flag that a pass whose size the book decides makes the figure a rough one.
+  const note = $('features-cost-note');
+  if (note) note.hidden = !price.approx;
 
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
