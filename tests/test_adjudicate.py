@@ -66,6 +66,26 @@ def test_max_candidates_caps_the_work():
     assert len(generate(paras, max_candidates=5)) == 5
 
 
+def test_a_denylisted_spelling_is_ruled_on_with_its_given_fix():
+    # 'alot' has no real word one edit away, so the typo signal would miss it;
+    # the denylist forces the ruling and supplies the two-word correction.
+    paras = [_para("body-0", "There was alot to do before the alot ran out.")]
+    cands = [c for c in generate(paras, denylist={"alot": "a lot"})
+             if c.word == "alot"]
+    assert len(cands) == 2                          # every occurrence, one fix
+    assert {c.kind for c in cands} == {"denylist"}
+    assert {c.suggestion for c in cands} == {"a lot"}
+
+
+def test_the_denylist_beats_protection():
+    # Even a word the caller protected as the author's own yields to the house
+    # denylist — protection is for coinages, not for spellings the press bans.
+    paras = [_para("body-0", "we sat aswell aswell by the fire that night.")]
+    cands = [c for c in generate(paras, protected=["aswell"],
+                                 denylist={"aswell": "as well"})]
+    assert cands and all(c.kind == "denylist" for c in cands)
+
+
 # --- helpers ------------------------------------------------------------------
 
 def test_match_case_follows_the_source():
@@ -173,3 +193,29 @@ def test_prepare_skips_candidates_when_the_pass_is_off(tmp_path):
     cfg.adjudicate.enabled = False
     prep = prepare(cfg, doc, "config/error_types")
     assert prep.adjudicate_candidates == []
+
+
+# --- a word under review is no longer protected -------------------------------
+
+def test_a_near_miss_candidate_leaves_the_protected_lexicon():
+    # The whole point of a near-miss is that a PROTECTED word is being questioned
+    # as a repeated typo; keeping it in the lexicon would tell every judge to
+    # protect and to doubt the same word at once.
+    from docproof.pipeline import _unprotect_near_miss
+    from docproof.spellscan import SpellScan
+    spell = SpellScan(lexicon=("Annastasia", "Kaelith"))
+    cands = [Candidate("body-0", "annastasia", 0, 10, "anastasia", "near_miss")]
+    out = _unprotect_near_miss(spell, cands)
+    assert "Annastasia" not in out.lexicon      # under review, so no longer owned
+    assert "Kaelith" in out.lexicon             # a true coinage is untouched
+
+
+def test_typo_and_denylist_candidates_do_not_disturb_the_lexicon():
+    # Only near-misses come out of the lexicon: a typo or a denylisted spelling
+    # was never protected in the first place.
+    from docproof.pipeline import _unprotect_near_miss
+    from docproof.spellscan import SpellScan
+    spell = SpellScan(lexicon=("Kaelith",))
+    cands = [Candidate("body-0", "staired", 0, 7, "stared", "typo"),
+             Candidate("body-0", "alot", 8, 12, "a lot", "denylist")]
+    assert _unprotect_near_miss(spell, cands).lexicon == ("Kaelith",)

@@ -59,12 +59,15 @@ normalize:
   quotes: true
   spaces: true
 
-# A dictionary scan that never corrects anything. Unknown words that repeat,
-# or that are written as names, are the author's own — they become a
-# do-not-flag list sent to every pass, which is what stops a coined name being
-# "corrected" into the standard word it resembles. Unknown words used once, in
-# lower case, are handed to the model to look at. Needs the optional `spylls`
-# package; without it the scan is skipped and the passes run as before.
+# A dictionary scan that never corrects anything. It sorts every unknown word:
+# words written as NAMES become a do-not-flag list sent to every pass (what
+# stops a coined name being "corrected" into the word it resembles); words that
+# come apart into an ordinary word plus an ending English does not give it
+# (growed → grow, layed → lay) and words used only seldom are handed to the
+# model to look at; words merely repeated are passed on as evidence, not
+# protection — because a misspelling the author believes in repeats just as
+# faithfully as a coinage. Needs the optional `spylls` package; without it the
+# scan is skipped and the passes run as before.
 spellcheck:
   enabled: true
   # Unset means "whatever `variant` asks for", which is almost always right.
@@ -73,9 +76,24 @@ spellcheck:
   # extension). Checking British spelling against a U.S. word list would file
   # every correct "colour" as unknown, so the scan declines instead.
   dictionary:
-  min_occurrences: 2        # seen this often → a coined term, not a typo
+  min_occurrences: 2        # seen this often → "used throughout" (evidence for the
+                            # model), not protection; seen less → raised to look at
   suggestion_limit: 25      # candidates given dictionary guesses (~0.25s each)
   allowlist: []             # always correct for this house, whatever the dictionary says
+  # Spellings the house never accepts → their correction. Never protected by
+  # repetition; the fix is given directly (the right form is often two words an
+  # edit-distance search cannot reach). Set to {} to disable.
+  denylist:
+    alot: a lot
+    aswell: as well
+    infact: in fact
+    eachother: each other
+    atleast: at least
+    incase: in case
+    everytime: every time
+    abit: a bit
+    inspite: in spite
+    ofcourse: of course
 
 # One term written more than one way — blood-cursed against bloodcursed, safe
 # keeping against safekeeping. The rule per-paragraph review structurally
@@ -330,6 +348,12 @@ comments: true              # margin comment on every tracked change
 # min_confidence join them in the manuscript, or stay in summary.md where only
 # an editor sees them.
 query_comments: true
+
+# One comment at the very top of the reviewed file, naming the words the spell
+# scan left out of the check (treated as the author's own and never flagged), so
+# a proofreader sees what was taken on trust before reading a line. Rides on
+# `comments`: with Word comments off, none of these are written either.
+excluded_words_comment: true
 
 # The second deliverable: a Word change log for the author, naming every
 # correction and reason, the scripted-check counts, the queries, what was

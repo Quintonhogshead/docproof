@@ -25,6 +25,7 @@ DOCX = DocumentFormat(
     apply_tracked_changes=_docx.apply_tracked_changes,
     normalize=_docx.normalize,
     snapshot=_docx.snapshot,
+    annotate_excluded_words=_docx.annotate_excluded_words,
 )
 
 IDML = DocumentFormat(

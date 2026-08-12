@@ -7,17 +7,30 @@ the dictionary makes that easy to do: asked to suggest for *Kaelith* it offers
 would quietly rename a character.
 
 So this module classifies instead. Every word the dictionary does not know is
-sorted into one of two piles:
+sorted into one of three piles:
 
-  * words the author clearly means — repeated, or capitalized mid-sentence.
-    These become a lexicon of the manuscript's own vocabulary, handed to the
-    model as a do-not-flag list. This is the half that pays for itself: it
-    attacks the exact false positive the error types are written to avoid,
-    with document-specific evidence no static list could carry.
+  * words written as names — capitalized where no rule of English would
+    capitalize them. These become a lexicon of the manuscript's own vocabulary,
+    handed to the model as a do-not-flag list. This is the half that pays for
+    itself: it attacks the exact false positive the error types are written to
+    avoid, with document-specific evidence no static list could carry.
 
-  * words used exactly once and not written as a name. That is what a typo
-    looks like, so they are handed over as things to look at — never as things
-    to change.
+  * words to look at: used seldom, or coming apart into an ordinary word plus
+    an ending English does not give it. Both are what a typo looks like, so
+    they are handed over as things to read — never as things to change.
+
+  * words used throughout. Repetition is evidence of vocabulary, and it used
+    to be treated as proof: any unknown word seen twice was protected outright.
+    That is the wrong way round for the words it matters most on. A coinage
+    repeats because the author invented it; *growed* repeats because the author
+    believes in it, and protecting it makes a misspelling on every page of a
+    manuscript the one thing this pipeline structurally cannot find. So the
+    repetition is passed on as what it is — evidence — and the model reads the
+    word where it falls.
+
+Protection is the strong claim, so it takes the strong signal. Name-casing is
+that signal, because renaming a character is the one error an author cannot
+undo by reading the change log.
 
 Nothing here edits the manuscript. The output is context for the model passes,
 and counts for the change log.
@@ -30,7 +43,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .models import ParagraphRef
 
@@ -47,13 +60,15 @@ class Candidate:
     word: str
     para_ids: tuple[str, ...]
     suggestions: tuple[str, ...] = ()
+    stem: str = ""            # the known word it is a regular ending away from
 
 
 @dataclass(frozen=True)
 class SpellScan:
     """What the dictionary found, and nothing it decided."""
-    lexicon: tuple[str, ...] = ()        # the author's own vocabulary: protect
-    candidates: tuple[Candidate, ...] = ()   # used once, unknown: look at
+    lexicon: tuple[str, ...] = ()        # written as names: protect
+    candidates: tuple[Candidate, ...] = ()   # unknown, not a name: look at
+    recurring: tuple[Candidate, ...] = ()    # unknown and repeated: read it
     tokens: int = 0
     unique: int = 0
     unknown: int = 0
@@ -67,28 +82,47 @@ class SpellScan:
         if self.lexicon:
             parts.append(
                 "WORDS THIS AUTHOR OWNS\n"
-                "A dictionary scan of this manuscript found these words used "
-                "as the author's own — coined terms, invented places and "
-                "peoples, character names. They are CORRECT. Never report one "
-                "as a misspelling, and never change one into the standard "
-                "English word it resembles:\n"
+                "A dictionary scan of this manuscript found these words "
+                "written as names — coined terms, invented places and peoples, "
+                "characters. They are CORRECT. Never report one as a "
+                "misspelling, and never change one into the standard English "
+                "word it resembles:\n"
                 + ", ".join(self.lexicon))
         if self.candidates:
-            listed = []
-            for c in self.candidates:
-                if c.suggestions:
-                    listed.append(f"{c.word} (perhaps: {', '.join(c.suggestions)})")
-                else:
-                    listed.append(c.word)
             parts.append(
                 "WORDS TO LOOK AT\n"
-                "These appear exactly once, are not written as a name, and are "
-                "not in the dictionary — which is what a typo looks like. "
-                "Where one falls in a paragraph you are reviewing, read it and "
-                "decide. If it reads as deliberate, leave it. The parenthesised "
-                "words are the dictionary's guesses, not instructions:\n"
-                + "; ".join(listed))
+                "These are not written as names and are not in the dictionary "
+                "— which is what a typo looks like. Where one falls in a "
+                "paragraph you are reviewing, read it and decide. If it reads "
+                "as deliberate, leave it. A word shown as “x → y” came apart "
+                "as an ordinary word plus an ending English does not give it, "
+                "which is usually a misspelling and occasionally dialect the "
+                "author means. The parenthesised words are the dictionary's "
+                "guesses, not instructions:\n"
+                + "; ".join(_describe(c) for c in self.candidates))
+        if self.recurring:
+            parts.append(
+                "WORDS USED THROUGHOUT\n"
+                "These are not in the dictionary either, and appear more than "
+                "once. Repetition usually means a coined term the author "
+                "means — but a misspelling the author believes in repeats just "
+                "as faithfully, so this is evidence and not a verdict. Read "
+                "each where it falls: if it belongs to this book's vocabulary, "
+                "leave it alone; if it is simply the wrong spelling of an "
+                "ordinary word, it is wrong every time it appears:\n"
+                + "; ".join(_describe(c) for c in self.recurring))
         return "\n\n".join(parts)
+
+
+def _describe(c: Candidate) -> str:
+    """One word as the model should see it: what it came apart into, and what
+    the dictionary would have guessed, neither of them as an instruction."""
+    out = c.word
+    if c.stem:
+        out += f" → {c.stem}"
+    if c.suggestions:
+        out += f" (perhaps: {', '.join(c.suggestions)})"
+    return out
 
 
 @lru_cache(maxsize=8)
@@ -131,16 +165,65 @@ def _dictionary(name: str):
 
 
 def _sentence_initial(text: str, pos: int) -> bool:
+    """Is this word standing where any word would be capitalized anyway?
+
+    Getting this wrong is expensive in one direction: a word wrongly read as
+    capitalized mid-sentence is read as a name, and names are protected. So a
+    quotation counts, even though the mark before it is usually a comma —
+    `he said, "Growed like a weed"` opens a sentence as surely as a full stop
+    does, and it is the commonest construction in fiction there is."""
     i = pos - 1
+    quoted = False
     while i >= 0 and text[i] in " \t \"“”'‘’(":
+        quoted = quoted or text[i] in "\"“‘'("
         i -= 1
-    return i < 0 or text[i] in ".!?…"
+    if i < 0 or text[i] in ".!?…":
+        return True
+    return quoted and text[i] in ",:;—–-"
+
+
+# Endings English adds by rule. Longest first, so "rised" is read as "rise"
+# plus -ed rather than "rise" plus -d.
+_REGULAR_ENDINGS = ("ing", "est", "ed", "es", "en", "er", "ly", "s", "d")
+
+
+def _regular_form(word: str, dic) -> str:
+    """The known word this one is a regular ending away from, if there is one.
+
+    This is the shape of a misspelling the occurrence count cannot argue with:
+    *growed*, *teached*, *layed*, *tooken*, *partys*, *messyer*. Each is an
+    ordinary English word wearing an ending English does not give it, and each
+    repeats — the author believes in it — so counting occurrences reads it as
+    vocabulary and protects it, which is exactly backwards.
+
+    Taking the word apart tells the two cases apart. A coinage is almost never
+    a standard word plus a regular ending: strip *bloodcursed* or *starship*
+    and no English word is left, while stripping *growed* leaves *grow*.
+
+    Returns the stem, or "" when the word does not come apart this way."""
+    w = word.lower()
+    for ending in _REGULAR_ENDINGS:
+        if not w.endswith(ending):
+            continue
+        stem = w[:-len(ending)]
+        if len(stem) < 3:
+            continue
+        guesses = [stem, stem + "e"]              # layed → lay; rised → rise
+        if stem[-1] == stem[-2]:
+            guesses.append(stem[:-1])             # runned → run
+        if stem.endswith("i"):
+            guesses.append(stem[:-1] + "y")       # tryed → try
+        for guess in guesses:
+            if dic.lookup(guess):
+                return guess
+    return ""
 
 
 @dataclass
 class _Seen:
     count: int = 0
     proper: int = 0        # capitalized somewhere other than a sentence start
+    lower: int = 0         # written in lower case at least this often
     forms: Counter = field(default_factory=Counter)   # how it is actually written
     para_ids: list[str] = field(default_factory=list)
 
@@ -154,7 +237,9 @@ class _Seen:
 
 def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
          min_occurrences: int = 2, suggestion_limit: int = 25,
-         allowlist: Sequence[str] = (), dictionary: str = "en_US") -> SpellScan:
+         allowlist: Sequence[str] = (),
+         denylist: Mapping[str, str] | None = None,
+         dictionary: str = "en_US") -> SpellScan:
     """Read every paragraph, and sort what the dictionary does not know."""
     if not enabled:
         return SpellScan(available=False)
@@ -163,6 +248,7 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
         return SpellScan(available=False, dictionary=dictionary)
 
     allowed = {w.lower() for w in allowlist}
+    deny = {k.lower().strip(): v for k, v in (denylist or {}).items()}
     seen: dict[str, _Seen] = {}
     tokens = 0
     for para in paragraphs:
@@ -172,7 +258,9 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
             entry = seen.setdefault(word.lower(), _Seen())
             entry.count += 1
             entry.forms[word] += 1
-            if word[0].isupper() and not _sentence_initial(para.text, m.start()):
+            if not word[0].isupper():
+                entry.lower += 1
+            elif not _sentence_initial(para.text, m.start()):
                 entry.proper += 1
             if para.para_id not in entry.para_ids:
                 entry.para_ids.append(para.para_id)
@@ -184,38 +272,69 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
 
     lexicon: list[str] = []
     candidates: list[Candidate] = []
+    recurring: list[Candidate] = []
+    denied: set[str] = set()
     for word in sorted(seen):
+        entry = seen[word]
+        if word in deny:
+            # A house-banned spelling. Never the author's own, never merely
+            # "noted": the correct form is often two words no dictionary
+            # suggestion would reach (alot → a lot), so it is carried here and
+            # shown as something to look at, whatever the casing or the count.
+            candidates.append(Candidate(entry.surface, tuple(entry.para_ids),
+                                        suggestions=(deny[word],)))
+            denied.add(entry.surface)
+            continue
         if known(word):
             continue
-        entry = seen[word]
-        # A word the author uses more than once, or writes as a name, is the
-        # author's. A word used once in lower case is worth a second look.
-        if entry.proper or entry.count >= min_occurrences:
+        stem = _regular_form(word, dic)
+        if entry.proper:
+            # Written as a name. This is the signal strong enough to earn
+            # protection outright, because it guards the one mistake an author
+            # cannot undo by reading the change log: a renamed character.
             lexicon.append(entry.surface)
+        elif not entry.lower and entry.count >= min_occurrences and not stem:
+            # Never once written in lower case, and used again: a name that
+            # happens only ever to have fallen at the start of a sentence.
+            # Weaker evidence, so it yields to a word that comes apart — a
+            # capital on "Layed" is the sentence's doing, not the author's.
+            lexicon.append(entry.surface)
+        elif stem or entry.count < min_occurrences:
+            # Used seldom, or an ordinary word wearing an ending English does
+            # not give it. Either way, something to look at.
+            candidates.append(Candidate(entry.surface, tuple(entry.para_ids),
+                                        stem=stem))
         else:
-            candidates.append(Candidate(entry.surface, tuple(entry.para_ids)))
+            # Repeated, which is evidence of vocabulary but not proof of it.
+            # Said to the model as evidence rather than acted on here.
+            recurring.append(Candidate(entry.surface, tuple(entry.para_ids)))
 
     # suggest() costs about a quarter-second a word and is the only slow part
     # of this module, so it runs on a bounded prefix and never on the lexicon —
-    # asking what "Kaelith" should have been is how the damage starts.
-    if suggestion_limit > 0 and candidates:
-        enriched = []
-        for i, c in enumerate(candidates):
-            if i < suggestion_limit:
+    # asking what "Kaelith" should have been is how the damage starts. A word
+    # that already came apart into a stem needs no guess: it carries its own.
+    if suggestion_limit > 0:
+        asked = 0
+        for pile in (candidates, recurring):
+            for i, c in enumerate(pile):
+                if asked >= suggestion_limit:
+                    break
+                if c.stem or c.word in denied:   # both already carry their fix
+                    continue
+                asked += 1
                 try:
                     picks = tuple(list(dic.suggest(c.word))[:3])
                 except Exception:                # a suggester that gives up
                     picks = ()
-                enriched.append(Candidate(c.word, c.para_ids, picks))
-            else:
-                enriched.append(c)
-        candidates = enriched
+                pile[i] = Candidate(c.word, c.para_ids, picks, c.stem)
 
     result = SpellScan(lexicon=tuple(lexicon), candidates=tuple(candidates),
-                       tokens=tokens, unique=len(seen),
-                       unknown=len(lexicon) + len(candidates),
+                       recurring=tuple(recurring), tokens=tokens,
+                       unique=len(seen),
+                       unknown=len(lexicon) + len(candidates) + len(recurring),
                        dictionary=dictionary)
     log.info("Spell scan: %d tokens, %d unique, %d unknown → %d protected as "
-             "the author's own, %d to look at", result.tokens, result.unique,
-             result.unknown, len(result.lexicon), len(result.candidates))
+             "names, %d to look at, %d repeated", result.tokens, result.unique,
+             result.unknown, len(result.lexicon), len(result.candidates),
+             len(result.recurring))
     return result

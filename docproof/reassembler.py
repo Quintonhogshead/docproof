@@ -3,9 +3,10 @@ from __future__ import annotations
 import copy
 import itertools
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, Sequence
 
 from lxml import etree
 
@@ -389,6 +390,65 @@ def _p_level(el, p):
     while el.getparent() is not p:
         el = el.getparent()
     return el
+
+
+# --- the words the spell scan took on trust -----------------------------------
+
+def _excluded_note(words: Sequence[str], limit: int) -> str:
+    """The body of the top-of-document comment: what was excluded, and the ask."""
+    shown = sorted(set(words), key=str.lower)
+    n = len(shown)
+    if n == 1:
+        noun, took, flagged, confirm = "word", "it", "it was", "it is"
+    else:
+        noun, took, flagged, confirm = "words", "them", "they were", "each is"
+    head = (f"DocProof left {n} {noun} out of the spell-check, taking {took} for "
+            f"the author's own vocabulary rather than a misspelling — so "
+            f"{flagged} never flagged. Worth a human eye to confirm {confirm} "
+            f"spelled as intended: ")
+    if n > limit:
+        return head + ", ".join(shown[:limit]) + f", …and {n - limit} more."
+    return head + ", ".join(shown) + "."
+
+
+def annotate_excluded_words(pkg: DocxPackage, doc: DocumentModel,
+                            words: Sequence[str], author: str, *,
+                            date: str | None = None, limit: int = 120) -> bool:
+    """Anchor one comment at the top of the document naming the words the spell
+    scan excluded from checking — the ones it judged the author's own and so
+    never flagged. A proofreader opening the delivered file sees, at the very
+    first word, exactly which spellings were taken on trust and can check them by
+    eye. This is a note, not a change: nothing in the text is edited.
+
+    It hangs on the first word of the first body paragraph, and — like every
+    query comment — inserts only range markers, which leave the canonical text
+    (and so every later edit's offsets) untouched. Runs before the tracked
+    changes for that reason. Returns True when the comment was placed, False when
+    there is nothing to say or nowhere in the body to hang it."""
+    if not words:
+        return False
+    first = next((p for p in doc.paragraphs
+                  if p.part == "word/document.xml" and p.text.strip()), None)
+    if first is None:
+        return False
+    elem = {wp.para_id: wp.element for wp in walk_package(pkg)
+            if wp.part == "word/document.xml"}.get(first.para_id)
+    if elem is None:
+        return False
+    merge_adjacent_runs(elem)
+    if paragraph_text(elem) != first.text:        # canonical-text drift: refuse
+        return False
+    m = re.search(r"\S+", first.text)
+    start, end = (m.start(), m.end()) if m else (0, min(1, len(first.text)))
+
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    comments = _Comments(pkg, author, date)
+    pkg.mark_modified("word/document.xml")
+    placed = comments.attach_to_span(elem, start, end, _excluded_note(words, limit))
+    if placed:
+        log.info("Top-of-document comment: named %d word(s) excluded from "
+                 "spell-check.", len(set(words)))
+    return placed
 
 
 # --- untracked application (working copies for multi-round review) -----------

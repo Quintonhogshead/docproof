@@ -27,7 +27,7 @@ import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -74,7 +74,7 @@ class Candidate:
     start: int           # character offset of `word` in the paragraph text
     end: int
     suggestion: str      # the proposed correction, matched to `word`'s casing
-    kind: str            # "typo" (not a word) | "real_word" | "near_miss"
+    kind: str            # "typo" | "real_word" | "near_miss" | "denylist"
 
 
 def _match_case(source: str, target: str) -> str:
@@ -107,11 +107,12 @@ def _best_neighbour(word: str, dic, *, min_len: int) -> tuple[str | None, float]
 
 def generate(paragraphs: Sequence[ParagraphRef], *,
              protected: Sequence[str] = (),
+             denylist: Mapping[str, str] | None = None,
              dictionary: str = "en_US",
              near_miss_gap: float = 2.5,
              min_len: int = 4,
              max_candidates: int = 500) -> list[Candidate]:
-    """Deterministic candidate sites, from two high-precision signals only:
+    """Deterministic candidate sites, from three high-precision signals only:
 
       * typo — the word is not in the dictionary at all and a real word sits one
         edit away (staired -> stared, farer -> fairer). The dictionary already
@@ -121,6 +122,9 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
         which sits one edit from a common word by a wide margin (Annastasia ->
         Anastasia). Protection is meant for coinages, not for a misspelling the
         author happens to repeat.
+      * denylist — a spelling the house never accepts (alot, aswell). The fix is
+        supplied directly, because the right form is often two words that no
+        edit-distance search would reach, and it fires however the word is cased.
 
     A broad "valid word with a commoner neighbour" signal was tried and dropped:
     on a real manuscript it flagged hundreds of correct literary words (glowered
@@ -130,10 +134,12 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
 
     `protected` is the spell scan's lexicon. A protected word surfaces only
     through near_miss, and only when a common word sits within near_miss_gap
-    zipf points — a genuine coinage has no common twin.
+    zipf points — a genuine coinage has no common twin. `denylist` overrides
+    both protection and the dictionary: a denylisted word is always ruled on.
     """
     dic = _dictionary(dictionary)
     protected_l = {w.lower() for w in protected}
+    deny = {k.lower().strip(): v for k, v in (denylist or {}).items()}
 
     # One decision per distinct surface spelling, then applied to each of its
     # occurrences: a typo repeated through the book is one judgement, many fixes.
@@ -147,6 +153,11 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
 
     verdicts: dict[str, tuple[str, str] | None] = {}   # lower -> (suggestion, kind)
     for wl in forms:
+        # The house denylist first, and unconditionally: it carries its own fix,
+        # so no dictionary lookup or neighbour search can talk it out of ruling.
+        if wl in deny:
+            verdicts[wl] = (deny[wl], "denylist")
+            continue
         is_protected = wl in protected_l
         known = _known(dic, wl)
         # Only unknown words, or protected ones, are ever candidates: a word the

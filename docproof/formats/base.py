@@ -38,6 +38,11 @@ class DocumentFormat:
     #   snapshot(pkg, mode) -> {para_id: text}, mode "current" | "reject"
     normalize: Callable | None = None
     snapshot: Callable | None = None
+    # Anchor the top-of-document note naming the words left out of the spell
+    # check. OOXML-comment-shaped, so a format without Word comments simply
+    # skips it — the same facts still reach summary.md and the change log.
+    #   annotate_excluded_words(pkg, doc, words, author) -> bool
+    annotate_excluded_words: Callable | None = None
 
     # What the press appends to a manuscript it has proofread. The name is the
     # deliverable's identity — the team hands "<book> - Pre-Proofread.docx" to
