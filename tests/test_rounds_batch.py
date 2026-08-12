@@ -12,7 +12,9 @@ import re
 from pathlib import Path
 
 import docx
+import pytest
 
+from docproof.pipeline import JobCancelled
 from docproof.providers import ProviderResult
 from docproof.reassembler import paragraph_view_text
 from docproof.rounds import run_batch_rounds
@@ -97,6 +99,22 @@ def test_batch_on_progress_marks_each_round_boundary(tmp_path, cfg):
                      judge_provider=_ApproveJudge(), poll_interval=0,
                      on_progress=lambda *a: calls.append(a))
     assert calls == [(1, 2, 0, 0), (2, 2, 0, 0)]
+
+
+def test_batch_rounds_aborts_before_submitting(tmp_path, cfg):
+    # should_cancel true at the boundary stops before a batch is submitted.
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat")])
+    with pytest.raises(JobCancelled):
+        run_batch_rounds(cfg, str(src), ERROR_DIR, str(tmp_path / "jobs"),
+                         out_dir=tmp_path, review_provider=review,
+                         judge_provider=_ApproveJudge(), poll_interval=0,
+                         should_cancel=lambda: True)
+    assert not [c for c in review.calls if c.get("batch")]   # nothing submitted
 
 
 def test_batch_early_stops_on_a_dry_round(tmp_path, cfg):

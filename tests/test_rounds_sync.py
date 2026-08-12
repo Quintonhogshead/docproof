@@ -13,8 +13,10 @@ import re
 from pathlib import Path
 
 import docx
+import pytest
 
 from docproof.__main__ import main
+from docproof.pipeline import JobCancelled
 from docproof.providers import ProviderResult
 from docproof.reassembler import paragraph_view_text
 from docproof.rounds import run_sync_rounds
@@ -127,6 +129,21 @@ def test_on_progress_reports_each_round_then_its_sections(tmp_path, cfg):
     # One detector call per round under _minimal, so each round is a boundary
     # announcement followed by a single 1-of-1 fold.
     assert calls == [(1, 2, 0, 0), (1, 2, 1, 1), (2, 2, 0, 0), (2, 2, 1, 1)]
+
+
+def test_sync_rounds_aborts_at_a_round_boundary(tmp_path, cfg):
+    # should_cancel true at the round boundary stops before any model call.
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat")])
+    with pytest.raises(JobCancelled):
+        run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                        review_provider=review, judge_provider=_ApproveJudge(),
+                        should_cancel=lambda: True)
+    assert not review.calls          # aborted before the first round's review
 
 
 # --- the CLI, offline via --mock-findings + --rounds -------------------------

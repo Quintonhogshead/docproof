@@ -242,14 +242,17 @@ class Job:
         # A multi-round review starts its section count over every round, so the
         # count alone would read as the bar jumping backwards. Name the round —
         # and add the within-round count only once it exists: a round still
-        # being ingested, or riding a vendor batch, has none to show.
+        # being ingested, or riding a vendor batch, has none to show. A batch
+        # round has none for hours, so it says "processing overnight" rather than
+        # a bare "reviewing" that reads as a stuck synchronous pass.
         if (self.state in ("queued", "running", "collecting")
                 and self.stage == "reviewing" and self.total_rounds > 1):
-            head = (f"Round {max(self.review_round, 1)} of {self.total_rounds}"
-                    " — reviewing")
+            head = f"Round {max(self.review_round, 1)} of {self.total_rounds}"
             if self.total:
-                return f"{head} ({self.done} of {self.total} sections)"
-            return head
+                return f"{head} — reviewing ({self.done} of {self.total} sections)"
+            if self.mode == "batch":
+                return f"{head} — processing overnight"
+            return f"{head} — reviewing"
         if self.state in ("queued", "running", "collecting") and self.stage in STAGE_STATE:
             template = STAGE_STATE[self.stage]
         else:
@@ -822,18 +825,28 @@ class JobRunner:
                               total_rounds=total_rounds, done=done, total=total)
 
         out = self._claim_results_dir(job)
+        should_cancel = lambda: self._cancel_pending(job_id)  # noqa: E731
         try:
             if job.mode == "batch":
                 outputs = run_batch_rounds(
                     cfg, job.source_path, self.error_dir,
                     str(out / "rounds-ws"), out_dir=out,
                     review_provider=review_provider,
-                    judge_provider=judge_provider, on_progress=on_progress)
+                    judge_provider=judge_provider, on_progress=on_progress,
+                    should_cancel=should_cancel)
             else:
                 outputs = run_sync_rounds(
                     cfg, job.source_path, self.error_dir, out_dir=out,
                     review_provider=review_provider,
-                    judge_provider=judge_provider, on_progress=on_progress)
+                    judge_provider=judge_provider, on_progress=on_progress,
+                    should_cancel=should_cancel)
+        except JobCancelled:
+            # An abort mid-run: stop cleanly (cancelled, not failed), releasing
+            # the results dir and discarding the checkpoint. The calls already
+            # paid for before the abort are billed; the ones not yet started are
+            # not — that is the point of the cap.
+            self._abort(job_id)
+            return
         except AuditError as e:
             log.error("Multi-round review for %s failed its reject-all audit: "
                       "%s", job.id, e)

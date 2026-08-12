@@ -271,6 +271,27 @@ button:hover { border-color: var(--accent); }
 
 .big-button { padding: 0.7rem 1.6rem; font-size: 1.02rem; }
 
+/* The submit row rides at the bottom of the viewport while the options panel —
+   which can run several screens with rounds, the judge and features open — is
+   scrolled. So the price and the button that spends it are always in reach, not
+   four screens down. It sits back into flow at the true bottom of the page. */
+.start-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-top: 1.5rem;
+  padding: 0.85rem 0 calc(0.85rem + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  border-top: 1px solid var(--line);
+}
+.start-price { font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.start-bar .big-button { margin: 0; }
+
 /* A second way to reach the same file — worth offering, not worth competing
    with the button that opens it. */
 button.quiet { color: var(--muted); background: transparent; }
@@ -340,6 +361,18 @@ textarea {
    buttons that open the file it produced. */
 .job-remove { margin-top: 0.7rem; color: var(--muted); font-size: 0.85rem; }
 .job-remove:hover { color: var(--warn); text-decoration-color: var(--warn); }
+
+/* Two-step inline confirm, in place of a native dialog on a file-deleting
+   Remove. Sits where the button was, warm rather than alarming. */
+.confirm-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.7rem;
+}
+.confirm-msg { font-size: 0.85rem; color: var(--warn); }
+.confirm-inline button { padding: 0.2rem 0.6rem; font-size: 0.85rem; }
 
 .job-head { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
 .job-state { font-size: 0.88rem; color: var(--muted); white-space: nowrap; }
@@ -564,6 +597,19 @@ details.sections > summary {
   main { padding: 1.25rem 1rem 4rem; }
   .job-head { flex-direction: column; gap: 0.25rem; }
   .section-list { max-height: 12rem; }
+  /* Nine tabs won't fit a phone's width. Rather than wrap them into a tall
+     stack — where "What it looks for" broke into four lines — give the nav its
+     own full-width row and let it scroll sideways, each tab on one line. The
+     plain-language labels stay; only the overflow behaviour changes. */
+  nav {
+    flex-wrap: nowrap;
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  nav::-webkit-scrollbar { display: none; }
+  .tab { white-space: nowrap; flex: none; }
 }
 
 /* ── choosing what to do ─────────────────────────────────────────────────── */

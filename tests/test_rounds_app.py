@@ -87,6 +87,15 @@ def test_round_aware_state_without_a_count_names_only_the_round(runner):
     assert job.plain_state() == "Round 1 of 2 — reviewing"
 
 
+def test_batch_multiround_state_reads_as_overnight(runner):
+    # A batch round has no section count for hours; "reviewing" would read as a
+    # stuck synchronous pass, so it says what is actually happening.
+    store, _ = runner
+    job = _job(store, mode="batch", state="running", stage="reviewing",
+               rounds=3, total_rounds=3, review_round=1, done=0, total=0)
+    assert job.plain_state() == "Round 1 of 3 — processing overnight"
+
+
 def test_single_review_state_is_unchanged(runner):
     store, _ = runner
     job = _job(store, state="running", stage="reviewing", done=5, total=40)
@@ -145,3 +154,25 @@ def test_run_rounds_reports_progress_onto_the_job(runner, monkeypatch):
         (2, 2, 4, 4, "Round 2 of 2 — reviewing (4 of 4 sections)"),
     ]
     assert store.get("j1").state == "done"
+
+
+def test_abort_marks_a_multiround_run_cancelled_not_failed(runner, monkeypatch):
+    """Abort on a multi-round run must stop it cleanly. The driver gets a
+    should_cancel that reflects the request, and a JobCancelled out of it lands
+    the job in 'cancelled' — not 'failed', and not a silent no-op."""
+    from docproof.pipeline import JobCancelled
+
+    store, r = runner
+
+    def fake_sync_rounds(cfg, source, error_dir, *, out_dir, review_provider,
+                         judge_provider, on_progress=None, should_cancel=None,
+                         **kw):
+        assert should_cancel is not None and should_cancel()   # abort requested
+        raise JobCancelled()
+
+    monkeypatch.setattr(r, "_provider", lambda cfg: object())
+    monkeypatch.setattr("docproof.rounds.run_sync_rounds", fake_sync_rounds)
+    job = _job(store, rounds=2, model="claude-sonnet-5")
+    r.request_cancel(job.id)                                    # user hit Abort
+    r._run_rounds(job.id)
+    assert store.get(job.id).state == "cancelled"
