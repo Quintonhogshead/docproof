@@ -149,6 +149,15 @@ class Job:
     # default. See docproof/rounds.py and docproof/verifier.py.
     rounds: int = 1
     judge_prompt: str = ""
+    # Which model rules on corrections between rounds. Empty (older records, or a
+    # run that didn't touch the picker) means the config default. See catalog.py.
+    judge_model: str = ""
+    # Multi-round progress: which round a running multi-round review is on, and
+    # how many it will run. Both 0 on single reviews and older records; the card
+    # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
+    # callback as the driver moves through its rounds. See plain_state.
+    review_round: int = 0
+    total_rounds: int = 0
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -229,6 +238,18 @@ class Job:
         # A running review names the actual step it is on, so the card doesn't
         # read "reviewing" while the rewrite pass retypes the book. Only reviews
         # set a stage; prep and promo never do, so they keep their own messages.
+        #
+        # A multi-round review starts its section count over every round, so the
+        # count alone would read as the bar jumping backwards. Name the round —
+        # and add the within-round count only once it exists: a round still
+        # being ingested, or riding a vendor batch, has none to show.
+        if (self.state in ("queued", "running", "collecting")
+                and self.stage == "reviewing" and self.total_rounds > 1):
+            head = (f"Round {max(self.review_round, 1)} of {self.total_rounds}"
+                    " — reviewing")
+            if self.total:
+                return f"{head} ({self.done} of {self.total} sections)"
+            return head
         if self.state in ("queued", "running", "collecting") and self.stage in STAGE_STATE:
             template = STAGE_STATE[self.stage]
         else:
@@ -499,6 +520,11 @@ class JobRunner:
         # it passes through verbatim.
         cfg.rounds.count = job.rounds
         cfg.rounds.judge_prompt = job.judge_prompt
+        # An empty judge_model keeps the config default (default.yaml); a panel
+        # pick overrides it. The pick is vetted at submit (routes/jobs.py) — this
+        # nested assignment doesn't re-run RoundsConfig's validator.
+        if job.judge_model:
+            cfg.rounds.judge_model = job.judge_model
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
         # Per-run feature switches land last, so a toggle the user set on the
@@ -778,10 +804,23 @@ class JobRunner:
                                  error=str(e))
             return
 
+        # review_round starts at 1, not 0: the driver's first callback only
+        # lands once round 1's review begins, and the whole-book ingest before
+        # it would otherwise leave the card reading "Round 0".
         if self.store.update_if(job_id, expect=job.state, state="running",
-                                done=0, total=0) is None:
+                                done=0, total=0, review_round=1,
+                                total_rounds=job.rounds) is None:
             return
         self.store.update(job_id, stage="reviewing")
+
+        def on_progress(rnd: int, total_rounds: int, done: int,
+                        total: int) -> None:
+            # The card's whole story for a multi-round run: which round, and how
+            # far through it. The section count starts over each round; the
+            # round number is what keeps that legible. See Job.plain_state.
+            self.store.update(job_id, review_round=rnd,
+                              total_rounds=total_rounds, done=done, total=total)
+
         out = self._claim_results_dir(job)
         try:
             if job.mode == "batch":
@@ -789,12 +828,12 @@ class JobRunner:
                     cfg, job.source_path, self.error_dir,
                     str(out / "rounds-ws"), out_dir=out,
                     review_provider=review_provider,
-                    judge_provider=judge_provider)
+                    judge_provider=judge_provider, on_progress=on_progress)
             else:
                 outputs = run_sync_rounds(
                     cfg, job.source_path, self.error_dir, out_dir=out,
                     review_provider=review_provider,
-                    judge_provider=judge_provider)
+                    judge_provider=judge_provider, on_progress=on_progress)
         except AuditError as e:
             log.error("Multi-round review for %s failed its reject-all audit: "
                       "%s", job.id, e)

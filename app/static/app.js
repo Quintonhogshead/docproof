@@ -24,6 +24,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // default model, both sent by /api/models so the picker never
                 // hardcodes a server-owned number.
                 effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
+                defaultJudgeModel: null,
                 // The per-run pass switches, as sent by /api/features: [{id,
                 // label, blurb, group, heavy, default}]. The live on/off state
                 // lives in the rendered checkboxes; collectFeatures() reads it.
@@ -786,6 +787,7 @@ async function loadModels() {
   state.defaultModel = body.default_model || state.defaultModel;
   state.defaultGlossaryModel = body.default_glossary_model
     || state.defaultGlossaryModel;
+  state.defaultJudgeModel = body.default_judge_model || state.defaultJudgeModel;
 
   const select = $('model');
   const previous = select.value;
@@ -826,6 +828,26 @@ async function loadModels() {
   const gdefault = (usable(state.defaultGlossaryModel) && state.defaultGlossaryModel)
     || 'off';
   gloss.value = usable(gprev) || gprev === 'off' ? gprev : gdefault;
+
+  // The between-round judge (multi-round review): the same catalog, defaulting to
+  // the house judge model. Only submitted when the run is 2+ rounds, but kept
+  // populated so the picker is ready the moment the judge field is revealed.
+  const judge = $('judge-model');
+  if (judge) {
+    const jprev = judge.value;
+    judge.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+      opt.disabled = !m.available;
+      judge.append(opt);
+    });
+    const jdefault = (usable(state.defaultJudgeModel) && state.defaultJudgeModel)
+      || (models.find((m) => m.available) || models[0] || {}).id
+      || '';
+    judge.value = usable(jprev) ? jprev : jdefault;
+  }
   renderCost();
 }
 
@@ -1311,6 +1333,7 @@ $('start').addEventListener('click', async () => {
           features: collectFeatures(),
           rounds: Number($('rounds').value),
           judge_prompt: $('judge-prompt').value,
+          judge_model: ($('judge-model') || {}).value || null,
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });

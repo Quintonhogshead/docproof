@@ -165,7 +165,7 @@ def test_empty_instructions_fall_back_to_the_default():
 def test_rounds_config_is_inert_by_default():
     cfg = Config()
     assert cfg.rounds.count == 1
-    assert cfg.rounds.judge_model == "claude-opus-5"
+    assert cfg.rounds.judge_model == "gpt-5.6-sol"
     assert cfg.rounds.judge_effort == "high"
 
 

@@ -38,6 +38,18 @@ def test_rounds_and_judge_prompt_reach_the_run_config(runner):
     assert cfg.rounds.judge_prompt == "Be strict."
 
 
+def test_judge_model_pick_overrides_the_config_default(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, rounds=2, judge_model="claude-opus-5"))
+    assert cfg.rounds.judge_model == "claude-opus-5"
+
+
+def test_empty_judge_model_keeps_the_config_default(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, rounds=2))          # untouched picker
+    assert cfg.rounds.judge_model == "gpt-5.6-sol"
+
+
 def test_a_record_without_rounds_is_a_single_review(runner):
     store, r = runner
     job = _job(store)                          # older record / untouched panel
@@ -55,3 +67,81 @@ def test_run_one_sends_a_multiround_job_to_the_rounds_driver(runner, monkeypatch
     r.run_one(_job(store, id="b", rounds=1, mode="now").id)
     r.run_one(_job(store, id="c", rounds=3, mode="batch").id)   # rounds wins over mode
     assert seen == [("rounds", "a"), ("now", "b"), ("rounds", "c")]
+
+
+# --- per-round progress on the results card ----------------------------------
+
+def test_round_aware_state_names_round_and_sections(runner):
+    store, _ = runner
+    job = _job(store, state="running", stage="reviewing",
+               rounds=3, total_rounds=3, review_round=2, done=5, total=40)
+    assert job.plain_state() == "Round 2 of 3 — reviewing (5 of 40 sections)"
+
+
+def test_round_aware_state_without_a_count_names_only_the_round(runner):
+    # Ingesting the working document, or waiting on a vendor batch: no section
+    # count yet, and "0 of 0 sections" is the very display this replaced.
+    store, _ = runner
+    job = _job(store, state="running", stage="reviewing",
+               rounds=2, total_rounds=2, review_round=1, done=0, total=0)
+    assert job.plain_state() == "Round 1 of 2 — reviewing"
+
+
+def test_single_review_state_is_unchanged(runner):
+    store, _ = runner
+    job = _job(store, state="running", stage="reviewing", done=5, total=40)
+    assert job.plain_state() == "Reviewing (5 of 40 sections)"
+
+
+def test_a_record_without_round_fields_reads_as_a_single_review(runner):
+    # An app.json written before these fields existed: the loader fills the
+    # defaults and the card renders the plain single-review message.
+    import json
+
+    from app.jobs import APP_MANIFEST
+
+    store, _ = runner
+    job = _job(store, id="old", state="running", stage="reviewing",
+               done=3, total=9)
+    path = store.dir("old") / APP_MANIFEST
+    data = json.loads(path.read_text("utf-8"))
+    del data["review_round"], data["total_rounds"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    loaded = store.get("old")
+    assert loaded.review_round == 0 and loaded.total_rounds == 0
+    assert loaded.plain_state() == "Reviewing (3 of 9 sections)"
+
+
+def test_run_rounds_reports_progress_onto_the_job(runner, monkeypatch):
+    """_run_rounds threads on_progress into the driver, and the callback lands
+    round/done/total on the record — the whole path the card reads."""
+    from docproof.pipeline import Outputs
+
+    store, r = runner
+    states = []
+
+    def fake_sync_rounds(cfg, source, error_dir, *, out_dir, review_provider,
+                         judge_provider, on_progress=None, **kw):
+        assert on_progress is not None
+        for call in ((1, 2, 0, 0), (1, 2, 4, 4), (2, 2, 0, 0), (2, 2, 4, 4)):
+            on_progress(*call)
+            j = store.get("j1")
+            states.append((j.review_round, j.total_rounds, j.done, j.total,
+                           j.plain_state()))
+        return Outputs(reviewed_path=out_dir / "x.docx",
+                       summary_md=out_dir / "s.md",
+                       findings_json=out_dir / "f.json",
+                       applied=0, findings=0)
+
+    monkeypatch.setattr(r, "_provider", lambda cfg: object())
+    monkeypatch.setattr("docproof.rounds.run_sync_rounds", fake_sync_rounds)
+    r._run_rounds(_job(store, rounds=2, model="claude-sonnet-5").id)
+
+    assert states == [
+        (1, 2, 0, 0, "Round 1 of 2 — reviewing"),
+        (1, 2, 4, 4, "Round 1 of 2 — reviewing (4 of 4 sections)"),
+        (2, 2, 0, 0, "Round 2 of 2 — reviewing"),
+        (2, 2, 4, 4, "Round 2 of 2 — reviewing (4 of 4 sections)"),
+    ]
+    assert store.get("j1").state == "done"

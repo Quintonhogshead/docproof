@@ -517,7 +517,7 @@ class RoundsConfig(BaseModel):
     (docproof/editlayer.py). Off by default: count 1 is a single ordinary review,
     byte-for-byte. See docproof/verifier.py (the judge) and docproof/editlayer.py."""
     count: int = Field(default=1, ge=1, le=4)
-    judge_model: str = "claude-opus-5"
+    judge_model: str = "gpt-5.6-sol"
     judge_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # The judge's instructions, meant to be edited per job in the review panel.
     # Empty uses the built-in default (docproof.verifier.default_judge_prompt()),

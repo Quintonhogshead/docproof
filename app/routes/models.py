@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI
 
+from docproof.config import load_config
 from docproof.providers import EFFORT_MULTIPLIER, MODELS, estimate_cost
 
 from . import common
 from .. import settings as settingslib
 from ..auth import owner_for
-from ..settings import Paths
+from ..settings import CONFIG_PATH, Paths
 
 
 def register(app: FastAPI) -> None:
@@ -49,4 +50,7 @@ def register(app: FastAPI) -> None:
                 "output_token_guess": common.OUTPUT_TOKEN_GUESS,
                 "effort_multipliers": EFFORT_MULTIPLIER,
                 "default_model": app.state.settings.model,
-                "default_glossary_model": app.state.settings.glossary_model}
+                "default_glossary_model": app.state.settings.glossary_model,
+                # The between-round judge's default model, so the panel's judge
+                # picker opens on the house choice without hardcoding it.
+                "default_judge_model": load_config(CONFIG_PATH).rounds.judge_model}

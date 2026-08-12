@@ -79,6 +79,26 @@ def test_batch_two_rounds_apply_edits_from_both(tmp_path, cfg):
     assert len(submits) == 2
 
 
+def test_batch_on_progress_marks_each_round_boundary(tmp_path, cfg):
+    # A vendor batch has no per-section signal while it runs, so the driver
+    # reports only the round boundaries — with the counts zeroed.
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    calls = []
+    run_batch_rounds(cfg, str(src), ERROR_DIR, str(tmp_path / "jobs"),
+                     out_dir=tmp_path, review_provider=review,
+                     judge_provider=_ApproveJudge(), poll_interval=0,
+                     on_progress=lambda *a: calls.append(a))
+    assert calls == [(1, 2, 0, 0), (2, 2, 0, 0)]
+
+
 def test_batch_early_stops_on_a_dry_round(tmp_path, cfg):
     _minimal(cfg)
     cfg.rounds.count = 3
