@@ -149,6 +149,16 @@ def test_a_clean_run_reports_full_coverage(tmp_path):
     assert coverage.total == 4 and coverage.reviewed == 4
 
 
+def test_on_phase_reports_the_detector_step(tmp_path):
+    """The step callback fires as the run enters the per-chunk loop, so a caller
+    can show which stage the document is at."""
+    cfg, prepared = _prepared(tmp_path, ["Line has teh typo."])
+    cfg.glossary.enabled = False       # keep to the local provider, no key needed
+    phases = []
+    run_sync(cfg, prepared, _AlwaysAnswer(), on_phase=phases.append)
+    assert phases and phases[0] == "reviewing"
+
+
 # --- the batch path -----------------------------------------------------------
 
 def test_batch_collect_recovers_a_missing_result(tmp_path):

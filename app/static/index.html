@@ -165,6 +165,16 @@
             pass misses. Opus is the default; “Off” skips it.</small>
         </label>
 
+        <details class="field review-only" id="features-field">
+          <summary>Passes &amp; features<span class="muted"> — what runs on this
+            review</span></summary>
+          <p id="features-cost-note" class="muted small" hidden>An extra read or
+            pass is on — the estimate above doesn't include its cost.</p>
+          <div id="features-groups" class="features"></div>
+          <small class="muted">Ensemble review (several detectors plus a verifier)
+            isn't a simple switch — it stays a config-file choice.</small>
+        </details>
+
         <fieldset class="field" id="prep-options" hidden>
           <legend>What should it hand back?</legend>
           <label class="radio">

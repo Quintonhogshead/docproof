@@ -451,7 +451,8 @@ def _ckpt_key(pass_index: int, chunk_id: str, detector: int) -> str:
 
 def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
              *, progress=None, checkpoint=None, should_cancel=None,
-             coverage=None, provider_factory=None) -> tuple[list, Usage]:
+             coverage=None, provider_factory=None, on_phase=None
+             ) -> tuple[list, Usage]:
     """Review every chunk now, one API call per (pass, chunk, detector).
 
     In single-detector mode (the default) that is one call per (pass, chunk),
@@ -468,6 +469,13 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     call rather than mid-run.
 
     `progress` is called with (done, total) as each call is folded in, in order.
+
+    `on_phase`, if given, is called with a short stage id each time the run moves
+    to a new step — "reviewing" for the per-chunk detector loop, then
+    "glossary" / "adjudicate" / "rewrite" / "languagetool" as each whole-document
+    pass that is actually enabled begins. It lets a caller show which step the
+    document is at, since those post-loop passes emit no per-call progress and
+    would otherwise leave the bar frozen at the end of the detector loop.
 
     `checkpoint` (a docproof.checkpoint.Checkpoint, already loaded) makes the
     run resumable: each completed call's findings land in it as they arrive, in
@@ -527,6 +535,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # detector answered for it, and a gap only when every detector failed it.
     covered: dict = {}
 
+    if on_phase:
+        on_phase("reviewing")
     with ThreadPoolExecutor(max_workers=cfg.api.concurrency) as pool:
         # Fetch every uncached chunk concurrently; a cached call needs no
         # network and gets no future.
@@ -593,6 +603,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # candidates. The adjudication pass then rules on every candidate in context.
     glossary_cands: list = []
     if cfg.glossary.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("glossary")
         from .glossary import (build_glossary, case_drift_findings,
                                suspects_to_candidates)
         gcfg = cfg.model_copy(deep=True)
@@ -612,6 +624,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 edit_min_count=cfg.glossary.case_edit_min_count))
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
+        if on_phase:
+            on_phase("adjudicate")
         from .adjudicate import adjudicate, merge_candidates
         adj_provider = provider if provider is not None else provider_factory(cfg)
         # The deterministic generator's suggestions are listed first, so on a
@@ -628,6 +642,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # confirm each in context. Its own model, so a cheap rewriter can run under a
     # dearer detector. Whole-document only, like the two passes above.
     if cfg.rewrite.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("rewrite")
         from .rewrite import confirm, propose
         rcfg = cfg.model_copy(deep=True)
         rcfg.api.model = cfg.rewrite.model or cfg.api.model
@@ -657,6 +673,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # valve rules on each so nothing is edited blind. No API cost of its own —
     # only the light confirm calls. Whole-document only (it reads the lexicon).
     if cfg.languagetool.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("languagetool")
         from .languagetool import (all_disabled_rules, propose as lt_propose,
                                    shutdown as lt_shutdown)
         from .rewrite import confirm as lt_confirm

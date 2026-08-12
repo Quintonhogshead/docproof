@@ -384,6 +384,33 @@ def test_job_is_refused_without_a_key(client, monkeypatch):
     assert "Settings" in resp.json()["detail"]
 
 
+def test_features_endpoint_lists_switches_at_their_current_defaults(client):
+    body = client.get("/api/features").json()
+    by_id = {f["id"]: f for f in body["features"]}
+    # Off-by-default recall levers read off, default-on passes read on.
+    assert by_id["storysheet"]["default"] is False
+    assert by_id["rewrite"]["default"] is False
+    assert by_id["adjudicate"]["default"] is True
+    # ensemble is not a switch, so it must not appear.
+    assert "ensemble" not in by_id
+
+
+def test_a_job_with_an_unknown_feature_is_refused(client):
+    staged = _upload(client)
+    resp = client.post("/api/jobs", json={"file_ids": [staged["id"]],
+                                          "model": "claude-sonnet-5",
+                                          "mode": "now",
+                                          "features": {"bogus": True}})
+    assert resp.status_code == 400
+    assert "bogus" in resp.json()["detail"]
+
+
+def test_a_features_map_is_stored_on_the_job(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], features={"storysheet": True})
+    assert job["features"] == {"storysheet": True}
+
+
 def test_failed_job_reports_plainly_and_can_be_retried(client, monkeypatch):
     staged = _upload(client)
     from docproof.providers import ProviderError

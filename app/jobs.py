@@ -37,6 +37,7 @@ from docproof.promo import PromoError, PromoTooLarge
 from docproof.providers import ProviderError, build_provider, estimate_cost, \
     provider_for
 
+from . import features
 from .settings import Paths, Settings, get_api_key
 from .spending import LedgerEntry, SpendingLedger
 from .usage import _totals_for
@@ -57,6 +58,22 @@ PLAIN_STATE = {
     "done": "Ready",
     "failed": "Needs attention",
     "cancelled": "Cancelled",
+}
+
+# The steps a running review moves through, in order. The per-chunk detector
+# loop ("reviewing") is the one with a real count; the rest are whole-book passes
+# that run after it, each a single stretch of work with no per-call progress —
+# so the card names the step instead of leaving the bar frozen at 100%. Keyed by
+# the stage ids the pipeline's on_phase callback emits, plus the two the app sets
+# itself around the run (preparing, writing). See Job.plain_state.
+STAGE_STATE = {
+    "preparing": "Reading your manuscript",
+    "reviewing": "Reviewing ({done} of {total} sections)",
+    "glossary": "Building the glossary for the whole book",
+    "adjudicate": "Checking for real-word typos",
+    "rewrite": "Rewriting and comparing, line by line",
+    "languagetool": "Running the mechanical check",
+    "writing": "Almost done — writing your document",
 }
 
 # Prep does a different job, so it says so. Only the states that differ.
@@ -99,6 +116,12 @@ class Job:
     schedule_at: str | None = None      # "HH:MM" local, batch mode only
     done: int = 0
     total: int = 0
+    # Which step a running review is on, so the results card reads the truth
+    # while a whole-book pass (glossary, rewrite, …) runs after the per-chunk
+    # loop — where done/total would otherwise sit frozen at 100%. Set by the
+    # pipeline's on_phase callback; "" on older records and non-review jobs, and
+    # cleared when the job finishes. See STAGE_STATE and _run_now.
+    stage: str = ""
     error: str | None = None
     applied: int | None = None
     results_dir: str | None = None
@@ -109,6 +132,9 @@ class Job:
     # Which model reads the whole book for the glossary pass, "off" to skip it,
     # or None on older records (config_for then leaves the config default).
     glossary_model: str | None = None
+    # Per-run pass toggles: {feature_id: on}. Empty (older records, or a run that
+    # touched nothing) means "use the config defaults". See app/features.py.
+    features: dict[str, bool] = field(default_factory=dict)
     # Which sections the user picked, or None for the whole document.
     selection: list[str] | None = None
     created_at: str = ""
@@ -178,7 +204,13 @@ class Job:
         extra = (PREP_STATE if self.is_prep
                  else PROMO_STATE if self.is_promo else {})
         states = {**PLAIN_STATE, **extra}
-        template = states.get(self.state, self.state)
+        # A running review names the actual step it is on, so the card doesn't
+        # read "reviewing" while the rewrite pass retypes the book. Only reviews
+        # set a stage; prep and promo never do, so they keep their own messages.
+        if self.state in ("queued", "running", "collecting") and self.stage in STAGE_STATE:
+            template = STAGE_STATE[self.stage]
+        else:
+            template = states.get(self.state, self.state)
         return template.format(done=self.done, total=self.total,
                                when=self.schedule_at or "later")
 
@@ -435,6 +467,10 @@ class JobRunner:
             cfg.glossary.model = job.glossary_model
         cfg.comments = self.settings.comments
         cfg.report_explanations = self.settings.explanations
+        # Per-run feature switches land last, so a toggle the user set on the
+        # submission panel wins over both the shipped config and the two
+        # settings-backed defaults above (comments, explanations).
+        features.apply_features(cfg, job.features)
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:
@@ -646,6 +682,10 @@ class JobRunner:
         if job is None or job.state not in ("queued", "running"):
             return
         cfg = self.config_for(job)
+        # Ingesting and the whole-book reads (spell scan, story sheet) happen
+        # here, before the run flips to "running", so the card reads "Reading
+        # your manuscript" rather than a stale "Waiting to start" meanwhile.
+        self.store.update(job_id, stage="preparing")
         try:
             provider = self._provider(cfg)
             prepared = prepare(cfg, job.source_path, self.error_dir,
@@ -666,6 +706,12 @@ class JobRunner:
         def progress(done: int, total: int) -> None:
             self.store.update(job_id, done=done, total=total)
 
+        def on_phase(name: str) -> None:
+            # Which step the run is on. The detector loop ("reviewing") carries
+            # the count; the whole-book passes after it have none, so this is all
+            # the card gets to know the document has moved past the bar.
+            self.store.update(job_id, stage=name)
+
         # The checkpoint outlives any failure below on purpose: a retry after
         # a crash or a mid-run exception resumes instead of paying again. Only
         # a finished job deletes it.
@@ -673,12 +719,13 @@ class JobRunner:
         coverage = CoverageLedger()
         try:
             findings, usage = run_sync(
-                cfg, prepared, provider, progress=progress,
+                cfg, prepared, provider, progress=progress, on_phase=on_phase,
                 checkpoint=checkpoint, coverage=coverage,
                 should_cancel=lambda: self._cancel_pending(job_id))
         except JobCancelled:
             self._abort(job_id)
             return
+        self.store.update(job_id, stage="writing")
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
@@ -703,7 +750,7 @@ class JobRunner:
             raise
         checkpoint.delete()
         self.store.update(job_id, state="done", applied=outputs.applied,
-                          results_dir=str(out), error=None)
+                          results_dir=str(out), error=None, stage="")
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._notify_done(job_id)
 
