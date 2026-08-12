@@ -1094,10 +1094,15 @@ function priceSelection(m) {
   });
 
   if (!any) return { now: null, batch: null, approx: false };
+  // Multi-round review runs the whole review once per round, so scale by the
+  // count. This over-counts the whole-book reads a touch (they're reused across
+  // rounds) and doesn't price the between-round judge at all, so any rounds>1
+  // figure is explicitly rough — see the note in renderCost.
+  const rounds = Number(($('rounds') || {}).value || 1);
   return {
-    now: batched + full,
-    batch: batched * (m.batch_discount || 1) + full,
-    approx,
+    now: (batched + full) * rounds,
+    batch: (batched * (m.batch_discount || 1) + full) * rounds,
+    approx: approx || rounds > 1,
   };
 }
 
@@ -1162,6 +1167,11 @@ function renderCost() {
   // flag that a pass whose size the book decides makes the figure a rough one.
   const note = $('features-cost-note');
   if (note) note.hidden = !price.approx;
+  // Multi-round figures are the review cost times the round count; the
+  // between-round judge (a stronger model) is not in it, so the real cost is
+  // higher. Say so whenever more than one round is picked.
+  const roundsNote = $('rounds-cost-note');
+  if (roundsNote) roundsNote.hidden = Number(($('rounds') || {}).value || 1) < 2;
 
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
