@@ -963,6 +963,8 @@ def test_models_endpoint_prices_the_staged_files(client):
     # Batch is exactly half, at any hour — the UI copy depends on this.
     assert opus["cost_batch"] == pytest.approx(opus["cost_now"] / 2)
     assert by_id["claude-haiku-4-5"]["cost_now"] < opus["cost_now"]
+    # The between-round judge picker opens on the house default (default.yaml).
+    assert body["default_judge_model"] == "gpt-5.6-sol"
 
 
 def test_settings_round_trip_never_returns_a_key(client, monkeypatch):

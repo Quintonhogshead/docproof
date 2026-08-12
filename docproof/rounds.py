@@ -274,14 +274,20 @@ def _merge_usage(dst: Usage, src) -> None:
 
 def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
                     review_provider=None, judge_provider=None,
-                    mock_findings=None):
+                    mock_findings=None, on_progress=None):
     """Run multi-round review synchronously and write the deliverable.
 
     Returns the same `Outputs` as a single review. `review_provider` and
     `judge_provider` are injectable for testing; in production they are built
     from `cfg` (the detector model, and the judge model/effort from
     `cfg.rounds`). `mock_findings`, if given, feeds each round the canned
-    findings instead of calling the detector model (for an offline smoke run)."""
+    findings instead of calling the detector model (for an offline smoke run).
+
+    `on_progress`, if given, is called with (round, total_rounds, done, total):
+    once as each round starts (done and total both 0 — the working document is
+    still being rebuilt and re-ingested then), and again per folded call as that
+    round's run_sync counts its sections. The section count starts over every
+    round; the round number is what keeps that legible on a card."""
     from pathlib import Path
 
     from .pipeline import prepare, run_sync
@@ -307,6 +313,8 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     captured: dict = {"format": []}
 
     def review(k, edits_by_para):
+        if on_progress:
+            on_progress(k, cfg.rounds.count, 0, 0)
         rcfg = _round_config(cfg, k, reuse)
         if k == 1:
             prepared = prepared0
@@ -320,7 +328,11 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
             from .__main__ import _run_mock
             raw, u = _run_mock(rcfg, prepared, mock_findings)
         else:
-            raw, u = run_sync(rcfg, prepared, review_provider)
+            progress = None if on_progress is None else (
+                lambda done, total: on_progress(k, cfg.rounds.count,
+                                                done, total))
+            raw, u = run_sync(rcfg, prepared, review_provider,
+                              progress=progress)
         _merge_usage(usage, u)
         rr, fmt = _round_review(prepared, raw)
         if k == 1:
@@ -334,7 +346,8 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
 
 def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
                      source_path=None, review_provider=None,
-                     judge_provider=None, poll_interval=30.0):
+                     judge_provider=None, poll_interval=30.0,
+                     on_progress=None):
     """Run multi-round review on the batch path and write the deliverable.
 
     Each round submits a review batch on the current working document, waits for
@@ -343,7 +356,11 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
     it is meant to be driven from a background worker rather than an interactive
     command. `review_provider`/`judge_provider` are injectable for testing;
     `poll_interval` is the seconds between polls (a fake batch completes on the
-    first poll, so tests never sleep)."""
+    first poll, so tests never sleep).
+
+    `on_progress`, if given, is called with (round, total_rounds, done, total)
+    as each round starts. A vendor batch reports no per-section progress while
+    it runs, so done and total stay 0 here — the round boundary is the signal."""
     import time
     from pathlib import Path
 
@@ -371,6 +388,8 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
     captured: dict = {"format": []}
 
     def review(k, edits_by_para):
+        if on_progress:
+            on_progress(k, cfg.rounds.count, 0, 0)
         rcfg = _round_config(cfg, k, reuse)
         wpath = _working_docx(rounds_dir, orig_doc, base_path, k, edits_by_para)
         job = batchlib.submit(rcfg, str(wpath), error_dir, review_provider,

@@ -56,6 +56,8 @@ class JobRequest(BaseModel):
     # judge instructions; empty means the built-in default.
     rounds: int | None = None
     judge_prompt: str = ""
+    # The between-round judge model. None/empty falls back to the config default.
+    judge_model: str | None = None
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -146,6 +148,16 @@ def register(app: FastAPI) -> None:
             rounds = 1
         if not 1 <= rounds <= 4:
             raise HTTPException(400, "rounds must be between 1 and 4")
+        # The judge only runs with 2+ rounds, so only vet its model then: it must
+        # be a real catalog model and its vendor must have a key on file.
+        if req.judge_model and rounds > 1:
+            jinfo = lookup(req.judge_model)
+            if jinfo is None:
+                raise HTTPException(400, f"Unknown judge model {req.judge_model!r}")
+            if not settingslib.get_api_key(jinfo.provider):
+                raise HTTPException(
+                    400, f"No API key saved for {jinfo.display} (the judge "
+                         f"model). Add one in Settings first.")
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -208,6 +220,7 @@ def register(app: FastAPI) -> None:
                 features=req.features or {},
                 rounds=rounds,
                 judge_prompt=req.judge_prompt,
+                judge_model=req.judge_model or "",
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,

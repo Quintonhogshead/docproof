@@ -185,13 +185,23 @@
         </label>
 
         <details class="field review-only" id="judge-field" hidden>
-          <summary>Judge instructions<span class="muted"> — how the
-            between-round judge decides</span></summary>
-          <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
-          <small class="muted">The instructions the between-round judge follows
-            when deciding which corrections to keep. Leave blank to use the
-            built-in default (shown here as the placeholder). Only used with 2+
-            rounds.</small>
+          <summary>Between-round judge<span class="muted"> — the model and
+            instructions that decide each change</span></summary>
+          <label class="field" id="judge-model-field">
+            <span>Judge model</span>
+            <select id="judge-model"></select>
+            <small class="muted">The model that rules on every correction between
+              rounds. It runs far fewer calls than the review itself, so a strong
+              model here is worth it.</small>
+          </label>
+          <label class="field">
+            <span>Judge instructions</span>
+            <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
+            <small class="muted">The instructions the judge follows when deciding
+              which corrections to keep. Leave blank to use the built-in default
+              (shown here as the placeholder).</small>
+          </label>
+          <small class="muted">Only used with 2+ rounds.</small>
         </details>
 
         <details class="field review-only" id="features-field">

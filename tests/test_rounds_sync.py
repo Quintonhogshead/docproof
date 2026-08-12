@@ -108,6 +108,27 @@ def test_a_judge_rejection_keeps_the_original(tmp_path, cfg):
     assert out.applied == 0
 
 
+def test_on_progress_reports_each_round_then_its_sections(tmp_path, cfg):
+    """The driver announces each round as it starts (count zeroed), then
+    forwards run_sync's per-call fold with the round number attached."""
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    calls = []
+    run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                    review_provider=review, judge_provider=_ApproveJudge(),
+                    on_progress=lambda *a: calls.append(a))
+    # One detector call per round under _minimal, so each round is a boundary
+    # announcement followed by a single 1-of-1 fold.
+    assert calls == [(1, 2, 0, 0), (1, 2, 1, 1), (2, 2, 0, 0), (2, 2, 1, 1)]
+
+
 # --- the CLI, offline via --mock-findings + --rounds -------------------------
 
 def test_cli_rounds_with_mock_findings(tmp_path):
