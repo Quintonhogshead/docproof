@@ -651,6 +651,35 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
             edit_confidence=cfg.rewrite.edit_confidence))
+
+    # LanguageTool mechanical-floor pass: a LOCAL rules checker proposes commas,
+    # missing words, and hyphenation the model glides past; the shared confirm
+    # valve rules on each so nothing is edited blind. No API cost of its own —
+    # only the light confirm calls. Whole-document only (it reads the lexicon).
+    if cfg.languagetool.enabled and prepared.whole_document:
+        from .languagetool import (all_disabled_rules, propose as lt_propose,
+                                   shutdown as lt_shutdown)
+        from .rewrite import confirm as lt_confirm
+        try:
+            lt_cands = lt_propose(
+                prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
+                dictionary=cfg.languagetool.dictionary,
+                disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules))
+            lt_provider, lt_model = provider, cfg.api.model
+            if cfg.languagetool.confirm_model:
+                lcfg = cfg.model_copy(deep=True)
+                lcfg.api.model = cfg.languagetool.confirm_model
+                lcfg.api.effort = cfg.languagetool.confirm_effort
+                lt_provider = provider_factory(lcfg)
+                lt_model = cfg.languagetool.confirm_model
+            findings.extend(lt_confirm(
+                lt_cands, prepared.doc.paragraphs, lt_provider, model=lt_model,
+                max_tokens=cfg.languagetool.max_output_tokens, usage=usage, ids=ids,
+                batch_size=cfg.languagetool.batch_size,
+                edit_confidence=cfg.languagetool.edit_confidence,
+                error_type="languagetool", chunk_id="languagetool", id_prefix="lt"))
+        finally:
+            lt_shutdown()
     return findings, usage
 
 

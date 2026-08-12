@@ -276,7 +276,9 @@ def confirm(candidates: Sequence[RewriteCandidate],
             paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             model: str, max_tokens: int, usage: Usage, ids,
             batch_size: int = 40, edit_confidence: str = "high",
-            reject_sink: list | None = None) -> list[Finding]:
+            reject_sink: list | None = None,
+            error_type: str = "rewrite", chunk_id: str = "rewrite",
+            id_prefix: str = "r") -> list[Finding]:
     """Skeptically rule on each candidate in context and turn the affirmed ones
     into Findings. Only an error affirmed at `edit_confidence` becomes a tracked
     change; a softer affirmation is force_query'd to the margin, a "keep" yields
@@ -329,10 +331,10 @@ def confirm(candidates: Sequence[RewriteCandidate],
             para_text = text_of[c.para_id]
             conf = v.confidence if v.confidence in _RANK else "low"
             findings.append(Finding(
-                finding_id=f"r-{next(ids):04d}",
-                chunk_id="rewrite",
+                finding_id=f"{id_prefix}-{next(ids):04d}",
+                chunk_id=chunk_id,
                 para_id=c.para_id,
-                error_type="rewrite",
+                error_type=error_type,
                 original_text=para_text,
                 occurrence=1,
                 corrected_text=para_text[:c.start] + c.replacement

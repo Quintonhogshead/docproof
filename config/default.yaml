@@ -189,6 +189,26 @@ rewrite:
   log_rejects: false        # write confirm's kept-as-not-an-error candidates to
                             # rewrite_rejects.json (diagnostic; batch collect only)
 
+# LanguageTool mechanical-floor pass: a LOCAL rules-based checker (no network, no
+# per-call cost, no client text egress) that proposes commas / missing words /
+# compound-modifier hyphenation the model glides past, then routes each through
+# the SAME confirm valve as rewrite (high=edit, soft=query, keep=nothing) — so it
+# never edits blind. Orthogonal to the LLM (~5% catch overlap); ~+6pt tracked-edit
+# recall on the mechanical tail at ~$0.01/book (confirm only). Needs Java + the
+# LanguageTool jar (auto-downloaded, cached), so OFF by default. Whole-document
+# only. See docproof/languagetool.py.
+languagetool:
+  enabled: false
+  dictionary: en-US         # LanguageTool language code (en-US | en-GB | …)
+  disabled_rules: []        # extra rule ids to drop, atop the built-in
+                            # artifact/style denylist (unpaired-quote, caps-start,
+                            # whitespace, style advice)
+  max_output_tokens: 4000   # ceiling per confirm request (verdicts are terse)
+  batch_size: 40            # candidates per confirm request
+  edit_confidence: high     # at/above this an affirmed fix edits; softer = query
+  confirm_model:            # unset = api.model confirms; a cheap model is plenty
+  confirm_effort: medium
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

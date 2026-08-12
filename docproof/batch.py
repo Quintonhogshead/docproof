@@ -374,6 +374,33 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
             edit_confidence=cfg.rewrite.edit_confidence,
             reject_sink=rewrite_rejects)
 
+    # LanguageTool mechanical-floor pass: local rules checker proposes, the shared
+    # confirm valve rules. Propose is local (no batch requests), so it runs here
+    # at collect either way; only the light confirm calls hit the API.
+    if cfg.languagetool.enabled and prepared.whole_document:
+        from .languagetool import (all_disabled_rules, propose as lt_propose,
+                                   shutdown as lt_shutdown)
+        from .rewrite import confirm as lt_confirm
+        try:
+            lt_cands = lt_propose(
+                prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
+                dictionary=cfg.languagetool.dictionary,
+                disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules))
+            lt_provider, lt_model = provider, cfg.api.model
+            if cfg.languagetool.confirm_model:
+                lcfg = cfg.model_copy(deep=True)
+                lcfg.api.model = cfg.languagetool.confirm_model
+                lcfg.api.effort = cfg.languagetool.confirm_effort
+                lt_provider, lt_model = build_provider(lcfg), cfg.languagetool.confirm_model
+            findings += lt_confirm(
+                lt_cands, prepared.doc.paragraphs, lt_provider, model=lt_model,
+                max_tokens=cfg.languagetool.max_output_tokens, usage=usage, ids=ids,
+                batch_size=cfg.languagetool.batch_size,
+                edit_confidence=cfg.languagetool.edit_confidence,
+                error_type="languagetool", chunk_id="languagetool", id_prefix="lt")
+        finally:
+            lt_shutdown()
+
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     if cfg.rewrite.enabled and prepared.whole_document and rewrite_rejects:
         _write_rewrite_rejects(out, rewrite_rejects)

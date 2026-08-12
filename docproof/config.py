@@ -377,6 +377,44 @@ class RewriteConfig(BaseModel):
         return self
 
 
+class LanguageToolConfig(BaseModel):
+    """LanguageTool mechanical-floor pass. A LOCAL, rules-based checker (≈1,600
+    English rules + n-gram perplexity) run as a Java sidecar — no network, no
+    per-call cost, no client text leaving the machine. It proposes candidates —
+    commas, missing words, compound-modifier hyphenation — that the SHARED
+    rewrite.confirm valve rules on in literary context, so LanguageTool never
+    edits blind; its own noise (a name read as a misspelling, an intentional
+    repeat, an over-eager hyphen) is caught at the valve. Orthogonal to the LLM
+    detector (~5% catch overlap) and strongest on exactly its weak tail; it does
+    NOT see mid-sentence capitalization or word-choice. Off by default: needs
+    Java + the LanguageTool jar (auto-downloaded, ~260 MB, cached). Whole-document
+    only. See docproof/languagetool.py."""
+    enabled: bool = False
+    dictionary: str = "en-US"           # LanguageTool language code
+    # Extra rule ids to drop, on top of the built-in artifact/style denylist
+    # (unpaired-quote, sentence-start caps, whitespace, style advice).
+    disabled_rules: list[str] = Field(default_factory=list)
+    max_output_tokens: int = Field(default=4000, ge=1)
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    # The confidence at or above which an affirmed fix edits; softer is a margin
+    # query. High by default — LanguageTool is deterministic but context-blind.
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The confirm model. Unset = api.model (the detector's) does its own
+    # confirming; the prompts are short so a stronger model here is cheap.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"languagetool.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -489,6 +527,7 @@ class Config(BaseModel):
     storysheet: StorySheetConfig = Field(default_factory=StorySheetConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
+    languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
