@@ -391,6 +391,81 @@ def _p_level(el, p):
     return el
 
 
+# --- untracked application (working copies for multi-round review) -----------
+
+def _accept_all_revisions(p) -> None:
+    """Turn the tracked changes just written into plain text: drop every
+    deletion, unwrap every insertion. Only the revisions this module writes are
+    present (the source is preflight-clean), so this is the whole of "accept
+    all" — there are no move or format records to consider."""
+    for d in list(p.iter(DEL_TAG)):
+        parent = d.getparent()
+        if parent is not None:
+            parent.remove(d)
+    for ins in list(p.iter(INS_TAG)):
+        parent = ins.getparent()
+        if parent is None:                       # was nested in a removed del
+            continue
+        at = parent.index(ins)
+        for child in list(ins):
+            parent.insert(at, child)
+            at += 1
+        parent.remove(ins)
+
+
+def apply_untracked(pkg: DocxPackage, doc: DocumentModel,
+                    edits_by_para: dict[str, list[tuple[int, int, str]]]) -> None:
+    """Apply span edits to the document's text in place, with NO revision
+    markup — the working copy a later review round reads.
+
+    Multi-round review corrects the manuscript between rounds and reviews the
+    corrected text; the delivered file's tracked changes are composed once at the
+    end against the original (docproof/editlayer.py), so these intermediate
+    copies only need the right text, never a revision. Each paragraph's edits are
+    in its canonical-text coordinates (an EditLayer's entries) and must be
+    disjoint.
+
+    Reuses apply_replacement — all of the run-splitting, insertion, and
+    hyperlink-adjacency handling — to make the edits as tracked changes, then
+    accepts them: the text lands exactly as EditLayer.render would, run
+    formatting is preserved, and nothing tracked remains, so the next round's
+    preflight (which refuses a document that already carries tracked changes) is
+    satisfied."""
+    if not edits_by_para:
+        return
+    paras = index_paragraphs(doc)
+    ids = itertools.count(_next_rev_id(pkg))         # transient; accepted away
+    author, date = "docproof", "1970-01-01T00:00:00Z"    # discarded on accept
+    parts = {paras[pid].part for pid in edits_by_para if pid in paras}
+    for part in parts:
+        pkg.mark_modified(part)
+        elem_by_id = {wp.para_id: wp.element
+                      for wp in walk_package(pkg) if wp.part == part}
+        for para_id, edits in edits_by_para.items():
+            if para_id not in paras or paras[para_id].part != part or not edits:
+                continue
+            p = elem_by_id.get(para_id)
+            if p is None:
+                log.error("%s vanished before untracked apply — skipping.",
+                          para_id)
+                continue
+            merge_adjacent_runs(p)                        # text-preserving
+            expected = paras[para_id].text
+            if paragraph_text(p) != expected:            # defense-in-depth
+                log.error("Canonical-text drift in %s — refusing untracked "
+                          "edit.", para_id)
+                continue
+            # Descending start (then end) so an edit never shifts the offsets of
+            # the ones still to come, exactly as apply_tracked_changes does; the
+            # revisions are accepted once the paragraph is fully edited.
+            for start, end, repl in sorted(edits, key=lambda e: (e[0], e[1]),
+                                           reverse=True):
+                apply_replacement(
+                    p, Anchor(start, end, expected[start:end], repl),
+                    author, date, ids)
+            _accept_all_revisions(p)
+
+
 # --- orchestration -------------------------------------------------------------
 
 def _next_rev_id(pkg: DocxPackage) -> int:
