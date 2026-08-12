@@ -123,6 +123,28 @@ class WatchSettings:
     # wrong author's folder is visible the same morning. See `notify.completion`.
     notify_on_complete: bool = False
 
+    # -- Drive output archive --------------------------------------------------
+    # The durable off-box record: every finished job's produced files, pushed to
+    # a Drive folder and organised Reviews|Prep|Promo -> YYYY-MM -> one folder
+    # per job. Off by default, so an install that never sets it up is unchanged.
+    # On, the app's own Google sign-in (the same one the completion email uses)
+    # archives every job as it finishes, and the ticker backfills the history and
+    # retries anything that did not land. Serves app jobs and watched books
+    # alike, and is independent of `subfolders_enabled` (the author-facing
+    # delivery): the archive is DocProof's record, deliberately its own copy. See
+    # `archive.py`.
+    archive_enabled: bool = False
+    # The archive root: a folder a person makes and pastes the address of, parsed
+    # by `folder_id_from` exactly like the watched folder. Empty means the
+    # archive stays off even if the switch above is on — there is nowhere to put
+    # anything.
+    archive_folder_id: str = ""
+    # Whether the submitted manuscript is archived beside the outputs. On by
+    # default: it is what makes a job re-runnable (retry, re-review, download
+    # anyway) after a total loss of the volume, not just readable. Turn off if
+    # originals should live only in their own folders.
+    archive_include_source: bool = True
+
     # -- HubSpot ---------------------------------------------------------------
     # All off by default: an install that has never heard of HubSpot behaves
     # exactly as it did before this existed. Turning it on gates every new

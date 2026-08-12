@@ -62,6 +62,16 @@ def test_completion_for_job_reports_cost_and_elapsed():
     assert "$1.23" in text and "Elapsed: 2m 30s" in text
 
 
+def test_completion_links_to_the_drive_archive_when_there_is_one():
+    _, text, html = notify.completion_for_job(
+        _job(drive_folder_id="fold-9"))
+    link = "https://drive.google.com/drive/folders/fold-9"
+    assert link in text and link in html
+    # And nothing about Drive when the job was never archived.
+    _, plain, _ = notify.completion_for_job(_job())
+    assert "drive.google.com" not in plain
+
+
 # --- the gate and the send ----------------------------------------------------
 
 def test_send_when_switched_on(tmp_path):

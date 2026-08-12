@@ -311,6 +311,32 @@ def register(app: FastAPI) -> None:
                      "review — use Retry to run it again.")
         return updated.to_api()
 
+    @app.post("/api/jobs/{job_id}/archive")
+    def archive_now(job_id: str, owner: str = Depends(owner_for)) -> dict:
+        """Try pushing a job's outputs to the Drive archive again, now.
+
+        For the "Retry archive" affordance on a job whose automatic attempts
+        gave up (Drive kept refusing). Resets the attempt count so the try is
+        fresh, then archives inline — the same idempotent write the ticker does,
+        so a partial earlier attempt is resumed, not duplicated. Best-effort:
+        the card comes back with the new archive state either way."""
+        store: JobStore = app.state.store
+        runner: JobRunner = app.state.runner
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review")
+        if runner.notify_home is None:
+            raise HTTPException(400, "The Drive archive is not set up.")
+        from ..watch import archive as archivelib
+        from ..watch.settings import WatchSettings
+        if not archivelib.is_enabled(WatchSettings.load(runner.notify_home)):
+            raise HTTPException(
+                400, "The Drive archive is switched off. Turn it on under "
+                     "DocWatch first.")
+        store.update(job_id, archive="", archive_attempts=0, archive_error="")
+        runner.archive_job(job_id)
+        return _card(store.get(job_id))
+
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel(job_id: str, owner: str = Depends(owner_for)) -> dict:
         """Abort a job. A queued or scheduled one is pulled back before it

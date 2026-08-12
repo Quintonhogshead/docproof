@@ -48,9 +48,18 @@ def register(app: FastAPI) -> None:
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
         if update.rounds is not None and not 1 <= update.rounds <= 4:
             raise HTTPException(400, "rounds must be between 1 and 4")
-        for field_name in ("model", "min_confidence", "effort", "rounds",
-                           "output_dir", "default_mode", "prep_output",
-                           "comments", "explanations", "indesign_template"):
+        editable = ["model", "min_confidence", "effort", "rounds",
+                    "output_dir", "default_mode", "prep_output",
+                    "comments", "explanations", "indesign_template"]
+        if app.state.web:
+            # Results live on the mounted volume on a server; an output folder is
+            # a desktop notion, and persisting one here is precisely how the path
+            # gets poisoned so a redeploy writes finished documents to the
+            # container's throwaway disk (see create_app, which clamps it at boot
+            # regardless). So refuse to store one at all rather than accept a
+            # value the boot clamp will only override.
+            editable.remove("output_dir")
+        for field_name in editable:
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)

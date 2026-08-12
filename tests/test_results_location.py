@@ -32,11 +32,15 @@ def test_desktop_build_keeps_the_documents_folder_default(tmp_path):
     assert app.state.settings.output_dir == str(default_output_dir())
 
 
-def test_an_administrators_saved_output_dir_is_respected(tmp_path):
-    chosen = tmp_path / "somewhere-else"
+def test_a_persisted_output_dir_is_overridden_on_the_web_build(tmp_path):
+    # A saved output_dir is the data-loss bug, not a preference to honour. The
+    # Settings screen round-trips the field on every save, so a value stored
+    # while it read the desktop default pins an ephemeral path that a redeploy
+    # wipes — the whole "DocProof deleted my documents on update" report. The web
+    # build overrides it onto the volume no matter what settings.json says.
+    poisoned = str(default_output_dir())
     (tmp_path / "settings.json").write_text(
-        json.dumps({"output_dir": str(chosen)}), encoding="utf-8")
+        json.dumps({"output_dir": poisoned}), encoding="utf-8")
     app = create_app(tmp_path, start_runner=False, web=True,
                      session_secret=SECRET, https_only=False)
-    # An explicit choice is never overridden by the volume default.
-    assert app.state.settings.output_dir == str(chosen)
+    assert app.state.settings.output_dir == str(Paths(tmp_path).results)

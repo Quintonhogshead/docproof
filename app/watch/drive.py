@@ -262,6 +262,70 @@ def download(token: str, file_id: str, dest: str | Path, *,
     return _write(dest, body)
 
 
+def _q_escape(value: str) -> str:
+    """A value safe between the single quotes of a Drive query. A backslash or
+    apostrophe left raw would end the string early or break the parse."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def create_folder(token: str, parent_id: str, name: str, *,
+                  app_properties: dict[str, str] | None = None,
+                  opener=_open_url) -> str:
+    """Make a folder inside another, and hand back its id.
+
+    A plain `files.create` with the folder mime type — no media, so not the
+    upload endpoint. Used to lay down the archive's `Reviews/2026-08/<book>`
+    tree a level at a time, each level created only when a scoped search does
+    not already find it."""
+    metadata: dict = {"name": name, "mimeType": FOLDER_MIME,
+                      "parents": [parent_id]}
+    if app_properties:
+        metadata["appProperties"] = app_properties
+    url = _url(f"{API}/files", {"fields": "id", **SHARED_DRIVE})
+    request = _request(url, token, data=json.dumps(metadata).encode(),
+                       method="POST", content_type="application/json")
+    answer = _json_call(request, opener=opener,
+                        what=f"create the folder {name!r}")
+    new_id = str(answer.get("id", ""))
+    if not new_id:
+        raise DriveError(f"Google Drive made the folder {name!r} but did not "
+                         f"say where.")
+    return new_id
+
+
+def find_children(token: str, parent_id: str, *, name: str | None = None,
+                  app_property: tuple[str, str] | None = None,
+                  folders_only: bool = False, page_size: int = 50,
+                  opener=_open_url) -> list[DriveFile]:
+    """Direct children of one folder matching a scoped clause — a name, an
+    appProperty, or both — and never a whole-tree walk.
+
+    One page: the archive's questions each have one answer (is there a
+    `Reviews` folder here, a folder tagged with this job id), and a query that
+    needs a second page is already too ambiguous to trust. Mirrors
+    `folders._search`, generalised past the author resolver's one shape."""
+    clauses = [f"'{_q_escape(parent_id)}' in parents", "trashed = false"]
+    if name is not None:
+        clauses.append(f"name = '{_q_escape(name)}'")
+    if app_property is not None:
+        key, value = app_property
+        clauses.append(
+            f"appProperties has {{ key='{_q_escape(key)}' and "
+            f"value='{_q_escape(value)}' }}")
+    if folders_only:
+        clauses.append(f"mimeType = '{FOLDER_MIME}'")
+    params = {
+        "q": " and ".join(clauses),
+        "fields": f"files({FILE_FIELDS})",
+        "pageSize": str(page_size),
+        **SHARED_DRIVE_LIST,
+    }
+    answer = _json_call(_request(_url(f"{API}/files", params), token),
+                        opener=opener, what="search a folder")
+    return [DriveFile.from_api(raw) for raw in (answer.get("files") or [])
+            if isinstance(raw, dict)]
+
+
 def export_docx(token: str, file_id: str, dest: str | Path, *,
                 opener=_open_url) -> Path:
     """A native Google Doc, as the .docx prep can read.
@@ -373,3 +437,19 @@ def set_app_properties(token: str, file_id: str, props: dict[str, str], *,
     request = _request(url, token, data=body, method="PATCH",
                        content_type="application/json")
     _json_call(request, opener=opener, what="mark a file as done")
+
+
+def update_media(token: str, file_id: str, path: str | Path, *,
+                 mime_type: str = DOCX_MIME, opener=_open_url) -> None:
+    """Replace a file's contents in place, keeping its id.
+
+    The archive's manifest is rewritten this way when a job is archived a
+    second time — a download-anyway run that added a reviewed .docx to a job
+    already recorded — so the folder keeps one `docproof.json` that means "this
+    is complete", not a litter of stale siblings. A media update is small
+    enough for the one-shot path, like `upload`'s multipart body."""
+    url = _url(f"{UPLOAD_API}/{file_id}",
+               {"uploadType": "media", "fields": "id", **SHARED_DRIVE})
+    request = _request(url, token, data=Path(path).read_bytes(), method="PATCH",
+                       content_type=mime_type)
+    _json_call(request, opener=opener, what="update the archive manifest")

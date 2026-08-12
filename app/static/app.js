@@ -1552,6 +1552,41 @@ function renderJobs(jobs) {
         meta.textContent = bits.join(' · ');
         actions.append(meta);
       }
+      // The Drive archive: a link to the folder once the copy lands, a quiet
+      // note while it is saving, and — if Drive kept refusing — the reason and a
+      // way to try again. Nothing shows when the archive is off: `archive` stays
+      // '' then, so this whole block is skipped.
+      if (job.archive === 'done' && job.drive_link) {
+        const link = document.createElement('a');
+        link.className = 'file-link';
+        link.href = job.drive_link;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'In Drive ↗';
+        actions.append(link);
+      } else if (job.archive === 'pending') {
+        const saving = document.createElement('span');
+        saving.className = 'file-meta muted';
+        saving.textContent = 'saving to Drive…';
+        actions.append(saving);
+      } else if (job.archive === 'failed') {
+        note.textContent = job.archive_error || 'The Drive copy did not finish.';
+        note.hidden = false;
+        const retryArchive = document.createElement('button');
+        retryArchive.className = 'quiet';
+        retryArchive.textContent = 'Retry Drive copy';
+        retryArchive.addEventListener('click', async () => {
+          retryArchive.disabled = true;
+          try {
+            await api(`/api/jobs/${job.id}/archive`, { method: 'POST' });
+            refreshJobs();
+          } catch (err) {
+            note.textContent = err.message || 'Could not save to Drive.';
+            retryArchive.disabled = false;
+          }
+        });
+        actions.append(retryArchive);
+      }
       li.append(actions, note);
       // Tracked changes are invisible until you know which panel shows them,
       // and that panel is in a different place in each application.
@@ -2834,6 +2869,9 @@ function renderWatch(body, quiet) {
   $('watch-output').value = w.prep_output || 'indesign';
   $('watch-notes').checked = w.upload_notes;
   $('watch-failure-note').checked = w.upload_failure_note;
+  $('watch-archive-enabled').checked = w.archive_enabled;
+  $('watch-archive-folder').value = w.archive_folder_id || '';
+  $('watch-archive-source').checked = w.archive_include_source;
   $('watch-auto').checked = w.auto_ticks;
   $('watch-agent').checked = w.times.length > 0;
   if (w.times.length) $('watch-times').value = w.times.join(',');
@@ -3120,6 +3158,31 @@ $('watch-save').addEventListener('click', async () => {
         prep_output: $('watch-output').value,
         upload_notes: $('watch-notes').checked,
         upload_failure_note: $('watch-failure-note').checked,
+      }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$('watch-archive-save').addEventListener('click', async () => {
+  const button = $('watch-archive-save');
+  const note = $('watch-archive-note');
+  note.hidden = true;
+  button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        archive_enabled: $('watch-archive-enabled').checked,
+        // null, not '': an empty box is "no change", the same as the folder.
+        archive_folder: $('watch-archive-folder').value.trim() || null,
+        archive_include_source: $('watch-archive-source').checked,
       }),
     });
     renderWatch(body);

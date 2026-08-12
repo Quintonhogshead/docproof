@@ -6,6 +6,7 @@ returns JSON. The pipeline itself lives in docproof/.
 """
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,8 @@ from .jobs import JobRunner, JobStore
 from .lock import FolderLock
 
 from starlette.types import Scope
+
+log = logging.getLogger("docproof.app.main")
 
 
 class FreshStaticFiles(StaticFiles):
@@ -78,14 +81,30 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
-    if web and not field_in_settings_file(paths, "output_dir"):
-        # The default output_dir is the desktop's ~/Documents/DocProof, which on
-        # a server lands on the container's throwaway filesystem — finished
-        # documents there vanish on the next redeploy or restart while the job
-        # records that point at them survive on the volume, so the results tab
-        # 404s "…is missing". Keep results on the volume beside the job records.
-        # An administrator who set output_dir themselves is left untouched.
-        settings.output_dir = str(paths.results)
+    if web:
+        # On a server there is no user Documents folder and no durable results
+        # location off the mounted volume: finished documents written anywhere
+        # else land on the container's throwaway filesystem and vanish on the
+        # next redeploy or restart — which here is several times a day — while
+        # the job records that point at them survive on the volume, so the
+        # results tab 404s "…is missing". So the web build ALWAYS keeps results
+        # on the volume beside the job records, whatever settings.json says.
+        #
+        # Not merely "unless an administrator chose one": a persisted output_dir
+        # is the data-loss bug, not a preference. The Settings screen
+        # round-trips the field on every save, so any save made while it read
+        # the desktop default (an older build that still showed the field on the
+        # web, a direct API call) pins the ephemeral path permanently — and the
+        # old "respect a saved value" guard then stepped aside for exactly the
+        # value that loses documents. Clamp it, and say so when overriding one.
+        on_volume = str(paths.results)
+        if settings.output_dir != on_volume:
+            if field_in_settings_file(paths, "output_dir"):
+                log.warning(
+                    "Web build: overriding persisted output_dir %r with the "
+                    "volume path %r so finished documents survive a redeploy.",
+                    settings.output_dir, on_volume)
+            settings.output_dir = on_volume
     store = JobStore(paths)
     # The watcher's home holds the one email address and Google sign-in every
     # pipeline's completion mail goes through, so the app's runner is told where

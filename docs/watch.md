@@ -4,6 +4,10 @@ An author signs a contract and their manuscript is uploaded to a Google Drive
 folder. Somebody then opens DocProof and prepares it for the house template.
 That second step is the one this removes.
 
+> The **output archive** — every finished job's files copied to a Drive folder
+> for safekeeping, and read back after a loss — is configured on the same
+> DocWatch screen and shares this Google sign-in. See [archive.md](archive.md).
+
 `docproof-watch` looks in **one folder**, a few times a day. Anything in it
 that looks like a manuscript and has not been prepared yet gets
 [prepped](prep.md) and the results put back beside the original:

@@ -347,6 +347,35 @@ def test_run_now_produces_downloadable_results(client, provider):
         client.get(f"/api/jobs/{job['id']}/file/findings").text)["findings"]
 
 
+def test_a_finished_job_is_pushed_to_the_drive_archive(client, provider,
+                                                       monkeypatch, tmp_path):
+    """The whole glue, end to end: a job finishing through the runner archives
+    itself to Drive when the archive is on, and the card links to the folder."""
+    from app.watch.settings import WatchSettings
+    from .fakes import fake_drive
+    # The runner's notify_home is <root>/watch; put archive settings there and a
+    # sign-in, and route every Drive call the archive makes to the fake.
+    WatchSettings(archive_enabled=True, archive_folder_id="root-archive",
+                  client_id="cid", client_secret="sec").save(tmp_path / "watch")
+    opener = fake_drive()
+    monkeypatch.setattr("app.watch.drive._open_url", opener)
+
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1))]
+    job = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+
+    final = client.get(f"/api/jobs/{job['id']}").json()
+    assert final["state"] == "done", final.get("error")
+    assert final["archive"] == "done"
+    assert final["drive_link"].endswith(final["drive_folder_id"])
+    # The reviewed document and the manifest are both in the fake's folder.
+    names = {e.get("name", "") for e in opener.files.values()}
+    assert "docproof.json" in names
+    assert any(n.startswith("Reviews") for n in names)
+
+
 def test_download_anyway_writes_the_file_after_an_audit_failure(
         client, provider, monkeypatch):
     from docproof.audit import AuditError
