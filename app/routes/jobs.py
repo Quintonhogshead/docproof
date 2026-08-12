@@ -179,6 +179,10 @@ def register(app: FastAPI) -> None:
                         req.model, input_tokens=inp,
                         output_tokens=reqs * common.OUTPUT_TOKEN_GUESS,
                         batch=(mode == "batch")) or 0.0
+                # Multi-round review runs the whole review once per round, so the
+                # cap must count all of them (the between-round judge is on top of
+                # this, so this stays a floor).
+                est *= rounds
                 if spent + est > cap:
                     raise HTTPException(
                         402, f"This review would put you over your "
