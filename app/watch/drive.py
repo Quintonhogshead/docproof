@@ -253,12 +253,20 @@ def list_folder(token: str, folder_id: str, *, opener=_open_url,
             return files
 
 
+def download_bytes(token: str, file_id: str, *, opener=_open_url,
+                   what: str = "download a file") -> bytes:
+    """A file's contents, into memory. For small things read and parsed on the
+    spot — the archive's manifest — rather than written to disk first."""
+    params = {"alt": "media", **SHARED_DRIVE}
+    return _call(_request(_url(f"{API}/files/{file_id}", params), token),
+                 opener=opener, what=what)
+
+
 def download(token: str, file_id: str, dest: str | Path, *,
              opener=_open_url) -> Path:
-    """An uploaded file, byte for byte."""
-    params = {"alt": "media", **SHARED_DRIVE}
-    body = _call(_request(_url(f"{API}/files/{file_id}", params), token),
-                 opener=opener, what="download a manuscript")
+    """An uploaded file, byte for byte, onto disk."""
+    body = download_bytes(token, file_id, opener=opener,
+                          what="download a manuscript")
     return _write(dest, body)
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -170,3 +171,34 @@ def register(app: FastAPI) -> None:
         else:
             os.environ.pop(ENV_VARS[provider], None)
         return {"keys": _key_rows()}
+
+    @app.post("/api/admin/archive/restore",
+              dependencies=[Depends(require_admin)])
+    def admin_restore_archive() -> dict:
+        """Rebuild the job list from the Drive archive after a volume loss.
+
+        Reads every archived job's manifest and recreates the records the store
+        is missing; a live record is never overwritten, and each restored job's
+        files stream back on first download. Runs in the background — a large
+        archive is many small reads — so this returns at once; the tally goes to
+        the log. Refused when the archive is off, since there is nothing to read
+        from."""
+        from ..watch import archive as archivelib
+        from ..watch.settings import WatchSettings
+        home = app.state.runner.notify_home
+        if home is None or not archivelib.is_enabled(WatchSettings.load(home)):
+            raise HTTPException(
+                400, "The Drive archive is switched off, so there is nothing to "
+                     "restore from. Turn it on under DocWatch first.")
+
+        def _run() -> None:
+            try:
+                archivelib.restore(home, app.state.store)
+            except Exception:                 # noqa: BLE001 - a thread's last stop
+                log.exception("Archive restore failed")
+
+        thread = threading.Thread(target=_run, name="docproof-restore",
+                                  daemon=True)
+        app.state.restore_thread = thread
+        thread.start()
+        return {"started": True}

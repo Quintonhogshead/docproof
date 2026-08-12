@@ -155,6 +155,134 @@ def due_jobs(store, *, limit: int = PER_TICK, now: datetime | None = None):
     return out
 
 
+# --- reading back: one file, and the whole list --------------------------------
+
+def fetch_file(home, job, name: str, dest_dir, *, save_as: str | None = None,
+               get_key=None, opener=None) -> Path | None:
+    """Bring one archived file back onto disk, or None if it cannot be.
+
+    This is what makes a wiped results folder still serve: the file's Drive id is
+    on the job record (`drive_files`), so it is fetched straight back and
+    re-cached under `dest_dir`. `save_as` renames it on the way down — the source
+    manuscript is archived as `source - <name>` but restored under its own name,
+    ready to re-run. None whenever the archive is off, does not have this file,
+    or Drive will not give it up; the caller then answers its own 404."""
+    opener = opener or drive._open_url
+    ws = WatchSettings.load(home)
+    if not is_enabled(ws):
+        return None
+    file_id = job.drive_files.get(name)
+    if not file_id:
+        return None
+    token = _token(ws, get_key, opener)
+    if token is None:
+        return None
+    try:
+        return drive.download(token, file_id, Path(dest_dir) / (save_as or name),
+                              opener=opener)
+    except drive.DriveError as e:
+        log.warning("Could not fetch %s for %s from the archive: %s",
+                    name, job.filename, e)
+        return None
+
+
+def restore(home, store, *, get_key=None, opener=None,
+            limit: int | None = None) -> dict:
+    """Rebuild job records from the archive's manifests — the recovery from a
+    lost volume. Walk `Reviews|Prep|Promo -> month -> job folder`, read each
+    `docproof.json`, and recreate every job id the store does not already have.
+
+    Local records always win: a job already on disk is never overwritten by its
+    own (never newer) archive. A job folder with no manifest is an incomplete
+    archive — skipped and logged, never half-restored. The recreated record
+    points at no local results (`results_dir=None`); its files stream back from
+    Drive on first download. Returns a small tally. Never raises."""
+    opener = opener or drive._open_url
+    ws = WatchSettings.load(home)
+    if not is_enabled(ws):
+        return {"restored": 0, "skipped": 0, "scanned": 0, "ok": False}
+    token = _token(ws, get_key, opener)
+    if token is None:
+        return {"restored": 0, "skipped": 0, "scanned": 0, "ok": False}
+
+    restored = skipped = scanned = 0
+    for kind_name in KIND_FOLDER.values():
+        kinds = drive.find_children(token, ws.archive_folder_id, name=kind_name,
+                                    folders_only=True, opener=opener)
+        if not kinds:
+            continue
+        for month in drive.list_folder(token, kinds[0].id, opener=opener):
+            if not month.is_folder:
+                continue
+            for folder in drive.list_folder(token, month.id, opener=opener):
+                if not folder.is_folder:
+                    continue
+                scanned += 1
+                if _restore_one(token, store, folder, opener=opener):
+                    restored += 1
+                else:
+                    skipped += 1
+                if limit is not None and restored >= limit:
+                    return {"restored": restored, "skipped": skipped,
+                            "scanned": scanned, "ok": True}
+    log.info("Archive restore: %d recreated, %d skipped, %d folders scanned.",
+             restored, skipped, scanned)
+    return {"restored": restored, "skipped": skipped, "scanned": scanned,
+            "ok": True}
+
+
+def _restore_one(token: str, store, folder, *, opener) -> bool:
+    """Recreate one job from its folder's manifest, or skip it. Returns whether a
+    record was written."""
+    manifests = drive.find_children(token, folder.id, name=MANIFEST_NAME,
+                                    opener=opener)
+    if not manifests:
+        log.info("Skipping %r: no manifest, so the archive is incomplete.",
+                 folder.name)
+        return False
+    try:
+        data = json.loads(drive.download_bytes(
+            token, manifests[0].id, opener=opener,
+            what="read an archive manifest"))
+    except (drive.DriveError, json.JSONDecodeError, ValueError) as e:
+        log.warning("Skipping %r: its manifest would not read (%s).",
+                    folder.name, e)
+        return False
+    job_dict = data.get("job") if isinstance(data, dict) else None
+    if not isinstance(job_dict, dict) or not job_dict.get("id"):
+        log.warning("Skipping %r: its manifest names no job.", folder.name)
+        return False
+    if store.get(job_dict["id"]) is not None:
+        return False                          # a live record always wins
+    _write_restored(store, job_dict, folder.id, data.get("files") or {},
+                    manifests[0].id)
+    return True
+
+
+def _write_restored(store, job_dict: dict, folder_id: str,
+                    files: dict, manifest_id: str) -> None:
+    """Recreate `jobs/<id>/app.json` from a manifest's job record, pointing at no
+    local results but at the archive that holds them."""
+    from app.jobs import Job
+    known = set(Job.__dataclass_fields__)
+    fields = {k: v for k, v in job_dict.items() if k in known}
+    drive_files = dict(files)
+    drive_files[MANIFEST_NAME] = manifest_id
+    fields.update(results_dir=None, archive="done", archive_error="",
+                  drive_folder_id=folder_id, drive_files=drive_files)
+    store.save(Job(**fields))
+
+
+def wants_boot_restore(home, paths) -> bool:
+    """Whether a fresh boot should rebuild from the archive: it is on, and there
+    are no local job records — exactly the empty-volume disaster restore exists
+    for. A machine that still has its jobs never triggers it."""
+    if not is_enabled(WatchSettings.load(home)):
+        return False
+    jobs_dir = Path(paths.jobs)
+    return not jobs_dir.is_dir() or not any(jobs_dir.iterdir())
+
+
 def _due(job, now: datetime) -> bool:
     """Whether a job's backoff has elapsed. A never-tried job (attempts 0) is due
     at once; after that, wait the backoff for its attempt count. Any trouble
@@ -417,4 +545,5 @@ def _token(ws: WatchSettings, get_key, opener) -> str | None:
         return None
 
 
-__all__ = ["is_enabled", "archive_done", "sweep_once", "due_jobs"]
+__all__ = ["is_enabled", "archive_done", "sweep_once", "due_jobs",
+           "fetch_file", "restore", "wants_boot_restore"]

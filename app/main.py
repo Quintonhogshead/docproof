@@ -50,6 +50,29 @@ from .update import Rebuilder
 from .watch.runner import WatchRunner
 
 
+def _maybe_boot_restore(watch_home: Path, store, paths) -> None:
+    """Rebuild the job list from the Drive archive when this machine boots with
+    none of its own — the empty-volume disaster restore exists for.
+
+    A fresh or recreated volume comes up with an empty jobs folder; if the
+    archive is on, its manifests hold every record, so restore runs on a
+    background thread and the list fills in before anyone notices. A machine that
+    still has its jobs never triggers it (the folder is not empty), and a build
+    with no archive configured does nothing. Best-effort: a restore that will not
+    run must never stop the app from starting."""
+    try:
+        from .watch import archive
+        if not archive.wants_boot_restore(watch_home, paths):
+            return
+        import threading
+        log.info("No local jobs on boot; rebuilding from the Drive archive.")
+        threading.Thread(
+            target=lambda: archive.restore(watch_home, store),
+            name="docproof-boot-restore", daemon=True).start()
+    except Exception:                         # noqa: BLE001 - never block startup
+        log.exception("Boot-time archive restore could not start")
+
+
 def watch_home_for(root: Path) -> Path:
     """Where the watcher keeps its things, derived from the app's home.
 
@@ -123,6 +146,7 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         if start_runner:
             runner.start()
             watch.start()
+            _maybe_boot_restore(wh, store, paths)
         yield
         runner.stop()
         watch.stop()

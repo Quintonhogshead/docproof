@@ -328,3 +328,150 @@ def test_backoff_holds_a_freshly_failed_job_and_releases_an_old_one(tmp_path):
     # The same job an hour later is due again.
     assert store.get(job.id) in archive.due_jobs(
         store, now=now + timedelta(hours=1))
+
+
+# --- reading back: one file --------------------------------------------------
+
+def test_fetch_file_brings_an_archived_file_back(tmp_path):
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+    job = store.get(job.id)
+
+    dest = tmp_path / "refetched"
+    got = archive.fetch_file(home, job, "reviewed Johnson - Book.docx", dest,
+                             get_key=_key, opener=opener)
+
+    assert got is not None and got.is_file()
+    assert got.read_bytes() == b"reviewed"
+
+
+def test_fetch_file_renames_with_save_as(tmp_path):
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+    job = store.get(job.id)
+
+    dest = tmp_path / "resource"
+    got = archive.fetch_file(home, job, "source - Johnson - Book.docx", dest,
+                             save_as="Johnson - Book.docx",
+                             get_key=_key, opener=opener)
+
+    assert got.name == "Johnson - Book.docx"
+    assert got.read_bytes() == b"original manuscript"
+
+
+def test_fetch_file_is_none_when_off_or_absent(tmp_path):
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+
+    # Off: nothing to fetch from.
+    off = _watch_home(tmp_path, archive_enabled=False)
+    assert archive.fetch_file(off, store.get(job.id), "x.docx", tmp_path,
+                              get_key=_key, opener=opener) is None
+    # On, but this job never recorded that file.
+    on = _watch_home(tmp_path)
+    assert archive.fetch_file(on, store.get(job.id), "not-a-file.docx", tmp_path,
+                              get_key=_key, opener=opener) is None
+
+
+# --- reading back: the whole list (restore) ----------------------------------
+
+def test_restore_rebuilds_records_from_the_manifests(tmp_path):
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+    archived = store.get(job.id)
+
+    # A total volume loss: a brand-new, empty store against the same Drive.
+    fresh = JobStore(Paths(tmp_path / "app-after-loss"))
+    result = archive.restore(home, fresh, get_key=_key, opener=opener)
+
+    assert result["restored"] == 1 and result["ok"]
+    back = fresh.get(job.id)
+    assert back is not None
+    # The record is recreated field for field from the manifest…
+    assert back.filename == "Johnson - Book.docx"
+    assert back.owner_id == "u1" and back.model == "claude-sonnet-5"
+    # …pointing at no local results, but at the archive that holds them.
+    assert back.results_dir is None
+    assert back.archive == "done"
+    assert back.drive_folder_id == archived.drive_folder_id
+    assert back.drive_files["reviewed Johnson - Book.docx"]
+
+
+def test_restore_never_overwrites_a_live_record(tmp_path):
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+
+    # Restoring into the store that still has the job changes nothing.
+    result = archive.restore(home, store, get_key=_key, opener=opener)
+
+    assert result["restored"] == 0 and result["skipped"] >= 1
+
+
+def test_restore_skips_a_folder_with_no_manifest(tmp_path):
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+    # An incomplete archive: the manifest never landed.
+    manifest_id = next(fid for fid, e in opener.files.items()
+                       if e.get("name") == "docproof.json")
+    del opener.files[manifest_id]
+
+    fresh = JobStore(Paths(tmp_path / "app2"))
+    result = archive.restore(home, fresh, get_key=_key, opener=opener)
+
+    assert result["restored"] == 0
+    assert fresh.get(job.id) is None            # not half-restored
+
+
+def test_a_restored_job_can_be_downloaded_from_drive(tmp_path):
+    """The whole recovery: archive, lose the volume, restore the record, and the
+    document still downloads — fetched straight back from Drive."""
+    home = _watch_home(tmp_path)
+    store = _store(tmp_path)
+    job = _finished_job(tmp_path, store)
+    opener = fake_drive()
+    archive.archive_done(home, store, job.id, get_key=_key, opener=opener)
+
+    fresh = JobStore(Paths(tmp_path / "app2"))
+    archive.restore(home, fresh, get_key=_key, opener=opener)
+    restored = fresh.get(job.id)
+
+    dest = tmp_path / "served"
+    got = archive.fetch_file(home, restored, "reviewed Johnson - Book.docx",
+                             dest, get_key=_key, opener=opener)
+    assert got is not None and got.read_bytes() == b"reviewed"
+
+
+# --- boot-time restore trigger -----------------------------------------------
+
+def test_wants_boot_restore_only_on_an_empty_volume(tmp_path):
+    home = _watch_home(tmp_path)
+    paths = Paths(tmp_path / "app").ensure()
+    # Enabled and no jobs yet: rebuild.
+    assert archive.wants_boot_restore(home, paths) is True
+    # A machine that still has its jobs never triggers it.
+    JobStore(paths).save(Job(id="j", filename="f.docx", source_path="",
+                             model="m", mode="now", state="done",
+                             created_at="2026-08-10T00:00:00+00:00"))
+    assert archive.wants_boot_restore(home, paths) is False
+
+
+def test_wants_boot_restore_is_false_when_the_archive_is_off(tmp_path):
+    off = _watch_home(tmp_path, archive_enabled=False)
+    paths = Paths(tmp_path / "app").ensure()
+    assert archive.wants_boot_restore(off, paths) is False

@@ -4135,6 +4135,30 @@ $('admin-settings-save').addEventListener('click', async () => {
   } finally { btn.disabled = false; }
 });
 
+$('admin-restore').addEventListener('click', async () => {
+  const btn = $('admin-restore');
+  const note = $('admin-restore-note');
+  note.hidden = true;
+  btn.disabled = true;
+  btn.textContent = 'Rebuilding…';
+  try {
+    await api('/api/admin/archive/restore', { method: 'POST' });
+    // The rebuild runs in the background; the list fills in as it goes, so a
+    // reload a moment later shows what came back.
+    note.textContent = 'Rebuilding from Drive — your jobs will reappear shortly.';
+    note.className = 'action-note ok';
+    note.hidden = false;
+    setTimeout(() => { refreshJobs().catch(() => {}); }, 2500);
+  } catch (err) {
+    note.textContent = err.message || 'Could not start the rebuild.';
+    note.className = 'action-note error';
+    note.hidden = false;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Rebuild from Drive';
+  }
+});
+
 // -- house style guide (prep tags manuscripts into it) ------------------------
 
 async function loadHouseStyle() {
