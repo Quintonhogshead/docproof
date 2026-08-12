@@ -1488,6 +1488,25 @@ function renderJobs(jobs) {
       });
       const actions = document.createElement('div');
       actions.className = 'job-actions';
+
+      // An overnight review that failed AFTER its batch completed has its
+      // results sitting at the vendor, already paid for. Offer to finish
+      // collecting them instead of Retry, which would resubmit and bill twice —
+      // so this is the primary action, ahead of Retry, when it applies.
+      if (job.recoverable) {
+        const recover = document.createElement('button');
+        recover.textContent = 'Finish collecting';
+        recover.addEventListener('click', async () => {
+          recover.disabled = true;
+          try {
+            await api(`/api/jobs/${job.id}/recover`, { method: 'POST' });
+            refreshJobs();
+          } catch (err) {
+            recover.disabled = false;
+          }
+        });
+        actions.append(recover);
+      }
       actions.append(retry);
 
       // A review that failed only the integrity check has all its work done

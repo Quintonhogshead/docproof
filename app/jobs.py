@@ -546,6 +546,39 @@ class JobRunner:
         self._notify_done(job_id)
         return updated
 
+    def recover(self, job_id: str) -> Job | None:
+        """Re-collect a batch review that failed AFTER its vendor batch landed.
+
+        A collect-time failure — a post-step raising (the LanguageTool pass,
+        say), a transient write error — leaves the overnight batch complete and
+        untouched at the vendor: it is billed, and its results are still there
+        to download. So recovery must NOT resubmit (which is what `retry`, the
+        state="queued" path, does — paying for the same batch twice). Instead we
+        send the job back through the ticker's collect path against the SAME
+        batch by returning it to `waiting`; the next `_advance_batch` re-polls
+        (finds it ready) and re-collects, reusing the paid results. Only the
+        synchronous post-steps re-run and re-bill, which is small.
+
+        Returns the updated job, or None when there is nothing to recover this
+        way: a job that is not failed, a "now" run (or one that never reached
+        submit) with no batch at the vendor, or one that failed the reject-all
+        audit — that last has its own `download_anyway` path and would only
+        fail the same audit again, so it is refused here rather than re-collected
+        at cost."""
+        job = self.store.get(job_id)
+        if job is None or not self.can_recover(job):
+            return None
+        return self.store.update_if(job_id, expect="failed", state="waiting",
+                                    error=None, error_kind="")
+
+    def can_recover(self, job: Job) -> bool:
+        """Whether `recover` has something to do — used to decide the results
+        card's "Finish collecting" affordance. A failed batch review whose
+        vendor batch actually landed (so a re-collect reuses paid results), and
+        not a reject-all audit failure (that has its own "Download anyway")."""
+        return (job.state == "failed" and not job.audit_failed
+                and self._batch_job_id(job) is not None)
+
     def _provider(self, cfg: Config):
         name = provider_for(cfg.api.model, cfg.api.provider)
         return build_provider(cfg, api_key=get_api_key(name))
