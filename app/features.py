@@ -163,9 +163,33 @@ def unknown_features(features: dict | None) -> list[str]:
     return [k for k in (features or {}) if k not in FEATURES_BY_ID]
 
 
+def _cost_meta(fid: str, cfg: Config) -> dict | None:
+    """How a heavy pass scales, so the panel's estimate can move when it is
+    switched on. The client has the book's token count and every model's rates;
+    what it cannot know is which model each pass runs on, so that is what travels
+    here. A null model means "the detector's own model" — the client falls back
+    to the one picked above. glossary is absent: it is priced from its own reader
+    picker, not a switch.
+
+    - read:    one whole-book read, input-dominated (story sheet).
+    - retype:  a rewrite of the whole book per sample, output-heavy; approximate.
+    - confirm: local rules propose for free, only the confirm calls cost, and
+               their number tracks the book's candidates — approximate."""
+    if fid == "storysheet":
+        return {"kind": "read", "model": cfg.storysheet.model}
+    if fid == "rewrite":
+        return {"kind": "retype", "model": cfg.rewrite.model,
+                "samples": cfg.rewrite.samples}
+    if fid == "languagetool":
+        return {"kind": "confirm", "model": cfg.languagetool.confirm_model}
+    return None
+
+
 def feature_catalog(cfg: Config) -> list[dict]:
     """The switches to render, each with the value it would take on this run if
     left untouched — read off the config the run would actually use, so the
-    panel opens showing what the pipeline does today."""
+    panel opens showing what the pipeline does today. Heavy passes also carry a
+    `cost` hint so the estimate can move with them; the rest carry cost=null."""
     return [{"id": f.id, "label": f.label, "blurb": f.blurb, "group": f.group,
-             "heavy": f.heavy, "default": f.read(cfg)} for f in FEATURES]
+             "heavy": f.heavy, "default": f.read(cfg),
+             "cost": _cost_meta(f.id, cfg)} for f in FEATURES]
