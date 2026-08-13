@@ -20,7 +20,7 @@ from docproof.config import load_config
 from docproof.ingest import IngestError, build_document_model, preflight
 from docproof.models import Anchor, Finding, index_paragraphs
 from docproof.reassembler import apply_tracked_changes
-from docproof.sapling import SaplingError, check, check_paragraphs
+from docproof.sapling import SaplingError, check, check_paragraphs, describe
 
 from ..auth import owner_for
 from ..settings import CONFIG_PATH, SAPLING, Paths, get_api_key
@@ -130,7 +130,8 @@ def register(app: FastAPI) -> None:
             except SaplingError as e:
                 raise HTTPException(502, str(e))
 
-            findings, records = _findings_from(para_edits, doc)
+            findings, records = _findings_from(
+                para_edits, doc, silent=not cfg.sapling.comments)
             stats = apply_tracked_changes(pkg, doc, findings, cfg)
             applied = set(stats.applied)
 
@@ -156,12 +157,13 @@ def register(app: FastAPI) -> None:
             shutil.rmtree(folder, ignore_errors=True)
 
 
-def _findings_from(para_edits, doc):
+def _findings_from(para_edits, doc, *, silent=False):
     """Turn Sapling's per-paragraph edits into validated Findings the reassembler
     can apply, dropping no-ops and any edit overlapping one already kept in the
     same paragraph (the reassembler assumes disjoint edits, as the validator
     guarantees on the review path). Returns (findings, records) where records
-    pairs each finding_id with its ParaEdit for the response list."""
+    pairs each finding_id with its ParaEdit for the response list. `silent`
+    applies each change with no margin comment (sapling.comments off)."""
     paras = index_paragraphs(doc)
     by_para: dict[str, list] = {}
     for pe in para_edits:
@@ -184,16 +186,12 @@ def _findings_from(para_edits, doc):
             last_end = pe.end
             n += 1
             fid = f"sap-{n:04d}"
-            general = pe.general_error_type or pe.error_type or "grammar"
-            detail = f"Sapling: {general}"
-            if pe.error_type and pe.error_type != general:
-                detail += f" ({pe.error_type})"
             findings.append(Finding(
                 finding_id=fid, chunk_id="sapling", para_id=para_id,
                 error_type=(pe.error_type or "sapling"),
                 original_text=pe.original, occurrence=1,
-                corrected_text=pe.replacement, explanation=detail,
-                confidence="high", status="validated",
+                corrected_text=pe.replacement, explanation=describe(pe),
+                confidence="high", status="validated", silent=silent,
                 anchor=Anchor(pe.start, pe.end, pe.original, pe.replacement)))
             records.append((fid, pe))
     return findings, records

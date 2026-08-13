@@ -394,6 +394,44 @@ def test_pass_folds_tracked_changes_into_the_review(tmp_path, monkeypatch):
 
 # -- the feature toggle -------------------------------------------------------
 
+def test_pass_records_its_char_cost_on_usage(monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    cfg = _cfg_with_sapling(True)                 # cost_per_1k_chars defaults 0.025
+    usage = Usage()
+    doc = _one_para_doc("x" * 4000)               # 4,000 chars sent
+    _sapling_findings(cfg, doc, usage)
+    assert usage.sapling_chars == 4000
+    assert usage.sapling_cost == 4000 * 0.025 / 1000    # $0.10
+
+
+def test_summary_totals_and_breaks_out_sapling_and_settings(tmp_path):
+    from docproof.config import load_config
+    from docproof.formats import DOCX
+    from docproof.models import DocumentModel, ParagraphRef, Usage
+    from docproof.reporting import write_summary_md
+    cfg = load_config("config/default.yaml")
+    cfg.sapling.enabled = True
+    cfg.sapling.variety = "us-variety"
+    usage = Usage(sapling_chars=2000, sapling_cost=0.05)
+    doc = DocumentModel("Book.docx", (ParagraphRef(
+        "body-0", "word/document.xml", "body", "A line.", "Normal"),))
+    out = tmp_path / "summary.md"
+    write_summary_md(out, doc=doc, findings=[], usage=usage, cfg=cfg,
+                     applied_ids=(), fmt=DOCX)
+    txt = out.read_text("utf-8")
+    # The total folds Sapling in, and the breakdown names its share.
+    assert "**$0.0500**" in txt
+    assert "Sapling grammar check: $0.0500 (2,000 characters at $0.025/1k)" in txt
+    # The settings section says what actually ran, on and off.
+    assert "## Settings used" in txt
+    assert "Sapling grammar check on (us-variety)" in txt
+    assert "Story sheet off" in txt
+    assert "Spell scan on" in txt
+
+
 def test_sapling_feature_toggle_round_trips():
     from app import features as featureslib
     from docproof.config import load_config
@@ -404,3 +442,102 @@ def test_sapling_feature_toggle_round_trips():
     row = {f["id"]: f for f in featureslib.feature_catalog(cfg)}["sapling"]
     assert row["default"] is True and row["heavy"] is True
     assert row["cost"] == {"kind": "grammar", "rate_per_1k": 0.025}
+
+
+# -- readable explanations and the comments toggle ----------------------------
+
+def _edit(original, replacement, error_type, general=""):
+    return sapling.Edit(start=0, end=len(original), original=original,
+                        replacement=replacement, error_type=error_type,
+                        general_error_type=general)
+
+
+def test_describe_reads_out_a_substitution():
+    d = sapling.describe(_edit("teh", "the", "R:SPELL", "Spelling"))
+    assert d == "Spelling: “teh” → “the”."
+
+
+def test_describe_names_an_insertion_and_a_deletion():
+    assert sapling.describe(_edit("", ",", "M:PUNCT", "Punctuation")) \
+        == "Punctuation: add “,”."
+    assert sapling.describe(_edit("very", "", "R:ADV", "Word Choice")) \
+        == "Adverb: remove “very”."
+
+
+def test_describe_prefers_a_known_category_over_the_general_bucket():
+    # "R:VERB:TENSE" resolves to the specific label even when the general
+    # bucket is a vaguer "Grammar".
+    d = sapling.describe(_edit("was", "were", "R:VERB:TENSE", "Grammar"))
+    assert d == "Verb tense: “was” → “were”."
+
+
+def test_describe_falls_back_to_the_general_bucket_then_grammar():
+    assert sapling.describe(_edit("x", "y", "R:WEIRD", "Style")) \
+        == "Style: “x” → “y”."
+    assert sapling.describe(_edit("x", "y", "", "")) == "Grammar: “x” → “y”."
+
+
+def test_pass_findings_carry_explanations_and_are_not_silent_by_default(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    findings = _sapling_findings(_cfg_with_sapling(True),
+                                 _one_para_doc("The cat sat on teh mat."))
+    assert findings[0].explanation == "Spelling: “teh” → “the”."
+    assert findings[0].silent is False
+
+
+def test_comments_off_makes_pass_findings_silent(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    cfg = _cfg_with_sapling(True)
+    cfg.sapling.comments = False
+    findings = _sapling_findings(cfg, _one_para_doc("The cat sat on teh mat."))
+    assert findings[0].silent is True
+    # The explanation is still built — it just won't be hung in the margin.
+    assert findings[0].explanation == "Spelling: “teh” → “the”."
+
+
+def test_silent_findings_get_no_margin_comment(tmp_path, monkeypatch):
+    """End to end: with sapling.comments off, the applied tracked change carries
+    no Word comment, while the same run with it on writes one."""
+    from docproof.models import Usage
+    from docproof.pipeline import finish, prepare
+    from docproof.utils.xml_helpers import DocxPackage
+
+    def comment_count(out_path):
+        from docproof.utils.xml_helpers import qn
+        pkg = DocxPackage(out_path)
+        if not pkg.has("word/comments.xml"):
+            return 0
+        return len(list(pkg.tree("word/comments.xml").iter(qn("w:comment"))))
+
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    src = _make_docx(tmp_path / "book.docx", "The cat sat on teh mat.")
+
+    cfg = _cfg_with_sapling(True)
+    cfg.audit = "off"
+    prepared = prepare(cfg, src, "config/error_types")
+    on = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "on",
+                source_path=src)
+    assert comment_count(on.reviewed_path) >= 1
+
+    cfg.sapling.comments = False
+    prepared = prepare(cfg, src, "config/error_types")
+    off = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "off",
+                 source_path=src)
+    assert comment_count(off.reviewed_path) == 0
+
+
+def test_sapling_comments_feature_toggle_round_trips():
+    from app import features as featureslib
+    from docproof.config import load_config
+    cfg = load_config("config/default.yaml")
+    assert cfg.sapling.comments is True
+    featureslib.apply_features(cfg, {"sapling_comments": False})
+    assert cfg.sapling.comments is False
+    row = {f["id"]: f
+           for f in featureslib.feature_catalog(cfg)}["sapling_comments"]
+    assert row["default"] is False and row["group"] == "output"

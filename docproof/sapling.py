@@ -57,6 +57,76 @@ class Edit:
                 "general_error_type": self.general_error_type}
 
 
+# Sapling names each edit with an ERRANT-style code — a one-letter operation
+# (M missing, R replace, U unnecessary) then a colon-separated category, e.g.
+# "R:SPELL", "M:PUNCT", "R:VERB:TENSE" — plus a friendlier `general_error_type`
+# bucket like "Spelling" or "Punctuation". Neither is prose. `describe` turns
+# them into one readable line so a Sapling change reads like the model's own
+# findings in the margin, rather than a raw code. This maps the category tail to
+# a human label; the general bucket is preferred when Sapling sends one, so an
+# unlisted category still degrades to something sensible.
+_CATEGORY_LABELS: dict[str, str] = {
+    "SPELL": "Spelling",
+    "PUNCT": "Punctuation",
+    "ORTH": "Capitalisation or spacing",
+    "TYPO": "Typo",
+    "DET": "Article",
+    "PREP": "Preposition",
+    "PRON": "Pronoun",
+    "NOUN": "Noun",
+    "NOUN:NUM": "Noun number",
+    "NOUN:POSS": "Possessive",
+    "NOUN:INFL": "Noun form",
+    "VERB": "Verb",
+    "VERB:TENSE": "Verb tense",
+    "VERB:FORM": "Verb form",
+    "VERB:INFL": "Verb form",
+    "VERB:SVA": "Subject–verb agreement",
+    "ADJ": "Adjective",
+    "ADJ:FORM": "Adjective form",
+    "ADV": "Adverb",
+    "MORPH": "Word form",
+    "WO": "Word order",
+    "CONTR": "Contraction",
+    "CONJ": "Conjunction",
+    "OTHER": "Grammar",
+}
+
+
+def _category_label(error_type: str) -> str:
+    """The human label for an ERRANT code, matching the most specific tail first
+    ("R:VERB:TENSE" → "Verb tense", falling back to "Verb"). Empty for a code we
+    don't recognise, so the caller can fall back to the general bucket."""
+    parts = [p for p in (error_type or "").split(":") if p]
+    # Drop the leading operation letter (M/R/U/UNK) if present.
+    if parts and parts[0] in ("M", "R", "U", "UNK"):
+        parts = parts[1:]
+    while parts:
+        key = ":".join(parts)
+        if key in _CATEGORY_LABELS:
+            return _CATEGORY_LABELS[key]
+        parts.pop()
+    return ""
+
+
+def describe(edit) -> str:
+    """A short, readable explanation for a Sapling edit (an `Edit` or `ParaEdit`
+    — anything with `.original`, `.replacement`, `.error_type`,
+    `.general_error_type`). Reads out the label and, where it clarifies, the edit
+    itself: `Spelling: “teh” → “the”.`, `Punctuation: add “,”.`, `Article.`"""
+    label = _category_label(edit.error_type) \
+        or (edit.general_error_type or "").strip() or "Grammar"
+    o = (edit.original or "").strip()
+    r = (edit.replacement or "").strip()
+    if o and r and o != r:
+        return f"{label}: “{o}” → “{r}”."
+    if r and not o:
+        return f"{label}: add “{r}”."
+    if o and not r:
+        return f"{label}: remove “{o}”."
+    return f"{label}."
+
+
 def _error_message(resp: httpx.Response) -> str:
     """Turn a non-200 into something a person can act on. Sapling puts a reason
     in a JSON `msg` on its 4xx bodies; fall back to trimmed text otherwise."""

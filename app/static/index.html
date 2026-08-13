@@ -143,100 +143,6 @@
           <small id="model-blurb" class="muted"></small>
         </label>
 
-        <label class="field" id="effort-field">
-          <span>How hard should it think?
-            <strong id="effort-name">Low</strong></span>
-          <input type="range" id="effort" min="1" max="5" step="1" value="1"
-                 list="effort-stops" aria-describedby="effort-blurb">
-          <datalist id="effort-stops">
-            <option value="1" label="Low"></option>
-            <option value="2" label="Medium"></option>
-            <option value="3" label="High"></option>
-            <option value="4" label="Very high"></option>
-            <option value="5" label="Max"></option>
-          </datalist>
-          <small id="effort-blurb" class="muted"></small>
-        </label>
-
-        <label class="field" id="glossary-field">
-          <span>First-pass glossary reader</span>
-          <select id="glossary-model"></select>
-          <small class="muted">One whole-book read before the review — it catches
-            real-word typos (a “calvary” regiment) and name casing the page-by-page
-            pass misses. Opus is the default; “Off” skips it.</small>
-        </label>
-
-        <label class="field review-only" id="rounds-field">
-          <span>Review rounds</span>
-          <select id="rounds">
-            <option value="1">1 — standard</option>
-            <option value="2">2</option>
-            <option value="3">3 — intensive</option>
-            <option value="4">4</option>
-          </select>
-          <small class="muted">Review the manuscript several times, each round
-            reading the previous round's corrections, with a strong judge ruling
-            on every change between rounds. Catches errors a single pass misses;
-            costs more and takes longer. You still get one document with all the
-            tracked changes.</small>
-          <p id="rounds-cost-note" class="muted small" hidden>The estimate is the
-            review cost times the number of rounds. The between-round judge runs
-            on a stronger model and isn't included, so expect the real cost to be
-            somewhat higher.</p>
-        </label>
-
-        <details class="field review-only" id="judge-field" hidden>
-          <summary>Between-round judge<span class="muted"> — the model and
-            instructions that decide each change</span></summary>
-          <label class="field" id="judge-model-field">
-            <span>Judge model</span>
-            <select id="judge-model"></select>
-            <small class="muted">The model that rules on every correction between
-              rounds. It runs far fewer calls than the review itself, so a strong
-              model here is worth it.</small>
-          </label>
-          <label class="field">
-            <span>Judge instructions</span>
-            <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
-            <small class="muted">The instructions the judge follows when deciding
-              which corrections to keep. Leave blank to use the built-in default
-              (shown here as the placeholder).</small>
-          </label>
-          <small class="muted">Only used with 2+ rounds.</small>
-        </details>
-
-        <details class="field review-only" id="continuity-field">
-          <summary>Continuity read<span class="muted"> — contradictions across
-            the whole book</span></summary>
-          <label class="field checkbox">
-            <span><input type="checkbox" id="continuity-only"> Continuity only —
-              run just this read, skip the full review</span>
-            <small class="muted">The whole-book contradiction read on its own: no
-              detector passes, no sweeps. You get margin queries — timeline slips,
-              age or date breaks, an attribute that drifts — and nothing is
-              edited. Leave off to run it as one pass inside a normal review
-              (switch it on under Passes &amp; features for that).</small>
-          </label>
-          <label class="field">
-            <span>Continuity instructions</span>
-            <textarea id="continuity-prompt" rows="8" spellcheck="false"></textarea>
-            <small class="muted">The instructions the continuity reader follows.
-              Leave blank to use the built-in default (shown here as the
-              placeholder).</small>
-          </label>
-        </details>
-
-        <details class="field review-only" id="features-field">
-          <summary>Passes &amp; features<span class="muted"> — what runs on this
-            review</span></summary>
-          <p id="features-cost-note" class="muted small" hidden>The estimate
-            includes the passes you've switched on. Rewrite and the mechanical
-            check are approximate — their cost depends on what the book throws.</p>
-          <div id="features-groups" class="features"></div>
-          <small class="muted">Ensemble review (several detectors plus a verifier)
-            isn't a simple switch — it stays a config-file choice.</small>
-        </details>
-
         <fieldset class="field" id="prep-options" hidden>
           <legend>What should it hand back?</legend>
           <label class="radio">
@@ -280,14 +186,115 @@
           </label>
         </fieldset>
 
-        <label class="field review-only">
-          <span>How careful should it be?</span>
-          <select id="confidence">
-            <option value="high">Only changes it's sure about</option>
-            <option value="medium" selected>Balanced (recommended)</option>
-            <option value="low">Flag anything questionable</option>
-          </select>
-        </label>
+        <details class="field advanced" id="advanced-options">
+          <summary>Advanced options
+            <span class="muted" id="advanced-summary"></span></summary>
+
+          <label class="field" id="effort-field">
+            <span>How hard should it think?
+              <strong id="effort-name">Low</strong></span>
+            <input type="range" id="effort" min="1" max="5" step="1" value="1"
+                   list="effort-stops" aria-describedby="effort-blurb">
+            <datalist id="effort-stops">
+              <option value="1" label="Low"></option>
+              <option value="2" label="Medium"></option>
+              <option value="3" label="High"></option>
+              <option value="4" label="Very high"></option>
+              <option value="5" label="Max"></option>
+            </datalist>
+            <small id="effort-blurb" class="muted"></small>
+          </label>
+
+          <label class="field" id="glossary-field">
+            <span>First-pass glossary reader</span>
+            <select id="glossary-model"></select>
+            <small class="muted">One whole-book read before the review — it
+              catches real-word typos (a “calvary” regiment) and name casing the
+              page-by-page pass misses. “Off” skips it.</small>
+          </label>
+
+          <label class="field review-only" id="rounds-field">
+            <span>Review rounds</span>
+            <select id="rounds">
+              <option value="1">1 — standard</option>
+              <option value="2">2</option>
+              <option value="3">3 — intensive</option>
+              <option value="4">4</option>
+            </select>
+            <small class="muted">Each extra round re-reads the previous round's
+              corrections, with a strong judge ruling between rounds. Catches
+              more; costs more.</small>
+            <p id="rounds-cost-note" class="muted small" hidden>The estimate is
+              the review cost times the number of rounds. The between-round judge
+              runs on a stronger model and isn't included, so expect the real
+              cost to be somewhat higher.</p>
+          </label>
+
+          <details class="field review-only" id="judge-field" hidden>
+            <summary>Between-round judge<span class="muted"> — the model and
+              instructions that decide each change</span></summary>
+            <label class="field" id="judge-model-field">
+              <span>Judge model</span>
+              <select id="judge-model"></select>
+              <small class="muted">The model that rules on every correction
+                between rounds. It runs far fewer calls than the review itself,
+                so a strong model here is worth it.</small>
+            </label>
+            <label class="field">
+              <span>Judge instructions</span>
+              <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
+              <small class="muted">The instructions the judge follows when
+                deciding which corrections to keep. Leave blank to use the
+                built-in default (shown here as the placeholder).</small>
+            </label>
+            <small class="muted">Only used with 2+ rounds.</small>
+          </details>
+
+          <details class="field review-only" id="continuity-field">
+            <summary>Continuity read<span class="muted"> — contradictions across
+              the whole book</span></summary>
+            <label class="field checkbox">
+              <span><input type="checkbox" id="continuity-only"> Continuity only
+                — run just this read, skip the full review</span>
+              <small class="muted">The whole-book contradiction read on its own:
+                no detector passes, no sweeps, no Sapling. You get margin queries
+                — timeline slips, age or date breaks, an attribute that drifts —
+                and nothing is edited. Leave off to run it as one pass inside a
+                normal review (switch it on under Passes &amp; features for
+                that).</small>
+            </label>
+            <label class="field">
+              <span>Continuity instructions</span>
+              <textarea id="continuity-prompt" rows="8"
+                        spellcheck="false"></textarea>
+              <small class="muted">The instructions the continuity reader
+                follows. Leave blank to use the built-in default (shown here as
+                the placeholder).</small>
+            </label>
+          </details>
+
+          <details class="field review-only" id="features-field">
+            <summary>Passes &amp; features<span class="muted"> — what runs on
+              this review</span></summary>
+            <p id="features-cost-note" class="muted small" hidden>The estimate
+              includes the passes you've switched on. Rewrite and the mechanical
+              check are approximate — their cost depends on what the book
+              throws.</p>
+            <div id="features-groups" class="features"></div>
+            <small class="muted">Ensemble review (several detectors plus a
+              verifier) isn't a simple switch — it stays a config-file
+              choice.</small>
+          </details>
+
+          <label class="field review-only">
+            <span>How careful should it be?</span>
+            <select id="confidence">
+              <option value="high">Only changes it's sure about</option>
+              <option value="medium" selected>Balanced (recommended)</option>
+              <option value="low">Flag anything questionable</option>
+            </select>
+          </label>
+        </details>
 
         <p class="field muted small" id="prep-cost" hidden></p>
 

@@ -676,7 +676,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                     first, last = apply_replacement(p, a, cfg.revision_author,
                                                     date, ids)
                 applied.append(f.finding_id)
-                if cfg.comments and part == "word/document.xml":
+                if cfg.comments and not f.silent and part == "word/document.xml":
                     if comments is None:
                         comments = _Comments(pkg, cfg.revision_author, date)
                     comments.attach(p, first, last,

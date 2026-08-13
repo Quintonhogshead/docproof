@@ -34,6 +34,11 @@ def _totals_for(job, read_usage) -> dict:
                                  + job.cache_write_tokens,
                                  output_tokens=job.output_tokens,
                                  batch=job.mode == "batch")
+            # job.cost already folds Sapling in; only the recompute fallback has
+            # to add it back so a record missing its stored cost still totals it.
+            sap = getattr(job, "sapling_cost", 0.0) or 0.0
+            if sap:
+                cost = (cost or 0.0) + sap
         return {"input_tokens": job.input_tokens,
                 "output_tokens": job.output_tokens,
                 "cache_read_tokens": job.cache_read_tokens,
@@ -53,6 +58,9 @@ def _totals_for(job, read_usage) -> dict:
             + usage.get("cache_creation_input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             batch=job.mode == "batch")
+        sap = usage.get("sapling_cost", 0.0) or 0.0
+        if sap:
+            cost = (cost or 0.0) + sap
     return {"input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
             "cache_read_tokens": usage.get("cache_read_input_tokens", 0),

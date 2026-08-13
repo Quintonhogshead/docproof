@@ -120,6 +120,12 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "Findings that ask rather than correct become Word margin comments. Off "
         "leaves them in the summary only.", "output", ("comments",)),
     FeatureSpec(
+        "sapling_comments", "Explain Sapling changes",
+        "Give each Sapling grammar edit a margin comment naming what it fixed. "
+        "Off applies Sapling's changes silently as tracked changes, with nothing "
+        "in the margin. No effect unless the Sapling pass is on.",
+        "output", ("sapling", "comments")),
+    FeatureSpec(
         "query_comments", "Below-gate queries as comments",
         "Also surface softer, below-threshold findings as margin queries, "
         "instead of only in summary.md where an editor alone would see them.",

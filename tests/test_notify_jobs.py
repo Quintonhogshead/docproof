@@ -62,6 +62,33 @@ def test_completion_for_job_reports_cost_and_elapsed():
     assert "$1.23" in text and "Elapsed: 2m 30s" in text
 
 
+def test_completion_email_breaks_out_sapling_cost():
+    """The total is model + Sapling; the email names Sapling's share rather than
+    burying a per-character third-party charge in one number."""
+    _, text, _ = notify.completion_for_job(
+        _job(kind="review", cost=1.73, sapling_cost=0.50))
+    assert "$1.73" in text
+    assert "includes $0.50 Sapling grammar check" in text
+
+
+def test_completion_email_lists_the_settings_used():
+    _, text, _ = notify.completion_for_job(_job(
+        kind="review", min_confidence="low", rounds=2, glossary_model="off",
+        features={"sapling": True, "rewrite": True, "consistency": False}))
+    assert "Confidence gate: low" in text
+    assert "Review rounds: 2" in text
+    assert "Glossary read: off" in text
+    assert "Sapling grammar check" in text and "rewrite & compare" in text
+
+
+def test_completion_email_flags_a_continuity_only_run():
+    """The run that confused everyone reads unmistakably in the email now."""
+    _, text, _ = notify.completion_for_job(_job(
+        kind="review", continuity_only=True, features={"sapling": True}))
+    assert "Continuity read only" in text
+    assert "skipped" in text
+
+
 def test_completion_links_to_the_drive_archive_when_there_is_one():
     _, text, html = notify.completion_for_job(
         _job(drive_folder_id="fold-9"))

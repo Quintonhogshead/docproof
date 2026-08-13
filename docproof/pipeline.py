@@ -768,7 +768,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     return findings, usage
 
 
-def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
+def _sapling_findings(cfg: Config, doc: DocumentModel,
+                      usage: Usage | None = None) -> list[Finding]:
     """Sapling's suggestions as findings, or [] when the pass is off, has no key,
     or the service can't be reached.
 
@@ -784,7 +785,7 @@ def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
         return []
     import os
 
-    from .sapling import SaplingError, check_paragraphs
+    from .sapling import SaplingError, check_paragraphs, describe
     from .sweeps import sentence_window
     key = os.environ.get("SAPLING_API_KEY")
     if not key:
@@ -796,8 +797,18 @@ def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
             [(p.para_id, p.text) for p in doc.paragraphs], key,
             variety=cfg.sapling.variety or None)
     except SaplingError as e:
+        # A pass that never returned bills nothing here — the cost stays 0 rather
+        # than charging a person for a book Sapling couldn't read.
         log.warning("Sapling pass failed (%s); continuing without it.", e)
         return []
+
+    # Bill for what was sent — the non-blank paragraph text, exactly what
+    # check_paragraphs submits — so the reported cost is the whole bill, not just
+    # the model's share, and matches the estimate shown before the run.
+    if usage is not None:
+        chars = sum(len(p.text) for p in doc.paragraphs if p.text.strip())
+        usage.sapling_chars = chars
+        usage.sapling_cost = chars * cfg.sapling.cost_per_1k_chars / 1000
 
     paras = {p.para_id: p for p in doc.paragraphs}
     findings: list[Finding] = []
@@ -814,10 +825,6 @@ def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
         if corrected == window:                    # a no-op suggestion
             continue
         n += 1
-        general = e.general_error_type or e.error_type or "grammar"
-        detail = f"Sapling: {general}"
-        if e.error_type and e.error_type != general:
-            detail += f" ({e.error_type})"
         findings.append(Finding(
             finding_id=f"sap-{n:04d}",
             chunk_id="sapling",
@@ -826,8 +833,9 @@ def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
             original_text=window,
             occurrence=occurrence,
             corrected_text=corrected,
-            explanation=detail,
+            explanation=describe(e),
             confidence="high",
+            silent=not cfg.sapling.comments,
         ))
     log.info("Sapling proposed %d edit(s) across %d paragraph(s).",
              len(findings), len(doc.paragraphs))
@@ -874,7 +882,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # the deterministic sweeps and consistency (so a house-style sweep keeps a
     # contested span, and Sapling's overlap with it is dropped) but ahead of the
     # model, which is the fuzzier source on any span the two both touch.
-    sapling_findings = _sapling_findings(cfg, prepared.doc)
+    sapling_findings = _sapling_findings(cfg, prepared.doc, usage)
     validated = validate_findings(list(prepared.sweep_findings)
                                   + list(prepared.consistency_findings)
                                   + sapling_findings
