@@ -85,7 +85,14 @@ const isPromo = () => kind() === 'promo';
 document.querySelectorAll('input[name="kind"]').forEach((r) =>
   r.addEventListener('change', () => { renderFiles(); renderKind(); }));
 document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
-  r.addEventListener('change', renderCost));
+  r.addEventListener('change', () => { renderBookOptions(); renderCost(); }));
+
+// The subject/title/author boxes only matter when a book-styled copy is
+// among the outputs.
+function renderBookOptions() {
+  const el = $('book-options');
+  if (el) el.hidden = !['book', 'all'].includes(prepOutput());
+}
 
 // Everything the two jobs disagree about: which options are on screen, what
 // the button says, and which files can go at all.
@@ -98,12 +105,13 @@ function renderKind() {
     el.hidden = prep || promo;
   });
   $('prep-options').hidden = !prep;
+  renderBookOptions();
   $('prep-cost').hidden = !prep;
   $('promo-cost').hidden = !promo;
   $('model-label').textContent = promo ? 'Which model should write it?'
     : prep ? 'Which model should read it?' : 'Which reviewer?';
   $('start').textContent = promo ? 'Write promo copy'
-    : prep ? 'Prepare for layout' : 'Start review';
+    : prep ? 'Format the manuscript' : 'Start review';
   $('staged-title').textContent = promo ? 'Ready to write copy'
     : prep ? 'Ready to prepare' : 'Ready to review';
   document.querySelectorAll('details.sections').forEach((el) => {
@@ -1602,6 +1610,9 @@ $('start').addEventListener('click', async () => {
           model: $('model').value,
           kind: kind(),
           prep_output: prepOutput(),
+          prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
+          prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
+          prep_author: isPrep() ? ($('prep-author') || {}).value.trim() : '',
           mode: isPrep() ? 'now' : mode(),
           schedule_at: (!isPrep() && mode() === 'batch'
                         && $('schedule-on').checked)
@@ -2354,13 +2365,23 @@ function prepActions(job) {
   const actions = document.createElement('div');
   actions.className = 'job-actions';
   const note = actionNote();
-  const first = job.prep_output === 'tracked' ? 'tracked' : 'indesign';
-  if (job.prep_output !== 'tracked') {
+  // Which files this run wrote, from the same vocabulary the server uses.
+  const wrote = {
+    book: ['book'], indesign: ['indesign'], tracked: ['tracked'],
+    both: ['indesign', 'tracked'], all: ['book', 'indesign', 'tracked'],
+  }[job.prep_output] || ['book'];
+  const first = wrote[0];
+  if (wrote.includes('book')) {
+    actions.append(openButton(job, 'book',
+      WEB ? 'Download the book-styled copy' : 'Open the book-styled copy',
+      note));
+  }
+  if (wrote.includes('indesign')) {
     actions.append(openButton(job, 'indesign',
       WEB ? 'Download the InDesign-ready file' : 'Open the file for InDesign',
       note));
   }
-  if (job.prep_output !== 'indesign') {
+  if (wrote.includes('tracked')) {
     actions.append(openButton(job, 'tracked',
       WEB ? 'Download the tracked-changes file' : 'Open the tracked-changes file',
       note));
@@ -2377,7 +2398,7 @@ function prepActions(job) {
     actions.append(
       openButton(job, first, 'Show in Finder', note, { reveal: true }));
     // Placing needs InDesign on a Mac; there is none behind a web build.
-    if (job.prep_output !== 'tracked') actions.append(placeButton(job, note));
+    if (wrote.includes('indesign')) actions.append(placeButton(job, note));
   }
 
   const bits = [];
@@ -2392,14 +2413,31 @@ function prepActions(job) {
   }
   wrap.append(actions, note);
 
+  const book = job.prep_book || {};
+  if (book.subject || book.title || book.author) {
+    const facts = document.createElement('p');
+    facts.className = 'where';
+    const how = book.detected === false ? 'as set' : 'as read from the book';
+    facts.textContent = `Book sketch (${how}): `
+      + [book.subject && `subject “${book.subject}”`,
+         book.title && `title “${book.title}”`,
+         book.author && `author “${book.author}”`]
+        .filter(Boolean).join(', ') + '.';
+    wrap.append(facts);
+  }
+
   const where = document.createElement('p');
   where.className = 'where';
   where.textContent = job.verified
     ? 'Checked word for word against your manuscript: nothing the author '
-      + 'wrote was changed. Place the tagged file in InDesign — the paragraph '
-      + 'style names in it are the template\'s own.'
+      + 'wrote was changed.'
+      + (wrote.includes('book')
+        ? ' The book-styled copy is a reading sketch for the author and '
+          + 'editors — the finished interior still comes from InDesign.'
+        : ' Place the tagged file in InDesign — the paragraph style names in '
+          + 'it are the template\'s own.')
     : 'Heads up: this file has not been confirmed word-for-word against the '
-      + 'manuscript. Read the prep notes before placing it.';
+      + 'manuscript. Read the prep notes before passing it on.';
   wrap.append(where);
   return wrap;
 }
@@ -3824,7 +3862,7 @@ async function loadSettings() {
   $('indesign-template').value = settings.indesign_template || '';
   $('comments').checked = settings.comments;
   $('explanations').checked = settings.explanations;
-  $('prep-output-default').value = settings.prep_output || 'indesign';
+  $('prep-output-default').value = settings.prep_output || 'book';
   loadStyleSheet().catch(() => {});
   loadVersion().catch(() => {});
   Object.entries(keys).forEach(([provider, info]) => {
@@ -4084,7 +4122,25 @@ async function loadStyleSheet() {
       ? 'This is your own file.' : 'This is the one DocProof ships with.'}`;
 
   $('sheet-reset').hidden = !d.using_override;
+  renderSubjectChoices(d);
   renderStyleEditor(d);
+}
+
+// The subject dropdown on the drop screen: the design file's own list, so a
+// subject added in YAML appears here with no code change.
+function renderSubjectChoices(d) {
+  const select = $('prep-subject');
+  if (!select) return;
+  const keep = select.value;
+  while (select.options.length > 1) select.remove(1);
+  (d.subjects || []).forEach((s) => {
+    const opt = document.createElement('option');
+    opt.value = s.key;
+    opt.textContent = `${s.key.replace(/_/g, ' ')} — ${s.family}`
+      + (s.key === d.default_subject ? ' (house default)' : '');
+    select.append(opt);
+  });
+  if (keep) select.value = keep;
 }
 
 // The values a designer actually picks between. Offered as a fixed list rather
@@ -4361,7 +4417,7 @@ function applyFormatChoice(choice) {
 // rather than resetting to the default on every launch.
 async function applyDefaults() {
   const { settings } = await api('/api/settings');
-  const choice = settings.prep_output || 'indesign';
+  const choice = settings.prep_output || 'book';
   const radio = document.querySelector(
     `input[name="prep-output"][value="${choice}"]`);
   if (radio) radio.checked = true;

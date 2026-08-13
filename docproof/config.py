@@ -81,6 +81,10 @@ class PrepConfig(BaseModel):
     is a different YAML rather than a different build."""
     style_sheet: str = "prep/house_styles.yaml"
     tagging_prompt: str = "prep/tagging.yaml"
+    # The interior design for the book output: page geometry, faces, running
+    # heads, drop caps, and the subject-matter display fonts. Like the style
+    # sheet, a file — a different look is a different YAML.
+    book_design: str = "prep/book_design.yaml"
     # A window is one request. The paragraph cap is what keeps the model from
     # skipping entries in a long list; the token budget is what keeps a window
     # of dense prose from being far bigger than a window of dialogue.
@@ -91,9 +95,13 @@ class PrepConfig(BaseModel):
     # labels, never text, so the tail of a 300-word paragraph would be billed
     # for nothing. 0 sends everything.
     preview_chars: int = Field(default=400, ge=0)
-    # Which files a run writes when the caller doesn't say.
-    outputs: list[Literal["indesign", "tracked"]] = Field(
-        default_factory=lambda: ["indesign"])
+    # Which files a run writes when the caller doesn't say. "book" is the
+    # reading copy for the author and the developmental editors — the
+    # manuscript dressed as an Atmosphere paperback; "indesign" is the placed
+    # file for the design team; "tracked" records the same decisions as Word
+    # revisions.
+    outputs: list[Literal["book", "indesign", "tracked"]] = Field(
+        default_factory=lambda: ["book"])
     # Clear the export's fonts, sizes and colours from the placed file. Italics
     # and other meaningful run marks are always kept. Never applied to the
     # tracked file, where it would be hundreds of extra revisions to click.

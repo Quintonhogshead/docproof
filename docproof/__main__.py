@@ -83,13 +83,24 @@ def main(argv=None) -> int:
     prp.add_argument("--config", default="config/default.yaml")
     prp.add_argument("--out", help="output directory (default: from config)")
     prp.add_argument("--output", default=None,
-                     choices=["indesign", "tracked", "both"],
-                     help="which file(s) to write: the InDesign-ready .docx, "
-                          "the tracked-changes .docx, or both "
-                          "(default: from config)")
+                     choices=["book", "indesign", "tracked", "both", "all"],
+                     help="which file(s) to write: the book-styled reading "
+                          "copy, the InDesign-ready .docx, the tracked-changes "
+                          ".docx, 'both' (indesign+tracked, as before books "
+                          "existed) or 'all' (default: from config)")
     prp.add_argument("--style-sheet",
                      help="a different house style set (YAML). This is how you "
                           "prep for another template without touching code.")
+    prp.add_argument("--subject", default="",
+                     help="the book output's subject matter (picks the "
+                          "title-page face). Default: detected from the "
+                          "opening pages.")
+    prp.add_argument("--book-title", default="",
+                     help="running-head title for the book output "
+                          "(default: detected, else the file name)")
+    prp.add_argument("--book-author", default="",
+                     help="running-head author for the book output "
+                          "(default: detected)")
     prp.add_argument("--model")
     prp.add_argument("--no-verify", action="store_true",
                      help="skip the word-for-word check. Not recommended: it "
@@ -411,7 +422,8 @@ def cmd_prep(args) -> int:
         cfg.prep.style_sheet = args.style_sheet
     if args.no_verify:
         cfg.prep.verify = False
-    kinds = (list(preplib.OUTPUT_KINDS) if args.output == "both"
+    kinds = (["indesign", "tracked"] if args.output == "both"
+             else list(preplib.OUTPUT_KINDS) if args.output == "all"
              else [args.output] if args.output else list(cfg.prep.outputs))
 
     out = Path(cfg.output_dir)
@@ -431,6 +443,7 @@ def cmd_prep(args) -> int:
           f"request(s) on {cfg.api.model}, ~"
           f"{prepared.est_document_tokens:,} tokens sent")
 
+    provider = None
     if args.mock_tags:
         tags, usage = preplib.run_mock(prepared)
     else:
@@ -444,9 +457,21 @@ def cmd_prep(args) -> int:
             progress=lambda done, total: print(
                 f"  labelled window {done} of {total}", flush=True))
 
+    meta = None
+    if "book" in kinds:
+        detected = (preplib.detect_meta(cfg, prepared, provider, usage=usage)
+                    if provider is not None else preplib.BookMeta())
+        meta = preplib.merge_meta(detected, subject=args.subject,
+                                  title=args.book_title,
+                                  author=args.book_author)
+        print(f"  book sketch: subject '{meta.subject or 'default'}', "
+              f"title {meta.title or Path(args.input).stem!r}, "
+              f"author {meta.author or '(none)'}")
+
     try:
         outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=out,
-                                 source_path=args.input, outputs=kinds)
+                                 source_path=args.input, outputs=kinds,
+                                 meta=meta)
     except preplib.VerificationFailed as e:
         print(f"error: {e}", file=sys.stderr)
         print(f"  see {out / 'prep_notes.md'} for what prep intended to do.",

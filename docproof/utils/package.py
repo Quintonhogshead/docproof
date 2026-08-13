@@ -32,12 +32,13 @@ class ZipPackage:
         self._trees: dict[str, etree._Element] = {}
         self._dirty: set[str] = set()
         self._new: dict[str, etree._Element] = {}
+        self._new_binary: dict[str, bytes] = {}
 
     def has(self, name: str) -> bool:
-        return name in self._raw or name in self._new
+        return name in self._raw or name in self._new or name in self._new_binary
 
     def names(self) -> list[str]:
-        return list(self._order) + list(self._new)
+        return list(self._order) + list(self._new) + list(self._new_binary)
 
     def raw(self, name: str) -> bytes:
         """The stored bytes of a part, for entries that are not XML."""
@@ -56,6 +57,11 @@ class ZipPackage:
     def add_part(self, name: str, root: etree._Element) -> None:
         self._new[name] = root
         self._dirty.add(name)
+
+    def add_binary_part(self, name: str, data: bytes) -> None:
+        """A part that is bytes, not XML — an embedded font, an image. Written
+        on save exactly as given, never serialized."""
+        self._new_binary[name] = data
 
     def _serialize(self, name: str) -> bytes:
         """Serialize a part, including anything that sits *outside* its root
@@ -78,6 +84,8 @@ class ZipPackage:
                 z.writestr(self._entry(name), data)
             for name in self._new:
                 z.writestr(self._entry(name), self._serialize(name))
+            for name, data in self._new_binary.items():
+                z.writestr(self._entry(name), data)
 
     def _entry(self, name: str) -> zipfile.ZipInfo:
         """A ZipInfo that carries the original entry's metadata forward, so a

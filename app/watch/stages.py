@@ -31,7 +31,7 @@ MANUSCRIPT_SUFFIXES = (".docx",) + CONVERTIBLE
 # is the belt for a file that lost them — somebody duplicated an output, or
 # re-uploaded one from their Downloads folder — because preparing a prepared
 # manuscript is the one mistake here that costs money.
-OUTPUT_PREFIXES = ("tagged_", "tracked_", "reviewed_", "prep_notes",
+OUTPUT_PREFIXES = ("book_", "tagged_", "tracked_", "reviewed_", "prep_notes",
                    "prep_failed")
 
 # Review outputs are named by suffix rather than prefix, because that is what

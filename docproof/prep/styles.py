@@ -245,29 +245,41 @@ def _ppr(style: Style):
     if fmt.get("page_break_before"):
         _sub(ppr, "w:pageBreakBefore", val="1")
     before, after = fmt.get("space_before"), fmt.get("space_after")
-    if before is not None or after is not None:
+    line = fmt.get("line")                   # a line-spacing multiple
+    if before is not None or after is not None or line is not None:
         spacing = _sub(ppr, "w:spacing")
         if before is not None:
             spacing.set(qn("w:before"), str(int(float(before) * 20)))
         if after is not None:
             spacing.set(qn("w:after"), str(int(float(after) * 20)))
+        if line is not None:
+            spacing.set(qn("w:line"), str(int(float(line) * 240)))
+            spacing.set(qn("w:lineRule"), "auto")
     indent = fmt.get("indent")
     if indent is not None:
         twips = int(float(indent) * 20)
         key = "firstLine" if twips >= 0 else "hanging"
         _sub(ppr, "w:ind", **{key: abs(twips)})
     if fmt.get("align"):
-        _sub(ppr, "w:jc", val=str(fmt["align"]))
+        value = str(fmt["align"])
+        _sub(ppr, "w:jc", val="both" if value == "justify" else value)
     return ppr if len(ppr) else None
 
 
 def _rpr(style: Style):
     fmt = style.format
     rpr = etree.Element(qn("w:rPr"))
+    if fmt.get("family"):                    # the face, by internal family name
+        family = str(fmt["family"])
+        _sub(rpr, "w:rFonts", ascii=family, hAnsi=family, cs=family)
     if fmt.get("bold"):
         _sub(rpr, "w:b", val="1")
     if fmt.get("italic"):
         _sub(rpr, "w:i", val="1")
+    if fmt.get("caps"):
+        _sub(rpr, "w:caps", val="1")
+    if fmt.get("letterspace") is not None:   # points, as w:spacing twentieths
+        _sub(rpr, "w:spacing", val=int(float(fmt["letterspace"]) * 20))
     if fmt.get("size") is not None:
         half = int(float(fmt["size"]) * 2)
         _sub(rpr, "w:sz", val=half)
@@ -275,21 +287,28 @@ def _rpr(style: Style):
     return rpr if len(rpr) else None
 
 
-def build_styles_xml(sheet: StyleSheet) -> etree._Element:
+def build_styles_xml(sheet: StyleSheet, *,
+                     defaults: dict | None = None) -> etree._Element:
     """One clean style sheet: Normal, every house paragraph style, and the
-    character styles. Formatting is deliberately light — InDesign overrides all
-    of it on Place, and the point of this file is the NAMES."""
+    character styles. For the placed file the formatting is deliberately light —
+    InDesign overrides all of it on Place, and the point of the file is the
+    NAMES. The book writer passes `defaults` (family, size, line) to move the
+    document's base face off the readable-anywhere Georgia default."""
+    base = {"family": "Georgia", "size": 12, "line": 1.15, **(defaults or {})}
     root = etree.Element(qn("w:styles"), nsmap={"w": W_NS})
 
-    defaults = _sub(root, "w:docDefaults")
-    rpr_default = _sub(defaults, "w:rPrDefault")
+    d = _sub(root, "w:docDefaults")
+    rpr_default = _sub(d, "w:rPrDefault")
     rpr = _sub(rpr_default, "w:rPr")
-    _sub(rpr, "w:rFonts", ascii="Georgia", hAnsi="Georgia")
-    _sub(rpr, "w:sz", val="24")
-    _sub(rpr, "w:szCs", val="24")
-    ppr_default = _sub(defaults, "w:pPrDefault")
+    _sub(rpr, "w:rFonts", ascii=base["family"], hAnsi=base["family"],
+         cs=base["family"])
+    half = str(int(float(base["size"]) * 2))
+    _sub(rpr, "w:sz", val=half)
+    _sub(rpr, "w:szCs", val=half)
+    ppr_default = _sub(d, "w:pPrDefault")
     ppr = _sub(ppr_default, "w:pPr")
-    _sub(ppr, "w:spacing", after="0", line="276", lineRule="auto")
+    _sub(ppr, "w:spacing", after="0",
+         line=str(int(float(base["line"]) * 240)), lineRule="auto")
 
     normal = _sub(root, "w:style", type="paragraph", default="1",
                   styleId="Normal")
@@ -315,7 +334,8 @@ def build_styles_xml(sheet: StyleSheet) -> etree._Element:
     return root
 
 
-def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True) -> None:
+def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
+                        defaults: dict | None = None) -> None:
     """Put the house styles into the document, registering the part if it never
     had one (a bare Google Docs export sometimes doesn't).
 
@@ -323,7 +343,7 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True) -> None
     placed into InDesign should be. The tracked-changes file merges instead:
     every retagged paragraph carries its previous style inside a `w:pPrChange`,
     and rejecting that change has to land back on a style that still exists."""
-    built = build_styles_xml(sheet)
+    built = build_styles_xml(sheet, defaults=defaults)
     if not pkg.has(STYLES_PART):
         pkg.add_part(STYLES_PART, built)
         _register_part(pkg)

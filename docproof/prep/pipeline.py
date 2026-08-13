@@ -8,6 +8,7 @@ wrote.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from ..providers import Provider
 from ..utils.tokens import estimate_tokens
 from ..utils.xml_helpers import DocxPackage
 from . import ingest as prep_ingest
+from .book_design import BookDesign, BookMeta, load_book_design
 from .chunker import Window
 from .model import PrepPlan, Structure, Tag
 from .notes import write_notes
@@ -25,12 +27,14 @@ from .rules import build_plan
 from .styles import StyleSheet, load_style_sheet
 from .tagger import (Tagger, TaggingPrompt, load_tagging_prompt, render_window)
 from .verify import Verification, VerificationFailed, verify_output
+from .writers.book import write_book
 from .writers.clean import WriteStats, write_clean
 from .writers.tracked import write_tracked
 
 log = logging.getLogger("docproof.prep.pipeline")
 
-OUTPUT_KINDS = ("indesign", "tracked")
+OUTPUT_KINDS = ("book", "indesign", "tracked")
+_PREFIXES = {"book": "book_", "indesign": "tagged_", "tracked": "tracked_"}
 # One label per paragraph, and the paragraph id is most of it.
 OUTPUT_TOKENS_PER_PARAGRAPH = 25
 
@@ -42,6 +46,7 @@ class PreparedPrep:
     sheet: StyleSheet
     prompt: TaggingPrompt
     windows: list[Window]
+    design: BookDesign | None = None
     system_tokens: int = 0
 
     @property
@@ -98,10 +103,12 @@ def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
                              override_dir=override_dir)
     prompt = load_tagging_prompt(resolve(config_dir, cfg.prep.tagging_prompt),
                                  override_dir=override_dir)
+    design = load_book_design(resolve(config_dir, cfg.prep.book_design),
+                              override_dir=override_dir)
     tagger = _tagger(cfg, sheet, prompt, provider=None)
     prepared = PreparedPrep(
         pkg=pkg, structure=structure, sheet=sheet, prompt=prompt,
-        windows=tagger.plan_windows(structure),
+        windows=tagger.plan_windows(structure), design=design,
         system_tokens=estimate_tokens(tagger.system_prompt))
     log.info("Prep ready: %d paragraphs, %d window(s), style sheet '%s'.",
              prepared.paragraph_count, prepared.request_count, sheet.name)
@@ -129,6 +136,24 @@ def run(cfg: Config, prepared: PreparedPrep, provider: Provider, *,
     return tags, usage
 
 
+def detect_meta(cfg: Config, prepared: PreparedPrep, provider: Provider, *,
+                usage: Usage) -> BookMeta:
+    """The one extra model call the book output wants: subject, title, author
+    from the opening pages. Callers merge overrides on top with merge_meta."""
+    from .meta import detect_meta as _detect
+
+    return _detect(prepared.structure, prepared.design, provider,
+                   model=cfg.api.model, usage=usage,
+                   source_name=Path(prepared.structure.source_path).name)
+
+
+def merge_meta(detected: BookMeta, *, subject: str = "", title: str = "",
+               author: str = "") -> BookMeta:
+    from .meta import merge_meta as _merge
+
+    return _merge(detected, subject=subject, title=title, author=author)
+
+
 def run_mock(prepared: PreparedPrep, canned: dict[str, str] | None = None
              ) -> tuple[list[Tag], Usage]:
     """Everything downstream of the model, without the model."""
@@ -139,9 +164,17 @@ def run_mock(prepared: PreparedPrep, canned: dict[str, str] | None = None
     return tags, usage
 
 
+def default_meta(source_path: str | Path) -> BookMeta:
+    """What the book output knows with no detector and no overrides: a title
+    guessed from the file name, and nothing else."""
+    stem = Path(source_path).stem or "Manuscript"
+    return BookMeta(title=" ".join(stem.replace("_", " ").split()))
+
+
 def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
            *, out_dir: str | Path, source_path: str | Path,
-           outputs: tuple[str, ...] | list[str] = ("indesign",)) -> PrepOutputs:
+           outputs: tuple[str, ...] | list[str] = ("book",),
+           meta: BookMeta | None = None) -> PrepOutputs:
     """Turn labels into documents, then prove the documents still say what the
     manuscript said. A file that fails is deleted, not shipped."""
     out = Path(out_dir)
@@ -151,6 +184,16 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
         raise ValueError(
             f"Nothing to write: outputs must include at least one of "
             f"{', '.join(OUTPUT_KINDS)}.")
+
+    book_meta: BookMeta | None = None
+    if "book" in kinds:
+        if prepared.design is None:
+            raise ValueError("The book output needs the interior design; "
+                             "prepare() loads it from cfg.prep.book_design.")
+        book_meta = meta or BookMeta()
+        if not book_meta.title:
+            book_meta = dataclasses.replace(
+                book_meta, title=default_meta(source_path).title)
 
     plan = build_plan(prepared.structure, tags, prepared.sheet)
     stem = Path(source_path).stem or "document"
@@ -165,7 +208,13 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
         # tracked file has to start from the manuscript, not from the clean
         # one.
         pkg = DocxPackage(Path(prepared.structure.source_path))
-        if kind == "indesign":
+        if kind == "book":
+            stats[kind] = write_book(
+                pkg, prepared.structure, plan, prepared.sheet,
+                prepared.design, book_meta,
+                strip_formatting=cfg.prep.strip_direct_formatting)
+            views = ("clean",)
+        elif kind == "indesign":
             stats[kind] = write_clean(
                 pkg, prepared.structure, plan, prepared.sheet,
                 strip_formatting=cfg.prep.strip_direct_formatting)
@@ -194,7 +243,7 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
         out, structure=prepared.structure, plan=plan, sheet=prepared.sheet,
         stats=stats, checks=checks, usage=usage, cfg=cfg, written=written,
         failures=failures, source_path=source_path,
-        prompt=prepared.prompt, tags=tags)
+        prompt=prepared.prompt, tags=tags, meta=book_meta)
 
     if failures:
         raise VerificationFailed(" ".join(failures))
@@ -207,4 +256,4 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
 
 
 def _prefix(kind: str) -> str:
-    return "tagged_" if kind == "indesign" else "tracked_"
+    return _PREFIXES[kind]

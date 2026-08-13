@@ -10,13 +10,17 @@ knows an Atmosphere Press style name.
 """
 from __future__ import annotations
 
+from .book_design import (BookDesign, BookDesignError, BookMeta,
+                          load_book_design)
 from .model import Flag, ParagraphPlan, PrepPlan, Structure, Tag
-from .pipeline import (OUTPUT_KINDS, PrepOutputs, PreparedPrep, finish,
-                       prepare, run, run_mock)
+from .pipeline import (OUTPUT_KINDS, PrepOutputs, PreparedPrep, default_meta,
+                       detect_meta, finish, merge_meta, prepare, run, run_mock)
 from .styles import StyleSheet, StyleSheetError, load_style_sheet
 from .verify import VerificationFailed
 
 __all__ = ["Flag", "ParagraphPlan", "PrepPlan", "Structure", "Tag",
-           "OUTPUT_KINDS", "PrepOutputs", "PreparedPrep", "finish", "prepare",
-           "run", "run_mock", "StyleSheet", "StyleSheetError",
-           "load_style_sheet", "VerificationFailed"]
+           "OUTPUT_KINDS", "PrepOutputs", "PreparedPrep", "default_meta",
+           "detect_meta", "finish", "merge_meta", "prepare", "run", "run_mock",
+           "StyleSheet", "StyleSheetError", "load_style_sheet",
+           "VerificationFailed", "BookDesign", "BookDesignError", "BookMeta",
+           "load_book_design"]

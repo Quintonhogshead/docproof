@@ -177,13 +177,19 @@ def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     if not out.is_dir():
         return []
     base = naming.format_base(Path(job.filename).stem or "manuscript")
+    book = sorted(out.glob("book_*.docx"))
     tagged = sorted(out.glob("tagged_*.docx"))
     tracked = sorted(out.glob("tracked_*.docx"))
     found: list[Artifact] = []
-    primary = tagged or tracked         # a tracked-only prep still has a deliverable
+    # The book-styled reading copy outranks the InDesign-ready file, which
+    # outranks the redline; whatever exists first takes the bare base name.
+    primary = book or tagged or tracked
     if primary:
         found.append(Artifact(primary[0], f"{base}.docx", DOCX_MIME))
-    if tagged and tracked:              # both asked for: the redline sits beside it
+    if tagged and primary is not tagged:    # beside the book copy
+        found.append(Artifact(tagged[0],
+                              f"{base}{naming.INDESIGN_SUFFIX}.docx", DOCX_MIME))
+    if tracked and primary is not tracked:  # the redline sits beside it
         found.append(Artifact(tracked[0],
                               f"{base}{naming.TRACKED_SUFFIX}.docx", DOCX_MIME))
     notes = out / "prep_notes.md"

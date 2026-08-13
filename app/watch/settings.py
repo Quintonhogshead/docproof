@@ -84,9 +84,11 @@ class WatchSettings:
     # filename. See `folders.py`, `tick._discover` and docs/watch.md.
     subfolders_enabled: bool = False
     model: str = "claude-sonnet-5"
-    # Which file prep hands back: the InDesign-ready .docx, the tracked-changes
-    # one, or both. Same vocabulary as the app's own setting.
-    prep_output: str = "indesign"
+    # Which file prep hands back: the book-styled reading copy (the sketch for
+    # the author and the developmental editors), the InDesign-ready .docx, the
+    # tracked-changes one, "both" (indesign+tracked) or "all". Same vocabulary
+    # as the app's own setting.
+    prep_output: str = "book"
     upload_notes: bool = True
     # Off by default: the folder authors and editors look at should hold
     # manuscripts, not apologies. A failure is loud in `status` and the log.

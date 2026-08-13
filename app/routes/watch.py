@@ -141,9 +141,10 @@ def register(app: FastAPI) -> None:
                                          f"DocProof knows.")
             ws.model = update.model
         if update.prep_output is not None:
-            if update.prep_output not in ("indesign", "tracked", "both"):
-                raise HTTPException(400, "prep_output must be 'indesign', "
-                                         "'tracked' or 'both'")
+            if update.prep_output not in ("book", "indesign", "tracked",
+                                          "both", "all"):
+                raise HTTPException(400, "prep_output must be 'book', 'indesign', "
+                                         "'tracked', 'both' or 'all'")
             ws.prep_output = update.prep_output
         # The archive folder is pasted the same way the watched one is: an empty
         # box means "unchanged", so a person can flip the switch without

@@ -171,9 +171,10 @@ class Settings:
     rounds: int = 1
     output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     default_mode: str = "batch"
-    # Which file manuscript prep hands back by default: the InDesign-ready
-    # .docx, the tracked-changes .docx, or both.
-    prep_output: str = "indesign"
+    # Which file manuscript prep hands back by default: the book-styled
+    # reading copy, the InDesign-ready .docx, the tracked-changes .docx,
+    # "both" (indesign+tracked) or "all".
+    prep_output: str = "book"
     comments: bool = True
     # Ask the model why each change was made. Off is materially cheaper —
     # the reasons are most of what the model writes back.

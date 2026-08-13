@@ -31,6 +31,9 @@ class WriteStats:
     controls: int = 0
     stripped: int = 0
     missing: tuple[str, ...] = ()
+    # Book-writer extras; zero for the other kinds.
+    drop_caps: int = 0
+    fonts: int = 0
 
 
 def write_clean(pkg, structure: Structure, plan: PrepPlan, sheet: StyleSheet, *,

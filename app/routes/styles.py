@@ -63,7 +63,7 @@ def _style_payload(paths: Paths) -> dict:
     except StyleSheetError as e:
         return {"ok": False, "error": str(e), "override_path": str(override),
                 "shipped_path": str(shipped), "using_override": override.is_file()}
-    return {
+    payload = {
         "ok": True,
         "name": sheet.name, "version": sheet.version, "trim": sheet.trim,
         "glyph": sheet.scene_break_glyph,
@@ -77,6 +77,22 @@ def _style_payload(paths: Paths) -> dict:
         "character_styles": [{"name": s.name, "id": s.id}
                              for s in sheet.character_styles],
     }
+    # The book output's subject choices, for the panel's override dropdown. A
+    # broken design file must not take the styles screen down with it — the
+    # styles above are a different file.
+    try:
+        cfg = load_config(CONFIG_PATH)
+        design = preplib.load_book_design(
+            preplib.pipeline.resolve(CONFIG_PATH.parent, cfg.prep.book_design),
+            override_dir=paths.prep)
+        payload["subjects"] = [
+            {"key": s.key, "family": s.family, "describe": s.describe}
+            for s in design.subjects.values()]
+        payload["default_subject"] = design.default_subject
+    except Exception as e:                    # noqa: BLE001 - any bad YAML
+        payload["subjects"] = []
+        payload["subjects_error"] = str(e)
+    return payload
 
 
 def _install_sheet(paths: Paths, body: bytes, override: Path) -> dict:
