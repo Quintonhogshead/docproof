@@ -303,3 +303,104 @@ def test_check_paragraphs_skips_blank_paragraphs(monkeypatch):
     monkeypatch.setattr(sapling.httpx, "post", fake_post)
     sapling.check_paragraphs([("a", "real text"), ("b", "   ")], "key")
     assert "real text" in seen["text"]
+
+
+# -- the Sapling pass folded into a full review ------------------------------
+
+def _one_para_doc(text):
+    from docproof.models import DocumentModel, ParagraphRef
+    return DocumentModel("x.docx", (ParagraphRef(
+        "body-0", "word/document.xml", "body", text, "Normal"),))
+
+
+def _cfg_with_sapling(enabled):
+    from docproof.config import load_config
+    cfg = load_config("config/default.yaml")
+    cfg.sapling.enabled = enabled
+    return cfg
+
+
+def test_pass_off_makes_no_call_and_no_findings(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+
+    def boom(*a, **k):
+        raise AssertionError("Sapling called while the pass was off")
+    monkeypatch.setattr(sapling.httpx, "post", boom)
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    assert _sapling_findings(_cfg_with_sapling(False),
+                             _one_para_doc("the teh cat.")) == []
+
+
+def test_pass_on_without_a_key_skips_gracefully(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.delenv("SAPLING_API_KEY", raising=False)
+    # No key → no findings, no exception (a warning is logged).
+    assert _sapling_findings(_cfg_with_sapling(True),
+                             _one_para_doc("the teh cat.")) == []
+
+
+def test_pass_failure_degrades_to_no_findings(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+
+    def fail(*a, **k):
+        raise httpx.ConnectError("down")
+    monkeypatch.setattr(sapling.httpx, "post", fail)
+    assert _sapling_findings(_cfg_with_sapling(True),
+                             _one_para_doc("the teh cat.")) == []
+
+
+def test_pass_builds_quoted_sentence_findings(monkeypatch):
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    findings = _sapling_findings(_cfg_with_sapling(True),
+                                 _one_para_doc("The cat sat on teh mat."))
+    assert len(findings) == 1
+    f = findings[0]
+    # A quoted sentence + corrected sentence, like a sweep — not raw offsets.
+    assert f.original_text == "The cat sat on teh mat."
+    assert f.corrected_text == "The cat sat on the mat."
+    assert f.status == "pending" and f.anchor is None
+    assert f.error_type == "sapling"
+
+
+def test_pass_folds_tracked_changes_into_the_review(tmp_path, monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import finish, prepare
+    from docproof.utils.xml_helpers import (DEL_TAG, INS_TAG, DocxPackage,
+                                            qn, walk_package)
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+
+    src = _make_docx(tmp_path / "book.docx", "The cat sat on teh mat.")
+    cfg = _cfg_with_sapling(True)
+    cfg.audit = "off"
+    prepared = prepare(cfg, src, "config/error_types")
+    out = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "out",
+                 source_path=src)
+
+    # The rebranded output name, and Sapling's edit applied as a tracked change
+    # authored to the press.
+    assert out.reviewed_path.name == "book - Atmosphere Press Proofreader.docx"
+    pkg = DocxPackage(out.reviewed_path)
+    ins = sum(len(list(wp.element.iter(INS_TAG))) for wp in walk_package(pkg))
+    dele = sum(len(list(wp.element.iter(DEL_TAG))) for wp in walk_package(pkg))
+    assert ins >= 1 and dele >= 1
+    authors = {el.get(qn("w:author"))
+               for wp in walk_package(pkg) for el in wp.element.iter(INS_TAG)}
+    assert authors == {"Atmosphere Press Proofreader"}
+
+
+# -- the feature toggle -------------------------------------------------------
+
+def test_sapling_feature_toggle_round_trips():
+    from app import features as featureslib
+    from docproof.config import load_config
+    cfg = load_config("config/default.yaml")
+    assert cfg.sapling.enabled is False
+    featureslib.apply_features(cfg, {"sapling": True})
+    assert cfg.sapling.enabled is True
+    row = {f["id"]: f for f in featureslib.feature_catalog(cfg)}["sapling"]
+    assert row["default"] is True and row["heavy"] is True
+    assert row["cost"] == {"kind": "grammar", "rate_per_1k": 0.025}

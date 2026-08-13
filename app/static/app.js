@@ -1279,6 +1279,7 @@ function priceSelection(m) {
     ? EXPLANATIONS_OFF_OUTPUT : 1;
   let batched = 0;                 // rides the batch discount
   let full = 0;                    // synchronous, full price both columns
+  let flat = 0;                    // per-run, not per-round (e.g. Sapling)
   let approx = false;
   let any = false;
 
@@ -1326,6 +1327,11 @@ function priceSelection(m) {
         full += LT_CONFIRM_SHARE * book
           * (pm.input_per_mtok + pm.output_per_mtok) / 1e6;
         approx = true;
+      } else if (spec.cost.kind === 'grammar') {
+        // Sapling bills per character of the manuscript, not per token, and
+        // runs once — regardless of model, rounds, or the batch discount — so
+        // it lands in `flat`, added after the per-round multiply below.
+        flat += (f.chars || 0) * (spec.cost.rate_per_1k || 0) / 1000;
       }
     });
   });
@@ -1337,8 +1343,8 @@ function priceSelection(m) {
   // figure is explicitly rough — see the note in renderCost.
   const rounds = Number(($('rounds') || {}).value || 1);
   return {
-    now: (batched + full) * rounds,
-    batch: (batched * (m.batch_discount || 1) + full) * rounds,
+    now: (batched + full) * rounds + flat,
+    batch: (batched * (m.batch_discount || 1) + full) * rounds + flat,
     approx: approx || rounds > 1,
   };
 }

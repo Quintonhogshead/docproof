@@ -23,7 +23,7 @@ from .error_registry import ErrorType, load_error_types
 from .formats import DocumentFormat, get_format
 from .audit import AuditReport, enforce, run_audit
 from .changelog import write_change_log
-from .models import Chunk, DocumentModel, Usage
+from .models import Chunk, DocumentModel, Finding, Usage
 from .normalize import NormalizationReport
 from .providers import Provider
 from .reporting import write_findings_json, write_summary_md
@@ -768,6 +768,72 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     return findings, usage
 
 
+def _sapling_findings(cfg: Config, doc: DocumentModel) -> list[Finding]:
+    """Sapling's suggestions as findings, or [] when the pass is off, has no key,
+    or the service can't be reached.
+
+    Each Sapling edit is turned into the same quoted-sentence finding a sweep
+    produces (via `sentence_window`), so it flows through the identical
+    validation, overlap-resolution and edit-guard downstream — and a Sapling edit
+    landing on a span a house-style sweep already claimed is dropped for free,
+    because sweeps validate ahead of it. Runs here in `finish`, once per review,
+    rather than in `prepare` (which runs twice in batch mode) — Sapling is a paid
+    network call, not a free local scan. A failure degrades to no findings and a
+    warning, never a failed review."""
+    if not cfg.sapling.enabled:
+        return []
+    import os
+
+    from .sapling import SaplingError, check_paragraphs
+    from .sweeps import sentence_window
+    key = os.environ.get("SAPLING_API_KEY")
+    if not key:
+        log.warning("Sapling pass is on but SAPLING_API_KEY is not set — "
+                    "skipping it.")
+        return []
+    try:
+        edits = check_paragraphs(
+            [(p.para_id, p.text) for p in doc.paragraphs], key,
+            variety=cfg.sapling.variety or None)
+    except SaplingError as e:
+        log.warning("Sapling pass failed (%s); continuing without it.", e)
+        return []
+
+    paras = {p.para_id: p for p in doc.paragraphs}
+    findings: list[Finding] = []
+    n = 0
+    for e in edits:
+        para = paras.get(e.para_id)
+        if para is None:
+            continue
+        text = para.text
+        if text[e.start:e.end] != e.original:      # offset drift — never edit blind
+            continue
+        window, lo, occurrence = sentence_window(text, e.start, e.end)
+        corrected = window[:e.start - lo] + e.replacement + window[e.end - lo:]
+        if corrected == window:                    # a no-op suggestion
+            continue
+        n += 1
+        general = e.general_error_type or e.error_type or "grammar"
+        detail = f"Sapling: {general}"
+        if e.error_type and e.error_type != general:
+            detail += f" ({e.error_type})"
+        findings.append(Finding(
+            finding_id=f"sap-{n:04d}",
+            chunk_id="sapling",
+            para_id=e.para_id,
+            error_type="sapling",
+            original_text=window,
+            occurrence=occurrence,
+            corrected_text=corrected,
+            explanation=detail,
+            confidence="high",
+        ))
+    log.info("Sapling proposed %d edit(s) across %d paragraph(s).",
+             len(findings), len(doc.paragraphs))
+    return findings
+
+
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
            batch: bool = False, coverage=None, verify_provider=None) -> Outputs:
@@ -804,9 +870,14 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                 cfg, prepared, model_findings, verify_provider, usage)
     # Sweep findings go first: the validator gives the earliest finding to
     # claim a span the right to it, and a scripted rule is more certain than
-    # anything the model reports about the same characters.
+    # anything the model reports about the same characters. Sapling sits after
+    # the deterministic sweeps and consistency (so a house-style sweep keeps a
+    # contested span, and Sapling's overlap with it is dropped) but ahead of the
+    # model, which is the fuzzier source on any span the two both touch.
+    sapling_findings = _sapling_findings(cfg, prepared.doc)
     validated = validate_findings(list(prepared.sweep_findings)
                                   + list(prepared.consistency_findings)
+                                  + sapling_findings
                                   + model_findings,
                                   prepared.doc, cfg.min_confidence,
                                   query_types=prepared.query_types,

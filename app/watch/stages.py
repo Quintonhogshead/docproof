@@ -35,11 +35,18 @@ OUTPUT_PREFIXES = ("tagged_", "tracked_", "reviewed_", "prep_notes",
                    "prep_failed")
 
 # Review outputs are named by suffix rather than prefix, because that is what
-# the press hands to an author: "<book> - Pre-Proofread.docx" sorts next to the
-# book. Taken from the format so the two cannot drift.
+# the press hands to an author: "<book> - Atmosphere Press Proofreader.docx"
+# sorts next to the book. Taken from the format so the two cannot drift.
+#
+# The legacy " - Pre-Proofread" names are kept here too: books proofread before
+# the rename already sit in Drive under the old suffix, and the watcher must
+# still recognise them as finished output — otherwise a rename would make every
+# one of them look like a fresh manuscript and reprocess it, which is exactly
+# the costly mistake this recognition exists to prevent.
+_LEGACY_STEM_SUFFIXES = (" - pre-proofread", " - pre-proofread change log")
 OUTPUT_STEM_SUFFIXES = tuple(
     s.lower() for s in (DocumentFormat.REVIEWED_SUFFIX,
-                        DocumentFormat.CHANGE_LOG_SUFFIX))
+                        DocumentFormat.CHANGE_LOG_SUFFIX)) + _LEGACY_STEM_SUFFIXES
 
 # Written by the watcher onto the files it touches.
 STATE_PROP = "docproof.state"

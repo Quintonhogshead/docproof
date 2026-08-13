@@ -291,4 +291,4 @@ def test_get_format_names_what_it_reads():
 
 def test_reviewed_name_keeps_the_extension():
     assert get_format("x.idml").reviewed_name("/a/Book Three.idml") \
-        == "Book Three - Pre-Proofread.idml"
+        == "Book Three - Atmosphere Press Proofreader.idml"

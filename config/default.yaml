@@ -257,6 +257,14 @@ languagetool:
   confirm_model:            # unset = api.model confirms; a cheap model is plenty
   confirm_effort: medium
 
+# Sapling.ai grammar/spell pass — a hosted checker whose suggestions fold into
+# the tracked changes after the sweeps and the model. Off by default and opt-in
+# per run; needs SAPLING_API_KEY in the environment. See docproof/sapling.py.
+sapling:
+  enabled: false
+  variety: ""               # "" | us-variety | gb-variety | au-variety | ca-variety
+  cost_per_1k_chars: 0.025  # $ per 1,000 chars — for the pre-run estimate only
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

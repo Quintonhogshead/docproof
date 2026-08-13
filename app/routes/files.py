@@ -103,6 +103,9 @@ def register(app: FastAPI) -> None:
         return {
             "sections": len(prepared.chunks),
             "paragraphs": len(prepared.doc.paragraphs),
+            # Characters of reviewable text — what the Sapling pass would send,
+            # so its per-character estimate has a real figure to work from.
+            "chars": sum(len(p.text) for p in prepared.doc.paragraphs),
             "requests": prepared.request_count,
             "input_tokens": prepared.est_document_tokens,
             "passes": len(prepared.groups),

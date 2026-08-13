@@ -71,8 +71,8 @@ comma, and a comment hanging off a single comma tells the author nothing.
 ## The two files
 
 ```
-Mankin - Book 1 - Pre-Proofread.docx
-Mankin - Book 1 - Pre-Proofread Change Log.docx
+Mankin - Book 1 - Atmosphere Press Proofreader.docx
+Mankin - Book 1 - Atmosphere Press Proofreader Change Log.docx
 ```
 
 The names are the house convention and come from `DocumentFormat`, so anything

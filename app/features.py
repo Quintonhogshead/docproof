@@ -89,6 +89,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "hyphenation) whose suggestions the confirm step vets in context. No "
         "per-call cost; runs on the server's own Java.",
         "pass", ("languagetool", "enabled")),
+    FeatureSpec(
+        "sapling", "Sapling grammar check",
+        "Also run the manuscript through Sapling.ai's hosted grammar and "
+        "spelling checker and fold its suggestions into the tracked changes, "
+        "after the house-style sweeps (which keep any span they both touch). A "
+        "third-party service billed per character — its cost is added to the "
+        "estimate separately from the model.",
+        "pass", ("sapling", "enabled"), heavy=True),
     # -- passes on by default: cheap, local-ish, here so they can be turned off -
     FeatureSpec(
         "adjudicate", "Real-word typo adjudication",
@@ -181,7 +189,10 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
     - read:    one whole-book read, input-dominated (story sheet).
     - retype:  a rewrite of the whole book per sample, output-heavy; approximate.
     - confirm: local rules propose for free, only the confirm calls cost, and
-               their number tracks the book's candidates — approximate."""
+               their number tracks the book's candidates — approximate.
+    - grammar: a hosted API billed per character of the manuscript, with no model
+               token cost at all — so it carries its own $/1k-char rate rather
+               than a model to price against."""
     if fid == "storysheet":
         return {"kind": "read", "model": cfg.storysheet.model}
     if fid == "continuity":
@@ -191,6 +202,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
                 "samples": cfg.rewrite.samples}
     if fid == "languagetool":
         return {"kind": "confirm", "model": cfg.languagetool.confirm_model}
+    if fid == "sapling":
+        return {"kind": "grammar", "rate_per_1k": cfg.sapling.cost_per_1k_chars}
     return None
 
 

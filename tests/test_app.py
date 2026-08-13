@@ -560,10 +560,10 @@ def test_open_hands_the_reviewed_document_to_its_application(
 
     resp = client.post(f"/api/jobs/{job['id']}/open/document")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["opened"] == "simple - Pre-Proofread.docx"
+    assert resp.json()["opened"] == "simple - Atmosphere Press Proofreader.docx"
 
     path, reveal = opened[0]
-    assert path.name == "simple - Pre-Proofread.docx" and path.is_file()
+    assert path.name == "simple - Atmosphere Press Proofreader.docx" and path.is_file()
     assert reveal is False
 
 
@@ -579,11 +579,11 @@ def test_opening_a_result_that_was_moved_says_which_file_is_gone(
         client, provider, opened):
     job = _finished_review(client, provider)
     results = Path(client.get(f"/api/jobs/{job['id']}").json()["results_dir"])
-    (results / "simple - Pre-Proofread.docx").unlink()
+    (results / "simple - Atmosphere Press Proofreader.docx").unlink()
 
     resp = client.post(f"/api/jobs/{job['id']}/open/document")
     assert resp.status_code == 404
-    assert "simple - Pre-Proofread.docx" in resp.json()["detail"]
+    assert "simple - Atmosphere Press Proofreader.docx" in resp.json()["detail"]
     assert not opened
 
 
@@ -649,7 +649,7 @@ def test_an_indesign_layout_can_go_overnight_too(client, provider):
     # The house filename has spaces in it, so the header carries it RFC 5987
     # encoded. Browsers decode it; the test has to as well.
     from urllib.parse import unquote
-    assert "layout - Pre-Proofread.idml" in unquote(
+    assert "layout - Atmosphere Press Proofreader.idml" in unquote(
         reviewed.headers["content-disposition"])
 
 

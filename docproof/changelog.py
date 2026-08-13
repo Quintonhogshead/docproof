@@ -143,7 +143,7 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
 
     d = docx.Document()
     name = Path(doc.source_path).stem
-    d.add_heading(f"{name} — Pre-Proofread Change Log", level=0)
+    d.add_heading(f"{name} — Atmosphere Press Proofreader Change Log", level=0)
 
     stamp = datetime.now(timezone.utc).strftime("%d %B %Y, %H:%M UTC")
     sub = d.add_paragraph(f"Atmosphere Press · prepared {stamp}")

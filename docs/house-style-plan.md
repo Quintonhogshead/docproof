@@ -189,8 +189,8 @@ passes skip the short ones, so the cost is unchanged and the count is true.
    report from Phase 2, query list, "deliberately left unchanged" (rejected and
    below-gate findings with reasons), limits-of-this-pass note, footnote
    coverage statement, and the Phase 3 audit confirmation.
-3. **Filenames** in `fmt.reviewed_name`: ` - Pre-Proofread` and
-   ` - Pre-Proofread Change Log`.
+3. **Filenames** in `fmt.reviewed_name`: ` - Atmosphere Press Proofreader` and
+   ` - Atmosphere Press Proofreader Change Log`.
 
 **Done when:** a run's two output files match what the team currently produces
 by hand, and queries appear as margin comments in Word.
