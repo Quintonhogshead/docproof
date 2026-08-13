@@ -481,6 +481,26 @@ class LanguageToolConfig(BaseModel):
         return self
 
 
+class SaplingConfig(BaseModel):
+    """Sapling.ai grammar/spell pass. A HOSTED grammar checker (network call,
+    per-use cost) run over the whole manuscript, its suggestions folded into the
+    tracked changes alongside the sweeps and the model — validated after both, so
+    a house-style sweep keeps first claim on a span and a Sapling edit that
+    overlaps one is dropped. Off by default and opt-in per run: it is a
+    third-party service that costs money. Needs SAPLING_API_KEY in the
+    environment (the web build loads the admin-set key there); with none set the
+    pass is skipped with a warning rather than failing the review.
+    Whole-document only. See docproof/sapling.py."""
+    enabled: bool = False
+    # Sapling's regional spelling variety: "", "us-variety", "gb-variety",
+    # "au-variety", "ca-variety". Empty sends no preference.
+    variety: str = ""
+    # What Sapling bills, in dollars per 1,000 characters of submitted text. Used
+    # only to show an estimate before a run — Sapling itself is the source of
+    # truth for the actual charge, and it never reaches the model-token cost math.
+    cost_per_1k_chars: float = Field(default=0.025, ge=0)
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -625,6 +645,7 @@ class Config(BaseModel):
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
+    sapling: SaplingConfig = Field(default_factory=SaplingConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
@@ -667,7 +688,7 @@ class Config(BaseModel):
     # manuscript: what changed, what was only asked about, and — the part the
     # house brief insists on — what this pass did not cover.
     change_log: bool = True
-    revision_author: str = "docproof"
+    revision_author: str = "Atmosphere Press Proofreader"
     # Ask the model to justify each finding. The explanations become Word
     # margin comments, but they are also the bulk of the output tokens — and
     # output bills at roughly 5x input. Turn this off for a cheaper pass that

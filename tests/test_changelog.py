@@ -62,21 +62,27 @@ def _run(tmp_path, paragraphs, mock=(), *, error_types=("comma_splice",), **kw):
 
 def test_the_house_filenames():
     assert DOCX.reviewed_name("/a/Mankin - Book 1.docx") == \
-        "Mankin - Book 1 - Pre-Proofread.docx"
+        "Mankin - Book 1 - Atmosphere Press Proofreader.docx"
     assert DOCX.change_log_name("/a/Mankin - Book 1.docx") == \
-        "Mankin - Book 1 - Pre-Proofread Change Log.docx"
+        "Mankin - Book 1 - Atmosphere Press Proofreader Change Log.docx"
 
 
 def test_a_layout_keeps_its_extension_but_the_log_is_always_word():
-    assert IDML.reviewed_name("/a/Book.idml") == "Book - Pre-Proofread.idml"
+    assert IDML.reviewed_name("/a/Book.idml") == \
+        "Book - Atmosphere Press Proofreader.idml"
     assert IDML.change_log_name("/a/Book.idml") == \
-        "Book - Pre-Proofread Change Log.docx"
+        "Book - Atmosphere Press Proofreader Change Log.docx"
 
 
 def test_the_watcher_knows_these_are_its_own_output():
     """Otherwise the folder watcher would treat a proofread manuscript as a
     new one and pay to review it again."""
     from app.watch.stages import _looks_like_output
+    assert _looks_like_output("Book One - Atmosphere Press Proofreader.docx")
+    assert _looks_like_output(
+        "Book One - Atmosphere Press Proofreader Change Log.docx")
+    # Books proofread before the rename still carry the old suffix; the watcher
+    # must keep recognising them, or a rename reprocesses the whole back catalogue.
     assert _looks_like_output("Book One - Pre-Proofread.docx")
     assert _looks_like_output("Book One - Pre-Proofread Change Log.docx")
     assert not _looks_like_output("Book One.docx")
@@ -90,7 +96,8 @@ SPLICE = "The manuscript was finished, nobody wanted to read it."
 def test_a_change_log_is_written_beside_the_manuscript(tmp_path):
     out = _run(tmp_path, [SPLICE])
     assert out.change_log is not None and out.change_log.exists()
-    assert out.change_log.name == "Book One - Pre-Proofread Change Log.docx"
+    assert out.change_log.name == \
+        "Book One - Atmosphere Press Proofreader Change Log.docx"
 
 
 def test_it_can_be_turned_off(tmp_path):

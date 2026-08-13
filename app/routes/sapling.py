@@ -41,9 +41,9 @@ MAX_CHARS = 50_000
 MAX_DOC_CHARS = 300_000
 
 # What the tracked changes are attributed to, and the tag appended to the
-# downloaded file — deliberately NOT DocProof's " - Pre-Proofread", so a Sapling
-# test output is never mistaken for a real proofread (nor picked up by the
-# watcher, which recognises DocProof's own suffix).
+# downloaded file — deliberately NOT the review's " - Atmosphere Press
+# Proofreader" suffix, so a Sapling test output is never mistaken for a real
+# proofread (nor picked up by the watcher, which recognises the review suffix).
 SAPLING_AUTHOR = "Sapling"
 SAPLING_SUFFIX = " - Sapling"
 

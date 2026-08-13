@@ -105,7 +105,8 @@ def main(argv=None) -> int:
     cmp.add_argument("doc_a", help="the baseline / ground-truth doc "
                                    "(e.g. the human-proofread manuscript)")
     cmp.add_argument("doc_b", help="the doc to compare against it "
-                                   "(e.g. docproof's Pre-Proofread output)")
+                                   "(e.g. docproof's Atmosphere Press "
+                                   "Proofreader output)")
     cmp.add_argument("--config", default="config/default.yaml")
     cmp.add_argument("--out", help="where to write the report "
                                    "(default: from config)")

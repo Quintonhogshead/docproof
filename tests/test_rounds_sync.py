@@ -180,7 +180,7 @@ def test_cli_rounds_with_mock_findings(tmp_path):
     rc = main(["review", str(src), "--mock-findings", str(mocks),
                "--rounds", "2", "--out", str(tmp_path)])
     assert rc == 0
-    reviewed = tmp_path / "src - Pre-Proofread.docx"
+    reviewed = tmp_path / "src - Atmosphere Press Proofreader.docx"
     assert reviewed.exists()
     for name in ("summary.md", "findings.json"):
         assert (tmp_path / name).exists(), name

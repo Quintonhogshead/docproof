@@ -261,13 +261,13 @@ def test_an_untracked_edit_makes_a_real_run_refuse_to_ship(tmp_path):
     out_dir = tmp_path / "out"
     with pytest.raises(AuditError, match="without wrapping it in a tracked"):
         finish(prepared, [], Usage(), cfg, out_dir=out_dir, source_path=src)
-    assert not (out_dir / "sneak - Pre-Proofread.docx").exists(), \
+    assert not (out_dir / "sneak - Atmosphere Press Proofreader.docx").exists(), \
         "a failed audit still shipped a manuscript"
     # The diagnosis survives, though: refusing to ship should not also mean
     # refusing to explain, so the reports — including the change log, which
     # records the failure in the author's own terms — are still written.
     assert (out_dir / "summary.md").exists()
-    assert (out_dir / "sneak - Pre-Proofread Change Log.docx").exists()
+    assert (out_dir / "sneak - Atmosphere Press Proofreader Change Log.docx").exists()
     assert "FAILED" in (out_dir / "summary.md").read_text()
 
 

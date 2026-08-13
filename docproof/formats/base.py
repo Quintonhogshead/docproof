@@ -45,12 +45,13 @@ class DocumentFormat:
     annotate_excluded_words: Callable | None = None
 
     # What the press appends to a manuscript it has proofread. The name is the
-    # deliverable's identity — the team hands "<book> - Pre-Proofread.docx" to
+    # deliverable's identity — the team hands "<book> - Atmosphere Press
+    # Proofreader.docx" to
     # an author — so it lives here rather than in whoever happens to save the
     # file. Anything that has to recognise docproof's own output matches on
     # these (see app/watch/stages.py).
-    REVIEWED_SUFFIX = " - Pre-Proofread"
-    CHANGE_LOG_SUFFIX = " - Pre-Proofread Change Log"
+    REVIEWED_SUFFIX = " - Atmosphere Press Proofreader"
+    CHANGE_LOG_SUFFIX = " - Atmosphere Press Proofreader Change Log"
 
     def reviewed_name(self, source_path: str | Path) -> str:
         return f"{Path(source_path).stem}{self.REVIEWED_SUFFIX}{self.suffix}"

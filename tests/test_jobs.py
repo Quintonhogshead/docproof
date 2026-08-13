@@ -766,7 +766,7 @@ def test_delete_job_removes_the_documents_and_the_record(runner):
     r.settings.output_dir = str(out)
     results = out / "MyBook"
     results.mkdir(parents=True)
-    (results / "MyBook - Pre-Proofread.docx").write_text("reviewed")
+    (results / "MyBook - Atmosphere Press Proofreader.docx").write_text("reviewed")
     _job(store, state="done", results_dir=str(results))
 
     assert r.delete_job("j1") is True
@@ -887,7 +887,7 @@ def test_the_change_log_is_a_named_result(runner):
     store, _ = runner
     job = _job(store, filename="Book.docx")
     assert (_result_name(job, "changes")
-            == "Book - Pre-Proofread Change Log.docx")
+            == "Book - Atmosphere Press Proofreader Change Log.docx")
 
 
 def test_to_api_flags_the_change_log_only_when_present(runner, tmp_path):
@@ -898,7 +898,7 @@ def test_to_api_flags_the_change_log_only_when_present(runner, tmp_path):
                results_dir=str(out))
     assert job.to_api()["has_change_log"] is False    # config had it off
 
-    (out / "Book - Pre-Proofread Change Log.docx").write_bytes(b"x")
+    (out / "Book - Atmosphere Press Proofreader Change Log.docx").write_bytes(b"x")
     assert job.to_api()["has_change_log"] is True
 
     prep = _job(store, id="j2", filename="Book.docx", state="done",
