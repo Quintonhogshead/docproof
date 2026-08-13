@@ -42,6 +42,7 @@ prep:
 # app picks it per run and any vendor works. See docs/promo.md.
 promo:
   generation_prompt: promo/generation.yaml
+  plan_prompt: promo/marketing_plan.yaml   # the marketing plan — promo's 3rd deliverable, its own call
   post_count: 12                   # how many social posts to ask for
   max_input_tokens: 180000         # refuse a book too big for one pass, don't overflow
   outputs: [teaser, posts]         # teaser | posts — the app may override this

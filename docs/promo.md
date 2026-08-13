@@ -123,6 +123,91 @@ same way:
 define the split. The post count is enforced in the prompt and checked after
 parsing, not in the schema (strict JSON schema can't carry a list length).
 
+## Marketing plan — promo's third deliverable
+
+The press also produces an author-facing **marketing plan** per book — today a
+manual workflow: an HS task fires, the coordinator uploads BOOK_FINAL to
+NotebookLM, pastes a short prompt, copies the result into a Google Doc in the
+author's Drive folder, and flips the HS "Marketing Plan" property from
+`Needed` to `Uploaded`. That is exactly the shape promo already automates for
+teaser + posts, so the plan is promo's third document.
+
+**The manual path is BUILT (v0.36.0).** The Promo panel has a second card,
+"Write a marketing plan": drop a manuscript, fill the operator form (author /
+pen name — defaulting from the filename — plus optional blurbs, city, and
+keywords), pick a model and effort, and generate. The result is a
+`{stem} - marketing plan.docx`, editable as Markdown in the panel and
+re-rendered on save, downloadable like the copy. It is a promo job with
+`plan_only` set (`Job.is_plan`), so it shares the store, panel, cost cap, and
+Results-list exclusion, and is told apart by a "marketing plan" tag on its
+card.
+
+The prompt is `config/promo/marketing_plan.yaml` — same system/user-template
+format as `generation.yaml`, grounded in the delivered sample (five fixed
+sections: title/author, Target Audience, Marketing Strategy, Comparable Titles,
+Key Message; 500-700 words) and emitting a small Markdown subset the writer
+parses. The engine mirrors the copy path: `prepare_plan` / `run_plan` /
+`run_plan_mock` / `finish_plan` in `docproof/promo/pipeline.py`, a
+single-field `MarketingPlan` model, a `write_plan` docx writer, and
+`PromoConfig.plan_prompt`. Endpoints: `POST /api/promo/plan`,
+`GET|PUT /api/promo/jobs/{id}/plan`, download `which=plan`.
+
+Design decisions that stuck:
+
+- **A separate call, not a field on `PromoResult`.** The plan takes an
+  author/book metadata block (pen name, blurbs, city, keywords) the teaser call
+  doesn't, so a second structured call was safer than widening the combined
+  one and risking the working deliverables.
+- **No grounding pass on the plan.** `finish_plan` runs neither
+  `verify_grounding` nor `verify_claims`: the Comparable Titles are real books
+  external to the manuscript by design, so the proper-noun guard would flag
+  every one. The plan is invention-guarded in the prompt instead. (Plan jobs
+  therefore always read `unverified == 0`.)
+
+**Still to wire — the AUTOMATED path** (watched-folder plan, waiting on Mia's
+1–3 below):
+
+- feed the plan into the tick loop the way copy is (a `plan`-mode watch job, or
+  a plan step beside the promo stage), reading the metadata from HubSpot (pen
+  name) and the Drive folder (blurbs, form answers).
+- HS writeback on the existing "Marketing Plan" property (`Needed` →
+  `Uploaded`) rather than the status-dropdown pair the copy stage uses.
+- **metadata sourcing (client's model, 2026-08-13).** The inputs split across
+  two sources — HubSpot gives the short name fields, the Drive folder gives
+  everything content-heavy:
+    - *From HubSpot* (three fields): **Author name** = the display / pen name if
+      one is used, printed verbatim on the plan; **first name** + **last name**,
+      used to coordinate with Google Drive (resolve the author's folder). First
+      and last are already read and already do exactly this at
+      `tick._resolve_subfolder`. The pen-name field is the one new HubSpot
+      property — none is configured today (only key/first/last), so it must be
+      confirmed on `0-970`, named in `WatchSettings`, and added to the gate's
+      `want` list, then threaded onto the promo `Job`.
+    - *From the Drive author folder:* the **full manuscript** (already fetched);
+      the **blurb information** (back-cover synopsis + endorsement blurbs) as a
+      sibling file in the folder; and the **results of a Google Form** the
+      author fills out (location, and whatever else the house decides to ask).
+      The folder `listing` is already in hand at tick time, so no new Drive
+      plumbing is needed — what's new is a convention for *which* file is the
+      blurb doc and which is the form dump, and a parser for each.
+    - *Open, with Mia:* (a) how the blurb file and the form-results file are
+      identified in the folder — filename convention vs. app-property tag; (b)
+      what the Google Form actually deposits (a Google Sheet row? a Doc? a
+      Forms→Drive export?) and its stable columns; (c) **keywords** — the old
+      NotebookLM prompt used the press keyword list, absent from this sourcing;
+      decide whether it moves onto the form, stays in HubSpot, or is dropped.
+
+When the automated path is built, its per-run inputs are the same fields the
+manual form already collects, so the operator form becomes the pre-filled view
+of HubSpot + folder data rather than a second code path.
+
+> **Manual path — DONE (v0.36.0).** The panel form decided on 2026-08-13 (a
+> fallback form, not a folder requirement — the manual path exists for books
+> *without* the automated setup) is built as described above. Everything is
+> optional except the author/pen name, which defaults from the filename; the
+> prompt degrades cleanly on blanks, so a bare manuscript still yields a valid,
+> fully-grounded plan.
+
 ## Open items
 
 - The contents of `config/promo/generation.yaml` — a placeholder ships now; the

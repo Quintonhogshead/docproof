@@ -8,17 +8,21 @@ other way round.
 from __future__ import annotations
 
 from .ingest import Manuscript, read_manuscript
-from .model import PromoResult, SocialPost
-from .pipeline import (OUTPUT_KINDS, PreparedPromo, PromoError, PromoOutputs,
-                       PromoTooLarge, estimate_output_tokens, finish, prepare,
-                       run, run_mock)
+from .model import MarketingPlan, PromoResult, SocialPost
+from .pipeline import (OUTPUT_KINDS, PlanOutputs, PreparedPlan, PreparedPromo,
+                       PromoError, PromoOutputs, PromoTooLarge,
+                       estimate_output_tokens, finish, finish_plan, prepare,
+                       prepare_plan, run, run_mock, run_plan, run_plan_mock)
+from .prompts import PlanMeta
 from .verify import ClaimCheck, verify_claims, verify_grounding
 
 __all__ = [
     "Manuscript", "read_manuscript",
-    "PromoResult", "SocialPost",
+    "PromoResult", "SocialPost", "MarketingPlan",
     "PreparedPromo", "PromoOutputs", "PromoError", "PromoTooLarge",
+    "PreparedPlan", "PlanOutputs", "PlanMeta",
     "OUTPUT_KINDS",
     "prepare", "run", "run_mock", "finish", "estimate_output_tokens",
+    "prepare_plan", "run_plan", "run_plan_mock", "finish_plan",
     "verify_grounding", "verify_claims", "ClaimCheck",
 ]

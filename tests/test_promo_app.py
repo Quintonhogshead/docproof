@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from docproof.promo import PromoResult, SocialPost
+from docproof.promo import MarketingPlan, PromoResult, SocialPost
 from docproof.providers import ProviderResult
 
 from .conftest import FIXTURES
@@ -20,12 +20,26 @@ from .fakes import USAGE
 
 MODEL = "claude-haiku-4-5"
 
+_PLAN_MD = (
+    "# The Book — A. Writer\n\n"
+    "This is a resource for you, the author, to consider some publicity "
+    "efforts and endeavors to pursue!\n\n"
+    "## Target Audience\n\n- **Readers:** people who read.\n\n"
+    "## Marketing Strategy\n\n- **Events:** hold some.\n\n"
+    "## Comparable Titles\n\n- **Some Book:** it rhymes with this one.\n\n"
+    "## Key Message\n\nA book worth your time.")
+
 
 class PromoProvider:
-    """Answers the one structured call promo makes. 'Zephyr' is not in any
-    fixture manuscript, so the grounding check flags exactly one term."""
+    """Answers the structured calls promo makes. For the teaser/posts call it
+    returns copy with 'Zephyr' (in no fixture manuscript, so the grounding check
+    flags exactly one term); for the marketing-plan call it returns Markdown.
+    It branches on schema_name so one fake serves both runs."""
 
     def complete_structured(self, **kw) -> ProviderResult:
+        if kw.get("schema_name") == "marketing_plan":
+            return ProviderResult(
+                parsed=MarketingPlan(plan=_PLAN_MD).model_dump(), usage=USAGE)
         result = PromoResult(
             teaser="A manuscript, and the Zephyr that changed it.",
             posts=[SocialPost(text=f"Would you read it? ({i + 1})")
@@ -126,6 +140,73 @@ def test_another_job_kind_is_not_a_promo_run(client):
     """A review job id is a 404 on the promo routes, not another kind's data."""
     r = client.get("/api/promo/jobs/does-not-exist/draft")
     assert r.status_code == 404
+
+
+# --- the marketing plan -------------------------------------------------------
+
+def run_plan(client, name="simple.docx", model=MODEL, **meta):
+    file_id = upload(client, name)
+    body = {"file_ids": [file_id], "model": model, **meta}
+    r = client.post("/api/promo/plan", json=body)
+    assert r.status_code == 200, r.text
+    client.app_state.runner.wait_idle()
+    return r.json()["jobs"][0]["id"]
+
+
+def test_a_plan_run_generates_and_lists_as_a_plan(client):
+    job_id = run_plan(client, author="A. Writer", city="Austin, TX")
+    jobs = client.get("/api/promo/jobs").json()["jobs"]
+    job = next(j for j in jobs if j["id"] == job_id)
+    assert job["is_promo"] and job["is_plan"] and job["state"] == "done"
+    # A plan runs no grounding check, so it never carries flags to reconcile.
+    assert job["unverified"] == 0
+
+
+def test_plan_metadata_reaches_the_job(client):
+    job_id = run_plan(client, author="A. Writer", blurbs="A brave book.",
+                      city="Austin, TX", keywords="rivers, journey")
+    job = client.app_state.store.get(job_id)
+    assert job.plan_only is True
+    assert job.plan_author == "A. Writer"
+    assert job.plan_blurbs == "A brave book."
+    assert job.plan_city == "Austin, TX"
+    assert job.plan_keywords == "rivers, journey"
+
+
+def test_the_plan_reads_back_and_edits_rewrite_the_docx(client):
+    job_id = run_plan(client, author="A. Writer")
+    draft = client.get(f"/api/promo/jobs/{job_id}/plan").json()
+    assert draft["plan"].startswith("# The Book")
+
+    assert client.put(f"/api/promo/jobs/{job_id}/plan",
+                      json={"plan": "# New Title\n\nRewritten plan."}
+                      ).status_code == 200
+    again = client.get(f"/api/promo/jobs/{job_id}/plan").json()
+    assert again["plan"].startswith("# New Title")
+
+    doc = client.get(f"/api/promo/jobs/{job_id}/file/plan")
+    assert doc.status_code == 200
+    assert "marketing%20plan.docx" in doc.headers["content-disposition"]
+
+
+def test_the_plan_endpoints_reject_a_copy_job(client):
+    """A teaser/posts job is not a plan job: its id 404s on the plan routes."""
+    copy_id = run_one(client)
+    assert client.get(f"/api/promo/jobs/{copy_id}/plan").status_code == 404
+    assert client.put(f"/api/promo/jobs/{copy_id}/plan",
+                      json={"plan": "x"}).status_code == 404
+
+
+def test_a_bad_plan_draft_is_refused(client):
+    job_id = run_plan(client, author="A. Writer")
+    r = client.put(f"/api/promo/jobs/{job_id}/plan", json={"not_plan": "x"})
+    assert r.status_code == 422           # plan is required by the request model
+
+
+def test_plan_jobs_stay_out_of_the_results_list(client):
+    job_id = run_plan(client, author="A. Writer")
+    results = [j["id"] for j in client.get("/api/jobs").json()["jobs"]]
+    assert job_id not in results
 
 
 # --- routing from the drop screen ---------------------------------------------

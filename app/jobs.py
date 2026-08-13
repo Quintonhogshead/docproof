@@ -190,6 +190,18 @@ class Job:
     # drop time and chose to send the whole book in one call anyway. Older
     # records have no such field and were never overridden.
     allow_oversize: bool = False
+    # Promo, plan mode only: this promo job writes a marketing plan — promo's
+    # third deliverable — instead of the teaser and posts. The plan is its own
+    # model call, taking author/book metadata the copy call never sees; on a
+    # manual panel run the operator types those, and they ride along here. All
+    # empty/False on a teaser+posts run and on review/prep. Every field but the
+    # book is optional: the prompt degrades to a thinner but valid plan, so a
+    # bare manuscript still produces one. See docproof/promo.prepare_plan.
+    plan_only: bool = False
+    plan_author: str = ""              # display / pen name, printed on the plan
+    plan_blurbs: str = ""              # back-cover synopsis + endorsement blurbs
+    plan_city: str = ""                # for the local-opportunities section
+    plan_keywords: str = ""            # the press's positioning keywords
     # Why a job failed, as a machine-readable tag when the reason needs handling
     # beyond the message string. Currently "oversize" for a promo book past the
     # single-pass limit, so the watcher can email a person about that case
@@ -265,6 +277,13 @@ class Job:
     def is_promo(self) -> bool:
         return self.kind == "promo"
 
+    @property
+    def is_plan(self) -> bool:
+        """A promo job that writes the marketing plan rather than the copy. Still
+        a promo job — it lives in the same store and panel — but a different
+        deliverable, so the runner and the panel branch on it."""
+        return self.kind == "promo" and self.plan_only
+
     def plain_state(self) -> str:
         extra = (PREP_STATE if self.is_prep
                  else PROMO_STATE if self.is_promo else {})
@@ -300,6 +319,7 @@ class Job:
         d["ready"] = self.state == "done"
         d["is_prep"] = self.is_prep
         d["is_promo"] = self.is_promo
+        d["is_plan"] = self.is_plan
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -1173,6 +1193,11 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None or job.state not in ("queued", "running"):
             return
+        if job.plan_only:
+            # Same store, same panel, different deliverable: the marketing plan
+            # is its own call with its own metadata, so it runs on its own path.
+            self._run_plan(job_id, job)
+            return
         cfg = self.config_for(job)
         try:
             provider = self._provider(cfg)
@@ -1237,6 +1262,66 @@ class JobRunner:
             # Reuse the prep card's clean/flagged light: grounding-clean copy
             # reads as "verified", flagged copy invites a look before it ships.
             verified=outputs.flag_count == 0)
+        self._record_usage_inline(job_id, usage, cfg.api.model)
+        self._finish(job_id)
+
+    def _run_plan(self, job_id: str, job: Job) -> None:
+        """Write the marketing plan — promo's third deliverable — for a book.
+
+        The plan sibling of `_run_promo`, and the same synchronous single-call
+        shape: prepare (read the whole book, render the plan prompt with the
+        job's metadata), one call, finish (write the .docx and the JSON). It
+        shares every seam — the oversize guard, the cancel check right before
+        the paid call, the inline usage record — differing only in the engine
+        functions it drives and that no grounding pass runs (the plan's
+        comparable titles are external to the book by design)."""
+        cfg = self.config_for(job)
+        meta = promolib.PlanMeta(
+            title="", author_name=job.plan_author, keywords=job.plan_keywords,
+            back_cover=job.plan_blurbs, author_city=job.plan_city)
+        try:
+            provider = self._provider(cfg)
+            prepared = promolib.prepare_plan(
+                cfg, job.source_path, meta, config_dir=self.config_path.parent,
+                override_dir=self.store.paths.promo,
+                allow_oversize=job.allow_oversize)
+        except (ProviderError, IngestError, PromoError,
+                FileNotFoundError, ValueError) as e:
+            extra = ({"error_kind": "oversize", "words": e.words,
+                      "input_tokens": e.tokens}
+                     if isinstance(e, PromoTooLarge) else {})
+            self.store.update_if(job_id, expect=job.state, state="failed",
+                                 error=str(e), **extra)
+            return
+
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=1,
+                                words=prepared.manuscript.word_count) is None:
+            return
+        if self._cancel_pending(job_id):
+            self._abort(job_id)
+            return
+        try:
+            plan, usage = promolib.run_plan(cfg, prepared, provider)
+        except PromoError as e:
+            self.store.update(job_id, state="failed", error=str(e))
+            return
+
+        self.store.update(job_id, state="collecting")
+        out = self._claim_results_dir(job)
+        try:
+            outputs = promolib.finish_plan(prepared, plan, cfg, out_dir=out,
+                                           source_path=job.source_path)
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+
+        self.store.update(job_id, state="done", results_dir=str(out),
+                          error=None, words=outputs.words,
+                          # The plan runs no grounding check, so it always reads
+                          # clean — nothing for a person to reconcile before it
+                          # ships, the way flagged copy invites.
+                          unverified=0, verified=True)
         self._record_usage_inline(job_id, usage, cfg.api.model)
         self._finish(job_id)
 

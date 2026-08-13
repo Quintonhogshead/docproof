@@ -30,3 +30,18 @@ class PromoResult(BaseModel):
     # A short marketing hook in back-cover / catalogue voice, spoiler-safe.
     teaser: str
     posts: list[SocialPost]
+
+
+class MarketingPlan(BaseModel):
+    """The author-facing marketing plan: one Markdown document, whole.
+
+    Promo's third deliverable, and deliberately looser than PromoResult — the
+    plan is prose in five fixed sections (Target Audience, Marketing Strategy,
+    Comparable Titles, Key Message), not a list the panel edits field by field,
+    so the model returns it as one Markdown string and the writer parses that.
+    `model_dump()` of this is `marketing_plan.json`, the editable source of
+    truth the `.docx` is regenerated from — the same contract PromoResult has
+    for the copy. A single field on purpose: a strict section schema would fight
+    the prose the plan is, and the grounding checks that guard the copy do not
+    apply here (comparable titles are external to the book by design)."""
+    plan: str
