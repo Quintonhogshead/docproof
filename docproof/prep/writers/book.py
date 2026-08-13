@@ -318,7 +318,7 @@ def _folio_paragraph(design: BookDesign) -> etree._Element:
 # CT_PPr child order — the subset the suppression patch can meet.
 _PPR_ORDER = ("pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr",
               "widowControl", "numPr", "spacing", "ind", "contextualSpacing",
-              "jc", "rPr", "sectPr")
+              "jc", "textAlignment", "rPr", "sectPr")
 
 
 def _suppress_repeated_openers(elements, plan: PrepPlan,
@@ -403,10 +403,13 @@ def _drop_first_letter(p, sheet: StyleSheet, design: BookDesign,
     size = float(body.get("size", 11))
     line = float(body.get("line", 1.35))
     lines = design.drop_caps.lines
-    # Sized so the capital's ascent spans the frame's lines. The factor is
-    # empirical — Spectral's cap height is ~0.66 em — checked against a
-    # LibreOffice render at 3 lines of 11pt/1.35.
-    letter_pt = int(round(lines * size * line * 1.15))
+    # Word's own recipe, read off a drop cap Word inserted itself: the frame
+    # paragraph's line box is the WHOLE frame — all N lines — as an exact
+    # height with baseline alignment, and the glyph's em is sized just inside
+    # it. A single auto line here is what lands the letter one line low.
+    line_twips = int(round(size * line * 20))
+    frame_twips = lines * line_twips
+    letter_pt = int(round(lines * size * line * 0.98))
 
     frame = etree.Element(qn("w:p"))
     ppr = etree.SubElement(frame, PPR_TAG)
@@ -417,8 +420,9 @@ def _drop_first_letter(p, sheet: StyleSheet, design: BookDesign,
         qn("w:wrap"): "around", qn("w:vAnchor"): "text",
         qn("w:hAnchor"): "text"})
     etree.SubElement(ppr, qn("w:spacing"),
-                     {qn("w:after"): "0", qn("w:line"): "240",
-                      qn("w:lineRule"): "auto"})
+                     {qn("w:after"): "0", qn("w:line"): str(frame_twips),
+                      qn("w:lineRule"): "exact"})
+    etree.SubElement(ppr, qn("w:textAlignment"), {qn("w:val"): "baseline"})
     for run in letter_runs:
         rpr = run.find(qn("w:rPr"))
         if rpr is None:
