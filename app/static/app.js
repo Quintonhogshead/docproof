@@ -35,7 +35,9 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // The Promo tab stages its file on selection (not at run time)
                 // so it can price it before the run; this holds that staged
                 // entry, with its preflight token counts, until the run uses it.
-                promoStaged: null };
+                // The marketing-plan card on the same tab stages its own file
+                // the same way, kept separately so the two cards never collide.
+                promoStaged: null, planStaged: null };
 
 // Web build only, set once at boot from /api/me. The desktop app has no such
 // route, so WEB stays false and every desktop path below is untouched.
@@ -2660,8 +2662,10 @@ async function loadPromo() {
     catch (_) { state.promoModels = []; }
   }
   fillPromoModels($('promo-model'));
+  fillPromoModels($('plan-model'));
   fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
   renderPromoPanelCost();
+  renderPlanCost();
   await refreshPromoJobs();
   loadPromoSettings().catch(() => {});
 }
@@ -2839,6 +2843,13 @@ function promoCard(job) {
   head.className = 'promo-job-head';
   const name = document.createElement('strong');
   name.textContent = job.filename;
+  // A plan and a copy run of the same book look alike in the list otherwise, so
+  // the plan cards carry a small tag; copy is the tab's default and stays bare.
+  if (job.is_plan) {
+    const tag = document.createElement('span');
+    tag.className = 'pill'; tag.textContent = 'marketing plan';
+    name.append(' ', tag);
+  }
   const state = document.createElement('span');
   state.className = 'muted';
   const flags = job.state === 'done' && job.unverified
@@ -2865,16 +2876,18 @@ function promoEditor(job) {
   const details = document.createElement('details');
   details.className = 'promo-edit';
   const summary = document.createElement('summary');
-  summary.textContent = 'Read & edit the copy';
+  summary.textContent = job.is_plan ? 'Read & edit the plan'
+    : 'Read & edit the copy';
   const body = document.createElement('div');
   const loading = document.createElement('p');
   loading.className = 'muted'; loading.textContent = 'Loading…';
   body.append(loading);
   details.append(summary, body);
 
+  const build = job.is_plan ? buildPlanEditor : buildPromoEditor;
   let loaded = false;
   details.addEventListener('toggle', () => {
-    if (details.open && !loaded) { loaded = true; buildPromoEditor(job, body); }
+    if (details.open && !loaded) { loaded = true; build(job, body); }
   });
   return details;
 }
@@ -2958,12 +2971,18 @@ function promoActions(job) {
   const row = document.createElement('div');
   row.className = 'promo-job-actions';
   if (job.state === 'done') {
-    row.append(promoDownload(job, 'teaser', 'Download teaser'),
-               promoDownload(job, 'posts', 'Download posts'));
+    if (job.is_plan) {
+      row.append(promoDownload(job, 'plan', 'Download plan'));
+    } else {
+      row.append(promoDownload(job, 'teaser', 'Download teaser'),
+                 promoDownload(job, 'posts', 'Download posts'));
+    }
   }
   const remove = document.createElement('button');
   remove.className = 'link'; remove.textContent = 'Remove';
-  confirmInline(remove, 'Remove this promo copy?', async (confirmRow) => {
+  const prompt = job.is_plan ? 'Remove this marketing plan?'
+    : 'Remove this promo copy?';
+  confirmInline(remove, prompt, async (confirmRow) => {
     try {
       await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
       await refreshPromoJobs();            // redraws; the transient row goes
@@ -3016,12 +3035,157 @@ async function savePromoSettings() {
   } catch (e) { status.textContent = e.message; }
 }
 
+// ── marketing plan ───────────────────────────────────────────────────────────
+//
+// The plan card on the Promo tab: the same stage-then-price-then-run shape as
+// the copy card, plus the operator-typed metadata the plan takes. The jobs it
+// makes land in the same list below, told apart by job.is_plan.
+
+// Stage the plan's manuscript, and — as a convenience — offer the file's name
+// as the author field when it is still empty, so the operator edits a guess
+// rather than typing from nothing.
+async function stagePlanFile() {
+  const file = $('plan-file').files[0];
+  const status = $('plan-run-status');
+  state.planStaged = null;
+  if (!file) { renderPlanCost(); return; }
+  status.hidden = false; status.textContent = 'Reading the manuscript…';
+  $('plan-run').disabled = true;
+  try {
+    const form = new FormData();
+    form.append('files', file);
+    const staged = (await api('/api/files',
+                              { method: 'POST', body: form })).files[0];
+    if (!staged.ok || !staged.promo) {
+      throw new Error(staged.promo_error || staged.error
+                      || 'That file cannot be used for a plan.');
+    }
+    state.planStaged = staged;
+    status.hidden = true;
+    if (!$('plan-author').value.trim()) {
+      $('plan-author').value = file.name.replace(/\.docx$/i, '');
+    }
+  } catch (e) {
+    status.hidden = false; status.textContent = e.message;
+  }
+  renderPlanCost();
+}
+
+// The plan's cost estimate and oversize override — the same single-call pricing
+// as the copy card (input plus a small fixed output, effort scaling the output
+// half), kept compact: one line and the override, no model-compare table.
+function renderPlanCost() {
+  const staged = state.planStaged;
+  const models = state.promoModels || [];
+  const m = models.find((x) => x.id === $('plan-model').value);
+  const level = $('plan-effort').value;
+  const warn = $('plan-oversize');
+  const ok = $('plan-oversize-ok');
+
+  if (!staged || !staged.promo) {
+    $('plan-cost').hidden = true;
+    warn.hidden = true;
+    $('plan-run').disabled = true;
+    return;
+  }
+
+  const promo = staged.promo;
+  $('plan-cost').hidden = false;
+  $('plan-cost-line').textContent = m
+    ? `About ${(promo.words || 0).toLocaleString()} words on ${m.display} costs `
+      + `about ${money(promoModelCost(m, promo, level))}. One call over the `
+      + `whole book.`
+    : '';
+
+  if (promo.over_limit) {
+    $('plan-oversize-note').textContent =
+      `This book is about ${promo.pass_tokens.toLocaleString()} tokens, over `
+      + `the ${promo.max_input_tokens.toLocaleString()}-token single-pass limit.`;
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+    ok.checked = false;
+  }
+
+  $('plan-run').disabled =
+    !(m && m.available && (!promo.over_limit || ok.checked));
+}
+
+async function runPlan() {
+  const staged = state.planStaged;
+  if (!staged || !staged.ok) return;
+  const status = $('plan-run-status');
+  status.hidden = false; status.textContent = 'Writing the marketing plan…';
+  $('plan-run').disabled = true;
+  try {
+    await api('/api/promo/plan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file_ids: [staged.id],
+        model: $('plan-model').value,
+        effort: $('plan-effort').value,
+        allow_oversize: $('plan-oversize-ok').checked,
+        author: $('plan-author').value.trim(),
+        blurbs: $('plan-blurbs').value.trim(),
+        city: $('plan-city').value.trim(),
+        keywords: $('plan-keywords').value.trim(),
+      }),
+    });
+    $('plan-file').value = '';
+    state.planStaged = null;
+    status.hidden = true;
+    renderPlanCost();
+    await refreshPromoJobs();
+  } catch (e) {
+    status.hidden = false; status.textContent = e.message;
+    renderPlanCost();
+  }
+}
+
+// The plan's editor: one Markdown textarea, re-rendered to the .docx on save —
+// the plan analog of buildPromoEditor's teaser/posts fields.
+async function buildPlanEditor(job, body) {
+  let draft;
+  try { draft = await api(`/api/promo/jobs/${job.id}/plan`); }
+  catch (e) { body.textContent = e.message; return; }
+  body.innerHTML = '';
+
+  const field = promoField('The plan (Markdown)', draft.plan, 18);
+  body.append(field.label);
+
+  const save = document.createElement('button');
+  save.className = 'primary'; save.textContent = 'Save changes';
+  const note = document.createElement('span');
+  note.className = 'muted'; note.hidden = true;
+  save.addEventListener('click', async () => {
+    save.disabled = true; note.hidden = false; note.textContent = 'Saving…';
+    try {
+      await api(`/api/promo/jobs/${job.id}/plan`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: field.input.value }),
+      });
+      note.textContent = 'Saved — the document was re-made.';
+    } catch (e) { note.textContent = e.message; }
+    finally { save.disabled = false; }
+  });
+  const row = document.createElement('div');
+  row.className = 'promo-job-actions';
+  row.append(save, note);
+  body.append(row);
+}
+
 $('promo-file').addEventListener('change', stagePromoFile);
 $('promo-model').addEventListener('change', renderPromoPanelCost);
 $('pp-effort').addEventListener('change', renderPromoPanelCost);
 $('pp-oversize-ok').addEventListener('change', renderPromoPanelCost);
 $('promo-run').addEventListener('click', runPromo);
 $('promo-settings-save').addEventListener('click', savePromoSettings);
+
+$('plan-file').addEventListener('change', stagePlanFile);
+$('plan-model').addEventListener('change', renderPlanCost);
+$('plan-effort').addEventListener('change', renderPlanCost);
+$('plan-oversize-ok').addEventListener('change', renderPlanCost);
+$('plan-run').addEventListener('click', runPlan);
 
 async function loadSpending() {
   let d;

@@ -699,6 +699,67 @@
     </div>
 
     <div class="card">
+      <h3>Write a marketing plan</h3>
+      <p class="muted small">The author-facing plan — target audience, marketing
+        strategy, comparable titles, and key message — written from the whole
+        book. Everything but the manuscript is optional; fill in what you have,
+        and leave the rest blank.</p>
+      <label class="field">
+        <span>The manuscript <small class="muted">— a finished Word
+          document</small></span>
+        <input type="file" id="plan-file" accept=".docx">
+      </label>
+      <label class="field">
+        <span>Author name <small class="muted">— the pen name, printed on the
+          plan. Left blank, the plan is headed by the title alone.</small></span>
+        <input type="text" id="plan-author" placeholder="e.g. John Cheyenne Wilbur">
+      </label>
+      <label class="field">
+        <span>Back-cover synopsis &amp; blurbs <small class="muted">—
+          optional</small></span>
+        <textarea id="plan-blurbs" rows="4" placeholder="Paste the synopsis and any endorsement blurbs, so the plan can quote them."></textarea>
+      </label>
+      <label class="field">
+        <span>Author's city or region <small class="muted">— optional; adds a
+          local-opportunities section</small></span>
+        <input type="text" id="plan-city" placeholder="e.g. Austin, TX">
+      </label>
+      <label class="field">
+        <span>Keywords <small class="muted">— optional positioning
+          terms</small></span>
+        <input type="text" id="plan-keywords" placeholder="faith, coming-of-age, music">
+      </label>
+      <label class="field">
+        <span>Which model should write it?</span>
+        <select id="plan-model"></select>
+      </label>
+      <label class="field">
+        <span>How hard should it think?</span>
+        <select id="plan-effort">
+          <option value="low">Low — cheapest</option>
+          <option value="medium" selected>Medium — a good default for a plan</option>
+          <option value="high">High</option>
+          <option value="xhigh">Extra high</option>
+          <option value="max">Max — deepest, most expensive</option>
+        </select>
+      </label>
+      <div class="field" id="plan-cost" hidden>
+        <p class="muted small" id="plan-cost-line"></p>
+        <div class="notice warn" id="plan-oversize" hidden>
+          <p class="small" id="plan-oversize-note"></p>
+          <label class="radio">
+            <input type="checkbox" id="plan-oversize-ok">
+            <span><strong>Write it anyway</strong> — send the whole book in one
+              call. The models take far more than the limit; DocProof is just
+              being cautious.</span>
+          </label>
+        </div>
+      </div>
+      <button id="plan-run" class="primary" disabled>Write marketing plan</button>
+      <p id="plan-run-status" class="muted" hidden></p>
+    </div>
+
+    <div class="card">
       <h3>Your promo copy</h3>
       <p id="promo-empty" class="muted">Nothing yet. Drop a manuscript above to
         write its copy.</p>

@@ -15,8 +15,8 @@ import pytest
 from docproof import promo
 from docproof.ingest import IngestError
 from docproof.models import Usage
-from docproof.promo import (ClaimCheck, PromoError, PromoResult, SocialPost,
-                            verify_claims)
+from docproof.promo import (ClaimCheck, MarketingPlan, PlanMeta, PromoError,
+                            PromoResult, SocialPost, verify_claims)
 from tests.fakes import FakeProvider, USAGE
 from docproof.providers import ProviderResult
 
@@ -204,3 +204,96 @@ def test_finish_records_unsupported_claims(tmp_path, cfg):
     saved = json.loads((tmp_path / "out" / "promo_verify.json")
                        .read_text("utf-8"))
     assert len(saved["claims"]) == 2 and saved["terms"] == list(out.unverified)
+
+
+# --- the marketing plan -------------------------------------------------------
+
+_PLAN_MD = (
+    "# Rowan - book 1 — Rowan Ash\n\n"
+    "This is a resource for you, the author, to consider some publicity "
+    "efforts and endeavors to pursue!\n\n"
+    "## Target Audience\n\n"
+    "- **Bridge-crossers:** readers who like a quiet, tense journey.\n\n"
+    "## Marketing Strategy\n\n"
+    "- **Riverside readings:** stage events by water to echo the setting.\n\n"
+    "## Comparable Titles\n\n"
+    "- **A Real Novel by Someone Else:** shares the lone-traveller mood.\n\n"
+    "## Key Message\n\n"
+    "One woman's walk to the far shore is a walk toward herself.")
+
+
+def test_prepare_plan_fills_metadata_and_falls_back_to_filename(tmp_path, cfg):
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    # A blank title falls back to the manuscript name; the rest is threaded in.
+    meta = PlanMeta(title="", author_name="Rowan Ash", keywords="rivers, journey",
+                    back_cover="A brave, quiet book.", author_city="Austin, TX")
+    prepared = promo.prepare_plan(cfg, src, meta, config_dir=CONFIG_DIR)
+
+    assert prepared.meta.title == "Rowan - book 1"
+    assert "Aldous bridge" in prepared.user        # the whole book went in
+    assert "Rowan Ash" in prepared.user
+    assert "rivers, journey" in prepared.user
+    assert "Austin, TX" in prepared.user
+
+
+def test_prepare_plan_blank_optionals_become_dashes_not_the_name(tmp_path, cfg):
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    prepared = promo.prepare_plan(cfg, src, PlanMeta(title="Book"),
+                                  config_dir=CONFIG_DIR)
+    # Optional fields read as "none given"; the pen name is left empty (not a
+    # dash) so the title heading is never "Book — —".
+    assert "Keywords: —" in prepared.user
+    assert "Author's city: —" in prepared.user
+    assert "printed as-is): —" not in prepared.user
+
+
+def test_run_plan_validates_and_finish_writes_docx(tmp_path, cfg):
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    prepared = promo.prepare_plan(cfg, src, PlanMeta(title="", author_name="Rowan Ash"),
+                                  config_dir=CONFIG_DIR)
+    provider = FakeProvider(results=[
+        ProviderResult(parsed=MarketingPlan(plan=_PLAN_MD).model_dump(),
+                       usage=USAGE)])
+    plan, usage = promo.run_plan(cfg, prepared, provider)
+    assert usage.api_calls == 1
+    assert plan.plan.startswith("# Rowan")
+
+    out = promo.finish_plan(prepared, plan, cfg, out_dir=tmp_path / "out",
+                            source_path=src)
+    assert out.document.name == "Rowan - book 1 - marketing plan.docx"
+    assert out.document.exists()
+    saved = json.loads(out.data_json.read_text("utf-8"))
+    assert saved["plan"].startswith("# Rowan")
+
+    # The Markdown parsed into headings and bullets, and the bold label lost its
+    # asterisks (a bold run, not literal **text**).
+    doc = docx.Document(str(out.document))
+    heads = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+    assert "Target Audience" in heads and "Comparable Titles" in heads
+    assert all("**" not in p.text for p in doc.paragraphs)
+
+
+def test_run_plan_raises_on_empty_plan(tmp_path, cfg):
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    prepared = promo.prepare_plan(cfg, src, PlanMeta(title="Book"),
+                                  config_dir=CONFIG_DIR)
+    provider = FakeProvider(results=[
+        ProviderResult(parsed=MarketingPlan(plan="   ").model_dump(),
+                       usage=USAGE)])
+    with pytest.raises(PromoError):
+        promo.run_plan(cfg, prepared, provider)
+
+
+def test_write_plan_survives_plain_prose(tmp_path, cfg):
+    """A plan that arrives with no Markdown marks still writes — headingless
+    paragraphs under a fallback title — rather than losing the copy."""
+    from docproof.promo.writers import write_plan
+    path = write_plan(tmp_path / "p.docx",
+                      "Just some prose with no marks at all.", title="Book")
+    doc = docx.Document(str(path))
+    assert any("Book — Marketing Plan" in p.text for p in doc.paragraphs)
+    assert any("Just some prose" in p.text for p in doc.paragraphs)
