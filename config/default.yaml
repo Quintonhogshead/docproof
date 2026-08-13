@@ -263,6 +263,7 @@ languagetool:
 sapling:
   enabled: false
   variety: ""               # "" | us-variety | gb-variety | au-variety | ca-variety
+  comments: true            # false = apply Sapling edits silently, no margin comment
   cost_per_1k_chars: 0.025  # $ per 1,000 chars — for the pre-run estimate only
 
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not

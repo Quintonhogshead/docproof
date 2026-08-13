@@ -495,6 +495,13 @@ class SaplingConfig(BaseModel):
     # Sapling's regional spelling variety: "", "us-variety", "gb-variety",
     # "au-variety", "ca-variety". Empty sends no preference.
     variety: str = ""
+    # Whether a Sapling edit carries an explanatory margin comment. On, each one
+    # reads like the model's own findings (a short line built from Sapling's
+    # error code — see docproof/sapling.describe). Off, Sapling's changes apply
+    # as silent tracked changes with nothing in the margin, for a cleaner file
+    # when the correction speaks for itself. Rides under the global `comments`
+    # switch: with all Word comments off, this changes nothing.
+    comments: bool = True
     # What Sapling bills, in dollars per 1,000 characters of submitted text. Used
     # only to show an estimate before a run — Sapling itself is the source of
     # truth for the actual charge, and it never reaches the model-token cost math.

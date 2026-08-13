@@ -120,7 +120,14 @@ def _cost(job) -> str:
     rates, so it is an estimate — an accurate shape, not the invoice."""
     if job.cost is None:
         return "unavailable (this model is not in the price catalog)"
-    return f"${job.cost:,.2f} — estimated at list rates, not a billed figure"
+    line = f"${job.cost:,.2f} — estimated at list rates, not a billed figure"
+    # When the Sapling pass ran, name its share: the total is model + Sapling,
+    # and a per-character charge on a third-party service is exactly the kind of
+    # line a person wants to see broken out rather than buried in the total.
+    sapling = getattr(job, "sapling_cost", 0.0) or 0.0
+    if sapling:
+        line += f" (includes ${sapling:,.2f} Sapling grammar check)"
+    return line
 
 
 def _elapsed(job) -> str:
@@ -346,6 +353,40 @@ def _result_group(job) -> tuple[str, list]:
     ])
 
 
+def _settings_rows(job) -> list:
+    """What the run was set to do, from the job record — so the email says not
+    just what it cost but what it actually ran. Reflects the choices a person
+    made on the panel; the attached summary carries the fully-resolved list."""
+    feats = getattr(job, "features", None) or {}
+    rows = [("Confidence gate",
+             getattr(job, "min_confidence", None) or "default", None)]
+    rounds = getattr(job, "rounds", 1) or 1
+    if rounds > 1:
+        rows.append(("Review rounds", str(rounds), None))
+    gloss = getattr(job, "glossary_model", "") or ""
+    rows.append(("Glossary read",
+                 "off" if gloss == "off" else (gloss or "default"), None))
+    # Continuity-only strips the run to the contradiction read — the case that
+    # most needs saying plainly, since almost nothing else runs.
+    if getattr(job, "continuity_only", False):
+        rows.append(("Continuity read only",
+                     "yes — the model review, sweeps and Sapling were skipped",
+                     None))
+        return rows
+    rows.append(("Model error-type passes", "full house set", None))
+    labels = [("storysheet", "story sheet"),
+              ("adjudicate", "real-word typos"),
+              ("rewrite", "rewrite & compare"),
+              ("languagetool", "LanguageTool"),
+              ("sapling", "Sapling grammar check"),
+              ("consistency", "consistency"),
+              ("spellcheck", "spell scan"),
+              ("continuity", "continuity read")]
+    on = [name for key, name in labels if feats.get(key)]
+    rows.append(("Extra passes on", ", ".join(on) if on else "none", None))
+    return rows
+
+
 def completion_for_job(job) -> tuple[str, str, str]:
     """Subject, plain-text body and HTML body for one finished job, from the job
     record alone. The same schema as `completion`, minus the routing a watched
@@ -373,6 +414,7 @@ def completion_for_job(job) -> tuple[str, str, str]:
             ("Mode", job.mode, None),
             ("API calls", _int(job.api_calls), None),
         ]),
+        ("Settings", _settings_rows(job)),
         ("Cost & tokens", [
             ("Estimated cost", _cost(job), None),
             ("Input tokens", _int(job.input_tokens), None),

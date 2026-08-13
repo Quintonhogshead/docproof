@@ -1392,7 +1392,40 @@ function setStartPrice(value, { approx = false } = {}) {
   el.textContent = `${approx ? '≈' : '~'} $${dollars}`;
 }
 
+// The Advanced drawer stays closed for most runs, so its summary line carries
+// what — if anything — this run does differently. Effort and glossary are left
+// out unless notable: changing them saves them as the new default, so they are
+// never really "non-default". Empty diffs read "standard settings".
+function updateAdvancedSummary() {
+  const el = $('advanced-summary');
+  if (!el) return;
+  const parts = [];
+  const rounds = Number(($('rounds') || {}).value || 1);
+  if (rounds > 1) parts.push(`${rounds} rounds`);
+  if (($('continuity-only') || {}).checked) parts.push('continuity only');
+  const conf = ($('confidence') || {}).value;
+  if (conf === 'high') parts.push('only sure changes');
+  if (conf === 'low') parts.push('flags more');
+  if (($('glossary-model') || {}).value === 'off') parts.push('no glossary read');
+  const live = collectFeatures();
+  state.features.forEach((f) => {
+    if (!(f.id in live) || live[f.id] === !!f.default) return;
+    const name = f.label.split(' — ')[0];
+    parts.push(live[f.id] ? `${name} on` : `${name} off`);
+  });
+  el.textContent = ` — ${parts.length ? parts.join(' · ') : 'standard settings'}`;
+}
+
+// Anything toggled inside the drawer refreshes its summary — including the
+// controls (confidence, continuity-only) that don't reprice the estimate and
+// so never passed through renderCost before.
+(() => {
+  const adv = $('advanced-options');
+  if (adv) adv.addEventListener('change', updateAdvancedSummary);
+})();
+
 function renderCost() {
+  updateAdvancedSummary();
   const m = state.models.find((x) => x.id === $('model').value);
   $('model-blurb').textContent = m ? m.blurb : '';
   const money = (v) => (typeof v === 'number'

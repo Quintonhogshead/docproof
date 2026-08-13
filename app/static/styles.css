@@ -871,11 +871,35 @@ details.sections > summary {
   outline-offset: 2px;
 }
 
+/* The Advanced drawer the submission panel folds its dials into: effort,
+   glossary, rounds, continuity, passes, care level. One collapsed row with a
+   live summary of anything non-default, so a standard run reads as three
+   choices and a Start button. */
+details.advanced {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0.25rem 0;
+}
+details.advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0.5rem 0;
+}
+details.advanced > summary .muted { font-weight: 400; font-size: 0.88rem; }
+details.advanced[open] > summary { margin-bottom: 0.75rem; }
+details.advanced > .field { margin: 0 0 1.1rem; }
+
 /* Per-run pass switches on the submission panel. Track/thumb markup mirrors the
    header's dark-mode switch; only the layout differs — a row of [switch] then
    [label + blurb], grouped, sitting inside a collapsible <details>. */
 #features-field > summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; }
 #features-field[open] > summary { margin-bottom: 0.6rem; }
+#judge-field > summary, #continuity-field > summary {
+  cursor: pointer; font-weight: 600; font-size: 0.92rem;
+}
+#judge-field[open] > summary, #continuity-field[open] > summary {
+  margin-bottom: 0.6rem;
+}
 #features-cost-note { margin: 0.2rem 0 0.6rem; color: var(--warn); }
 .features { display: grid; gap: 1.1rem; }
 .feature-group { display: grid; gap: 0.55rem; }

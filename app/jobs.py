@@ -220,6 +220,10 @@ class Job:
     cache_write_tokens: int = 0
     api_calls: int = 0
     cost: float | None = None
+    # The Sapling pass's share of `cost` (0 when it didn't run), kept alongside
+    # so the completion email can break it out — `cost` above is the grand total,
+    # model plus Sapling.
+    sapling_cost: float = 0.0
     # Set when a review failed the reject-all audit specifically (as opposed to
     # a provider or ingest error), so the results card can offer "download
     # anyway" only where it applies.
@@ -607,7 +611,7 @@ class JobRunner:
             cfg.error_types = []
             cfg.sweeps = []
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
-                          "consistency", "spellcheck"):
+                          "sapling", "consistency", "spellcheck"):
                 getattr(cfg, _pass).enabled = False
             cfg.continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
@@ -1348,13 +1352,20 @@ class JobRunner:
                 input_tokens=usage.get("input_tokens", 0)
                 + usage.get("cache_creation_input_tokens", 0),
                 output_tokens=usage.get("output_tokens", 0), batch=batch)
+        # Sapling is billed per character and never in the model estimate, so
+        # fold its charge into the recorded total — this is what the email, the
+        # spending ledger and the dashboard all read.
+        sapling_cost = usage.get("sapling_cost", 0.0) or 0.0
+        if sapling_cost:
+            cost = (cost or 0.0) + sapling_cost
         self.store.update(
             job_id,
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             cache_read_tokens=usage.get("cache_read_input_tokens", 0),
             cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
-            api_calls=usage.get("api_calls", 0), cost=cost)
+            api_calls=usage.get("api_calls", 0), cost=cost,
+            sapling_cost=sapling_cost)
 
     # -- batch ----------------------------------------------------------------
 

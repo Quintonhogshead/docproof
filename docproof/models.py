@@ -100,6 +100,12 @@ class Finding:
     # keep as a change down the query channel instead — a margin comment, not a
     # tracked edit. Inert unless the verifier ran.
     force_query: bool = False
+    # Apply this finding as a tracked change but hang no explanatory comment off
+    # it, even when comments are otherwise on. Used by the Sapling pass when its
+    # comments are switched off, so its edits land silently while the model's own
+    # findings keep their margin notes. Never routes a finding away from the
+    # tracked-change channel — it only suppresses the note beside it.
+    silent: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,6 +128,12 @@ class Usage:
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
     api_calls: int = 0
+    # The Sapling pass bills per character, not per token, so it never touches
+    # the fields above — its charge is carried here instead, so the reported cost
+    # (summary, completion email, spending) is the whole bill and not just the
+    # model's share. Both stay 0 on a run where Sapling never ran.
+    sapling_chars: int = 0
+    sapling_cost: float = 0.0
 
     def add(self, resp_usage) -> None:
         self.api_calls += 1

@@ -131,6 +131,53 @@ def _gap_preview(gap, paras) -> str:
     return f"{span}: “{snippet}”"
 
 
+def _settings_section(cfg: Config, batch: bool) -> list[str]:
+    """Everything this run was configured to do — every pass, on or off — so the
+    report says not just what changed but what was even looked for. A reader who
+    can't tell whether the spell scan or the model review ran is exactly how a
+    continuity-only run got mistaken for a full proofread."""
+    def on(flag: bool) -> str:
+        return "on" if flag else "off"
+
+    n_pass = len(cfg.error_type_groups)
+    glossary = f"on (`{cfg.glossary.model}`)" if cfg.glossary.enabled else "off"
+    sapling = "off"
+    if cfg.sapling.enabled:
+        sapling = "on" + (f" ({cfg.sapling.variety})" if cfg.sapling.variety
+                          else "")
+    passes = [
+        ("Glossary read", glossary),
+        ("Story sheet", on(cfg.storysheet.enabled)),
+        ("Real-word typo adjudication", on(cfg.adjudicate.enabled)),
+        ("Rewrite-and-compare", on(cfg.rewrite.enabled)),
+        ("LanguageTool floor", on(cfg.languagetool.enabled)),
+        ("Sapling grammar check", sapling),
+        ("Consistency scan", on(cfg.consistency.enabled)),
+        ("Spell scan", on(cfg.spellcheck.enabled)),
+        ("Continuity read", on(cfg.continuity.enabled)),
+    ]
+    L = ["## Settings used\n"]
+    L.append(f"- **Reviewer:** `{cfg.api.model}`"
+             + (f", effort {cfg.api.effort}" if cfg.api.effort else "")
+             + f", confidence gate {cfg.min_confidence}")
+    L.append(f"- **Timing:** "
+             f"{'overnight (batch rates)' if batch else 'right now'}")
+    if cfg.rounds.count and cfg.rounds.count > 1:
+        L.append(f"- **Review rounds:** {cfg.rounds.count}")
+    L.append("- **Model error-type passes:** "
+             + (f"{n_pass} pass(es) over {len(cfg.error_type_keys)} error "
+                f"type(s)" if n_pass else "none"))
+    L.append("- **House-style sweeps:** "
+             + (f"on ({len(cfg.sweeps)} rule(s))" if cfg.sweeps else "off"))
+    L.append("- **Passes:** "
+             + " · ".join(f"{name} {state}" for name, state in passes))
+    L.append(f"- **Writes:** margin comments {on(cfg.comments)}, "
+             f"change reasons {on(cfg.report_explanations)}, "
+             f"reject-all audit {cfg.audit}")
+    L.append("")
+    return L
+
+
 def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
@@ -171,6 +218,8 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              ", ".join(f"{k} {v}" for k, v in stats.items()) +
              f". Paragraphs reviewed: {len(doc.paragraphs)}; "
              f"skipped: {len(doc.skipped)}.\n")
+
+    L += _settings_section(cfg, batch)
 
     if coverage is not None:
         L.append("## Coverage\n")
@@ -387,10 +436,21 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         est = ((usage.input_tokens + usage.cache_creation_input_tokens)
                * cfg.pricing.input_per_mtok
                + usage.output_tokens * cfg.pricing.output_per_mtok) / 1_000_000
-    if est is not None:
+    # Sapling bills per character with no tokens, so it is added on top of the
+    # model estimate — otherwise the total would silently omit a pass a person
+    # paid for. Broken out on its own line so the sum is legible.
+    sapling_cost = getattr(usage, "sapling_cost", 0.0) or 0.0
+    if est is not None or sapling_cost:
         note = "batch rates" if batch else "upper bound"
+        total = (est or 0.0) + sapling_cost
         L.append(f"Estimated cost ({note} — cache reads bill below the "
-                 f"input rate): **${est:.4f}**\n")
+                 f"input rate): **${total:.4f}**\n")
+        if sapling_cost:
+            model_line = f"${est:.4f}" if est is not None else "not priced"
+            L.append(f"- Model (`{cfg.api.model}`): {model_line}\n")
+            L.append(f"- Sapling grammar check: ${sapling_cost:.4f} "
+                     f"({getattr(usage, 'sapling_chars', 0):,} characters at "
+                     f"${cfg.sapling.cost_per_1k_chars:g}/1k)\n")
 
     if fmt is None:                       # callers that predate format support
         from .formats import DOCX as fmt

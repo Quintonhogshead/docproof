@@ -71,6 +71,19 @@ def test_a_feature_toggle_can_turn_a_pass_or_safety_net_off(runner):
     assert cfg.audit == "off"                # the tri-state audit reads as a toggle
 
 
+def test_continuity_only_strips_every_other_pass_including_sapling(runner):
+    """"Only" has to mean only: a continuity-only run must not leak the Sapling
+    pass (a paid network call) even when its toggle was left on — the bug the
+    Michalak run hit, where a continuity-only job came back with 1,390 Sapling
+    edits and no contradiction-read anything."""
+    store, r = runner
+    cfg = r.config_for(_job(store, continuity_only=True,
+                            features={"sapling": True}))
+    assert cfg.sapling.enabled is False
+    assert cfg.error_types == [] and cfg.sweeps == []
+    assert cfg.continuity.enabled is True
+
+
 def test_a_record_without_features_keeps_the_config_defaults(runner):
     """Old job records (and untouched panels) carry no features and change
     nothing — storysheet stays off, adjudicate stays on."""
