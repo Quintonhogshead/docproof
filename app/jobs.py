@@ -130,6 +130,12 @@ class Job:
     # pipeline's on_phase callback; "" on older records and non-review jobs, and
     # cleared when the job finishes. See STAGE_STATE and _run_now.
     stage: str = ""
+    # When the current stage began (UTC ISO), stamped by JobStore whenever
+    # `stage` changes value. The no-count whole-book passes (preparing, glossary,
+    # rewrite, …) write nothing else while they run, so the card would otherwise
+    # sit frozen with no sign it is alive: this lets it show time-in-stage. "" on
+    # older records and until the first stage is set. See Job.to_api and app.js.
+    stage_since: str = ""
     error: str | None = None
     applied: int | None = None
     results_dir: str | None = None
@@ -386,9 +392,20 @@ class JobStore:
             job = self.get(job_id)
             if job is None:
                 return None
+            self._stamp_stage(job, fields)
             for k, v in fields.items():
                 setattr(job, k, v)
             return self.save(job)
+
+    @staticmethod
+    def _stamp_stage(job: Job, fields: dict) -> None:
+        """Reset the stage clock the moment the stage actually changes, so a
+        card can show how long the current step has run. A caller that sets
+        `stage_since` itself wins (nothing does today); a no-op stage write
+        does not restart the clock."""
+        if ("stage" in fields and fields["stage"] != job.stage
+                and "stage_since" not in fields):
+            job.stage_since = _now()
 
     def delete(self, job_id: str) -> bool:
         """Remove a job's record folder — the manifest, checkpoint, and any
@@ -413,6 +430,7 @@ class JobStore:
             job = self.get(job_id)
             if job is None or job.state != expect:
                 return None
+            self._stamp_stage(job, fields)
             for k, v in fields.items():
                 setattr(job, k, v)
             return self.save(job)

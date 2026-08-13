@@ -101,6 +101,38 @@ def test_a_record_without_a_stage_keeps_the_plain_running_message():
     assert job.plain_state() == "Reviewing (2 of 5 sections)"
 
 
+def test_the_stage_clock_resets_only_when_the_stage_changes(runner, monkeypatch):
+    """The card shows time-in-stage off `stage_since`, so it must be stamped the
+    moment the stage changes — and only then, or a mid-stage write (a section
+    count, a cost) would keep restarting the clock and the elapsed time would
+    never climb."""
+    import app.jobs as jobsmod
+    clock = iter(f"t{i}" for i in range(100))
+    monkeypatch.setattr(jobsmod, "_now", lambda: next(clock))
+
+    store, _ = runner
+    _job(store, id="j1")                        # fresh record: no stage yet
+    assert store.get("j1").stage_since == ""
+
+    store.update("j1", stage="preparing")
+    started = store.get("j1").stage_since
+    assert started != ""                        # the clock started
+
+    store.update("j1", done=1, total=9)         # a mid-stage write
+    assert store.get("j1").stage_since == started    # ... does not restart it
+
+    store.update("j1", stage="preparing")       # a no-op stage write
+    assert store.get("j1").stage_since == started    # ... does not either
+
+    store.update("j1", stage="reviewing")       # a real change
+    assert store.get("j1").stage_since != started    # ... does
+
+    # update_if is on the same path, so it stamps there too.
+    moved = store.update_if("j1", expect="queued", stage="glossary")
+    assert moved.stage == "glossary"
+    assert moved.stage_since not in (started, "")
+
+
 def test_a_per_run_feature_wins_over_the_settings_default(tmp_path):
     """comments is a settings-backed default; a per-run switch overrides it."""
     paths = Paths(tmp_path).ensure()

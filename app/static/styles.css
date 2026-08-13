@@ -389,6 +389,29 @@ textarea {
   100% { transform: translateX(320%); }
 }
 
+/* The step tracker: the whole pipeline a review walks, finished steps checked
+   off, the current one lit with its quip. See stageTracker in app.js. */
+.stages { list-style: none; margin: 0.7rem 0 0; padding: 0;
+          display: flex; flex-direction: column; gap: 0.12rem; }
+/* Reset the job-card box that `#job-list li` paints — these nested rows are
+   steps, not cards. Scoped under #job-list so it outranks that id selector. */
+#job-list .stages li {
+  background: none; border: 0; border-radius: 0; padding: 0; margin: 0;
+  display: flex; gap: 0.5rem; align-items: baseline;
+  font-size: 0.86rem; line-height: 1.35; color: var(--muted);
+}
+.stage-marker { flex: none; width: 1em; text-align: center; font-size: 0.8rem; }
+.stage-body { display: flex; flex-direction: column; }
+.stages .done .stage-marker { color: var(--ok); }
+.stages .pending { opacity: 0.5; }
+/* The step under way: brought forward, its name in the ink colour, the quip and
+   the count/elapsed beneath it in muted text. */
+.stages .current { color: var(--ink); }
+.stages .current .stage-name { font-weight: 600; }
+.stages .current .stage-marker { color: var(--accent); }
+.stage-meta { font-weight: 400; color: var(--muted); }
+.stage-quip { color: var(--muted); font-size: 0.82rem; margin-top: 0.05rem; }
+
 .job-actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; flex-wrap: wrap; }
 
 /* Where the tracked changes are once the file is open — different panel in
@@ -966,3 +989,60 @@ details.sections > summary {
 }
 .pill.off { background: var(--line); color: var(--muted); }
 .row-disabled td { opacity: 0.5; }
+
+/* Sapling test panel */
+#sap-text {
+  width: 100%;
+  font: 0.95rem/1.5 inherit;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  resize: vertical;
+}
+.sap-preview {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.7;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  margin-bottom: 1rem;
+}
+.sap-mark {
+  background: var(--accent-soft);
+  color: var(--warn);
+  border-bottom: 2px solid var(--warn);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.sap-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--line);
+}
+.sap-edit:first-of-type { border-top: 0; }
+.sap-change {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9rem;
+}
+.sap-from { color: var(--warn); text-decoration: line-through; }
+.sap-to { color: var(--ok); }
+.sap-arrow { color: var(--muted); }
+.sap-tag { margin-left: auto; }
+.rule {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.75rem 0 1.25rem;
+}
+#sap-doc-zone { margin: 0.5rem 0 1rem; }
+.sap-para { color: var(--muted); font-size: 0.8rem; }

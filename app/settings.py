@@ -30,17 +30,27 @@ CONFIG_PATH = resource_root() / "config" / "default.yaml"
 ERROR_DIR = CONFIG_PATH.parent / "error_types"
 
 KEYCHAIN_SERVICE = "docproof"
-# The AI providers, plus three that are not providers at all: a read-only GitHub
-# token, so a build somebody was sent can ask whether a newer one has been
-# released, the watcher's Google refresh token, and the watcher's HubSpot
-# private-app token. They live here because they are secrets and this is where
-# secrets go — the Keychain, never a file, never returned to the browser.
-# `PROVIDERS` stays the list of vendors that review documents, so nothing offers
-# to review one with a Drive or HubSpot token — do not add either here.
+# The AI providers, plus the odds and ends that are not providers at all: a
+# read-only GitHub token, so a build somebody was sent can ask whether a newer
+# one has been released, the watcher's Google refresh token, the watcher's
+# HubSpot private-app token, and Sapling's grammar-API key (a standalone test
+# panel, never part of a review). They live here because they are secrets and
+# this is where secrets go — the Keychain, never a file, never returned to the
+# browser. `PROVIDERS` stays the list of vendors that review documents, so
+# nothing offers to review one with a Drive, HubSpot or Sapling key — do not add
+# any of those here.
 ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
             "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN",
-            "google": "GOOGLE_REFRESH_TOKEN", "hubspot": "HUBSPOT_TOKEN"}
+            "google": "GOOGLE_REFRESH_TOKEN", "hubspot": "HUBSPOT_TOKEN",
+            "sapling": "SAPLING_API_KEY"}
 PROVIDERS = ("anthropic", "openai", "gemini")
+
+# Sapling is not a review provider — it is a separate hosted grammar checker
+# wired in only as a test surface — but its key is set and stored exactly like a
+# provider's. `KEY_PROVIDERS` is the set the portal's key screen manages and the
+# server loads from the keystore at boot: the review providers, plus Sapling.
+SAPLING = "sapling"
+KEY_PROVIDERS = PROVIDERS + (SAPLING,)
 
 # Reasoning depth the model runs at, ordered cheapest → deepest. Mirrors the
 # Literal in docproof.config.APIConfig.effort. The app never offers "null"

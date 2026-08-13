@@ -44,8 +44,9 @@ class FreshStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers.setdefault("Cache-Control", "no-cache")
         return response
-from .settings import (CONFIG_PATH, ENV_VARS, PROVIDERS, Paths, Settings,
-                       default_root, field_in_settings_file, resource_root)
+from .settings import (CONFIG_PATH, ENV_VARS, KEY_PROVIDERS, PROVIDERS, Paths,
+                       Settings, default_root, field_in_settings_file,
+                       resource_root)
 from .update import Rebuilder
 from .watch.runner import WatchRunner
 
@@ -184,8 +185,10 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         # restart. A portal key takes precedence while it exists.
         keystore = KeyStore(paths.keys_db)
         app.state.keystore = keystore
-        app.state.env_keys = {p: os.environ.get(ENV_VARS[p]) for p in PROVIDERS}
-        for provider in PROVIDERS:
+        # KEY_PROVIDERS, not PROVIDERS: Sapling's key is set and stored in the
+        # portal like a review provider's, even though it never reviews anything.
+        app.state.env_keys = {p: os.environ.get(ENV_VARS[p]) for p in KEY_PROVIDERS}
+        for provider in KEY_PROVIDERS:
             stored = keystore.get(provider)
             if stored:
                 os.environ[ENV_VARS[provider]] = stored
