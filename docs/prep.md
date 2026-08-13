@@ -1,12 +1,18 @@
-# Manuscript prep — Word in, InDesign-ready out
+# Manuscript prep — Word in, formatted out
 
 DocProof does two jobs. **Review** finds errors and writes tracked changes.
-**Prep** answers a different question — what *is* each paragraph — and tags a
-manuscript into a house InDesign style set, so it loads cleanly into the
-template on Place.
+**Prep** answers a different question — what *is* each paragraph — and uses the
+answers to format the manuscript: as a book-styled reading copy, as a file
+tagged for the house InDesign template, or both.
 
-A prep run hands back either or both of:
+A prep run hands back any of:
 
+- **`book_<name>.docx`** — *the default.* The manuscript cleaned up and dressed
+  as a printed Atmosphere interior: the house trim with mirrored margins,
+  running heads and folios, chapter openers with a drop cap, justified Spectral
+  body — a reading sketch for the author and the developmental editors, not a
+  file for the InDesign team. The title-page lettering follows the book's
+  subject matter (see [The book output](#the-book-output) below).
 - **`tagged_<name>.docx`** — one clean style sheet whose paragraph style *names*
   are the template's own, blank lines resolved, export artifacts gone. This is
   the file a designer places.
@@ -18,8 +24,37 @@ A prep run hands back either or both of:
 were handled, what was cleaned up, the word-for-word result, and the flags for
 the designer.
 
-Asking for both files costs nothing extra. The cost of a run is reading the
-manuscript; writing the second file is free.
+Asking for more than one file costs almost nothing extra. The cost of a run is
+reading the manuscript; the book output adds only one small extra call (below).
+
+## The book output
+
+The book file is built from the same verified decisions as the placed file,
+then dressed by **`config/prep/book_design.yaml`** — the interior design as
+data: page geometry, faces, per-style formats, running heads, drop caps, and a
+subject-matter → display-face map. Like the style sheet, a replacement dropped
+into the prep override directory wins wholesale, and the app's Settings screen
+reads the subjects out of it.
+
+Three facts about the manuscript feed the design:
+
+- **subject** — picks the title-page display face (`IM FELL English` for
+  fantasy, `Special Elite` for a thriller, and so on; the map is YAML).
+- **title** and **author** — the running heads (title recto, author verso).
+
+All three are detected by one small structured call over the opening pages
+(`docproof/prep/meta.py`); the subject answer is schema-constrained to the
+design's own keys. The operator can override any of the three per job — an
+empty field means "use what was detected", and a failed detection degrades to
+the default face and a file-name title, never a failed job.
+
+The faces are embedded into the .docx (`word/fonts/*.odttf`, the spec's
+obfuscation) so the file looks right on machines without the fonts; everything
+bundled is OFL/Apache licensed with `fsType=0` (see
+`config/prep/fonts/README.md`). The drop cap moves the chapter's first letter
+into a `w:framePr` frame paragraph — exactly how Word records its own — and
+the verifier glues it back onto the word it came from, so the word-for-word
+gate still holds letter for letter.
 
 ## The one rule
 

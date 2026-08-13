@@ -46,7 +46,12 @@ class JobRequest(BaseModel):
     # What to do with these documents: review them for errors, or prepare them
     # for the house InDesign template.
     kind: str = "review"                      # "review" | "prep"
-    prep_output: str = "indesign"             # "indesign" | "tracked" | "both"
+    prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
+    # Book output only: the operator's answers for the sketch. Empty means
+    # "let the detector read them off the opening pages".
+    prep_subject: str = ""
+    prep_title: str = ""
+    prep_author: str = ""
     # Per-run pass toggles, {feature_id: on}. Omitted or empty leaves the config
     # defaults. Unknown ids are refused, not ignored — see create_jobs.
     features: dict[str, bool] | None = None
@@ -81,6 +86,7 @@ def _result_name(job: Job, which: str) -> str | None:
         "changes": get_format(job.filename).change_log_name(job.filename),
         "summary": "summary.md",
         "findings": "findings.json",
+        "book": f"book_{stem}.docx",
         "indesign": f"tagged_{stem}.docx",
         "tracked": f"tracked_{stem}.docx",
         "notes": "prep_notes.md",
@@ -89,15 +95,16 @@ def _result_name(job: Job, which: str) -> str | None:
     }
     if job.is_prep and which in ("document", "docx"):
         # Whatever this job actually wrote, so one "open it" button works for
-        # either output choice — counting the archive as well as the disk, so a
+        # any output choice — counting the archive as well as the disk, so a
         # restored prep job (no local results yet) still resolves to the file it
         # really produced rather than crashing on a None results_dir.
         def _present(n: str) -> bool:
             if job.results_dir and (Path(job.results_dir) / n).is_file():
                 return True
             return n in job.drive_files
-        return next((n for n in (names["indesign"], names["tracked"])
-                     if _present(n)), names["indesign"])
+        return next((n for n in (names["book"], names["indesign"],
+                                 names["tracked"])
+                     if _present(n)), names["book"])
     return names.get(which)
 
 
@@ -186,9 +193,10 @@ def register(app: FastAPI) -> None:
             raise HTTPException(400, "mode must be 'now' or 'batch'")
         if req.kind not in ("review", "prep"):
             raise HTTPException(400, "kind must be 'review' or 'prep'")
-        if req.prep_output not in ("indesign", "tracked", "both"):
+        if req.prep_output not in ("book", "indesign", "tracked", "both", "all"):
             raise HTTPException(
-                400, "prep_output must be 'indesign', 'tracked' or 'both'")
+                400, "prep_output must be 'book', 'indesign', 'tracked', "
+                     "'both' or 'all'")
         unknown = featureslib.unknown_features(req.features)
         if unknown:
             raise HTTPException(
@@ -285,6 +293,9 @@ def register(app: FastAPI) -> None:
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
                 prep_output=req.prep_output,
+                prep_subject=req.prep_subject.strip(),
+                prep_title=req.prep_title.strip(),
+                prep_author=req.prep_author.strip(),
                 owner_id=owner,
             )
             created.append(runner.enqueue(job).to_api())
@@ -597,7 +608,8 @@ def register(app: FastAPI) -> None:
             return name in job.drive_files
         data["files"] = {kind: _present(name)
                          for kind, name in
-                         (("indesign", f"tagged_{Path(job.filename).stem}.docx"),
+                         (("book", f"book_{Path(job.filename).stem}.docx"),
+                          ("indesign", f"tagged_{Path(job.filename).stem}.docx"),
                           ("tracked", f"tracked_{Path(job.filename).stem}.docx"))}
         return data
 

@@ -96,8 +96,9 @@ PROMO_STATE = {
     "collecting": "Almost done — writing your files",
 }
 
-PREP_OUTPUTS = {"indesign": ["indesign"], "tracked": ["tracked"],
-                "both": ["indesign", "tracked"]}
+PREP_OUTPUTS = {"book": ["book"], "indesign": ["indesign"],
+                "tracked": ["tracked"], "both": ["indesign", "tracked"],
+                "all": ["book", "indesign", "tracked"]}
 
 
 class _ReplayOnly:
@@ -179,7 +180,17 @@ class Job:
     # What this job is: a grammar review, or manuscript prep for the house
     # InDesign template. Older records have no `kind` and are reviews.
     kind: str = "review"               # review | prep | promo
-    prep_output: str = "indesign"      # indesign | tracked | both
+    prep_output: str = "indesign"      # book | indesign | tracked | both | all
+    # Prep, book output only: the operator's per-job answers for the sketch —
+    # subject matter (picks the title-page face), running-head title and
+    # author. Empty means "use what the detector reads off the opening pages",
+    # the same sentinel the prompt overrides use. `prep_book` is written back
+    # when the job finishes: the merged answers the file was actually built
+    # with, so the panel can show what was detected.
+    prep_subject: str = ""
+    prep_title: str = ""
+    prep_author: str = ""
+    prep_book: dict = field(default_factory=dict)
     # Promo only: whether the generated copy still needs a human's sign-off
     # before it ships. "" on review and prep; on promo, "auto" ships with no
     # gate, "pending" waits in the panel for a person, "approved" once one has
@@ -637,7 +648,7 @@ class JobRunner:
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:
-            cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["indesign"])
+            cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["book"])
         return cfg
 
     def _checkpoint(self, job: Job, cfg: Config, prepared) -> "Checkpoint":
@@ -1143,12 +1154,43 @@ class JobRunner:
         except JobCancelled:
             self._abort(job_id)
             return
+        # The book output's three facts: whatever the operator typed wins,
+        # field by field; the detector fills the rest with one small call. A
+        # detection failure is a default face and a file-name title, never a
+        # failed job. The answer rides the same checkpoint as the windows, so
+        # a retry (or a re-considered manuscript) replays it instead of
+        # paying for it again.
+        meta = None
+        if "book" in cfg.prep.outputs:
+            from docproof.checkpoint import add_usage, snapshot, usage_delta
+
+            detected = preplib.BookMeta()
+            if not (job.prep_subject and job.prep_title and job.prep_author):
+                cached = checkpoint.get("book_meta")
+                if cached is not None and cached.items:
+                    detected = preplib.BookMeta(**cached.items[0])
+                    add_usage(usage, cached.usage)
+                else:
+                    before = snapshot(usage)
+                    try:
+                        detected = preplib.detect_meta(cfg, prepared, provider,
+                                                       usage=usage)
+                    except Exception as e:          # noqa: BLE001
+                        log.warning("Subject detection failed for %s: %s",
+                                    job.id, e)
+                    checkpoint.put("book_meta", items=[asdict(detected)],
+                                   usage=usage_delta(before, usage), ok=True)
+            meta = preplib.merge_meta(detected, subject=job.prep_subject,
+                                      title=job.prep_title,
+                                      author=job.prep_author)
+            self.store.update(job_id, prep_book=asdict(meta))
+
         self.store.update(job_id, state="collecting")
         out = self._claim_results_dir(job)
         try:
             outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=out,
                                      source_path=job.source_path,
-                                     outputs=cfg.prep.outputs)
+                                     outputs=cfg.prep.outputs, meta=meta)
         except VerificationFailed as e:
             # The notes were still written, and they are the most useful thing
             # here: they say what prep intended and where the text diverged. So

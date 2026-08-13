@@ -96,7 +96,7 @@ def test_what_lands_in_the_folder_is_what_prep_wrote(tmp_path, ws, provider):
     run(tmp_path, ws, opener)
 
     job = JobStore(Paths(tmp_path)).all()[0]
-    local = Path(job.results_dir) / "tagged_Wolves.docx"   # prep's internal name
+    local = Path(job.results_dir) / "book_Wolves.docx"     # prep's internal name
     uploaded = [fid for fid, entry in opener.files.items()
                 if entry["name"] == "Wolves - book 0.docx"][0]
     assert opener.content[uploaded] == local.read_bytes()
@@ -1187,6 +1187,7 @@ def test_a_finished_book_is_not_emailed_twice(tmp_path, ws, provider):
     run(tmp_path, ws, opener)
     assert len(opener.emails) == 1
     assert WatchState.load(tmp_path / "state.json").get("f-1").completion_emailed
+    paid = len(provider.calls)          # tagging plus the subject detection
 
     # The marker vanishes (a different OAuth client, a manual edit): the book
     # looks new again and is reconsidered, but the email does not repeat.
@@ -1194,5 +1195,5 @@ def test_a_finished_book_is_not_emailed_twice(tmp_path, ws, provider):
     second = run(tmp_path, ws, opener)
 
     assert second.prepped == ["Wolves.docx"]        # it was reconsidered
-    assert len(provider.calls) == 1                 # without re-spending
+    assert len(provider.calls) == paid              # without re-spending
     assert len(opener.emails) == 1                  # and without a second email

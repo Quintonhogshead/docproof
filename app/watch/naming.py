@@ -22,9 +22,12 @@ from pathlib import Path
 SOURCE_STAGE = "Book Original"
 OUTPUT_STAGE = "book 0"
 
-# The two companions to the InDesign-ready deliverable, under the same base.
+# The companions to the primary deliverable, under the same base.
 TRACKED_SUFFIX = " - tracked changes"
 NOTES_SUFFIX = " - notes"
+# When the book-styled reading copy is the deliverable, the InDesign-ready
+# file (if also asked for) sits beside it under this suffix.
+INDESIGN_SUFFIX = " - indesign"
 
 
 def format_base(stem: str) -> str:

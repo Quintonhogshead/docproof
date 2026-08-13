@@ -49,9 +49,9 @@ def upload(client, name="googledoc.docx"):
     return response.json()["files"][0]
 
 
-def start_prep(client, file_id, output="indesign"):
+def start_prep(client, file_id, output="indesign", **extra):
     body = {"file_ids": [file_id], "model": "claude-haiku-4-5", "kind": "prep",
-            "prep_output": output}
+            "prep_output": output, **extra}
     job = client.post("/api/jobs", json=body).json()["jobs"][0]
     client.app_state.runner.wait_idle()
     return client.get(f"/api/jobs/{job['id']}").json()
@@ -112,6 +112,40 @@ def test_the_output_toggle_decides_which_files_are_written(client):
     assert not (results / "tagged_googledoc.docx").exists()
 
 
+def test_the_book_output_writes_the_reading_copy(client):
+    """The book-styled sketch: written, verified, downloadable, and the job
+    record carries the operator's answers the file was built with."""
+    job = start_prep(client, upload(client)["id"], output="book",
+                     prep_subject="fantasy", prep_title="Witch in the Wall",
+                     prep_author="Quinn Hogshead")
+    assert job["state"] == "done", job.get("error")
+    assert job["verified"] is True
+    results = Path(job["results_dir"])
+    assert (results / "book_googledoc.docx").is_file()
+    assert not (results / "tagged_googledoc.docx").exists()
+    # The merged answers the sketch was built with, for the panel.
+    assert job["prep_book"]["subject"] == "fantasy"
+    assert job["prep_book"]["title"] == "Witch in the Wall"
+
+    r = client.get(f"/api/jobs/{job['id']}/file/book")
+    assert r.status_code == 200
+    assert "book_googledoc.docx" in r.headers["content-disposition"]
+    # The generic "open it" button resolves to the book copy too.
+    assert client.get(f"/api/jobs/{job['id']}/file/document").status_code == 200
+    # And the notes screen reports the book deliverable present.
+    notes = client.get(f"/api/jobs/{job['id']}/prep").json()
+    assert notes["files"]["book"] is True
+    assert notes["book"]["subject"] == "fantasy"
+
+
+def test_an_unknown_prep_output_is_refused(client):
+    staged = upload(client)
+    r = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-haiku-4-5",
+        "kind": "prep", "prep_output": "sculpture"})
+    assert r.status_code == 400
+
+
 def test_prep_is_never_queued_overnight(client):
     """Windows are read in order — a paragraph's meaning depends on the ones
     before it — so there is no batch form of prep to fall into by accident."""
@@ -141,7 +175,8 @@ def test_the_prep_notes_read_back_for_the_screen(client):
     assert notes["counts"]["scene_breaks_inserted"] == 1
     assert notes["styles"]["body para"] >= 1
     assert any(f["kind"] == "model" for f in notes["flags"])
-    assert notes["files"] == {"indesign": True, "tracked": False}
+    assert notes["files"] == {"book": False, "indesign": True,
+                              "tracked": False}
 
 
 def test_a_prep_job_interrupted_mid_write_is_started_again(client):

@@ -30,19 +30,21 @@ FLAG_TITLES = {
     "list_paragraph": "Lists, which the style set does not cover",
 }
 
-KIND_TITLES = {"indesign": "InDesign-ready Word file",
+KIND_TITLES = {"book": "Book-styled Word file (interior sketch)",
+               "indesign": "InDesign-ready Word file",
                "tracked": "Tracked-changes Word file"}
 
 
 def write_notes(out_dir: Path, *, structure: Structure, plan: PrepPlan,
                 sheet: StyleSheet, stats: dict, checks: list, usage,
                 cfg, written: dict, failures: list[str],
-                source_path: str | Path, prompt, tags: list[Tag]
-                ) -> tuple[Path, Path]:
+                source_path: str | Path, prompt, tags: list[Tag],
+                meta=None) -> tuple[Path, Path]:
     payload = _payload(structure=structure, plan=plan, sheet=sheet,
                        stats=stats, checks=checks, usage=usage, cfg=cfg,
                        written=written, failures=failures,
-                       source_path=source_path, prompt=prompt, tags=tags)
+                       source_path=source_path, prompt=prompt, tags=tags,
+                       meta=meta)
     json_path = out_dir / "prep.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -53,7 +55,7 @@ def write_notes(out_dir: Path, *, structure: Structure, plan: PrepPlan,
 
 
 def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
-             failures, source_path, prompt, tags) -> dict:
+             failures, source_path, prompt, tags, meta=None) -> dict:
     unanswered = [t.para_id for t in tags if t.source == "unanswered"]
     author_breaks = sum(1 for p in plan.plans
                         if p.style == sheet.role("scene_break").name
@@ -97,6 +99,7 @@ def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
             "untouched_outside_body": len(structure.untouched),
         },
         "styles": plan.style_counts,
+        "book": (dataclasses.asdict(meta) if meta is not None else None),
         "written": {kind: str(path) for kind, path in written.items()},
         "write_stats": {kind: dataclasses.asdict(s) for kind, s in stats.items()},
         "verification": [dataclasses.asdict(c) for c in checks],
@@ -137,6 +140,16 @@ def _markdown(d: dict) -> str:
         L.append("## Files\n")
         for kind, path in d["written"].items():
             L.append(f"- **{KIND_TITLES.get(kind, kind)}** — `{Path(path).name}`")
+        L.append("")
+
+    if d.get("book"):
+        book = d["book"]
+        how = "detected from the manuscript" if book.get("detected") \
+            else "defaulted — nothing was detected or set"
+        L.append("## Book sketch\n")
+        L.append(f"- Subject: **{book.get('subject') or '(default)'}** ({how})")
+        L.append(f"- Running heads: title **{book.get('title') or '—'}**, "
+                 f"author **{book.get('author') or '—'}**")
         L.append("")
 
     L.append("## Style mapping\n")

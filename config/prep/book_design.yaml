@@ -1,0 +1,179 @@
+# The book look for the "book" prep output.
+#
+# THIS FILE IS THE INTERIOR DESIGN. The book output is a reading copy for the
+# author and the developmental editors — a sketch of the finished Atmosphere
+# interior, not files for the InDesign team. Everything about how that sketch
+# looks lives here: page geometry, faces, per-style formatting, running heads,
+# drop caps, and the subject-matter display faces for the front matter. To
+# change the look, edit this file (or drop a replacement into the prep override
+# directory, which wins over the shipped copy). No code changes.
+#
+# It layers ON TOP of house_styles.yaml: the style NAMES still come from the
+# style sheet — this file only restates how each one should look in print-like
+# form. A style not overridden here keeps its light house_styles format.
+#
+# Measurements: page/margins in inches, everything else in points.
+# `line` is a line-spacing multiple (1.0 = single).
+
+version: 1
+name: Atmosphere Press interior sketch
+
+page:
+  width: 5.5
+  height: 8.5
+  margins:
+    top: 0.9        # first text line; the running head sits above it
+    bottom: 0.8     # last text line; the folio sits below it
+    inside: 0.75
+    outside: 0.65
+    header: 0.5     # top of page -> running head
+    footer: 0.45    # bottom of page -> folio
+  mirror_margins: true
+
+# The two faces every book uses, plus per-subject display faces below.
+# `family` must be the font's INTERNAL family name (see fonts/README.md);
+# `files` are embedded into the .docx so the look survives on machines
+# without the fonts installed. Paths are relative to this file's folder.
+fonts:
+  body:
+    family: Spectral
+    files:
+      - fonts/Spectral-Regular.ttf
+      - fonts/Spectral-Italic.ttf
+      - fonts/Spectral-Bold.ttf
+      - fonts/Spectral-BoldItalic.ttf
+  heading:
+    family: Spectral
+    files: []           # same family as body; already embedded
+
+# Running heads and the folio, as in the printed interiors: the author's name
+# on the left-hand page, the book's title on the right, both in letterspaced
+# caps, and a centered page number at the foot. Chapter-opener pages carry
+# neither (Word's "different first page" per section is more surgery than a
+# sketch warrants; the heads are suppressed on the first page of the document
+# only).
+running_heads:
+  verso: author       # left-hand pages
+  recto: title        # right-hand pages
+  size: 9
+  caps: true
+  letterspace: 2
+folio:
+  size: 10
+
+# The opening paragraph of a chapter gets a dropped initial spanning this many
+# lines, as the printed interiors set them. Only applied when the paragraph
+# starts with a plain letter, and only after the styles listed.
+drop_caps:
+  lines: 3
+  after: ["chapter # / title", "chapter subtitle", "part title"]
+
+# How each house style looks in the sketch. Keys are house style NAMES from
+# house_styles.yaml. Format keys: everything house_styles `format` accepts,
+# plus  font (body | heading | display), line (spacing multiple), caps,
+# letterspace (points), align: justify.
+styles:
+  "body para":
+    {font: body, size: 11, line: 1.35, align: justify, indent: 18, space_after: 0}
+  "body first":
+    {font: body, size: 11, line: 1.35, align: justify, indent: 0, space_after: 0}
+  "scene break":
+    {font: body, size: 11, align: center, space_before: 12, space_after: 12}
+  "chapter # / title":
+    {font: heading, size: 20, bold: true, align: center, space_before: 110,
+     space_after: 30, page_break_before: true, keep_next: true, line: 1.15}
+  "chapter subtitle":
+    {font: heading, size: 13, italic: true, align: center, space_after: 24,
+     keep_next: true}
+  "part #":
+    {font: display, size: 15, align: center, caps: true, letterspace: 2,
+     space_before: 180, space_after: 10, page_break_before: true, keep_next: true}
+  "part title":
+    {font: display, size: 24, align: center, caps: true, letterspace: 2,
+     space_after: 24, keep_next: true}
+  "title page":
+    {font: display, size: 30, align: center, caps: true, letterspace: 4,
+     space_before: 130, space_after: 30, line: 1.5, keep_next: true}
+  "front/backmatter title":
+    {font: heading, size: 18, bold: true, align: center, space_before: 60,
+     space_after: 24, page_break_before: true, keep_next: true}
+  "toc entry":
+    {font: body, size: 11, space_after: 4}
+  "copyright":
+    {font: body, size: 9, align: left, space_after: 8, line: 1.2,
+     page_break_before: true, space_before: 260}
+  "epigraph":
+    {font: body, size: 10.5, italic: true, align: center, space_before: 12,
+     space_after: 3, line: 1.3}
+  "epigraph source":
+    {font: body, size: 10.5, align: center, space_after: 18}
+  "Subhead A":
+    {font: heading, size: 13, bold: true, space_before: 20, space_after: 8,
+     keep_next: true}
+  "Subhead B":
+    {font: heading, size: 11, bold: true, space_before: 14, space_after: 6,
+     keep_next: true}
+  "captions":
+    {font: body, size: 9, align: center, space_before: 6, space_after: 12}
+  "tables":
+    {font: body, size: 10, space_after: 3}
+  "endnotes":
+    {font: body, size: 9, space_after: 3}
+  "references":
+    {font: body, size: 9, space_after: 3, indent: -18}
+  "bibliography":
+    {font: body, size: 9, space_after: 3, indent: -18}
+
+# Which house styles are set in the subject-matter display face. In the printed
+# books the title lettering is artwork matched to the cover; the sketch stands
+# in for it with a face chosen by what the book is.
+display_styles: ["title page", "part #", "part title"]
+
+# The display face per subject. `describe` doubles as the definition the model
+# reads when it classifies the manuscript, so it is also how you tune the
+# detection. The subject keys are the wire enum — adding one here adds it to
+# the app's override list and the detector's choices.
+subjects:
+  fantasy:
+    family: IM FELL English
+    file: fonts/IMFellEnglish-Regular.ttf
+    describe: Fantasy — magic, witches, epic or mythic worlds, fae, quests.
+  science_fiction:
+    family: Orbitron
+    file: fonts/Orbitron-Medium.ttf
+    describe: Science fiction — space, future tech, dystopia, first contact.
+  romance:
+    family: Cormorant Garamond
+    file: fonts/CormorantGaramond-Medium.ttf
+    describe: Romance — the love story is the plot.
+  mystery_thriller:
+    family: Special Elite
+    file: fonts/SpecialElite-Regular.ttf
+    describe: Mystery, crime, or thriller — investigation, suspense, noir.
+  horror:
+    family: Pirata One
+    file: fonts/PirataOne-Regular.ttf
+    describe: Horror — dread, the supernatural played for fear.
+  historical:
+    family: EB Garamond
+    file: fonts/EBGaramond-Regular.ttf
+    describe: Historical fiction — set convincingly in a real past era.
+  literary:
+    family: Playfair Display
+    file: fonts/PlayfairDisplay-Regular.ttf
+    describe: Literary and general fiction — voice-driven, contemporary.
+  memoir_biography:
+    family: Lora
+    file: fonts/Lora-Regular.ttf
+    describe: Memoir, autobiography, or biography — a true life told.
+  nonfiction:
+    family: Spectral
+    file: ""
+    describe: Nonfiction — history, essays, self-help, business, guides.
+  young_readers:
+    family: Quicksand
+    file: fonts/Quicksand-Medium.ttf
+    describe: Middle-grade or children's — young protagonists, young readers.
+
+# Used when nothing picked a subject: no detection, no override.
+default_subject: literary

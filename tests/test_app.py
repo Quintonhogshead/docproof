@@ -137,6 +137,12 @@ def test_upload_of_a_manuscript_format_asks_for_the_converter(client):
     """.txt, .doc, .rtf and .odt are prep inputs rather than DocProof formats:
     they are converted at drop time, so the failure to name is the missing
     converter, not the file."""
+    import shutil
+
+    if shutil.which("soffice") or Path(
+            "/Applications/LibreOffice.app/Contents/MacOS/soffice").exists():
+        pytest.skip("LibreOffice is installed here, so the conversion "
+                    "succeeds instead of asking for it")
     resp = client.post("/api/files",
                        files={"files": ("notes.txt", b"hello")})
     entry = resp.json()["files"][0]

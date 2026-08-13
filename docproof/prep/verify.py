@@ -74,15 +74,39 @@ def output_stream(path: str | Path, glyph: str, *, view: str = "clean") -> list[
 
     Deliberately re-opened from disk rather than read out of the package still
     in memory: what matters is what the file says, including anything the save
-    itself might have done to it."""
+    itself might have done to it.
+
+    A drop cap is the one place the book writer moves text between paragraphs:
+    the opening letter sits in its own frame paragraph (`w:framePr` with
+    `w:dropCap`), exactly as Word records its own. The letter is glued back
+    onto the paragraph that follows, so "M" + "om had been dead" reads as the
+    word the author wrote."""
     pkg = DocxPackage(Path(path))
-    texts = []
+    texts: list[str] = []
+    held = ""
     for wp in walk_package(pkg):
         if wp.part != BODY_PART:
             continue
-        texts.append(paragraph_text(wp.element) if view == "clean"
-                     else paragraph_view_text(wp.element, view))
+        text = (paragraph_text(wp.element) if view == "clean"
+                else paragraph_view_text(wp.element, view))
+        if _is_drop_cap(wp.element):
+            held += text
+            continue
+        texts.append(held + text)
+        held = ""
+    if held:
+        texts.append(held)
     return stream(texts, glyph)
+
+
+def _is_drop_cap(p) -> bool:
+    from ..utils.xml_helpers import qn
+
+    ppr = p.find(qn("w:pPr"))
+    if ppr is None:
+        return False
+    frame = ppr.find(qn("w:framePr"))
+    return frame is not None and frame.get(qn("w:dropCap")) is not None
 
 
 def compare(source: list[str], output: list[str], *, view: str) -> Verification:

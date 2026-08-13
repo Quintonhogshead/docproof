@@ -85,5 +85,8 @@ app = ["static/*"]
 config = ["*.yaml"]
 "config.error_types" = ["*.yaml"]
 "config.prep" = ["*.yaml"]
+# The book-output fonts, embedded into book_*.docx files at write time.
+"config.prep.fonts" = ["*.ttf", "README.md"]
+"config.prep.fonts.licenses" = ["*.txt"]
 "config.promo" = ["*.yaml"]
 "config.variants" = ["*.yaml"]

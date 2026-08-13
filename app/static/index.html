@@ -124,8 +124,9 @@
         </label>
         <label class="radio">
           <input type="radio" name="kind" value="prep">
-          <span><strong>Prepare for layout</strong> — tag every paragraph with
-            a house InDesign style, ready to place
+          <span><strong>Format the manuscript</strong> — clean it up and tag
+            every paragraph, handed back as a book-styled reading copy or an
+            InDesign-ready file
             <em id="prep-sheet-note" class="muted"></em></span>
         </label>
         <label class="radio">
@@ -146,7 +147,14 @@
         <fieldset class="field" id="prep-options" hidden>
           <legend>What should it hand back?</legend>
           <label class="radio">
-            <input type="radio" name="prep-output" value="indesign" checked>
+            <input type="radio" name="prep-output" value="book" checked>
+            <span><strong>A book-styled reading copy</strong> — the manuscript
+              cleaned up and dressed as a printed Atmosphere interior, for the
+              author and the developmental editors. Title-page lettering
+              follows the book's subject matter</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="indesign">
             <span><strong>A file ready for InDesign</strong> — a clean Word
               document whose paragraph styles are the template's own, so they
               map when you place it</span>
@@ -159,9 +167,34 @@
           </label>
           <label class="radio">
             <input type="radio" name="prep-output" value="both">
-            <span><strong>Both</strong> — one costs no more than the other;
-              the work is in reading the manuscript</span>
+            <span><strong>InDesign + tracked</strong> — one costs no more than
+              the other; the work is in reading the manuscript</span>
           </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="all">
+            <span><strong>All three</strong> — the reading copy, the InDesign
+              file and the redline together</span>
+          </label>
+          <div class="options" id="book-options">
+            <label class="field">
+              <span>Subject matter</span>
+              <select id="prep-subject">
+                <option value="">Let DocProof read it (recommended)</option>
+              </select>
+              <small class="muted">Picks the title-page lettering. Detected
+                from the opening pages unless you choose one.</small>
+            </label>
+            <label class="field">
+              <span>Running-head title</span>
+              <input type="text" id="prep-title"
+                     placeholder="Detected from the title page">
+            </label>
+            <label class="field">
+              <span>Running-head author</span>
+              <input type="text" id="prep-author"
+                     placeholder="Detected from the byline">
+            </label>
+          </div>
         </fieldset>
 
         <fieldset class="field review-only">
@@ -537,9 +570,11 @@
       <label class="field">
         <span>Put back</span>
         <select id="watch-output">
+          <option value="book">A book-styled reading copy</option>
           <option value="indesign">A file ready for InDesign</option>
           <option value="tracked">A tracked-changes copy to review first</option>
-          <option value="both">Both</option>
+          <option value="both">InDesign + tracked</option>
+          <option value="all">All three</option>
         </select>
       </label>
 
@@ -911,11 +946,13 @@
                placeholder="/Users/you/Templates/House prose.indd">
       </label>
       <label class="field">
-        <span>When preparing for layout, hand back</span>
+        <span>When formatting a manuscript, hand back</span>
         <select id="prep-output-default">
+          <option value="book">A book-styled reading copy</option>
           <option value="indesign">A file ready for InDesign</option>
           <option value="tracked">A tracked-changes Word file</option>
-          <option value="both">Both</option>
+          <option value="both">InDesign + tracked</option>
+          <option value="all">All three</option>
         </select>
       </label>
       <label class="checkbox">

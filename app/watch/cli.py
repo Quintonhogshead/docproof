@@ -61,7 +61,8 @@ def main(argv=None) -> int:
     ini.add_argument("--folder", help="the folder's address, pasted from a "
                                       "browser, or just its id")
     ini.add_argument("--model", help="which model prepares the manuscripts")
-    ini.add_argument("--output", choices=["indesign", "tracked", "both"],
+    ini.add_argument("--output",
+                     choices=["book", "indesign", "tracked", "both", "all"],
                      help="which file(s) to put back in the folder")
     ini.add_argument("--notify-email",
                      help="email this address when a pass needs a person "
