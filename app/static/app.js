@@ -59,7 +59,7 @@ function show(name) {
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === current));
   });
-  ['drop', 'jobs', 'report', 'compare', 'watch', 'promo', 'spending',
+  ['drop', 'jobs', 'report', 'compare', 'sapling', 'watch', 'promo', 'spending',
    'prompts', 'settings', 'admin'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
@@ -631,6 +631,212 @@ const REPORT_CSS = `
     saveReportUrl(built.url, built.m);
     // The download reads the blob synchronously; release it on the next tick.
     setTimeout(() => URL.revokeObjectURL(built.url), 0);
+  }
+})();
+
+// ── Sapling grammar check (test panel) ──────────────────────────────────────
+// A standalone surface for trying Sapling.ai on a passage. It is deliberately
+// apart from the review flow: paste text, one POST to /api/sapling/check, its
+// edits back. Nothing is uploaded to a reviewer, saved, or billed through
+// DocProof. The Sapling key is admin-set (Admin → Provider API keys); with none
+// set the route answers with a message this panel just shows.
+(() => {
+  const text = $('sap-text');
+  const run = $('sap-run');
+  if (!text || !run) return;                 // panel not in this build's HTML
+
+  const count = $('sap-count');
+  const sync = () => {
+    const n = text.value.length;
+    count.textContent = `${n.toLocaleString()} character${n === 1 ? '' : 's'}`;
+    run.disabled = text.value.trim().length === 0;
+  };
+  text.addEventListener('input', sync);
+  sync();
+
+  run.addEventListener('click', async () => {
+    $('sap-error').hidden = true;
+    $('sap-results').hidden = true;
+    run.disabled = true;
+    $('sap-busy').hidden = false;
+    try {
+      const body = { text: text.value, variety: $('sap-variety').value };
+      const d = await api('/api/sapling/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      renderSapling(text.value, d.edits || []);
+    } catch (err) {
+      $('sap-error').textContent = err.message;
+      $('sap-error').hidden = false;
+    } finally {
+      $('sap-busy').hidden = true;
+      sync();                                 // re-enable per the current text
+    }
+  });
+
+  // Everything below builds DOM nodes and sets textContent — the submitted text
+  // and Sapling's strings are untrusted and must never become markup.
+  function renderSapling(source, edits) {
+    const summary = $('sap-summary');
+    summary.textContent = edits.length
+      ? `Sapling flagged ${edits.length} suggestion${edits.length === 1 ? '' : 's'}.`
+      : 'Sapling found nothing to change in this text.';
+
+    const list = $('sap-list');
+    list.innerHTML = '';
+    if (edits.length) list.append(preview(source, edits));
+    edits.forEach((e) => list.append(editCard(e)));
+    $('sap-results').hidden = false;
+  }
+
+  // The passage with each flagged span marked in place. Edits arrive sorted by
+  // start; a later edit that opens before the previous one closed (overlapping
+  // suggestions) is left unmarked here rather than mangling the offsets — its
+  // card below still shows it.
+  function preview(source, edits) {
+    const box = document.createElement('div');
+    box.className = 'sap-preview';
+    let at = 0;
+    for (const e of edits) {
+      if (e.start < at || e.end > source.length || e.start > e.end) continue;
+      if (e.start > at) box.append(document.createTextNode(source.slice(at, e.start)));
+      const mark = document.createElement('mark');
+      mark.className = 'sap-mark';
+      mark.textContent = source.slice(e.start, e.end) || '∅';
+      mark.title = e.replacement
+        ? `${e.error_type || 'suggestion'} → ${e.replacement}`
+        : `${e.error_type || 'suggestion'} → (delete)`;
+      box.append(mark);
+      at = e.end;
+    }
+    if (at < source.length) box.append(document.createTextNode(source.slice(at)));
+    return box;
+  }
+
+  function editCard(e) {
+    const card = document.createElement('div');
+    card.className = 'sap-edit';
+
+    const change = document.createElement('div');
+    change.className = 'sap-change';
+    const from = document.createElement('span');
+    from.className = 'sap-from';
+    from.textContent = e.original || '∅';
+    const arrow = document.createElement('span');
+    arrow.className = 'sap-arrow';
+    arrow.textContent = '→';
+    const to = document.createElement('span');
+    to.className = 'sap-to';
+    to.textContent = e.replacement || '(delete)';
+    change.append(from, arrow, to);
+
+    const label = e.general_error_type || e.error_type;
+    card.append(change);
+    if (label) {
+      const tag = document.createElement('span');
+      tag.className = 'tag sap-tag';
+      tag.textContent = label;
+      card.append(tag);
+    }
+    return card;
+  }
+
+  // ── run a whole .docx through Sapling → tracked changes ───────────────────
+  const docZone = $('sap-doc-zone');
+  if (docZone) {
+    const docInput = $('sap-doc-input');
+    const docName = $('sap-doc-name');
+    const docRun = $('sap-doc-run');
+    let chosen = null;                        // the picked File
+    let lastDoc = null;                       // { blob, filename } for download
+
+    const setFile = (file) => {
+      chosen = file || null;
+      docName.textContent = file ? file.name : 'Drop a .docx, or click to choose';
+      docName.classList.toggle('muted', !file);
+      docRun.disabled = !file;
+    };
+    docZone.addEventListener('click', () => docInput.click());
+    docZone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); docInput.click(); }
+    });
+    docInput.addEventListener('change', () => setFile(docInput.files[0]));
+    ['dragenter', 'dragover'].forEach((evt) =>
+      docZone.addEventListener(evt, (e) => {
+        e.preventDefault(); docZone.classList.add('hot');
+      }));
+    ['dragleave', 'drop'].forEach((evt) =>
+      docZone.addEventListener(evt, (e) => {
+        e.preventDefault(); docZone.classList.remove('hot');
+      }));
+    docZone.addEventListener('drop', (e) => {
+      const f = [...e.dataTransfer.files]
+        .find((x) => x.name.toLowerCase().endsWith('.docx'));
+      if (f) setFile(f);
+    });
+
+    docRun.addEventListener('click', async () => {
+      if (!chosen) return;
+      $('sap-doc-error').hidden = true;
+      $('sap-doc-results').hidden = true;
+      docRun.disabled = true;
+      $('sap-doc-busy').hidden = false;
+      try {
+        const body = new FormData();
+        body.append('file', chosen);
+        body.append('variety', $('sap-variety').value);
+        const d = await api('/api/sapling/docx', { method: 'POST', body });
+        lastDoc = { blob: b64ToBlob(d.docx_base64), filename: d.filename };
+        renderDocResults(d);
+      } catch (err) {
+        $('sap-doc-error').textContent = err.message;
+        $('sap-doc-error').hidden = false;
+      } finally {
+        $('sap-doc-busy').hidden = true;
+        docRun.disabled = !chosen;
+      }
+    });
+
+    $('sap-doc-download').addEventListener('click', () => {
+      if (!lastDoc) return;
+      const url = URL.createObjectURL(lastDoc.blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = lastDoc.filename;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+
+    function renderDocResults(d) {
+      $('sap-doc-summary').textContent = d.applied
+        ? `Sapling made ${d.applied} tracked change${d.applied === 1 ? '' : 's'} `
+          + `across ${d.paragraphs} paragraph${d.paragraphs === 1 ? '' : 's'}.`
+        : `Sapling found nothing to change across ${d.paragraphs} `
+          + `paragraph${d.paragraphs === 1 ? '' : 's'}.`;
+      const list = $('sap-doc-list');
+      list.innerHTML = '';
+      // Only the changes that actually landed as revisions — a suggestion the
+      // document's own text no longer matched is dropped rather than shown as
+      // applied.
+      (d.edits || []).filter((e) => e.applied).forEach((e) =>
+        list.append(editCard(e)));
+      $('sap-doc-results').hidden = false;
+    }
+  }
+
+  // Decode the base64 .docx the server returns into a Blob to download. Kept
+  // simple — atob to a byte array, no streaming needed at this panel's size.
+  function b64ToBlob(b64) {
+    const bytes = atob(b64);
+    const arr = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+    return new Blob([arr], {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
   }
 })();
 
@@ -1410,6 +1616,127 @@ async function refreshJobs({ tick = false } = {}) {
 const aborting = new Set();
 const TERMINAL_STATES = ['done', 'failed', 'cancelled'];
 
+// The steps a review moves through, in the order the pipeline runs them, with a
+// one-line label and a plain-English quip for what each is actually doing. The
+// ids match the stage ids the pipeline emits (see STAGE_STATE in app/jobs.py);
+// `optional` stages only run when the job turns them on — see stageFlowFor.
+const STAGE_FLOW = [
+  { id: 'preparing', label: 'Reading your manuscript',
+    quip: 'Skimming every page and sketching a story sheet — who’s who, what '
+        + 'tense, whose voice — so the checks that follow actually know your book.' },
+  { id: 'reviewing', label: 'Reviewing section by section',
+    quip: 'The main read: working through the book in sections, hunting typos, '
+        + 'grammar slips, and punctuation gremlins.' },
+  { id: 'glossary', label: 'Building the glossary', optional: true,
+    quip: 'Learning your invented names and spellings so they’re never quietly '
+        + '“corrected” against you.' },
+  { id: 'adjudicate', label: 'Real-word typos', optional: true,
+    quip: 'Weighing the sneaky ones — “form” for “from”, “lead” for “led” — that '
+        + 'a spellchecker sails right past.' },
+  { id: 'rewrite', label: 'Rewrite & compare', optional: true,
+    quip: 'Quietly retyping each line and diffing it against yours to catch what '
+        + 'a single read glides over.' },
+  { id: 'languagetool', label: 'Mechanical check', optional: true,
+    quip: 'A rules-based sweep for the commas, hyphens, and dropped words the '
+        + 'model tends to shrug at.' },
+  { id: 'continuity', label: 'Continuity read', optional: true,
+    quip: 'Reading cover to cover for facts the book contradicts about itself — '
+        + 'ages, dates, eye colours, the day of the week.' },
+  { id: 'writing', label: 'Writing your document',
+    quip: 'Folding every accepted change back in and packaging up your files.' },
+];
+const STAGE_INDEX = Object.fromEntries(STAGE_FLOW.map((s, i) => [s.id, i]));
+
+// Which of the steps this particular job will run, in order. The always-on ones
+// stay; an optional one is kept only when the job's toggles ask for it, so the
+// tracker doesn't promise a pass that never fires. The current stage is always
+// kept, even if a toggle says otherwise, so the tracker can never lose its place.
+function stageFlowFor(job) {
+  const f = job.features || {};
+  const on = (k) => !!f[k];
+  return STAGE_FLOW.filter((s) => {
+    if (s.id === job.stage) return true;
+    if (!s.optional) return true;
+    if (s.id === 'glossary') return job.glossary_model !== 'off';
+    return on(s.id);            // adjudicate, rewrite, languagetool, continuity
+  });
+}
+
+// A review shows the step tracker while it is actively working through the
+// pipeline: a sync run (state "running") or the "preparing" read that comes
+// just before it (still "queued"). Prep and promo have their own single-step
+// lives and set no stage, so they never show one.
+function tracksStages(job) {
+  return job.kind === 'review' && !!job.stage
+    && STAGE_INDEX[job.stage] !== undefined
+    && (job.state === 'running' || job.state === 'queued');
+}
+
+function stageElapsed(job) {
+  if (!job.stage_since) return null;             // older record, or not set yet
+  const secs = Math.floor((Date.now() - Date.parse(job.stage_since)) / 1000);
+  if (!Number.isFinite(secs) || secs < 0) return null;   // clock skew: show none
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+// The step tracker: every step this run will take, the finished ones checked
+// off, the current one lit with its quip (and a count or elapsed time), the rest
+// waiting. It is what turns a frozen "Reading your manuscript" into a visible,
+// legible march through the pipeline.
+function stageTracker(job) {
+  const flow = stageFlowFor(job);
+  const here = STAGE_INDEX[job.stage];
+  const ol = document.createElement('ol');
+  ol.className = 'stages';
+  flow.forEach((s) => {
+    const i = STAGE_INDEX[s.id];
+    const status = i < here ? 'done' : i === here ? 'current' : 'pending';
+    const li = document.createElement('li');
+    li.className = status;
+    const marker = document.createElement('span');
+    marker.className = 'stage-marker';
+    marker.textContent = status === 'done' ? '✓' : status === 'current' ? '●' : '○';
+    const body = document.createElement('span');
+    body.className = 'stage-body';
+    const name = document.createElement('span');
+    name.className = 'stage-name';
+    name.textContent = s.label;
+    if (status === 'current') {
+      const meta = stageMeta(job);
+      if (meta) {
+        const m = document.createElement('span');
+        m.className = 'stage-meta';
+        m.textContent = ` · ${meta}`;
+        name.append(m);
+      }
+    }
+    body.append(name);
+    if (status === 'current') {
+      const quip = document.createElement('span');
+      quip.className = 'stage-quip';
+      quip.textContent = s.quip;
+      body.append(quip);
+    }
+    li.append(marker, body);
+    ol.append(li);
+  });
+  return ol;
+}
+
+// What to show beside the current step's name: how far through the section
+// count when there is one, otherwise how long the step has run.
+function stageMeta(job) {
+  const elapsed = stageElapsed(job);
+  if (job.stage === 'reviewing' && job.total) {
+    return elapsed ? `${job.done} of ${job.total} · ${elapsed}`
+                   : `${job.done} of ${job.total}`;
+  }
+  return elapsed;
+}
+
 function renderJobs(jobs) {
   const list = $('job-list');
   list.innerHTML = '';
@@ -1441,14 +1768,17 @@ function renderJobs(jobs) {
     head.append(name, status);
     li.append(head);
 
-    if (job.state === 'running') {
+    // "preparing" runs before the job flips to "running" (state is still
+    // "queued"), so give it a bar too — otherwise the story-sheet wait shows
+    // nothing moving at all. Everything else with a bar is a running job.
+    if (job.state === 'running' || tracksStages(job)) {
       const bar = document.createElement('div');
       bar.className = 'bar';
       const fill = document.createElement('i');
       // The per-chunk loop ("reviewing") has a real count; the whole-book passes
-      // after it do not, so the bar runs indeterminate while the step name in
-      // the status carries the truth. A record with no stage — from before
-      // stages existed — keeps the old numeric bar.
+      // do not, so the bar runs indeterminate while the step tracker below
+      // carries the truth. A record with no stage — from before stages existed —
+      // keeps the old numeric bar.
       const numeric = (job.stage === 'reviewing' || !job.stage) && job.total;
       if (numeric) {
         fill.style.width = `${Math.round((job.done / job.total) * 100)}%`;
@@ -1458,6 +1788,11 @@ function renderJobs(jobs) {
       bar.append(fill);
       li.append(bar);
     }
+
+    // The step tracker: the whole pipeline this run will walk, checked off as it
+    // goes, the current step lit with a plain-English quip. This is what makes a
+    // long whole-book pass read as progress instead of a stall.
+    if (tracksStages(job)) li.append(stageTracker(job));
 
     // A running review is actively spending; let the user pull the plug. The
     // worker stops between calls and cancels everything not already in flight,

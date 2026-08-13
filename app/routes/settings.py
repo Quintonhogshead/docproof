@@ -79,6 +79,18 @@ def register(app: FastAPI) -> None:
     @app.post("/api/settings/test/{provider}")
     def test_key(provider: str) -> dict:
         """One cheap real call, so a bad key fails here and not at 11pm."""
+        if provider == "sapling":
+            # Sapling is not a review provider, so it never builds a model
+            # provider — one tiny edits call is its "does the key work?".
+            key = settingslib.get_api_key("sapling")
+            if not key:
+                return {"ok": False, "message": "No key saved yet."}
+            from docproof.sapling import SaplingError, check
+            try:
+                check("This are a test.", key)
+            except SaplingError as e:
+                return {"ok": False, "message": str(e)}
+            return {"ok": True, "message": "Key works."}
         if provider not in ("anthropic", "openai", "gemini"):
             raise HTTPException(404, "Unknown provider")
         key = settingslib.get_api_key(provider)

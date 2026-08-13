@@ -16,7 +16,7 @@ from .. import settings as settingslib
 from ..accounts import AccountError, User
 from ..auth import require_admin
 from ..jobs import JobStore, read_usage
-from ..settings import ENV_VARS, PROVIDERS
+from ..settings import ENV_VARS, KEY_PROVIDERS
 from ..spending import SpendingLedger, merge_live
 from ..usage import build_usage
 
@@ -45,8 +45,11 @@ class KeyUpdate(BaseModel):
     key: str | None = None
 
 
-# The provider labels the portal shows, matching the desktop Settings screen.
-KEY_DISPLAY = {"anthropic": "Claude", "openai": "ChatGPT", "gemini": "Gemini"}
+# The key labels the portal shows, matching the desktop Settings screen. Sapling
+# is the odd one out — a standalone grammar-check test surface, not a reviewer —
+# but its key is managed here alongside the review providers.
+KEY_DISPLAY = {"anthropic": "Claude", "openai": "ChatGPT", "gemini": "Gemini",
+               "sapling": "Sapling"}
 
 
 def register(app: FastAPI) -> None:
@@ -129,7 +132,7 @@ def register(app: FastAPI) -> None:
 
     def _key_rows() -> list[dict]:
         rows = []
-        for provider in PROVIDERS:
+        for provider in KEY_PROVIDERS:
             portal = app.state.keystore.get(provider) is not None
             from_env = bool(app.state.env_keys.get(provider))
             source = "portal" if portal else ("environment" if from_env else None)
@@ -147,7 +150,7 @@ def register(app: FastAPI) -> None:
 
     @app.put("/api/admin/keys/{provider}", dependencies=[Depends(require_admin)])
     def admin_set_key(provider: str, body: KeyUpdate) -> dict:
-        if provider not in PROVIDERS:
+        if provider not in KEY_PROVIDERS:
             raise HTTPException(404, "Unknown provider")
         key = (body.key or "").strip()
         if not key:
@@ -160,7 +163,7 @@ def register(app: FastAPI) -> None:
     @app.delete("/api/admin/keys/{provider}",
                 dependencies=[Depends(require_admin)])
     def admin_clear_key(provider: str) -> dict:
-        if provider not in PROVIDERS:
+        if provider not in KEY_PROVIDERS:
             raise HTTPException(404, "Unknown provider")
         app.state.keystore.delete(provider)
         # Put back whatever the environment gave at boot, so removing a portal

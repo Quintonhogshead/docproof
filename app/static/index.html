@@ -49,6 +49,7 @@
     <button class="tab" data-screen="drop" aria-current="true">Drop documents</button>
     <button class="tab" data-screen="jobs">Results <span id="jobs-badge" hidden></span></button>
     <button class="tab" data-screen="compare">Compare</button>
+    <button class="tab" data-screen="sapling">Sapling</button>
     <button class="tab" data-screen="watch">DocWatch</button>
     <button class="tab" data-screen="promo">Promo</button>
     <button class="tab" data-screen="spending">Spending</button>
@@ -398,6 +399,80 @@
       <p id="cmp-score" class="headline"></p>
       <p id="cmp-caveat" class="muted small"></p>
       <div id="cmp-groups"></div>
+    </div>
+  </section>
+
+  <!-- ── Sapling (test panel) ─────────────────────────────────────────── -->
+  <section id="screen-sapling" class="screen" hidden>
+    <h2>Sapling grammar check <span class="tag">test</span></h2>
+    <p class="muted">A separate, experimental surface for trying
+      <strong>Sapling.ai</strong> against a passage — paste some text and see
+      what its grammar and spelling checker flags. This is for evaluation only:
+      it is not part of a review, nothing is saved or billed through DocProof,
+      and the whole panel is dark until an administrator adds a Sapling key under
+      <strong>Admin</strong>.</p>
+
+    <label class="field">
+      <span>Spelling variety <small class="muted">— which regional
+        spelling Sapling should prefer</small></span>
+      <select id="sap-variety">
+        <option value="">No preference</option>
+        <option value="us">American</option>
+        <option value="gb">British</option>
+        <option value="au">Australian</option>
+        <option value="ca">Canadian</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Text to check <small class="muted" id="sap-count">0 characters</small></span>
+      <textarea id="sap-text" rows="10" spellcheck="false"
+                placeholder="Paste a paragraph or two here…"></textarea>
+    </label>
+
+    <div class="job-actions">
+      <button id="sap-run" class="primary" disabled>Check with Sapling</button>
+      <span id="sap-busy" class="muted" hidden>Checking…</span>
+    </div>
+    <p id="sap-error" class="error" hidden></p>
+
+    <div id="sap-results" hidden>
+      <p id="sap-summary" class="headline"></p>
+      <div id="sap-list"></div>
+    </div>
+
+    <hr class="rule">
+
+    <h3>Run a document through Sapling</h3>
+    <p class="muted">Drop a <code>.docx</code> and get it back with Sapling's
+      suggestions as Word tracked changes — the same accept/reject revisions a
+      DocProof review produces, only Sapling wrote them. Read on the spot and
+      handed straight back: nothing is queued, saved as a job, or billed through
+      DocProof.</p>
+
+    <div class="compare-slot">
+      <div class="dropzone mini" id="sap-doc-zone" tabindex="0" role="button"
+           aria-label="Drop a .docx to run through Sapling">
+        <p id="sap-doc-name" class="muted">Drop a .docx, or click to choose</p>
+        <input type="file" id="sap-doc-input" accept=".docx" hidden>
+      </div>
+    </div>
+
+    <div class="job-actions">
+      <button id="sap-doc-run" class="primary" disabled>Check document with
+        Sapling</button>
+      <span id="sap-doc-busy" class="muted" hidden>Running the document through
+        Sapling…</span>
+    </div>
+    <p id="sap-doc-error" class="error" hidden></p>
+
+    <div id="sap-doc-results" hidden>
+      <p id="sap-doc-summary" class="headline"></p>
+      <div class="job-actions">
+        <button id="sap-doc-download" class="primary">Download tracked
+          changes</button>
+      </div>
+      <div id="sap-doc-list"></div>
     </div>
   </section>
 
