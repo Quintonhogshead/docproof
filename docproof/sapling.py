@@ -15,10 +15,12 @@ text in hand, and drops the sentence-relative numbers from the result.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 import httpx
+
+from .rewrite import RewriteCandidate
 
 log = logging.getLogger("docproof.sapling")
 
@@ -259,3 +261,75 @@ def check_paragraphs(paragraphs: Iterable[tuple[str, str]], api_key: str, *,
             if placed is not None:
                 out.append(placed)
     return out
+
+
+# --- feeding the shared confirm valve ---------------------------------------
+
+def _errant_keys(error_type: str) -> list[str]:
+    """The category tails of an ERRANT code, operation letter dropped, most
+    specific first: "R:VERB:TENSE" -> ["VERB:TENSE", "VERB"]. A denylist entry
+    matching any tail drops the edit, so "VERB" catches every verb subtype while
+    "VERB:TENSE" catches only that one."""
+    parts = [p for p in (error_type or "").split(":") if p]
+    if parts and parts[0] in ("M", "R", "U", "UNK"):
+        parts = parts[1:]
+    keys: list[str] = []
+    while parts:
+        keys.append(":".join(parts))
+        parts.pop()
+    return keys
+
+
+def to_candidates(edits: Sequence[ParaEdit], para_text: Mapping[str, str], *,
+                  lexicon: Sequence[str] = (),
+                  disabled_error_types: Sequence[str] = (),
+                  ) -> list[RewriteCandidate]:
+    """Turn Sapling's placed edits into RewriteCandidates for `rewrite.confirm`,
+    so an LLM rules on each in literary context instead of Sapling editing blind.
+
+    Mirrors `languagetool.propose`'s two cheap pre-filters, run before the model
+    ever sees a candidate because they are certain and free:
+      * the spell scan's lexicon (the author's own names/coinages) suppresses a
+        spelling/typo flag on one of them — Sapling's largest false-positive
+        source on a novel, exactly as it is LanguageTool's;
+      * `disabled_error_types` drops whole ERRANT classes by category tail or raw
+        code or general bucket (e.g. "ORTH" to stop spacing edits that fight
+        house style, "PUNCT" for every punctuation subtype).
+
+    Each surviving edit's `describe()` line rides along as the candidate's `note`,
+    so a confirmed Sapling change reads in the margin like Sapling's own finding,
+    not the valve's generic default. Offsets are re-checked against the paragraph
+    text; an edit that no longer slices its own `original` (drift) or is a no-op
+    is dropped rather than confirmed."""
+    lex = {w.strip("'’\".,").lower() for w in lexicon}
+    deny = frozenset(disabled_error_types)
+    cands: list[RewriteCandidate] = []
+    seen: set[tuple[str, int, int, str]] = set()
+    dropped = {"denied": 0, "name": 0, "drift": 0, "noop": 0}
+    for e in edits:
+        text = para_text.get(e.para_id)
+        if text is None:
+            continue
+        keys = _errant_keys(e.error_type)
+        if (e.error_type in deny or e.general_error_type in deny
+                or any(k in deny for k in keys)):
+            dropped["denied"] += 1; continue
+        is_spelling = any(k in ("SPELL", "TYPO") for k in keys)
+        if is_spelling and (e.original or "").strip("'’\".,").lower() in lex:
+            dropped["name"] += 1; continue
+        if text[e.start:e.end] != e.original:          # offset drift
+            dropped["drift"] += 1; continue
+        if e.replacement == e.original:                # nothing to change
+            dropped["noop"] += 1; continue
+        key = (e.para_id, e.start, e.end, e.replacement)
+        if key in seen:
+            continue
+        seen.add(key)
+        cands.append(RewriteCandidate(
+            para_id=e.para_id, start=e.start, end=e.end,
+            original=e.original, replacement=e.replacement, note=describe(e)))
+    log.info("Sapling: %d candidate(s) after filter "
+             "(dropped %d name, %d denied, %d drift, %d no-op)",
+             len(cands), dropped["name"], dropped["denied"],
+             dropped["drift"], dropped["noop"])
+    return cands

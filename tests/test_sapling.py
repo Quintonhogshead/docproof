@@ -313,6 +313,14 @@ def _one_para_doc(text):
         "body-0", "word/document.xml", "body", text, "Normal"),))
 
 
+def _prepared(text, lexicon=()):
+    """A stand-in for the parts of Prepared that _sapling_findings reads: the
+    document and the spell scan's protected lexicon."""
+    from types import SimpleNamespace
+    return SimpleNamespace(doc=_one_para_doc(text),
+                           spell=SimpleNamespace(lexicon=tuple(lexicon)))
+
+
 def _cfg_with_sapling(enabled):
     from docproof.config import load_config
     cfg = load_config("config/default.yaml")
@@ -328,7 +336,7 @@ def test_pass_off_makes_no_call_and_no_findings(monkeypatch):
     monkeypatch.setattr(sapling.httpx, "post", boom)
     monkeypatch.setenv("SAPLING_API_KEY", "k")
     assert _sapling_findings(_cfg_with_sapling(False),
-                             _one_para_doc("the teh cat.")) == []
+                             _prepared("the teh cat.")) == []
 
 
 def test_pass_on_without_a_key_skips_gracefully(monkeypatch):
@@ -336,7 +344,7 @@ def test_pass_on_without_a_key_skips_gracefully(monkeypatch):
     monkeypatch.delenv("SAPLING_API_KEY", raising=False)
     # No key → no findings, no exception (a warning is logged).
     assert _sapling_findings(_cfg_with_sapling(True),
-                             _one_para_doc("the teh cat.")) == []
+                             _prepared("the teh cat.")) == []
 
 
 def test_pass_failure_degrades_to_no_findings(monkeypatch):
@@ -347,15 +355,18 @@ def test_pass_failure_degrades_to_no_findings(monkeypatch):
         raise httpx.ConnectError("down")
     monkeypatch.setattr(sapling.httpx, "post", fail)
     assert _sapling_findings(_cfg_with_sapling(True),
-                             _one_para_doc("the teh cat.")) == []
+                             _prepared("the teh cat.")) == []
 
 
-def test_pass_builds_quoted_sentence_findings(monkeypatch):
+def test_blind_pass_builds_quoted_sentence_findings(monkeypatch):
+    """With confirm off, Sapling folds edits straight in as quoted-sentence
+    findings — the older behaviour, kept for A/B measurement."""
     from docproof.pipeline import _sapling_findings
     monkeypatch.setenv("SAPLING_API_KEY", "k")
     monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
-    findings = _sapling_findings(_cfg_with_sapling(True),
-                                 _one_para_doc("The cat sat on teh mat."))
+    cfg = _cfg_with_sapling(True)
+    cfg.sapling.confirm = False
+    findings = _sapling_findings(cfg, _prepared("The cat sat on teh mat."))
     assert len(findings) == 1
     f = findings[0]
     # A quoted sentence + corrected sentence, like a sweep — not raw offsets.
@@ -375,6 +386,7 @@ def test_pass_folds_tracked_changes_into_the_review(tmp_path, monkeypatch):
 
     src = _make_docx(tmp_path / "book.docx", "The cat sat on teh mat.")
     cfg = _cfg_with_sapling(True)
+    cfg.sapling.confirm = False        # blind fold-in; no LLM valve in this test
     cfg.audit = "off"
     prepared = prepare(cfg, src, "config/error_types")
     out = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "out",
@@ -400,9 +412,10 @@ def test_pass_records_its_char_cost_on_usage(monkeypatch):
     monkeypatch.setenv("SAPLING_API_KEY", "k")
     monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
     cfg = _cfg_with_sapling(True)                 # cost_per_1k_chars defaults 0.025
+    cfg.sapling.confirm = False                   # cost is billed before the valve
     usage = Usage()
-    doc = _one_para_doc("x" * 4000)               # 4,000 chars sent
-    _sapling_findings(cfg, doc, usage)
+    prepared = _prepared("x" * 4000)              # 4,000 chars sent
+    _sapling_findings(cfg, prepared, usage)
     assert usage.sapling_chars == 4000
     assert usage.sapling_cost == 4000 * 0.025 / 1000    # $0.10
 
@@ -481,8 +494,9 @@ def test_pass_findings_carry_explanations_and_are_not_silent_by_default(monkeypa
     from docproof.pipeline import _sapling_findings
     monkeypatch.setenv("SAPLING_API_KEY", "k")
     monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
-    findings = _sapling_findings(_cfg_with_sapling(True),
-                                 _one_para_doc("The cat sat on teh mat."))
+    cfg = _cfg_with_sapling(True)
+    cfg.sapling.confirm = False
+    findings = _sapling_findings(cfg, _prepared("The cat sat on teh mat."))
     assert findings[0].explanation == "Spelling: “teh” → “the”."
     assert findings[0].silent is False
 
@@ -492,8 +506,9 @@ def test_comments_off_makes_pass_findings_silent(monkeypatch):
     monkeypatch.setenv("SAPLING_API_KEY", "k")
     monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
     cfg = _cfg_with_sapling(True)
+    cfg.sapling.confirm = False
     cfg.sapling.comments = False
-    findings = _sapling_findings(cfg, _one_para_doc("The cat sat on teh mat."))
+    findings = _sapling_findings(cfg, _prepared("The cat sat on teh mat."))
     assert findings[0].silent is True
     # The explanation is still built — it just won't be hung in the margin.
     assert findings[0].explanation == "Spelling: “teh” → “the”."
@@ -518,6 +533,7 @@ def test_silent_findings_get_no_margin_comment(tmp_path, monkeypatch):
     src = _make_docx(tmp_path / "book.docx", "The cat sat on teh mat.")
 
     cfg = _cfg_with_sapling(True)
+    cfg.sapling.confirm = False        # blind fold-in; no LLM valve in this test
     cfg.audit = "off"
     prepared = prepare(cfg, src, "config/error_types")
     on = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "on",
@@ -529,6 +545,120 @@ def test_silent_findings_get_no_margin_comment(tmp_path, monkeypatch):
     off = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "off",
                  source_path=src)
     assert comment_count(off.reviewed_path) == 0
+
+
+# -- to_candidates: filtering before the valve --------------------------------
+
+def _para_edit(original, replacement, error_type="R:SPELL", general="Spelling",
+               start=0):
+    return sapling.ParaEdit(
+        para_id="body-0", start=start, end=start + len(original),
+        original=original, replacement=replacement, error_type=error_type,
+        general_error_type=general)
+
+
+def test_to_candidates_maps_edit_and_carries_describe_note():
+    cands = sapling.to_candidates([_para_edit("teh", "the")],
+                                  {"body-0": "teh cat."})
+    assert len(cands) == 1
+    c = cands[0]
+    assert (c.para_id, c.start, c.end, c.original, c.replacement) \
+        == ("body-0", 0, 3, "teh", "the")
+    assert c.note == "Spelling: “teh” → “the”."   # rides into the margin
+
+
+def test_to_candidates_lexicon_suppresses_a_name_misspelling():
+    # A spelling flag on one of the author's own protected words is a name, not
+    # an error — dropped before the model, exactly as in the LanguageTool pass.
+    cands = sapling.to_candidates(
+        [_para_edit("Aeryn", "Aaron")], {"body-0": "Aeryn ran."},
+        lexicon=["Aeryn"])
+    assert cands == []
+
+
+def test_to_candidates_disabled_error_type_drops_a_class():
+    e = _para_edit("  ", " ", error_type="R:ORTH", general="Orthography", start=1)
+    cands = sapling.to_candidates([e], {"body-0": "a  b"},
+                                  disabled_error_types=["ORTH"])
+    assert cands == []
+
+
+def test_to_candidates_drops_offset_drift_and_no_ops():
+    drift = _para_edit("teh", "the")            # text says "the", not "teh"
+    noop = _para_edit("the", "the")             # nothing to change
+    cands = sapling.to_candidates([drift, noop], {"body-0": "the cat."})
+    assert cands == []
+
+
+# -- the confirm valve: an LLM accepts/rejects each Sapling edit ---------------
+
+def _fake_provider(*batches):
+    """A FakeProvider that returns one verdicts payload per confirm batch."""
+    from docproof.providers import ProviderResult
+    from .fakes import FakeProvider
+    return FakeProvider([ProviderResult(parsed={"verdicts": list(b)})
+                         for b in batches])
+
+
+def test_confirm_valve_accepts_a_real_error(monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    prov = _fake_provider([{"index": 1, "is_error": True, "confidence": "high"}])
+    monkeypatch.setattr("docproof.providers.build_provider", lambda *a, **k: prov)
+    findings = _sapling_findings(_cfg_with_sapling(True),
+                                 _prepared("The cat sat on teh mat."), Usage())
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.error_type == "sapling"
+    assert f.corrected_text == "The cat sat on the mat."
+    assert f.explanation == "Spelling: “teh” → “the”."   # Sapling's own line
+    assert f.silent is False and f.force_query is False
+
+
+def test_confirm_valve_keeps_voice_and_logs_the_rejection(tmp_path, monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    # The LLM rules the edit would touch something deliberate → KEEP the original.
+    prov = _fake_provider([{"index": 1, "is_error": False, "confidence": "high"}])
+    monkeypatch.setattr("docproof.providers.build_provider", lambda *a, **k: prov)
+    findings = _sapling_findings(_cfg_with_sapling(True),
+                                 _prepared("The cat sat on teh mat."), Usage(),
+                                 out_dir=tmp_path)
+    assert findings == []
+    import json
+    logged = json.loads((tmp_path / "sapling_rejected.json").read_text("utf-8"))
+    assert logged and logged[0]["original"] == "teh"
+
+
+def test_confirm_softer_confidence_becomes_a_query_not_a_silent_edit(monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    prov = _fake_provider([{"index": 1, "is_error": True, "confidence": "medium"}])
+    monkeypatch.setattr("docproof.providers.build_provider", lambda *a, **k: prov)
+    cfg = _cfg_with_sapling(True)                 # edit_confidence defaults high
+    findings = _sapling_findings(cfg, _prepared("The cat sat on teh mat."),
+                                 Usage())
+    assert len(findings) == 1 and findings[0].force_query is True
+
+
+def test_confirm_path_respects_comments_toggle(monkeypatch):
+    from docproof.models import Usage
+    from docproof.pipeline import _sapling_findings
+    monkeypatch.setenv("SAPLING_API_KEY", "k")
+    monkeypatch.setattr(sapling.httpx, "post", _spellfix_post("teh", "the"))
+    prov = _fake_provider([{"index": 1, "is_error": True, "confidence": "high"}])
+    monkeypatch.setattr("docproof.providers.build_provider", lambda *a, **k: prov)
+    cfg = _cfg_with_sapling(True)
+    cfg.sapling.comments = False
+    findings = _sapling_findings(cfg, _prepared("The cat sat on teh mat."),
+                                 Usage())
+    assert len(findings) == 1 and findings[0].silent is True
 
 
 def test_sapling_comments_feature_toggle_round_trips():

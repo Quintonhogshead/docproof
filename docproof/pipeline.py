@@ -768,25 +768,37 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     return findings, usage
 
 
-def _sapling_findings(cfg: Config, doc: DocumentModel,
-                      usage: Usage | None = None) -> list[Finding]:
+def _sapling_findings(cfg: Config, prepared: Prepared,
+                      usage: Usage | None = None, *,
+                      out_dir: str | Path | None = None) -> list[Finding]:
     """Sapling's suggestions as findings, or [] when the pass is off, has no key,
     or the service can't be reached.
 
-    Each Sapling edit is turned into the same quoted-sentence finding a sweep
-    produces (via `sentence_window`), so it flows through the identical
-    validation, overlap-resolution and edit-guard downstream — and a Sapling edit
-    landing on a span a house-style sweep already claimed is dropped for free,
-    because sweeps validate ahead of it. Runs here in `finish`, once per review,
-    rather than in `prepare` (which runs twice in batch mode) — Sapling is a paid
-    network call, not a free local scan. A failure degrades to no findings and a
-    warning, never a failed review."""
+    With `sapling.confirm` on (the default), every Sapling edit is routed through
+    the SHARED rewrite.confirm valve: an LLM rules on each in literary context and
+    keeps anything that would touch voice, dialect, invented names, or style, so
+    Sapling never edits blind. Its `describe()` line rides along as the margin
+    comment, and a softer-than-`edit_confidence` affirmation becomes a margin
+    query rather than a silent change.
+
+    With `confirm` off, each edit is instead turned into the same quoted-sentence
+    finding a sweep produces (via `sentence_window`), gated only by the
+    deterministic validation/overlap/edit-guard downstream — the older behaviour,
+    kept so a run can A/B raw vs valved.
+
+    Either way a Sapling edit landing on a span a house-style sweep already
+    claimed is dropped for free, because sweeps validate ahead of it. Runs here in
+    `finish`, once per review, rather than in `prepare` (which runs twice in batch
+    mode) — Sapling is a paid network call, not a free local scan. A failure
+    degrades to no findings and a warning, never a failed review."""
     if not cfg.sapling.enabled:
         return []
     import os
 
-    from .sapling import SaplingError, check_paragraphs, describe
+    from .sapling import (SaplingError, check_paragraphs, describe,
+                          to_candidates)
     from .sweeps import sentence_window
+    doc = prepared.doc
     key = os.environ.get("SAPLING_API_KEY")
     if not key:
         log.warning("Sapling pass is on but SAPLING_API_KEY is not set — "
@@ -809,6 +821,49 @@ def _sapling_findings(cfg: Config, doc: DocumentModel,
         chars = sum(len(p.text) for p in doc.paragraphs if p.text.strip())
         usage.sapling_chars = chars
         usage.sapling_cost = chars * cfg.sapling.cost_per_1k_chars / 1000
+
+    if cfg.sapling.confirm:
+        from itertools import count
+
+        from .providers import build_provider
+        from .rewrite import confirm as sap_confirm
+        para_text = {p.para_id: p.text for p in doc.paragraphs}
+        cands = to_candidates(
+            edits, para_text, lexicon=prepared.spell.lexicon,
+            disabled_error_types=cfg.sapling.disabled_error_types)
+        if not cands:
+            return []
+        provider = build_provider(cfg)
+        model = cfg.api.model
+        if cfg.sapling.confirm_model:
+            scfg = cfg.model_copy(deep=True)
+            scfg.api.model = cfg.sapling.confirm_model
+            scfg.api.effort = cfg.sapling.confirm_effort
+            provider = build_provider(scfg)
+            model = cfg.sapling.confirm_model
+        rejected: list = []
+        findings = sap_confirm(
+            cands, doc.paragraphs, provider, model=model,
+            max_tokens=cfg.sapling.max_output_tokens,
+            usage=usage if usage is not None else Usage(), ids=count(1),
+            batch_size=cfg.sapling.batch_size,
+            edit_confidence=cfg.sapling.edit_confidence,
+            reject_sink=rejected, error_type="sapling", chunk_id="sapling",
+            id_prefix="sap", silent=not cfg.sapling.comments)
+        # The valve's rejections are where a real Sapling catch can die — persist
+        # them so a run can measure raw -> survivors and see what the 5% was.
+        if out_dir is not None and rejected:
+            import json
+            try:
+                Path(out_dir, "sapling_rejected.json").write_text(
+                    json.dumps(rejected, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+            except OSError as e:                     # debug artifact, never fatal
+                log.warning("Sapling: could not write reject log: %s", e)
+        log.info("Sapling: %d confirmed edit(s) from %d candidate(s) "
+                 "(%d kept as not-an-error).",
+                 len(findings), len(cands), len(rejected))
+        return findings
 
     paras = {p.para_id: p for p in doc.paragraphs}
     findings: list[Finding] = []
@@ -840,6 +895,104 @@ def _sapling_findings(cfg: Config, doc: DocumentModel,
     log.info("Sapling proposed %d edit(s) across %d paragraph(s).",
              len(findings), len(doc.paragraphs))
     return findings
+
+
+def _promote_low_confidence(cfg: Config, prepared: Prepared,
+                            model_findings: list[Finding], usage: Usage, *,
+                            out_dir: str | Path | None = None
+                            ) -> tuple[list[Finding], list[Finding]]:
+    """Give a below-`min_confidence` model EDIT one more chance to be applied.
+
+    Each below-gate edit is turned into a RewriteCandidate and run through the
+    SHARED rewrite.confirm valve — an LLM rules on it in literary context — so a
+    genuine dialogue-mechanics catch (which the type prompts mark "low" on
+    purpose) can be PROMOTED to a tracked change instead of only ever surfacing
+    as a margin comment. A softer affirmation becomes a margin query; a "not an
+    error" verdict drops it. Precision is restored downstream rather than at the
+    gate, so the gate itself does not have to be lowered.
+
+    Returns `(survivors, promoted)`. `survivors` is `model_findings` with the
+    below-gate edits removed but everything else untouched — above-gate findings,
+    queries, formatting marks, and any below-gate edit that could not be anchored
+    or shrank to a no-op (those are left in place so the validator reports them as
+    it always has, never silently dropped). `promoted` is the valve's verdicts,
+    which the caller validates LAST so they yield to every surer source on a span.
+
+    Off unless `low_confidence.confirm`; a paid pass, so measure before shipping
+    on. The valve's rejections persist to `low_confidence_rejected.json` so a run
+    can see what the below-gate promotion recovered and what it correctly let go."""
+    if not cfg.low_confidence.confirm:
+        return model_findings, []
+    from itertools import count
+
+    from .models import CONFIDENCE_RANK
+    from .providers import build_provider
+    from .rewrite import RewriteCandidate
+    from .rewrite import confirm as lc_confirm
+    from .validator import anchor_offset, shrink
+
+    gate = CONFIDENCE_RANK[cfg.min_confidence]
+    para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
+    survivors: list[Finding] = []
+    cands: list[RewriteCandidate] = []
+    for f in model_findings:
+        below = CONFIDENCE_RANK[f.confidence] < gate
+        # Only genuine edits enter the valve. A query, a forced query, and a
+        # formatting mark are not tracked changes and never touched the gate;
+        # anything already at or above the gate is applied as usual.
+        editable = (f.error_type not in prepared.query_types
+                    and not f.force_query
+                    and f.error_type not in prepared.format_types)
+        text = para_text.get(f.para_id)
+        if not (below and editable) or text is None:
+            survivors.append(f)
+            continue
+        s = anchor_offset(text, f.original_text, f.occurrence)
+        if s == -1:
+            survivors.append(f)                  # let it report as no-anchor
+            continue
+        pre, deleted, inserted = shrink(f.original_text, f.corrected_text)
+        if not deleted and not inserted:
+            survivors.append(f)                  # no-op, handled downstream
+            continue
+        start, end = s + pre, s + pre + len(deleted)
+        if text[start:end] != deleted:           # offset drift after folding
+            survivors.append(f)
+            continue
+        cands.append(RewriteCandidate(
+            para_id=f.para_id, start=start, end=end,
+            original=deleted, replacement=inserted, note=f.explanation or None))
+    if not cands:
+        return survivors, []
+
+    lc = cfg.low_confidence
+    provider = build_provider(cfg)
+    model = cfg.api.model
+    if lc.confirm_model:
+        scfg = cfg.model_copy(deep=True)
+        scfg.api.model = lc.confirm_model
+        scfg.api.effort = lc.confirm_effort
+        provider = build_provider(scfg)
+        model = lc.confirm_model
+    rejected: list = []
+    promoted = lc_confirm(
+        cands, prepared.doc.paragraphs, provider, model=model,
+        max_tokens=lc.max_output_tokens, usage=usage, ids=count(1),
+        batch_size=lc.batch_size, edit_confidence=lc.edit_confidence,
+        reject_sink=rejected, error_type="low_confidence",
+        chunk_id="low_confidence", id_prefix="lc")
+    if out_dir is not None and rejected:
+        import json
+        try:
+            Path(out_dir, "low_confidence_rejected.json").write_text(
+                json.dumps(rejected, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as e:                     # debug artifact, never fatal
+            log.warning("Low-confidence: could not write reject log: %s", e)
+    log.info("Low-confidence: %d promoted from %d below-gate candidate(s) "
+             "(%d kept as not-an-error).",
+             len(promoted), len(cands), len(rejected))
+    return survivors, promoted
 
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
@@ -882,11 +1035,20 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # the deterministic sweeps and consistency (so a house-style sweep keeps a
     # contested span, and Sapling's overlap with it is dropped) but ahead of the
     # model, which is the fuzzier source on any span the two both touch.
-    sapling_findings = _sapling_findings(cfg, prepared.doc, usage)
+    sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out)
+    # Below-gate model edits get one more chance to become a tracked change: the
+    # confirm valve re-rules each in literary context, so a real dialogue-
+    # mechanics catch the type prompts marked "low" is promoted rather than left
+    # to a margin comment. Off by default. `model_findings` comes back with the
+    # below-gate edits removed and the valve's verdicts (`promoted`) taking their
+    # place; the verdicts go LAST so they yield to every surer source on a span.
+    model_findings, promoted = _promote_low_confidence(
+        cfg, prepared, model_findings, usage, out_dir=out)
     validated = validate_findings(list(prepared.sweep_findings)
                                   + list(prepared.consistency_findings)
                                   + sapling_findings
-                                  + model_findings,
+                                  + model_findings
+                                  + promoted,
                                   prepared.doc, cfg.min_confidence,
                                   query_types=prepared.query_types,
                                   format_types=prepared.format_types,

@@ -46,6 +46,9 @@ class RewriteCandidate:
     end: int
     original: str        # paragraph.text[start:end]
     replacement: str     # what the rewrite put there
+    note: str | None = None  # a ready-made margin explanation, if the proposing
+                             # source has a better one than the generic default
+                             # (Sapling's describe() line); None uses _explanation
 
 
 # --- propose: rewrite each paragraph, diff against the source ------------------
@@ -265,6 +268,8 @@ def _describe(c: RewriteCandidate) -> str:
 
 
 def _explanation(c: RewriteCandidate) -> str:
+    if c.note:
+        return c.note
     if not c.original:
         return f'Possible missing text — suggested: insert "{c.replacement}".'
     if not c.replacement:
@@ -278,7 +283,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
             batch_size: int = 40, edit_confidence: str = "high",
             reject_sink: list | None = None,
             error_type: str = "rewrite", chunk_id: str = "rewrite",
-            id_prefix: str = "r") -> list[Finding]:
+            id_prefix: str = "r", silent: bool = False) -> list[Finding]:
     """Skeptically rule on each candidate in context and turn the affirmed ones
     into Findings. Only an error affirmed at `edit_confidence` becomes a tracked
     change; a softer affirmation is force_query'd to the margin, a "keep" yields
@@ -288,7 +293,11 @@ def confirm(candidates: Sequence[RewriteCandidate],
     not-an-error). These are where recall dies at the gate: a candidate the rewrite
     pass surfaced and confirm then discarded. Persisting them lets a compare say
     how many were real errors confirm wrongly rejected — the evidence for whether
-    a stronger confirm model is worth its cost."""
+    a stronger confirm model is worth its cost.
+
+    `silent` marks every emitted Finding as a silent edit (a tracked change with
+    no margin comment), for a candidate source that rides under the global
+    `comments` switch — Sapling with `sapling.comments` off."""
     if not candidates:
         return []
     text_of = {p.para_id: p.text for p in paragraphs}
@@ -342,7 +351,8 @@ def confirm(candidates: Sequence[RewriteCandidate],
                 explanation=_explanation(c),
                 confidence=conf,
                 # Only a beyond-doubt affirmation edits; softer ones ask.
-                force_query=_RANK[conf] < edit_floor))
+                force_query=_RANK[conf] < edit_floor,
+                silent=silent))
     kept = len(reject_sink) if reject_sink is not None else 0
     log.info("Rewrite: %d correction(s) from %d candidate(s)%s", len(findings),
              len(candidates),
