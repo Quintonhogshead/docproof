@@ -284,6 +284,26 @@ variant: us
 
 min_confidence: medium      # low | medium | high — gate for applying changes
 
+# What happens to a model edit that falls BELOW min_confidence. Left off, the
+# gate's original behaviour holds: a below-gate edit never auto-applies and (with
+# query_comments on) shows only as a margin comment. The type prompts mark
+# anything in dialogue "low" on purpose, which also strands real dialogue
+# mechanics there. With confirm on, each below-gate edit is re-ruled by an LLM in
+# context through the SHARED rewrite.confirm valve — affirmed at edit_confidence
+# it becomes a tracked change, a softer affirmation a margin query, a "not an
+# error" verdict is dropped. Recovers the genuine catch without lowering the gate
+# for everything. A paid pass; off until measured on the recall harness, like
+# rewrite/languagetool/sapling. See docproof/pipeline._promote_low_confidence.
+low_confidence:
+  confirm: false
+  edit_confidence: high     # the bar an affirmed below-gate edit clears to apply
+  batch_size: 40            # candidates per confirm request
+  max_output_tokens: 4000
+  # Unset = the detector's own model confirms. A stronger model here is cheap
+  # (the prompts are short) and is the point of a separate confirm valve.
+  confirm_model:
+  confirm_effort: medium
+
 # Each entry is ONE API pass over the whole document. A bare key runs alone;
 # a list runs as a single combined pass, so the document is sent once for the
 # whole group instead of once per type. Related types are grouped together —

@@ -492,9 +492,34 @@ class SaplingConfig(BaseModel):
     pass is skipped with a warning rather than failing the review.
     Whole-document only. See docproof/sapling.py."""
     enabled: bool = False
+    # Route every Sapling edit through the SHARED rewrite.confirm valve: an LLM
+    # rules on each in literary context and KEEPs anything touching voice,
+    # dialect, invented names, or style, so Sapling never edits blind. On by
+    # default — the whole point of the pass on a novel. Off restores the older
+    # behaviour (Sapling's edits fold straight in, gated only by the
+    # deterministic sweeps/edit-guard), kept so a run can A/B raw vs valved and
+    # measure the rejection rate.
+    confirm: bool = True
     # Sapling's regional spelling variety: "", "us-variety", "gb-variety",
     # "au-variety", "ca-variety". Empty sends no preference.
     variety: str = ""
+    # ERRANT classes to drop before the confirm valve, by category tail
+    # ("PUNCT", "VERB:TENSE"), raw code ("R:ORTH"), or general bucket
+    # ("Spelling"). On top of the always-on lexicon filter for author
+    # names/coinages. Only consulted when `confirm` is on.
+    disabled_error_types: list[str] = Field(default_factory=list)
+    # Confirm-valve sizing/routing, mirroring LanguageToolConfig. edit_confidence
+    # is the bar an affirmed edit clears to become a tracked change; a softer
+    # affirmation is a margin query, never a silent change. High by default —
+    # Sapling is confident and context-blind, so the LLM's doubt should ask, not
+    # edit.
+    max_output_tokens: int = Field(default=4000, ge=1)
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The confirm model. Unset = api.model (the detector's) does its own
+    # confirming; the prompts are short so a stronger model here is cheap.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     # Whether a Sapling edit carries an explanatory margin comment. On, each one
     # reads like the model's own findings (a short line built from Sapling's
     # error code — see docproof/sapling.describe). Off, Sapling's changes apply
@@ -506,6 +531,16 @@ class SaplingConfig(BaseModel):
     # only to show an estimate before a run — Sapling itself is the source of
     # truth for the actual charge, and it never reaches the model-token cost math.
     cost_per_1k_chars: float = Field(default=0.025, ge=0)
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"sapling.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
 
 
 class DetectorSpec(BaseModel):
@@ -632,6 +667,48 @@ class RoundsConfig(BaseModel):
         return self
 
 
+class LowConfidenceConfig(BaseModel):
+    """What becomes of a model EDIT that falls below `min_confidence`.
+
+    By default the gate's original, precision-first behaviour holds: the edit
+    never becomes a tracked change, and (with query_comments on) surfaces only as
+    a margin comment. The type prompts mark anything inside dialogue "low" on
+    purpose — dialect and voice are usually deliberate there — but that also
+    strands the real dialogue MECHANICS (a missing comma before a tag, its/it's
+    inside a quote): the densest error zone in fiction can never reach the
+    manuscript as an edit, only as a question.
+
+    With `confirm` on, each below-gate edit is re-ruled by an LLM in literary
+    context through the SHARED rewrite.confirm valve: one affirmed at
+    `edit_confidence` is PROMOTED to a tracked change, a softer affirmation
+    becomes a margin query, and a "not an error" verdict drops it. That recovers
+    the genuine catch without lowering the gate for everything — precision is
+    restored downstream instead of up front. Queries and formatting marks are not
+    edits and never enter the valve; nor does anything already above the gate.
+
+    Off by default: it is a paid pass, so measure the recall/precision delta on
+    the private harness before shipping it on, exactly as rewrite/languagetool/
+    sapling are gated. Knobs mirror SaplingConfig's confirm block."""
+    confirm: bool = False
+    max_output_tokens: int = Field(default=4000, ge=1)
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The confirm model. Unset = api.model (the detector's) does its own
+    # confirming; the prompts are short so a stronger model here is cheap.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.confirm and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"low_confidence.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -655,6 +732,7 @@ class Config(BaseModel):
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
+    low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent
