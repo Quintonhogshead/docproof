@@ -415,9 +415,22 @@ def _fold(parsed, window, text_of: dict, findings: list, reject_sink,
         if suggestion:
             # Quote the sentence, not the paragraph: this finding is going to
             # the margin, and the quoted span IS the highlighted span there.
-            # corrected_text still carries the suggested wording — it is part of
-            # the validator's duplicate key for a force_query finding, so two
-            # different suggestions about one sentence stay two questions.
+            #
+            # corrected_text carries the suggested wording, and must keep
+            # carrying it. The obvious-looking simplification is the one the
+            # other query-only passes use — `corrected_text=original`, on the
+            # reasoning that a question edits nothing (continuity.py does
+            # exactly this). Here it silently LOSES DATA: the validator's
+            # duplicate key for a force_query finding is
+            # (para_id, start, "query", error_type, corrected_text)
+            # (validator.py, the query branch), so two different suggestions
+            # about one sentence would key identically and the second would be
+            # dropped as rejected_duplicate — the author asked one question
+            # instead of two, with nothing in any report to say so. Continuity
+            # gets away with it because it never files two questions about one
+            # sentence; a line editor does that routinely.
+            # Pinned by tests/test_smoothing.py::
+            # test_two_suggestions_on_one_sentence_stay_two_questions.
             from .sweeps import sentence_window
             quote, lo, occurrence = sentence_window(para_text, c.start, c.end)
             corrected = (quote[:c.start - lo] + c.replacement
