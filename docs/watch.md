@@ -293,6 +293,14 @@ Besides being a receipt, it is a drift tripwire: in subfolder mode the routing
 block shows exactly where the outputs landed, so a book put in the wrong author's
 folder is obvious the same morning rather than found weeks later.
 
+Every finished job gets the same log, whichever pipeline ran it, with one group
+that differs by what the job produced. For a **proofread** that group reports
+both halves of the deliverable: the corrections made as tracked changes, the
+queries left for the author as margin comments, and — as a share of those
+queries, not a number to add to them — how many are corrections a judge gate
+held back. The query rows are left out entirely when there are none, so a clean
+run reads as one.
+
 **About the cost figure.** The "estimated cost" in the email — and in
 `docproof-watch status` — is priced from the run's *real* token counts at the
 model catalog's *list* rates, and now reflects the reasoning effort the run used.

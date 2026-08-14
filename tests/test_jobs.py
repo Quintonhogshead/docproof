@@ -120,6 +120,29 @@ def test_a_record_without_features_keeps_the_config_defaults(runner):
     assert cfg.adjudicate.enabled is True
 
 
+def test_a_record_from_before_the_query_counts_existed_still_loads(runner):
+    """A job record written before a review counted its margin comments has no
+    key for them at all. It must load — with nothing to report, which is not
+    the same as a crash — or every finished review on the machine disappears
+    from the list the day the field is added."""
+    import json
+
+    from app.jobs import APP_MANIFEST
+
+    store, _ = runner
+    job = _job(store, state="done", applied=7)
+    path = store.dir(job.id) / APP_MANIFEST
+    old = json.loads(path.read_text("utf-8"))
+    del old["queried"], old["judge_held"]
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    back = store.get(job.id)
+    assert back is not None
+    assert back.applied == 7
+    assert back.queried == 0 and back.judge_held == 0
+    assert back.to_api()["queried"] == 0        # and it reaches the card
+
+
 def test_a_running_review_names_the_step_it_is_on():
     """plain_state reads the stage while a whole-book pass runs after the loop,
     so the card doesn't say "reviewing" during the rewrite pass."""

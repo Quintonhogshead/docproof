@@ -379,6 +379,23 @@ commonest first, each one shown as before → after with only the altered words
 marked. Confidence is a phrase rather than a score, and anything the model
 found but didn't apply is kept in a separate panel rather than dropped.
 
+Those panels are the second half of the deliverable, and they are not all the
+same thing — see [deliverables.md](deliverables.md):
+
+- **Queries — questions, not corrections.** The kinds of mistake that ask
+  rather than correct, because the answer is the author's to make. Each is a
+  comment in the margin of the reviewed file, and none of them changed the
+  document. This is work waiting for a person, not work that failed.
+- **Left for you to judge.** Findings below the confidence gate the run was set
+  to.
+- **Couldn't be placed.** The words a finding quoted could no longer be found
+  when it came time to write it in.
+- **Not applied.** Set aside deliberately — usually covered by another change,
+  or held back by a check further down the line. Each card says which.
+
+The count on the results card reads the same way: corrections are the tracked
+changes, and questions in the margins are counted separately.
+
 ## Changing what it looks for
 
 **What it looks for** shows the instructions sent with your document, one
