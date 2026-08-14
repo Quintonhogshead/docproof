@@ -345,7 +345,7 @@ def cmd_review(args) -> int:
         except (IngestError, FileNotFoundError, ValueError, ProviderError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 2
-        print(f"\n{outputs.applied} tracked change(s) applied.")
+        print(f"\n{_result_line(outputs)}.")
         for p in (outputs.reviewed_path, outputs.change_log,
                   outputs.summary_md, outputs.findings_json, out / "run.log"):
             if p is not None:
@@ -380,7 +380,7 @@ def cmd_review(args) -> int:
 
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=args.input, coverage=coverage)
-    print(f"\n{outputs.applied} tracked change(s) applied.")
+    print(f"\n{_result_line(outputs)}.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
         if p is not None:
@@ -462,7 +462,7 @@ def cmd_collect(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    print(f"\n{outputs.applied} tracked change(s) applied.")
+    print(f"\n{_result_line(outputs)}.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json):
         if p is not None:
@@ -503,8 +503,7 @@ def cmd_rejudge(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    print(f"\n{outputs.applied} tracked change(s) applied "
-          f"({usage.api_calls} judge call(s)).")
+    print(f"\n{_result_line(outputs)} ({usage.api_calls} judge call(s)).")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json):
         if p is not None:
@@ -768,6 +767,19 @@ def cmd_eval(args) -> int:
 
 
 # --- helpers ------------------------------------------------------------------
+
+def _result_line(outputs) -> str:
+    """What a finished review produced, both halves of it — no full stop, so a
+    caller can add its own tail.
+
+    A review hands back tracked changes and margin questions, and printing only
+    the first tells someone who ran it on the command line that a book with
+    forty questions waiting in it needed nothing looked at."""
+    line = f"{outputs.applied} tracked change(s) applied"
+    if outputs.queried:
+        line += f", {outputs.queried} question(s) left in the margins"
+    return line
+
 
 def _plain_state(job) -> str:
     return {"submitted": "waiting on the provider",

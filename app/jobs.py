@@ -167,6 +167,14 @@ class Job:
     stage_since: str = ""
     error: str | None = None
     applied: int | None = None
+    # The review's other channel. `applied` counts tracked changes — the
+    # corrections; `queried` counts the margin comments, which are questions
+    # the author answers and which change nothing. `judge_held` is how many of
+    # those questions are corrections a judge gate withdrew rather than let
+    # through. Both are 0 on older records and on jobs that are not reviews;
+    # see docproof.pipeline.Outputs, which counts them.
+    queried: int = 0
+    judge_held: int = 0
     results_dir: str | None = None
     min_confidence: str = "medium"
     # Which English this manuscript is written in: "us" | "uk" | "ca" | "au".
@@ -406,6 +414,18 @@ class Job:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _tallies(outputs) -> dict:
+    """What a finished review counted, as `store.update` keywords.
+
+    Six paths finish a review — inline, batch collect, multi-round, re-judge,
+    and the two "download anyway" rebuilds — and every one of them has to
+    record the same numbers or the results card will disagree with itself
+    depending on how the document was produced. Collected here so that a run
+    counts a new thing in one place rather than six."""
+    return {"applied": outputs.applied, "queried": outputs.queried,
+            "judge_held": outputs.judge_held}
 
 
 def read_usage(results_dir: Path | str) -> tuple[dict, float | None] | None:
@@ -808,7 +828,7 @@ class JobRunner:
                          judge_held=read_meaning_held(out))
         checkpoint.delete()
         updated = self.store.update(job_id, state="done", audit_overridden=True,
-                                    applied=outputs.applied,
+                                    **_tallies(outputs),
                                     results_dir=str(out), error=job.error)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._finish(job_id)
@@ -863,7 +883,7 @@ class JobRunner:
                          source_path=job.source_path,
                          judge_held=read_meaning_held(out))
         updated = self.store.update(job.id, state="done", audit_overridden=True,
-                                    applied=outputs.applied,
+                                    **_tallies(outputs),
                                     results_dir=str(out), error=job.error)
         self._record_usage(job.id, out, cfg.api.model,
                            batch=job.mode == "batch")
@@ -952,7 +972,7 @@ class JobRunner:
         source = self.store.save(replace(
             job, id=batchlib.new_job_id(job.filename), state="running",
             stage="judging", stage_since=_now(), results_dir="", error="",
-            error_kind="", applied=0, done=0, total=0,
+            error_kind="", applied=0, queried=0, judge_held=0, done=0, total=0,
             review_round=0, total_rounds=0, mode="now", schedule_at=None,
             collect_attempts=0, audit_failed=False, audit_overridden=False,
             verified=None, words=None,
@@ -979,7 +999,7 @@ class JobRunner:
             self._finish(source.id)
             return updated
         updated = self.store.update(source.id, state="done",
-                                    applied=outputs.applied,
+                                    **_tallies(outputs),
                                     results_dir=str(out), stage="")
         self._record_usage(source.id, out, cfg.meaning_check.model, batch=False)
         self._finish(source.id)
@@ -1214,7 +1234,7 @@ class JobRunner:
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise
-        self.store.update(job_id, state="done", applied=outputs.applied,
+        self.store.update(job_id, state="done", **_tallies(outputs),
                           results_dir=str(out), error=None, stage="")
         self._record_usage(job_id, out, cfg.api.model, batch=job.mode == "batch")
         self._finish(job_id)
@@ -1292,7 +1312,7 @@ class JobRunner:
             self._release_results_dir(job_id)
             raise
         checkpoint.delete()
-        self.store.update(job_id, state="done", applied=outputs.applied,
+        self.store.update(job_id, state="done", **_tallies(outputs),
                           results_dir=str(out), error=None, stage="")
         self._record_usage(job_id, out, cfg.api.model, batch=False)
         self._finish(job_id)
@@ -1844,7 +1864,7 @@ class JobRunner:
             self._release_results_dir(job.id)
             self.store.update(job.id, state="failed", error=str(e))
             return
-        self.store.update(job.id, state="done", applied=outputs.applied,
+        self.store.update(job.id, state="done", **_tallies(outputs),
                           results_dir=str(out), error=None)
         self._record_usage(job.id, out, cfg.api.model, batch=True)
         self._notify_done(job.id)

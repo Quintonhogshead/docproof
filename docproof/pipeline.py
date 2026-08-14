@@ -140,6 +140,15 @@ class Outputs:
     applied: int
     findings: int
     change_log: Path | None = None
+    # The deliverable has two channels, and only one of them was ever counted
+    # here. `queried` is the margin comments — questions and judgment calls the
+    # author is asked to rule on, not corrections — counted exactly the way
+    # summary.md counts them (status == "query" in the final list), so the two
+    # never disagree. `judge_held` is how many of those queries a judge gate
+    # withdrew from the tracked changes. Both default to 0 so a caller that
+    # predates them still constructs.
+    queried: int = 0
+    judge_held: int = 0
 
 
 def content_hash(doc: DocumentModel) -> str:
@@ -1071,17 +1080,18 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
                      usage: Usage, *, out_dir, replay: list[dict] | None):
     """Run every enabled judge gate over `validated`, in place.
 
-    Returns (reports, rows) — the per-gate reports for the run report, and the
-    rows recorded for a later replay. With `replay` supplied and the gates off,
-    an earlier run's verdicts are re-applied instead, costing nothing."""
+    Returns (reports, held) — the per-gate reports for the run report, and how
+    many changes were withdrawn into the margin. With `replay` supplied and the
+    gates off, an earlier run's verdicts are re-applied instead, costing
+    nothing — and those count as held too, because the document in the author's
+    hands holds them back however the verdict was reached."""
     from .judges import SPECS, screen
     from .validator import to_query
 
     gates = [(cfg.meaning_check, SPECS["meaning"]), (cfg.fix_check, SPECS["fix"])]
     if not any(g.enabled for g, _ in gates):
-        if replay:
-            _replay_judge_gates(prepared, validated, replay)
-        return [], []
+        return [], (_replay_judge_gates(prepared, validated, replay)
+                    if replay else 0)
 
     para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
     context = "\n\n".join(x for x in (prepared.conventions,
@@ -1150,12 +1160,17 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
     # summary told them they were protected from. See app/jobs.py.
     if rows:
         _write_judge_held(out_dir, rows)
-    return reports, rows
+    return reports, len(rows)
 
 
 def _replay_judge_gates(prepared: Prepared, validated: list,
-                        rows: list[dict]) -> None:
-    """Re-apply an earlier run's verdicts without paying a judge to reach them."""
+                        rows: list[dict]) -> int:
+    """Re-apply an earlier run's verdicts without paying a judge to reach them.
+
+    Returns how many changes were actually withdrawn — which is not
+    `len(rows)`: a row only matches if the finding is still a validated change
+    in this rebuild, and the report should say what this document holds back,
+    not what the original run recorded."""
     from .validator import to_query
     notes = {(r.get("para_id"), r.get("original_text"), r.get("occurrence"),
               r.get("corrected_text")): r.get("explanation", "") for r in rows}
@@ -1172,6 +1187,7 @@ def _replay_judge_gates(prepared: Prepared, validated: list,
     if n:
         log.info("Judge gates: re-applied %d held-back change(s) from the "
                  "original run.", n)
+    return n
 
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
@@ -1254,7 +1270,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # them. Running gates one after another is safe for the same reason: each
     # only ever removes, and a change the first withdrew is no longer
     # "validated", so the second neither sees it nor is billed for it.
-    judge_reports, held_rows = _run_judge_gates(
+    judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held)
     # Verifier rejections were never candidates for a tracked change, but they
     # belong in the report so the author sees what the overseer set aside.
@@ -1302,12 +1318,20 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          cfg=cfg, applied_ids=stats.applied,
                          sweeps=prepared.sweep_reports, spell=prepared.spell,
                          normalization=prepared.normalization,
-                         audit=audit_report, usage=usage, stats=stats,
+                         audit=audit_report, usage=usage,
                          variant=prepared.variant)
 
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)
+    # Counted off the same list the reports are written from, not off
+    # `stats.queried`: with query_comments on, the reassembler's tally also
+    # counts the low-confidence and oversized comments it writes, and misses
+    # the queries that found no anchor. This number is the one summary.md
+    # prints, and the IDML format — whose own stats class has no queried field
+    # at all — reaches it the same way.
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated),
-                   change_log=change_log)
+                   change_log=change_log,
+                   queried=sum(1 for f in validated if f.status == "query"),
+                   judge_held=held_count)

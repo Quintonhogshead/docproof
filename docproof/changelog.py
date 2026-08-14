@@ -117,8 +117,7 @@ def _reason(f: Finding) -> str:
 
 def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                      applied_ids, sweeps=None, spell=None, normalization=None,
-                     audit=None, usage=None, stats=None,
-                     variant=None) -> None:
+                     audit=None, usage=None, variant=None) -> None:
     """Write the change log. Imports python-docx lazily so that a run which
     does not want one never pays for the import."""
     import docx
