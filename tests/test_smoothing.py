@@ -186,6 +186,23 @@ def test_a_suggestion_reaches_the_document_as_a_comment_and_nothing_else(
     # ...but the suggestion did reach the author, wording and all.
     assert "quietly" in (tmp_path / "out" / "summary.md").read_text(
         encoding="utf-8")
+    # And the record says what produced it, so a later run can be compared.
+    block = record["smoothing"]
+    assert block["proposed"] == 1 and block["kept"] == 1
+    assert block["unjudged"] == 0
+    assert len(block["propose_prompt_sha"]) == 12
+    assert block["judge_model"] == cfg.smoothing.judge_model
+
+
+def test_a_prompt_change_changes_the_recorded_fingerprint():
+    """Two runs are only comparable when the prompts match — a prompt change
+    moves the output more than any config knob. The fingerprint is what lets an
+    eval notice instead of silently scoring a pre-change run against a
+    post-change baseline."""
+    from docproof.smoothing import PROPOSE_SYSTEM, prompt_sha
+    assert prompt_sha(PROPOSE_SYSTEM) == prompt_sha(PROPOSE_SYSTEM)
+    assert prompt_sha(PROPOSE_SYSTEM) != prompt_sha(PROPOSE_SYSTEM + " ")
+    assert len(prompt_sha("anything")) == 12
 
 
 # --- restraint ----------------------------------------------------------------

@@ -1050,9 +1050,13 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
              "(%d filtered before the judge, %d kept as not-worth-raising, "
              "%d withheld by the cap of %d).",
              len(kept), len(cands), filtered, len(rejected), withheld, cap)
-    return kept, SmoothingReport(proposed=len(cands), kept=len(kept),
-                                 withheld=withheld, cap=cap,
-                                 unjudged=unjudged)
+    from .smoothing import prompt_sha
+    return kept, SmoothingReport(
+        proposed=len(cands), kept=len(kept), withheld=withheld, cap=cap,
+        unjudged=unjudged, filtered=filtered,
+        propose_model=propose_model, judge_model=sm.judge_model,
+        propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM),
+        judge_prompt_sha=prompt_sha(system))
 
 
 def _promote_low_confidence(cfg: Config, prepared: Prepared,
@@ -1427,7 +1431,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
                         audit=audit_report, consistency=prepared.consistency,
-                        coverage=coverage)
+                        coverage=coverage, smoothing=smoothing_report)
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,

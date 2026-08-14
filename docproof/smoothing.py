@@ -160,6 +160,22 @@ class SmoothingReport:
     withheld: int = 0        # affirmed, then dropped by the per-1,000-words cap
     cap: int = 0             # the cap itself, for the report line
     unjudged: int = 0        # candidates the judge never ruled on either way
+    filtered: int = 0        # dropped by the deterministic filters, pre-judge
+    # What produced these numbers. A prompt change moves the output more than
+    # any config knob does, so two runs are only comparable when these match —
+    # and an eval scoring a pre-change run against a post-change baseline would
+    # be measuring the prompt, not the pass. Fingerprints rather than the prompt
+    # text: the point is to detect difference, not to reproduce the wording.
+    propose_model: str = ""
+    judge_model: str = ""
+    propose_prompt_sha: str = ""
+    judge_prompt_sha: str = ""
+
+
+def prompt_sha(text: str) -> str:
+    """A short, stable fingerprint of a system prompt."""
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
 class _Suggestion(BaseModel):

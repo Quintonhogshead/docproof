@@ -54,7 +54,7 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
                         normalization=None, audit=None, consistency=None,
-                        coverage=None) -> None:
+                        coverage=None, smoothing=None) -> None:
     applied = set(applied_ids)
     payload = {
         "schema_version": 1,
@@ -102,6 +102,15 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                                 "para_ids": list(g.para_ids)}
                                for g in coverage.gaps]}
                      if coverage is not None else None),
+        # What the smoothing pass did, for anything scoring it. `unjudged` is
+        # the one that must not be inferred: a pass that proposed suggestions
+        # and delivered none looks identical to a restrained one from the
+        # outside, and on this pass silence is the DESIRED output almost
+        # everywhere — which is exactly why silence must never be the
+        # unexamined reading. The prompt fingerprints are here so two runs can
+        # be told apart: a prompt change moves the output more than any knob.
+        "smoothing": (dataclasses.asdict(smoothing)
+                      if smoothing is not None else None),
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
