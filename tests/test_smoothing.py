@@ -358,7 +358,7 @@ def _f(conf: str, n: int) -> Finding:
 
 def test_the_cap_keeps_the_surest_and_counts_the_rest():
     findings = [_f("low", 1), _f("high", 2), _f("medium", 3), _f("high", 4)]
-    kept, withheld = rank_and_cap(findings, cap=2, min_confidence="low")
+    kept, withheld, below = rank_and_cap(findings, cap=2, min_confidence="low")
     assert [f.finding_id for f in kept] == ["sm-0002", "sm-0004"]
     assert withheld == 2
 
@@ -367,8 +367,9 @@ def test_the_confidence_floor_drops_before_the_cap_counts():
     """A suggestion below the floor was never eligible, so it is not 'withheld' —
     reporting it as withheld would overstate what the cap cost the author."""
     findings = [_f("low", 1), _f("high", 2)]
-    kept, withheld = rank_and_cap(findings, cap=5, min_confidence="medium")
+    kept, withheld, below = rank_and_cap(findings, cap=5, min_confidence="medium")
     assert [f.finding_id for f in kept] == ["sm-0002"] and withheld == 0
+    assert below == 1          # the low one was never eligible, and is counted
 
 
 def test_the_cap_reports_what_it_withheld(monkeypatch):
@@ -526,3 +527,36 @@ def test_the_eval_runner_disables_smoothing():
     cfg = Config()
     cfg.smoothing.enabled = True
     assert _eval_config(cfg).smoothing.enabled is False
+
+
+def test_every_candidate_is_accounted_for(monkeypatch):
+    """The identity that makes the pass's numbers reconcilable:
+
+        proposed == kept + withheld + below_floor + refused + unjudged
+
+    Each term is a different thing that happened and has a different fix — a cap
+    doing its job, taste, a threshold, and a fault. An unexplained remainder
+    would mean a loss path nobody has found, which is exactly how the
+    below-floor drop went uncounted until someone tried to make the columns
+    add up."""
+    p = _para("body-0", "He was walking slowly in a very quiet way indeed, he "
+                        "thought, and the long road went on for a while yet.")
+    findings, report, _prov = _run(
+        monkeypatch, _cfg(max_per_1000_words=500, min_confidence="medium"),
+        _prepared(p), [
+            _suggest(_s("body-0", "was walking", "walked", category="aspect"),
+                     _s("body-0", "in a very quiet way", "quietly"),
+                     _s("body-0", "for a while yet", "a while longer"),
+                     _s("body-0", "went on", "continued", category="idiom")),
+            _verdicts({"index": 1, "is_error": True, "confidence": "high"},
+                      {"index": 2, "is_error": True, "confidence": "low"},
+                      {"index": 3, "is_error": False, "confidence": "high"}),
+        ])
+    assert report.proposed == (report.kept + report.withheld
+                               + report.below_floor + report.refused
+                               + report.unjudged)
+    assert report.kept == 1          # the high-confidence one
+    assert report.below_floor == 1   # affirmed "low", under the medium floor
+    assert report.refused == 1       # the judge said no
+    assert report.unjudged == 1      # never ruled on at all
+    assert len(findings) == report.kept

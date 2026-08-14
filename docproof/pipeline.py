@@ -1034,7 +1034,7 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
 
     words = sum(len(p.text.split()) for p in doc.paragraphs)
     cap = cap_for(words, sm.max_per_1000_words)
-    kept, withheld = rank_and_cap(judged, cap, sm.min_confidence)
+    kept, withheld, below_floor = rank_and_cap(judged, cap, sm.min_confidence)
     # The judge's rejections are the pass's own taste record: what a strong model
     # thought was not worth the author's attention. Persisted for the same reason
     # Sapling's are — it is the only way to measure the valve rather than guess.
@@ -1054,6 +1054,7 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     return kept, SmoothingReport(
         proposed=len(cands), kept=len(kept), withheld=withheld, cap=cap,
         unjudged=unjudged, filtered=filtered,
+        refused=len(rejected), below_floor=below_floor,
         propose_model=propose_model, judge_model=sm.judge_model,
         propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM),
         judge_prompt_sha=prompt_sha(system))

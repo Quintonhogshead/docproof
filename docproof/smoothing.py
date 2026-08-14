@@ -161,6 +161,17 @@ class SmoothingReport:
     cap: int = 0             # the cap itself, for the report line
     unjudged: int = 0        # candidates the judge never ruled on either way
     filtered: int = 0        # dropped by the deterministic filters, pre-judge
+    refused: int = 0         # the judge ruled not worth raising
+    below_floor: int = 0     # affirmed, but softer than min_confidence
+    # These five account for every candidate the judge was given, exactly:
+    #
+    #     proposed == kept + withheld + below_floor + refused + unjudged
+    #
+    # and each term is a different thing that happened, with a different fix.
+    # `withheld` is a cap doing its job and is not a loss at all; `refused` is
+    # taste; `below_floor` is a threshold; `unjudged` is a fault. An unexplained
+    # remainder would mean a path nobody has found, so the identity is asserted
+    # in the tests rather than left as a comment.
     # What produced these numbers. A prompt change moves the output more than
     # any config knob does, so two runs are only comparable when these match —
     # and an eval scoring a pre-change run against a post-change baseline would
@@ -416,15 +427,22 @@ def cap_for(words: int, per_1000: float) -> int:
 
 
 def rank_and_cap(findings: list, cap: int, min_confidence: str = "low"
-                 ) -> tuple[list, int]:
-    """Drop anything softer than the floor, keep the best `cap`, and report how
-    many affirmed suggestions were withheld.
+                 ) -> tuple[list, int, int]:
+    """Drop anything softer than the floor, keep the best `cap`, and report both
+    the number withheld by the cap and the number dropped by the floor.
+
+    Those two are separate on purpose. A suggestion the judge affirmed only
+    weakly was never eligible, so counting it as "withheld" would overstate what
+    the cap cost the author — and leaving it uncounted entirely, which is what
+    this function used to do, means the pass's numbers do not add up and the
+    remainder looks like a bug somewhere else.
 
     Sorted by confidence and then by the order the judge produced them — a
     stable sort, so within one confidence band the pass's own reading order
     survives and the result does not move between runs on a tie."""
     floor = _RANK.get(min_confidence, 0)
     eligible = [f for f in findings if _RANK.get(f.confidence, 0) >= floor]
+    below_floor = len(findings) - len(eligible)
     ranked = sorted(eligible,
                     key=lambda f: -_RANK.get(f.confidence, 0))
-    return ranked[:cap], max(0, len(ranked) - cap)
+    return ranked[:cap], max(0, len(ranked) - cap), below_floor
