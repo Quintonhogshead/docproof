@@ -649,6 +649,14 @@ class SmoothingConfig(BaseModel):
     min_confidence: Literal["low", "medium", "high"] = "medium"
     batch_size: int = Field(default=40, ge=1)   # candidates per judge request
     max_output_tokens: int = Field(default=4000, ge=1)
+    # The judge gets its own, much larger ceiling. Its VISIBLE output is tiny —
+    # a verdict is three fields — but on a reasoning model the thinking counts
+    # against this budget too, and judging forty literary calls at high effort
+    # burns far more of it than the verdicts occupy. Sized from the propose
+    # ceiling it truncates, and a truncated batch returns no verdicts at all:
+    # every candidate in it vanishes, and the run reports a restrained pass
+    # rather than a failed one. Measured that on the first real book.
+    judge_max_output_tokens: int = Field(default=16000, ge=1)
     # Both system prompts, editable per job the way the round judge's is. Empty
     # (the default) uses the built-in one in smoothing.py; a non-empty value
     # replaces it wholesale.

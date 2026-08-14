@@ -132,13 +132,24 @@ a reasonable editor would raise it; low = defensible but skippable."""
 
 @dataclass(frozen=True)
 class SmoothingReport:
-    """What the pass did, for summary.md. `withheld` is the number of judged,
-    above-floor suggestions the volume cap dropped — reported because a cap the
-    author cannot see is indistinguishable from a pass that found nothing."""
+    """What the pass did, for summary.md.
+
+    `withheld` is the number of judged, above-floor suggestions the volume cap
+    dropped — reported because a cap the author cannot see is indistinguishable
+    from a pass that found nothing.
+
+    `unjudged` exists for a failure that is otherwise invisible and reads as a
+    virtue. A judge batch whose reply is truncated or unparseable yields no
+    verdicts AT ALL: every candidate in it disappears, landing in neither the
+    kept list nor the reject log. The run then reports "0 suggestions from 53
+    proposed", which looks exactly like admirable restraint and is in fact a
+    pass that never ran. Counted as the candidates the judge never accounted
+    for, so the two cannot be confused."""
     proposed: int = 0        # candidates surviving the deterministic filters
     kept: int = 0            # suggestions the judge affirmed at/above the floor
     withheld: int = 0        # affirmed, then dropped by the per-1,000-words cap
     cap: int = 0             # the cap itself, for the report line
+    unjudged: int = 0        # candidates the judge never ruled on either way
 
 
 class _Suggestion(BaseModel):

@@ -304,7 +304,12 @@ smoothing:
   max_per_1000_words: 3.0   # volume cap; overflow is dropped AND counted in summary.md
   min_confidence: medium    # drop anything the judge affirms softer than this
   batch_size: 40            # candidates per judge request
-  max_output_tokens: 4000
+  max_output_tokens: 4000   # the proposing read
+  judge_max_output_tokens: 16000  # much larger on purpose: a verdict is tiny,
+                            # but on a reasoning model the THINKING counts here
+                            # too, and a truncated judge batch returns no
+                            # verdicts at all — every candidate in it vanishes
+                            # and the run looks restrained instead of broken
   propose_prompt: ""        # empty = built-in default (see docproof/smoothing.py)
   judge_prompt: ""          # empty = built-in default
 

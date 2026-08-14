@@ -404,6 +404,14 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      f"— this manuscript's cap is {smoothing.cap}, and the "
                      f"least confident past that were dropped rather than "
                      f"crowd the margin.\n")
+        if smoothing.unjudged:
+            # Silence here would read as restraint. It is not: these are
+            # candidates nobody ruled on, so the count above is a floor.
+            L.append(f"**{smoothing.unjudged} of them were never ruled on** — "
+                     f"the reviewing model's reply came back truncated or "
+                     f"unreadable, so those suggestions were neither offered "
+                     f"nor refused. This pass ran incompletely; treat the "
+                     f"count above as a floor rather than a finding.\n")
 
     # Each judge gate gets its own section, because these are a different animal
     # from the queries above: every one of them is a correction the run was going

@@ -369,6 +369,51 @@ def test_the_cap_reports_what_it_withheld(monkeypatch):
     assert len(findings) == 1 and report.kept == 1 and report.withheld == 1
 
 
+def test_a_judge_that_never_answered_is_not_reported_as_restraint(monkeypatch):
+    """Found on the first real book: both judge batches came back truncated,
+    every candidate vanished, and the run reported "0 suggestions from 53
+    proposed" — which reads as admirable restraint and was a pass that never
+    ran. A failure that flatters the feature is the worst kind to leave
+    unreported."""
+    p = _para("body-0", "He was walking slowly in a very quiet way indeed.")
+    # A reply with no verdicts at all is what truncation produces.
+    findings, report, _prov = _run(monkeypatch, _cfg(), _prepared(p), [
+        _suggest(_s("body-0", "was walking", "walked", category="aspect"),
+                 _s("body-0", "in a very quiet way", "quietly")),
+        ProviderResult(parsed={"verdicts": []}),
+    ])
+    assert findings == []
+    assert report.proposed == 2 and report.kept == 0
+    # The distinction that matters: nobody ruled on these.
+    assert report.unjudged == 2
+
+
+def test_a_judge_that_refused_everything_is_not_reported_as_failure(monkeypatch):
+    """The other side of the same line. An honest rejection IS restraint, and
+    must not be tarred as a broken run."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    _findings, report, _prov = _run(monkeypatch, _cfg(), _prepared(p), [
+        _suggest(_s("body-0", "in a very quiet way", "quietly")),
+        _verdicts({"index": 1, "is_error": False, "confidence": "high"}),
+    ])
+    assert report.proposed == 1 and report.kept == 0 and report.unjudged == 0
+
+
+def test_the_unjudged_count_reaches_summary_md(tmp_path):
+    from docproof.formats import DOCX
+    from docproof.reporting import write_summary_md
+    from docproof.smoothing import SmoothingReport
+    doc = DocumentModel(source_path="x.docx",
+                        paragraphs=(_para("body-0", "Some prose here."),))
+    write_summary_md(tmp_path / "summary.md", doc=doc, findings=[],
+                     usage=Usage(), cfg=Config(), applied_ids=(), fmt=DOCX,
+                     smoothing=SmoothingReport(proposed=53, kept=0, withheld=0,
+                                               cap=3, unjudged=53))
+    text = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert "53 of them were never ruled on" in text
+    assert "floor" in text
+
+
 def test_the_withheld_count_reaches_summary_md(tmp_path):
     from docproof.reporting import write_summary_md
     from docproof.smoothing import SmoothingReport

@@ -1015,11 +1015,22 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     rejected: list = []
     judged = smooth_confirm(
         cands, doc.paragraphs, build_provider(jcfg), model=sm.judge_model,
-        max_tokens=sm.max_output_tokens, usage=usage, ids=count(1),
+        max_tokens=sm.judge_max_output_tokens, usage=usage, ids=count(1),
         batch_size=sm.batch_size, reject_sink=rejected,
         error_type="smoothing", chunk_id="smoothing", id_prefix="sm",
         concurrency=cfg.concurrency_for(sm.judge_model),
         system=system, mode="suggestion")
+
+    # Every candidate should come back either affirmed or in the reject log. Any
+    # that did neither were in a batch the judge failed to answer — a truncated
+    # or unparseable reply drops the whole window silently, and the run would
+    # otherwise report the loss as restraint.
+    unjudged = max(0, len(cands) - len(judged) - len(rejected))
+    if unjudged:
+        log.warning("Smoothing: the judge never ruled on %d of %d candidate(s) "
+                    "— a batch reply was truncated or unusable. Treat this "
+                    "run's volume as a floor, not a measurement.",
+                    unjudged, len(cands))
 
     words = sum(len(p.text.split()) for p in doc.paragraphs)
     cap = cap_for(words, sm.max_per_1000_words)
@@ -1040,7 +1051,8 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
              "%d withheld by the cap of %d).",
              len(kept), len(cands), filtered, len(rejected), withheld, cap)
     return kept, SmoothingReport(proposed=len(cands), kept=len(kept),
-                                 withheld=withheld, cap=cap)
+                                 withheld=withheld, cap=cap,
+                                 unjudged=unjudged)
 
 
 def _promote_low_confidence(cfg: Config, prepared: Prepared,
