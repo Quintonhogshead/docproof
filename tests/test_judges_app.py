@@ -446,3 +446,22 @@ def test_a_gate_left_off_stays_off_in_the_rejudge(runner, tmp_path, monkeypatch)
         r.rejudge(job.id, gates={"meaning_check": False, "fix_check": True},
                   models={"fix_check": "claude-opus-5"})
     assert seen == {"meaning": False, "fix": True}
+
+
+def test_the_tick_endpoint_carries_the_card_flags(client, uploaded):
+    """The Results screen opens by ticking, so /api/tick renders the list just
+    as often as /api/jobs. A flag on one and not the other makes a button appear
+    and vanish depending on how the screen was reached — which is exactly how
+    the Re-judge button shipped unreachable."""
+    created = client.post("/api/jobs", json={
+        "file_ids": [uploaded], "model": "claude-sonnet-5"}).json()
+    job_id = created["jobs"][0]["id"]
+
+    listed = client.get("/api/jobs").json()["jobs"]
+    ticked = client.post("/api/tick").json()["jobs"]
+    a = next(j for j in listed if j["id"] == job_id)
+    b = next(j for j in ticked if j["id"] == job_id)
+    for flag in ("rejudgeable", "recoverable"):
+        assert flag in a, f"/api/jobs dropped {flag}"
+        assert flag in b, f"/api/tick dropped {flag}"
+        assert a[flag] == b[flag]

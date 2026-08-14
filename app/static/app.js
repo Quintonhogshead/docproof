@@ -1779,7 +1779,7 @@ function judgeModelSelect(id, chosen) {
   return sel;
 }
 
-function rejudgeGateRow(key, label, blurb, chosen) {
+function rejudgeGateRow(key, label, blurb, chosen, on_ = true) {
   const row = document.createElement('div');
   row.className = 'rejudge-gate';
   const on = document.createElement('label');
@@ -1787,7 +1787,7 @@ function rejudgeGateRow(key, label, blurb, chosen) {
   const box = document.createElement('input');
   box.type = 'checkbox';
   box.dataset.gate = key;
-  box.checked = true;
+  box.checked = on_;
   const name = document.createElement('span');
   name.append(box, document.createTextNode(` ${label}`));
   const small = document.createElement('small');
@@ -1808,7 +1808,13 @@ function rejudgeGateRow(key, label, blurb, chosen) {
   return row;
 }
 
-function rejudgeForm(job, onClose) {
+// Which cards have the re-judge form open, and what has been picked in each.
+// The results list redraws on a timer and rebuilds every card from scratch, so
+// without this the form would vanish mid-choice — well before anyone could read
+// two blurbs and pick two models.
+const rejudgeOpen = new Map();
+
+function rejudgeForm(job, onClose, saved) {
   const form = document.createElement('div');
   form.className = 'rejudge-form';
   const head = document.createElement('p');
@@ -1817,21 +1823,40 @@ function rejudgeForm(job, onClose) {
     + 'ones that fail. No detector calls — only the checks you pick here are '
     + 'paid for, and the result lands beside this review as its own.';
   form.append(head);
+  const was = saved || {};
   form.append(rejudgeGateRow(
     'meaning_check', 'Meaning check',
     'Does the corrected sentence still mean what the original meant?',
-    state.defaultMeaningModel));
+    was.meaning_model || state.defaultMeaningModel,
+    was.meaning_check !== false));
   form.append(rejudgeGateRow(
     'fix_check', 'Fix check',
     'Is the correction actually the right one?',
-    state.defaultFixModel));
+    was.fix_model || state.defaultFixModel,
+    was.fix_check !== false));
+
+  // Remember every choice as it is made, so a redraw can put it back exactly.
+  const snapshot = () => {
+    const g = (k) => form.querySelector(`input[data-gate="${k}"]`).checked;
+    const m = (k) => (form.querySelector(`#rejudge-${k}-model`) || {}).value;
+    rejudgeOpen.set(job.id, {
+      meaning_check: g('meaning_check'), fix_check: g('fix_check'),
+      meaning_model: m('meaning_check'), fix_model: m('fix_check'),
+    });
+  };
+  form.addEventListener('change', snapshot);
+  snapshot();
 
   const note = actionNote();
   const run = document.createElement('button');
   run.textContent = 'Run the checks';
   const cancel = document.createElement('button');
   cancel.textContent = 'Cancel';
-  cancel.addEventListener('click', () => { form.remove(); onClose(); });
+  cancel.addEventListener('click', () => {
+    rejudgeOpen.delete(job.id);
+    form.remove();
+    onClose();
+  });
 
   run.addEventListener('click', async () => {
     const gate = (k) => form.querySelector(`input[data-gate="${k}"]`).checked;
@@ -1854,6 +1879,7 @@ function rejudgeForm(job, onClose) {
           fix_model: gate('fix_check') ? model('fix_check') : null,
         }),
       });
+      rejudgeOpen.delete(job.id);
       form.remove();
       onClose();
       refreshJobs();
@@ -2152,6 +2178,29 @@ function renderJobs(jobs) {
         actions.append(
           openButton(job, 'document', 'Show in Finder', note, { reveal: true }));
       }
+      // A review that finished can have the judge gates run over it afterwards
+      // — no detector call, so a book proofread before the gates existed can be
+      // gated now for the price of the gates alone. The result lands beside this
+      // one as its own review rather than overwriting it, which is what makes
+      // the two comparable.
+      if (job.rejudgeable) {
+        const rj = document.createElement('button');
+        rj.textContent = 'Re-judge';
+        rj.title = 'Read every change in this review again — for meaning, for '
+          + 'whether the fix is right, or both — and hold back the ones that '
+          + 'fail. Makes no detector calls.';
+        const open = (savedState) => {
+          if (li.querySelector('.rejudge-form')) return;   // already open
+          rj.disabled = true;
+          li.append(rejudgeForm(job, () => { rj.disabled = false; }, savedState));
+        };
+        rj.addEventListener('click', () => open());
+        actions.append(rj);
+        // This list redraws on a timer, rebuilding every card. A form that was
+        // open before the redraw comes back with its choices intact, rather
+        // than disappearing under whoever was still reading it.
+        if (rejudgeOpen.has(job.id)) queueMicrotask(() => open(rejudgeOpen.get(job.id)));
+      }
       const bits = [];
       if (typeof job.applied === 'number') {
         bits.push(`${job.applied} change${job.applied === 1 ? '' : 's'} suggested`);
@@ -2209,24 +2258,6 @@ function renderJobs(jobs) {
         actions.append(recover);
       }
       actions.append(retry);
-
-      // A finished review can have the judge gates run over it afterwards —
-      // no detector call, so a book proofread before the gates existed can be
-      // gated now for the price of the gates alone. The result lands beside
-      // this one as its own review rather than overwriting it.
-      if (job.rejudgeable) {
-        const rj = document.createElement('button');
-        rj.textContent = 'Re-judge';
-        rj.title = 'Read every change in this review again — for meaning, for '
-          + 'whether the fix is right, or both — and hold back the ones that '
-          + 'fail. Makes no detector calls.';
-        rj.addEventListener('click', () => {
-          if (li.querySelector('.rejudge-form')) return;   // already open
-          rj.disabled = true;
-          li.append(rejudgeForm(job, () => { rj.disabled = false; }));
-        });
-        actions.append(rj);
-      }
 
       // A review that failed only the integrity check has all its work done
       // and paid for — offer to hand the file over anyway, clearly flagged.
