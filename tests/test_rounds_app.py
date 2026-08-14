@@ -217,6 +217,71 @@ def test_download_anyway_rebuilds_an_audit_failed_rounds_review(runner, cfg,
     assert len(review.calls) == 2                # still just the original rounds
 
 
+def test_download_anyway_rounds_does_not_rebill_the_paid_passes(
+        runner, cfg, tmp_path, monkeypatch):
+    """The rounds rebuild inherits the job's original config, and the paid
+    passes live inside the very calls it makes: the story sheet in prepare(),
+    Sapling, the low-confidence valve and the ensemble verifier in finish().
+    All of them must be off — composed.json already holds the findings, so the
+    rebuild is assembly, not review."""
+    from docproof.config import DetectorSpec
+    from docproof.rounds import run_sync_rounds
+    from tests.fakes import FakeProvider, finding_result
+
+    from .test_rounds_sync import _ApproveJudge, _docx, _minimal
+
+    store, r = runner
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    out = tmp_path / "results"
+    out.mkdir()
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    outputs = run_sync_rounds(cfg, str(src), CONFIG.parent / "error_types",
+                              out_dir=out, review_provider=review,
+                              judge_provider=_ApproveJudge())
+    outputs.reviewed_path.unlink()               # the audit withheld the file
+
+    # The job "ran" with every paid pass on, and the rebuild reads that same
+    # config. From here on, reaching Sapling or building any provider IS the bug.
+    real = JobRunner.config_for
+
+    def paid(self, job):
+        c = real(self, job)
+        c.storysheet.enabled = True
+        c.sapling.enabled = True
+        c.low_confidence.confirm = True
+        c.ensemble.detectors = [DetectorSpec(model="claude-sonnet-5")]
+        c.ensemble.verifier_model = "claude-fable-5"
+        return c
+
+    def no_sapling(*a, **k):
+        raise AssertionError("download-anyway sent the book to Sapling")
+
+    def no_provider(*a, **k):
+        raise AssertionError("download-anyway built a provider")
+
+    monkeypatch.setattr(JobRunner, "config_for", paid)
+    monkeypatch.setenv("SAPLING_API_KEY", "key-on-file")
+    monkeypatch.setattr("docproof.sapling.check_paragraphs", no_sapling)
+    monkeypatch.setattr("docproof.providers.build_provider", no_provider)
+
+    job = _job(store, id="ra", filename=Path(src).name, source_path=str(src),
+               rounds=2, state="failed", audit_failed=True,
+               results_dir=str(out), error="audit failed")
+    updated = r.download_anyway("ra")
+    assert updated is not None
+    assert updated.state == "done" and updated.audit_overridden
+    assert outputs.reviewed_path.is_file()       # rebuilt, nothing re-billed
+    assert len(review.calls) == 2                # still just the original rounds
+    assert store.get("ra").sapling_cost == 0.0
+
+
 def test_download_anyway_refuses_a_rounds_run_without_a_snapshot(runner,
                                                                  tmp_path):
     # A run from before the snapshot existed (or with its working files cleaned

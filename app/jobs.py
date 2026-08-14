@@ -118,6 +118,29 @@ class _ReplayOnly:
             "one was missing — refusing to re-run the review at cost.")
 
 
+def _free_finish(cfg: Config) -> None:
+    """Force off every pass that spends inside finish(), so a download-anyway
+    rebuild costs what it promises: nothing.
+
+    The mirror of docproof.rejudge._gates_only, needed for the same reason: the
+    rebuild inherits the ORIGINAL run's config, so a book reviewed with Sapling
+    on would silently pay Sapling (a per-character bill plus its confirm-valve
+    model calls) again — likewise the low-confidence valve and the ensemble's
+    overseer-verifier, each a model call finish() makes on its own account. Two
+    deliberate differences from the re-judge:
+
+      * the judge gates come off TOO — this path replays their recorded
+        verdicts (read_meaning_held) rather than paying to rule again;
+      * the ensemble's detectors stay, because the replayed findings are raw
+        per-detector output and finish() still has to fold them by agreement —
+        a free, local merge. Only the verifier, a model call, is disarmed."""
+    cfg.meaning_check.enabled = False       # the meaning gate's judge
+    cfg.fix_check.enabled = False           # the fix check's judge
+    cfg.sapling.enabled = False             # per-character bill + confirm valve
+    cfg.low_confidence.confirm = False      # the below-gate promotion valve
+    cfg.ensemble.verifier_model = None      # the overseer-verifier
+
+
 @dataclass
 class Job:
     id: str
@@ -747,22 +770,25 @@ class JobRunner:
         checkpoint = self._checkpoint(job, cfg, prepared)
         # _ReplayOnly guarantees this makes no API calls: if the checkpoint is
         # somehow incomplete, it raises rather than silently charging for a
-        # re-review.
+        # re-review. The factory too: with the ensemble on, run_sync ignores
+        # `provider` and builds one client per detector from the factory, so
+        # without it the guarantee would hold for every run except an ensemble's.
         coverage = CoverageLedger()
         findings, usage = run_sync(cfg, prepared, _ReplayOnly(),
-                                   checkpoint=checkpoint, coverage=coverage)
+                                   checkpoint=checkpoint, coverage=coverage,
+                                   provider_factory=lambda _cfg: _ReplayOnly())
 
         cfg.audit = "warn"                              # now let the write pass
-        # The meaning gate lives inside finish() and builds its own provider, so
-        # _ReplayOnly cannot stop it: leaving it on would put a paid pass inside
-        # the one operation that promises to charge nothing. Its verdicts are NOT
-        # in these findings — the checkpoint only carries raw detector output —
-        # so they are read back from what the original run recorded and applied
-        # without a judge. Skipping that step would rebuild the file with every
-        # held-back change applied, which is the opposite of what the first
-        # summary told the author.
-        cfg.meaning_check.enabled = False
-        cfg.fix_check.enabled = False
+        # Every pass that spends inside finish() comes off — each builds its own
+        # provider in there, so _ReplayOnly cannot stop them, and leaving any on
+        # would put a paid pass inside the one operation that promises to charge
+        # nothing. The judge gates' verdicts are NOT in these findings — the
+        # checkpoint only carries raw detector output — so they are read back
+        # from what the original run recorded and applied without a judge.
+        # Skipping that step would rebuild the file with every held-back change
+        # applied, which is the opposite of what the first summary told the
+        # author.
+        _free_finish(cfg)
         out = (Path(job.results_dir) if job.results_dir
                else self._claim_results_dir(job))
         outputs = finish(prepared, findings, usage, cfg, out_dir=out,
@@ -803,17 +829,22 @@ class JobRunner:
         usage = Usage(**data.get("usage", {}))
 
         cfg = self.config_for(job)
+        # The story sheet is a paid whole-book read inside prepare(), and it
+        # only ever feeds detector prompts — no detector runs here, so it comes
+        # off before the ingest. (The single-review path cannot do the same: its
+        # checkpoint is fingerprinted on the original config and prompts, so the
+        # sheet is rebuilt there from its whole-book cache instead.)
+        cfg.storysheet.enabled = False
         # The same deterministic ingest the run used; base.docx was saved from
         # it, so paragraph ids line up. No provider is built or called.
         prepared0 = prepare(cfg, job.source_path, self.error_dir)
         cfg.audit = "warn"                              # let the write pass
-        # ...and the meaning gate off, for the same reason as the single-review
-        # path above: it would build its own provider inside finish() and turn
-        # "costs nothing" into a bill. Its original verdicts are replayed from
-        # the record instead, so the rebuilt file holds back what the first one
-        # did. See _download_anyway.
-        cfg.meaning_check.enabled = False
-        cfg.fix_check.enabled = False
+        # ...and every pass that spends inside finish() off, for the same reason
+        # as the single-review path above: each builds its own provider in there
+        # and would turn "costs nothing" into a bill. The meaning gate's original
+        # verdicts are replayed from the record instead, so the rebuilt file
+        # holds back what the first one did. See download_anyway.
+        _free_finish(cfg)
         prepared_final = replace(prepared0, pkg=DocxPackage(base),
                                  sweep_findings=[], consistency_findings=[])
         outputs = finish(prepared_final, findings, usage, cfg, out_dir=out,
