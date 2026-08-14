@@ -999,35 +999,147 @@ MEANING_HELD_FILE = "meaning_held.json"
 
 
 def read_meaning_held(out_dir) -> list[dict]:
-    """The changes an earlier run's meaning gate held back, if it recorded any.
+    """The changes an earlier run's judge gates held back, if it recorded any.
 
-    A replay (a "download anyway" rebuild) has to reproduce those verdicts
-    without paying for them again — the alternative is handing the author the
-    un-gated document their summary told them they were protected from."""
+    A replay (a "download anyway" rebuild, or a re-judge of a finished run) has
+    to reproduce those verdicts without paying for them again — the alternative
+    is handing the author the un-gated document their summary told them they were
+    protected from. The file keeps its original name so a rebuild of a job run
+    before the second gate existed still reads."""
     import json
     p = Path(out_dir, MEANING_HELD_FILE)
     try:
-        return json.loads(p.read_text("utf-8"))
+        rows = json.loads(p.read_text("utf-8"))
+        return rows if isinstance(rows, list) else []
     except (OSError, json.JSONDecodeError, ValueError):
         return []
 
 
-def _write_meaning_held(out_dir, downgraded) -> None:
+def _write_judge_held(out_dir, rows) -> None:
     import json
-    rows = [{"para_id": f.para_id, "original_text": f.original_text,
-             "occurrence": f.occurrence, "corrected_text": f.corrected_text,
-             "explanation": f.explanation} for f in downgraded]
     try:
         Path(out_dir, MEANING_HELD_FILE).write_text(
             json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:                     # never fatal to a finished review
-        log.warning("Meaning gate: could not record held-back changes: %s", e)
+        log.warning("Judge gates: could not record held-back changes: %s", e)
+
+
+def _held_key(f) -> tuple:
+    """How a held-back change is recognised again on a replay. Coordinate-free
+    and id-free: ids are only unique per source, and offsets shift."""
+    return (f.para_id, f.original_text, f.occurrence, f.corrected_text)
+
+
+def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
+                     usage: Usage, *, out_dir, replay: list[dict] | None):
+    """Run every enabled judge gate over `validated`, in place.
+
+    Returns (reports, rows) — the per-gate reports for the run report, and the
+    rows recorded for a later replay. With `replay` supplied and the gates off,
+    an earlier run's verdicts are re-applied instead, costing nothing."""
+    from .judges import SPECS, screen
+    from .validator import to_query
+
+    gates = [(cfg.meaning_check, SPECS["meaning"]), (cfg.fix_check, SPECS["fix"])]
+    if not any(g.enabled for g, _ in gates):
+        if replay:
+            _replay_judge_gates(prepared, validated, replay)
+        return [], []
+
+    para_text = {p.para_id: p.text for p in prepared.doc.paragraphs}
+    context = "\n\n".join(x for x in (prepared.conventions,
+                                      prepared.vocabulary) if x)
+    reports, rows = [], []
+    for gate, spec in gates:
+        if not gate.enabled:
+            continue
+        # Eligibility is a position range, not a set of ids. `proposed` is built
+        # in a known order — the deterministic sweeps and the consistency scan
+        # first, then everything a model or an outside checker proposed — and
+        # validate_findings returns exactly one finding per input, in order, so
+        # position identifies a finding exactly where an id would not (ids are
+        # only unique per source: continuity and consistency both mint "c-0001").
+        first = 0
+        skip_deterministic = gate.scope == "model_sources"
+        if skip_deterministic:
+            first = len(prepared.sweep_findings) + len(prepared.consistency_findings)
+        # A query changes no text and a formatting mark changes no characters, so
+        # neither has anything for a judge to rule on. Only tracked changes are
+        # read — which also means a change an earlier gate withdrew is already
+        # out of this list, unbilled and unjudged twice.
+        where = [i for i in range(first, len(validated))
+                 if validated[i].status == "validated" and not validated[i].format
+                 # ...and a tag check on top of the range, because multi-round
+                 # hands finish() a composed list with those two source lists
+                 # emptied (the sweeps were folded in every round), so the range
+                 # alone would put every house-style edit in front of a frontier
+                 # model. Both scripted sources stamp their own chunk_id, and
+                 # that survives composition.
+                 and not (skip_deterministic
+                          and validated[i].chunk_id in ("sweep", "consistency"))]
+        if not where:
+            continue
+        # Built only now, and only if there is something to judge: this is the
+        # far end of a run that has already been paid for, and a client
+        # constructed for a manuscript with no changes in it would raise on a
+        # missing key and take every output of that run down with it.
+        from .providers import build_provider
+        gcfg = cfg.model_copy(deep=True)
+        gcfg.api.model = gate.model
+        gcfg.api.effort = gate.effort
+        report = screen(
+            [validated[i] for i in where], para_text, build_provider(gcfg),
+            spec=spec, model=gate.model, instructions=gate.prompt,
+            # The house conventions AND the book's own vocabulary, exactly as the
+            # overseer-verifier gets them: without the vocabulary a coined name
+            # reads as a word substitution, and a judge would hold back the very
+            # corrections around it that are safest.
+            context=context, max_tokens=gate.max_output_tokens,
+            concurrency=cfg.api.concurrency, flag_unsure=gate.flag_unsure,
+            usage=usage)
+        for pos, f in zip(report.positions, report.withheld):
+            validated[where[pos]] = to_query(f, prepared.doc)
+        rows += [{"judge": spec.key, "para_id": f.para_id,
+                  "original_text": f.original_text, "occurrence": f.occurrence,
+                  "corrected_text": f.corrected_text,
+                  "explanation": f.explanation} for f in report.withheld]
+        reports.append(report)
+
+    # Persist what was held back. The verdicts live nowhere else — the checkpoint
+    # only carries raw detector output, written long before finish() runs — so
+    # without this a "download anyway" replay rebuilds the file with every
+    # held-back change applied, handing the author the un-gated document their
+    # summary told them they were protected from. See app/jobs.py.
+    if rows:
+        _write_judge_held(out_dir, rows)
+    return reports, rows
+
+
+def _replay_judge_gates(prepared: Prepared, validated: list,
+                        rows: list[dict]) -> None:
+    """Re-apply an earlier run's verdicts without paying a judge to reach them."""
+    from .validator import to_query
+    notes = {(r.get("para_id"), r.get("original_text"), r.get("occurrence"),
+              r.get("corrected_text")): r.get("explanation", "") for r in rows}
+    n = 0
+    for i, f in enumerate(validated):
+        if f.status != "validated" or f.format:
+            continue
+        note = notes.get(_held_key(f))
+        if note is None:
+            continue
+        validated[i] = to_query(replace(f, explanation=note or f.explanation),
+                                prepared.doc)
+        n += 1
+    if n:
+        log.info("Judge gates: re-applied %d held-back change(s) from the "
+                 "original run.", n)
 
 
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
            batch: bool = False, coverage=None, verify_provider=None,
-           meaning_held: list[dict] | None = None) -> Outputs:
+           judge_held: list[dict] | None = None) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
@@ -1087,102 +1199,25 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                  edit_guard=cfg.edit_guard)
 
     validated = _validate(proposed)
-    # The meaning gate: the last read before the manuscript is written. It runs
+    # The judge gates: the last read before the manuscript is written. They run
     # AFTER validation on purpose — by now the survivors are exactly the changes
-    # that would reach the author, so the judge reads each one once, and never
-    # one that a later gate would have thrown away anyway.
+    # that would reach the author, so a judge reads each one once, and never one
+    # that a later gate would have thrown away anyway.
     #
-    # It is deliberately SUBTRACTIVE: a change it will not vouch for is turned
-    # into a margin question in place (validator.to_query), and nothing else in
-    # the run moves. The tempting alternative — set force_query and re-run the
-    # validator — is wrong, because a second arbitration re-opens every span: the
-    # withdrawn change frees the one it held, an edit that had been set aside as
-    # overlapping is promoted into it, and that promoted edit can in turn evict a
-    # DIFFERENT change this same gate had just approved. Turning on a safety pass
-    # must not delete a correction the safety pass itself vouched for, so the
-    # spans stay exactly as the one arbitration settled them.
-    meaning_report = None
-    if cfg.meaning_check.enabled:
-        from .meaning import screen_meaning
-        from .validator import to_query
-        # Eligibility is a position range, not a set of ids. `proposed` is built
-        # here in a known order — the deterministic sweeps and the consistency
-        # scan first, then everything a model or an outside checker proposed —
-        # and validate_findings returns exactly one finding per input, in order,
-        # so position identifies a finding exactly where an id would not (ids are
-        # only unique per source: continuity and consistency both mint "c-0001").
-        first = 0
-        skip_deterministic = cfg.meaning_check.scope == "model_sources"
-        if skip_deterministic:
-            first = len(prepared.sweep_findings) + len(prepared.consistency_findings)
-
-        def _deterministic(f) -> bool:
-            # ...and a tag check on top of the range, because multi-round hands
-            # finish() a composed list with those two source lists emptied (the
-            # sweeps were folded in every round), so the range alone would put
-            # every house-style edit in front of a frontier model. Both scripted
-            # sources stamp their own chunk_id, and that survives composition.
-            return f.chunk_id in ("sweep", "consistency")
-
-        # A query changes no text and a formatting mark changes no characters, so
-        # neither has a meaning to preserve. Only tracked changes are read.
-        where = [i for i in range(first, len(validated))
-                 if validated[i].status == "validated" and not validated[i].format
-                 and not (skip_deterministic and _deterministic(validated[i]))]
-        if where:
-            # Built only now, and only if there is something to judge: this is
-            # the far end of a run that has already been paid for, and a client
-            # constructed for a manuscript with no changes in it would raise on a
-            # missing key and take every output of that run down with it.
-            from .providers import build_provider
-            mcfg = cfg.model_copy(deep=True)
-            mcfg.api.model = cfg.meaning_check.model
-            mcfg.api.effort = cfg.meaning_check.effort
-            meaning_report = screen_meaning(
-                [validated[i] for i in where],
-                {p.para_id: p.text for p in prepared.doc.paragraphs},
-                build_provider(mcfg), model=cfg.meaning_check.model,
-                instructions=cfg.meaning_check.prompt,
-                # The house conventions AND the book's own vocabulary, exactly
-                # as the overseer-verifier gets them: without the vocabulary a
-                # coined name reads as a word substitution, and the judge would
-                # hold back the very corrections around it that are safest.
-                context="\n\n".join(x for x in (prepared.conventions,
-                                                prepared.vocabulary) if x),
-                max_tokens=cfg.meaning_check.max_output_tokens,
-                concurrency=cfg.api.concurrency,
-                flag_unsure=cfg.meaning_check.flag_unsure, usage=usage)
-            for pos, f in zip(meaning_report.positions,
-                              meaning_report.downgraded):
-                validated[where[pos]] = to_query(f, prepared.doc)
-            # Persist what was held back. The gate's verdicts live nowhere else
-            # — the checkpoint only carries raw detector output, written long
-            # before finish() runs — so without this a "download anyway" replay
-            # rebuilds the file with every held-back change applied, handing the
-            # author the un-gated document their summary told them they were
-            # protected from. See app/jobs.py _download_anyway.
-            _write_meaning_held(out, meaning_report.downgraded)
-    elif meaning_held:
-        # A replay: honour the original run's verdicts without paying a judge to
-        # re-reach them.
-        from .validator import to_query
-        keys = {(h.get("para_id"), h.get("original_text"), h.get("occurrence"),
-                 h.get("corrected_text")): h.get("explanation", "")
-                for h in meaning_held}
-        n = 0
-        for i, f in enumerate(validated):
-            if f.status != "validated" or f.format:
-                continue
-            note = keys.get((f.para_id, f.original_text, f.occurrence,
-                             f.corrected_text))
-            if note is None:
-                continue
-            validated[i] = to_query(replace(f, explanation=note or f.explanation),
-                                    prepared.doc)
-            n += 1
-        if n:
-            log.info("Meaning gate: re-applied %d held-back change(s) from the "
-                     "original run.", n)
+    # They are deliberately SUBTRACTIVE: a change a judge will not vouch for is
+    # turned into a margin question in place (validator.to_query), and nothing
+    # else in the run moves. The tempting alternative — set force_query and
+    # re-run the validator — is wrong, because a second arbitration re-opens
+    # every span: the withdrawn change frees the one it held, an edit that had
+    # been set aside as overlapping is promoted into it, and that promoted edit
+    # can in turn evict a DIFFERENT change this same gate had just approved.
+    # Turning on a safety pass must not delete a correction the safety pass
+    # itself vouched for, so the spans stay exactly as the arbitration settled
+    # them. Running gates one after another is safe for the same reason: each
+    # only ever removes, and a change the first withdrew is no longer
+    # "validated", so the second neither sees it nor is billed for it.
+    judge_reports, held_rows = _run_judge_gates(
+        cfg, prepared, validated, usage, out_dir=out, replay=judge_held)
     # Verifier rejections were never candidates for a tracked change, but they
     # belong in the report so the author sees what the overseer set aside.
     validated = validated + verifier_rejected
@@ -1221,7 +1256,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,
                      consistency=prepared.consistency, coverage=coverage,
-                     meaning=meaning_report)
+                     judges=judge_reports)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)

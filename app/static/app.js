@@ -25,6 +25,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // hardcodes a server-owned number.
                 effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
                 defaultJudgeModel: null, defaultMeaningModel: null,
+                defaultFixModel: null,
                 // The per-run pass switches, as sent by /api/features: [{id,
                 // label, blurb, group, heavy, default}]. The live on/off state
                 // lives in the rendered checkboxes; collectFeatures() reads it.
@@ -108,7 +109,7 @@ function renderKind() {
   // between-round judge needs 2+ rounds, the meaning gate needs its switch on —
   // and the sweep above has just un-hidden both. Put them back.
   syncRounds();
-  syncMeaning();
+  syncJudgeGates();
   $('prep-options').hidden = !prep;
   renderBookOptions();
   $('prep-cost').hidden = !prep;
@@ -1014,6 +1015,7 @@ async function loadModels() {
   state.defaultJudgeModel = body.default_judge_model || state.defaultJudgeModel;
   state.defaultMeaningModel = body.default_meaning_model
     || state.defaultMeaningModel;
+  state.defaultFixModel = body.default_fix_model || state.defaultFixModel;
 
   const select = $('model');
   const previous = select.value;
@@ -1094,12 +1096,32 @@ async function loadModels() {
       || '';
     meaning.value = usable(mprev) ? mprev : mdefault;
   }
+
+  // The fix gate's judge: the same catalog once more. It is a separate pass from
+  // the meaning gate and can run on a different model, or on its own.
+  const fixSel = $('fix-model');
+  if (fixSel) {
+    const fprev = fixSel.value;
+    fixSel.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+      opt.disabled = !m.available;
+      fixSel.append(opt);
+    });
+    const fdefault = (usable(state.defaultFixModel) && state.defaultFixModel)
+      || (models.find((m) => m.available) || models[0] || {}).id
+      || '';
+    fixSel.value = usable(fprev) ? fprev : fdefault;
+  }
   renderCost();
 }
 
 $('model').addEventListener('change', renderCost);
 $('glossary-model').addEventListener('change', renderCost);
 if ($('meaning-model')) $('meaning-model').addEventListener('change', renderCost);
+if ($('fix-model')) $('fix-model').addEventListener('change', renderCost);
 $('rounds').addEventListener('change', () => { syncRounds(); renderCost(); });
 
 // ── passes & features ─────────────────────────────────────────────────────
@@ -1136,6 +1158,9 @@ async function loadFeatures() {
       if ($('meaning-prompt') && body.meaning) {
         $('meaning-prompt').placeholder = body.meaning.prompt_default || '';
       }
+      if ($('fix-prompt') && body.fix) {
+        $('fix-prompt').placeholder = body.fix.prompt_default || '';
+      }
       syncRounds();
     }
   } catch (_) {
@@ -1151,13 +1176,17 @@ function syncRounds() {
   if (judge) judge.hidden = n < 2;
 }
 
-// The meaning gate's model and instructions only matter when its switch is on,
-// so the field follows the switch the way the judge field follows the rounds.
-function syncMeaning() {
-  const field = $('meaning-field');
-  if (!field) return;
-  const sw = document.querySelector('#features-groups input[data-feature="meaning_check"]');
-  field.hidden = !(sw && sw.checked);
+// A judge gate's model and instructions only matter when its switch is on, so
+// each field follows its switch the way the judge field follows the rounds.
+function syncJudgeGates() {
+  [['meaning-field', 'meaning_check'], ['fix-field', 'fix_check']]
+    .forEach(([id, feature]) => {
+      const field = $(id);
+      if (!field) return;
+      const sw = document.querySelector(
+        `#features-groups input[data-feature="${feature}"]`);
+      field.hidden = !(sw && sw.checked);
+    });
 }
 
 function renderFeatures() {
@@ -1176,7 +1205,7 @@ function renderFeatures() {
     items.forEach((f) => section.append(featureRow(f)));
     host.append(section);
   });
-  syncMeaning();
+  syncJudgeGates();
   renderCost();
 }
 
@@ -1204,7 +1233,7 @@ function featureRow(f) {
   blurb.textContent = f.blurb;
   text.append(name, blurb);
   input.addEventListener('change', () => {
-    if (f.id === 'meaning_check') syncMeaning();
+    if (f.id === 'meaning_check' || f.id === 'fix_check') syncJudgeGates();
     renderCost();
   });
   row.append(input, track, text);
@@ -1363,15 +1392,19 @@ function priceSelection(m) {
     // unlike those passes it reads whatever changes a run produces — including
     // on a partial selection. It scales off the text actually being reviewed,
     // so a few sections cost a few sections' worth, not a book's.
-    if (feats.meaning_check === true) {
-      const spec = state.features.find((s) => s.id === 'meaning_check');
-      const jm = modelById(($('meaning-model') || {}).value)
-        || modelById(spec && spec.cost && spec.cost.model) || m;
-      full += MEANING_SHARE * (inTok / (passes || 1))
-        * (jm.input_per_mtok + jm.output_per_mtok) / 1e6;
-      approx = true;
-      any = true;
-    }
+    // Each enabled gate is its own pass over the same changes, so two gates on
+    // is two bills — the second is not a discount on the first.
+    [['meaning_check', 'meaning-model'], ['fix_check', 'fix-model']]
+      .forEach(([id, picker]) => {
+        if (feats[id] !== true) return;
+        const spec = state.features.find((s) => s.id === id);
+        const jm = modelById(($(picker) || {}).value)
+          || modelById(spec && spec.cost && spec.cost.model) || m;
+        full += MEANING_SHARE * (inTok / (passes || 1))
+          * (jm.input_per_mtok + jm.output_per_mtok) / 1e6;
+        approx = true;
+        any = true;
+      });
 
     // The whole-document passes run only when the file is reviewed whole.
     if (kept.size !== chunks.length || !chunks.length) return;
@@ -1696,6 +1729,8 @@ $('start').addEventListener('click', async () => {
           continuity_only: !!(($('continuity-only') || {}).checked),
           meaning_model: ($('meaning-model') || {}).value || null,
           meaning_prompt: ($('meaning-prompt') || {}).value || '',
+          fix_model: ($('fix-model') || {}).value || null,
+          fix_prompt: ($('fix-prompt') || {}).value || '',
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
@@ -1722,6 +1757,119 @@ function fail(message) {
 }
 
 // ── jobs ──────────────────────────────────────────────────────────────────
+
+// Re-judging a finished review: which gates to run, and which model reads for
+// each. It opens on the card the review is already on, because that is what it
+// is about — and each gate carries its own picker, since the two ask different
+// questions and are worth different models (a cheap one for the fix check, a
+// frontier one for meaning, or the reverse).
+function judgeModelSelect(id, chosen) {
+  const sel = document.createElement('select');
+  sel.id = id;
+  state.models.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+    opt.disabled = !m.available;
+    sel.append(opt);
+  });
+  const usable = (x) => state.models.some((m) => m.id === x && m.available);
+  sel.value = usable(chosen) ? chosen
+    : ((state.models.find((m) => m.available) || {}).id || '');
+  return sel;
+}
+
+function rejudgeGateRow(key, label, blurb, chosen) {
+  const row = document.createElement('div');
+  row.className = 'rejudge-gate';
+  const on = document.createElement('label');
+  on.className = 'field checkbox';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.dataset.gate = key;
+  box.checked = true;
+  const name = document.createElement('span');
+  name.append(box, document.createTextNode(` ${label}`));
+  const small = document.createElement('small');
+  small.className = 'muted';
+  small.textContent = blurb;
+  on.append(name, small);
+  const pick = document.createElement('label');
+  pick.className = 'field';
+  const pickName = document.createElement('span');
+  pickName.textContent = 'Model';
+  const sel = judgeModelSelect(`rejudge-${key}-model`, chosen);
+  // The picker only means anything while its gate is on.
+  const sync = () => { pick.hidden = !box.checked; };
+  box.addEventListener('change', sync);
+  pick.append(pickName, sel);
+  sync();
+  row.append(on, pick);
+  return row;
+}
+
+function rejudgeForm(job, onClose) {
+  const form = document.createElement('div');
+  form.className = 'rejudge-form';
+  const head = document.createElement('p');
+  head.className = 'muted small';
+  head.textContent = 'Read every change in this review again and hold back the '
+    + 'ones that fail. No detector calls — only the checks you pick here are '
+    + 'paid for, and the result lands beside this review as its own.';
+  form.append(head);
+  form.append(rejudgeGateRow(
+    'meaning_check', 'Meaning check',
+    'Does the corrected sentence still mean what the original meant?',
+    state.defaultMeaningModel));
+  form.append(rejudgeGateRow(
+    'fix_check', 'Fix check',
+    'Is the correction actually the right one?',
+    state.defaultFixModel));
+
+  const note = actionNote();
+  const run = document.createElement('button');
+  run.textContent = 'Run the checks';
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => { form.remove(); onClose(); });
+
+  run.addEventListener('click', async () => {
+    const gate = (k) => form.querySelector(`input[data-gate="${k}"]`).checked;
+    const model = (k) => (form.querySelector(`#rejudge-${k}-model`) || {}).value;
+    if (!gate('meaning_check') && !gate('fix_check')) {
+      note.textContent = 'Pick at least one check to run.';
+      note.hidden = false;
+      return;
+    }
+    run.disabled = true;
+    note.hidden = true;
+    try {
+      await api(`/api/jobs/${job.id}/rejudge`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          meaning_check: gate('meaning_check'),
+          fix_check: gate('fix_check'),
+          meaning_model: gate('meaning_check') ? model('meaning_check') : null,
+          fix_model: gate('fix_check') ? model('fix_check') : null,
+        }),
+      });
+      form.remove();
+      onClose();
+      refreshJobs();
+    } catch (err) {
+      note.textContent = err.message;
+      note.hidden = false;
+      run.disabled = false;
+    }
+  });
+
+  const actions = document.createElement('div');
+  actions.className = 'job-actions';
+  actions.append(run, cancel, note);
+  form.append(actions);
+  return form;
+}
 
 async function refreshJobs({ tick = false } = {}) {
   try {
@@ -2061,6 +2209,24 @@ function renderJobs(jobs) {
         actions.append(recover);
       }
       actions.append(retry);
+
+      // A finished review can have the judge gates run over it afterwards —
+      // no detector call, so a book proofread before the gates existed can be
+      // gated now for the price of the gates alone. The result lands beside
+      // this one as its own review rather than overwriting it.
+      if (job.rejudgeable) {
+        const rj = document.createElement('button');
+        rj.textContent = 'Re-judge';
+        rj.title = 'Read every change in this review again — for meaning, for '
+          + 'whether the fix is right, or both — and hold back the ones that '
+          + 'fail. Makes no detector calls.';
+        rj.addEventListener('click', () => {
+          if (li.querySelector('.rejudge-form')) return;   // already open
+          rj.disabled = true;
+          li.append(rejudgeForm(job, () => { rj.disabled = false; }));
+        });
+        actions.append(rj);
+      }
 
       // A review that failed only the integrity check has all its work done
       // and paid for — offer to hand the file over anyway, clearly flagged.

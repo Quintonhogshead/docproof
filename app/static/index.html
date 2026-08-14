@@ -330,6 +330,29 @@
               edit.</small>
           </details>
 
+          <details class="field review-only" id="fix-field" hidden>
+            <summary>Fix check<span class="muted"> — the model that checks each
+              correction is right</span></summary>
+            <label class="field" id="fix-model-field">
+              <span>Fix-check model</span>
+              <select id="fix-model"></select>
+              <small class="muted">The same last read as the meaning check, on
+                the other question: is the correction actually right? Runs as its
+                own pass, so it can use a different model — or run without the
+                meaning check, and vice versa.</small>
+            </label>
+            <label class="field">
+              <span>Fix-check instructions</span>
+              <textarea id="fix-prompt" rows="8" spellcheck="false"></textarea>
+              <small class="muted">The instructions it follows when deciding
+                whether a correction is the right one. Leave blank to use the
+                built-in default (shown here as the placeholder).</small>
+            </label>
+            <small class="muted">Switch the check on under Passes &amp; features.
+              A held-back change becomes a margin question, never a silent
+              edit.</small>
+          </details>
+
           <details class="field review-only" id="features-field">
             <summary>Passes &amp; features<span class="muted"> — what runs on
               this review</span></summary>

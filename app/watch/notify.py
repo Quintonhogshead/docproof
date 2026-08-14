@@ -382,7 +382,8 @@ def _settings_rows(job) -> list:
               ("consistency", "consistency"),
               ("spellcheck", "spell scan"),
               ("continuity", "continuity read"),
-              ("meaning_check", "meaning check")]
+              ("meaning_check", "meaning check"),
+              ("fix_check", "fix check")]
     on = [name for key, name in labels if feats.get(key)]
     rows.append(("Extra passes on", ", ".join(on) if on else "none", None))
     return rows

@@ -68,10 +68,24 @@ class JobRequest(BaseModel):
     # own, with every detector pass and sweep stripped off.
     continuity_prompt: str = ""
     continuity_only: bool = False
-    # The meaning gate's judge and its editable instructions. None/empty falls
-    # back to the config default; the gate itself is a feature toggle.
+    # The judge gates' models and editable instructions. None/empty falls back to
+    # the config default; each gate itself is a feature toggle.
     meaning_model: str | None = None
     meaning_prompt: str = ""
+    fix_model: str | None = None
+    fix_prompt: str = ""
+
+
+class RejudgeRequest(BaseModel):
+    """Which gates to run over a finished review, and on what. Nothing else is
+    re-run, so the switches here ARE the job — an empty request is refused
+    rather than quietly rebuilding the same document."""
+    meaning_check: bool = False
+    fix_check: bool = False
+    meaning_model: str | None = None
+    fix_model: str | None = None
+    meaning_prompt: str = ""
+    fix_prompt: str = ""
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -228,24 +242,32 @@ def register(app: FastAPI) -> None:
                 raise HTTPException(
                     400, f"No API key saved for {jinfo.display} (the judge "
                          f"model). Add one in Settings first.")
-        # The meaning gate's judge. A pick is applied to the run config whether
-        # or not the gate is on, so the model itself is ALWAYS checked against
-        # the catalog — an unvetted id must never reach a config. Whether a key
-        # is on file only matters if the gate will actually run, and that is the
+        # The judge gates' models. A pick is applied to the run config whether or
+        # not its gate is on, so the model itself is ALWAYS checked against the
+        # catalog — an unvetted id must never reach a config. Whether a key is on
+        # file only matters if the gate will actually run, and that is the
         # config's answer, not the request's: the panel sends the switch, but a
-        # house config could ship the gate on with the switch untouched.
-        if req.meaning_model:
-            minfo = lookup(req.meaning_model)
-            if minfo is None:
+        # house config could ship a gate on with the switch untouched.
+        _house = None
+        for _gate, _picked in (("meaning_check", req.meaning_model),
+                               ("fix_check", req.fix_model)):
+            if not _picked:
+                continue
+            ginfo = lookup(_picked)
+            if ginfo is None:
                 raise HTTPException(
-                    400, f"Unknown meaning-check model {req.meaning_model!r}")
-            asked = (req.features or {}).get("meaning_check")
-            gate_on = (bool(asked) if asked is not None
-                       else load_config(CONFIG_PATH).meaning_check.enabled)
-            if gate_on and not settingslib.get_api_key(minfo.provider):
+                    400, f"Unknown {_gate.replace('_', '-')} model {_picked!r}")
+            asked = (req.features or {}).get(_gate)
+            if asked is None:
+                _house = _house or load_config(CONFIG_PATH)
+                gate_on = getattr(_house, _gate).enabled
+            else:
+                gate_on = bool(asked)
+            if gate_on and not settingslib.get_api_key(ginfo.provider):
                 raise HTTPException(
-                    400, f"No API key saved for {minfo.display} (the "
-                         f"meaning-check model). Add one in Settings first.")
+                    400, f"No API key saved for {ginfo.display} (the "
+                         f"{_gate.replace('_', '-')} model). Add one in "
+                         f"Settings first.")
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -313,6 +335,8 @@ def register(app: FastAPI) -> None:
                 continuity_only=req.continuity_only,
                 meaning_model=req.meaning_model or "",
                 meaning_prompt=req.meaning_prompt,
+                fix_model=req.fix_model or "",
+                fix_prompt=req.fix_prompt,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -343,14 +367,16 @@ def register(app: FastAPI) -> None:
         # prompt) and a run-alone switch, so its default rides alongside the
         # catalog the same way the round judge's does.
         from docproof.continuity import default_continuity_prompt
-        # The meaning gate is a boolean in the catalog above, but its judge also
-        # carries an editable prompt, so its default rides alongside the same way.
-        from docproof.meaning import default_meaning_prompt
+        # Each judge gate is a boolean in the catalog above, but its judge also
+        # carries an editable prompt, so those defaults ride alongside the same
+        # way the round judge's does.
+        from docproof.judges import default_prompt
         return {"features": featureslib.feature_catalog(cfg),
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
                            "judge_prompt_default": default_judge_prompt()},
                 "continuity": {"prompt_default": default_continuity_prompt()},
-                "meaning": {"prompt_default": default_meaning_prompt()}}
+                "meaning": {"prompt_default": default_prompt("meaning")},
+                "fix": {"prompt_default": default_prompt("fix")}}
 
     def _card(job: Job) -> dict:
         """A job as the results card needs it: its own fields plus whether the
@@ -360,6 +386,9 @@ def register(app: FastAPI) -> None:
         the plain `to_api` can't see."""
         d = job.to_api()
         d["recoverable"] = app.state.runner.can_recover(job)
+        # Same reason: whether a finished review still has the record and the
+        # manuscript a re-judge needs is a question about files on disk.
+        d["rejudgeable"] = app.state.runner.can_rejudge(job)
         return d
 
     @app.get("/api/jobs")
@@ -515,6 +544,51 @@ def register(app: FastAPI) -> None:
                 400, "This one is still active. Abort it first, then remove it.")
         runner.delete_job(job_id)
         return {"ok": True, "id": job_id}
+
+    @app.post("/api/jobs/{job_id}/rejudge")
+    def rejudge(job_id: str, req: RejudgeRequest,
+                owner: str = Depends(owner_for)) -> dict:
+        """Run the judge gates over a review that already ran.
+
+        No detector call is made — the corrections come off the record the
+        original run left — so a manuscript proofread before these gates existed
+        can be gated now for the price of the gates alone. The result lands
+        beside the original as its own review; the first is never overwritten."""
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No such review.")
+        if not app.state.runner.can_rejudge(job):
+            raise HTTPException(
+                409, "This review can't be re-judged — it needs to have "
+                     "finished, kept its findings record, and still have the "
+                     "manuscript it read.")
+        gates = {"meaning_check": req.meaning_check,
+                 "fix_check": req.fix_check}
+        if not any(gates.values()):
+            raise HTTPException(
+                400, "Switch on the meaning check, the fix check, or both — a "
+                     "re-judge runs the gates and nothing else.")
+        models = {}
+        for gate, picked in (("meaning_check", req.meaning_model),
+                             ("fix_check", req.fix_model)):
+            if not (picked and gates[gate]):
+                continue
+            info = lookup(picked)
+            if info is None:
+                raise HTTPException(400, f"Unknown model {picked!r}")
+            if not settingslib.get_api_key(info.provider):
+                raise HTTPException(
+                    400, f"No API key saved for {info.display}. Add one in "
+                         f"Settings first.")
+            models[gate] = picked
+        _ensure_source(job)
+        updated = app.state.runner.rejudge(
+            job_id, gates=gates, models=models,
+            prompts={"meaning_check": req.meaning_prompt,
+                     "fix_check": req.fix_prompt})
+        if updated is None:
+            raise HTTPException(409, "This review can't be re-judged.")
+        return updated.to_api()
 
     @app.post("/api/jobs/{job_id}/download-anyway")
     def download_anyway(job_id: str, owner: str = Depends(owner_for)) -> dict:

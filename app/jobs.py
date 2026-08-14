@@ -29,7 +29,7 @@ from docproof.audit import AuditError
 from docproof.ingest import IngestError
 from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
                                read_meaning_held, run_sync)
-from docproof.models import CoverageLedger
+from docproof.models import CoverageLedger, Usage
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
@@ -167,13 +167,16 @@ class Job:
     # docproof/continuity.py and JobStore.config_for.
     continuity_prompt: str = ""
     continuity_only: bool = False
-    # The meaning gate's judge — the model that reads every proposed change for
-    # whether it moves the sentence's sense — and its editable instructions.
-    # Empty (older records, or a run that left the picker alone) means the config
-    # default. The gate itself is the "meaning_check" feature toggle. See
-    # docproof/meaning.py and JobStore.config_for.
+    # The two judge gates — one reads every proposed change for whether it moves
+    # the sentence's sense, the other for whether the fix is right — each with
+    # its own model and editable instructions. Empty (older records, or a run
+    # that left the picker alone) means the config default. The gates themselves
+    # are the "meaning_check" and "fix_check" feature toggles. See
+    # docproof/judges.py and JobStore.config_for.
     meaning_model: str = ""
     meaning_prompt: str = ""
+    fix_model: str = ""
+    fix_prompt: str = ""
     # Multi-round progress: which round a running multi-round review is on, and
     # how many it will run. Both 0 on single reviews and older records; the card
     # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
@@ -648,6 +651,9 @@ class JobRunner:
         cfg.meaning_check.prompt = job.meaning_prompt
         if job.meaning_model:
             cfg.meaning_check.model = job.meaning_model
+        cfg.fix_check.prompt = job.fix_prompt
+        if job.fix_model:
+            cfg.fix_check.model = job.fix_model
         # "Continuity only" strips the run to that one whole-book read: no
         # detector passes, no sweeps, none of the other whole-book passes — just
         # the contradiction check and its margin queries. The continuity switch is
@@ -657,7 +663,7 @@ class JobRunner:
             cfg.sweeps = []
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
                           "sapling", "consistency", "spellcheck",
-                          "meaning_check"):
+                          "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
@@ -736,11 +742,12 @@ class JobRunner:
         # held-back change applied, which is the opposite of what the first
         # summary told the author.
         cfg.meaning_check.enabled = False
+        cfg.fix_check.enabled = False
         out = (Path(job.results_dir) if job.results_dir
                else self._claim_results_dir(job))
         outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                          source_path=job.source_path, coverage=coverage,
-                         meaning_held=read_meaning_held(out))
+                         judge_held=read_meaning_held(out))
         checkpoint.delete()
         updated = self.store.update(job_id, state="done", audit_overridden=True,
                                     applied=outputs.applied,
@@ -760,7 +767,6 @@ class JobRunner:
         Returns None (the route's 409) for a run from before the snapshot
         existed, or one whose working files were cleaned away."""
         from docproof.checkpoint import finding_from_dict
-        from docproof.models import Usage
         from docproof.utils.xml_helpers import DocxPackage
 
         out = Path(job.results_dir) if job.results_dir else None
@@ -787,11 +793,12 @@ class JobRunner:
         # the record instead, so the rebuilt file holds back what the first one
         # did. See _download_anyway.
         cfg.meaning_check.enabled = False
+        cfg.fix_check.enabled = False
         prepared_final = replace(prepared0, pkg=DocxPackage(base),
                                  sweep_findings=[], consistency_findings=[])
         outputs = finish(prepared_final, findings, usage, cfg, out_dir=out,
                          source_path=job.source_path,
-                         meaning_held=read_meaning_held(out))
+                         judge_held=read_meaning_held(out))
         updated = self.store.update(job.id, state="done", audit_overridden=True,
                                     applied=outputs.applied,
                                     results_dir=str(out), error=job.error)
@@ -826,6 +833,72 @@ class JobRunner:
         # run may have exhausted the cap (often why it is failed here at all).
         return self.store.update_if(job_id, expect="failed", state="waiting",
                                     error=None, error_kind="", collect_attempts=0)
+
+    def can_rejudge(self, job: Job) -> bool:
+        """Whether `rejudge` has something to work from — used to decide the
+        results card's "Re-judge" affordance. A finished review that kept its
+        findings record and whose manuscript is still where it was; prep and
+        promo have no corrections to rule on."""
+        if job.kind != "review" or job.state != "done" or not job.results_dir:
+            return False
+        return (Path(job.results_dir, "findings.json").is_file()
+                and Path(job.source_path).is_file())
+
+    def rejudge(self, job_id: str, *, gates: dict, models: dict | None = None,
+                prompts: dict | None = None) -> Job | None:
+        """Put a finished review's corrections to the judge gates, and nothing
+        else. No detector call is made — the corrections come off the record the
+        original run left — so a book proofread before these gates existed can
+        be gated now for the price of the gates alone.
+
+        The result is written beside the original as its own review, so the
+        first deliverable is never overwritten: an editor comparing the two is
+        the point of running this at all."""
+        from docproof.rejudge import RejudgeError, rejudge as run_rejudge
+
+        job = self.store.get(job_id)
+        if job is None or not self.can_rejudge(job):
+            return None
+        cfg = self.config_for(job)
+        # The gates are the whole run here, so the panel's switches win outright
+        # rather than riding on whatever the original job recorded.
+        for name in ("meaning_check", "fix_check"):
+            gate = getattr(cfg, name)
+            gate.enabled = bool(gates.get(name))
+            picked = (models or {}).get(name)
+            if picked:
+                gate.model = picked
+            gate.prompt = (prompts or {}).get(name, "")
+        if not (cfg.meaning_check.enabled or cfg.fix_check.enabled):
+            return None
+
+        source = self.store.save(replace(
+            job, id=batchlib.new_job_id(job.filename), state="running",
+            stage="reviewing", results_dir="", error="", applied=0,
+            audit_failed=False, audit_overridden=False,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            meaning_model=(models or {}).get("meaning_check", ""),
+            fix_model=(models or {}).get("fix_check", ""),
+            features={**(job.features or {}),
+                      "meaning_check": cfg.meaning_check.enabled,
+                      "fix_check": cfg.fix_check.enabled}))
+        out = self.results_dir(source)
+        usage = Usage()
+        try:
+            outputs = run_rejudge(cfg, job.results_dir, out_dir=out,
+                                  error_dir=self.error_dir,
+                                  source=job.source_path, usage=usage)
+        except (RejudgeError, ProviderError, IngestError, ValueError) as e:
+            log.warning("Re-judge of %s failed: %s", job_id, e)
+            updated = self.store.update(source.id, state="failed", error=str(e))
+            self._finish(source.id)
+            return updated
+        updated = self.store.update(source.id, state="done",
+                                    applied=outputs.applied,
+                                    results_dir=str(out))
+        self._record_usage(source.id, out, cfg.meaning_check.model, batch=False)
+        self._finish(source.id)
+        return updated
 
     def can_recover(self, job: Job) -> bool:
         """Whether `recover` has something to do — used to decide the results

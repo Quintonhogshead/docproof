@@ -61,6 +61,14 @@ def main(argv=None) -> int:
     rev.add_argument("--meaning-model",
                      help="which model reads the changes for the meaning check "
                           "(default: config meaning_check.model)")
+    rev.add_argument("--fix-check", action="store_true",
+                     help="before writing, have a strong model read every "
+                          "proposed change and hold back any whose replacement "
+                          "is not the right fix (default: config "
+                          "fix_check.enabled)")
+    rev.add_argument("--fix-model",
+                     help="which model reads the changes for the fix check "
+                          "(default: config fix_check.model)")
 
     sub_batch = sub.add_parser(
         "submit", help="queue a review at batch prices (50%% cheaper, "
@@ -158,10 +166,32 @@ def main(argv=None) -> int:
                     help="JSON file of raw findings; scores the harness itself "
                          "with no API call")
 
+    rj = sub.add_parser(
+        "rejudge", help="run the judge gates over a review that already ran, "
+                        "without reviewing it again")
+    rj.add_argument("results",
+                    help="the output directory of the finished review "
+                         "(the one holding findings.json)")
+    rj.add_argument("--config", default="config/default.yaml")
+    rj.add_argument("--out", help="where to write the re-judged deliverable "
+                                  "(default: <results>/rejudged)")
+    rj.add_argument("--source",
+                    help="the manuscript the review read, if it has moved "
+                         "since (default: the path findings.json recorded)")
+    rj.add_argument("--meaning-check", action="store_true",
+                    help="run the meaning gate (does the corrected sentence "
+                         "still mean what the original meant?)")
+    rj.add_argument("--meaning-model",
+                    help="which model reads the changes for the meaning check")
+    rj.add_argument("--fix-check", action="store_true",
+                    help="run the fix gate (is the replacement the right fix?)")
+    rj.add_argument("--fix-model",
+                    help="which model reads the changes for the fix check")
+
     args = ap.parse_args(argv)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
-            "collect": cmd_collect, "prep": cmd_prep,
+            "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
             "eval": cmd_eval, "compare": cmd_compare}[args.cmd](args)
 
 
@@ -281,6 +311,11 @@ def cmd_review(args) -> int:
         cfg.meaning_check.enabled = True
     if getattr(args, "meaning_check", False):
         cfg.meaning_check.enabled = True
+    if getattr(args, "fix_model", None):
+        cfg.fix_check.model = args.fix_model
+        cfg.fix_check.enabled = True
+    if getattr(args, "fix_check", False):
+        cfg.fix_check.enabled = True
     if cfg.rounds.count > 1:                          # multi-round review
         from .rounds import run_sync_rounds
         canned = None
@@ -413,6 +448,48 @@ def cmd_collect(args) -> int:
         return 2
 
     print(f"\n{outputs.applied} tracked change(s) applied.")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json):
+        if p is not None:
+            print(f"  {p}")
+    return 0
+
+
+def cmd_rejudge(args) -> int:
+    """Put a finished review's corrections to the judge gates, and nothing else.
+
+    Its own command rather than a flag on `review` because it is a different
+    job: `review` finds corrections, this one rules on corrections already
+    found. It makes no detector call and re-reads nothing — the record the
+    original run left is the input, so a book proofread before these gates
+    existed can be gated now for the price of the gates alone."""
+    from .rejudge import RejudgeError, rejudge
+
+    cfg = load_config(args.config)
+    error_dir = Path(args.config).parent / "error_types"
+    if args.meaning_model:
+        cfg.meaning_check.model = args.meaning_model
+        cfg.meaning_check.enabled = True
+    if args.meaning_check:
+        cfg.meaning_check.enabled = True
+    if args.fix_model:
+        cfg.fix_check.model = args.fix_model
+        cfg.fix_check.enabled = True
+    if args.fix_check:
+        cfg.fix_check.enabled = True
+
+    out = Path(args.out) if args.out else Path(args.results, "rejudged")
+    setup_logging(out)
+    usage = Usage()
+    try:
+        outputs = rejudge(cfg, args.results, out_dir=out, error_dir=error_dir,
+                          source=args.source, usage=usage)
+    except (RejudgeError, ProviderError, IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"\n{outputs.applied} tracked change(s) applied "
+          f"({usage.api_calls} judge call(s)).")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json):
         if p is not None:

@@ -106,6 +106,15 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "question instead of a silent change. Costs by the number of changes, not "
         "the length of the book.",
         "pass", ("meaning_check", "enabled"), heavy=True),
+    FeatureSpec(
+        "fix_check", "Fix check — read every change before it ships",
+        "The same last read, asking the other question: is the correction "
+        "actually right? A fix can leave the meaning perfectly intact and still "
+        "be the wrong repair — “their” corrected to “there” where "
+        "“they're” was wanted, a verb put in the wrong form, a semicolon "
+        "the clauses won't carry. Anything it won't vouch for becomes a margin "
+        "question instead of a silent change.",
+        "pass", ("fix_check", "enabled"), heavy=True),
     # -- passes on by default: cheap, local-ish, here so they can be turned off -
     FeatureSpec(
         "adjudicate", "Real-word typo adjudication",
@@ -225,6 +234,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "grammar", "rate_per_1k": cfg.sapling.cost_per_1k_chars}
     if fid == "meaning_check":
         return {"kind": "judge", "model": cfg.meaning_check.model}
+    if fid == "fix_check":
+        return {"kind": "judge", "model": cfg.fix_check.model}
     return None
 
 

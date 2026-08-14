@@ -306,17 +306,26 @@ low_confidence:
   confirm_model:
   confirm_effort: medium
 
-# The meaning gate — the last read before the manuscript is written. Every check
-# above asks whether something is an error and whether the fix is right; this
-# asks the one question none of them do: does the corrected sentence still MEAN
-# what the original meant? It reads the changes that survived everything else,
-# source-blind — a Sapling suggestion, a LanguageTool comma, a rewrite diff and a
-# detector finding all arrive here as the same kind of object — and a change it
-# will not vouch for is held back as a margin question with its reason attached,
-# never dropped and never silently applied. Cost tracks the number of CHANGES,
-# not the length of the book (a few hundred short calls, one per paragraph that
-# has edits), which is what makes a frontier model affordable here and nowhere
-# else. Off by default, like every paid pass. See docproof/meaning.py.
+# The judge gates — the last reads before the manuscript is written. Every check
+# above asks whether something is an error and whether the fix is right, while
+# the change is still being proposed. These run at the other end, over the
+# changes that survived everything else, source-blind: a Sapling suggestion, a
+# LanguageTool comma, a rewrite diff and a detector finding all arrive here as
+# the same kind of object.
+#
+# They ask two different questions, and are separately switchable because they
+# fail differently. A change can be a faithful fix that alters the sense, and it
+# can preserve the sense perfectly while being the wrong repair.
+#
+# Both are purely SUBTRACTIVE: a change a judge will not vouch for is held back
+# as a margin question with its reason attached, never dropped and never silently
+# applied, and an unanswerable call leaves the change untouched. Cost tracks the
+# number of CHANGES, not the length of the book (a few hundred short calls per
+# gate, one per paragraph that has edits), which is what makes a frontier model
+# affordable here and nowhere else. Off by default, like every paid pass.
+# See docproof/judges.py.
+
+# Does the corrected sentence still MEAN what the original meant?
 meaning_check:
   enabled: false
   model: claude-fable-5     # the last reader before the author; app panel picks it
@@ -324,10 +333,22 @@ meaning_check:
   scope: model_sources      # model_sources (detector, rewrite, adjudicate,
                             # low-confidence, LanguageTool, Sapling) | all, which
                             # adds the scripted sweeps and the consistency scan —
-                            # punctuation-sized changes that cannot move a sense
+                            # punctuation-sized changes these gates can't fault
   flag_unsure: true         # an "unsure" verdict is held back too; off applies it
   max_output_tokens: 4000
   prompt: ""                # empty = built-in default (editable in the review panel)
+
+# Is the replacement the CORRECT fix? Same wiring, same knobs, different
+# question — "their" corrected to "there" where "they're" was wanted, a verb in
+# the wrong form for its subject, a semicolon the clauses will not carry.
+fix_check:
+  enabled: false
+  model: claude-fable-5
+  effort: high
+  scope: model_sources
+  flag_unsure: true
+  max_output_tokens: 4000
+  prompt: ""
 
 # Each entry is ONE API pass over the whole document. A bare key runs alone;
 # a list runs as a single combined pass, so the document is sent once for the
