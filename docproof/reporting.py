@@ -54,8 +54,11 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
                         normalization=None, audit=None, consistency=None,
-                        coverage=None) -> None:
+                        coverage=None, queried_ids: tuple[str, ...] = (),
+                        unplaced_ids: tuple[str, ...] = ()) -> None:
     applied = set(applied_ids)
+    queried = set(queried_ids)
+    unplaced = set(unplaced_ids)
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -106,10 +109,19 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
                                for pid, r in doc.skipped],
+        # `applied` says a tracked change was written. `queried` and `unplaced`
+        # say the same for the OTHER channel, and neither is derivable from
+        # `status`: a finding can be status "query" and still never reach the
+        # reader, because both reassemblers require a truthy anchor, refuse a
+        # paragraph outside the main story part, and can fail to attach the
+        # comment itself. Without these, anything counting questions off this
+        # file counts the ones that were GENERATED and calls them delivered.
         "findings": [
             {**dataclasses.asdict(f),
              "anchor": dataclasses.asdict(f.anchor) if f.anchor else None,
-             "applied": f.finding_id in applied}
+             "applied": f.finding_id in applied,
+             "queried": f.finding_id in queried,
+             "unplaced": f.finding_id in unplaced}
             for f in findings
         ],
     }

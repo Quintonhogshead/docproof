@@ -47,7 +47,9 @@ class RejudgeError(Exception):
 
 
 # Fields written into findings.json that are reporting, not part of a Finding.
-_NOT_A_FIELD = ("applied",)
+# Each describes what the run DID with a finding, not what the finding is — so
+# a re-judge, which re-decides exactly that, has to drop them before rebuilding.
+_NOT_A_FIELD = ("applied", "queried", "unplaced")
 
 
 def read_run(results_dir: str | Path) -> tuple[list, str]:
