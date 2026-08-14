@@ -68,6 +68,10 @@ class JobRequest(BaseModel):
     # own, with every detector pass and sweep stripped off.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The meaning gate's judge and its editable instructions. None/empty falls
+    # back to the config default; the gate itself is a feature toggle.
+    meaning_model: str | None = None
+    meaning_prompt: str = ""
 
 
 # The states a job stays in for good: it has stopped, so it can be removed from
@@ -224,6 +228,24 @@ def register(app: FastAPI) -> None:
                 raise HTTPException(
                     400, f"No API key saved for {jinfo.display} (the judge "
                          f"model). Add one in Settings first.")
+        # The meaning gate's judge. A pick is applied to the run config whether
+        # or not the gate is on, so the model itself is ALWAYS checked against
+        # the catalog — an unvetted id must never reach a config. Whether a key
+        # is on file only matters if the gate will actually run, and that is the
+        # config's answer, not the request's: the panel sends the switch, but a
+        # house config could ship the gate on with the switch untouched.
+        if req.meaning_model:
+            minfo = lookup(req.meaning_model)
+            if minfo is None:
+                raise HTTPException(
+                    400, f"Unknown meaning-check model {req.meaning_model!r}")
+            asked = (req.features or {}).get("meaning_check")
+            gate_on = (bool(asked) if asked is not None
+                       else load_config(CONFIG_PATH).meaning_check.enabled)
+            if gate_on and not settingslib.get_api_key(minfo.provider):
+                raise HTTPException(
+                    400, f"No API key saved for {minfo.display} (the "
+                         f"meaning-check model). Add one in Settings first.")
         info = lookup(req.model)
         if info is None:
             raise HTTPException(400, f"Unknown model {req.model!r}")
@@ -289,6 +311,8 @@ def register(app: FastAPI) -> None:
                 judge_model=req.judge_model or "",
                 continuity_prompt=req.continuity_prompt,
                 continuity_only=req.continuity_only,
+                meaning_model=req.meaning_model or "",
+                meaning_prompt=req.meaning_prompt,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
@@ -319,10 +343,14 @@ def register(app: FastAPI) -> None:
         # prompt) and a run-alone switch, so its default rides alongside the
         # catalog the same way the round judge's does.
         from docproof.continuity import default_continuity_prompt
+        # The meaning gate is a boolean in the catalog above, but its judge also
+        # carries an editable prompt, so its default rides alongside the same way.
+        from docproof.meaning import default_meaning_prompt
         return {"features": featureslib.feature_catalog(cfg),
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
                            "judge_prompt_default": default_judge_prompt()},
-                "continuity": {"prompt_default": default_continuity_prompt()}}
+                "continuity": {"prompt_default": default_continuity_prompt()},
+                "meaning": {"prompt_default": default_meaning_prompt()}}
 
     def _card(job: Job) -> dict:
         """A job as the results card needs it: its own fields plus whether the

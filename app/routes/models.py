@@ -53,4 +53,8 @@ def register(app: FastAPI) -> None:
                 "default_glossary_model": app.state.settings.glossary_model,
                 # The between-round judge's default model, so the panel's judge
                 # picker opens on the house choice without hardcoding it.
-                "default_judge_model": load_config(CONFIG_PATH).rounds.judge_model}
+                "default_judge_model": load_config(CONFIG_PATH).rounds.judge_model,
+                # Same for the meaning gate's judge — the last reader before the
+                # author, and the one pass where a frontier model is the point.
+                "default_meaning_model":
+                    load_config(CONFIG_PATH).meaning_check.model}

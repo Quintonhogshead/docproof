@@ -24,7 +24,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // default model, both sent by /api/models so the picker never
                 // hardcodes a server-owned number.
                 effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
-                defaultJudgeModel: null,
+                defaultJudgeModel: null, defaultMeaningModel: null,
                 // The per-run pass switches, as sent by /api/features: [{id,
                 // label, blurb, group, heavy, default}]. The live on/off state
                 // lives in the rendered checkboxes; collectFeatures() reads it.
@@ -104,6 +104,11 @@ function renderKind() {
   document.querySelectorAll('.review-only').forEach((el) => {
     el.hidden = prep || promo;
   });
+  // Two review-only fields have a second condition on top of the kind — the
+  // between-round judge needs 2+ rounds, the meaning gate needs its switch on —
+  // and the sweep above has just un-hidden both. Put them back.
+  syncRounds();
+  syncMeaning();
   $('prep-options').hidden = !prep;
   renderBookOptions();
   $('prep-cost').hidden = !prep;
@@ -1007,6 +1012,8 @@ async function loadModels() {
   state.defaultGlossaryModel = body.default_glossary_model
     || state.defaultGlossaryModel;
   state.defaultJudgeModel = body.default_judge_model || state.defaultJudgeModel;
+  state.defaultMeaningModel = body.default_meaning_model
+    || state.defaultMeaningModel;
 
   const select = $('model');
   const previous = select.value;
@@ -1067,11 +1074,32 @@ async function loadModels() {
       || '';
     judge.value = usable(jprev) ? jprev : jdefault;
   }
+
+  // The meaning gate's judge: the same catalog again, defaulting to the house
+  // choice (a frontier model — it is the last reader before the author, and it
+  // makes one short call per paragraph that has changes, not one per chunk).
+  const meaning = $('meaning-model');
+  if (meaning) {
+    const mprev = meaning.value;
+    meaning.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+      opt.disabled = !m.available;
+      meaning.append(opt);
+    });
+    const mdefault = (usable(state.defaultMeaningModel) && state.defaultMeaningModel)
+      || (models.find((m) => m.available) || models[0] || {}).id
+      || '';
+    meaning.value = usable(mprev) ? mprev : mdefault;
+  }
   renderCost();
 }
 
 $('model').addEventListener('change', renderCost);
 $('glossary-model').addEventListener('change', renderCost);
+if ($('meaning-model')) $('meaning-model').addEventListener('change', renderCost);
 $('rounds').addEventListener('change', () => { syncRounds(); renderCost(); });
 
 // ── passes & features ─────────────────────────────────────────────────────
@@ -1104,6 +1132,10 @@ async function loadFeatures() {
       if ($('continuity-prompt') && body.continuity) {
         $('continuity-prompt').placeholder = body.continuity.prompt_default || '';
       }
+      // And the meaning gate's, which reveals itself when its switch goes on.
+      if ($('meaning-prompt') && body.meaning) {
+        $('meaning-prompt').placeholder = body.meaning.prompt_default || '';
+      }
       syncRounds();
     }
   } catch (_) {
@@ -1117,6 +1149,15 @@ function syncRounds() {
   const n = Number(($('rounds') || {}).value || 1);
   const judge = $('judge-field');
   if (judge) judge.hidden = n < 2;
+}
+
+// The meaning gate's model and instructions only matter when its switch is on,
+// so the field follows the switch the way the judge field follows the rounds.
+function syncMeaning() {
+  const field = $('meaning-field');
+  if (!field) return;
+  const sw = document.querySelector('#features-groups input[data-feature="meaning_check"]');
+  field.hidden = !(sw && sw.checked);
 }
 
 function renderFeatures() {
@@ -1135,6 +1176,7 @@ function renderFeatures() {
     items.forEach((f) => section.append(featureRow(f)));
     host.append(section);
   });
+  syncMeaning();
   renderCost();
 }
 
@@ -1161,7 +1203,10 @@ function featureRow(f) {
   blurb.className = 'muted';
   blurb.textContent = f.blurb;
   text.append(name, blurb);
-  input.addEventListener('change', renderCost);
+  input.addEventListener('change', () => {
+    if (f.id === 'meaning_check') syncMeaning();
+    renderCost();
+  });
   row.append(input, track, text);
   return row;
 }
@@ -1266,6 +1311,12 @@ const READ_OUTPUT_TOKENS = 2000;
 // LanguageTool's confirm calls scale with how many candidates the book throws,
 // which isn't known before the run, so price it as a small share of one read.
 const LT_CONFIRM_SHARE = 0.15;
+// The meaning gate reads one short call per paragraph that has a change: the
+// paragraph, the changes, and its instructions on every call. How many
+// paragraphs that is depends on what the book throws, so — like the confirm
+// calls above — it is priced as a share of one read, a little larger because
+// its instructions repeat per call and it usually runs on a dearer model.
+const MEANING_SHARE = 0.25;
 
 function modelById(id) {
   return state.models.find((x) => x.id === id) || null;
@@ -1308,6 +1359,20 @@ function priceSelection(m) {
       + reqs * state.outputGuess * m.output_per_mtok * effortFactor(m) * outFactor)
       / 1e6;
 
+    // The meaning gate is priced before the whole-document guard below, because
+    // unlike those passes it reads whatever changes a run produces — including
+    // on a partial selection. It scales off the text actually being reviewed,
+    // so a few sections cost a few sections' worth, not a book's.
+    if (feats.meaning_check === true) {
+      const spec = state.features.find((s) => s.id === 'meaning_check');
+      const jm = modelById(($('meaning-model') || {}).value)
+        || modelById(spec && spec.cost && spec.cost.model) || m;
+      full += MEANING_SHARE * (inTok / (passes || 1))
+        * (jm.input_per_mtok + jm.output_per_mtok) / 1e6;
+      approx = true;
+      any = true;
+    }
+
     // The whole-document passes run only when the file is reviewed whole.
     if (kept.size !== chunks.length || !chunks.length) return;
     const book = bookTokensFor(f);
@@ -1337,6 +1402,9 @@ function priceSelection(m) {
         full += LT_CONFIRM_SHARE * book
           * (pm.input_per_mtok + pm.output_per_mtok) / 1e6;
         approx = true;
+      } else if (spec.cost.kind === 'judge') {
+        // Already priced above the whole-document guard — it is the one paid
+        // pass that also runs on a partial selection.
       } else if (spec.cost.kind === 'grammar') {
         // Sapling bills per character of the manuscript, not per token, and
         // runs once — regardless of model, rounds, or the batch discount — so
@@ -1626,6 +1694,8 @@ $('start').addEventListener('click', async () => {
           judge_model: ($('judge-model') || {}).value || null,
           continuity_prompt: ($('continuity-prompt') || {}).value || '',
           continuity_only: !!(($('continuity-only') || {}).checked),
+          meaning_model: ($('meaning-model') || {}).value || null,
+          meaning_prompt: ($('meaning-prompt') || {}).value || '',
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
