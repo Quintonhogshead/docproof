@@ -455,6 +455,79 @@ def test_download_anyway_writes_the_file_after_an_audit_failure(
     assert docx.status_code == 200 and docx.content[:2] == b"PK"
 
 
+def test_download_anyway_does_not_rebill_the_paid_passes(
+        client, provider, monkeypatch):
+    """A job that ran with the paid finish()-time passes on — Sapling, the
+    low-confidence valve, an ensemble with an overseer-verifier — must not pay
+    any of them again on download-anyway. The rebuild replays the checkpoint
+    and disarms every pass that spends inside finish(); this drives the whole
+    path and treats any provider call or Sapling contact as the failure."""
+    from docproof.audit import AuditError
+    from docproof.config import DetectorSpec
+    import app.jobs as jobs_module
+
+    # The job's config has every paid pass on — applied through config_for so
+    # the run and the rebuild agree, which the checkpoint fingerprint requires.
+    inner = JobRunner.config_for
+
+    def paid(self, job):
+        cfg = inner(self, job)
+        cfg.sapling.enabled = True
+        cfg.low_confidence.confirm = True
+        cfg.ensemble.detectors = [DetectorSpec(model="claude-sonnet-5")]
+        cfg.ensemble.verifier_model = "claude-fable-5"
+        return cfg
+
+    monkeypatch.setattr(JobRunner, "config_for", paid)
+    # The ensemble path ignores the injected provider and builds one client per
+    # detector itself; route that through the fake for the original run.
+    monkeypatch.setattr("docproof.providers.build_provider",
+                        lambda cfg, api_key=None: provider)
+
+    # A below-gate finding, so the valve would have real work to re-bill.
+    provider.results = [finding_result(
+        para_id="body-0000", error_type="comma_splice", original=SPLICE,
+        corrected=SPLICE.replace(",", ";", 1), confidence="low")]
+
+    real_finish = jobs_module.finish
+    calls = {"n": 0}
+
+    def flaky_finish(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise AuditError("body-0000 at character 5: reject-all mismatch")
+        return real_finish(*a, **k)
+
+    monkeypatch.setattr("app.jobs.finish", flaky_finish)
+
+    job = _run(client, _upload(client)["id"])
+    client.app_state.runner.wait_idle()
+    assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "failed"
+
+    # From here on, reaching Sapling or building any real provider IS the bug.
+    monkeypatch.setenv("SAPLING_API_KEY", "key-on-file")
+
+    def no_sapling(*a, **k):
+        raise AssertionError("download-anyway sent the book to Sapling")
+
+    def no_provider(*a, **k):
+        raise AssertionError("download-anyway built a provider inside finish()")
+
+    monkeypatch.setattr("docproof.sapling.check_paragraphs", no_sapling)
+    monkeypatch.setattr("docproof.providers.build_provider", no_provider)
+    paid_calls = len(provider.calls)
+
+    resp = client.post(f"/api/jobs/{job['id']}/download-anyway")
+    assert resp.status_code == 200, resp.text
+    done = resp.json()
+    assert done["state"] == "done" and done["audit_overridden"] is True
+    assert len(provider.calls) == paid_calls       # not one more model call
+    assert client.app_state.store.get(job["id"]).sapling_cost == 0.0
+
+    docx = client.get(f"/api/jobs/{job['id']}/file/docx")
+    assert docx.status_code == 200 and docx.content[:2] == b"PK"
+
+
 def test_download_anyway_refused_on_a_healthy_job(client, provider):
     provider.results = [finding_result(
         para_id="body-0000", error_type="comma_splice", original=SPLICE,
