@@ -1719,6 +1719,7 @@ $('start').addEventListener('click', async () => {
                         && $('schedule-on').checked)
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
+          variant: ($('variant') || {}).value || '',
           effort: effortValue(),
           glossary_model: $('glossary-model').value,
           features: collectFeatures(),
