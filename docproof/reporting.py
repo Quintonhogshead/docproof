@@ -155,6 +155,7 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Consistency scan", on(cfg.consistency.enabled)),
         ("Spell scan", on(cfg.spellcheck.enabled)),
         ("Continuity read", on(cfg.continuity.enabled)),
+        ("Smoothing", on(cfg.smoothing.enabled)),
     ]
     L = ["## Settings used\n"]
     L.append(f"- **Reviewer:** `{cfg.api.model}`"
@@ -183,7 +184,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
                      audit=None, consistency=None, coverage=None,
-                     judges=None) -> None:
+                     judges=None, smoothing=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -387,6 +388,22 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
         L.append("")
+
+    # The smoothing pass reports its own volume, because the number it chose NOT
+    # to show is not visible anywhere else. A cap the author cannot see is
+    # indistinguishable from a pass that simply found little, and those are very
+    # different facts about their manuscript.
+    if smoothing is not None and smoothing.proposed:
+        L.append("## Language smoothing\n")
+        L.append(f"{smoothing.kept} suggestion(s) in the margin, from "
+                 f"{smoothing.proposed} the line-editing pass proposed. These "
+                 f"are questions of taste, not corrections: every one is a "
+                 f"{fmt.comment_noun} and none of them changed the text.\n")
+        if smoothing.withheld:
+            L.append(f"**{smoothing.withheld} further suggestion(s) withheld** "
+                     f"— this manuscript's cap is {smoothing.cap}, and the "
+                     f"least confident past that were dropped rather than "
+                     f"crowd the margin.\n")
 
     # Each judge gate gets its own section, because these are a different animal
     # from the queries above: every one of them is a correction the run was going

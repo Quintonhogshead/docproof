@@ -594,6 +594,82 @@ class SaplingConfig(BaseModel):
         return self
 
 
+class SmoothingConfig(BaseModel):
+    """The line-editing pass: the half of a proofreader's job DocProof otherwise
+    refuses. A line editor reads the manuscript and proposes small smoothings —
+    a word doing no work, a preposition that is not the idiomatic one, an
+    awkward coordination, a tense that reads rough, an ambiguous pronoun — and a
+    skeptical taste judge culls them before any of them reach the author.
+
+    Query-only by design, and unconditionally so: a mechanical error has a
+    verifiable right answer and may be a tracked change, but a smoothing has no
+    right answer, only a better one, and which is better is the author's call.
+    Every finding this pass emits is force_query'd, so it can only ever be a
+    margin comment. That is the invariant the whole pass is built around — it is
+    not a confidence threshold that a high-confidence judgement could clear.
+
+    Voice risk is what the knobs defend against: dialogue is excluded by default
+    (a character's diction is not the pipeline's to smooth), author coinages are
+    filtered deterministically before the judge ever sees a candidate, and the
+    volume is capped per 1,000 words so a book comes back with a handful of
+    considered suggestions rather than a margin full of opinions. Suggestions
+    dropped by that cap are counted in summary.md, never silently discarded.
+
+    Echo — a distinctive word repeated close together — is deliberately NOT one
+    of this pass's categories: the taxonomy already has `word_echo` for it, on
+    the query channel, and two passes asking the author the same question about
+    the same repetition is worse than either asking alone.
+
+    OFF by default and opt-in per run: it costs a full manuscript read plus a
+    judge, and it is the one pass whose output is taste rather than correctness.
+    Whole-document only. See docproof/smoothing.py."""
+    enabled: bool = False
+    # The proposing reader. Unset = api.model (the detector's). Restraint is
+    # most of the job, so this is not the place to economize hard — but the
+    # judge below is the one that decides what survives.
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    # The taste judge. Deliberately a strong model on its own line: telling a
+    # genuine smoothing from a merely-conventional rephrasing is the hard part
+    # of this pass, and the judge is what stands between the proposer's
+    # enthusiasm and the author's margin. Its prompts are short, so a frontier
+    # model here is cheap relative to the read.
+    judge_model: str = "claude-fable-5"
+    judge_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # Whether to smooth inside quoted speech. Off by default: voice risk
+    # concentrates in dialogue, where "awkward" is frequently the point.
+    include_dialogue: bool = False
+    # The volume cap, in suggestions per 1,000 words of manuscript. Ranked by
+    # judge confidence; everything past the cap is dropped AND counted in
+    # summary.md. Atmosphere's own proofreaders smooth at roughly this rate.
+    max_per_1000_words: float = Field(default=3.0, gt=0)
+    # Drop anything the judge affirms softer than this, before the cap. A
+    # suggestion the judge is lukewarm about costs the author more attention
+    # than it earns.
+    min_confidence: Literal["low", "medium", "high"] = "medium"
+    batch_size: int = Field(default=40, ge=1)   # candidates per judge request
+    max_output_tokens: int = Field(default=4000, ge=1)
+    # Both system prompts, editable per job the way the round judge's is. Empty
+    # (the default) uses the built-in one in smoothing.py; a non-empty value
+    # replaces it wholesale.
+    propose_prompt: str = ""
+    judge_prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if not self.enabled:
+            return self
+        if self.model is not None and lookup(self.model) is None:
+            raise ValueError(
+                f"smoothing.model '{self.model}' is not in the catalog")
+        if lookup(self.judge_model) is None:
+            raise ValueError(
+                f"smoothing.judge_model '{self.judge_model}' "
+                "is not in the catalog")
+        return self
+
+
 class DetectorSpec(BaseModel):
     """One reviewer in an ensemble: a model and how hard it thinks. The provider
     is read from the catalog, exactly as api.model is, so a detector is just a
@@ -862,6 +938,7 @@ class Config(BaseModel):
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
+    smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
