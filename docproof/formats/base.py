@@ -23,7 +23,10 @@ class DocumentFormat:
     review_instructions: str
     # The same thing for the app, which renders as plain text.
     where_to_look: str
-    # Where the explanation for each change ends up, when comments are on.
+    # Where the explanation for each change ends up, when comments are on, in
+    # the format's own word: a Word file holds margin comments, an InDesign
+    # file holds notes and has no margin to put them in. Complete on its own —
+    # every site interpolates it bare, so prefixing "margin " here doubles it.
     comment_noun: str
 
     preflight: Callable
