@@ -1,0 +1,59 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded errors: a single unpaired comma no reading defends — subject split from
+# verb, verb from object, a stray comma between correlative halves, and one
+# standing before a restrictive "that" clause. Traps: commas a sibling type ADDS,
+# a matched pair whose closing half lands right before the verb, and two commas
+# no bullet in the prompt names. No paragraph is a calibration example.
+error_type: unnecessary_comma
+
+cases:
+  - id: uc-001
+    text: "The blacksmith and his eldest son, arrived before the others had finished eating."
+    expect: { span: "son, arrived", correction: "son arrived", confidence: high }
+  - id: uc-002
+    text: "The three men who had been waiting since dawn, moved back from the fire."
+    expect: { span: "dawn, moved", correction: "dawn moved", confidence: high }
+  - id: uc-003
+    text: "Keeping the lamp burning until first light, cost more oil than they could spare."
+    expect: { span: "light, cost", correction: "light cost", confidence: medium }
+  - id: uc-004
+    text: "The clerk handed her, a folded slip of blue paper and turned away."
+    expect: { span: "handed her, a folded", correction: "handed her a folded", confidence: high }
+  - id: uc-005
+    text: "The channel was neither deep enough, nor wide enough for the barge."
+    expect: { span: "enough, nor", correction: "enough nor", confidence: medium }
+  - id: uc-006
+    text: "She kept the one key, that still turned in the cellar door."
+    expect: { span: "key, that", correction: "key that", confidence: medium }
+  - id: uc-007
+    text: "The pilot who had taken them out that morning refused, any part of the blame for what followed."
+    expect: { span: "refused, any part", correction: "refused any part", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: uc-101
+    text: "She loaded the cart with sacks of meal, a churn, and two crates of hens."
+    expect: clean          # the serial comma house style requires; serial_comma adds it
+  - id: uc-102
+    text: "After the third night without sleep, he stopped answering the door."
+    expect: clean          # a comma after an introductory phrase; introductory_comma's
+  - id: uc-103
+    text: "The harbourmaster, a heavy man in a wet coat, waved the boat off."
+    expect: clean          # a paired appositive; neither half is stray on its own
+  - id: uc-104
+    text: "The tide had turned, but the ferry still had not left the slip."
+    expect: clean          # two independent clauses; compound_sentence_comma's comma
+  - id: uc-105
+    text: "\"You will want a coat, Ellis, before you go down to the water.\""
+    expect: clean          # a mid-sentence vocative; direct_address_comma's, one each side
+  - id: uc-106
+    text: "\"It was never about the money, not really,\" Harlan said."
+    expect: clean          # a pause comma in dialogue; the beat is the author's
+  - id: uc-107
+    text: "The woman in the doorway, who had not spoken since they arrived, put down her cup."
+    expect: clean          # a matched pair; the closing comma before the verb is its other half
+  - id: uc-108
+    text: "He came down to the door in his shirtsleeves, hat in hand."
+    expect: clean          # an unpaired absolute-phrase comma, correct and named by no bullet
+  - id: uc-109
+    text: "The lamp guttered twice, nobody in the room said a word about it."
+    expect: clean          # a comma splice; comma_splice replaces the comma, never deletes it
