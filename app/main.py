@@ -186,7 +186,9 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         keystore = KeyStore(paths.keys_db)
         app.state.keystore = keystore
         # KEY_PROVIDERS, not PROVIDERS: Sapling's key is set and stored in the
-        # portal like a review provider's, even though it never reviews anything.
+        # portal like a review provider's. Loading it here also feeds the
+        # opt-in Sapling review pass, which reads SAPLING_API_KEY from the
+        # environment.
         app.state.env_keys = {p: os.environ.get(ENV_VARS[p]) for p in KEY_PROVIDERS}
         for provider in KEY_PROVIDERS:
             stored = keystore.get(provider)

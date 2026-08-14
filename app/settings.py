@@ -33,22 +33,24 @@ KEYCHAIN_SERVICE = "docproof"
 # The AI providers, plus the odds and ends that are not providers at all: a
 # read-only GitHub token, so a build somebody was sent can ask whether a newer
 # one has been released, the watcher's Google refresh token, the watcher's
-# HubSpot private-app token, and Sapling's grammar-API key (a standalone test
-# panel, never part of a review). They live here because they are secrets and
-# this is where secrets go — the Keychain, never a file, never returned to the
-# browser. `PROVIDERS` stays the list of vendors that review documents, so
-# nothing offers to review one with a Drive, HubSpot or Sapling key — do not add
-# any of those here.
+# HubSpot private-app token, and Sapling's grammar-API key (serving both the
+# test panel and the opt-in Sapling pass a review can run). They live here
+# because they are secrets and this is where secrets go — the Keychain, never a
+# file, never returned to the browser. `PROVIDERS` stays the list of vendors
+# that review documents, so nothing offers to review one with a Drive, HubSpot
+# or Sapling key — do not add any of those here.
 ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
             "gemini": "GEMINI_API_KEY", "github": "GITHUB_TOKEN",
             "google": "GOOGLE_REFRESH_TOKEN", "hubspot": "HUBSPOT_TOKEN",
             "sapling": "SAPLING_API_KEY"}
 PROVIDERS = ("anthropic", "openai", "gemini")
 
-# Sapling is not a review provider — it is a separate hosted grammar checker
-# wired in only as a test surface — but its key is set and stored exactly like a
-# provider's. `KEY_PROVIDERS` is the set the portal's key screen manages and the
-# server loads from the keystore at boot: the review providers, plus Sapling.
+# Sapling is not a review provider — no review can run on its key alone — but
+# the key serves two surfaces: the standalone test panel, and the opt-in
+# Sapling pass a review runs when `sapling.enabled` is on. It is set and stored
+# exactly like a provider's key. `KEY_PROVIDERS` is the set the portal's key
+# screen manages and the server loads from the keystore at boot: the review
+# providers, plus Sapling.
 SAPLING = "sapling"
 KEY_PROVIDERS = PROVIDERS + (SAPLING,)
 
