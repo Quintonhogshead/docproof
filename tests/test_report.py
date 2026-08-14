@@ -125,6 +125,17 @@ def test_cost_is_priced_at_the_rate_that_was_actually_paid(tmp_path):
     assert batched["cost"] == 9.0
 
 
+def test_sapling_charge_is_part_of_the_reported_cost(tmp_path):
+    usage = {"input_tokens": 1_000_000, "output_tokens": 1_000_000,
+             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+             "api_calls": 3, "sapling_chars": 500_000, "sapling_cost": 2.5}
+    report = build_report(_write(tmp_path, [_finding("0001")],
+                                 batch=False, usage=usage))
+    # The ledger, the email and summary.md all show model + Sapling; the
+    # on-screen report must agree with them.
+    assert report["cost"] == 20.5
+
+
 def test_a_review_that_changed_nothing_still_reports(tmp_path):
     report = build_report(_write(tmp_path, []))
     assert report["headline"]["applied"] == 0

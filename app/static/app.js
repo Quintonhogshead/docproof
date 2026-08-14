@@ -1947,41 +1947,7 @@ function renderJobs(jobs) {
         meta.textContent = bits.join(' · ');
         actions.append(meta);
       }
-      // The Drive archive: a link to the folder once the copy lands, a quiet
-      // note while it is saving, and — if Drive kept refusing — the reason and a
-      // way to try again. Nothing shows when the archive is off: `archive` stays
-      // '' then, so this whole block is skipped.
-      if (job.archive === 'done' && job.drive_link) {
-        const link = document.createElement('a');
-        link.className = 'file-link';
-        link.href = job.drive_link;
-        link.target = '_blank';
-        link.rel = 'noopener';
-        link.textContent = 'In Drive ↗';
-        actions.append(link);
-      } else if (job.archive === 'pending') {
-        const saving = document.createElement('span');
-        saving.className = 'file-meta muted';
-        saving.textContent = 'saving to Drive…';
-        actions.append(saving);
-      } else if (job.archive === 'failed') {
-        note.textContent = job.archive_error || 'The Drive copy did not finish.';
-        note.hidden = false;
-        const retryArchive = document.createElement('button');
-        retryArchive.className = 'quiet';
-        retryArchive.textContent = 'Retry Drive copy';
-        retryArchive.addEventListener('click', async () => {
-          retryArchive.disabled = true;
-          try {
-            await api(`/api/jobs/${job.id}/archive`, { method: 'POST' });
-            refreshJobs();
-          } catch (err) {
-            note.textContent = err.message || 'Could not save to Drive.';
-            retryArchive.disabled = false;
-          }
-        });
-        actions.append(retryArchive);
-      }
+      driveActions(actions, note, job);
       li.append(actions, note);
       // Tracked changes are invisible until you know which panel shows them,
       // and that panel is in a different place in each application.
@@ -2360,6 +2326,44 @@ async function openDesignerNotes(job) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// The Drive archive, shared by review and prep rows: a link to the folder
+// once the copy lands, a quiet note while it is saving, and — if Drive kept
+// refusing — the reason and a way to try again. Nothing shows when the
+// archive is off: `archive` stays '' then, so this whole block is skipped.
+function driveActions(actions, note, job) {
+  if (job.archive === 'done' && job.drive_link) {
+    const link = document.createElement('a');
+    link.className = 'file-link';
+    link.href = job.drive_link;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'In Drive ↗';
+    actions.append(link);
+  } else if (job.archive === 'pending') {
+    const saving = document.createElement('span');
+    saving.className = 'file-meta muted';
+    saving.textContent = 'saving to Drive…';
+    actions.append(saving);
+  } else if (job.archive === 'failed') {
+    note.textContent = job.archive_error || 'The Drive copy did not finish.';
+    note.hidden = false;
+    const retryArchive = document.createElement('button');
+    retryArchive.className = 'quiet';
+    retryArchive.textContent = 'Retry Drive copy';
+    retryArchive.addEventListener('click', async () => {
+      retryArchive.disabled = true;
+      try {
+        await api(`/api/jobs/${job.id}/archive`, { method: 'POST' });
+        refreshJobs();
+      } catch (err) {
+        note.textContent = err.message || 'Could not save to Drive.';
+        retryArchive.disabled = false;
+      }
+    });
+    actions.append(retryArchive);
+  }
+}
+
 function prepActions(job) {
   const wrap = document.createElement('div');
   const actions = document.createElement('div');
@@ -2411,6 +2415,7 @@ function prepActions(job) {
     meta.textContent = bits.join(' · ');
     actions.append(meta);
   }
+  driveActions(actions, note, job);
   wrap.append(actions, note);
 
   const book = job.prep_book || {};

@@ -108,6 +108,12 @@ def build_report(findings_path: str | Path,
         + usage.get("cache_creation_input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),
         batch=bool(data.get("batch")))
+    # Sapling is billed per character and never in the model estimate, so fold
+    # its charge in here too — otherwise the report headline understates what
+    # the spending ledger and the completion email both show.
+    sapling_cost = usage.get("sapling_cost", 0.0) or 0.0
+    if sapling_cost:
+        cost = (cost or 0.0) + sapling_cost
 
     return {
         "source": Path(data.get("source", "")).name,
