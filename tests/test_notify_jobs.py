@@ -57,6 +57,44 @@ def test_completion_for_job_speaks_each_pipeline():
     assert "Proofread" in review and "Changes applied: 42" in review
 
 
+def test_the_review_email_reports_both_channels():
+    """A proofread hands back corrections AND questions. The log said only the
+    first, so the queries waiting for the author were invisible to the person
+    reading the morning email."""
+    _, body, html = notify.completion_for_job(
+        _job(kind="review", applied=42, queried=9, judge_held=4))
+    assert "Changes applied: 42" in body
+    assert "Queries for the author: 9" in body
+    # A judge withdraws a correction by turning it into a query, so the held
+    # count is a share of the 9 above — never a fourth number to add on.
+    assert "Held back by judge: 4 of those" in body
+    # Both renderings are built from the one row list, and both are sent.
+    for label, value in (("Queries for the author", "9"),
+                         ("Held back by judge", "4 of those")):
+        assert f">{label}</td><td>{value}</td>" in html
+
+
+def test_a_review_with_nothing_to_ask_says_nothing_about_queries():
+    """Zero rows are left out rather than printed: a clean run should read like
+    a clean run, not like a column of noughts."""
+    _, body, html = notify.completion_for_job(
+        _job(kind="review", applied=42, queried=0, judge_held=0))
+    for text in (body, html):
+        assert "Queries for the author" not in text
+        assert "Held back by judge" not in text
+
+
+def test_a_record_without_the_count_fields_at_all_still_emails():
+    """The completion log is built from whatever job-like record it is handed —
+    app jobs, watched books — so a missing field has to read as "nothing to
+    report" rather than take the email down with it."""
+    job = _job(kind="review", applied=42)
+    del job.queried, job.judge_held
+    _, body, _ = notify.completion_for_job(job)
+    assert "Changes applied: 42" in body
+    assert "Queries for the author" not in body
+
+
 def test_completion_for_job_reports_cost_and_elapsed():
     _, text, _ = notify.completion_for_job(_job())
     assert "$1.23" in text and "Elapsed: 2m 30s" in text

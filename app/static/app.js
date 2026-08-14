@@ -2215,8 +2215,17 @@ function renderJobs(jobs) {
         if (rejudgeOpen.has(job.id)) queueMicrotask(() => open(rejudgeOpen.get(job.id)));
       }
       const bits = [];
+      // "Suggested" was wrong on both counts: a tracked change is a correction
+      // the review is willing to stand behind, and the things it merely
+      // suggests are the margin queries — which this line never mentioned at
+      // all. Prep never reaches here (it has its own actions above), so
+      // `applied` on this branch is always tracked changes.
       if (typeof job.applied === 'number') {
-        bits.push(`${job.applied} change${job.applied === 1 ? '' : 's'} suggested`);
+        bits.push(`${job.applied} correction${job.applied === 1 ? '' : 's'} applied`);
+      }
+      if (job.queried) {
+        bits.push(`${job.queried} question${job.queried === 1 ? '' : 's'} `
+          + 'in the margins');
       }
       // Reviewing one document twice leaves two entries that read alike; the
       // folder name is what tells them apart on disk.
@@ -2781,8 +2790,18 @@ function renderReport(r, format) {
     parts.push(`${h.applied} correction${h.applied === 1 ? '' : 's'} `
       + `in ${h.paragraphs} paragraph${h.paragraphs === 1 ? '' : 's'}`);
     if (h.top_count) parts.push(`most common: ${h.top_name} (${h.top_count})`);
-  } else {
+  } else if (!h.queries) {
     parts.push('Nothing needed changing');
+  } else {
+    // Queries but no corrections is a real outcome, not an empty review: the
+    // run found nothing to fix and several things to ask about.
+    parts.push('Nothing needed correcting');
+  }
+  // The other half of the deliverable. Said in the headline because it is the
+  // part a reader would otherwise never go looking for.
+  if (h.queries) {
+    parts.push(`${h.queries} question${h.queries === 1 ? '' : 's'} `
+      + 'in the margins');
   }
   if (typeof r.cost === 'number') {
     parts.push(`cost ${r.cost < 0.01 ? '<$0.01' : '$' + r.cost.toFixed(2)}`);
@@ -2811,15 +2830,30 @@ function renderReport(r, format) {
 
   const aside = $('report-aside');
   aside.innerHTML = '';
+  // Queries come first of the four, because they are the only ones the author
+  // is being asked to do something about. The other three are the review
+  // explaining itself.
+  addAside(aside, 'Queries — questions, not corrections', r.queries,
+    'These come from the kinds of mistake that ask rather than correct, '
+    + 'because the answer is yours to make. Each one is a comment in the '
+    + 'margin of the reviewed file; none of them changed your document.');
   addAside(aside, 'Left for you to judge', r.low_confidence,
     'These looked deliberate, or the model was unsure. Nothing in your '
     + 'document was changed for them.');
+  addAside(aside, 'Couldn’t be placed', r.not_placed,
+    'These were found, but the words they quote could no longer be located '
+    + 'in the document, so there was nowhere safe to put them.');
   addAside(aside, 'Not applied', r.not_applied,
-    'These were found but could not be placed in the document safely.');
+    'Nothing in your document was changed for these. Each one says why '
+    + 'underneath it — most were covered by another change, or set aside by '
+    + 'a check further down the line.');
 }
 
 function addAside(parent, title, findings, blurb) {
-  if (!findings.length) return;
+  // A report built before a bucket existed simply has no key for it, and a
+  // missing panel is the right answer there — not a crash that blanks the
+  // whole page.
+  if (!findings || !findings.length) return;
   const box = document.createElement('details');
   box.className = 'card';
   const summary = document.createElement('summary');

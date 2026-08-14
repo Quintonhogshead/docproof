@@ -25,11 +25,21 @@ CONFIDENCE_WORDS = {
 }
 
 STATUS_WORDS = {
+    # A query is not a failure to change something — it is the other half of
+    # the deliverable. The reviewed file carries it as a margin comment, and
+    # this is the word for that, so it stops reading as a change that fell
+    # over. See docs/deliverables.md.
+    "query": "Asked in the margin — nothing was changed",
     "skipped_low_confidence": "Left alone — below your care setting",
     "rejected_no_anchor": "Couldn't be placed in the document",
     "rejected_overlap": "Overlapped another change",
     "rejected_duplicate": "Already covered by another change",
     "rejected_noop": "Would not have changed anything",
+    # The remaining two were missing, which left their cards with no reason at
+    # all on them — and the panel they sit in now tells the reader that each
+    # finding carries its own, so every status a finding can hold needs a word.
+    "rejected_oversized": "A real catch, but too large a fix to make for you",
+    "rejected_by_verifier": "Set aside by the second reader",
 }
 
 _WORDS = re.compile(r"\s+")
@@ -71,9 +81,32 @@ def _finding_view(f: dict, names: dict[str, str]) -> dict:
         "confidence_word": CONFIDENCE_WORDS.get(f.get("confidence", "medium"),
                                                 "Fairly confident"),
         "status": f.get("status", ""),
-        "status_word": STATUS_WORDS.get(f.get("status", ""), ""),
+        "status_word": _status_word(f),
         "applied": bool(f.get("applied")),
     }
+
+
+def _status_word(f: dict) -> str:
+    """Why this finding is where it is, in words.
+
+    One case can't be read off the status alone: a finding that validated and
+    still wasn't written. For plain text there is one cause — the writer
+    re-checked the quoted words at the moment of editing, found they had moved,
+    and refused rather than edit the wrong characters.
+
+    A formatting mark has two, and findings.json cannot tell them apart: the
+    text was already set that way (not a failure at all — the model reads plain
+    text and cannot see the italics on a title it correctly reports), or the
+    same anchor re-check refused it, which happens when a correction inside the
+    title applied first and shifted the offsets underneath it. Both leave
+    status "validated", `format` set and `applied` false, and only the run log
+    distinguishes them — so say both rather than pick one and be wrong."""
+    status = f.get("status", "")
+    if status == "validated" and not f.get("applied"):
+        return ("Already set that way, or the words around it had moved"
+                if f.get("format")
+                else "The words it quotes had moved before it was written")
+    return STATUS_WORDS.get(status, "")
 
 
 def build_report(findings_path: str | Path,
@@ -84,10 +117,19 @@ def build_report(findings_path: str | Path,
     names = names or {}
     findings = [_finding_view(f, names) for f in data.get("findings", [])]
 
+    # Four ways a finding can end up not being a tracked change, and only one
+    # of them is a disappointment. A query is a deliverable — a question the
+    # author is meant to answer — so it gets its own bucket instead of being
+    # swept in with the rejections; and the one status that really does mean
+    # "there was nowhere to put this" is separated from the ones that mean
+    # "another change already covered it", which are working as intended.
     applied = [f for f in findings if f["applied"]]
-    low = [f for f in findings if f["status"] == "skipped_low_confidence"]
-    other = [f for f in findings
-             if not f["applied"] and f["status"] != "skipped_low_confidence"]
+    rest = [f for f in findings if not f["applied"]]
+    queries = [f for f in rest if f["status"] == "query"]
+    low = [f for f in rest if f["status"] == "skipped_low_confidence"]
+    not_placed = [f for f in rest if f["status"] == "rejected_no_anchor"]
+    other = [f for f in rest if f["status"] not in
+             ("query", "skipped_low_confidence", "rejected_no_anchor")]
 
     groups: dict[str, dict] = {}
     for f in applied:
@@ -126,10 +168,14 @@ def build_report(findings_path: str | Path,
             "top_name": ordered[0]["error_name"] if ordered else "",
             "top_count": ordered[0]["count"] if ordered else 0,
             "low_confidence": len(low),
+            "queries": len(queries),
+            "not_placed": len(not_placed),
             "not_applied": len(other),
         },
         "cost": cost,
         "groups": ordered,
+        "queries": queries,
         "low_confidence": low,
+        "not_placed": not_placed,
         "not_applied": other,
     }

@@ -345,12 +345,27 @@ def _result_group(job) -> tuple[str, list]:
             ("Author's words verified intact",
              "yes" if job.verified else "no", None),
         ])
-    return ("Review", [
-        ("Changes applied", _int(job.applied), None),
-        ("Reject-all check",
-         "failed — see the results card" if job.audit_failed else "passed",
-         None),
-    ])
+    # A proofread hands back two things, and for a long time this said only one
+    # of them. The queries are the questions in the margins — nothing was
+    # changed for them, and someone has to answer them — so a log that reports
+    # only the corrections understates the work and hides what is waiting.
+    # Zero of either is left off rather than printed: a run with no questions
+    # should read like a run with no questions, not like a row of noughts.
+    rows = [("Changes applied", _int(job.applied), None)]
+    queried = getattr(job, "queried", 0) or 0
+    if queried:
+        rows.append(("Queries for the author", _int(queried), None))
+    # Held-back changes are queries too — a judge withdraws a correction by
+    # turning it into a margin question — so this is a share of the row above,
+    # not a fourth number to add to it. Said that way, or the email reads as
+    # more work than there is.
+    held = getattr(job, "judge_held", 0) or 0
+    if held:
+        rows.append(("Held back by judge", f"{_int(held)} of those", None))
+    rows.append(("Reject-all check",
+                 "failed — see the results card" if job.audit_failed
+                 else "passed", None))
+    return ("Review", rows)
 
 
 def _settings_rows(job) -> list:
@@ -374,6 +389,10 @@ def _settings_rows(job) -> list:
                      None))
         return rows
     rows.append(("Model error-type passes", "full house set", None))
+    # Hand-maintained, and silently partial: a pass that exists in
+    # app/features.py but is missing a line here never appears in the email,
+    # however loudly it was switched on. Add the pass here in the same change
+    # that adds the toggle.
     labels = [("storysheet", "story sheet"),
               ("adjudicate", "real-word typos"),
               ("rewrite", "rewrite & compare"),

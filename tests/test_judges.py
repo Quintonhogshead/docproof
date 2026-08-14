@@ -345,6 +345,11 @@ def test_finish_holds_back_a_meaning_changing_edit(tmp_path, monkeypatch):
     summary = (tmp_path / "out" / "summary.md").read_text("utf-8")
     assert "The meaning check" in summary
     assert "Drops the negation." in summary
+    # A withheld change is not a change that vanished: it became a question in
+    # the margin, and the run reports it as one so the results card and the
+    # completion email can say what is waiting for the author.
+    assert out.judge_held == 1
+    assert out.queried == 1
 
 
 def test_finish_applies_an_edit_that_preserves_meaning(tmp_path, monkeypatch):
@@ -480,12 +485,19 @@ def test_a_replay_honours_the_original_runs_held_back_changes(tmp_path,
                    out_dir=tmp_path / "out2", source_path=src,
                    judge_held=held)
     assert again.applied == 0, "the replay re-applied a held-back change"
+    # ...and it says so. A rebuilt document holds back exactly what the first
+    # one did, so the record it hands the app has to report that too — counted
+    # from what this rebuild actually withdrew, since the gates themselves ran
+    # nowhere near it.
+    assert again.judge_held == 1
+    assert again.queried == 1
 
     # ...and without the record, the same replay would have applied it — which
     # is exactly the bug the record exists to prevent.
     ungated = finish(prepared, [replace(f, para_id="body-0000")], Usage(), cfg,
                      out_dir=tmp_path / "out3", source_path=src)
     assert ungated.applied == 1
+    assert ungated.judge_held == 0 and ungated.queried == 0
 
 
 def test_a_judge_that_never_answered_is_reported_not_hidden(tmp_path,
