@@ -6,8 +6,13 @@ output/
 .DS_Store
 tests/fixtures/*.docx
 jobs/
+jobs-*/
 build/
 dist/
+.pytest_cache/
+
+# Local session/experiment artifacts (see scratch/README.md)
+scratch/
 
 # HubSpot CLI credentials
 hubspot.config.yml
