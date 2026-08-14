@@ -205,7 +205,8 @@ def _run(cfg: Config, prepared, to_verify: list[Finding], provider: Provider,
             by_para.setdefault(f.para_id, []).append(f)
 
     verdicts: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=cfg.api.concurrency) as pool:
+    with ThreadPoolExecutor(
+            max_workers=cfg.concurrency_for(cfg.ensemble.verifier_model)) as pool:
         pending = [(fs, pool.submit(verifier.fetch, paras[pid].text, fs))
                    for pid, fs in by_para.items()]
         for fs, fut in pending:                        # fold serially: usage.add is not thread-safe

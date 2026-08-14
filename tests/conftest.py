@@ -37,6 +37,21 @@ _ensure_fixtures()
 
 
 @pytest.fixture(autouse=True)
+def no_whole_book_cache(monkeypatch):
+    """Every test re-reads; nothing is pinned between them.
+
+    `load_config` fills in a default cache folder for the glossary, story sheet
+    and continuity reads, which in a real run is the point — the same draft is
+    not read twice. In the suite it would be a shared, persistent seam between
+    tests: one test's fake glossary answered from another's run, provider call
+    counts off by whatever the previous run happened to leave behind, and the
+    developer's own ~/.docproof written to by a test. Empty means off (see
+    docproof.config.default_cache_dir); a test about caching sets its own
+    tmp_path."""
+    monkeypatch.setenv("DOCPROOF_CACHE_DIR", "")
+
+
+@pytest.fixture(autouse=True)
 def no_internet(monkeypatch):
     """Nothing in this suite may leave the machine.
 

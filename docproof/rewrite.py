@@ -192,25 +192,30 @@ def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
     schema = rewrite_schema()
 
     def do(job: tuple[Chunk, int]):
+        """Returns (candidates, usage-or-None). The usage comes back rather than
+        being folded here: this runs on the pool, and Usage.add is a lock-free
+        read-modify-write, so adding from N workers silently loses updates and
+        under-reports what the run cost."""
         chunk, sample = job
         if not chunk.paragraphs:
-            return []
+            return [], None
         system = lens_system(sample) if diverse else PROPOSE_SYSTEM
         res = provider.complete_structured(
             model=model, system=system, user=render(chunk.paragraphs),
             schema=schema, schema_name="rewritten", max_tokens=max_tokens)
-        usage.add(res.usage)
         if res.stop_reason != "ok" or not res.parsed:
             log.warning("rewrite: chunk %s returned %s", chunk.chunk_id,
                         res.error or res.stop_reason)
-            return []
+            return [], res.usage
         return candidates_from_result(chunk, res.parsed, max_add=max_add,
-                                      max_span=max_span)
+                                      max_span=max_span), res.usage
 
     jobs = [(chunk, s) for s in range(max(1, samples)) for chunk in chunks]
     cands: list[RewriteCandidate] = []
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for group in ex.map(do, jobs):
+        for group, spent in ex.map(do, jobs):
+            if spent is not None:
+                usage.add(spent)                     # fold serially: not thread-safe
             cands.extend(group)
     cands = dedup_candidates(cands)
     log.info("Rewrite: %d candidate diff(s) from %d chunk(s) x %d sample(s)",
@@ -283,11 +288,21 @@ def confirm(candidates: Sequence[RewriteCandidate],
             batch_size: int = 40, edit_confidence: str = "high",
             reject_sink: list | None = None,
             error_type: str = "rewrite", chunk_id: str = "rewrite",
-            id_prefix: str = "r", silent: bool = False) -> list[Finding]:
+            id_prefix: str = "r", silent: bool = False,
+            concurrency: int = 1) -> list[Finding]:
     """Skeptically rule on each candidate in context and turn the affirmed ones
     into Findings. Only an error affirmed at `edit_confidence` becomes a tracked
     change; a softer affirmation is force_query'd to the margin, a "keep" yields
     nothing — the same routing that makes the adjudication pass safe.
+
+    `concurrency` windows are in flight at once, the verifier's split: the calls
+    fan out, the answers fold back in window order on this thread. The order is
+    not incidental — findings claim their span in the order they are emitted, the
+    ids come off a shared counter, and `reject_sink` is a record an eval reads
+    positionally — so only the waiting is parallel. This valve is the one every
+    candidate source shares (rewrite, LanguageTool, Sapling, the low-confidence
+    promotion), and on a novel each of them can fill dozens of windows. 1 (the
+    default) is the old strictly-sequential behaviour.
 
     `reject_sink`, if given, collects every candidate the confirm step KEPT (ruled
     not-an-error). These are where recall dies at the gate: a candidate the rewrite
@@ -303,58 +318,88 @@ def confirm(candidates: Sequence[RewriteCandidate],
     text_of = {p.para_id: p.text for p in paragraphs}
     enriched = [c for c in candidates if c.para_id in text_of]
     edit_floor = _RANK.get(edit_confidence, 2)
+    windows = [enriched[i:i + batch_size]
+               for i in range(0, len(enriched), batch_size)]
+    schema = strict_json_schema(_CVerdicts)          # deep-copies; hoist off the pool
 
-    findings: list[Finding] = []
-    for i in range(0, len(enriched), batch_size):
-        window = enriched[i:i + batch_size]
+    def fetch(window):
         lines = []
         for n, c in enumerate(window, 1):
             sent = _sentence_around(text_of[c.para_id], c.start, c.end)
             lines.append(f"{n}. sentence: {sent}\n   edit: {_describe(c)}")
-        res = provider.complete_structured(
+        return provider.complete_structured(
             model=model, system=_CONFIRM_SYSTEM, user="\n\n".join(lines),
-            schema=strict_json_schema(_CVerdicts), schema_name="verdicts",
+            schema=schema, schema_name="verdicts",
             max_tokens=max_tokens)
-        usage.add(res.usage)
-        if res.stop_reason != "ok" or res.parsed is None:
-            log.error("rewrite-confirm batch %d: %s", i // batch_size,
-                      res.error or res.stop_reason)
-            continue
+
+    findings: list[Finding] = []
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        pending = [(w, pool.submit(fetch, w)) for w in windows]
         try:
-            parsed = _CVerdicts.model_validate(res.parsed)
-        except Exception as e:
-            log.error("rewrite-confirm batch %d: bad response: %s",
-                      i // batch_size, e)
-            continue
-        for v in parsed.verdicts:
-            if not (1 <= v.index <= len(window)):
-                continue
-            c = window[v.index - 1]
-            if not v.is_error:
-                if reject_sink is not None:
-                    reject_sink.append({
-                        "para_id": c.para_id, "start": c.start, "end": c.end,
-                        "original": c.original, "replacement": c.replacement,
-                        "confidence": v.confidence})
-                continue
-            para_text = text_of[c.para_id]
-            conf = v.confidence if v.confidence in _RANK else "low"
-            findings.append(Finding(
-                finding_id=f"{id_prefix}-{next(ids):04d}",
-                chunk_id=chunk_id,
-                para_id=c.para_id,
-                error_type=error_type,
-                original_text=para_text,
-                occurrence=1,
-                corrected_text=para_text[:c.start] + c.replacement
-                + para_text[c.end:],
-                explanation=_explanation(c),
-                confidence=conf,
-                # Only a beyond-doubt affirmation edits; softer ones ask.
-                force_query=_RANK[conf] < edit_floor,
-                silent=silent))
+            for batch_no, (window, future) in enumerate(pending):
+                res = future.result()
+                usage.add(res.usage)                 # fold serially: not thread-safe
+                if res.stop_reason != "ok" or res.parsed is None:
+                    log.error("rewrite-confirm batch %d: %s", batch_no,
+                              res.error or res.stop_reason)
+                    continue
+                try:
+                    parsed = _CVerdicts.model_validate(res.parsed)
+                except Exception as e:
+                    log.error("rewrite-confirm batch %d: bad response: %s",
+                              batch_no, e)
+                    continue
+                _fold(parsed, window, text_of, findings, reject_sink, ids,
+                      edit_floor, error_type=error_type, chunk_id=chunk_id,
+                      id_prefix=id_prefix, silent=silent)
+        except BaseException:
+            # Every window was queued up front, and the pool drains its queue on
+            # the way out — so without this an abort keeps buying the rest of the
+            # book. The serial loop it replaced stopped at the first failure, and
+            # so must this. Only calls not yet started can be recalled.
+            for _w, unstarted in pending:
+                unstarted.cancel()
+            raise
     kept = len(reject_sink) if reject_sink is not None else 0
     log.info("Rewrite: %d correction(s) from %d candidate(s)%s", len(findings),
              len(candidates),
              f" ({kept} kept as not-an-error)" if reject_sink is not None else "")
     return findings
+
+
+def _fold(parsed, window, text_of: dict, findings: list, reject_sink,
+          ids, edit_floor: int, *, error_type: str, chunk_id: str,
+          id_prefix: str, silent: bool) -> None:
+    """One window's verdicts, appended to `findings` in the order asked.
+
+    Split out of `confirm` so the folding stays a plain serial routine while the
+    calls around it run on a pool: the id counter, the findings list and the
+    reject log are all shared, and none of them may be touched from a worker
+    thread."""
+    for v in parsed.verdicts:
+        if not (1 <= v.index <= len(window)):
+            continue
+        c = window[v.index - 1]
+        if not v.is_error:
+            if reject_sink is not None:
+                reject_sink.append({
+                    "para_id": c.para_id, "start": c.start, "end": c.end,
+                    "original": c.original, "replacement": c.replacement,
+                    "confidence": v.confidence})
+            continue
+        para_text = text_of[c.para_id]
+        conf = v.confidence if v.confidence in _RANK else "low"
+        findings.append(Finding(
+            finding_id=f"{id_prefix}-{next(ids):04d}",
+            chunk_id=chunk_id,
+            para_id=c.para_id,
+            error_type=error_type,
+            original_text=para_text,
+            occurrence=1,
+            corrected_text=para_text[:c.start] + c.replacement
+            + para_text[c.end:],
+            explanation=_explanation(c),
+            confidence=conf,
+            # Only a beyond-doubt affirmation edits; softer ones ask.
+            force_query=_RANK[conf] < edit_floor,
+            silent=silent))

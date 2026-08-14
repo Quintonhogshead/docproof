@@ -502,7 +502,8 @@ def _drive(cfg, prepared0, orig_doc, review, judge_provider, usage):
         judge_model=cfg.rounds.judge_model, judge_prompt=cfg.rounds.judge_prompt,
         min_confidence=cfg.min_confidence, query_types=prepared0.query_types,
         format_types=prepared0.format_types, edit_guard=cfg.edit_guard,
-        min_new_edits=cfg.rounds.min_new_edits, concurrency=cfg.api.concurrency,
+        min_new_edits=cfg.rounds.min_new_edits,
+        concurrency=cfg.concurrency_for(cfg.rounds.judge_model),
         usage=usage)
 
 

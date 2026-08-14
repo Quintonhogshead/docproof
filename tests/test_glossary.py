@@ -187,3 +187,26 @@ def test_glossary_cache_key_changes_with_the_model(tmp_path):
                        cache_dir=str(tmp_path))
     assert [e.canonical for e in g.entries] == ["Lower City"]
     assert prov2.calls != []                           # the different model re-read
+
+
+def test_the_cache_key_changes_with_reasoning_effort(tmp_path):
+    """Effort is on the wire — it is what the provider is asked to spend — so a
+    raised effort has to miss the cache. Keyed without it, an operator who lifts
+    glossary.effort to chase a weak read would be served the old, cheaper one
+    and see no change at all."""
+    paras = [_para("body-0", "Wren crossed the Upper City before dawn.")]
+    payload = {"entries": [{"canonical": "Upper City", "kind": "place",
+                            "variants": []}],
+               "suspected_misspellings": []}
+    first = FakeProvider([ProviderResult(parsed=payload)])
+    build_glossary(paras, first, model="m", max_tokens=100, usage=Usage(),
+                   effort="medium", cache_dir=str(tmp_path))
+    raised = FakeProvider([ProviderResult(parsed=payload)])
+    build_glossary(paras, raised, model="m", max_tokens=100, usage=Usage(),
+                   effort="high", cache_dir=str(tmp_path))
+    assert len(raised.calls) == 1, "a raised effort was served the cheaper read"
+
+    same = FakeProvider([])                             # empty queue
+    build_glossary(paras, same, model="m", max_tokens=100, usage=Usage(),
+                   effort="high", cache_dir=str(tmp_path))
+    assert same.calls == []                             # unchanged effort still hits

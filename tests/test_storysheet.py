@@ -2,6 +2,8 @@
 system-prompt section, and caching it per draft."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from docproof.models import ParagraphRef, Usage
 from docproof.providers.base import ProviderResult
 from docproof.storysheet import StorySheet, build_storysheet, prompt_section
@@ -63,3 +65,41 @@ def test_story_sheet_cache_reuses_without_a_second_call(tmp_path):
                          cache_dir=str(tmp_path))
     assert s.narration == "third person past"
     assert prov2.calls == []                            # served from cache
+
+
+def test_prepare_reads_the_book_once_across_a_batch_submit_and_collect(
+        tmp_path, monkeypatch):
+    """A batch review calls prepare twice — once to build and send the requests,
+    once at collect to rebuild the same chunking — and the story sheet is the one
+    whole-book read that happens inside prepare. Without a cache folder that is
+    two reads of the entire manuscript for one job, and the second one is thrown
+    away: at collect the detector prompts it feeds are only used on the recovery
+    path. With the folder wired (load_config now fills it in), the second prepare
+    is served from disk."""
+    import docx
+
+    from docproof.config import load_config
+    from docproof.pipeline import prepare
+
+    root = Path(__file__).parent.parent
+    doc = docx.Document()
+    for i in range(4):
+        doc.add_paragraph(f"She walked on, and paragraph {i} said so plainly.")
+    src = tmp_path / "book.docx"
+    doc.save(src)
+
+    prov = FakeProvider([_result(narration="third person past", characters=[],
+                                 notes=[])])
+    monkeypatch.setattr("docproof.providers.build_provider",
+                        lambda cfg, **kw: prov)
+
+    cfg = load_config(str(root / "config" / "default.yaml"))
+    cfg.storysheet.enabled = True
+    cfg.storysheet.cache_dir = str(tmp_path / "cache")
+
+    first = prepare(cfg, src, root / "config" / "error_types")
+    second = prepare(cfg, src, root / "config" / "error_types")
+
+    assert "third person past" in first.story_sheet
+    assert second.story_sheet == first.story_sheet
+    assert len(prov.calls) == 1, "the second prepare re-read the whole book"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 from pathlib import Path
 from typing import ClassVar, Literal
 
@@ -28,8 +29,41 @@ class APIConfig(BaseModel):
     # so fetching several concurrently is most of the wall-clock win. Ordering,
     # cost accounting and resume are unaffected — findings are still assembled
     # in document order. 1 restores the old strictly-serial behaviour; keep it
-    # modest so a big manuscript does not trip the provider's rate limit.
+    # modest so a big manuscript does not trip the provider's rate limit. 1 is
+    # strictly serial and overrides the per-vendor table below.
     concurrency: int = Field(default=8, ge=1)
+    # Per-vendor overrides of the number above, because "modest" is a different
+    # number at each vendor and the pass that is running decides which one
+    # applies — a valve may confirm on an OpenAI model under an Anthropic
+    # detector. 8 was set when the OpenAI keys were Tier-1 (200K TPM); they now
+    # carry 2M TPM / 5K RPM, where 8 in flight leaves the ceiling untouched.
+    # This is not a niche path: the engine default here is Haiku, but the app
+    # ships gpt-5.6-luna as its detector AND its glossary reader (app/settings),
+    # so most real reviews are the OpenAI ones this raises.
+    # Anthropic keeps the conservative number: its headroom has never been
+    # measured, and a 429 that outlives max_retries is not retried — it becomes
+    # a silent coverage gap, not a loud failure. Guessing there is expensive.
+    # Keyed by vendor id — "anthropic" | "openai" | "gemini". See
+    # `Config.concurrency_for`.
+    concurrency_by_provider: dict[str, int] = Field(
+        default_factory=lambda: {"openai": 24})
+
+    @field_validator("concurrency_by_provider")
+    @classmethod
+    def _known_providers(cls, value):
+        """A misspelled vendor would silently do nothing — the lookup would miss
+        and the floor would apply — so it is refused at load instead. Same three
+        names as `provider`."""
+        allowed = ("anthropic", "openai", "gemini")
+        for name, n in value.items():
+            if name not in allowed:
+                raise ValueError(
+                    f"api.concurrency_by_provider: '{name}' is not a provider; "
+                    f"use one of {', '.join(allowed)}")
+            if n < 1:
+                raise ValueError(
+                    f"api.concurrency_by_provider: '{name}' must be at least 1")
+        return value
 
 
 class ChunkingConfig(BaseModel):
@@ -298,11 +332,14 @@ class GlossaryConfig(BaseModel):
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     max_output_tokens: int = Field(default=8000, ge=1)
-    # Pin the whole-book read per draft. A path enables a content-addressed
-    # cache (keyed by text + model + prompt): re-reviewing an unchanged draft
-    # reuses the read instead of paying for it again, and — since the read is
-    # stochastic — every run of that draft sees the same glossary, so case-drift
-    # findings stop wobbling run to run. Unset (the default) disables the cache.
+    # Where to pin the whole-book read per draft: a content-addressed cache
+    # (keyed by text + model + effort + prompt) so re-reviewing an unchanged
+    # draft reuses the read instead of paying for it again, and — since the read
+    # is stochastic — every run of that draft sees the same glossary, so
+    # case-drift findings stop wobbling run to run.
+    # Unset does NOT mean off: it means the shared default folder, resolved at
+    # the point of use by `cache_dir_for` (DOCPROOF_CACHE_DIR, else under
+    # DOCPROOF_HOME). Setting DOCPROOF_CACHE_DIR empty is what turns caching off.
     cache_dir: str | None = None
     # Raise the glossary's casing drift as margin queries. Off leaves only the
     # suspected-misspelling half (which the adjudication pass carries).
@@ -370,9 +407,10 @@ class ContinuityConfig(BaseModel):
     # read would silently miss every contradiction past the cut. Mirrors promo's
     # refuse-don't-overflow guard.
     max_input_tokens: int = Field(default=400_000, ge=1)
-    # A path pins the read per draft (text + model + prompt): re-reviewing an
-    # unchanged draft reuses the read instead of paying again, and — since the
-    # read is stochastic — every run of that draft sees the same questions.
+    # A path pins the read per draft (text + model + effort + prompt):
+    # re-reviewing an unchanged draft reuses the read instead of paying again,
+    # and — since the read is stochastic — every run sees the same questions.
+    # Unset is the shared default folder, not off; see glossary.cache_dir.
     cache_dir: str | None = None
     # The reader's system prompt, editable per job in the panel the way the
     # round judge's is. Empty (the default) uses the built-in one in
@@ -638,7 +676,8 @@ class StorySheetConfig(BaseModel):
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
     max_output_tokens: int = Field(default=4000, ge=1)
-    # A path pins the read per draft, like glossary.cache_dir.
+    # A path pins the read per draft, like glossary.cache_dir — and, like it,
+    # unset means the shared default folder rather than no cache.
     cache_dir: str | None = None
 
     @model_validator(mode="after")
@@ -922,6 +961,72 @@ class Config(BaseModel):
     def error_type_keys(self) -> tuple[str, ...]:
         """Every enabled key, flat, in pass order."""
         return tuple(k for group in self.error_type_groups for k in group)
+
+    def concurrency_for(self, model: str | None = None) -> int:
+        """How many calls a pass on `model` may keep in flight.
+
+        The vendor decides, not the pass: `api.concurrency` is what every
+        provider gets, and `api.concurrency_by_provider` overrides it for the
+        ones whose headroom we have actually measured. Ask with the model the
+        pass is about to call — a confirm valve often runs a different model,
+        sometimes at a different vendor, than the detector that ran before it.
+        An unknown model falls back to `api.provider`, as `build_provider` does.
+
+        `api.concurrency: 1` wins over every vendor entry. It is the documented
+        way to make a run strictly serial — the first thing to reach for when
+        chasing a threading bug or a rate limit — and a switch that quietly did
+        nothing because a vendor table out-voted it would be worse than no
+        switch at all."""
+        if self.api.concurrency == 1:
+            return 1
+        from .providers.catalog import provider_for
+        name = provider_for(model or self.api.model, self.api.provider)
+        return max(1, self.api.concurrency_by_provider.get(
+            name, self.api.concurrency))
+
+
+CACHE_DIR_ENV = "DOCPROOF_CACHE_DIR"
+
+
+def default_cache_dir() -> str | None:
+    """Where the whole-book reads are pinned, or None to re-read every time.
+
+    The glossary, the story sheet and the continuity read each cost one call
+    over the entire manuscript, and each is keyed by (text, model, prompt) — so
+    the same draft read twice is the same answer bought twice. It happens more
+    than it sounds: a batch review runs `prepare` at submit AND again at
+    collect, so the story sheet alone was billed twice for every batch job, and
+    re-running a draft (a fixed typo, a different detector, an eval sweep) paid
+    for all three again.
+
+    DOCPROOF_CACHE_DIR names the folder; set it EMPTY to turn the cache off and
+    go back to re-reading, which is what the test suite does and what an eval
+    measuring run-to-run variance in the whole-book passes should do. Otherwise
+    it sits under DOCPROOF_HOME when the deployment sets one — on Fly that is
+    the mounted volume, so the cache outlives a deploy — and under ~/.docproof
+    when nothing does."""
+    env = os.environ.get(CACHE_DIR_ENV)
+    if env is not None:
+        env = env.strip()
+        return str(Path(env).expanduser()) if env else None
+    home = os.environ.get("DOCPROOF_HOME")
+    root = Path(home).expanduser() if home else Path.home() / ".docproof"
+    return str(root / "cache" / "whole-book")
+
+
+def cache_dir_for(configured: str | None) -> str | None:
+    """The folder a whole-book pass should cache in: what the config asked for,
+    else the shared default.
+
+    Resolved HERE, at the point of use, and deliberately not written back into
+    the Config. The app builds the resumable checkpoint's fingerprint out of
+    `cfg.model_dump(mode="json")` and throws the checkpoint away whenever it
+    moves, so an absolute, HOME-derived path living in the config would put
+    environment state inside that fingerprint: turning the cache off for an eval
+    run, or resuming under a different HOME, would silently discard a review's
+    paid-for calls. Where a pass caches is not something the manuscript's
+    results depend on, and it should not be able to invalidate them."""
+    return configured or default_cache_dir()
 
 
 def load_config(path: str | Path) -> Config:

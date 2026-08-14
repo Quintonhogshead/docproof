@@ -16,7 +16,7 @@ from typing import Sequence
 
 from .analyzer import Analyzer
 from .chunker import _SENTENCE_SPLIT, chunk_document
-from .config import Config
+from .config import Config, cache_dir_for
 from .consistency import (CONSISTENCY_KEY, ConsistencyReport,
                           find_inconsistencies, to_findings)
 from .error_registry import ErrorType, load_error_types
@@ -332,7 +332,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                 doc.paragraphs, build_provider(scfg),
                 model=cfg.storysheet.model,
                 max_tokens=cfg.storysheet.max_output_tokens, usage=usage,
-                cache_dir=cfg.storysheet.cache_dir)
+                effort=cfg.storysheet.effort,
+                cache_dir=cache_dir_for(cfg.storysheet.cache_dir))
             story_sheet = prompt_section(sheet)
     else:
         # Counts-only preflight: none of the discardable whole-document work.
@@ -486,8 +487,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
 
     In single-detector mode (the default) that is one call per (pass, chunk),
     exactly as before. When the ensemble is on, every detector reviews every
-    chunk; the calls are still independent, so up to `cfg.api.concurrency` are in
-    flight at once, and results are folded back in strict (pass, chunk, detector)
+    chunk; the calls are still independent, so up to `cfg.concurrency_for()` are
+    in flight at once, and results are folded back in strict (pass, chunk, detector)
     order — the order the id counter, the token accounting and the resumable
     checkpoint all depend on. So a big manuscript comes back far sooner,
     byte-for-byte the same as if it had run serially.
@@ -513,7 +514,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     `should_cancel`, if given, is polled once per folded call; when it first
     returns true the run raises `JobCancelled` and cancels every call not yet
     started, so an abort stops paying for the tail of the document. Calls
-    already in flight (at most `cfg.api.concurrency`) still finish — a thread
+    already in flight (at most `cfg.concurrency_for()`) still finish — a thread
     pool can't recall them — but their results are dropped."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -566,7 +567,13 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
 
     if on_phase:
         on_phase("reviewing")
-    with ThreadPoolExecutor(max_workers=cfg.api.concurrency) as pool:
+    # One pool serves every detector, and with the ensemble on those can sit at
+    # different vendors — so the width is the narrowest any of them allows. Take
+    # the widest instead and a two-detector run would drive the more cautious
+    # vendor at the other's rate. Single-detector mode asks about api.model and
+    # gets exactly that model's number.
+    width = min(cfg.concurrency_for(model) for model, _effort in specs)
+    with ThreadPoolExecutor(max_workers=width) as pool:
         # Fetch every uncached chunk concurrently; a cached call needs no
         # network and gets no future.
         futures = [
@@ -643,7 +650,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             prepared.doc.paragraphs, provider_factory(gcfg),
             model=cfg.glossary.model,
             max_tokens=cfg.glossary.max_output_tokens, usage=usage,
-            cache_dir=cfg.glossary.cache_dir)
+            effort=cfg.glossary.effort,
+            cache_dir=cache_dir_for(cfg.glossary.cache_dir))
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings.extend(case_drift_findings(
@@ -665,7 +673,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             adj_provider, model=cfg.api.model,
             max_tokens=cfg.api.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
-            edit_confidence=cfg.adjudicate.edit_confidence))
+            edit_confidence=cfg.adjudicate.edit_confidence,
+            concurrency=cfg.concurrency_for()))
 
     # Rewrite-then-diff: retype each paragraph minimal-edit, diff for candidates,
     # confirm each in context. Its own model, so a cheap rewriter can run under a
@@ -695,7 +704,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             rcands, prepared.doc.paragraphs, confirm_provider, model=confirm_model,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
-            edit_confidence=cfg.rewrite.edit_confidence))
+            edit_confidence=cfg.rewrite.edit_confidence,
+            concurrency=cfg.concurrency_for(confirm_model)))
 
     # LanguageTool mechanical-floor pass: a LOCAL rules checker proposes commas,
     # missing words, and hyphenation the model glides past; the shared confirm
@@ -724,7 +734,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 max_tokens=cfg.languagetool.max_output_tokens, usage=usage, ids=ids,
                 batch_size=cfg.languagetool.batch_size,
                 edit_confidence=cfg.languagetool.edit_confidence,
-                error_type="languagetool", chunk_id="languagetool", id_prefix="lt"))
+                error_type="languagetool", chunk_id="languagetool", id_prefix="lt",
+                concurrency=cfg.concurrency_for(lt_model)))
         finally:
             lt_shutdown()
 
@@ -781,7 +792,8 @@ def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
             model=cfg.continuity.model,
             max_tokens=cfg.continuity.max_output_tokens, usage=usage,
             prompt=cfg.continuity.prompt,
-            cache_dir=cfg.continuity.cache_dir)
+            effort=cfg.continuity.effort,
+            cache_dir=cache_dir_for(cfg.continuity.cache_dir))
         out.extend(report_to_findings(
             report, prepared.doc.paragraphs, ids,
             min_confidence=cfg.continuity.min_confidence,
@@ -872,7 +884,8 @@ def _sapling_findings(cfg: Config, prepared: Prepared,
             batch_size=cfg.sapling.batch_size,
             edit_confidence=cfg.sapling.edit_confidence,
             reject_sink=rejected, error_type="sapling", chunk_id="sapling",
-            id_prefix="sap", silent=not cfg.sapling.comments)
+            id_prefix="sap", silent=not cfg.sapling.comments,
+            concurrency=cfg.concurrency_for(model))
         # The valve's rejections are where a real Sapling catch can die — persist
         # them so a run can measure raw -> survivors and see what the 5% was.
         if out_dir is not None and rejected:
@@ -1003,7 +1016,8 @@ def _promote_low_confidence(cfg: Config, prepared: Prepared,
         max_tokens=lc.max_output_tokens, usage=usage, ids=count(1),
         batch_size=lc.batch_size, edit_confidence=lc.edit_confidence,
         reject_sink=rejected, error_type="low_confidence",
-        chunk_id="low_confidence", id_prefix="lc")
+        chunk_id="low_confidence", id_prefix="lc",
+        concurrency=cfg.concurrency_for(model))
     if out_dir is not None and rejected:
         import json
         try:
@@ -1118,7 +1132,8 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
             # reads as a word substitution, and a judge would hold back the very
             # corrections around it that are safest.
             context=context, max_tokens=gate.max_output_tokens,
-            concurrency=cfg.api.concurrency, flag_unsure=gate.flag_unsure,
+            concurrency=cfg.concurrency_for(gate.model),
+            flag_unsure=gate.flag_unsure,
             usage=usage)
         for pos, f in zip(report.positions, report.withheld):
             validated[where[pos]] = to_query(f, prepared.doc)

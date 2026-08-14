@@ -36,6 +36,7 @@ from .models import Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
 from .sweeps import occurrence_of
+from .utils.files import write_cache
 
 log = logging.getLogger("docproof.glossary")
 
@@ -84,13 +85,13 @@ to catalogue.\
 """
 
 
-def _cache_key(doc_text: str, model: str) -> str:
+def _cache_key(doc_text: str, model: str, effort: str | None) -> str:
     """A fingerprint of everything that determines the glossary: the manuscript
-    text, the reader model, and the prompt itself. Changing any of the three
-    misses the cache and re-reads, so a stale prompt or a swapped model can never
-    return an out-of-date glossary."""
+    text, the reader model, its reasoning effort, and the prompt itself. Changing
+    any of them misses the cache and re-reads, so a stale prompt, a swapped model
+    or a raised effort can never return an out-of-date glossary."""
     h = hashlib.sha256()
-    for part in (model, _SYSTEM, doc_text):
+    for part in (model, effort or "", _SYSTEM, doc_text):
         h.update(part.encode("utf-8"))
         h.update(b"\0")
     return h.hexdigest()[:16]
@@ -98,6 +99,7 @@ def _cache_key(doc_text: str, model: str) -> str:
 
 def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                    model: str, max_tokens: int, usage: Usage,
+                   effort: str | None = None,
                    cache_dir: str | None = None) -> Glossary:
     """One whole-manuscript read. Additive and best-effort: on any failure
     (context overflow, refusal, malformed output) it logs and returns an empty
@@ -113,7 +115,7 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         return Glossary()
     cache_path = None
     if cache_dir:
-        cache_path = Path(cache_dir) / f"glossary-{_cache_key(doc_text, model)}.json"
+        cache_path = Path(cache_dir) / f"glossary-{_cache_key(doc_text, model, effort)}.json"
         if cache_path.is_file():
             try:
                 g = Glossary.model_validate_json(cache_path.read_text("utf-8"))
@@ -138,8 +140,7 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         return Glossary()
     if cache_path is not None:
         try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(g.model_dump_json(indent=1), "utf-8")
+            write_cache(cache_path, g.model_dump_json(indent=1))
         except OSError as e:                             # unwritable cache is non-fatal
             log.warning("could not write glossary cache: %s", e)
     log.info("Glossary: %d entr(y/ies), %d suspected misspelling(s)",

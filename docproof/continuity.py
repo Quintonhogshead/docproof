@@ -41,6 +41,7 @@ from .models import CONFIDENCE_RANK, Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
 from .sweeps import occurrence_of
+from .utils.files import write_cache
 
 log = logging.getLogger("docproof.continuity")
 
@@ -100,12 +101,14 @@ def default_continuity_prompt() -> str:
     return _SYSTEM
 
 
-def _cache_key(doc_text: str, model: str, system: str) -> str:
+def _cache_key(doc_text: str, model: str, system: str,
+               effort: str | None) -> str:
     """Fingerprint of everything that determines the read: manuscript text, model,
-    and the prompt itself — so a swapped model or an edited prompt misses the
-    cache and re-reads rather than returning a stale result."""
+    reasoning effort, and the prompt itself — so a swapped model, a raised effort
+    or an edited prompt misses the cache and re-reads rather than returning a
+    stale result."""
     h = hashlib.sha256()
-    for part in (model, system, doc_text):
+    for part in (model, effort or "", system, doc_text):
         h.update(part.encode("utf-8"))
         h.update(b"\0")
     return h.hexdigest()[:16]
@@ -113,7 +116,8 @@ def _cache_key(doc_text: str, model: str, system: str) -> str:
 
 def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                      model: str, max_tokens: int, usage: Usage,
-                     prompt: str = "", cache_dir: str | None = None
+                     prompt: str = "", effort: str | None = None,
+                     cache_dir: str | None = None
                      ) -> ContinuityReport:
     """One whole-manuscript read. Additive and best-effort: on any failure
     (context overflow, refusal, malformed output) it logs and returns an empty
@@ -129,7 +133,7 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     cache_path = None
     if cache_dir:
         cache_path = Path(cache_dir) / \
-            f"continuity-{_cache_key(doc_text, model, system)}.json"
+            f"continuity-{_cache_key(doc_text, model, system, effort)}.json"
         if cache_path.is_file():
             try:
                 r = ContinuityReport.model_validate_json(cache_path.read_text("utf-8"))
@@ -154,8 +158,7 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         return ContinuityReport()
     if cache_path is not None:
         try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(r.model_dump_json(indent=1), "utf-8")
+            write_cache(cache_path, r.model_dump_json(indent=1))
         except OSError as e:                             # unwritable cache is non-fatal
             log.warning("could not write continuity cache: %s", e)
     log.info("Continuity: %d contradiction(s) flagged", len(r.findings))
