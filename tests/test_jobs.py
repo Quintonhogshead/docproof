@@ -56,6 +56,31 @@ def test_a_record_from_before_effort_existed_runs_at_low(runner):
     assert r.config_for(job).api.effort == "low"
 
 
+def test_the_jobs_variant_reaches_the_run_config(runner):
+    """The per-run variant is the whole point: a British manuscript submitted
+    through the panel must not be held to American conventions."""
+    store, r = runner
+    cfg = r.config_for(_job(store, variant="uk"))
+    assert cfg.variant == "uk"
+
+
+def test_a_record_with_no_variant_keeps_the_configs_own(runner):
+    """Older records and the watcher send nothing, and must stay on the house
+    default rather than being forced to any one variant."""
+    store, r = runner
+    job = _job(store)
+    assert job.variant == ""
+    assert r.config_for(job).variant == load_config(CONFIG).variant
+
+
+def test_the_variant_picks_the_spell_scan_dictionary(runner):
+    """Variant and dictionary are one choice downstream: `spellcheck.dictionary`
+    is unset by default, so the variant's own is what the scan gets."""
+    store, r = runner
+    cfg = r.config_for(_job(store, variant="uk"))
+    assert cfg.spellcheck.dictionary is None    # nothing overrides the variant
+
+
 def test_per_run_features_reach_the_run_config(runner):
     """A switch flipped on the submission panel becomes an enabled pass."""
     store, r = runner
