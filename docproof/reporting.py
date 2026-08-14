@@ -60,6 +60,12 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": doc.source_path,
+        # `error_types` is the CONFIGURED registry keys and nothing else. It
+        # can never name a pass that labels its findings with a free-form
+        # string — the sweeps, LanguageTool, Sapling, the low-confidence valve,
+        # continuity, consistency — so a reader must not take absence from this
+        # list as "that pass did not run". See docproof/labels.py, which owns
+        # that question and answers it from positive evidence instead.
         "config": {"model": cfg.api.model,
                    "error_types": list(cfg.error_type_keys),
                    "error_type_passes": [list(g) for g in cfg.error_type_groups],

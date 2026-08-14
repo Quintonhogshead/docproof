@@ -693,10 +693,12 @@ def _cmd_compare_formatting(args, out: Path) -> int:
 
 
 def cmd_eval(args) -> int:
+    from .error_registry import shipped_keys
     from .eval.corpus import CorpusError, check_no_leakage, load_corpus
     from .eval.runner import run_eval
     from .eval.scorecard import write_scorecard
-    from .eval.scorer import score_curve
+    from .eval.scorer import family, score_curve
+    from .labels import DID_NOT_RUN, will_produce
 
     cfg, error_dir = _configure(args)
     out = Path(cfg.output_dir)
@@ -712,10 +714,31 @@ def cmd_eval(args) -> int:
     # The corpus is per-type; scoring only makes sense for the types the run
     # actually exercises. --error-types narrows the passes; narrow the cases to
     # match so a skipped type is not scored as all-misses.
-    enabled = set(cfg.error_type_keys)
-    cases = [c for c in cases if c.error_type in enabled]
+    #
+    # Asked of the whole FAMILY, and through `will_produce` rather than through
+    # `cfg.error_type_keys`. A case is caught by any label in its family, and
+    # the aliases are free-form labels that the error-type list cannot contain
+    # under any config — so keying the filter off that list alone dropped every
+    # repeated_word case from a `--error-types spelling` run even though
+    # sweep_doubled_word was still running and still catching them, and scored
+    # the sweeps' whole contribution as out of scope. A case whose family is
+    # entirely unproducible is genuinely unscoreable; anything less certain is
+    # kept, because an over-inclusive corpus reports as a visible miss and an
+    # under-inclusive one reports as nothing at all.
+    known = shipped_keys(error_dir)
+    kept, dropped = [], []
+    for case in cases:
+        producible = any(
+            will_produce(cfg, label, known_types=known) != DID_NOT_RUN
+            for label in family(case.error_type))
+        (kept if producible else dropped).append(case)
+    if dropped:
+        print(f"Not scored — no pass in this run produces them: "
+              f"{', '.join(sorted({c.error_type for c in dropped}))} "
+              f"({len(dropped)} case(s))")
+    cases = kept
     if not cases:
-        print("error: no corpus cases match the enabled error types.",
+        print("error: no corpus cases match the passes this run performs.",
               file=sys.stderr)
         return 2
 
@@ -735,8 +758,8 @@ def cmd_eval(args) -> int:
     n_err = sum(1 for c in cases if not c.is_clean)
     n_trap = len(cases) - n_err
     print(f"Scoring {len(cases)} cases ({n_err} seeded errors, {n_trap} traps) "
-          f"across {len(enabled)} type(s) on {cfg.api.model}"
-          f"{' [mock]' if mock else ''}")
+          f"across {len({c.error_type for c in cases})} type(s) on "
+          f"{cfg.api.model}{' [mock]' if mock else ''}")
 
     def progress(done, total):
         print(f"  reviewing {done}/{total}", end="\r", flush=True)
