@@ -194,6 +194,78 @@ def test_the_pass_runs_in_the_pipeline_and_emits_a_query(tmp_path):
     assert "was a Monday" in conts[0].explanation
 
 
+def _batch_cfg():
+    from docproof.config import load_config
+    cfg = load_config("config/default.yaml")
+    cfg.error_types = [["spelling"]]
+    cfg.glossary.enabled = False
+    cfg.adjudicate.enabled = False
+    cfg.rewrite.enabled = False
+    cfg.languagetool.enabled = False
+    cfg.continuity.enabled = True                       # calendar_check on by default
+    return cfg
+
+
+def _mismatch_docx(tmp_path):
+    """A manuscript whose stated weekday is wrong — June 3, 2019 was a Monday."""
+    import docx
+    d = docx.Document()
+    d.add_paragraph("They met on Tuesday, June 3, 2019, in the rain.")
+    src = tmp_path / "m.docx"
+    d.save(src)
+    return src
+
+
+def test_the_pass_runs_on_the_batch_path_too(tmp_path, monkeypatch):
+    # Batch is the app's default submission mode, so this is the common path, not
+    # an edge case: the read cannot ride the review batch (its own model, one
+    # request), so — like the glossary read — it runs synchronously at collect.
+    # Without it a batch review would report and price a read it never made.
+    from docproof import batch as batchlib
+    from docproof import providers as providers_mod
+
+    cfg = _batch_cfg()
+    reader = FakeProvider()                 # the continuity model's own client
+    monkeypatch.setattr(providers_mod, "build_provider", lambda c, **kw: reader)
+
+    provider = FakeProvider()
+    job = batchlib.submit(cfg, str(_mismatch_docx(tmp_path)),
+                          "config/error_types", provider, tmp_path / "ws")
+    result = batchlib.collect_findings(job, provider, "config/error_types")
+
+    conts = [f for f in result.findings if f.error_type == "continuity"]
+    assert len(conts) == 1                              # the calendar tier's query
+    assert conts[0].force_query is True
+    assert "was a Monday" in conts[0].explanation
+    # And the model read itself happened, not only the free calendar check.
+    assert [c["schema_name"] for c in reader.calls] == ["continuity"]
+
+
+def test_a_collected_batch_review_reports_only_the_read_it_made(tmp_path,
+                                                                monkeypatch):
+    # The deliverable's own claim: summary.md prints the pass list straight off
+    # the config, so "Continuity read on" has to mean a continuity finding could
+    # have come out of this run. The two must not disagree.
+    import json
+
+    from docproof import batch as batchlib
+    from docproof import providers as providers_mod
+
+    cfg = _batch_cfg()
+    monkeypatch.setattr(providers_mod, "build_provider",
+                        lambda c, **kw: FakeProvider())
+
+    provider = FakeProvider()
+    ws = tmp_path / "ws"
+    job = batchlib.submit(cfg, str(_mismatch_docx(tmp_path)),
+                          "config/error_types", provider, ws)
+    outputs = batchlib.collect(job, provider, "config/error_types", ws)
+
+    assert "Continuity read on" in outputs.summary_md.read_text("utf-8")
+    findings = json.loads(outputs.findings_json.read_text("utf-8"))["findings"]
+    assert [f["error_type"] for f in findings if f["error_type"] == "continuity"]
+
+
 # --- editable prompt ----------------------------------------------------------
 
 def test_default_continuity_prompt_is_the_builtin():
