@@ -545,11 +545,17 @@ def _query_span(f: Finding, para_text: str) -> tuple[int, int]:
 
     A below-gate finding carries the shrunk anchor of the change that was not
     made, which for a comma splice is one comma. A comment hanging off a
-    single comma tells the author nothing about what is being questioned."""
-    from .validator import find_nth
-    s = find_nth(para_text, f.original_text, f.occurrence)
-    if s == -1:                                  # cannot happen after the
-        return f.anchor.start, f.anchor.end      # validator, but cheap to keep
+    single comma tells the author nothing about what is being questioned.
+
+    Re-search with the validator's fold-tolerant anchor, not a bare exact
+    match: the validator admits a finding whose original_text renders the
+    manuscript's curly punctuation as straight, so an exact re-search here
+    would miss it and fall back to the shrunk one-character diff span — the
+    very thing this function exists to avoid."""
+    from .validator import anchor_offset
+    s = anchor_offset(para_text, f.original_text, f.occurrence)
+    if s == -1:                                  # unanchorable text never
+        return f.anchor.start, f.anchor.end      # reaches here past the validator
     return s, s + len(f.original_text)
 
 
