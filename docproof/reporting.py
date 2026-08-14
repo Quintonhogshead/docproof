@@ -193,7 +193,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     oversized = [f for f in findings if f.status == "rejected_oversized"]
     rejected = [f for f in findings if f.status.startswith("rejected")
                 and f.status != "rejected_oversized"]
-    in_margin = (f", and each is a margin {fmt.comment_noun} in the reviewed "
+    in_margin = (f", and each is a {fmt.comment_noun} in the reviewed "
                  f"file" if cfg.query_comments else "")
 
     L: list[str] = []
@@ -377,7 +377,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         L.append(f"{len(queries)} finding(s) from types that ask rather than "
                  f"correct, because the answer is the author's to make — "
                  f"where a line of dialogue belongs is not a punctuation fix. "
-                 f"Nothing here changed the document, and each is a margin "
+                 f"Nothing here changed the document, and each is a "
                  f"{fmt.comment_noun} in the reviewed file.\n"
                  if cfg.query_comments else
                  f"{len(queries)} finding(s) from types that ask rather than "
