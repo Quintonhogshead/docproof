@@ -42,6 +42,7 @@ per round. See docs/smoothing.md.
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Sequence
@@ -59,6 +60,12 @@ log = logging.getLogger("docproof.smoothing")
 # docstring. Kept as a tuple so the prompt and the validation of what came back
 # cannot drift apart.
 CATEGORIES = ("tighten", "idiom", "flow", "aspect", "clarity")
+
+# The spell scan's own tokenizer (docproof/spellscan.py), reused so the lexicon
+# filter reads a span exactly the way the lexicon was built. Splitting on
+# whitespace instead would hide a coinage glued to its neighbour by an unspaced
+# em dash — which is Atmosphere house style, and so the common case.
+_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 
 # How much manuscript goes into one propose call. Paragraph-shaped rather than
 # token-shaped: the model is asked to read prose in context, and a window that
@@ -161,24 +168,26 @@ def quote_spans(text: str, closing: str) -> list[tuple[int, int]]:
     Known error mode, and the reason the single-quote variant is the harder one:
     an apostrophe is the same character as a U.K. closing quote. A mark is read
     as OPENING only at a word boundary (start of paragraph, or after whitespace
-    or a dash) and as CLOSING only when not between two letters, which keeps
-    "don't" and "Sarah's" out of it but will still mis-read a possessive that
-    ends a quoted phrase. The failure is in the safe direction for this pass: a
-    span wrongly believed to be dialogue is merely left un-smoothed."""
+    or a dash). Closing is asymmetric, because the ambiguity only exists for one
+    shape: an unambiguous ”/" closes wherever it appears, while an
+    apostrophe-shaped mark closes only when it does NOT follow a letter. Real
+    dialogue ends on its punctuation — `way,’` `you.’` `Wait—’` — whereas an
+    elision or a plural possessive sits flush against a letter (`goin’`,
+    `boys’`). Getting this wrong in the permissive direction is what would
+    expose the rest of a speech to smoothing, so the tie goes to leaving text
+    alone: a span wrongly believed to be dialogue is merely left un-smoothed."""
     opening = {"”": "“", "\"": "\"", "’": "‘", "'": "'"}
     opens = {opening[c] for c in closing if c in opening}
+    ambiguous = set("’'")            # also an apostrophe; needs the stricter test
     spans: list[tuple[int, int]] = []
     start: int | None = None
     for i, ch in enumerate(text):
         prev = text[i - 1] if i else ""
-        nxt = text[i + 1] if i + 1 < len(text) else ""
         if start is None:
             if ch in opens and (not prev or prev.isspace() or prev in "—–-(["):
                 start = i
             continue
-        # Inside a quote: the first closing mark that is not wedged between two
-        # letters (an apostrophe) ends it.
-        if ch in closing and not (prev.isalpha() and nxt.isalpha()):
+        if ch in closing and not (ch in ambiguous and prev.isalpha()):
             spans.append((start, i + 1))
             start = None
     if start is not None:                    # an unclosed quote runs to the end
@@ -201,15 +210,13 @@ def touches_lexicon(quote: str, lexicon: set[str]) -> bool:
     no way to know which coinages are load-bearing. Cheap to be absolute."""
     if not lexicon:
         return False
-    for raw in quote.split():
-        word = raw.strip("'’\".,;:!?()[]—–-").lower()
-        if not word:
-            continue
+    for raw in _WORD.findall(quote):
+        word = raw.lower()
         # A possessive is the same word wearing a suffix, and the coinage it is
         # made from is exactly what must not be touched.
-        for form in (word, word[:-2] if word.endswith(("'s", "’s")) else word):
-            if form in lexicon:
-                return True
+        if word in lexicon or (word.endswith(("'s", "’s"))
+                               and word[:-2] in lexicon):
+            return True
     return False
 
 
@@ -274,9 +281,16 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     smoothing pass that guesses where it meant is a smoothing pass that edits the
     wrong words."""
     from .validator import anchor_offset
-    text_of = {p.para_id: p.text for p in paragraphs}
+    # Headings, captions and the rest of the un-reviewable furniture are out of
+    # scope for the same reason they are out of scope for every other pass — and
+    # `text_of` is narrowed too, not just the windows: a suggestion naming a
+    # heading's para_id then fails to site instead of anchoring a comment on a
+    # chapter title.
+    usable = [p for p in paragraphs
+              if p.text.strip() and getattr(p, "reviewable", True)]
+    text_of = {p.para_id: p.text for p in usable}
     lex = {w.strip("'’\".,").lower() for w in lexicon}
-    windows = [w for w in _windows([p for p in paragraphs if p.text.strip()])]
+    windows = _windows(usable)
     if not windows:
         return [], 0
     schema = strict_json_schema(_Suggestions)     # deep-copies; hoist off the pool

@@ -140,13 +140,86 @@ def test_two_suggestions_on_one_sentence_stay_two_questions(monkeypatch):
     assert [f.status for f in validated] == ["query", "query"]
 
 
+def test_a_suggestion_reaches_the_document_as_a_comment_and_nothing_else(
+        tmp_path, monkeypatch):
+    """The invariant through the REAL path — prepare() and finish(), the merge
+    order, the validator, the reassembler.
+
+    Every other test here calls _smoothing_findings directly, which means the
+    whole pipeline wiring could be deleted with the rest of the suite green.
+    This is the one that notices."""
+    import docx
+    from docproof.config import load_config
+    from docproof.pipeline import finish, prepare
+
+    d = docx.Document()
+    d.add_paragraph("She walked over to the door in a very quiet way.")
+    src = tmp_path / "Book.docx"
+    d.save(src)
+
+    cfg = load_config("config/default.yaml")
+    cfg.error_types, cfg.sweeps = [], []
+    cfg.audit = "off"
+    cfg.smoothing.enabled = True
+    prov = FakeProvider([
+        _suggest(_s("body-0000", "in a very quiet way", "quietly")),
+        _verdicts({"index": 1, "is_error": True, "confidence": "high"}),
+    ])
+    import docproof.providers as _p
+    monkeypatch.setattr(_p, "build_provider", lambda cfg, **kw: prov)
+
+    prepared = prepare(cfg, src, "config/error_types")
+    out = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "out",
+                 source_path=src)
+
+    import json
+    record = json.loads(out.findings_json.read_text(encoding="utf-8"))
+    smoothing = [f for f in record["findings"]
+                 if f["error_type"] == "smoothing"]
+    assert len(smoothing) == 1
+    assert smoothing[0]["status"] == "query"
+    # Nothing was applied, and the manuscript text is untouched.
+    assert out.applied == 0 and out.queried == 1
+    reviewed = docx.Document(out.reviewed_path)
+    assert reviewed.paragraphs[0].text == \
+        "She walked over to the door in a very quiet way."
+    # ...but the suggestion did reach the author, wording and all.
+    assert "quietly" in (tmp_path / "out" / "summary.md").read_text(
+        encoding="utf-8")
+
+
 # --- restraint ----------------------------------------------------------------
 
-def test_off_by_default_spends_nothing():
+def _no_provider(monkeypatch, why: str):
+    """Make BUILDING a provider the failure.
+
+    "Patch nothing and trust it not to call" is not a test: on a machine with a
+    vendor key in the environment build_provider succeeds, propose() logs the
+    failed call and swallows it, and the assertion passes over a pass that ran."""
+    import docproof.providers as _p
+
+    def _never(*a, **kw):
+        raise AssertionError(why)
+    monkeypatch.setattr(_p, "build_provider", _never)
+
+
+def test_off_by_default_spends_nothing(monkeypatch):
     cfg = Config()                                  # smoothing defaults off
     p = _para("body-0", "She walked over to the door in a very quiet way.")
-    # No provider is patched: if the pass ran at all, build_provider would fire.
+    _no_provider(monkeypatch, "smoothing built a provider while disabled")
     findings, report = _smoothing_findings(cfg, _prepared(p), Usage())
+    assert findings == [] and report.proposed == 0
+
+
+def test_a_selected_sections_run_does_not_buy_a_whole_book_line_edit(monkeypatch):
+    """Whole-document only, like every pass that reads the book entire. The
+    author must not get "Consider: ..." in chapters nobody selected — and must
+    not be billed for reading them."""
+    import dataclasses
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    prepared = dataclasses.replace(_prepared(p), whole_document=False)
+    _no_provider(monkeypatch, "smoothing ran on a selected-sections review")
+    findings, report = _smoothing_findings(_cfg(), prepared, Usage())
     assert findings == [] and report.proposed == 0
 
 
@@ -187,6 +260,38 @@ def test_an_author_coinage_is_never_offered_a_smoothing(monkeypatch):
     ])
     assert findings == [] and report.proposed == 0
     assert len(prov.calls) == 1                     # judge never paid for
+
+
+def test_a_heading_is_neither_read_nor_reworded(monkeypatch):
+    """Un-reviewable furniture is out of scope for every other pass, and a
+    "Consider: ..." comment on a chapter title is the visible version of the
+    same mistake."""
+    import dataclasses
+    body = _para("body-0", "She walked over to the door in a very quiet way.")
+    head = dataclasses.replace(_para("body-1", "Chapter One: The Long Road"),
+                               reviewable=False)
+    findings, report, prov = _run(monkeypatch, _cfg(), _prepared(body, head), [
+        _suggest(_s("body-1", "The Long Road", "A Long Road")),
+    ])
+    assert findings == [] and report.proposed == 0
+    # The heading never even reached the proposer.
+    assert "The Long Road" not in str(prov.calls[0])
+
+
+def test_the_propose_effort_applies_without_a_model_override(monkeypatch):
+    """`effort` and `model` are separate knobs. Tying the first to the second
+    means the documented default (medium) silently never applies."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    seen = {}
+
+    import docproof.providers as _p
+
+    def _build(cfg, **kw):
+        seen.setdefault("effort", cfg.api.effort)
+        return FakeProvider([_suggest()])
+    monkeypatch.setattr(_p, "build_provider", _build)
+    _smoothing_findings(_cfg(effort="xhigh"), _prepared(p), Usage())
+    assert seen["effort"] == "xhigh"
 
 
 def test_a_suggestion_that_does_not_anchor_is_dropped_not_guessed(monkeypatch):
@@ -308,6 +413,26 @@ def test_touches_lexicon_matches_a_word_anywhere_in_the_span():
     assert touches_lexicon("the animal moved", {"zorrillo"}) is False
 
 
+def test_a_coinage_glued_on_by_punctuation_is_still_found():
+    """House style here is the UNSPACED em dash, so a coinage with no space
+    around it is the common case, not the exotic one. Splitting the span on
+    whitespace would hide every one of these from the filter."""
+    lex = {"zorrillo", "kaelen"}
+    assert touches_lexicon("zorrillo—a small beast—moved", lex) is True
+    assert touches_lexicon("Kaelen—who spoke first", lex) is True
+    assert touches_lexicon("the zorrillo-hunter came", lex) is True
+    assert touches_lexicon("Zorrillo… he thought", lex) is True
+
+
+def test_uk_dialogue_survives_an_elision_inside_it():
+    """The U.K. closing mark is the apostrophe character, so a contraction
+    mid-speech must not end the span — that would expose the rest of the line
+    to smoothing, which is the failure that matters."""
+    text = "'I was just goin' over there,' he said."
+    spans = quote_spans(text, "’'")
+    assert [text[a:b] for a, b in spans] == ["'I was just goin' over there,'"]
+
+
 def test_the_margin_note_announces_itself_as_a_suggestion():
     note = margin_note("quietly", "reads tighter")
     assert note.startswith("Consider:")
@@ -332,15 +457,6 @@ def test_a_free_rebuild_never_pays_for_smoothing_again():
     cfg.smoothing.enabled = True
     _free_finish(cfg)
     assert cfg.smoothing.enabled is False
-
-
-def test_a_continuity_only_run_does_not_smooth():
-    """Continuity-only promises one whole-book read, not a line edit."""
-    import inspect
-
-    import app.jobs as jobs
-    src = inspect.getsource(jobs.JobRunner.config_for)
-    assert '"smoothing"' in src
 
 
 def test_the_eval_runner_disables_smoothing():

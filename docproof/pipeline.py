@@ -963,7 +963,14 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     survived it — and going unreported is the one thing a cap must not do."""
     from .smoothing import (JUDGE_SYSTEM, PROPOSE_SYSTEM, SmoothingReport,
                             cap_for, propose, rank_and_cap)
-    if not cfg.smoothing.enabled:
+    # Whole-document only, like every other pass that reads the book entire. A
+    # selected-sections run must not buy a full-manuscript line edit, and — the
+    # part that would be visible to the author — must not come back with
+    # "Consider: ..." in chapters nobody asked anyone to look at.
+    if not (cfg.smoothing.enabled and prepared.whole_document):
+        if cfg.smoothing.enabled:
+            log.info("Smoothing: skipped — a selected-sections run does not buy "
+                     "a whole-book line edit.")
         return [], SmoothingReport()
 
     from itertools import count
@@ -975,10 +982,9 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     usage = usage if usage is not None else Usage()
 
     pcfg = cfg.model_copy(deep=True)
-    if sm.model:
-        pcfg.api.model = sm.model
-        pcfg.api.effort = sm.effort
-    propose_model = sm.model or cfg.api.model
+    pcfg.api.model = sm.model or cfg.api.model
+    pcfg.api.effort = sm.effort          # applies whether or not `model` is set
+    propose_model = pcfg.api.model
     cands, filtered = propose(
         doc.paragraphs, build_provider(pcfg), model=propose_model,
         max_tokens=sm.max_output_tokens, usage=usage,
