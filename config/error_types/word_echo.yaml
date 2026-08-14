@@ -1,0 +1,139 @@
+key: word_echo
+name: Echoed word or phrase
+version: 1
+# Asks, never corrects. An echo has no right answer — the fix is a synonym, a
+# pronoun, or a recast line, and choosing among them is writing, not
+# proofreading. Whether the repetition was deliberate is the author's to say,
+# so this type puts the observation in the margin and leaves the text alone.
+channel: query
+
+detection_prompt: |
+  A distinctive word or phrase that comes back a few lines later, for no
+  reason a reader can hear, snags them the way a stumble does: they notice the
+  word instead of the sentence. A proofreader marks it and moves on. There is
+  no correct replacement to supply, so this type only ever asks.
+
+  The whole repetition must sit inside the one paragraph you are reporting on.
+  Repetition you can see only across a paragraph break, or only in the
+  read-only <context> block, is not reportable here — leave it.
+
+  FLAG, as a question:
+  - The same distinctive content word three or more times in one paragraph,
+    in no parallel structure, where a pronoun or a plain synonym would serve
+    at least one of them.
+  - A distinctive noun, verb, adjective or adverb twice in one sentence,
+    close enough to chime: "The rain had stopped, but the road was still
+    slick with rain." Across a sentence boundary the bar is higher: a single
+    word returning in the very next sentence is worth a question only when
+    nothing there needs it back — when the second sentence has moved on to
+    something else and the word simply came along with it.
+  - A multi-word phrase that returns intact inside the paragraph for no
+    rhetorical reason: "a moment later … a moment later". Not inside quoted
+    speech, where a character restating their own words is voice.
+
+  The default answer for this type is silence. Ordinary narrative repeats
+  words constantly and almost all of it is fine; a paragraph of good prose
+  should produce nothing at all unless the repetition genuinely jangles.
+
+  Do NOT flag — the failure here is not one wrong query but fifty defensible
+  ones, and a margin crowded with them teaches an author to stop reading the
+  margin:
+  - Two words duplicated side by side ("the the", "to to"). Those belong to
+    repeated_word, and the sweep_doubled_word sweep catches them
+    deterministically as well. A phrase duplicated contiguously, even
+    across a line break ("at the end of / of the day"), is also
+    repeated_word's; a phrase duplicated across a clause boundary ("still
+    came up came up short") is general_error's. Anything adjacent is somebody
+    else's.
+  - The same word used twice in different roles or senses: "The play was a
+    play on words", "the giver gave", "a dreamer's dream". repeated_word
+    already rules these clean, and contradicting it one pass away is the most
+    visible mistake this type can make.
+  - Anaphora and deliberate parallel construction — repeated openings, paired
+    clauses, a list built on one verb. There the repetition is the structure.
+  - Emphasis ladders and intensifier doubles: "very, very old", "far, far
+    away", "long, long ago", "No, no, no." Repetition separated by
+    punctuation is nearly always intentional.
+  - Refrains and callbacks: a line restated at the close of a scene, a motif,
+    an epigraph answered later on.
+  - Dialogue tics that characterize a speaker, a speaker restating their own
+    words for emphasis ("I said I'm not going back there"), and stammering or
+    hesitation: "I— I didn't mean to."
+  - "said", "asked", "replied", "told" and the other tag verbs. A reader does
+    not count tags; repeating one is the convention working, not an echo. How
+    a tag is punctuated or worded belongs to dialogue_tag.
+  - Function words — articles, prepositions, pronouns, conjunctions,
+    auxiliaries, "that", "it", "there", "not". However often they recur, they
+    are never distinctive.
+  - Proper nouns, place names and coined terms. A character's name coming
+    back is how a reader keeps track of who is in the room.
+  - Thematic key words — a word the book is about. If a synonym would weaken
+    the passage, the repetition is doing work.
+  - Technical, legal, nautical or medical terms with no honest synonym. The
+    murder weapon is a knife and it stays a knife; elegant variation is a
+    worse fault than the echo.
+  - Quoted matter the author is reproducing rather than writing: epigraphs,
+    songs, letters, documents, transcripts.
+  - One term written two ways ("bloodcursed" and "blood-cursed",
+    "safekeeping" and "safe keeping"). That is variation, the opposite of an
+    echo, and the consistency scan already reports it.
+  - A concrete object, place or body part named again because the sentence is
+    still about it, where a pronoun would be ambiguous or clumsy: the table
+    they are still laying, the cupboard whose door will not shut. Repeating
+    the noun is the reference working, not an echo, and this is the commonest
+    honest repetition in narrative prose.
+  - Two occurrences that have any defensible reason at all. Most pairs are
+    fine, and a pair is worth a comment only when nothing in the sentence
+    needs the word back. A wrong query is a comment the author must stop,
+    read and dismiss, and every one of those costs attention that belonged to
+    a finding that was right.
+
+fix_guidance: |
+  This type never edits. Set corrected_text to the quoted text exactly as it
+  appears — repeat original_text unchanged, character for character — and put
+  the observation in explanation, phrased as a question the author can answer:
+  name the repeated word or phrase, say how many times it appears, and ask
+  whether the repetition is intended. Quote the sentence holding the last
+  occurrence, or, when the whole repetition sits in one unbroken stretch, that
+  stretch, so the comment marks both ends of it. That stretch is the one place
+  this type may quote more than a single sentence, and only because a query
+  claims no span and proposes no edit; every type that corrects still quotes
+  exactly one sentence. Never write a version with the repetition taken out;
+  choosing the synonym is the author's work, not yours.
+
+confidence_guidance: |
+  Every finding of this type becomes a comment, whatever its confidence, so
+  confidence describes how sure you are rather than gating anything. It is
+  still read, and a low-confidence query with a thin reason is the one an
+  editor throws out — give the reason either way.
+  high   — the same distinctive word three or more times in one paragraph, in
+           no parallel structure, where a pronoun or a synonym would serve at
+           least one of them.
+  medium — a distinctive word or phrase twice inside one sentence, close
+           enough to chime, with no rhetorical reason for the return.
+  low    — a single word returning in the next sentence, or two occurrences
+           further apart, where the repetition may well be deliberate; say so
+           in the comment. Inside quoted speech or clearly rhythmic prose,
+           prefer silence — a repetition there is more likely voice than
+           echo. When you are in real doubt, stay silent rather than drop to
+           low.
+
+examples:
+  - text: "He set the ledger on the counter and opened it to the last page, where the last entry had been made in a hand he did not recognize, and the last light went out of the window as he read."
+    finding:
+      original_text: "He set the ledger on the counter and opened it to the last page, where the last entry had been made in a hand he did not recognize, and the last light went out of the window as he read."
+      corrected_text: "He set the ledger on the counter and opened it to the last page, where the last entry had been made in a hand he did not recognize, and the last light went out of the window as he read."
+      explanation: "\"last\" appears three times in this paragraph — is the repetition intended?"
+      confidence: high
+  - text: "The auctioneer had a habit of clearing his throat before each lot, and by the end of the afternoon the habit was all anyone in the room could hear."
+    finding:
+      original_text: "The auctioneer had a habit of clearing his throat before each lot, and by the end of the afternoon the habit was all anyone in the room could hear."
+      corrected_text: "The auctioneer had a habit of clearing his throat before each lot, and by the end of the afternoon the habit was all anyone in the room could hear."
+      explanation: "\"habit\" comes back inside the same sentence — did you mean to repeat it?"
+      confidence: medium
+  - text: "She set the lamp down on the windowsill and turned the wick low. The windowsill was damp under it, and by morning there was a ring in the paint."
+    finding: null
+  - text: "She had waited through the winter. She had waited through the thaw. She had waited until waiting was the only thing left that she knew how to do well."
+    finding: null
+  - text: "“He said he would be here by six,” Marta said. “He said the same thing on Tuesday, and I sat in that station for an hour.”"
+    finding: null

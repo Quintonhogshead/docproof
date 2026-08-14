@@ -1,0 +1,59 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# This type ASKS, never edits (channel: query), so seeded cases carry a span but
+# no correction — the expected output is a margin comment, not a change. Seeded:
+# a distinctive word or phrase returning inside one sentence, or three times in
+# one paragraph; every span is a verbatim stretch covering the repetition, so a
+# query anchored to either occurrence overlaps it. Traps: anaphora, a speaker's
+# tic, repeated "said", a proper noun doing orientation work, a thematic key
+# word, a term with no honest synonym, one word in two senses, and one term
+# spelled two ways. No paragraph is a calibration example.
+error_type: word_echo
+
+cases:
+  - id: we-001
+    text: "The bell rang twice before dawn, and the sound of the bell carried all the way down to the river."
+    expect: { span: "the sound of the bell", confidence: medium }
+  - id: we-002
+    text: "She wiped the counter down twice before the bell over the door went, and it was only after she had seen who it was that she wiped her hands on the front of her apron."
+    expect: { span: "that she wiped her hands", confidence: medium }
+  - id: we-003
+    text: "The heat came up off the pavement in waves, the heat inside the car was worse, and by noon the heat had driven everyone indoors."
+    expect: { span: "the heat had driven everyone indoors", confidence: high }
+  - id: we-004
+    text: "The smell of paraffin was still in the room where they had eaten, and she could not tell whether the paraffin was on her hands or in the curtains."
+    expect: { span: "whether the paraffin", confidence: medium }
+  - id: we-005
+    text: "She waited at the edge of the platform until the crowd had gone, went up to the ticket hall for a cup of tea, and then walked back to the edge of the platform and looked down at the rails."
+    expect: { span: "walked back to the edge of the platform", confidence: medium }
+  - id: we-006
+    text: "The lamp in the window threw a long shadow down the path, and she stood in the shadow of the water butt until the door opened."
+    expect: { span: "she stood in the shadow", confidence: medium }
+  - id: we-007
+    text: "He looked out of the window at the flooded lane, and when no one in the room said anything he looked out of the window again."
+    expect: { span: "he looked out of the window again", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: we-101
+    text: "He counted the days on the wall. He counted them again in the dark. He counted them until the counting was the only clock he had left."
+    expect: clean          # deliberate anaphora — the repetition is the structure
+  - id: we-102
+    text: "The train of her thought had not moved an inch since the train pulled out of the station."
+    expect: clean          # one word in two senses; repeated_word already rules these clean
+  - id: we-103
+    text: "\"Right then,\" the foreman said. \"Right then, we'll start at the top and work our way down the hill.\""
+    expect: clean          # a verbal tic that characterizes the speaker
+  - id: we-104
+    text: "\"You're early,\" Ellis said. \"I couldn't sleep,\" she said. \"Nobody sleeps the night before,\" he said."
+    expect: clean          # repeated "said" is tag convention, not echo; dialogue_tag owns tags
+  - id: we-105
+    text: "Bellweather had promised to meet them at noon. Ruth waited by the stalls until half past, and then went to find out where Bellweather had got to."
+    expect: clean          # a proper noun genuinely keeping the reader oriented
+  - id: we-106
+    text: "Salt was the whole economy of the island. Salt paid the priest, salt paid the harbourmaster, and salt was what the men went out for."
+    expect: clean          # a thematic key word doing deliberate work
+  - id: we-107
+    text: "The bailiff logged the knife, then the coat, then the boots, and it was the knife the coroner asked about first."
+    expect: clean          # no honest synonym, and a pronoun here would point at the boots
+  - id: we-108
+    text: "The sign over the door still read Safe Keeping, though the ledger inside had it as safekeeping throughout."
+    expect: clean          # one term written two ways — variation, and the consistency scan owns it

@@ -1,0 +1,152 @@
+key: unnecessary_comma
+name: Unnecessary comma
+version: 1
+
+detection_prompt: |
+  A comma the sentence cannot defend — one that breaks a joint English does not
+  break: a subject from its verb, a verb from its object, one half of a
+  correlative pair from the other, or a defining clause from the noun it
+  defines. Those four are the whole of it. Almost every comma in a manuscript is
+  defensible, and several other types exist to ADD the commas house style wants,
+  so this type deletes very little and hands nearly everything back.
+
+  FLAG:
+  - A single UNPAIRED comma between a complete subject and its verb: "The woman
+    in the grey coat, opened the gate without knocking." This covers an inverted
+    sentence ("Down the hill, ran the boy.") and a participial or infinitive
+    phrase that is itself the subject ("Running down the hill, was exhausting.").
+    If an opening comma appears earlier in the sentence, this one is the closing
+    half of a correctly set-off element and is CORRECT: "The woman, who wore a
+    grey coat, opened the gate."
+  - A single UNPAIRED comma between a verb and its direct object or complement:
+    "He insisted, that the ferry would not run until morning." Not before quoted
+    speech — "He said, 'Wait here.'" is correct — and not where the comma opens a
+    matched pair.
+  - A single comma between the halves of a correlative pair (not only X but also
+    Y, either X or Y, neither X nor Y, both X and Y) where the halves are NOT
+    independent clauses: "She was not only tired, but also hungry." When the
+    second half IS an independent clause ("Not only was she tired, but she was
+    also hungry."), the comma is correct and belongs to compound_sentence_comma.
+  - A single UNPAIRED comma before an essential (defining) clause introduced by
+    "that" or by no relative pronoun at all, where no closing comma follows:
+    "The letter, that arrived on Tuesday was still unopened." NEVER before
+    "which" or "who", and never a matched PAIR of commas around a "that" clause
+    — that pair is that_which's own case, and it repairs it by swapping the
+    pronoun, not by deleting a comma.
+
+  Do NOT flag — deleting a comma is the one edit an author reads as the
+  proofreader overruling their ear, and nearly every comma below is either
+  correct English or owned by a type that repairs it a different way:
+  - A comma joining two independent clauses. That is a comma splice and
+    comma_splice owns it — and its repair REPLACES the comma with a semicolon or
+    a period, or adds a conjunction after it. Deleting a splice comma turns the
+    sentence into a run-on, which is a worse error than the one you started with.
+    Never report a splice here, even when you are certain the comma is wrong.
+  - A comma before a coordinating conjunction (and, but, or, nor, for, yet, so)
+    joining two INDEPENDENT clauses: "The rain had stopped, but the streets were
+    still empty." That comma is correct, and compound_sentence_comma exists to
+    supply it where it is missing. Leave the optional comma before a conjunction
+    in a COMPOUND PREDICATE too ("She stood, and walked to the window." — one
+    subject, two verbs), where a comma is permitted for clarity or for breath;
+    compound_sentence_comma declines to ADD one there, which is not a licence to
+    remove one the author wrote.
+  - A comma plus a coordinating conjunction between two clauses. That is exactly
+    the repair run_on_sentence proposes for a fused sentence, and comma_splice's
+    third-choice fix; removing it re-creates the error those types just fixed.
+  - The serial (Oxford) comma before the final conjunction in a list of three or
+    more items: "a notebook, two pens, and a spare charger". House style requires
+    it and serial_comma exists to add it; deleting one undoes a house rule.
+  - Any comma inside a list whose items carry their own internal commas.
+    complex_list_semicolon owns those lists and repairs them by promoting the
+    item separators to semicolons while leaving every item-internal comma
+    untouched — never by deleting one.
+  - A comma after an introductory phrase or clause: "After the meeting, we
+    left." introductory_comma exists to add it. This includes the optional one
+    after a short introductory adverb or a short prepositional phrase ("Then,
+    she left.", "In the morning, he left."): introductory_comma declines to ADD
+    a comma there, which is not a reason to delete one the author chose.
+  - A comma setting off a name or title used in direct address: "Hey, Sarah.",
+    "You are late, Marcus.", "I told you, Tom, it would not hold."
+    direct_address_comma exists to add these, and a mid-sentence vocative
+    correctly carries one on each side.
+  - A comma before a tag question: "You're coming, aren't you?", "Let's not talk
+    about it, shall we?", "You did lock the gate, right?" tag_question_comma
+    exists to add it.
+  - Commas around a nonrestrictive relative clause — "He left early, which
+    surprised everyone." — or the paired commas around a "that" clause that
+    should have been "which". that_which owns the restrictive/nonrestrictive
+    question and repairs it by swapping the relative pronoun, never by removing a
+    comma. Deleting a comma before a relative clause silently converts
+    nonrestrictive to restrictive; that changes what the sentence says and is the
+    author's call, not yours. Never touch a comma before "which" or "who".
+  - The comma joining a line of dialogue to its attribution — "Wait here," he
+    said. — including the commas around an interrupting tag: "I know," she said,
+    "and I don't care." dialogue_tag and the deterministic dialogue-tag sweep own
+    that comma and exist to supply it; house style sets it inside the closing
+    quotation mark. This holds for a named speaker exactly as it does for a
+    pronoun.
+  - A comma between two speakers' lines inside one paragraph. speaker_change owns
+    that paragraph and asks about it as a margin query; the answer is a paragraph
+    break, not a comma deletion.
+  - Commas setting off an appositive or a parenthetical: "the captain, Rodriguez,
+    said nothing", "The house, empty for years, had begun to lean." Both commas
+    are correct, and neither half of a pair is stray on its own.
+  - The thousands comma in a four-digit-or-larger number ("12,500 miles"), which
+    number_style exists to add, and the commas in a date ("July 14, 1989"), which
+    the manuscript's English variant settles, not you.
+  - The comma inside a deliberate repetition: "very, very old", "No, no, no.",
+    "far, far away". repeated_word treats repetition separated by punctuation as
+    intentional; the comma is the rhythm, not an error.
+  - A correlative pair missing its second half ("not only tired but hungry",
+    "between the house the barn"). missing_word owns that defect and repairs it
+    by inserting the missing word, not by moving a comma.
+  - Punctuation inside verbatim quoted material — an epigraph, a letter, a sign,
+    an inscription. The punctuation is the source's.
+  - A pause comma in dialogue or in stylised first-person narration where the
+    beat is plainly the author's: "I would have told you, eventually." Report at
+    low confidence at most, or not at all.
+
+  When in doubt, leave the comma. Report only the four cases listed above; a
+  comma that is merely unneeded, or that a different editor would have set
+  otherwise, is not this type's business.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with exactly one comma deleted
+  and nothing else changed: no rewording, no compensating punctuation, no second
+  comma touched, no capitalization altered. Delete the comma character itself and
+  keep the space that followed it, so exactly one clean space remains between the
+  words it separated. A sentence carrying two indefensible commas gets two
+  findings.
+
+confidence_guidance: |
+  high   — an unpaired comma splitting a complete subject from its verb, or a
+           verb from its object, in narration, where no reading defends it.
+  medium — a correlative-pair comma, a comma before an essential "that" clause,
+           or a split in a sentence long enough that the parse is arguable.
+  low    — inside dialogue or stylised first-person narration, where the pause
+           may be the author's ear rather than an error. When unsure, stay at
+           low so it asks rather than edits.
+
+examples:
+  - text: "The old ferryman with the tin whistle, waited for the tide to turn."
+    finding:
+      original_text: "The old ferryman with the tin whistle, waited for the tide to turn."
+      corrected_text: "The old ferryman with the tin whistle waited for the tide to turn."
+      explanation: "A single unpaired comma splits the complete subject from its verb."
+      confidence: high
+  - text: "The gardener, who had worked there since before the war, knew every gate on the property."
+    finding: null
+  - text: "He insisted, that the road over the pass would be clear by noon."
+    finding:
+      original_text: "He insisted, that the road over the pass would be clear by noon."
+      corrected_text: "He insisted that the road over the pass would be clear by noon."
+      explanation: "A single unpaired comma splits the verb from its object clause."
+      confidence: high
+  - text: "The dog got up off the hearth, and followed her out into the yard."
+    finding: null
+  - text: "She was not only tired, but also hungrier than she would admit."
+    finding:
+      original_text: "She was not only tired, but also hungrier than she would admit."
+      corrected_text: "She was not only tired but also hungrier than she would admit."
+      explanation: "A stray comma between correlative halves that are not independent clauses."
+      confidence: medium
