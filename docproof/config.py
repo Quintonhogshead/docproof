@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
@@ -722,46 +722,48 @@ class LowConfidenceConfig(BaseModel):
         return self
 
 
-class MeaningCheckConfig(BaseModel):
-    """The meaning gate: one strong model reading every proposed change, from
-    every source, immediately before the tracked changes are written.
+class JudgeGateConfig(BaseModel):
+    """One judge gate: a strong model reading every proposed change, from every
+    source, immediately before the tracked changes are written.
 
-    Each earlier check asks whether something is an error and whether the fix is
-    right. This asks the one question none of them do — does the corrected
-    sentence still MEAN what the original meant — over the changes that survived
-    all of them, source-blind: a Sapling suggestion, a LanguageTool comma, a
-    rewrite diff and a detector finding arrive here as the same kind of object.
+    Two of these ship — see MeaningCheckConfig and FixCheckConfig for the
+    question each one asks. Everything below is common to both, because the only
+    thing that differs between judges is the question: a change the judge will
+    not vouch for is downgraded to a margin question with its reason attached,
+    never dropped and never silently applied, and fail-open throughout so an
+    unanswerable call leaves the change untouched.
 
-    A change whose sense the judge will not vouch for is downgraded to a margin
-    question with its reason attached, never dropped and never silently applied.
-    Fail-open throughout: an unanswerable call leaves the change untouched.
-
-    Off by default — it is a paid pass — but the cheapest paid pass in the
-    pipeline to run well, because its cost tracks the number of CHANGES rather
+    Off by default — these are paid passes — but the cheapest paid passes in the
+    pipeline to run well, because their cost tracks the number of CHANGES rather
     than the length of the book, which is what makes a frontier `model`
-    affordable here. See docproof/meaning.py."""
+    affordable here. See docproof/judges.py."""
+    # The gate's own key in docproof.judges.SPECS, for error messages and for
+    # the record a run leaves behind. Set by each subclass, never by config.
+    judge_key: ClassVar[str] = ""
+
     enabled: bool = False
-    # The judge. A frontier model is the point of this pass: it is the last
-    # reader before the author, and it sees a few hundred short prompts, not the
-    # whole manuscript.
+    # The judge. A frontier model is the point of these passes: they are the last
+    # reader before the author, and each sees a few hundred short prompts, not
+    # the whole manuscript.
     model: str = "claude-fable-5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # Which changes are read. "model_sources" is every change proposed by a
     # model or an outside checker — the detector passes, rewrite, adjudicate,
     # low-confidence promotions, LanguageTool and Sapling — and is the default.
     # "all" adds the deterministic house-style sweeps and the consistency scan,
-    # which are scripted, punctuation-sized, and cannot move a sentence's sense;
-    # paying a frontier model to confirm that is usually waste, but the option is
-    # here for a run that wants nothing reaching the author unread.
+    # which are scripted, punctuation-sized, and cannot be wrong in the ways
+    # these gates look for; paying a frontier model to confirm that is usually
+    # waste, but the option is here for a run that wants nothing reaching the
+    # author unread.
     scope: Literal["model_sources", "all"] = "model_sources"
     # Treat an "unsure" verdict as a downgrade. On by default: the gate exists to
-    # stop a silent change, and a judge that cannot vouch for the sense has not
-    # vouched for it. Off applies anything not positively flagged.
+    # stop a silent change, and a judge that cannot vouch for one has not vouched
+    # for it. Off applies anything not positively flagged.
     flag_unsure: bool = True
     max_output_tokens: int = Field(default=4000, ge=1)
     # The judge's instructions, meant to be edited per job in the review panel.
-    # Empty uses the built-in default (docproof.meaning.default_meaning_prompt()),
-    # so clearing the field reverts to it.
+    # Empty uses the built-in default (docproof.judges.default_prompt(key)), so
+    # clearing the field reverts to it.
     prompt: str = ""
 
     @model_validator(mode="after")
@@ -769,8 +771,35 @@ class MeaningCheckConfig(BaseModel):
         from .providers.catalog import lookup
         if self.enabled and lookup(self.model) is None:
             raise ValueError(
-                f"meaning_check.model '{self.model}' is not in the catalog")
+                f"{self.judge_key}_check.model '{self.model}' "
+                "is not in the catalog")
         return self
+
+
+class MeaningCheckConfig(JudgeGateConfig):
+    """Does the corrected sentence still MEAN what the original meant?
+
+    A fix can be defensible as grammar and still change the book — a dropped
+    negation, a homophone resolved the wrong way, a tense that moves when an
+    event happened. Every other check in the pipeline asks whether something is
+    an error and whether the fix is right; this asks the one question none of
+    them do, over the changes that survived all of them, source-blind: a Sapling
+    suggestion, a LanguageTool comma, a rewrite diff and a detector finding
+    arrive here as the same kind of object."""
+    judge_key: ClassVar[str] = "meaning"
+
+
+class FixCheckConfig(JudgeGateConfig):
+    """Is the replacement the CORRECT fix?
+
+    Separate from the meaning gate on purpose, and separately switchable. A
+    change can preserve the sense perfectly and still be the wrong repair —
+    "their" corrected to "there" where "they're" was wanted, a verb put in the
+    wrong form for its subject, a semicolon the clauses will not carry, an
+    agreement error the fix creates rather than removes. One judge asked to weigh
+    both questions at once does neither well, so each gets its own pass, its own
+    prompt, and its own model."""
+    judge_key: ClassVar[str] = "fix"
 
 
 class Config(BaseModel):
@@ -798,6 +827,7 @@ class Config(BaseModel):
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
     meaning_check: MeaningCheckConfig = Field(default_factory=MeaningCheckConfig)
+    fix_check: FixCheckConfig = Field(default_factory=FixCheckConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent

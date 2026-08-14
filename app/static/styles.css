@@ -425,6 +425,29 @@ textarea {
   font-size: 0.86rem;
 }
 .job-actions a { text-decoration: none; }
+
+/* Re-judging a finished review: opens in place on the card it belongs to,
+   rather than a dialog, because the review it is about is right there. */
+.rejudge-form {
+  margin-top: 0.7rem;
+  padding: 0.7rem 0.8rem;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  display: grid;
+  gap: 0.6rem;
+}
+.rejudge-form > p:first-child { margin: 0; }
+.rejudge-gate {
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 15rem);
+  align-items: start;
+}
+.rejudge-gate > .field { margin: 0; }
+.rejudge-gate select { width: 100%; }
+@media (max-width: 620px) {
+  .rejudge-gate { grid-template-columns: minmax(0, 1fr); }
+}
 .job-error { margin-top: 0.5rem; font-size: 0.88rem; }
 .action-note { margin: 0.5rem 0 0; font-size: 0.88rem; }
 
