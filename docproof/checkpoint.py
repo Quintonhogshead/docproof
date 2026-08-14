@@ -16,13 +16,26 @@ deterministic in the document and the config, so cached results are only
 reusable while both are unchanged: edit the manuscript, switch the model, or
 touch a prompt, and every cached answer is stale. A mismatch wipes the file
 and the run starts clean, which costs money but never correctness.
+
+The file is append-only: a fingerprint header, then one line per completed
+call. It used to be one JSON document rewritten in full after every call, which
+made a resumable review quadratic in its own results — a 400-page book is ~450
+calls, and the last of them rewrote every finding the first 449 had produced,
+around 250 MB of writes for 1 MB of state, all of it on the thread folding
+results in. Appending costs one line each.
+
+Two things follow from the format, both improvements. A crash mid-write can
+only damage the final line, and `load` drops that one line instead of the whole
+file — where the old whole-document parse gave up everything for one bad byte.
+And a checkpoint written by the previous format no longer parses, so it is
+discarded and that run starts clean: a one-time cost, paid only by a review
+that was mid-flight at the moment of the upgrade.
 """
 from __future__ import annotations
 
 import dataclasses
 import json
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -32,6 +45,16 @@ log = logging.getLogger("docproof.checkpoint")
 
 VERSION = 1
 _FINDING_ID = re.compile(r"^f-(\d+)$")
+
+
+def _parse(line: str) -> dict | None:
+    """One JSON line, or None if it is not one. A half-written final line is the
+    expected reason, not an exceptional one."""
+    try:
+        row = json.loads(line)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return row if isinstance(row, dict) else None
 
 
 def finding_to_dict(f: Finding) -> dict:
@@ -74,30 +97,46 @@ class Checkpoint:
     def load(self) -> int:
         """Read what a previous attempt saved. Returns the number of usable
         entries; anything unreadable or stale is discarded, because a wrong
-        cached answer costs correctness where a missing one only costs money."""
+        cached answer costs correctness where a missing one only costs money.
+
+        Lines are applied in file order into one dict, so a key written twice —
+        a call that failed, then succeeded on a resume — ends up at its latest
+        answer, and `max_finding_id` never sees ids the superseded attempt
+        handed out."""
         self._entries = {}
         if not self.path.is_file():
             return 0
         try:
-            raw = json.loads(self.path.read_text("utf-8"))
-        except (OSError, json.JSONDecodeError) as e:
+            lines = self.path.read_text("utf-8").splitlines()
+        except OSError as e:
             log.warning("Unreadable checkpoint %s (%s); starting clean.",
                         self.path, e)
             self.delete()
             return 0
-        if raw.get("fingerprint") != self.fingerprint:
-            log.info("Checkpoint at %s was made from a different document, "
-                     "model or prompt set; starting clean.", self.path)
+        header = _parse(lines[0]) if lines else None
+        if header is None or header.get("fingerprint") != self.fingerprint:
+            log.info("Checkpoint at %s is unreadable, or was made from a "
+                     "different document, model or prompt set; starting clean.",
+                     self.path)
             self.delete()
             return 0
-        for key, entry in (raw.get("entries") or {}).items():
+        for n, line in enumerate(lines[1:], start=2):
+            if not line.strip():
+                continue
+            row = _parse(line)
+            if row is None:
+                # Almost always the last line of a file whose process died
+                # mid-write. Everything before it is intact and paid for.
+                log.warning("Dropping unreadable checkpoint line %d of %s; "
+                            "the calls before it still count.", n, self.path)
+                continue
             try:
-                self._entries[key] = Entry(items=list(entry["items"]),
-                                           usage=dict(entry["usage"]),
-                                           ok=bool(entry["ok"]))
+                self._entries[row["key"]] = Entry(items=list(row["items"]),
+                                                  usage=dict(row["usage"]),
+                                                  ok=bool(row["ok"]))
             except (KeyError, TypeError) as e:
-                log.warning("Skipping malformed checkpoint entry %s (%s)",
-                            key, e)
+                log.warning("Skipping malformed checkpoint entry on line %d "
+                            "(%s)", n, e)
         done = sum(1 for e in self._entries.values() if e.ok)
         if done:
             log.info("Resuming: %d of the calls this run needs were already "
@@ -120,9 +159,9 @@ class Checkpoint:
 
     def put(self, key: str, *, items: list[dict], usage: Usage,
             ok: bool) -> None:
-        self._entries[key] = Entry(items=items,
-                                   usage=dataclasses.asdict(usage), ok=ok)
-        self._write()
+        entry = Entry(items=items, usage=dataclasses.asdict(usage), ok=ok)
+        self._entries[key] = entry
+        self._append(key, entry)
 
     def delete(self) -> None:
         self._entries = {}
@@ -143,17 +182,46 @@ class Checkpoint:
 
     # -- disk -----------------------------------------------------------------
 
-    def _write(self) -> None:
-        body = json.dumps({
-            "fingerprint": self.fingerprint,
-            "entries": {k: dataclasses.asdict(e)
-                        for k, e in self._entries.items()},
-        }, indent=2)
-        # Atomic, because this file's whole reason to exist is surviving the
-        # process dying at an arbitrary moment.
-        staging = self.path.with_name(self.path.name + ".writing")
-        staging.write_text(body, encoding="utf-8")
-        os.replace(staging, self.path)
+    def _append(self, key: str, entry: Entry) -> None:
+        """One completed call, one line.
+
+        The header is re-emitted whenever the file is missing or empty, which is
+        both the first write of a run and the repair for a file deleted out from
+        under a run still folding — cancelling a job unlinks it from another
+        thread. Without that, the next append would build a headerless file that
+        the next `load` could only throw away.
+
+        A file whose last line has no newline was torn by a process that died
+        mid-write. `load` drops that fragment but leaves it on disk, so this
+        terminates it before appending: writing straight onto it would splice the
+        fragment and the new entry into one unparseable line, and the call being
+        recorded — already paid for — would be dropped by every later load and
+        bought again on every resume."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        size = self._size()
+        with open(self.path, "a", encoding="utf-8") as fh:
+            if not size:
+                fh.write(json.dumps({"fingerprint": self.fingerprint}) + "\n")
+            elif not self._ends_cleanly():
+                fh.write("\n")
+            fh.write(json.dumps({"key": key, **dataclasses.asdict(entry)}) + "\n")
+
+    def _size(self) -> int:
+        """Bytes on disk, or 0 for a file that is missing — including one
+        unlinked between the check and the stat, which is the cancel this
+        method's docstring describes and must not raise into the run."""
+        try:
+            return self.path.stat().st_size
+        except OSError:
+            return 0
+
+    def _ends_cleanly(self) -> bool:
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(-1, 2)
+                return fh.read(1) == b"\n"
+        except OSError:
+            return True                              # unreadable: don't add noise
 
 
 def usage_delta(before: Usage, after: Usage) -> Usage:

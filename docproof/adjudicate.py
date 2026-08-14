@@ -286,70 +286,107 @@ def adjudicate(candidates: Sequence[Candidate],
                paragraphs: Sequence[ParagraphRef],
                provider: Provider, *, model: str, max_tokens: int,
                usage: Usage, ids, batch_size: int = 40,
-               edit_confidence: str = "high") -> list[Finding]:
+               edit_confidence: str = "high",
+               concurrency: int = 1) -> list[Finding]:
     """Ask the model to rule on each candidate in context and turn confident
     misspellings into Findings. Safety is in the routing, not the detector: only
     a model-affirmed correction at `edit_confidence` becomes a tracked-change
     Finding; every other affirmed correction is force_query'd to the margin so a
     human decides, and a "keep" produces nothing. So a wrong candidate costs at
-    most a query, never a silent miscorrection."""
+    most a query, never a silent miscorrection.
+
+    `concurrency` windows are in flight at once. The split is the verifier's: the
+    calls fan out, the answers are folded back in window order on this thread. A
+    window's verdicts must land in the order they were asked for — findings claim
+    their span in the order they are emitted, and the ids come off a shared
+    counter — so only the waiting is parallel, never the folding. 1 (the default)
+    is the old strictly-sequential behaviour, for callers with no config in hand."""
     if not candidates:
         return []
+    from concurrent.futures import ThreadPoolExecutor
+
     text_of = {p.para_id: p.text for p in paragraphs}
     # Attach each candidate's sentence once; skip any whose paragraph vanished.
     enriched = [(c, text_of[c.para_id],
                  _sentence_around(text_of[c.para_id], c.start, c.end))
                 for c in candidates if c.para_id in text_of]
+    windows = [enriched[i:i + batch_size]
+               for i in range(0, len(enriched), batch_size)]
+    schema = strict_json_schema(_Verdicts)           # deep-copies; hoist off the pool
+
+    def fetch(window):
+        numbered = [(n + 1, c, sent) for n, (c, _para, sent) in enumerate(window)]
+        return provider.complete_structured(
+            model=model, system=_SYSTEM, user=_build_user(numbered),
+            schema=schema, schema_name="verdicts",
+            max_tokens=max_tokens)
 
     findings: list[Finding] = []
     rank = {"low": 0, "medium": 1, "high": 2}
     edit_floor = rank.get(edit_confidence, 2)
-    for i in range(0, len(enriched), batch_size):
-        window = enriched[i:i + batch_size]
-        numbered = [(n + 1, c, sent) for n, (c, _para, sent) in enumerate(window)]
-        result = provider.complete_structured(
-            model=model, system=_SYSTEM, user=_build_user(numbered),
-            schema=strict_json_schema(_Verdicts), schema_name="verdicts",
-            max_tokens=max_tokens)
-        usage.add(result.usage)
-        if result.stop_reason != "ok" or result.parsed is None:
-            log.error("adjudication batch %d: %s", i // batch_size,
-                      result.error or result.stop_reason)
-            continue
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        pending = [(w, pool.submit(fetch, w)) for w in windows]
         try:
-            parsed = _Verdicts.model_validate(result.parsed)
-        except Exception as e:                       # malformed structured output
-            log.error("adjudication batch %d: bad response: %s",
-                      i // batch_size, e)
-            continue
-        for v in parsed.verdicts:
-            if not (1 <= v.index <= len(numbered)):
-                continue
-            cand, para_text, sentence = (window[v.index - 1][0],
-                                         window[v.index - 1][1],
-                                         window[v.index - 1][2])
-            if not v.is_error or not v.correction.strip():
-                continue
-            correction = _match_case(cand.word, v.correction.strip())
-            if correction.lower() == cand.word.lower():
-                continue                             # a no-op "fix"
-            corrected_para = (para_text[:cand.start] + correction
-                              + para_text[cand.end:])
-            conf = v.confidence if v.confidence in rank else "low"
-            findings.append(Finding(
-                finding_id=f"a-{next(ids):04d}",
-                chunk_id="adjudicate",
-                para_id=cand.para_id,
-                error_type="spelling",
-                original_text=para_text,
-                occurrence=1,
-                corrected_text=corrected_para,
-                explanation=f'"{cand.word}" appears to be a misspelling of '
-                            f'"{correction}".',
-                confidence=conf,
-                # Only a high-confidence call is trusted as a silent edit; a
-                # softer one asks rather than changes.
-                force_query=rank[conf] < edit_floor))
+            for batch_no, (window, future) in enumerate(pending):
+                result = future.result()
+                usage.add(result.usage)              # fold serially: not thread-safe
+                if result.stop_reason != "ok" or result.parsed is None:
+                    log.error("adjudication batch %d: %s", batch_no,
+                              result.error or result.stop_reason)
+                    continue
+                try:
+                    parsed = _Verdicts.model_validate(result.parsed)
+                except Exception as e:               # malformed structured output
+                    log.error("adjudication batch %d: bad response: %s",
+                              batch_no, e)
+                    continue
+                findings.extend(
+                    _findings_from(parsed, window, ids, rank, edit_floor))
+        except BaseException:
+            # Every window was queued up front, and the pool drains its queue on
+            # the way out — so without this an abort keeps buying the rest of the
+            # book. The serial loop it replaced stopped at the first failure, and
+            # so must this. Only calls not yet started can be recalled.
+            for _w, unstarted in pending:
+                unstarted.cancel()
+            raise
     log.info("Adjudication: %d correction(s) from %d candidate(s)",
              len(findings), len(candidates))
+    return findings
+
+
+def _findings_from(parsed: "_Verdicts", window, ids, rank: dict,
+                   edit_floor: int) -> list[Finding]:
+    """One window's verdicts as Findings, in the order the model answered.
+
+    Split out of `adjudicate` only so the folding stays a plain serial routine
+    while the calls around it run on a pool: everything here touches shared
+    state (the id counter) and must not be reached from a worker thread."""
+    findings: list[Finding] = []
+    for v in parsed.verdicts:
+        if not (1 <= v.index <= len(window)):
+            continue
+        cand, para_text, _sentence = window[v.index - 1]
+        if not v.is_error or not v.correction.strip():
+            continue
+        correction = _match_case(cand.word, v.correction.strip())
+        if correction.lower() == cand.word.lower():
+            continue                                 # a no-op "fix"
+        corrected_para = (para_text[:cand.start] + correction
+                          + para_text[cand.end:])
+        conf = v.confidence if v.confidence in rank else "low"
+        findings.append(Finding(
+            finding_id=f"a-{next(ids):04d}",
+            chunk_id="adjudicate",
+            para_id=cand.para_id,
+            error_type="spelling",
+            original_text=para_text,
+            occurrence=1,
+            corrected_text=corrected_para,
+            explanation=f'"{cand.word}" appears to be a misspelling of '
+                        f'"{correction}".',
+            confidence=conf,
+            # Only a high-confidence call is trusted as a silent edit; a
+            # softer one asks rather than changes.
+            force_query=rank[conf] < edit_floor))
     return findings

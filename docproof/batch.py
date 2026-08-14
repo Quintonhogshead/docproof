@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .config import Config
+from .config import Config, cache_dir_for
 from .models import CoverageLedger, Usage
 from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
                        continuity_findings, finish, prepare)
@@ -325,7 +325,8 @@ def collect_findings(job: Job, provider: Provider,
             prepared.doc.paragraphs, build_provider(gcfg),
             model=cfg.glossary.model,
             max_tokens=cfg.glossary.max_output_tokens, usage=usage,
-            cache_dir=cfg.glossary.cache_dir)
+            effort=cfg.glossary.effort,
+            cache_dir=cache_dir_for(cfg.glossary.cache_dir))
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings += case_drift_findings(
@@ -342,7 +343,8 @@ def collect_findings(job: Job, provider: Provider,
             model=cfg.api.model, max_tokens=cfg.api.max_output_tokens,
             usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
-            edit_confidence=cfg.adjudicate.edit_confidence)
+            edit_confidence=cfg.adjudicate.edit_confidence,
+            concurrency=cfg.concurrency_for())
 
     # Rewrite-then-diff. When it can ride the batch (the default: rewrite.model
     # matches the review model), its output-heavy propose calls already rode the
@@ -389,7 +391,8 @@ def collect_findings(job: Job, provider: Provider,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
             edit_confidence=cfg.rewrite.edit_confidence,
-            reject_sink=rewrite_rejects)
+            reject_sink=rewrite_rejects,
+            concurrency=cfg.concurrency_for(confirm_model))
 
     # LanguageTool mechanical-floor pass: local rules checker proposes, the shared
     # confirm valve rules. Propose is local (no batch requests), so it runs here
@@ -415,7 +418,8 @@ def collect_findings(job: Job, provider: Provider,
                 max_tokens=cfg.languagetool.max_output_tokens, usage=usage, ids=ids,
                 batch_size=cfg.languagetool.batch_size,
                 edit_confidence=cfg.languagetool.edit_confidence,
-                error_type="languagetool", chunk_id="languagetool", id_prefix="lt")
+                error_type="languagetool", chunk_id="languagetool", id_prefix="lt",
+                concurrency=cfg.concurrency_for(lt_model))
         finally:
             lt_shutdown()
 
