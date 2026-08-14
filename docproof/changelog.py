@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Finding
+from .queries import wanted_statuses
 
 log = logging.getLogger("docproof.changelog")
 
@@ -117,7 +118,7 @@ def _reason(f: Finding) -> str:
 
 def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
                      applied_ids, sweeps=None, spell=None, normalization=None,
-                     audit=None, usage=None, variant=None) -> None:
+                     audit=None, usage=None, variant=None, fmt=None) -> None:
     """Write the change log. Imports python-docx lazily so that a run which
     does not want one never pays for the import."""
     import docx
@@ -139,6 +140,14 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     rejected = [f for f in findings if f.status.startswith("rejected")]
     oversized = [f for f in findings if f.status == "rejected_oversized"]
+    # What the manuscript actually carries, decided by the rule the reassembler
+    # applies rather than by a second count that can drift from it — and named
+    # in the format's own word, because an InDesign file holds notes and this
+    # log is read beside the file it describes.
+    wanted = wanted_statuses(cfg.query_comments)
+    in_margin = [f for f in queries + low + oversized
+                 if f.status in wanted and f.anchor]
+    noun = fmt.comment_noun if fmt is not None else "margin comment"
 
     d = docx.Document()
     name = Path(doc.source_path).stem
@@ -153,8 +162,8 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
 
     d.add_paragraph(
         f"{len(applied)} correction(s) were made as tracked changes, and "
-        f"{len(queries) + len(low)} question(s) were raised as margin "
-        f"comments that change nothing. Revisions and comments are authored "
+        f"{len(in_margin)} question(s) were raised as {noun}s that change "
+        f"nothing. Revisions and {noun}s are authored "
         f"by “{cfg.revision_author}”.")
 
     # --- style basis ---------------------------------------------------------
@@ -231,10 +240,13 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     if not (queries or low):
         d.add_paragraph("No questions were raised.")
     else:
+        carried = (f"{len(in_margin)} of them a {noun} in the manuscript"
+                   if len(in_margin) != len(queries) + len(low)
+                   else f"each a {noun} in the manuscript")
         d.add_paragraph(
-            f"{len(queries) + len(low)} question(s), each a margin comment in "
-            f"the manuscript. Nothing here was changed. Where a query has a "
-            f"suggestion attached, it is a suggestion and not a correction.")
+            f"{len(queries) + len(low)} question(s), {carried}. Nothing here "
+            f"was changed. Where a query has a suggestion attached, it is a "
+            f"suggestion and not a correction.")
         for f in sorted(queries + low,
                         key=lambda f: (order.get(f.para_id, len(order)),
                                        f.anchor.start if f.anchor else 0)):

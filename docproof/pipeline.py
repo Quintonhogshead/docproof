@@ -1319,7 +1319,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          sweeps=prepared.sweep_reports, spell=prepared.spell,
                          normalization=prepared.normalization,
                          audit=audit_report, usage=usage,
-                         variant=prepared.variant)
+                         variant=prepared.variant, fmt=fmt)
 
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)
@@ -1327,8 +1327,10 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # `stats.queried`: with query_comments on, the reassembler's tally also
     # counts the low-confidence and oversized comments it writes, and misses
     # the queries that found no anchor. This number is the one summary.md
-    # prints, and the IDML format — whose own stats class has no queried field
-    # at all — reaches it the same way.
+    # prints, and both formats reach it the same way — IDML writes its queries
+    # as inline Notes and carries the same `queried`/`unplaced` stats the .docx
+    # reassembler does, so the count is a count of what is in the file either
+    # way.
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated),

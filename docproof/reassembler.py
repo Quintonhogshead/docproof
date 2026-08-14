@@ -12,6 +12,7 @@ from lxml import etree
 
 from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
+from .queries import query_span, query_text, wanted_statuses
 from .utils.xml_helpers import (CT_NS, DELTEXT_TAG, DEL_TAG, DR_NS, DocxPackage,
                                 INS_TAG, P_TAG, PR_NS, RPR_TAG, R_TAG, T_TAG,
                                 TEXT_SKIP_ANCESTORS,
@@ -539,63 +540,15 @@ def _next_rev_id(pkg: DocxPackage) -> int:
     return mx + 1
 
 
-def _query_span(f: Finding, para_text: str) -> tuple[int, int]:
-    """What a query's comment should highlight: the sentence it is asking
-    about, not the characters an edit would have touched.
-
-    A below-gate finding carries the shrunk anchor of the change that was not
-    made, which for a comma splice is one comma. A comment hanging off a
-    single comma tells the author nothing about what is being questioned.
-
-    Re-search with the validator's fold-tolerant anchor, not a bare exact
-    match: the validator admits a finding whose original_text renders the
-    manuscript's curly punctuation as straight, so an exact re-search here
-    would miss it and fall back to the shrunk one-character diff span — the
-    very thing this function exists to avoid."""
-    from .validator import anchor_offset
-    s = anchor_offset(para_text, f.original_text, f.occurrence)
-    if s == -1:                                  # unanchorable text never
-        return f.anchor.start, f.anchor.end      # reaches here past the validator
-    return s, s + len(f.original_text)
-
-
-def _query_text(f: Finding) -> str:
-    """What a query says in the margin. A question has to read as one — an
-    author who cannot tell a query from a correction has lost the distinction
-    the two channels exist to draw."""
-    if f.status == "query":
-        return f.explanation or f"{f.error_type.replace('_', ' ')}: worth a look."
-    kind = f.error_type.replace("_", " ")
-    if f.status == "rejected_oversized":
-        # A real catch whose fix rewrites more than a minimal edit should — a
-        # run-on split in two, a restructured list. Not applied automatically,
-        # but the author should still see it and make the change by hand.
-        parts = [f"Possibly {kind} — the suggested fix was too large to apply "
-                 f"as a minimal tracked change, so it is left for you to make "
-                 f"by hand."]
-    else:
-        parts = [f"Possibly {kind} — left as written, because it may be deliberate."]
-    if f.explanation:
-        parts.append(f.explanation)
-    if f.corrected_text and f.corrected_text != f.original_text:
-        parts.append(f"Suggested: {f.corrected_text}")
-    return " ".join(parts)
-
-
 def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                           findings: list[Finding], cfg: Config
                           ) -> ReassemblyStats:
     validated = [f for f in findings if f.status == "validated"]
     # Two channels, never blurred: a correction the author accepts or rejects,
-    # and a question that edits nothing. Below-gate findings join the second —
-    # the model thought something was wrong but not confidently enough to
-    # touch it, which is exactly what a margin query is for. An oversized edit
-    # joins it too: the catch is real, only its fix is too large to auto-apply,
-    # so surfacing it as a comment beats dropping the information silently.
-    wanted = {"query"}
-    if cfg.query_comments:
-        wanted.add("skipped_low_confidence")
-        wanted.add("rejected_oversized")
+    # and a question that edits nothing. Which findings take the second is
+    # shared with the IDML reassembler (docproof/queries.py), because the
+    # channel a finding belongs in is policy, not markup.
+    wanted = wanted_statuses(cfg.query_comments)
     queries = [f for f in findings if f.status in wanted and f.anchor]
     if not validated and not queries:
         log.info("No validated findings; document untouched.")
@@ -650,8 +603,8 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                     continue
                 if comments is None:
                     comments = _Comments(pkg, cfg.revision_author, date)
-                lo, hi = _query_span(f, paras[para_id].text)
-                if comments.attach_to_span(p, lo, hi, _query_text(f)):
+                lo, hi = query_span(f, paras[para_id].text)
+                if comments.attach_to_span(p, lo, hi, query_text(f)):
                     queried.append(f.finding_id)
                 else:
                     unplaced.append(f.finding_id)

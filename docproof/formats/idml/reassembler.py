@@ -1,4 +1,9 @@
-"""Tracked-change surgery on IDML stories.
+"""Tracked-change surgery on IDML stories, and the queries beside them.
+
+Both channels, as in Word (docs/deliverables.md): a correction the author
+accepts or rejects, and a question that edits nothing. The question is an
+inline Note — the same element an explanation uses, and the only element
+InDesign offers for either.
 
 The counterpart of docproof/reassembler.py, and it keeps the same defences:
 paragraphs are relocated by re-running the shared walker, canonical text is
@@ -21,6 +26,7 @@ from lxml import etree
 
 from ...config import Config
 from ...models import Anchor, DocumentModel, Finding, index_paragraphs
+from ...queries import query_span, query_text, wanted_statuses
 from .walker import (CHANGE, CONTENT, CSR, DELETED, DESIGNMAP, DOCUMENT_USER,
                      INSERTED, NOTE, PSR, IdmlPackage, paragraph_text,
                      walk_package)
@@ -32,8 +38,10 @@ _DOCPROOF_USER = "dDocProofUser"
 
 @dataclass(frozen=True)
 class ReassemblyStats:
-    applied: tuple[str, ...]
-    skipped: tuple[str, ...]
+    applied: tuple[str, ...]         # finding_ids written as tracked changes
+    skipped: tuple[str, ...]         # finding_ids refused by a safety check
+    queried: tuple[str, ...] = ()    # finding_ids written as Notes only
+    unplaced: tuple[str, ...] = ()   # queries with nowhere to hang a Note
 
 
 def _stamp() -> str:
@@ -172,13 +180,9 @@ def apply_replacement(para: _Paragraph, anchor: Anchor, author: str,
 
 # --- notes (the InDesign counterpart of a Word comment) -----------------------
 
-def attach_note(anchor_el: etree._Element, text: str, author: str,
-                date: str) -> None:
-    """An inline Note beside the change, holding docproof's explanation.
-
-    Notes live where the change lives — a direct child of the
-    CharacterStyleRange — and are excluded from canonical text by the walker,
-    so adding one never disturbs an anchor."""
+def _note(text: str, author: str, date: str) -> etree._Element:
+    """The Note element itself, in the shape InDesign 2026 writes its own
+    (docs/idml-notes.md)."""
     note = etree.Element(NOTE, {"Collapsed": "false", "CreationDate": date,
                                 "ModificationDate": date, "UserName": author,
                                 "AppliedDocumentUser": _DOCPROOF_USER})
@@ -188,8 +192,41 @@ def attach_note(anchor_el: etree._Element, text: str, author: str,
         "AppliedCharacterStyle": "CharacterStyle/$ID/[No character style]"})
     content = etree.SubElement(inner_csr, CONTENT)
     content.text = text
+    return note
+
+
+def attach_note(anchor_el: etree._Element, text: str, author: str,
+                date: str) -> None:
+    """An inline Note beside the change, holding docproof's explanation.
+
+    Notes live where the change lives — a direct child of the
+    CharacterStyleRange — and are excluded from canonical text by the walker,
+    so adding one never disturbs an anchor."""
     parent = anchor_el.getparent()
-    parent.insert(parent.index(anchor_el), note)
+    parent.insert(parent.index(anchor_el), _note(text, author, date))
+
+
+def attach_note_at(para: _Paragraph, off: int, text: str, author: str,
+                   date: str) -> bool:
+    """A Note at a character offset with no revision around it — the query
+    channel: this asks, and changes nothing.
+
+    The one real difference from the Word side. A Word comment spans a range,
+    so a query there highlights the whole sentence it is asking about; an
+    InDesign Note is a *point* in the text, with no range to highlight. So the
+    note is anchored at the first character of that sentence, which is where a
+    reader's eye goes anyway, and the question itself carries the rest.
+
+    Like a Word comment's range markers, this inserts no text: splitting a
+    Content node preserves canonical text exactly, and the Note is skipped by
+    the walker. Every offset the tracked changes below rely on therefore still
+    points where it did. Returns False when there is nowhere to hang it."""
+    if not para.nodes:                       # an empty paragraph has no anchor
+        return False
+    para.ensure_boundary(off)
+    parent, at, _ = para.insert_point(off)
+    parent.insert(at, _note(text, author, date))
+    return True
 
 
 def ensure_document_user(pkg: IdmlPackage, author: str) -> None:
@@ -247,7 +284,13 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                           findings: list[Finding], cfg: Config
                           ) -> ReassemblyStats:
     validated = [f for f in findings if f.status == "validated"]
-    if not validated:
+    # Two channels, never blurred, in InDesign exactly as in Word: a correction
+    # the author accepts or rejects, and a question that edits nothing. Which
+    # findings take the second is shared policy (docproof/queries.py); only the
+    # anchoring below is InDesign's own.
+    wanted = wanted_statuses(cfg.query_comments)
+    queries = [f for f in findings if f.status in wanted and f.anchor]
+    if not validated and not queries:
         log.info("No validated findings; document untouched.")
         return ReassemblyStats((), ())
 
@@ -256,9 +299,18 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
     author = cfg.revision_author
     applied: list[str] = []
     skipped: list[str] = []
+    queried: list[str] = []
+    unplaced: list[str] = []
+
+    def refuse(fs: list[Finding]) -> None:
+        """A paragraph we will not touch. A withheld correction is `skipped`;
+        a question that never reached the file is `unplaced`."""
+        for f in fs:
+            (skipped if f.status == "validated" else unplaced).append(
+                f.finding_id)
 
     by_part: dict[str, list[Finding]] = {}
-    for f in validated:
+    for f in validated + queries:
         by_part.setdefault(paras[f.para_id].part, []).append(f)
 
     ensure_document_user(pkg, author)
@@ -271,32 +323,51 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
         for f in part_findings:
             by_para.setdefault(f.para_id, []).append(f)
 
-        touched = False
+        touched = changed = False
         for para_id, para_findings in by_para.items():
             walked = walked_by_id.get(para_id)
             if walked is None:
                 log.error("%s vanished between ingest and reassembly — "
                           "refusing.", para_id)
-                skipped += [f.finding_id for f in para_findings]
+                refuse(para_findings)
                 continue
 
             if walked.location == "footnote":        # defense-in-depth 0
                 # Ingest already skips these; a finding reaching here would
                 # mean a stale document model, and the cost of being wrong is
-                # an .idml InDesign crashes on rather than a bad edit.
+                # an .idml InDesign crashes on rather than a bad edit. A Note
+                # is not the element InDesign chokes on, but nothing about
+                # footnote markup has been verified past the crash, so the
+                # question stays out too rather than being the thing that
+                # proves it.
                 log.error("%s is in a footnote, where InDesign cannot carry a "
                           "tracked change — refusing.", para_id)
-                skipped += [f.finding_id for f in para_findings]
+                refuse(para_findings)
                 continue
 
             para = _Paragraph(walked)
             if para.text != paras[para_id].text:      # defense-in-depth 1
                 log.error("Canonical-text drift in %s — refusing to edit it.",
                           para_id)
-                skipped += [f.finding_id for f in para_findings]
+                refuse(para_findings)
                 continue
 
-            for f in sorted(para_findings, key=lambda x: x.anchor.start,
+            # Questions go on first, for the reason the Word side does it: a
+            # Note inserts no text, so the offsets the edits below rely on are
+            # unchanged — whereas applying a deletion first moves Content out
+            # of the paragraph's node list and every later offset points at the
+            # wrong place.
+            for f in sorted((x for x in para_findings if x.status != "validated"),
+                            key=lambda x: x.anchor.start):
+                lo, _hi = query_span(f, paras[para_id].text)
+                if attach_note_at(para, lo, query_text(f), author, date):
+                    queried.append(f.finding_id)
+                    touched = True
+                else:
+                    unplaced.append(f.finding_id)
+
+            for f in sorted((x for x in para_findings if x.status == "validated"),
+                            key=lambda x: x.anchor.start,
                             reverse=True):
                 anchor = f.anchor
                 if para.text[anchor.start:anchor.end] != anchor.delete_text:
@@ -306,18 +377,26 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                     continue
                 first = apply_replacement(para, anchor, author, date)
                 applied.append(f.finding_id)
-                touched = True
+                touched = changed = True
                 if cfg.comments and first is not None:
                     attach_note(first, f.explanation or f"{f.error_type} fix",
                                 author, date)
 
         if touched:
-            story = pkg.story(part)
-            if story is not None:
-                # Without this InDesign hides the changes it is carrying.
-                story.set("TrackChanges", "true")
+            if changed:
+                story = pkg.story(part)
+                if story is not None:
+                    # Without this InDesign hides the changes it is carrying.
+                    # A story that only gained Notes has no change to hide, so
+                    # it is left as the designer set it.
+                    story.set("TrackChanges", "true")
             pkg.mark_modified(part)
 
     log.info("Applied %d tracked change(s); %d skipped by safety checks.",
              len(applied), len(skipped))
-    return ReassemblyStats(tuple(applied), tuple(skipped))
+    if queried or unplaced:
+        log.info("Wrote %d margin quer%s as Note(s), which change nothing%s.",
+                 len(queried), "y" if len(queried) == 1 else "ies",
+                 f"; {len(unplaced)} had nowhere to hang" if unplaced else "")
+    return ReassemblyStats(tuple(applied), tuple(skipped), tuple(queried),
+                           tuple(unplaced))
