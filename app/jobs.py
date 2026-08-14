@@ -169,6 +169,13 @@ class Job:
     applied: int | None = None
     results_dir: str | None = None
     min_confidence: str = "medium"
+    # Which English this manuscript is written in: "us" | "uk" | "ca" | "au".
+    # Empty means whatever config/default.yaml says, which is what the watcher
+    # submits and what every job recorded before this field existed meant. It
+    # lives on the job rather than in the runner because a batch is collected
+    # days after it is submitted, and a setting the manifest cannot carry is a
+    # setting that quietly reverts. See docproof/variants.py.
+    variant: str = ""
     # Reasoning depth for the model. Older records predate this field; the
     # default keeps them on the shipped "low" behaviour.
     effort: str = "low"
@@ -662,6 +669,11 @@ class JobRunner:
         cfg.api.model = job.model
         cfg.api.effort = job.effort
         cfg.min_confidence = job.min_confidence
+        # Which English to hold the book to. Empty keeps the config's own
+        # variant for older records and the watcher; a pick is vetted at submit
+        # (routes/jobs.py), and Config's Literal re-checks it on assignment.
+        if job.variant:
+            cfg.variant = job.variant
         # The glossary pass runs its own (usually stronger) model. "off" skips
         # it; None leaves the shipped config default for older job records.
         if job.glossary_model == "off":

@@ -16,6 +16,7 @@ from .logging_setup import setup_logging
 from .models import CoverageLedger, Usage
 from .pipeline import chunk_outline, finish, prepare, run_sync
 from .providers import ProviderError, build_provider, estimate_cost
+from .variants import VARIANT_KEYS
 
 log = logging.getLogger("docproof.main")
 
@@ -206,6 +207,16 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--model")
     p.add_argument("--min-confidence", choices=["low", "medium", "high"])
     p.add_argument("--no-comments", action="store_true")
+    p.add_argument("--variant", choices=list(VARIANT_KEYS),
+                   help="which English this manuscript is written in: it flips "
+                        "the conventions that differ by variant (dialogue mark, "
+                        "percent vs per cent, dates, that/which) and picks the "
+                        "spell-scan dictionary (default: config variant)")
+    p.add_argument("--dictionary",
+                   help="path to a Hunspell .aff/.dic pair, without the "
+                        "extension, for the spell scan. Only needed when the "
+                        "variant's dictionary is not bundled — spylls ships "
+                        "en_US alone (default: config spellcheck.dictionary)")
 
 
 def _selection(args) -> list[str] | None:
@@ -225,6 +236,10 @@ def _configure(args):
                            if group.strip()]
     if getattr(args, "min_confidence", None):
         cfg.min_confidence = args.min_confidence
+    if getattr(args, "variant", None):
+        cfg.variant = args.variant
+    if getattr(args, "dictionary", None):
+        cfg.spellcheck.dictionary = args.dictionary
     if getattr(args, "no_comments", False):
         cfg.comments = False
     if getattr(args, "out", None):

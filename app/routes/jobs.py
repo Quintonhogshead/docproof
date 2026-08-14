@@ -16,6 +16,7 @@ from docproof.formats import get_format
 from docproof.prep import place as placelib
 from docproof.prep.place import PlaceError
 from docproof.providers import estimate_cost, lookup
+from docproof.variants import VARIANT_KEYS
 
 from . import common
 from .. import features as featureslib
@@ -34,6 +35,10 @@ class JobRequest(BaseModel):
     mode: str = "batch"                       # "now" | "batch"
     schedule_at: str | None = None            # "HH:MM" local
     min_confidence: str = "medium"
+    # Which English this manuscript is written in. Empty keeps the config's own
+    # variant, so an older page that doesn't send it — and the watcher, which
+    # never does — behaves exactly as before.
+    variant: str = ""
     # Reasoning depth for this run. None falls back to the saved default, so an
     # older page that doesn't send it keeps whatever the defaults screen set.
     effort: str | None = None
@@ -225,6 +230,11 @@ def register(app: FastAPI) -> None:
         if req.effort is not None and req.effort not in settingslib.EFFORT_LEVELS:
             raise HTTPException(
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
+        # Refused here rather than left to Config's Literal, which would raise
+        # mid-run — after the upload, and on the batch path days after submit.
+        if req.variant and req.variant not in VARIANT_KEYS:
+            raise HTTPException(
+                400, f"variant must be one of {', '.join(VARIANT_KEYS)}")
         effort = req.effort or app.state.settings.effort
         # Multi-round review is a review-only knob; prep is always a single pass.
         rounds = req.rounds if req.rounds is not None else app.state.settings.rounds
@@ -325,6 +335,7 @@ def register(app: FastAPI) -> None:
                 group_id=group_id,
                 schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
+                variant=req.variant,
                 effort=effort,
                 glossary_model=req.glossary_model or app.state.settings.glossary_model,
                 features=req.features or {},

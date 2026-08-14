@@ -1,6 +1,7 @@
 import json
+from argparse import Namespace
 
-from docproof.__main__ import main
+from docproof.__main__ import _configure, main
 from docproof.reassembler import paragraph_view_text
 from docproof.utils.xml_helpers import DocxPackage, walk_package
 from .conftest import FIXTURES
@@ -33,6 +34,23 @@ def test_end_to_end_mock(tmp_path):
     p = {wp.para_id: wp.element for wp in walk_package(pkg)}["body-0000"]
     assert paragraph_view_text(p, "reject") == SPLICE_A      # fidelity
     assert ";" in paragraph_view_text(p, "accept")
+
+def test_the_variant_and_dictionary_flags_reach_the_config():
+    """Both doors take the variant per run — `--variant` is the CLI's half of
+    the submission panel's picker, and `--dictionary` the escape hatch for when
+    the variant's Hunspell pair isn't bundled."""
+    cfg, _ = _configure(Namespace(
+        config=str(FIXTURES.parent.parent / "config" / "default.yaml"),
+        variant="uk", dictionary="/dicts/en_GB"))
+    assert cfg.variant == "uk"
+    assert cfg.spellcheck.dictionary == "/dicts/en_GB"
+
+
+def test_no_variant_flag_leaves_the_configs_own():
+    cfg, _ = _configure(Namespace(
+        config=str(FIXTURES.parent.parent / "config" / "default.yaml")))
+    assert cfg.variant == "us"                # what config/default.yaml ships
+
 
 def test_status_for_a_job_that_never_existed_answers_in_words(tmp_path, capsys,
                                                               monkeypatch):

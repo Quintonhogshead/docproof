@@ -583,6 +583,29 @@ def test_a_features_map_is_stored_on_the_job(client):
     assert job["features"] == {"storysheet": True}
 
 
+def test_a_job_with_an_unknown_variant_is_refused(client):
+    """Refused at submit, not left to raise mid-run — on the batch path that
+    would surface days after the operator walked away."""
+    staged = _upload(client)
+    resp = client.post("/api/jobs", json={"file_ids": [staged["id"]],
+                                          "model": "claude-sonnet-5",
+                                          "mode": "now",
+                                          "variant": "british"})
+    assert resp.status_code == 400
+    assert "variant" in resp.json()["detail"]
+
+
+def test_a_picked_variant_is_stored_on_the_job(client):
+    job = _run(client, _upload(client)["id"], variant="uk")
+    assert job["variant"] == "uk"
+
+
+def test_a_page_that_sends_no_variant_leaves_it_to_the_config(client):
+    """The watcher never sends one, and older pages don't either."""
+    job = _run(client, _upload(client)["id"])
+    assert job["variant"] == ""
+
+
 def test_static_assets_are_served_no_cache(client):
     """The page and its script/style carry no content hash, so they ship
     no-cache — a deploy is picked up on the next load, not left stale behind a
