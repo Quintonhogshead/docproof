@@ -152,12 +152,13 @@ def test_footnotes_are_skipped_with_a_reason(cfg):
 
 # --- the reassembler ----------------------------------------------------------
 
-def _apply(cfg, findings, tmp_path, comments=True):
+def _apply(cfg, findings, tmp_path, comments=True, query_types=frozenset()):
     cfg.comments = comments
     cfg.revision_author = "docproof"
     pkg = preflight(LAYOUT, "abort")
     doc = build_document_model(pkg, cfg)
-    validated = validate_findings(list(findings), doc, cfg.min_confidence)
+    validated = validate_findings(list(findings), doc, cfg.min_confidence,
+                                  query_types=query_types)
     stats = apply_tracked_changes(pkg, doc, validated, cfg)
     out = tmp_path / "reviewed.idml"
     pkg.save(out)
@@ -229,6 +230,158 @@ def test_notes_do_not_disturb_canonical_text(cfg, tmp_path):
                            tmp_path, comments=True)
     assert texts(after)["story-ue0-p0004"] == \
         "Their were several mistakes here to find."
+
+
+# --- the query channel --------------------------------------------------------
+#
+# The other half of the deliverable (docs/deliverables.md): a question that
+# edits nothing. It reaches an .idml as an inline Note, the same element an
+# explanation uses — for a long time it reached one as nothing at all, while
+# every surface still counted it.
+
+SPEAKER = frozenset({"speaker_change"})
+FRAGMENT = "the room was empty."          # a sentence inside DOOR, not all of it
+
+
+def query(fid, para_id, sentence, explanation="Who is speaking here?"):
+    """A query-only type: it repeats its sentence rather than correcting it."""
+    return Finding(fid, "chunk-000", para_id, "speaker_change", sentence, 1,
+                   sentence, explanation, "high")
+
+
+def notes_in(pkg):
+    part = [p for p in pkg.story_parts() if p.endswith("ue0.xml")][0]
+    return [n.findtext("ParagraphStyleRange/CharacterStyleRange/Content")
+            for n in pkg.tree(part).iter("Note")]
+
+
+def note_before(pkg, para_id, offset):
+    """The Note anchored immediately before the character at `offset`.
+
+    An InDesign Note is a point, not a range, so where the marker sits is the
+    whole of what the author is shown — worth asserting on rather than trusting.
+    """
+    wp = next(w for w in walk_package(pkg) if w.para_id == para_id)
+    off = 0
+    for node in wp.contents:
+        if off == offset:
+            prev = node.getprevious()
+            if prev is not None and prev.tag == "Note":
+                return prev.findtext(
+                    "ParagraphStyleRange/CharacterStyleRange/Content")
+            return None
+        off += len(node.text or "")
+    return None
+
+
+def test_a_query_becomes_a_note(cfg, tmp_path):
+    """The headline: an .idml carries its questions. Reporting "3 questions in
+    the margins" over a file that holds none is the bug this exists to stop."""
+    stats, _, after = _apply(cfg, [query("q-1", "story-ue0-p0002", DOOR)],
+                             tmp_path, query_types=SPEAKER)
+    assert stats.queried == ("q-1",)
+    assert stats.applied == () and not stats.unplaced
+    assert notes_in(after) == ["Who is speaking here?"]
+
+
+def test_a_query_changes_nothing(cfg, tmp_path):
+    """A query's anchor spans its whole sentence with nothing to insert. Let it
+    reach the change loop and it deletes that sentence — so the accepted and
+    rejected views must both still read exactly as the author wrote it."""
+    _, doc, after = _apply(cfg, [query("q-1", "story-ue0-p0002", DOOR)],
+                           tmp_path, query_types=SPEAKER)
+    before = {p.para_id: p.text for p in doc.paragraphs}
+    wp = next(w for w in walk_package(after) if w.para_id == "story-ue0-p0002")
+    assert paragraph_text(wp.contents) == before["story-ue0-p0002"]
+    assert paragraph_view_text(wp.psr, "reject").count(DOOR) == 1
+    assert not list(after.tree(
+        [p for p in after.story_parts() if p.endswith("ue0.xml")][0]
+    ).iter("Change"))
+
+
+def test_a_query_hangs_at_the_start_of_the_sentence_it_asks_about(cfg, tmp_path):
+    """A Word comment highlights the range; a Note cannot, so it goes on the
+    first character of the sentence rather than wherever the anchor happened to
+    land."""
+    _, _, after = _apply(cfg, [query("q-1", "story-ue0-p0002", FRAGMENT)],
+                         tmp_path, query_types=SPEAKER)
+    assert note_before(after, "story-ue0-p0002", DOOR.index(FRAGMENT)) \
+        == "Who is speaking here?"
+
+
+def test_a_query_is_written_even_with_comments_off(cfg, tmp_path):
+    """`comments` governs the explanation hung off a correction. A query type
+    has no other channel — asking is its entire output — so switching comments
+    off must not silently discard the question."""
+    stats, _, after = _apply(cfg, [query("q-1", "story-ue0-p0002", DOOR)],
+                             tmp_path, comments=False, query_types=SPEAKER)
+    assert stats.queried == ("q-1",)
+    assert notes_in(after) == ["Who is speaking here?"]
+
+
+def test_a_query_and_a_change_in_one_paragraph_both_land(cfg, tmp_path):
+    """Notes go on first because they insert no text. Applied the other way
+    round, the deletion moves Content out of the paragraph and the note lands
+    against a stale offset."""
+    stats, _, after = _apply(
+        cfg,
+        [query("q-1", "story-ue0-p0002", FRAGMENT),
+         finding("f-1", "story-ue0-p0002", DOOR, DOOR.replace("door,", "door;"))],
+        tmp_path, query_types=SPEAKER)
+    assert stats.queried == ("q-1",) and stats.applied == ("f-1",)
+    wp = next(w for w in walk_package(after) if w.para_id == "story-ue0-p0002")
+    assert paragraph_text(wp.contents) == DOOR.replace("door,", "door;")
+    assert paragraph_view_text(wp.psr, "reject").count(DOOR) == 1
+    assert note_before(after, "story-ue0-p0002", DOOR.index(FRAGMENT)) \
+        == "Who is speaking here?"
+
+
+def test_a_below_gate_finding_becomes_a_note_carrying_its_suggestion(cfg, tmp_path):
+    """With query_comments on, a change the model was not confident enough to
+    make is a question instead — and says what it would have done."""
+    cfg.query_comments = True
+    low = Finding("l-1", "chunk-000", "story-ue0-p0002", "comma_splice", DOOR,
+                  1, DOOR.replace("door,", "door;"), "Two clauses.", "low")
+    stats, _, after = _apply(cfg, [low], tmp_path)
+    assert stats.queried == ("l-1",) and stats.applied == ()
+    note = notes_in(after)[0]
+    assert note.startswith("Possibly comma splice — left as written")
+    assert "Suggested: " + DOOR.replace("door,", "door;") in note
+
+
+def test_query_comments_off_keeps_a_below_gate_finding_out_of_the_file(cfg, tmp_path):
+    """The switch still means what it says: these stay in summary.md, where
+    only whoever ran the review sees them. A query *type* is unaffected."""
+    cfg.query_comments = False
+    low = Finding("l-1", "chunk-000", "story-ue0-p0002", "comma_splice", DOOR,
+                  1, DOOR.replace("door,", "door;"), "Two clauses.", "low")
+    stats, _, after = _apply(cfg, [low], tmp_path)
+    assert stats.queried == () and notes_in(after) == []
+
+
+def test_a_query_in_a_footnote_is_refused(cfg, tmp_path):
+    """The same defense in depth the changes get. A Note is not the element
+    InDesign crashes on, but footnote markup is unverified past that crash and
+    a question is not worth being the thing that tests it."""
+    cfg.comments = False
+    pkg = preflight(LAYOUT, "abort")
+    doc = build_document_model(pkg, cfg)
+    from docproof.models import Anchor, ParagraphRef
+    fn_text = "A footnote with its own sentence, it also runs on."
+    doc = type(doc)(source_path=doc.source_path,
+                    paragraphs=doc.paragraphs + (ParagraphRef(
+                        "story-ue0-fn0-p0000", "Stories/Story_ue0.xml",
+                        "footnote", fn_text, "NormalParagraphStyle"),),
+                    skipped=doc.skipped)
+    q = query("q-x", "story-ue0-fn0-p0000", fn_text)
+    q = type(q)(**{**q.__dict__, "status": "query",
+                   "anchor": Anchor(0, len(fn_text), fn_text, "")})
+    stats = apply_tracked_changes(pkg, doc, [q], cfg)
+    # A question that never reached the file is unplaced, not skipped: no
+    # correction was withheld.
+    assert stats.queried == () and stats.unplaced == ("q-x",)
+    assert stats.skipped == ()
+    assert not list(pkg.tree("Stories/Story_ue0.xml").iter("Note"))
 
 
 def test_a_finding_in_a_footnote_is_refused(cfg, tmp_path):

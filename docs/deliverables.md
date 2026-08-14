@@ -17,9 +17,17 @@ docproof implements both.
 Word, and rejecting all of them returns the manuscript exactly as it arrived
 (see `docs/audit.md`).
 
-**Queries** are questions. They are Word comments with no `w:ins`/`w:del`
-around them: they change nothing, and there is nothing to accept. Two kinds of
-finding land here.
+**Queries** are questions. In Word they are comments with no `w:ins`/`w:del`
+around them; in InDesign they are inline `<Note>` elements with no `Change`
+around them. Either way they change nothing, and there is nothing to accept.
+Two kinds of finding land here.
+
+Both formats carry both channels — a count of questions is a count of what is
+in the file the author opens, whichever format that is. What a query points at
+and the words it asks in live in `docproof/queries.py`, one copy for both
+reassemblers. The single difference is the anchor: a Word comment spans the
+sentence, an InDesign note is a point at the start of it (see
+[indesign.md](indesign.md)).
 
 ### Query-only error types
 
@@ -62,7 +70,9 @@ the review will see them.
 Queries are attached **before** any tracked change is applied to a paragraph.
 Comment range markers are not text, so inserting them does not move the offsets
 the edits rely on — whereas applying a deletion first moves text out of `w:t`
-and every later offset points at the wrong place.
+and every later offset points at the wrong place. The same holds in InDesign,
+where a `<Note>` is skipped by the walker and a deletion moves `Content` out of
+the paragraph.
 
 A query's comment covers the whole sentence it asks about, not the characters
 an edit would have touched. A below-gate comma splice would have changed one

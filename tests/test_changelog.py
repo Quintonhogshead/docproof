@@ -193,6 +193,48 @@ def test_queries_are_listed_and_marked_as_questions(tmp_path):
     assert "a suggestion and not a correction" in text
 
 
+def test_a_query_is_named_in_the_word_the_format_uses(tmp_path):
+    """The log is read beside the manuscript it describes. An author opening an
+    .idml is looking for a note; nothing in that file is called a comment."""
+    from docproof.changelog import write_change_log
+    from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
+    from docproof.variants import load_variant
+
+    doc = DocumentModel(source_path="Book.idml", paragraphs=(ParagraphRef(
+        "story-ue0-p0000", "Stories/Story_ue0.xml", "body", SPLICE, "Normal"),))
+    q = Finding("q-1", "chunk-000", "story-ue0-p0000", "speaker_change",
+                SPLICE, 1, SPLICE, "Who is speaking?", "high", status="query",
+                anchor=Anchor(0, len(SPLICE), SPLICE, ""))
+    cfg = load_config("config/default.yaml")
+
+    write_change_log(tmp_path / "idml.docx", doc=doc, findings=[q], cfg=cfg,
+                     applied_ids=(), fmt=IDML, variant=load_variant("us"))
+    text, _ = _read(tmp_path / "idml.docx")
+    assert "1 question(s) were raised as notes" in text
+    assert "each a note in the manuscript" in text
+
+    write_change_log(tmp_path / "docx.docx", doc=doc, findings=[q], cfg=cfg,
+                     applied_ids=(), fmt=DOCX, variant=load_variant("us"))
+    text, _ = _read(tmp_path / "docx.docx")
+    assert "raised as margin comments" in text
+
+
+def test_the_log_only_claims_the_questions_the_file_actually_carries(tmp_path):
+    """With query_comments off, a below-gate finding stays in summary.md. It is
+    still listed here — nothing is discarded silently — but the log must not
+    say it is in a manuscript that does not hold it."""
+    out = _run(tmp_path, [SPLICE],
+               [{"para_id": "body-0000", "error_type": "comma_splice",
+                 "original_text": SPLICE,
+                 "corrected_text": "The manuscript was finished; nobody wanted to read it.",
+                 "explanation": "Possible splice.", "confidence": "low"}],
+               query_comments=False)
+    text, _ = _read(out.change_log)
+    assert "0 question(s) were raised as margin comments" in text
+    assert "1 question(s), 0 of them a margin comment in the manuscript" in text
+    assert "Possible splice." in text          # still reported, just not in the file
+
+
 def test_the_authors_own_words_are_named_as_protected(tmp_path):
     # Mid-sentence capitalization is what marks a coinage as a name, so it is
     # protected however high the length-scaled repeat floor climbs.

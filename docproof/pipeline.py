@@ -1303,7 +1303,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                          sweeps=prepared.sweep_reports, spell=prepared.spell,
                          normalization=prepared.normalization,
                          audit=audit_report, usage=usage, stats=stats,
-                         variant=prepared.variant)
+                         variant=prepared.variant, fmt=fmt)
 
     enforce(audit_report, cfg.audit)
     prepared.pkg.save(reviewed)

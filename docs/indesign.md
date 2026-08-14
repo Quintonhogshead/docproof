@@ -59,7 +59,23 @@ directly; a deletion wraps the text in a full `ParagraphStyleRange` →
 children of the `CharacterStyleRange`, siblings of `Content`.
 
 **Comments are inline `<Note>` elements**, not a separate package part with
-relationships the way Word comments are.
+relationships the way Word comments are. Both channels use them: the
+explanation hung off a correction, and the query that corrects nothing.
+
+**A Note is a point, not a range.** This is the one place the two formats give
+the author a different thing. A Word query highlights the whole sentence it is
+asking about (`w:commentRangeStart`/`End` around it); InDesign has no such
+range, so the note is anchored at the **first character of that sentence** and
+the question carries the rest. Everything else about the channel is identical,
+including the words it asks in — those are shared in
+[`docproof/queries.py`](../docproof/queries.py) rather than written once per
+format, because an IDML review that quietly dropped its queries while every
+surface still counted them is what one copy per format bought us.
+
+Placing a note inserts no text, exactly as Word's range markers insert none:
+splitting a `Content` node preserves canonical text, and the walker skips
+`Note`. So queries go on **before** the tracked changes, and every offset the
+edits rely on still points where it did.
 
 ## Known limitations (v1)
 
