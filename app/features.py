@@ -97,6 +97,15 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "third-party service billed per character — its cost is added to the "
         "estimate separately from the model.",
         "pass", ("sapling", "enabled"), heavy=True),
+    FeatureSpec(
+        "meaning_check", "Meaning check — read every change before it ships",
+        "One strong model reads every correction this run would make — the "
+        "model's own, Sapling's, LanguageTool's, all of them together — and asks "
+        "the one thing the other checks do not: does the sentence still mean what "
+        "the author meant? Anything it will not vouch for becomes a margin "
+        "question instead of a silent change. Costs by the number of changes, not "
+        "the length of the book.",
+        "pass", ("meaning_check", "enabled"), heavy=True),
     # -- passes on by default: cheap, local-ish, here so they can be turned off -
     FeatureSpec(
         "adjudicate", "Real-word typo adjudication",
@@ -198,7 +207,11 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
                their number tracks the book's candidates — approximate.
     - grammar: a hosted API billed per character of the manuscript, with no model
                token cost at all — so it carries its own $/1k-char rate rather
-               than a model to price against."""
+               than a model to price against.
+    - judge:   one short call per paragraph that has changes, so its cost tracks
+               the number of findings rather than the book — the client scales it
+               off the same candidate count `confirm` uses, and the model is the
+               judge's own, which is usually a frontier one."""
     if fid == "storysheet":
         return {"kind": "read", "model": cfg.storysheet.model}
     if fid == "continuity":
@@ -210,6 +223,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "confirm", "model": cfg.languagetool.confirm_model}
     if fid == "sapling":
         return {"kind": "grammar", "rate_per_1k": cfg.sapling.cost_per_1k_chars}
+    if fid == "meaning_check":
+        return {"kind": "judge", "model": cfg.meaning_check.model}
     return None
 
 

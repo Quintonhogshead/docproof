@@ -722,6 +722,57 @@ class LowConfidenceConfig(BaseModel):
         return self
 
 
+class MeaningCheckConfig(BaseModel):
+    """The meaning gate: one strong model reading every proposed change, from
+    every source, immediately before the tracked changes are written.
+
+    Each earlier check asks whether something is an error and whether the fix is
+    right. This asks the one question none of them do — does the corrected
+    sentence still MEAN what the original meant — over the changes that survived
+    all of them, source-blind: a Sapling suggestion, a LanguageTool comma, a
+    rewrite diff and a detector finding arrive here as the same kind of object.
+
+    A change whose sense the judge will not vouch for is downgraded to a margin
+    question with its reason attached, never dropped and never silently applied.
+    Fail-open throughout: an unanswerable call leaves the change untouched.
+
+    Off by default — it is a paid pass — but the cheapest paid pass in the
+    pipeline to run well, because its cost tracks the number of CHANGES rather
+    than the length of the book, which is what makes a frontier `model`
+    affordable here. See docproof/meaning.py."""
+    enabled: bool = False
+    # The judge. A frontier model is the point of this pass: it is the last
+    # reader before the author, and it sees a few hundred short prompts, not the
+    # whole manuscript.
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # Which changes are read. "model_sources" is every change proposed by a
+    # model or an outside checker — the detector passes, rewrite, adjudicate,
+    # low-confidence promotions, LanguageTool and Sapling — and is the default.
+    # "all" adds the deterministic house-style sweeps and the consistency scan,
+    # which are scripted, punctuation-sized, and cannot move a sentence's sense;
+    # paying a frontier model to confirm that is usually waste, but the option is
+    # here for a run that wants nothing reaching the author unread.
+    scope: Literal["model_sources", "all"] = "model_sources"
+    # Treat an "unsure" verdict as a downgrade. On by default: the gate exists to
+    # stop a silent change, and a judge that cannot vouch for the sense has not
+    # vouched for it. Off applies anything not positively flagged.
+    flag_unsure: bool = True
+    max_output_tokens: int = Field(default=4000, ge=1)
+    # The judge's instructions, meant to be edited per job in the review panel.
+    # Empty uses the built-in default (docproof.meaning.default_meaning_prompt()),
+    # so clearing the field reverts to it.
+    prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"meaning_check.model '{self.model}' is not in the catalog")
+        return self
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -746,6 +797,7 @@ class Config(BaseModel):
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
+    meaning_check: MeaningCheckConfig = Field(default_factory=MeaningCheckConfig)
     pricing: PricingConfig = Field(default_factory=PricingConfig)
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent

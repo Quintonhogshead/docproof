@@ -182,7 +182,8 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      findings: list[Finding], usage: Usage, cfg: Config,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
-                     audit=None, consistency=None, coverage=None) -> None:
+                     audit=None, consistency=None, coverage=None,
+                     meaning=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -386,6 +387,46 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
         L.append("")
+
+    # The meaning gate's own section, because these are a different animal from
+    # the queries above: every one of them is a correction the run was going to
+    # make and then withheld, so the author is owed both the change it would
+    # have made and the reason it was held.
+    if meaning is not None and meaning.checked:
+        # Matched on the change itself, not the finding id alone: ids are only
+        # unique per source, so a namesake from another pass must not be listed
+        # here as something the gate held back.
+        held_key = {(f.finding_id, f.para_id, f.corrected_text)
+                    for f in meaning.downgraded}
+        held = [f for f in queries
+                if (f.finding_id, f.para_id, f.corrected_text) in held_key]
+        L.append("## The meaning check\n")
+        L.append(f"Every change this review proposed — {meaning.checked} of "
+                 f"them — was read once more, with a single question asked of "
+                 f"each: does the corrected sentence still mean what the "
+                 f"original meant?\n")
+        # The pass fails open, so a judge that could not answer leaves changes
+        # applied. That is the one thing a reader of this section must not have
+        # to guess at: an unread change looks exactly like an approved one.
+        if meaning.unread:
+            L.append(f"**{meaning.unread} of them got no answer** — the model "
+                     f"refused, timed out, or replied unusably — and those were "
+                     f"applied WITHOUT being read. Treat this run's meaning "
+                     f"check as incomplete.\n")
+        if not meaning.n_downgraded:
+            L.append(f"{meaning.answered} were read and none of them changed a "
+                     f"sentence's meaning, so nothing was held back.\n")
+        else:
+            L.append(f"{meaning.n_downgraded} did not clearly pass, so they "
+                     f"were NOT applied. Each is a question instead, with the "
+                     f"reason below; nothing here changed the document.\n")
+        for f in held:
+            L.append(f"- **{f.para_id}** ({f.error_type}): "
+                     f"{f.original_text!r}\n"
+                     f"  → would have become {f.corrected_text!r}\n"
+                     f"  — {f.explanation}")
+        if held:
+            L.append("")
 
     if low:
         L.append("## Possibly intentional — for your judgment\n")

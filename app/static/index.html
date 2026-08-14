@@ -306,6 +306,30 @@
             </label>
           </details>
 
+          <details class="field review-only" id="meaning-field" hidden>
+            <summary>Meaning check<span class="muted"> — the model that reads
+              every change before it ships</span></summary>
+            <label class="field" id="meaning-model-field">
+              <span>Meaning-check model</span>
+              <select id="meaning-model"></select>
+              <small class="muted">The last reader before the author. It sees
+                every correction this run would make — the model's own,
+                Sapling's, LanguageTool's — and holds back any that changes what
+                a sentence means. One short call per paragraph that has changes,
+                so a frontier model here costs little and is the whole point.</small>
+            </label>
+            <label class="field">
+              <span>Meaning-check instructions</span>
+              <textarea id="meaning-prompt" rows="8" spellcheck="false"></textarea>
+              <small class="muted">The instructions it follows when deciding
+                whether a change alters meaning. Leave blank to use the built-in
+                default (shown here as the placeholder).</small>
+            </label>
+            <small class="muted">Switch the check on under Passes &amp; features.
+              A held-back change becomes a margin question, never a silent
+              edit.</small>
+          </details>
+
           <details class="field review-only" id="features-field">
             <summary>Passes &amp; features<span class="muted"> — what runs on
               this review</span></summary>

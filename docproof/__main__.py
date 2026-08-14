@@ -52,6 +52,15 @@ def main(argv=None) -> int:
                           "previous round's corrections, with a strong judge "
                           "ruling on every change between rounds "
                           "(default: config rounds.count)")
+    rev.add_argument("--meaning-check", action="store_true",
+                     help="before writing, have a strong model read every "
+                          "proposed change — the model's, Sapling's, "
+                          "LanguageTool's — and hold back any that alters what "
+                          "a sentence means (default: config "
+                          "meaning_check.enabled)")
+    rev.add_argument("--meaning-model",
+                     help="which model reads the changes for the meaning check "
+                          "(default: config meaning_check.model)")
 
     sub_batch = sub.add_parser(
         "submit", help="queue a review at batch prices (50%% cheaper, "
@@ -264,6 +273,14 @@ def cmd_review(args) -> int:
 
     if args.rounds is not None:
         cfg.rounds.count = args.rounds
+    # The gate is a flag rather than a tri-state: absent leaves whatever the
+    # config says, so a house config that ships it on is not silently disarmed
+    # by every CLI run. Naming a model implies wanting the gate.
+    if getattr(args, "meaning_model", None):
+        cfg.meaning_check.model = args.meaning_model
+        cfg.meaning_check.enabled = True
+    if getattr(args, "meaning_check", False):
+        cfg.meaning_check.enabled = True
     if cfg.rounds.count > 1:                          # multi-round review
         from .rounds import run_sync_rounds
         canned = None

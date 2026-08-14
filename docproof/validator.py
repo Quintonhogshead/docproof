@@ -153,13 +153,20 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         if f.error_type in query_types or f.force_query:
             # The whole quoted sentence is the anchor: a question is about a
             # passage, not about the characters someone would have changed.
-            # force_query is the verifier's downgrade — a finding it would not
-            # keep as a change but did not reject either, sent to the margin.
+            # force_query is a downgrade — the overseer-verifier's, or the
+            # meaning gate's — a finding neither would keep as a change but
+            # neither rejected, sent to the margin instead.
             # The error type is part of the key so two *different* questions
             # about one sentence — a term-consistency query and a speaker-change
             # query, say — both survive; only the same question asked twice is a
-            # duplicate.
-            key = (f.para_id, s, "query", f.error_type)
+            # duplicate. A downgrade carries a specific correction that was
+            # withheld, so the correction is part of what makes it a distinct
+            # question: two different fixes for one sentence, both held back,
+            # are two things to tell the author, and keying them the same way
+            # would silently drop the second — the one outcome a downgrade must
+            # never produce.
+            key = (f.para_id, s, "query", f.error_type,
+                   f.corrected_text if f.force_query else "")
             if key in seen:
                 out.append(_status(f, "rejected_duplicate"))
                 continue
@@ -227,6 +234,33 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     log.info("Validated %d/%d findings (%s)", n_ok, len(out),
              _tally(out))
     return out
+
+
+def to_query(f: Finding, doc: DocumentModel) -> Finding:
+    """Re-cut an already-validated edit as a margin question, in place.
+
+    The meaning gate needs to withdraw a change AFTER the run has been
+    arbitrated, and it must do so without re-running the validator: a second
+    arbitration re-opens every span, which can promote an edit that was set
+    aside as overlapping and let it evict a change the gate had just approved.
+    So the gate withdraws its findings one at a time, through here — the span
+    stays claimed, nothing else moves, and the only difference to the run is
+    that this correction became a question. Same anchoring the query branch of
+    `validate_findings` uses.
+
+    A finding whose quote no longer anchors (it did when it validated, so this is
+    belt and braces) comes back as a query with no anchor: still reported, still
+    not applied, which is the safe direction."""
+    para = index_paragraphs(doc).get(f.para_id)
+    s = anchor_offset(para.text, f.original_text, f.occurrence) if para else -1
+    if s == -1:
+        return dataclasses.replace(f, status="query", anchor=None,
+                                   force_query=True)
+    end = s + len(f.original_text)
+    return dataclasses.replace(
+        f, status="query", force_query=True,
+        anchor=Anchor(start=s, end=end, delete_text=para.text[s:end],
+                      insert_text=""))
 
 
 def _oversteps(deleted: str, inserted: str, guard) -> bool:

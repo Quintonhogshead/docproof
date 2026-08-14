@@ -306,6 +306,29 @@ low_confidence:
   confirm_model:
   confirm_effort: medium
 
+# The meaning gate — the last read before the manuscript is written. Every check
+# above asks whether something is an error and whether the fix is right; this
+# asks the one question none of them do: does the corrected sentence still MEAN
+# what the original meant? It reads the changes that survived everything else,
+# source-blind — a Sapling suggestion, a LanguageTool comma, a rewrite diff and a
+# detector finding all arrive here as the same kind of object — and a change it
+# will not vouch for is held back as a margin question with its reason attached,
+# never dropped and never silently applied. Cost tracks the number of CHANGES,
+# not the length of the book (a few hundred short calls, one per paragraph that
+# has edits), which is what makes a frontier model affordable here and nowhere
+# else. Off by default, like every paid pass. See docproof/meaning.py.
+meaning_check:
+  enabled: false
+  model: claude-fable-5     # the last reader before the author; app panel picks it
+  effort: high
+  scope: model_sources      # model_sources (detector, rewrite, adjudicate,
+                            # low-confidence, LanguageTool, Sapling) | all, which
+                            # adds the scripted sweeps and the consistency scan —
+                            # punctuation-sized changes that cannot move a sense
+  flag_unsure: true         # an "unsure" verdict is held back too; off applies it
+  max_output_tokens: 4000
+  prompt: ""                # empty = built-in default (editable in the review panel)
+
 # Each entry is ONE API pass over the whole document. A bare key runs alone;
 # a list runs as a single combined pass, so the document is sent once for the
 # whole group instead of once per type. Related types are grouped together —

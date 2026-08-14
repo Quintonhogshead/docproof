@@ -346,3 +346,73 @@ def test_the_default_config_ships_the_query_channel_on():
     assert cfg.query_comments is True
     assert "speaker_change" in cfg.error_type_keys
     assert Config().query_comments is True
+
+
+# -- downgrades: the verifier's and the meaning gate's ------------------------
+
+def test_two_distinct_downgrades_on_one_sentence_both_survive():
+    """A downgrade carries a specific correction that was withheld, so two
+    different withheld fixes for one sentence are two things to tell the author.
+    Keying them only by (paragraph, sentence, type) collapsed them and dropped
+    the second — silently losing a finding the pass had promised to keep."""
+    from docproof.models import DocumentModel, Finding, ParagraphRef
+    from docproof.validator import validate_findings
+    text = "He could not have known the road was barred."
+    para = ParagraphRef(para_id="body-0000", part="word/document.xml",
+                        location="body", text=text, style="Normal")
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+
+    def held(fid, corrected):
+        return Finding(finding_id=fid, chunk_id="c0", para_id="body-0000",
+                       error_type="spelling", original_text=text, occurrence=1,
+                       corrected_text=corrected, explanation="", confidence="high",
+                       force_query=True)
+
+    out = validate_findings([held("f-1", text.replace("barred", "blocked")),
+                             held("f-2", text.replace("barred", "bolted"))],
+                            doc, "medium")
+    assert [f.status for f in out] == ["query", "query"]
+
+    # The same withheld fix twice is still one question, not two.
+    same = text.replace("barred", "blocked")
+    out2 = validate_findings([held("f-1", same), held("f-2", same)],
+                             doc, "medium")
+    assert [f.status for f in out2] == ["query", "rejected_duplicate"]
+
+
+def test_to_query_withdraws_a_change_without_re_arbitrating_the_run():
+    """The meaning gate withdraws one finding at a time so nothing else moves.
+    The result is a margin question anchored on the whole sentence, with the
+    span it held still spoken for."""
+    from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
+    from docproof.validator import to_query
+    text = "He could not have known the road was barred."
+    para = ParagraphRef(para_id="body-0000", part="word/document.xml",
+                        location="body", text=text, style="Normal")
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+    at = text.index("barred")
+    f = Finding(finding_id="f-1", chunk_id="c0", para_id="body-0000",
+                error_type="spelling", original_text=text, occurrence=1,
+                corrected_text=text.replace("barred", "bared"),
+                explanation="typo", confidence="high", status="validated",
+                anchor=Anchor(start=at, end=at + 6, delete_text="barred",
+                              insert_text="bared"))
+    q = to_query(f, doc)
+    assert q.status == "query" and q.force_query is True
+    assert q.anchor.start == 0 and q.anchor.end == len(text)
+    assert q.anchor.insert_text == ""          # a question changes no text
+    assert q.corrected_text == f.corrected_text  # what was proposed is kept
+
+
+def test_to_query_on_an_unanchorable_finding_still_refuses_to_apply_it():
+    from docproof.models import DocumentModel, Finding, ParagraphRef
+    from docproof.validator import to_query
+    para = ParagraphRef(para_id="body-0000", part="word/document.xml",
+                        location="body", text="Some other text.", style="Normal")
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+    f = Finding(finding_id="f-1", chunk_id="c0", para_id="body-0000",
+                error_type="spelling", original_text="not in this paragraph",
+                occurrence=1, corrected_text="x", explanation="", confidence="high",
+                status="validated")
+    q = to_query(f, doc)
+    assert q.status == "query" and q.anchor is None

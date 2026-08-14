@@ -28,7 +28,7 @@ from docproof.formats import get_format
 from docproof.audit import AuditError
 from docproof.ingest import IngestError
 from docproof.pipeline import (JobCancelled, content_hash, finish, prepare,
-                               run_sync)
+                               read_meaning_held, run_sync)
 from docproof.models import CoverageLedger
 from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
@@ -167,6 +167,13 @@ class Job:
     # docproof/continuity.py and JobStore.config_for.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The meaning gate's judge — the model that reads every proposed change for
+    # whether it moves the sentence's sense — and its editable instructions.
+    # Empty (older records, or a run that left the picker alone) means the config
+    # default. The gate itself is the "meaning_check" feature toggle. See
+    # docproof/meaning.py and JobStore.config_for.
+    meaning_model: str = ""
+    meaning_prompt: str = ""
     # Multi-round progress: which round a running multi-round review is on, and
     # how many it will run. Both 0 on single reviews and older records; the card
     # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
@@ -634,6 +641,13 @@ class JobRunner:
         # The continuity read's editable prompt (empty = built-in default),
         # applied like the round judge's — the sentinel passes through verbatim.
         cfg.continuity.prompt = job.continuity_prompt
+        # The meaning gate's judge. Applied AFTER apply_features, which owns the
+        # gate's on/off: the picker only says which model reads the changes, and
+        # an empty pick keeps the config default. Vetted at submit
+        # (routes/jobs.py), like the round judge's.
+        cfg.meaning_check.prompt = job.meaning_prompt
+        if job.meaning_model:
+            cfg.meaning_check.model = job.meaning_model
         # "Continuity only" strips the run to that one whole-book read: no
         # detector passes, no sweeps, none of the other whole-book passes — just
         # the contradiction check and its margin queries. The continuity switch is
@@ -642,7 +656,8 @@ class JobRunner:
             cfg.error_types = []
             cfg.sweeps = []
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
-                          "sapling", "consistency", "spellcheck"):
+                          "sapling", "consistency", "spellcheck",
+                          "meaning_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
@@ -712,10 +727,20 @@ class JobRunner:
                                    checkpoint=checkpoint, coverage=coverage)
 
         cfg.audit = "warn"                              # now let the write pass
+        # The meaning gate lives inside finish() and builds its own provider, so
+        # _ReplayOnly cannot stop it: leaving it on would put a paid pass inside
+        # the one operation that promises to charge nothing. Its verdicts are NOT
+        # in these findings — the checkpoint only carries raw detector output —
+        # so they are read back from what the original run recorded and applied
+        # without a judge. Skipping that step would rebuild the file with every
+        # held-back change applied, which is the opposite of what the first
+        # summary told the author.
+        cfg.meaning_check.enabled = False
         out = (Path(job.results_dir) if job.results_dir
                else self._claim_results_dir(job))
         outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                         source_path=job.source_path, coverage=coverage)
+                         source_path=job.source_path, coverage=coverage,
+                         meaning_held=read_meaning_held(out))
         checkpoint.delete()
         updated = self.store.update(job_id, state="done", audit_overridden=True,
                                     applied=outputs.applied,
@@ -756,10 +781,17 @@ class JobRunner:
         # it, so paragraph ids line up. No provider is built or called.
         prepared0 = prepare(cfg, job.source_path, self.error_dir)
         cfg.audit = "warn"                              # let the write pass
+        # ...and the meaning gate off, for the same reason as the single-review
+        # path above: it would build its own provider inside finish() and turn
+        # "costs nothing" into a bill. Its original verdicts are replayed from
+        # the record instead, so the rebuilt file holds back what the first one
+        # did. See _download_anyway.
+        cfg.meaning_check.enabled = False
         prepared_final = replace(prepared0, pkg=DocxPackage(base),
                                  sweep_findings=[], consistency_findings=[])
         outputs = finish(prepared_final, findings, usage, cfg, out_dir=out,
-                         source_path=job.source_path)
+                         source_path=job.source_path,
+                         meaning_held=read_meaning_held(out))
         updated = self.store.update(job.id, state="done", audit_overridden=True,
                                     applied=outputs.applied,
                                     results_dir=str(out), error=job.error)
