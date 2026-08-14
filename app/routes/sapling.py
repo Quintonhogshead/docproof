@@ -1,10 +1,13 @@
-"""Sapling.ai grammar check — a standalone test surface, not part of review.
+"""Sapling.ai grammar check — the standalone test panel, not the review path.
 
-Wired in as its own panel so Sapling's suggestions can be eyeballed against
-DocProof's own on the same text, without touching the review pipeline or a bill.
-One route: paste text, get Sapling's edits back. The key is the admin-set
-Sapling key (see settings.KEY_PROVIDERS); a missing or rejected key comes back
-as a plain message the panel shows.
+These routes exist so Sapling's suggestions can be eyeballed against DocProof's
+own on the same text, without touching the review pipeline or a bill. (Sapling
+does also run inside reviews — the opt-in `sapling.enabled` pass in
+docproof.pipeline — but that path never comes through here.) Two routes: paste
+text at /check and get Sapling's edits back, or upload a whole .docx at /docx
+for a tracked-changes copy. The key is the admin-set Sapling key (see
+settings.KEY_PROVIDERS); a missing or rejected key comes back as a plain
+message the panel shows.
 """
 from __future__ import annotations
 

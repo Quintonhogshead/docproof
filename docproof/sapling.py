@@ -1,10 +1,14 @@
-"""Sapling.ai grammar-and-spelling API — a thin client for the test panel.
+"""Sapling.ai grammar-and-spelling API — a thin client with two callers.
 
 Sapling is a hosted grammar/spell checker with a single edits endpoint: POST
-some text, get back a list of suggested edits. It is wired into DocProof only as
-a separate, opt-in surface for now — nothing in the review pipeline calls it —
-so this module stays deliberately small: one request, one normalised list of
-edits, and every failure surfaced as one exception the route can show verbatim.
+some text, get back a list of suggested edits. Two surfaces in DocProof call
+it: the standalone test panel (the /api/sapling/* routes, for eyeballing
+Sapling against DocProof on the same text) and the opt-in review pass
+(`sapling.enabled`), where the pipeline's `finish` folds Sapling's edits into
+the tracked changes, vetted by the shared `rewrite.confirm` valve while
+`sapling.confirm` is on. That wiring lives with the callers; this module stays
+deliberately small: one request, one normalised list of edits, and every
+failure surfaced as one exception a caller can show or log verbatim.
 
 The API returns each edit's `start`/`end` *relative to its sentence*, with the
 sentence's own offset given separately as `sentence_start`. Nobody downstream
