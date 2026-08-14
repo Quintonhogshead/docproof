@@ -728,44 +728,67 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         finally:
             lt_shutdown()
 
-    # Whole-book continuity read: one frontier read of the whole manuscript for
-    # facts it contradicts about itself — timeline slips, age/date arithmetic,
-    # attribute drift, object continuity — the class the chunked detectors are
-    # structurally blind to (they never see two distant passages together). Every
-    # finding is force_query: a margin comment, never an edit, because which fact
-    # is right is the author's call. A deterministic date->weekday check rides
-    # along at no API cost. Additive and best-effort like the glossary; whole-
-    # document only. See docproof/continuity.py.
-    if cfg.continuity.enabled and prepared.whole_document:
-        if on_phase:
-            on_phase("continuity")
-        from .continuity import (build_continuity, calendar_findings,
-                                 report_to_findings)
-        from .utils.tokens import estimate_tokens
-        doc_tokens = sum(estimate_tokens(p.text) for p in prepared.doc.paragraphs)
-        if doc_tokens > cfg.continuity.max_input_tokens:
-            log.warning("continuity: ~%d tokens over max_input_tokens %d — "
-                        "skipping the read to avoid a truncated (silently "
-                        "incomplete) one; the calendar check still runs",
-                        doc_tokens, cfg.continuity.max_input_tokens)
-        else:
-            ccfg = cfg.model_copy(deep=True)
-            ccfg.api.model = cfg.continuity.model
-            ccfg.api.effort = cfg.continuity.effort
-            report = build_continuity(
-                prepared.doc.paragraphs, provider_factory(ccfg),
-                model=cfg.continuity.model,
-                max_tokens=cfg.continuity.max_output_tokens, usage=usage,
-                prompt=cfg.continuity.prompt,
-                cache_dir=cfg.continuity.cache_dir)
-            findings.extend(report_to_findings(
-                report, prepared.doc.paragraphs, ids,
-                min_confidence=cfg.continuity.min_confidence,
-                max_queries=cfg.continuity.max_queries))
-        if cfg.continuity.calendar_check:
-            findings.extend(calendar_findings(prepared.doc.paragraphs, ids))
+    # Whole-book continuity read. Shared with the batch collector rather than
+    # written out here, so the two paths cannot drift apart — see
+    # continuity_findings.
+    findings.extend(continuity_findings(cfg, prepared, ids, usage,
+                                        provider_factory, on_phase=on_phase))
 
     return findings, usage
+
+
+def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
+                        provider_factory, *, on_phase=None) -> list[Finding]:
+    """The whole-book continuity read's findings, or [] when the pass is off.
+
+    One frontier read of the whole manuscript for facts it contradicts about
+    itself — timeline slips, age/date arithmetic, attribute drift, object
+    continuity — the class the chunked detectors are structurally blind to (they
+    never see two distant passages together). Every finding is force_query: a
+    margin comment, never an edit, because which fact is right is the author's
+    call. A deterministic date->weekday check rides along at no API cost.
+    Additive and best-effort like the glossary; whole-document only. See
+    docproof/continuity.py.
+
+    A function rather than a block inside `run_sync` because the read has to
+    happen on BOTH paths. It is one synchronous whole-book call on its own model,
+    so it cannot ride a review batch (a batch is one model, and this is a single
+    request) — meaning a batch review has to make it at collect time, exactly as
+    it does the glossary read. It lived only in `run_sync` for a while, and since
+    batch is the app's default submission mode, the common path was reporting and
+    pricing a read it never made."""
+    if not (cfg.continuity.enabled and prepared.whole_document):
+        return []
+    if on_phase:
+        on_phase("continuity")
+    from .continuity import (build_continuity, calendar_findings,
+                             report_to_findings)
+    from .utils.tokens import estimate_tokens
+
+    out: list[Finding] = []
+    doc_tokens = sum(estimate_tokens(p.text) for p in prepared.doc.paragraphs)
+    if doc_tokens > cfg.continuity.max_input_tokens:
+        log.warning("continuity: ~%d tokens over max_input_tokens %d — "
+                    "skipping the read to avoid a truncated (silently "
+                    "incomplete) one; the calendar check still runs",
+                    doc_tokens, cfg.continuity.max_input_tokens)
+    else:
+        ccfg = cfg.model_copy(deep=True)
+        ccfg.api.model = cfg.continuity.model
+        ccfg.api.effort = cfg.continuity.effort
+        report = build_continuity(
+            prepared.doc.paragraphs, provider_factory(ccfg),
+            model=cfg.continuity.model,
+            max_tokens=cfg.continuity.max_output_tokens, usage=usage,
+            prompt=cfg.continuity.prompt,
+            cache_dir=cfg.continuity.cache_dir)
+        out.extend(report_to_findings(
+            report, prepared.doc.paragraphs, ids,
+            min_confidence=cfg.continuity.min_confidence,
+            max_queries=cfg.continuity.max_queries))
+    if cfg.continuity.calendar_check:
+        out.extend(calendar_findings(prepared.doc.paragraphs, ids))
+    return out
 
 
 def _sapling_findings(cfg: Config, prepared: Prepared,

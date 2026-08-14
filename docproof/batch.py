@@ -21,7 +21,7 @@ from typing import Sequence
 from .config import Config
 from .models import CoverageLedger, Usage
 from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
-                       finish, prepare)
+                       continuity_findings, finish, prepare)
 from .providers import BatchRequest, BatchStatus, Provider
 
 log = logging.getLogger("docproof.batch")
@@ -397,6 +397,7 @@ def collect_findings(job: Job, provider: Provider,
     if cfg.languagetool.enabled and prepared.whole_document:
         from .languagetool import (all_disabled_rules, propose as lt_propose,
                                    shutdown as lt_shutdown)
+        from .providers import build_provider
         from .rewrite import confirm as lt_confirm
         try:
             lt_cands = lt_propose(
@@ -417,6 +418,14 @@ def collect_findings(job: Job, provider: Provider,
                 error_type="languagetool", chunk_id="languagetool", id_prefix="lt")
         finally:
             lt_shutdown()
+
+    # Whole-book continuity read: like the glossary above it is one synchronous
+    # whole-book call on its own model, so it cannot ride the batch — it runs
+    # here at collect. Without this the app's default submission mode would do no
+    # continuity reads at all while summary.md (and the pre-run estimate) both
+    # said it had. Same helper the synchronous path uses, so they stay in step.
+    from .providers import build_provider
+    findings += continuity_findings(cfg, prepared, ids, usage, build_provider)
 
     return CollectResult(cfg, prepared, findings, usage, coverage, source,
                          rewrite_rejects)
