@@ -39,7 +39,7 @@ IDML = DocumentFormat(
         "Accept/Reject."),
     where_to_look=("In InDesign, open Window → Editorial → Track Changes, or "
                    "the Story Editor, to step through the changes."),
-    comment_noun="note",
+    comment_noun="margin note",
     preflight=_idml_ingest.preflight,
     build_document_model=_idml_ingest.build_document_model,
     apply_tracked_changes=_idml_reassembler.apply_tracked_changes,
