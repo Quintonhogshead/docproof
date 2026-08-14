@@ -759,5 +759,9 @@ def register(app: FastAPI) -> None:
         /api/jobs."""
         app.state.runner.tick_once()
         scope = owner if app.state.web else None
-        return {"jobs": [j.to_api() for j in app.state.store.all(scope)
+        # Built with `_card`, exactly as /api/jobs is: the panel renders from
+        # whichever of the two answered last, so a flag on one and not the other
+        # makes a button appear and vanish depending on how the screen was
+        # reached. This is the endpoint the Results screen opens on.
+        return {"jobs": [_card(j) for j in app.state.store.all(scope)
                          if not j.is_promo]}
