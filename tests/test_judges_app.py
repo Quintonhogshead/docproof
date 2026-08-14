@@ -9,6 +9,7 @@ docproof/judges.py.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -446,6 +447,93 @@ def test_a_gate_left_off_stays_off_in_the_rejudge(runner, tmp_path, monkeypatch)
         r.rejudge(job.id, gates={"meaning_check": False, "fix_check": True},
                   models={"fix_check": "claude-opus-5"})
     assert seen == {"meaning": False, "fix": True}
+
+
+def _started_rejudge(store, r, job, tmp_path, monkeypatch) -> Job:
+    """Kick off a re-judge and hand back the record it created, caught mid-run:
+    the gates are stubbed to raise, so the new job is exactly as the card reads
+    it while the judges work."""
+    r.settings.output_dir = str(tmp_path / "out")
+
+    def fake_rejudge(cfg, results_dir, **kw):
+        raise RuntimeError("stop — the new record is what this test is after")
+
+    monkeypatch.setattr("docproof.rejudge.rejudge", fake_rejudge)
+    with pytest.raises(RuntimeError):
+        r.rejudge(job.id, gates={"meaning_check": True, "fix_check": False})
+    fresh = [j for j in store.all() if j.id != job.id]
+    assert len(fresh) == 1, "a re-judge writes exactly one new record"
+    return fresh[0]
+
+
+def test_a_rejudge_starts_its_own_clock(runner, tmp_path, monkeypatch):
+    """The new record is a copy of the finished review, and `save` — unlike
+    `update` — does not stamp the stage clock. Left inherited, the card read the
+    original's section count against a clock last set when that review finished,
+    so a re-judge started now announced itself as "Reviewing (412 of 412
+    sections) · 33h 0m"."""
+    store, r = runner
+    job = _finished(store, tmp_path, stage="", done=412, total=412,
+                    review_round=3, total_rounds=3,
+                    stage_since="2026-08-13T00:00:00+00:00")
+    fresh = _started_rejudge(store, r, job, tmp_path, monkeypatch)
+
+    began = datetime.fromisoformat(fresh.stage_since)
+    assert (datetime.now(timezone.utc) - began).total_seconds() < 60
+    assert (fresh.done, fresh.total) == (0, 0)
+    assert (fresh.review_round, fresh.total_rounds) == (0, 0)
+    # And it says what it is doing, rather than borrowing the detector loop's
+    # line and its section count.
+    assert fresh.stage == "judging"
+    assert fresh.plain_state() == "Putting the corrections to the judges"
+
+
+def test_a_rejudge_does_not_inherit_the_original_run(runner, tmp_path,
+                                                     monkeypatch):
+    """Worse than cosmetic. `_archive_job` takes the folder off the record and
+    skips every file already in `drive_files`, so an inherited pair marks the
+    re-judged deliverable archived — at the original's folder, without uploading
+    a byte of it. The token counts would likewise bill the original's review a
+    second time until the gates' own usage overwrote them."""
+    store, r = runner
+    job = _finished(store, tmp_path, archive="done", archive_attempts=2,
+                    drive_folder_id="folder-1",
+                    drive_files={"simple - reviewed.docx": "file-1"},
+                    cost=12.5, input_tokens=900, api_calls=40, mode="batch",
+                    schedule_at="23:00")
+    fresh = _started_rejudge(store, r, job, tmp_path, monkeypatch)
+
+    assert (fresh.drive_folder_id, fresh.drive_files) == ("", {})
+    assert (fresh.archive, fresh.archive_attempts) == ("", 0)
+    assert (fresh.cost, fresh.input_tokens, fresh.api_calls) == (None, 0, 0)
+    # It runs inline, now — not overnight at the hour the original was booked.
+    assert (fresh.mode, fresh.schedule_at) == ("now", None)
+
+
+def test_an_interrupted_rejudge_is_not_re_run_as_a_review(runner, tmp_path):
+    """A re-judge runs inline in the request thread with no checkpoint and no
+    queue entry. Handing its id to the worker on restart would read an ordinary
+    review record and run the whole detector pipeline — a full paid re-review
+    nobody asked for."""
+    store, r = runner
+    _job(store, id="rj", state="running", stage="judging", mode="now")
+    r.resume_interrupted()
+
+    assert r.queue.empty()
+    after = store.get("rj")
+    assert after.state == "failed"
+    assert "again" in after.error
+
+
+def test_an_interrupted_review_is_still_re_queued(runner, tmp_path):
+    """The other side of that guard: an ordinary sync review interrupted by a
+    restart still resumes off its checkpoint."""
+    store, r = runner
+    _job(store, id="rv", state="running", stage="reviewing", mode="now")
+    r.resume_interrupted()
+
+    assert r.queue.get_nowait() == "rv"
+    assert store.get("rv").state == "queued"
 
 
 def test_the_tick_endpoint_carries_the_card_flags(client, uploaded):

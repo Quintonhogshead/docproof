@@ -82,6 +82,11 @@ STAGE_STATE = {
     "languagetool": "Running the mechanical check",
     "continuity": "Reading the whole book for continuity",
     "writing": "Almost done — writing your document",
+    # A re-judge is not the pipeline above: it runs the gates over a finished
+    # run's corrections and writes a new deliverable, emitting this one stage and
+    # no other. Borrowing "reviewing" made the card claim a section count and a
+    # step tracker for passes that never run. See JobRunner.rejudge.
+    "judging": "Putting the corrections to the judges",
 }
 
 # Prep does a different job, so it says so. Only the states that differ.
@@ -551,6 +556,21 @@ class JobRunner:
             # ticker-owned and would otherwise sit "running" forever. It restarts
             # from round 1 (the driver is not round-level resumable); any vendor
             # batches it had in flight are abandoned.
+            # A re-judge is the one running job the worker must not be handed.
+            # It runs inline in the request thread and has no queue entry to
+            # resume; put its id on the queue and the worker would read an
+            # ordinary review record and run the whole detector pipeline — a full
+            # paid re-review nobody asked for. There is nothing to resume (the
+            # gates keep no checkpoint), so it is failed with something a person
+            # can act on: press the button again.
+            if job.state == "running" and job.stage == "judging":
+                log.info("Re-judge %s was interrupted by a restart; failing it "
+                         "rather than re-running the review.", job.id)
+                self.store.update(
+                    job.id, state="failed", stage="",
+                    error="This re-judge was interrupted by a restart. Nothing "
+                          "was written — run it again from the finished review.")
+                continue
             multiround = job.rounds > 1 and job.state == "running"
             interrupted = (job.state == "running" and job.mode == "now") or (
                 (job.is_prep or job.is_promo) and job.state == "collecting"
@@ -872,10 +892,31 @@ class JobRunner:
         if not (cfg.meaning_check.enabled or cfg.fix_check.enabled):
             return None
 
+        # A new record, not a copy of the old run. Everything the finished review
+        # recorded about ITS run — how far it got, when its step began, what it
+        # cost, where its files went in the archive — would be read as this run's,
+        # and `save` does not stamp the stage clock the way `update` does. The
+        # card read the original's section count against a clock last set when
+        # that review finished, so a re-judge started now announced itself as
+        # "Reviewing (412 of 412 sections) · 33h 0m". The archive fields are worse
+        # than cosmetic: inheriting `drive_files` makes _archive_job skip every
+        # upload as already placed and mark this run archived at the original's
+        # folder, so the re-judged deliverable never reaches Drive at all.
+        #
+        # `mode`/`schedule_at` go with them: a re-judge runs inline, here, and a
+        # record claiming to be an overnight batch is a record the ticker and the
+        # restart sweep both have to reason about. See _resume.
         source = self.store.save(replace(
             job, id=batchlib.new_job_id(job.filename), state="running",
-            stage="reviewing", results_dir="", error="", applied=0,
-            audit_failed=False, audit_overridden=False,
+            stage="judging", stage_since=_now(), results_dir="", error="",
+            error_kind="", applied=0, done=0, total=0,
+            review_round=0, total_rounds=0, mode="now", schedule_at=None,
+            collect_attempts=0, audit_failed=False, audit_overridden=False,
+            verified=None, words=None,
+            input_tokens=0, output_tokens=0, cache_read_tokens=0,
+            cache_write_tokens=0, api_calls=0, cost=None, sapling_cost=0.0,
+            archive="", archive_error="", archive_attempts=0,
+            drive_folder_id="", drive_files={},
             created_at=datetime.now(timezone.utc).isoformat(),
             meaning_model=(models or {}).get("meaning_check", ""),
             fix_model=(models or {}).get("fix_check", ""),
@@ -890,12 +931,13 @@ class JobRunner:
                                   source=job.source_path, usage=usage)
         except (RejudgeError, ProviderError, IngestError, ValueError) as e:
             log.warning("Re-judge of %s failed: %s", job_id, e)
-            updated = self.store.update(source.id, state="failed", error=str(e))
+            updated = self.store.update(source.id, state="failed", error=str(e),
+                                        stage="")
             self._finish(source.id)
             return updated
         updated = self.store.update(source.id, state="done",
                                     applied=outputs.applied,
-                                    results_dir=str(out))
+                                    results_dir=str(out), stage="")
         self._record_usage(source.id, out, cfg.meaning_check.model, batch=False)
         self._finish(source.id)
         return updated

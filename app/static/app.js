@@ -1941,13 +1941,22 @@ const STAGE_FLOW = [
   { id: 'writing', label: 'Writing your document',
     quip: 'Folding every accepted change back in and packaging up your files.' },
 ];
-const STAGE_INDEX = Object.fromEntries(STAGE_FLOW.map((s, i) => [s.id, i]));
+// A re-judge walks its own one-step flow, not the pipeline above: it runs the
+// gates over a finished run's corrections and writes a new deliverable, and no
+// detector pass fires. Shown on its own so the tracker can't check off passes
+// this run never takes. See STAGE_STATE and JobRunner.rejudge in app/jobs.py.
+const REJUDGE_FLOW = [
+  { id: 'judging', label: 'Putting the corrections to the judges',
+    quip: 'Reading every change the review proposed and asking whether it keeps '
+        + 'your meaning and whether the fix is right.' },
+];
 
 // Which of the steps this particular job will run, in order. The always-on ones
 // stay; an optional one is kept only when the job's toggles ask for it, so the
 // tracker doesn't promise a pass that never fires. The current stage is always
 // kept, even if a toggle says otherwise, so the tracker can never lose its place.
 function stageFlowFor(job) {
+  if (job.stage === 'judging') return REJUDGE_FLOW;
   const f = job.features || {};
   const on = (k) => !!f[k];
   return STAGE_FLOW.filter((s) => {
@@ -1964,7 +1973,7 @@ function stageFlowFor(job) {
 // lives and set no stage, so they never show one.
 function tracksStages(job) {
   return job.kind === 'review' && !!job.stage
-    && STAGE_INDEX[job.stage] !== undefined
+    && stageFlowFor(job).some((s) => s.id === job.stage)
     && (job.state === 'running' || job.state === 'queued');
 }
 
@@ -1984,11 +1993,14 @@ function stageElapsed(job) {
 // legible march through the pipeline.
 function stageTracker(job) {
   const flow = stageFlowFor(job);
-  const here = STAGE_INDEX[job.stage];
+  // Position within the flow this job is actually walking — filtering keeps the
+  // pipeline's order, and a re-judge walks a different flow entirely, so a
+  // global index over STAGE_FLOW would place it past every review step and check
+  // them all off.
+  const here = flow.findIndex((s) => s.id === job.stage);
   const ol = document.createElement('ol');
   ol.className = 'stages';
-  flow.forEach((s) => {
-    const i = STAGE_INDEX[s.id];
+  flow.forEach((s, i) => {
     const status = i < here ? 'done' : i === here ? 'current' : 'pending';
     const li = document.createElement('li');
     li.className = status;
