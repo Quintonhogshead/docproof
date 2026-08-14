@@ -404,15 +404,97 @@ def test_to_query_withdraws_a_change_without_re_arbitrating_the_run():
     assert q.corrected_text == f.corrected_text  # what was proposed is kept
 
 
-def test_to_query_on_an_unanchorable_finding_still_refuses_to_apply_it():
+def test_to_query_on_an_unanchorable_finding_falls_back_to_the_paragraph():
+    """A withdrawn change whose quote no longer anchors still has to reach the
+    author. Both reassemblers place a comment from the anchor and drop a query
+    without one, so no anchor means no margin comment — while summary.md counts
+    the question as raised. The paragraph is the coarsest honest span, and it
+    still edits nothing."""
     from docproof.models import DocumentModel, Finding, ParagraphRef
     from docproof.validator import to_query
+    text = "Some other text."
     para = ParagraphRef(para_id="body-0000", part="word/document.xml",
-                        location="body", text="Some other text.", style="Normal")
+                        location="body", text=text, style="Normal")
     doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
     f = Finding(finding_id="f-1", chunk_id="c0", para_id="body-0000",
                 error_type="spelling", original_text="not in this paragraph",
                 occurrence=1, corrected_text="x", explanation="", confidence="high",
                 status="validated")
     q = to_query(f, doc)
+    assert q.status == "query" and q.force_query is True
+    assert q.anchor.start == 0 and q.anchor.end == len(text)
+    assert q.anchor.delete_text == text and q.anchor.insert_text == ""
+
+
+def test_to_query_on_an_unknown_paragraph_has_no_anchor_to_fall_back_to():
+    """The one case that genuinely cannot be placed: no paragraph, so nothing
+    to hang a comment on. The reassemblers count it as unplaced."""
+    from docproof.models import DocumentModel, Finding, ParagraphRef
+    from docproof.validator import to_query
+    para = ParagraphRef(para_id="body-0000", part="word/document.xml",
+                        location="body", text="Some other text.", style="Normal")
+    doc = DocumentModel(source_path="x.docx", paragraphs=(para,))
+    f = Finding(finding_id="f-1", chunk_id="c0", para_id="body-9999",
+                error_type="spelling", original_text="anything", occurrence=1,
+                corrected_text="x", explanation="", confidence="high",
+                status="validated")
+    q = to_query(f, doc)
     assert q.status == "query" and q.anchor is None
+
+
+def _one_para_docx(tmp_path, text):
+    """A one-paragraph .docx, opened as a package and a document model."""
+    import docx
+    from docproof.ingest import build_document_model, preflight
+    d = docx.Document()
+    d.add_paragraph(text)
+    src = tmp_path / "q.docx"
+    d.save(src)
+    cfg = load_config("config/default.yaml")
+    pkg = preflight(src, "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = next(p.para_id for p in doc.paragraphs if p.text == text)
+    return cfg, pkg, doc, pid
+
+
+def test_a_fallback_anchored_query_reaches_the_document(tmp_path):
+    """to_query's fallback has to be a comment the author can read, not merely
+    a non-None anchor: a paragraph-wide span places a real one."""
+    from docproof.models import Anchor
+    from docproof.reassembler import apply_tracked_changes
+    from docproof.validator import to_query
+    text = "He left. She waited a long time. Nobody came."
+    cfg, pkg, doc, pid = _one_para_docx(tmp_path, text)
+
+    # A validated change whose quote no longer matches the paragraph — the
+    # belt-and-braces branch of to_query.
+    f = _finding(finding_id="q-x", para_id=pid, error_type="comma_splice",
+                 original_text="a sentence that is not in the paragraph",
+                 corrected_text="x", explanation="Withheld by the gate.",
+                 status="validated",
+                 anchor=Anchor(0, 8, "He left.", "He departed."))
+    stats = apply_tracked_changes(pkg, doc, [to_query(f, doc)], cfg)
+    assert stats.queried == ("q-x",) and stats.unplaced == ()
+    assert stats.applied == () and stats.skipped == ()
+
+    out = tmp_path / "reviewed.docx"
+    pkg.save(out)
+    assert list(_comment_ranges(out).values()) == [text]
+    assert any("Withheld by the gate." in t for t in _comment_texts(out))
+
+
+def test_a_query_with_no_anchor_is_counted_as_unplaced_not_dropped(tmp_path):
+    """The reassembler places a comment from the anchor, so a query without one
+    cannot be written — but summary.md still counts the question as raised. It
+    has to be named somewhere, or the loss is invisible: a pass whose every
+    suggestion vanished looks exactly like a healthy run that found nothing."""
+    from docproof.reassembler import apply_tracked_changes
+    text = "He left. She waited a long time. Nobody came."
+    cfg, pkg, doc, pid = _one_para_docx(tmp_path, text)
+
+    q = _finding(finding_id="q-x", para_id=pid, original_text="He left.",
+                 status="query")
+    stats = apply_tracked_changes(pkg, doc, [q], cfg)
+    assert stats.queried == () and stats.unplaced == ("q-x",)
+    assert stats.applied == () and stats.skipped == ()
+    assert _comment_texts(tmp_path / "q.docx") == []
