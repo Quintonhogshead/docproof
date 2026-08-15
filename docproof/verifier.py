@@ -310,7 +310,11 @@ class RoundJudge:
 
     def __init__(self, types: dict[str, ErrorType], provider: Provider,
                  model: str, *, instructions: str = "", context: str = "",
-                 max_tokens: int = 4000):
+                 # rounds.judge_model is a reasoning model at judge_effort high
+                 # (gpt-5.6-sol by default) and rounds.py does not override this,
+                 # so this default IS the multi-round judge's ceiling — and it
+                 # has to cover the model's thinking, not just its verdicts.
+                 max_tokens: int = 12000):
         self.types = types
         self.provider = provider
         self.model = model
@@ -362,7 +366,7 @@ class RoundJudge:
 def adjudicate_round(findings: list[Finding], para_text: dict[str, str],
                      types: dict[str, ErrorType], provider: Provider, *,
                      model: str, instructions: str = "", context: str = "",
-                     max_tokens: int = 4000, concurrency: int = 8,
+                     max_tokens: int = 12000, concurrency: int = 8,
                      prior_rejections: frozenset = frozenset(),
                      usage: Usage) -> RoundJudgment:
     """Rule on a round's model-generated corrections. The caller passes only the
