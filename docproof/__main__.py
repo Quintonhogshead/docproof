@@ -317,7 +317,8 @@ def cmd_inventory(args) -> int:
         if chap is not None:
             print(f"  + chapter continuity on {cc_model}: ~${chap:.2f} "
                   f"({len(units)} chapter read(s), query-only, plus a small "
-                  f"judge on {cc.judge_model})")
+                  f"judge on {cc.judge_model}); the reads ride their own batch, "
+                  f"so a batch submission roughly halves this")
 
     print("\nSections (pass any of these to --only):")
     for row in chunk_outline(prepared):

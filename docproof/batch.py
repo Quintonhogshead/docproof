@@ -47,8 +47,15 @@ class Job:
     content_hash: str
     model: str
     provider: str
+    # The detector/review batch. "" when a run has no detector requests at all
+    # (a continuity-only run), whose whole batch is the continuity one below.
     batch_id: str
     state: str = "submitted"
+    # The chapter-continuity propose batch, on its own model — the reads are N
+    # independent requests, the textbook batch candidate. None when the pass is
+    # off, and None on every manifest written before this field existed, which
+    # `load()` restores as None: an in-flight job simply has no second batch.
+    continuity_batch_id: str | None = None
     request_count: int = 0
     created_at: str = ""
     updated_at: str = ""
@@ -131,6 +138,92 @@ def rewrite_batched(cfg: Config) -> bool:
                                     or cfg.rewrite.model == cfg.api.model)
 
 
+# --- the chapter-continuity propose batch -------------------------------------
+#
+# Unlike the rewrite retype, the chapter reads do NOT ride the review batch: a
+# continuity-only run has no review batch to ride, and the reader is usually a
+# different (stronger) model than the detector — and a batch is one model. So
+# they go out as their OWN batch, on the chapter model, polled and collected
+# alongside the review one. The whole-book read stays synchronous at collect: it
+# retries once at a doubled ceiling on truncation, and a call already in a batch
+# cannot be retried.
+
+def _cc_model(cfg: Config) -> str:
+    """The chapter reader's model: its own, else the whole-book read's, else the
+    review model — the same resolution the pipeline uses at run time."""
+    cc = cfg.chapter_continuity
+    return cc.model or cfg.continuity.model or cfg.api.model
+
+
+def _provider_for(cfg: Config, model: str, effort: str | None) -> Provider:
+    """A provider bound to `model` at `effort` (its vendor is chosen from the id),
+    built off a copy of `cfg` so nothing else in the run is disturbed. Effort is
+    explicit because it is baked into every batch request body at construction —
+    the whole reason the sync path sets `pcfg.api.effort = cc.effort` before
+    building its provider."""
+    from .providers import build_provider
+    c = cfg.model_copy(deep=True)
+    c.api.model = model
+    c.api.effort = effort
+    return build_provider(c)
+
+
+def _cc_provider(cfg: Config, provider: Provider) -> Provider:
+    """The provider the chapter batch uses. Reuse the review `provider` ONLY when
+    both its model AND its effort already match the chapter reader's — otherwise
+    build one carrying the chapter model and effort, since effort is stamped into
+    the request bodies and a mismatch would read the whole book at the wrong
+    reasoning depth (the batch's divergence from the sync path)."""
+    cc = cfg.chapter_continuity
+    cc_model = _cc_model(cfg)
+    if cc_model == cfg.api.model and cc.effort == cfg.api.effort:
+        return provider
+    return _provider_for(cfg, cc_model, cc.effort)
+
+
+def continuity_batch_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
+    """One read request per chapter unit, or [] when the pass is off. Empty-text
+    units are skipped (nothing to read); their absence is recognised at collect."""
+    cc = cfg.chapter_continuity
+    if not (cc.enabled and prepared.whole_document):
+        return []
+    from .continuity import (chapter_read_custom_id, chapter_read_schema,
+                             chapter_read_user, chapters, resolve_chapter_system)
+    units = chapters(prepared.doc.paragraphs, cfg.skip.is_sweep_only,
+                     min_tokens=cc.min_chapter_tokens,
+                     max_tokens=cc.max_chapter_tokens)
+    system = resolve_chapter_system(cc.prompt)
+    schema = chapter_read_schema()
+    reqs = []
+    for u in units:
+        user = chapter_read_user(u)
+        if not user.strip():
+            continue
+        reqs.append(BatchRequest(custom_id=chapter_read_custom_id(u.index),
+                                 system=system, user=user,
+                                 schema=schema, schema_name="scene_breaks"))
+    return reqs
+
+
+def _combine_status(statuses: list[BatchStatus]) -> BatchStatus:
+    """One status over the job's batches for the progress bar: failed if any
+    failed, completed only when all completed, else in progress. Counts sum so a
+    two-batch job's bar is honest. (Whether a failure fails the JOB is decided in
+    `poll`, which distinguishes the primary batch from the optional chapter one —
+    this is only the display roll-up.)"""
+    total = sum(s.total for s in statuses)
+    succeeded = sum(s.succeeded for s in statuses)
+    errored = sum(s.errored for s in statuses)
+    if any(s.state in ("failed", "expired", "cancelled") for s in statuses):
+        state = "failed"
+    elif all(s.state == "completed" for s in statuses):
+        state = "completed"
+    else:
+        state = "in_progress"
+    return BatchStatus(state=state, total=total, succeeded=succeeded,
+                       errored=errored)
+
+
 # --- persistence --------------------------------------------------------------
 
 def save(job: Job, workspace: str | Path) -> Path:
@@ -179,12 +272,29 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
     prepared = prepare(cfg, input_path, error_dir, max_chunks=max_chunks,
                        selection=selection)
     requests = build_requests(cfg, prepared)
-    if not requests:
+    cc_requests = continuity_batch_requests(cfg, prepared)
+    if not requests and not cc_requests:
         raise BatchError(
             f"{Path(input_path).name} has no reviewable paragraphs.")
 
-    batch_id = provider.submit_batch(model=cfg.api.model, requests=requests,
-                                     max_tokens=cfg.api.max_output_tokens)
+    # Build the chapter provider BEFORE anything is billed, so a construction
+    # failure (a missing key for a different-vendor chapter model) fails fast with
+    # no orphaned paid batch. Building a provider does not bill; submit_batch does.
+    cc_provider = _cc_provider(cfg, provider) if cc_requests else None
+    # The review/detector batch. Empty for a continuity-only run, whose whole
+    # batch is the chapter one below — so "" is a real value here, not a bug.
+    batch_id = ""
+    if requests:
+        batch_id = provider.submit_batch(model=cfg.api.model, requests=requests,
+                                         max_tokens=cfg.api.max_output_tokens)
+    # The chapter-continuity batch on its own model. Submitted second, so a
+    # failure here leaves at most the review batch orphaned — the same one-batch
+    # exposure submit has always had, not a new two-batch one.
+    continuity_batch_id = None
+    if cc_provider is not None:
+        continuity_batch_id = cc_provider.submit_batch(
+            model=_cc_model(cfg), requests=cc_requests,
+            max_tokens=cfg.chapter_continuity.max_output_tokens)
     job = Job(
         job_id=new_job_id(Path(input_path).name),
         source_path=str(Path(input_path).resolve()),
@@ -193,7 +303,8 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
         model=cfg.api.model,
         provider=provider.name,
         batch_id=batch_id,
-        request_count=len(requests),
+        continuity_batch_id=continuity_batch_id,
+        request_count=len(requests) + len(cc_requests),
         created_at=_now(),
         config=cfg.model_dump(mode="json"),
         # Resolved rather than echoed: whatever narrowed the run, the manifest
@@ -202,8 +313,9 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
         prompts=pass_prompts(cfg, prepared),
     )
     save(job, workspace)
-    log.info("Job %s submitted: %d request(s) as batch %s",
-             job.job_id, len(requests), batch_id)
+    log.info("Job %s submitted: %d review + %d chapter request(s) "
+             "(batches %r / %r)", job.job_id, len(requests), len(cc_requests),
+             batch_id, continuity_batch_id)
     return job
 
 
@@ -251,12 +363,34 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
 
 
 def poll(job: Job, provider: Provider, workspace: str | Path) -> BatchStatus:
-    status = provider.poll_batch(job.batch_id)
-    if status.state == "completed":
-        job.state = "ready"
-    elif status.state in ("failed", "expired", "cancelled"):
+    """Poll every batch this job holds — the review batch and, when present, the
+    chapter-continuity batch (on its own model, so its own provider) — and move
+    to `ready` only when ALL of them have completed. A job with only a continuity
+    batch (continuity-only) polls just that one."""
+    review = provider.poll_batch(job.batch_id) if job.batch_id else None
+    chapter = None
+    if job.continuity_batch_id:
+        cfg = Config.model_validate(job.config)
+        chapter = _cc_provider(cfg, provider).poll_batch(job.continuity_batch_id)
+    present = [s for s in (review, chapter) if s is not None]
+    status = _combine_status(present) if present else BatchStatus(state="completed")
+    fail = ("failed", "expired", "cancelled")
+    # The PRIMARY batch — the review one, or the chapter one for a continuity-only
+    # run — is what the whole run turns on. The job fails only when IT failed. A
+    # secondary chapter-batch failure does NOT discard a completed review: the
+    # pass is additive and best-effort, so the review proceeds and the failure is
+    # reported at collect as chapter reads that failed.
+    primary = review if review is not None else chapter
+    if primary is not None and primary.state in fail:
         job.state = "failed"
-        job.error = f"The provider reported this batch as {status.state}."
+        job.error = f"The provider reported the primary batch as {primary.state}."
+    elif (review is not None and review.state == "completed"
+          and chapter is not None and chapter.state in fail):
+        job.state = "ready"
+        log.warning("Job %s: the chapter-continuity batch %s; the review "
+                    "proceeds without those queries.", job.job_id, chapter.state)
+    elif all(s.state == "completed" for s in present):
+        job.state = "ready"
     else:
         job.state = "in_progress"
     save(job, workspace)
@@ -275,6 +409,10 @@ class CollectResult:
     coverage: CoverageLedger
     source: Path
     rewrite_rejects: list | None
+    # The chapter-continuity batch's raw reads (custom_id -> ProviderResult), or
+    # None when the pass had no batch. finish() parses these into queries; the
+    # judge over them still runs synchronously there.
+    chapter_reads: dict | None = None
 
 
 def collect_findings(job: Job, provider: Provider,
@@ -301,10 +439,26 @@ def collect_findings(job: Job, provider: Provider,
             f"submitted, so the corrections no longer line up with the text. "
             f"Start a new review of the current version.")
 
-    results = provider.collect_batch(job.batch_id)
+    results = provider.collect_batch(job.batch_id) if job.batch_id else {}
     coverage = CoverageLedger()
     findings, usage = _assemble(cfg, prepared, results, provider, coverage)
     rewrite_rejects = None
+    # The chapter-continuity reads, fetched from their own batch on their own
+    # model. Parsed and judged in finish() (the judge is synchronous either way),
+    # so here we only hand the raw reads forward. None when the pass had no batch.
+    chapter_reads = None
+    if job.continuity_batch_id:
+        try:
+            chapter_reads = _cc_provider(cfg, provider).collect_batch(
+                job.continuity_batch_id)
+        except Exception as e:
+            # The chapter batch failed to complete (poll let the review through
+            # anyway). An empty dict — NOT None — makes finish take the batch
+            # path and report every chapter as unread, rather than silently
+            # re-buying the reads live.
+            log.error("chapter-continuity: could not collect batch %s (%s); "
+                      "reporting its reads as failed.", job.continuity_batch_id, e)
+            chapter_reads = {}
 
     # The glossary and adjudication passes are synchronous post-steps: the
     # detector work rode the batch, but the whole-book glossary read is one call
@@ -462,7 +616,7 @@ def collect_findings(job: Job, provider: Provider,
     coverage.record_windows(window_losses)
 
     return CollectResult(cfg, prepared, findings, usage, coverage, source,
-                         rewrite_rejects)
+                         rewrite_rejects, chapter_reads=chapter_reads)
 
 
 def collect(job: Job, provider: Provider, error_dir: str | Path,
@@ -474,7 +628,8 @@ def collect(job: Job, provider: Provider, error_dir: str | Path,
     if r.cfg.rewrite.enabled and r.prepared.whole_document and r.rewrite_rejects:
         _write_rewrite_rejects(out, r.rewrite_rejects)
     outputs = finish(r.prepared, r.findings, r.usage, r.cfg, out_dir=out,
-                     source_path=r.source, batch=True, coverage=r.coverage)
+                     source_path=r.source, batch=True, coverage=r.coverage,
+                     chapter_batch_reads=r.chapter_reads)
     job.state = "done"
     save(job, workspace)
     log.info("Job %s collected: %d change(s) applied", job.job_id,

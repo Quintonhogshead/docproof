@@ -494,6 +494,46 @@ def test_the_eval_runner_disables_chapter_continuity():
     assert _eval_config(cfg).chapter_continuity.enabled is False
 
 
+# --- the reads riding a batch -------------------------------------------------
+
+def test_the_reads_can_come_from_a_batch(monkeypatch):
+    """The batch path: the chapter reads arrive as a results dict (custom_id ->
+    ProviderResult) instead of being bought live, and only the judge runs here.
+    Same candidates, same findings — the read just came from a batch."""
+    from docproof.continuity import chapter_read_custom_id
+    p = _para("body-0", "He was on his feet by the door. He sat down again.")
+    reads = {chapter_read_custom_id(0): _breaks(
+        _b("He was on his feet by the door.", "He sat down again."))}
+    prov = FakeProvider([_verdicts({"index": 1, "is_break": True,
+                                    "confidence": "high"})])
+    import docproof.providers as _p
+    import docproof.pipeline as _pipe
+    monkeypatch.setattr(_p, "build_provider", lambda cfg, **kw: prov)
+    monkeypatch.setattr(_pipe, "cache_dir_for", lambda c: None)
+    findings, report = _chapter_continuity_findings(
+        _cfg(), _prepared(p), Usage(), batch_reads=reads)
+    assert report.proposed == 1 and len(findings) == 1
+    assert len(prov.calls) == 1              # the judge only — no propose call was bought
+
+
+def test_chapter_reads_from_batch_counts_missing_and_truncated():
+    """A read that truncated and a read with no result at all are both failures —
+    counted, never swallowed, exactly like the sync path's read failures."""
+    from docproof.continuity import (chapter_read_custom_id,
+                                     chapter_reads_from_batch, chapters)
+    from docproof.providers.base import ProviderResult
+    paras = [_para("h1", "Chapter One", "Heading1"), _para("b1", "Body one. " * 40),
+             _para("h2", "Chapter Two", "Heading1"), _para("b2", "Body two. " * 40)]
+    units = chapters(paras, _heading, min_tokens=1)
+    assert len(units) == 2
+    reads = {                                # unit 0 truncated; unit 1 absent entirely
+        chapter_read_custom_id(0): ProviderResult(parsed=None,
+                                                  stop_reason="max_tokens")}
+    cands, dropped, read_failed = chapter_reads_from_batch(units, reads, Usage())
+    assert cands == []
+    assert read_failed == 2
+
+
 # --- the sensitivity dial -----------------------------------------------------
 
 def test_sensitivity_profile_is_monotonic_strict_to_loose():
