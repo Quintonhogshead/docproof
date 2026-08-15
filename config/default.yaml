@@ -186,9 +186,13 @@ continuity:
   effort: high
   # A frontier model at effort high, reading a whole book and writing up to
   # max_queries findings with an explanation each — and it always thinks, so
-  # most of this ceiling is reasoning. One call, all-or-nothing: truncating
-  # loses every continuity finding in the book.
-  max_output_tokens: 24000
+  # most of this ceiling is reasoning. Sized with headroom: a cap costs
+  # nothing until tokens are actually generated, while a truncated read is a
+  # fully billed call whose findings are ALL lost (a cut-off structured reply
+  # parses as nothing). One truncation is retried once at double this ceiling
+  # — reasoning spend varies run to run, and this one call has no window to
+  # split the way the chunked passes recover.
+  max_output_tokens: 32000
   max_queries: 40           # cap on margin comments; most significant first
   min_confidence: medium    # drop "low" — a wrong continuity flag costs trust
   calendar_check: true      # deterministic date->weekday math; no API, query-only
@@ -320,7 +324,13 @@ smoothing:
   max_per_1000_words: 3.0   # volume cap; overflow is dropped AND counted in summary.md
   min_confidence: medium    # drop anything the judge affirms softer than this
   batch_size: 40            # candidates per judge request
-  max_output_tokens: 4000   # the proposing read
+  max_output_tokens: 16000  # the proposing read — sized like the judge below:
+                            # on a reasoning model the ceiling covers the
+                            # THINKING too, so 4,000 truncated a dense window and
+                            # dropped it whole, which reads as restraint. Unused
+                            # ceiling is free; propose() counts any read that
+                            # still fails so it is reported, not mistaken for
+                            # silence.
   judge_max_output_tokens: 16000  # much larger on purpose: a verdict is tiny,
                             # but on a reasoning model the THINKING counts here
                             # too, and a truncated judge batch returns no

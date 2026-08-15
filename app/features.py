@@ -98,6 +98,17 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "estimate separately from the model.",
         "pass", ("sapling", "enabled"), heavy=True),
     FeatureSpec(
+        "smoothing", "Line-editing suggestions (smoothing)",
+        "A separate line editor reads the whole manuscript and proposes small "
+        "smoothings — a word doing no work, an unidiomatic preposition, an "
+        "awkward clause — which a skeptical taste judge then culls. Every one "
+        "reaches the author as a margin QUESTION, never a tracked change: a "
+        "smoothing has no single right answer, only a better wording, and that "
+        "is the author's call. A full-book read plus a judge, billed on top of "
+        "the estimate. Tune how much it surfaces with the proposer and judge "
+        "controls in Advanced options.",
+        "pass", ("smoothing", "enabled"), heavy=True),
+    FeatureSpec(
         "meaning_check", "Meaning check — read every change before it ships",
         "One strong model reads every correction this run would make — the "
         "model's own, Sapling's, LanguageTool's, all of them together — and asks "

@@ -10,8 +10,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from typing import get_args
+
 from docproof import batch as batchlib
-from docproof.config import load_config
+from docproof.config import SmoothingConfig, load_config
 from docproof.formats import get_format
 from docproof.prep import place as placelib
 from docproof.prep.place import PlaceError
@@ -27,6 +29,13 @@ from ..prompts import list_prompts
 from ..report import build_report
 from ..settings import CONFIG_PATH, ERROR_DIR, Paths
 from ..usage import build_usage
+
+# The smoothing dials' valid values, read straight off SmoothingConfig's Literals
+# so the API's accepted set can never drift from what the config will accept.
+_RESTRAINT_LEVELS = get_args(
+    SmoothingConfig.model_fields["proposer_restraint"].annotation)
+_HARSHNESS_LEVELS = get_args(
+    SmoothingConfig.model_fields["judge_harshness"].annotation)
 
 
 class JobRequest(BaseModel):
@@ -83,6 +92,12 @@ class JobRequest(BaseModel):
     # only. The tier is a client-side macro over the controls above, so this
     # never changes how the job runs; empty means a custom or older submission.
     preset: str = ""
+    # Smoothing pass tuning. Only bites when the `smoothing` feature is on; None
+    # falls back to the config default, so an older page — and the watcher —
+    # keep today's behaviour. proposer_restraint = how much the line editor
+    # surfaces; judge_harshness = how hard the taste judge culls it.
+    proposer_restraint: str | None = None    # "restrained" | "open"
+    judge_harshness: str | None = None       # lenient|balanced|strict|severe
 
 
 class RejudgeRequest(BaseModel):
@@ -239,6 +254,18 @@ def register(app: FastAPI) -> None:
         if req.variant and req.variant not in VARIANT_KEYS:
             raise HTTPException(
                 400, f"variant must be one of {', '.join(VARIANT_KEYS)}")
+        # Smoothing dials — vetted here, not left to Config's Literal, for the
+        # same reason variant is: a bad value would otherwise raise mid-run.
+        if (req.proposer_restraint is not None
+                and req.proposer_restraint not in _RESTRAINT_LEVELS):
+            raise HTTPException(
+                400, f"proposer_restraint must be one of "
+                     f"{', '.join(_RESTRAINT_LEVELS)}")
+        if (req.judge_harshness is not None
+                and req.judge_harshness not in _HARSHNESS_LEVELS):
+            raise HTTPException(
+                400, f"judge_harshness must be one of "
+                     f"{', '.join(_HARSHNESS_LEVELS)}")
         effort = req.effort or app.state.settings.effort
         # Multi-round review is a review-only knob; prep is always a single pass.
         rounds = req.rounds if req.rounds is not None else app.state.settings.rounds
@@ -353,6 +380,8 @@ def register(app: FastAPI) -> None:
                 fix_model=req.fix_model or "",
                 fix_prompt=req.fix_prompt,
                 preset=req.preset,
+                proposer_restraint=req.proposer_restraint or "restrained",
+                judge_harshness=req.judge_harshness or "strict",
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,

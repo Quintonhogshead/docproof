@@ -451,6 +451,31 @@
                   change becomes a margin question, never a silent edit.</small>
               </label>
             </details>
+
+            <!-- The smoothing pass's two dials — they bite only when the
+                 "Line-editing suggestions (smoothing)" switch above is on. -->
+            <label class="field review-only">
+              <span>Smoothing — how much the line editor surfaces</span>
+              <select id="proposer-restraint">
+                <option value="restrained" selected>Restrained (fewer, safest)</option>
+                <option value="open">Open (surface more, let the judge decide)</option>
+              </select>
+            </label>
+
+            <label class="field review-only">
+              <span>Smoothing — how hard the taste judge culls</span>
+              <select id="judge-harshness">
+                <option value="lenient">Lenient — keep the most</option>
+                <option value="balanced">Balanced</option>
+                <option value="strict" selected>Strict (default) — reject most</option>
+                <option value="severe">Severe — keep only the surest</option>
+              </select>
+              <small class="muted">Both apply only when “Line-editing suggestions
+                (smoothing)” is switched on under Passes &amp; features. Restrained
+                + strict is the shipped behaviour; open with a lower harshness
+                surfaces more suggestions in the margin. Every one is a question,
+                never a tracked change.</small>
+            </label>
           </div>
 
           <!-- Output — what the run writes, and the English variant. -->

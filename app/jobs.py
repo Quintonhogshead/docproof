@@ -227,6 +227,13 @@ class Job:
     # this changes nothing about how the job runs; it only records what was
     # chosen. Empty on older records and on any run that didn't send one.
     preset: str = ""
+    # The smoothing pass's two dials, applied only when the "smoothing" feature is
+    # on. proposer_restraint = how much the line editor surfaces; judge_harshness
+    # = how hard the taste judge culls it. The defaults are the shipped config
+    # defaults, so older records and runs that never touched the pass behave
+    # exactly as before. See docproof/smoothing.py and JobStore.config_for.
+    proposer_restraint: str = "restrained"
+    judge_harshness: str = "strict"
     # Multi-round progress: which round a running multi-round review is on, and
     # how many it will run. Both 0 on single reviews and older records; the card
     # reads them only when total_rounds > 1. Set by _run_rounds' on_progress
@@ -736,6 +743,12 @@ class JobRunner:
         cfg.fix_check.prompt = job.fix_prompt
         if job.fix_model:
             cfg.fix_check.model = job.fix_model
+        # The smoothing pass's two dials, applied after apply_features (which owns
+        # the pass's on/off): these only say HOW it behaves when it is on — how
+        # much the proposer surfaces, and how hard the judge culls. Vetted at
+        # submit, like the other per-run picks.
+        cfg.smoothing.proposer_restraint = job.proposer_restraint
+        cfg.smoothing.judge_harshness = job.judge_harshness
         # "Continuity only" strips the run to that one whole-book read: no
         # detector passes, no sweeps, none of the other whole-book passes — just
         # the contradiction check and its margin queries. The continuity switch is

@@ -2184,6 +2184,8 @@ $('start').addEventListener('click', async () => {
           // controls above, so it changes nothing the server runs — only the
           // label. "custom" once anything is edited off a tier.
           preset: kind() === 'review' ? (state.tier || '') : '',
+          proposer_restraint: ($('proposer-restraint') || {}).value || 'restrained',
+          judge_harshness: ($('judge-harshness') || {}).value || 'strict',
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
