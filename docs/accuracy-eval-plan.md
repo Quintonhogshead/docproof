@@ -91,6 +91,63 @@ the text that should be edited, `correction` the expected result (matched
 exactly only as a secondary metric — a right-span/wrong-fix still counts as
 caught), `confidence` the label the model ought to assign.
 
+## Silence metrics need a noise counterpart
+
+**Any safety metric whose good value is silence needs a counterpart whose good
+value is noise, or it cannot distinguish a working gate from a dead one.**
+
+The trap tier is a silence metric: a trap that draws no finding is a pass, and
+the headline is the rate at which traps fire. A pass that emits nothing at all
+scores a flawless 0% on it. So a set built that way also needs **controls** —
+cases where silence is the *failure*, prose the gate should certainly act on
+with no defence available for leaving it alone. The two rates are read together
+or neither means anything.
+
+### Why the rule is here
+
+The smoothing trap set (`eval/smoothing/traps.yaml`, which gates the opt-in
+language-smoothing pass) got its controls on purely hypothetical grounds: an
+auditor pointed out that a pass emitting nothing would score a perfect 0%
+firing rate, at a time when there was no pass in existence to emit anything.
+On the first real run they were load-bearing. Three measures came back green —
+0 of 78 silence traps fired, suggestion volume under cap, and never a landing
+on a meaning-changing edit (0 of 36) — and the controls fired 2 of 10. That one
+line is what made "it also finds almost nothing" visible.
+
+(A fourth measure, dialogue-touch, *looked* green and was not a measurement at
+all: the scorer was indexing corpus paragraphs at offsets naming different
+text, so two of its three "dialogue" hits were on passages containing no
+quotation marks. It now reports UNKNOWN for any span it cannot corroborate.
+Quoting it here as a green measure would have been this section's own error
+committed inside the section warning against it — a number that reassures
+because nothing falsified it, when nothing *could* have.)
+Without it the honest verdict, *safe but not yet useful*, would have read as
+*safe*; the only other route to noticing was a coverage number whose
+denominator moves ±28% between adjudication runs.
+
+### It generalises past that trap set
+
+Every fail-closed gate in this codebase has the identical shape — the meaning
+gate, the confirm valve, and any judge that yields nothing when it refuses or
+truncates. **A gate rejecting everything and a gate working perfectly both
+produce "no bad output", and only a positive control tells them apart.** Two
+instances turned up independently in this project, so the failure is real
+rather than theoretical:
+
+- A smoothing pass proposed 53 candidates and delivered 0, because both judge
+  batches truncated and a truncated batch returns no verdicts — so every
+  candidate fell out of both the kept list and the reject log. The run summary
+  printed "0 suggestions from 53 proposed", which reads as admirable restraint.
+- The scorer's own total-loss alarm was disabled the same way. Its
+  `NOT_UNDER_TEST` branch ran first and keyed off `config.error_types`, which
+  can never contain `smoothing` because smoothing is not an error type — so
+  the alarm built to catch a failure disguised as success was itself a failure
+  disguised as success.
+
+Before writing a gate, decide what its eval's noise counterpart is: a handful
+of cases the gate must act on, scored as its own number beside the silence
+rate. A dozen is enough. Without them a green scorecard is unfalsifiable.
+
 ## Architecture
 
 Four components, reusing the pipeline wholesale rather than reimplementing it.

@@ -29,6 +29,7 @@ place. That is a hard failure here rather than a silent misplacement.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from dataclasses import replace
@@ -36,7 +37,7 @@ from pathlib import Path
 
 from .checkpoint import finding_from_dict
 from .config import Config
-from .models import Usage
+from .models import Finding, Usage
 from .pipeline import Outputs, finish, prepare
 
 log = logging.getLogger("docproof.rejudge")
@@ -46,8 +47,14 @@ class RejudgeError(Exception):
     """A re-judge could not be set up — carries the message a person sees."""
 
 
-# Fields written into findings.json that are reporting, not part of a Finding.
-_NOT_A_FIELD = ("applied",)
+# A findings.json row is `dataclasses.asdict(finding)` plus whatever reporting
+# hangs off it ("applied" today). Derived from the dataclass rather than listed
+# by hand: a hand-kept list of the reporting keys is a list that rots, and it
+# rots into a TypeError on a button press — every re-judge of every run written
+# after the new key appeared, for a key that was never a Finding field and was
+# always safe to drop. Asking Finding what its fields are cannot fall behind
+# reporting.py, because reporting.py is not the one being asked.
+_FIELDS = frozenset(f.name for f in dataclasses.fields(Finding))
 
 
 def read_run(results_dir: str | Path) -> tuple[list, str]:
@@ -72,8 +79,8 @@ def read_run(results_dir: str | Path) -> tuple[list, str]:
     for row in rows:
         try:
             findings.append(finding_from_dict(
-                {k: v for k, v in row.items() if k not in _NOT_A_FIELD}))
-        except TypeError as e:                # a record from a newer build
+                {k: v for k, v in row.items() if k in _FIELDS}))
+        except TypeError as e:                # a record missing a Finding field
             raise RejudgeError(
                 f"{path} holds a finding this build does not understand "
                 f"({e}).") from e
@@ -93,7 +100,10 @@ def _gates_only(cfg: Config) -> Config:
         prompts this mode never runs;
       * Sapling is a per-character bill inside `finish`;
       * the low-confidence valve and the ensemble overseer are model calls inside
-        `finish`.
+        `finish`;
+      * smoothing is a whole-manuscript read plus a judge inside `finish`, and
+        its suggestions are already in the record — paying again would buy a
+        second, differently-worded set of the same questions.
 
     Everything left free — the sweeps, the spell scan, the consistency scan —
     stays on, because `finish` needs a prepared document either way and those
@@ -101,6 +111,7 @@ def _gates_only(cfg: Config) -> Config:
     out = cfg.model_copy(deep=True)
     out.storysheet.enabled = False
     out.sapling.enabled = False
+    out.smoothing.enabled = False
     out.low_confidence.confirm = False
     out.ensemble.detectors = []
     out.ensemble.verifier_model = None

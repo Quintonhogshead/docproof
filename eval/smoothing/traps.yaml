@@ -1,0 +1,2523 @@
+# The smoothing trap set: the passages that gate a language-smoothing pass in
+# BOTH directions — the ones where firing is the failure, and the ones where
+# silence is.
+#
+# This file is NOT part of the standard accuracy scorecard. It has a different
+# shape from `eval/cases/*.yaml` on purpose (no `error_type`, no `cases`, no
+# `expect`) so that neither file can be fed to the other's loader by accident,
+# and it lives outside `eval/cases/` so `docproof.eval.corpus.load_corpus`'s
+# non-recursive `eval/cases/*.yaml` glob can never pick it up. Its loader is
+# `eval/tools/style_traps.py`; its consumer is the Phase 2 style scorer; and
+# `eval/tools/reconcile_traps.py` is what regenerates the DETECTOR
+# RECONCILIATION section below when a passage changes.
+#
+# ---------------------------------------------------------------------------
+# WHAT IT MEASURES
+#
+# Phase 3 adds an opt-in language-smoothing pass that emits margin QUERIES
+# (never tracked changes) about phrasing. It can fail in two opposite ways, and
+# a trap set that only watches one of them is not a gate:
+#
+#   * It can FLATTEN — regularize a novelist's dialect, refrain, fragment, or
+#     deliberate cadence into competent, anonymous prose. The `silence` items
+#     below are that tripwire. Correct output on every one of them is nothing
+#     at all, and the metric is the trap firing rate: the percentage drawing
+#     >= 1 suggestion, which should be at or near zero.
+#   * It can DO NOTHING — and a pass that emits no suggestions anywhere scores
+#     a perfect 0% firing rate on a silence-only set while being worthless.
+#     The `control` items are that tripwire. Each is prose a line editor would
+#     certainly smooth, with no voice defence available. Silence on a control
+#     is a FAILURE, not a pass, and the scorer reports it as its own number.
+#
+# Read the two numbers together or neither means anything. A pass is only
+# working if the silence firing rate is near zero AND the control firing rate
+# is near one hundred.
+#
+# ---------------------------------------------------------------------------
+# THE DIFFICULTY GRADIENT (`difficulty`, on silence items only)
+#
+# `overt`    — the voice signal is loud and unmistakable. Non-standard grammar
+#              held consistently across a whole speech; a refrain repeated
+#              verbatim four times; a paragraph with no finite verb in it.
+#              These are the floor. A firing here is disqualifying: the pass
+#              cannot see stylization at all.
+# `marginal` — the voice signal is real but quiet. One device in an otherwise
+#              plain, competent contemporary paragraph: a single fragment, one
+#              withheld comma, one inverted opening, one unattributed thought,
+#              one phrase that comes back once. A smoothing suggestion here
+#              would be a defensible call — and still the wrong one, because
+#              the device is load-bearing. This is the band where a gate
+#              actually discriminates; a pass that is clean on `overt` and
+#              fires all over `marginal` is a pass that has learned to
+#              recognize costume, not voice.
+#
+# Controls carry no `difficulty` — they are not graded on how hidden the voice
+# is, because there is no voice in them to hide.
+#
+# ---------------------------------------------------------------------------
+# COMPOSITION
+#
+# 78 silence passages (53 overt / 25 marginal) + 10 controls = 88 items.
+# Per category, overt / marginal:
+#
+#   dialect-idiolect             6 / 3   =  9
+#   intentional-repetition       7 / 3   = 10
+#   deliberate-fragment          7 / 3   = 10
+#   stylized-archaic-narration   7 / 3   = 10
+#   rhythm-punctuation           8 / 3   = 11
+#   free-indirect-interiority    6 / 3   =  9
+#   embedded-document-register   6 / 3   =  9
+#   lyric-inversion              6 / 4   = 10
+#   control-deadwood                       5
+#   control-clumsy-syntax                  5
+#
+# NARRATION SHARE. 6.4% of the characters in the silence set sit inside quoted
+# dialogue, and 6 of the 78 silence passages are majority dialogue (all 6 in
+# dialect-idiolect). That is deliberate. `config/error_types/general_error.yaml`
+# already grants the dialogue guard unconditionally — "Dialect, deliberate
+# fragments, coined names, and unusual-but-intentional phrasing are the
+# author's, not errors" — so a trap set built out of quoted speech would score
+# a guard that ships for free, and a pass could be perfect on it while
+# flattening every paragraph of narration in the book. Phase 3's design is
+# narration-first, so this set is too. dialect-idiolect stays because it is the
+# highest-consequence category there is (correcting a speaker's grammar erases
+# the character), but three of its nine passages carry the idiolect in
+# NARRATION, with no quotation mark anywhere in them: dial-07 (Midland idiom in
+# close third), dial-08 (a narrator's uncontracted second-language formality,
+# inherited from the woman he is describing) and dial-09 (an institutional
+# register followed into a private notebook). Controls carry no dialogue at
+# all, by construction.
+#
+# That count is now a test rather than a claim
+# (`tests/test_style_traps.py::test_the_dialect_category_carries_three_passages
+# _in_narration`), because it was wrong once: an earlier dial-08 put its whole
+# voice signal — two uncontracted sentences — inside quotation marks, which
+# made it a third passage scoring the free dialogue guard while being counted
+# as one that does not.
+#
+# ---------------------------------------------------------------------------
+# MECHANICALLY CLEAN
+#
+# "Mechanically clean" means: no misspelling, no unintentional agreement slip,
+# no genuinely wrong punctuation, and no violation of a deterministic house
+# sweep. Non-standard grammar is either inside quoted speech — internally
+# consistent within a speaker, and spelled and punctuated correctly as dialect
+# — or it is a named regional idiom carried in narration on purpose (dial-07,
+# dial-08), which is declared. Controls are held to the same bar: a control
+# must be stylistically poor while remaining mechanically correct, so that it
+# separates the smoothing pass from the proofreader. A control that a
+# proofreading type would flag would measure the wrong pipeline.
+#
+# ONE PASSAGE QUALIFIES THAT: arch-09 carries "there is a foundation... and a
+# line of walnut trees", proximity agreement after an existential "there" with
+# a compound subject. It is ordinary edited English and it is not a slip, but
+# `subject_verb_agreement.yaml`'s FLAG list names the construction outright and
+# the detector returns it HIGH and validated in a quarter of the runs, so it is
+# declared rather than left to look like an oversight. The tag table below has
+# the full argument, and the alternative — a one-word repair — with it.
+#
+# What "mechanically clean" does NOT mean is "draws no mechanical finding".
+# Some of these passages are built out of shapes a first-class error type
+# legitimately owns — a deliberate splice IS a comma splice — and the two
+# sections below say exactly which, measured rather than assumed: the eight
+# house sweeps are run over every passage (HOUSE-STYLE SWEEPS) and the real
+# review pipeline is run over the whole file (DETECTOR RECONCILIATION). The
+# sweeps are deterministic and the sweep claim is a test. The pipeline claim is
+# not: it is twelve samples of a stochastic detector over the passages as they
+# now read, and — read the first paragraph of DETECTOR RECONCILIATION before
+# any number in it — EVERY SAMPLE EVER TAKEN AGAINST THIS FILE, in this
+# revision and in all of them before it, was taken on gpt-5.6-luna, which is
+# NOT the detector `config/default.yaml` configures. The configured detector,
+# claude-haiku-4-5, has never once run over this file, and the reason is a
+# billing block on the Anthropic account rather than anything about the set.
+# The `reconciliation` block below the header says all of this in fields a test
+# can read, including the tool that regenerates the section.
+#
+# `mechanical_overlap` (optional, per item): a LIST of the first-class error
+# types that have a claim on some span in this passage, so a mechanical finding
+# from one of them is NOT a smoothing failure. Filter these out when scoring
+# anything but the smoothing channel; never treat them as evidence the
+# mechanical pipeline misbehaved. It is a list as of schema 3 because running
+# the real pipeline over this file found passages where two types have a claim
+# at once on different spans (rhy-08 is both a splice and a withheld
+# introductory comma); schema 2 could record only one of the two, and did.
+#
+# A tag records REACH, not endorsement — that a mechanical channel can arrive
+# here, not that the correct DocProof answer stops being silence. Twenty-four
+# items carry twenty-nine tags:
+#
+#   serial_comma (8)          — anaph-06, arch-02, frag-01, frag-02, int-05,
+#     rhy-06, rhy-09, lyr-03. THE LARGEST COLLISION IN THE FILE, and a
+#     structural one rather than a set of typos: polysyndeton is a core device
+#     of this material ("the gutters and the downspout and the barrel",
+#     "the mill and the donkey and their father's blessing", "in March or April
+#     or May"), and any three coordinate items written that way are, to the
+#     house serial-comma rule, a three-item list missing its final comma. The
+#     two are the same shape seen from two directions; there is no wording that
+#     keeps the accumulation and loses the claim. Editing the polysyndeton out
+#     would delete the device the traps exist to protect, so every instance of
+#     it is tagged instead. The tag is applied where the items are genuinely
+#     coordinate — nouns, adjectives, prepositional phrases, or clauses with
+#     their own subjects — and NOT to a compound predicate ("got the door open
+#     and got him inside and got the coat off him", rhy-01; "checked the gauge
+#     twice and wrote the number down and checked it again", int-07), which
+#     `config/error_types/serial_comma.yaml` puts on its own "Do NOT flag" list:
+#     "Two or three verbs sharing one subject are not list items."
+#   comma_splice (6)          — int-01, rhy-02, rhy-06, rhy-08, rhy-11, doc-06.
+#     Every one is short parallel independent clauses joined by commas, which
+#     `config/error_types/comma_splice.yaml` asks the model to report at low
+#     confidence even when it recognizes the splice as deliberate. The tag is
+#     applied to that shape and only that shape. A SERIES joined with
+#     coordinating conjunctions is explicitly on that file's "Do NOT flag"
+#     list, so rhy-08's opening ("the lead is in the alley crying, the
+#     understudy is in Ohio, the stage manager has stopped answering her radio,
+#     and I am standing in the wings") is tagged for the three comma-joined
+#     independent clauses BEFORE the conjunction, not for the series; int-01 has
+#     the identical shape and is tagged identically. An earlier draft tagged
+#     that shape in one place and left it untagged in two others.
+#   introductory_comma (5)    — lyr-01, lyr-02, rhy-03, rhy-08, frag-04. THE SECOND
+#     STRUCTURAL COLLISION, and it belongs to the lyric-inversion category by
+#     construction: a fronted or inverted opening with no comma after it is
+#     that category's whole device ("Down the long field the light came"; "and
+#     under all of it the sweetness of the fruit boats"), and it is also the
+#     first thing `introductory_comma.yaml` is built to look for. That file's
+#     own "Do NOT flag" list excludes exactly this — "Inverted sentences, which
+#     take no comma: 'Down the hill ran the boy.', 'Out of the fog came a
+#     voice.'" — so a finding here is the model contradicting its own prompt
+#     rather than the rule reaching honestly; it is tagged because it reaches,
+#     not because it is right. rhy-03 ("by the time anyone in that kitchen
+#     understood what was happening she had already read") and rhy-08 ("Twelve
+#     minutes to curtain and the lead is in the alley crying") are the other
+#     shape: a genuinely fronted element whose comma is withheld on purpose,
+#     which each passage's own `tempting_edit` already names as the edit not to
+#     make. frag-04 is the odd one and the uncomfortable one: it carries no
+#     introductory element at all, and the tag records a MODEL MISFIRE rather
+#     than a shape. In 1 of the twelve runs the detector returned
+#     introductory_comma at medium confidence proposing a comma between "She
+#     stood in the hallway in her socks" and its own second verb ("and did the
+#     arithmetic of the house") — a comma splitting a compound predicate, under
+#     an explanation ("a longer introductory prepositional phrase is followed by
+#     a comma") that does not describe the span it landed on. It validated, so
+#     an author would have seen it. There is nothing here to repunctuate: the
+#     passage is right and the finding is wrong. Tagging it is the only way to
+#     keep the declaration complete for the sampling, and the cost is real —
+#     the scorer will now ignore a genuine introductory_comma finding on
+#     frag-04 forever. Read this tag as "this type has been observed to reach
+#     here", not as "frag-04 is missing a comma", which it is not.
+#   compound_sentence_comma (3) — rhy-03, rhy-07, rhy-10. Each omits the comma
+#     before a coordinating conjunction joining two INDEPENDENT clauses;
+#     `compound_sentence_comma.yaml` caps that at low confidence inside
+#     dialogue or a deliberate rhythm but still reports it. Coordinated
+#     SUBORDINATE clauses (rhy-09's "until the light changed and the dog
+#     started up and she realized", lyr-04's two "that" clauses) are not that
+#     shape and carry no compound_sentence_comma tag, even though LanguageTool
+#     fires on both — rhy-09 is tagged `serial_comma` instead, for the three
+#     coordinate clauses themselves.
+#   complex_list_semicolon (2) — rhy-05 and lyr-02. rhy-05 was the entry in
+#     this table that was missing while a run had already found it, and the
+#     reason the section below was rewritten once already. rhy-05 is a single
+#     sentence, and by the time its
+#     closing series lands ("woke up, looked out the window at what was
+#     happening, said something mild that she has never been able to repeat
+#     convincingly, and went back to sleep") the sentence has already spent
+#     commas on two relative clauses ("not the noise, which everyone asked
+#     about", "not the dust, which was in every photograph") and on an
+#     appositive ("a stranger in a brown coat who had been asleep since the
+#     second stop"). More than one item boundary is therefore doing double duty,
+#     which is precisely what `complex_list_semicolon.yaml` is built to FLAG —
+#     "items with internal dates or internal modifying phrases" — and one of the
+#     earlier runs returned it HIGH and validated. The fix that type asks for
+#     is a semicolon between the items, which is a full stop dropped into the
+#     middle of the one sentence rhy-05's `why_silence` says has to stay open
+#     until its last three words; ctl-08 is in the file precisely to be a
+#     sentence of the same length with no such defence. Tagged rather than
+#     repunctuated, on the same rule as the serial comma below.
+#     lyr-02 is the same type on a different device and was found by the same
+#     mechanism — one run of a resample, this time at low confidence and
+#     validated. Its opening series ("Salt, first, and then tar, and then the
+#     green rot of the pilings, and under all of it the sweetness of the fruit
+#     boats") has an item carrying its own internal comma in the first three
+#     words, which is the shape that type owns. Tagged, not repunctuated:
+#     semicolons in that series would turn a nose reporting in real time into
+#     an inventory, and `why_silence` says so.
+#   subject_verb_agreement (1) — arch-09, for "there is a foundation the size of
+#     a small church and a line of walnut trees somebody planted in a row".
+#     Returned HIGH and validated in 3 of the twelve runs behind the current
+#     table. THE ONE TAG IN THIS FILE WHERE THE MECHANICAL CHANNEL IS ARGUABLY
+#     RIGHT RATHER THAN OVER-REACHING, and it is flagged as such rather than
+#     buried: `subject_verb_agreement.yaml`'s own FLAG list names both halves of
+#     this construction by name — "compound subjects joined by 'and' taking a
+#     singular verb" and "inverted constructions: 'There is three reasons for
+#     this.'" — so unlike the introductory_comma-on-an-inversion collision, the
+#     model is not contradicting its own prompt here. The reason it is tagged
+#     rather than repaired is the FIX rule's second condition, not its first:
+#     proximity agreement after existential "there" with a compound subject
+#     whose first element is singular is ordinary edited English, so the
+#     standard does not PLAINLY want the mark, and the one-token repair the type
+#     asks for produces "there are a foundation and a line of walnut trees",
+#     which few editors would impose. If the user disagrees, the repair is one
+#     word and nothing in `tempting_edit` or `why_silence` depends on it — the
+#     device is the existential opening and the gnomic present, both of which
+#     survive "there are". This entry exists so that choice is the user's and
+#     not something a header quietly made for them.
+#   tense_shift (1)           — frag-02, for "and that is the entire strategy he
+#     had": a present-tense narratorial aside closing a past-tense sentence.
+#     Returned at medium confidence by one earlier run and again in 1 of the
+#     twelve current ones. THIS IS ONE OF THE TWO PLACES IN THE FILE WHERE A TAG
+#     RECORDS OBSERVATION RATHER THAN SHAPE (frag-04's introductory_comma is the
+#     other, and the worse of the two), and
+#     the honest caveat is that at least seven other passages carry the same
+#     shape untagged: frag-03 ("It is a strange arithmetic"), frag-05 ("he has
+#     not opened it since"), frag-09 ("that is the part she has never been able
+#     to explain"), anaph-06 ("which is a decision"), anaph-07 ("which is what
+#     you do"), arch-02 ("which is a thing the story will not tell you"),
+#     arch-04 ("one of the boys is the reason the song exists"). Tagging all
+#     eight by shape would excuse the mechanical channel on eight passages'
+#     worth of the set's most common aside, which weakens the gate more than it
+#     documents; tagging none leaves an observed finding undeclared while the
+#     section below claims there are none, which is the contradiction that got
+#     this file audited. So: one tag, and this paragraph, which says out loud
+#     that a run landing on any of the seven will produce a finding the table
+#     below does not predict.
+#   repeated_word (1)         — lyr-04. "whatever had happened had happened"
+#     is a subject and its predicate, which `repeated_word.yaml` rules clean
+#     ("the same word appearing twice in a sentence in different roles"), but
+#     LanguageTool's PHRASE_REPETITION does fire on it and the type could
+#     follow. Tagged rather than repunctuated: the doubling is the sentence.
+#   word_echo (1)             — anaph-03. Five occurrences of "quiet" in one
+#     paragraph. `word_echo.yaml` excludes parallel construction and thematic
+#     key words, so the correct answer is still silence, but this is the exact
+#     borderline that type owns and pretending otherwise would be dishonest.
+#   general_error (1)         — dial-07, for "all the further she cared to
+#     walk", a Midland idiom carried in NARRATION rather than in quotation
+#     marks. LanguageTool has a rule for it (ALL_THE_FURTHER) typed
+#     `misspelling`, which `docproof/languagetool.py`'s denylist does not drop,
+#     so a mechanical run can reach that span. general_error is the nearest
+#     first-class type that could carry the resulting query — and its own
+#     prompt tells the model to leave dialect alone, so the correct DocProof
+#     answer is still silence. The tag records that a mechanical channel has a
+#     claim here, not that the claim should be honoured.
+#
+# The rule for choosing between repunctuating a passage and tagging it: FIX
+# where the omission is incidental — nothing in the passage's `tempting_edit`
+# or `why_silence` depends on it, and the standard plainly wants the mark —
+# and TAG where the omission is the device. int-06, frag-07 and doc-08 each
+# gained a compound-sentence comma under that rule; ctl-01, ctl-07, frag-06,
+# doc-06 and lyr-06 gained an introductory comma; int-07 gained one after a
+# transitional phrase; rhy-04 gained the article in "a quarter past two";
+# lyr-06's two spaced em dashes were closed up. Everything left is tagged.
+#
+# TWO MORE PASSAGES GAINED AN INTRODUCTORY COMMA under that rule in the current
+# revision, and they are the reason the rule now has a worked example of BOTH
+# branches on the SAME shape. rhy-02 ("and by the time he got his head up[,] the
+# whole town was a line of lights") and int-09 ("and if there were witnesses[,]
+# she would not do the thing where") each fronted a subordinate clause and
+# withheld its comma. Neither passage's `tempting_edit` mentions the comma;
+# rhy-02's `why_silence` defends the three-clause splice earlier in the
+# paragraph and int-09's defends the phrase "the thing where". Incidental, so:
+# FIXED. rhy-03 carries the identical shape ("and by the time anyone in that
+# kitchen understood what was happening she had already read") and is TAGGED,
+# because its `tempting_edit` names that exact comma as an edit not to make and
+# its `why_silence` says the absence is what makes the sentence arrive all at
+# once. Same shape, opposite dispositions, and the difference is entirely in
+# what the passage itself claims to be doing — which is the rule working, not
+# the rule being bent. An auditor was right to ask why int-09 had been left
+# alone while rhy-02's neighbour was declared: the previous revision fixed one
+# instance of an undeclared type and never swept the class.
+#
+# ---------------------------------------------------------------------------
+# HOUSE-STYLE SWEEPS
+#
+# `config/default.yaml` runs eight deterministic sweeps before any model sees
+# the text — sweep_ellipsis, sweep_dash, sweep_stacked_punctuation,
+# sweep_doubled_word, sweep_century, sweep_compound_number, sweep_dialogue_tag,
+# sweep_terminal_period — and a sweep hit is not a judgement call: it is a
+# high-confidence tracked change, on every run, forever, with no model and no
+# API in the loop. All eight are run over all 88 passages in both forms, raw
+# and normalized, and the count is now zero.
+#
+# It was two. lyr-06 carried a spaced em dash pair ("came the horses — six of
+# them, wet to the shoulder — and behind the horses"), and Atmosphere house
+# style sets the em dash UNSPACED, so `sweep_dash` drew two permanent
+# high-confidence tracked changes on a passage in a file whose header called
+# itself mechanically clean, and would have gone on drawing them forever.
+# LanguageTool cannot see that — it has no house dash rule — which is why a
+# LanguageTool sweep is not sufficient evidence for the claim this section
+# makes. The dashes were closed up, and the check is now
+# `tests/test_style_traps.py::test_no_passage_violates_a_house_style_sweep`,
+# which reads the sweep list out of `config/default.yaml` rather than naming
+# one, so enabling a ninth sweep re-checks the file instead of silently not
+# checking it.
+#
+# Note the scope: the sweeps are run over each item's `text` only. The prose
+# fields around it (`tempting_edit`, `why_silence`, these comments) are
+# documentation, not manuscript, and are not held to house punctuation.
+#
+# ---------------------------------------------------------------------------
+# DETECTOR RECONCILIATION — the real pipeline, a STAND-IN model, twelve runs
+#
+# EVERY NUMBER IN THIS SECTION WAS MEASURED ON gpt-5.6-luna AT MEDIUM EFFORT.
+# THAT IS NOT THE DETECTOR THIS PIPELINE SHIPS. Read the WHICH MODEL subsection
+# below before any figure in this one; the `reconciliation` block further down
+# says the same thing in fields a test reads, so the two cannot drift apart.
+#
+# WHICH MODEL, AND WHICH MODEL IS MISSING.
+#
+# `config/default.yaml` sets `api.model: claude-haiku-4-5` and leaves
+# `ensemble.detectors` empty, which is single-detector mode: the configured
+# detector, the thing a client manuscript is actually reviewed by, is
+# claude-haiku-4-5.
+#
+# claude-haiku-4-5 HAS NEVER BEEN RUN OVER THIS FILE. Not once, at any point in
+# the file's history. It was attempted on 2026-08-14 and could not run: every
+# request returns HTTP 400, "Your credit balance is too low to access the
+# Anthropic API." That was reproduced independently again while writing this
+# revision — a bare four-token request to the Anthropic Messages API, same 400,
+# same message (request_id req_011Ce3PJYmtjueT5wzjiZouH) — and it costs nothing
+# to reproduce, because no token is consumed and no finding comes back. A
+# zero-finding run of that kind means nothing about this file. The blocker is
+# API credit on the Anthropic account, not effort, not money at the scale this
+# would cost, and not anything a change to the trap set could fix. IT IS A REAL
+# LIMITATION FOR THE USER TO RESOLVE, and it is stated here rather than papered
+# over with the stand-in's numbers.
+#
+# The substitution is not cosmetic, and the repo says so in its own words:
+# `eval/tools/anchor_dump.py` was written because the accuracy baseline put
+# claude-haiku-4-5 at a 29% anchor-failure rate against gpt-5.6-luna's 0%. Two
+# models that disagree that sharply about whether a quote is even anchorable
+# will not return the same finding set on these passages either. And
+# `docproof/providers/catalog.py` marks claude-haiku-4-5 `supports_effort=False`
+# — so "medium effort", which every run below did use, is not a setting the
+# configured detector has. The run that closes the gap is exactly the one that
+# produced everything below with `--model` left off:
+#
+#     python -m eval.tools.reconcile_traps --runs 6
+#
+# claude-haiku-4-5 prices higher per token than the stand-in ($1/$5 per MTok
+# against luna's $0.20/$1.20, per `docproof/providers/catalog.py`) but a run
+# over 88 short paragraphs cost about $0.045 on luna, so the whole missing
+# measurement is well under a dollar the day the credit exists.
+#
+# Until it runs, the honest reading of this section is: it reconciles the trap
+# file against gpt-5.6-luna, and it is EVIDENCE ABOUT THE SHAPES IN THESE
+# PASSAGES — polysyndeton is a serial-comma claim whatever model is looking —
+# but it is not a measurement of what the shipped detector does to them.
+#
+# HOW THIS SECTION IS REGENERATED. `eval/tools/reconcile_traps.py`, named in
+# the `reconciliation.runner` field and checked to exist by
+# `tests/test_style_traps.py::test_the_reconciliation_names_a_runner_that_exists`.
+# It builds the whole file into a document one paragraph per passage and runs
+# the actual review pipeline over it N times (`docproof.eval.runner.run_eval` →
+# `prepare` → `run_sync` → `validate_findings`, `normalize.quotes` and
+# `normalize.spaces` off so offsets survive, `min_confidence` forced to "low" by
+# the runner itself so nothing is hidden by the gate), then prints the
+# trap x error_type x runs-seen table below and flags every finding whose type
+# the passage does not declare. It writes to a temp directory, never into the
+# repo. An earlier version of this header claimed the section "is regenerated
+# whenever a passage changes rather than being inherited" while no such tool
+# existed anywhere in the repo — the script that made the table lived in a
+# scratchpad that did not survive its session. That claim was false when
+# written; it is true now, and schema 5 makes it checkable.
+#
+# WHAT WAS RUN. LanguageTool cleared this file; the real pipeline did not.
+# TWELVE runs over the passages exactly as they now read, in two blocks of six,
+# gpt-5.6-luna at medium effort. Finding counts: 17, 19, 14, 21, 22, 21, 17, 19,
+# 15, 19, 16, 17 — a range of 14 to 22, and no two of the twelve returned the
+# same set. (Every recorded sample over any draft of this file falls in that
+# same 14-to-22 band, and an earlier version of this header quoted a narrower
+# one because it had seen fewer runs. That is the argument for quoting a
+# denominator with every number.) 17 of the 88 passages drew at least one
+# finding in at least one run. The whole table:
+#
+#   trap      error_type              reached an author  thrown out  confidence
+#   int-01    comma_splice                 12/12              -      low
+#   doc-06    comma_splice                 12/12              -      low
+#   rhy-02    comma_splice                 12/12              -      low
+#   rhy-06    comma_splice                 12/12              -      low
+#   rhy-11    comma_splice                 11/12              -      low
+#   lyr-03    serial_comma                 11/12              -      high, medium
+#   anaph-06  serial_comma                 10/12              -      high, medium
+#   arch-02   serial_comma                 10/12              -      high, medium
+#   frag-02   serial_comma                 10/12              -      high, medium
+#   rhy-06    serial_comma                 10/12              -      high, medium
+#   rhy-08    comma_splice                 10/12              -      low
+#   frag-01   serial_comma                  8/12              -      high, medium
+#   rhy-03    introductory_comma            8/12              -      high
+#   rhy-08    introductory_comma            7/12              -      high, medium
+#   lyr-01    introductory_comma            6/12              -      medium
+#   arch-09   subject_verb_agreement        3/12              -      high
+#   frag-02   tense_shift                   1/12              -      medium
+#   frag-04   introductory_comma            1/12              -      medium
+#   rhy-08    serial_comma                    -              1/12    high
+#   anaph-10  number_style                    -              1/12    high
+#   frag-02   number_style                    -              1/12    high
+#   frag-03   number_style                    -              1/12    high
+#   frag-04   serial_comma                    -              1/12    medium
+#
+# EVERY ONE OF THE EIGHTEEN THAT REACHED AN AUTHOR LANDS ON A TYPE ITS PASSAGE
+# DECLARES. Getting there took two repairs and three new declarations in this
+# revision, all of them listed under the tag table above:
+#
+#   FIXED (the FIX branch of the rule, both incidental):
+#     rhy-02  introductory_comma. A fronted "by the time" clause with the comma
+#             withheld for no reason the passage gives. Found HIGH and validated
+#             in 2 of 6 runs of the resample that sent the file back for this
+#             revision; the comma was added, and it has not returned in any of
+#             the twelve runs since.
+#     int-09  introductory_comma. Never observed firing — repunctuated by SHAPE,
+#             because it is the same fronted-subordinate-clause construction as
+#             rhy-02, one passage over, with a `why_silence` that defends the
+#             phrase "the thing where" and says nothing about any comma. An
+#             auditor flagged the inconsistency of fixing one and leaving the
+#             other, and was right to.
+#   DECLARED (the TAG branch):
+#     arch-09 subject_verb_agreement, HIGH, 3/12 here and 1 of the six runs
+#             immediately before the repairs. Existential "there is" with a
+#             compound subject. The one tag in the file where the mechanical
+#             channel is arguably CORRECT rather than over-reaching; the tag
+#             table says so at length and leaves the one-word repair to the user.
+#     lyr-02  complex_list_semicolon, low, validated, 1 of the six runs taken
+#             immediately before this revision's repairs, and none of the twelve
+#             since. A series whose first item carries its own internal comma.
+#     frag-04 introductory_comma, medium, validated, 1/12. A model misfire, not a
+#             defect: it proposed a comma between a subject and its second verb
+#             under an explanation that does not describe the span. Tagged by
+#             OBSERVATION rather than shape, with the cost of doing so named in
+#             the tag table.
+#
+# FINDINGS THAT NEVER REACHED AN AUTHOR. Five in these twelve runs, listed
+# individually because a list that says "and others" is not a reconciliation:
+#     rhy-08  serial_comma, high, rejected_noop. The model returned a
+#             `corrected_text` byte-identical to the original, explaining that
+#             the series already carried its serial comma. It does.
+#     anaph-10, frag-02, frag-03  number_style, high, rejected_noop, one run
+#             each. Three instances of one recurring shape rather than three
+#             accidents: the type returns the paragraph unchanged with the
+#             explanation "house style spells out numbers one through one
+#             hundred in prose", which these passages already do. Every
+#             number_style result ever recorded against this file has been a
+#             no-op — rhy-08's in the earlier sampling, lyr-06's and frag-02's in
+#             the six-run resample that preceded this revision, and these three.
+#             An earlier draft of this section named rhy-08's alone while
+#             claiming the list was individual, which it was not.
+#     frag-04 serial_comma, medium, rejected_no_anchor. Returned against the
+#             wrong paragraph — the model quoted frag-02's text on frag-04's
+#             finding — and thrown out by the validator. It has done this
+#             before, on an earlier run, in both directions of rejection.
+#   Also inherited, from the sampling that preceded this revision and is not
+#   re-measurable now that two passages have changed: ctl-01 introductory_comma,
+#   rejected_noop, 1 run — THE CONTROL REPAIR WORKING. Before that repair ctl-01
+#   drew this type as a high-confidence tracked change in 2 of 2 runs; after it,
+#   the model returned a no-op explaining the comma was already there, and
+#   `validate_findings` threw it out. No control has drawn anything an author
+#   could act on in any run since, including all twelve here — which is the
+#   whole invariant `test_no_control_carries_a_mechanical_overlap` defends.
+#
+# ELEVEN OF THE TWENTY-NINE TAGS DID NOT FIRE IN ANY OF THE TWELVE RUNS:
+# dial-07 general_error, anaph-03 word_echo, int-05 and rhy-09 serial_comma,
+# rhy-03, rhy-07 and rhy-10 compound_sentence_comma, rhy-05 and lyr-02
+# complex_list_semicolon, lyr-02 introductory_comma, lyr-04 repeated_word. That
+# is the by-shape rule working as intended, not a set of stale declarations: a
+# declaration that records only what one afternoon's sampling happened to
+# surface is a snapshot, and tagging by shape is what makes this table
+# reproducible. Earlier sampling has already fired on several of them (rhy-09
+# serial_comma, rhy-03 introductory_comma, rhy-05 complex_list_semicolon,
+# lyr-02 complex_list_semicolon), which is the rule being vindicated rather than
+# corrected.
+#
+# THE SCOPE OF THE CLAIM, WHICH IS THE POINT OF THE DENOMINATOR. What this
+# section supports is: THE DECLARATIONS COVER EVERY VALIDATED FINDING THAT
+# TWELVE RUNS OF gpt-5.6-luna SURFACED OVER THE PASSAGES AS THEY NOW READ, and
+# the five that were thrown out before any author could see them are named
+# above, individually. That is the whole claim. It is deliberately NOT "zero
+# undeclared findings", which no run count can establish for a stochastic
+# detector, and which this file has twice asserted and twice had falsified.
+# The falsification rate is worth stating plainly, because it is the best
+# available estimate of how much a reader should trust the next such claim.
+# FOUR independent six-run blocks have been taken over this file since the last
+# revision, and three of the four broke it:
+#
+#   block 1  the resample that sent the file back. Undeclared and validated:
+#            rhy-02 introductory_comma, HIGH, 2/6. Also two undeclared
+#            no-ops the inventory did not contain (lyr-06, frag-02
+#            number_style). Over the text as the last revision left it.
+#   block 2  taken at the start of this revision, same text. Undeclared and
+#            validated: arch-09 subject_verb_agreement HIGH 1/6, lyr-02
+#            complex_list_semicolon low 1/6. Neither had appeared in any
+#            earlier run, and neither repeats block 1's finding.
+#   block 3  after the rhy-02 and int-09 commas and the arch-09 and lyr-02
+#            tags. Undeclared and validated: frag-04 introductory_comma,
+#            medium, 1/6. The first six of the twelve in the table above.
+#   block 4  after frag-04 was tagged. Nothing undeclared reached an author.
+#            The second six of the twelve.
+#
+# Three consecutive blocks, three different novel findings, none predicting the
+# next. A fifth block may well turn up another; the `tense_shift` entry in the
+# tag table names seven specific passages where that is most likely. What can be said without hedging is narrower and firmer: the
+# deterministic half of the pipeline (the sweeps) is checked by a test and is
+# zero; the declarations are made by shape rather than by observation wherever
+# a shape exists, so they do not decay as sampling changes; this section can now
+# actually be regenerated, by a committed tool a test can find; and none of it
+# has yet been measured on the model `config/default.yaml` configures.
+#
+# WHY THIS DOES NOT MAKE THE SET USELESS. The mechanical channel and the
+# smoothing channel overlap by nature in this material: polysyndeton IS a list
+# without its serial comma, inversion IS a fronted phrase without its comma,
+# and a rhythm splice IS a comma splice. No rewrite separates them, and a
+# rewrite that did would have deleted the devices the traps exist to protect.
+# The separation has to happen in the SCORER, which counts only
+# smoothing-channel suggestions toward the trap firing rate; `mechanical_overlap`
+# is the file's own declaration of where that filter has work to do.
+#
+# ---------------------------------------------------------------------------
+# LANGUAGETOOL RECONCILIATION
+#
+# The whole file has been swept with `language_tool_python` (en-US, default
+# rule set, no denylist, one paragraph per check). 40 hits over 88 passages,
+# reconciled exhaustively — 40 = 14 + 7 + 9 + 4 + 2 + 4:
+#
+#   14  MORFOLOGIK_RULE_EN_US, an unknown word. Eleven are invented proper
+#       nouns — Ellisville, Hendersons, Halloran (x4), Petersons, Adeyemi,
+#       Ansel, Halvorsen, Bowens — which the pipeline suppresses with the spell
+#       scan's lexicon (`docproof/languagetool.py`: "a misspelling flag on one
+#       of them is a name/coinage"). Three are valid closed compounds the
+#       dictionary lacks: downspout, woodsmoke, mudroom.
+#    7  ENGLISH_WORD_REPEAT_BEGINNING_RULE, "three successive sentences begin
+#       with the same word". Five land on the anaphora and repeated-opening
+#       passages (anaph-01, anaph-04, arch-03, rhy-04, lyr-05) — the device the
+#       passage exists to protect, so the trap working as designed. Two land on
+#       ctl-04, where the repeated "She could see / hear / feel" IS the clunk
+#       the control is made of, so the control working as designed. All are
+#       typed `style`, which `DEFAULT_DISABLED_ISSUE_TYPES` drops before the
+#       model sees them.
+#    9  intended dialect inside quotation marks: PRP_PAST_PART on "I done told"
+#       (dial-01), MD_NO_VB (x2) on Scots "you'll no be" (dial-02), and
+#       HE_VERB_AGR / DOUBLE_NEGATIVE / PRP_VBG / HE_NEED (x3) on the speech in
+#       dial-03. Exactly the case `general_error.yaml` already exempts.
+#    4  wordiness on a control, i.e. the control working as designed: WHETHER on
+#       ctl-01 and ctl-10, AS_OF_YET and ADD_AN_ADDITIONAL on ctl-03. All typed
+#       `style` and dropped by the same denylist — which is the point of having
+#       controls at all: the mechanical floor will not catch this prose, so if
+#       the smoothing pass does not either, nobody does.
+#    2  a LanguageTool rule over-firing on a construction the corresponding
+#       DocProof type explicitly excludes, so not a compound-sentence-comma
+#       claim: COMMA_COMPOUND_SENTENCE on rhy-09 and COMMA_COMPOUND_SENTENCE_2
+#       on lyr-04 both coordinate SUBORDINATE clauses ("until X and Y and Z";
+#       "that X and Y"), and `compound_sentence_comma.yaml` flags only where
+#       BOTH sides are genuinely independent. Both passages are nonetheless
+#       tagged, for other types and other spans (rhy-09 serial_comma, lyr-04
+#       repeated_word).
+#    4  tagged in `mechanical_overlap` above: COMMA_COMPOUND_SENTENCE on rhy-03
+#       and rhy-07, PHRASE_REPETITION on lyr-04, ALL_THE_FURTHER on dial-07.
+#
+# Every LanguageTool hit is accounted for. That is a much weaker statement than
+# it sounds, and it is the reason the DETECTOR RECONCILIATION section above
+# exists: this sweep was clean on a file carrying a house-style dash violation
+# and two controls missing a required comma, because LanguageTool has no house
+# dash rule and did not report either comma. A rule engine's silence is not
+# evidence. Note also that rhy-10's withheld comma is tagged
+# `compound_sentence_comma` although LanguageTool does not find it — the tag
+# tracks the DocProof type's own rule, not the rule engine's coverage.
+#
+# Hits in earlier drafts that were incidental errors rather than devices were
+# fixed rather than explained — a missing compound-sentence comma in int-06 and
+# one in an earlier dial-09 that no longer exists — and are gone from the sweep
+# above.
+#
+# HOW THIS ONE IS REGENERATED, since the section above had to stop claiming
+# regeneration it could not perform: `language_tool_python.LanguageTool('en-US')`
+# over each `load_traps()` passage's `text`, counting `rule_id`, which is a
+# dozen lines and needs no API key and no committed tool. It was re-run after
+# this revision's two comma repairs (rhy-02, int-09) and the total is unchanged
+# at 40, with the same rule breakdown; neither repaired passage draws a
+# LanguageTool hit before or after. Unlike the detector section this sweep is
+# deterministic, so one run of it is the whole claim.
+#
+# ---------------------------------------------------------------------------
+# NORMALIZATION
+#
+# `normalization: on` below is a run contract, not a preference. Run the trap
+# document through `docproof.normalize` before the smoothing pass, the same as
+# any manuscript.
+#
+# Why. The passages are written with straight quotes and single spaces, because
+# a YAML file people have to review by eye should be typeable. Every real
+# manuscript reaches the passes with curly quotes, and 24 of the 88 passages
+# here contain a straight mark, including the places where the direction is
+# least obvious: dropped-g apostrophes ("studyin'", "askin'", "nothin'",
+# "buyin'") and plural possessives ("the Hendersons' dock", "the nurses'
+# station"), all of which must curl RIGHT and none of which open anything.
+# Scoring a pass on typographic input no client document ever produces would
+# measure the wrong thing, and would also skip the one place this file could
+# tempt the normalizer into a mistake.
+#
+# The cost of normalizing is normally offset drift, and here there is none: the
+# quote rule substitutes one character for one (`docproof/validator.py` depends
+# on that invariant), and the space rule cannot fire because the loader rejects
+# any passage containing a double space. `tests/test_style_traps.py` runs the
+# real normalizer over every passage and asserts the length is unchanged, so
+# the claim is checked rather than asserted. Offsets are stable and the
+# realistic input is free. Phase 3 and the scorer must agree on this or their
+# firing rates are not comparable.
+#
+# ---------------------------------------------------------------------------
+# PROVENANCE
+#
+# Every passage was written for this file, with the four exceptions below.
+# There is no client manuscript text here, and no text from any work still in
+# copyright. Characters and businesses are invented; a handful of real
+# geographic names (Baltimore, Tucson, Ohio, Duluth, Falmouth, Ellisville)
+# appear as ordinary setting.
+#
+# The four passages built on a named public-domain model:
+#
+#   arch-01 — opens with the King James Bible's narrative formula "And it came
+#     to pass in those days" (KJV, 1611; public domain). Nothing after the
+#     first clause corresponds to any verse; the river, the bell and the
+#     eleven years are invented.
+#   arch-02 — the setup is a deliberate close retelling of the opening of
+#     Charles Perrault's "Le Maistre Chat, ou le Chat Botté" / "Puss in Boots"
+#     (1697; public domain): a miller, three sons, the mill and the donkey to
+#     the elder two, the cat to the youngest. The wording is not Perrault's or
+#     any translator's, and the passage diverges from the tale immediately
+#     afterward. It is here because fairy-tale register IS the trap, and the
+#     best-known instance of that register is the honest test of it.
+#   arch-06 — the escalating denunciation cadence of the King James prophets
+#     (1611; public domain). No verse is quoted, paraphrased, or alluded to;
+#     only the shape of the sentence is borrowed.
+#   arch-07 — uses the Victorian novel's direct-address convention ("Reader,"),
+#     most famously Charlotte Brontë's "Jane Eyre" (1847; public domain). One
+#     word of convention; the sentence and everything around it are original.
+#
+# Two further passages imitate formulae that have no author at all and so are
+# not attributable to anyone: doc-03 reproduces the boilerplate of a U.S.
+# public-sale notice ("Notice is hereby given", "appurtenances thereto",
+# "forever barred"), and doc-02 the verbless-entry convention of a ship's log.
+# int-01, rhy-02, rhy-06, rhy-08, rhy-11 and doc-06 use the
+# short-parallel-clause splice that `config/error_types/comma_splice.yaml`
+# itself names with Caesar's "I came, I saw, I conquered"; no text is taken
+# from anywhere.
+#
+# Every other passage was re-audited for the same problem — a phrase or opening
+# lifted from a specific published work — and nothing else was found. The
+# nearest calls, all cleared: arch-03 is nineteenth-century comic register with
+# no single model; arch-04 is ballad convention; doc-01's "I am in receipt of
+# yours of the eleventh" is commercial-letter formula; doc-05 is wire-service
+# house style. Real geographic names are used only as setting; every character
+# and business is invented.
+#
+# This section replaces an earlier header that claimed "no paraphrase of any
+# published passage." That was false about arch-01 and arch-02. Both are
+# public domain, so nothing here is a rights problem — but the user is being
+# asked to sign this file off, and a sign-off obtained on an inaccurate
+# provenance claim would not be worth having.
+#
+# ---------------------------------------------------------------------------
+# STATUS: PASSAGES APPROVED, POST-APPROVAL REPAIRS PENDING CONFIRMATION.
+# `status` below still reads `draft-pending-user-signoff`, and it stays there
+# until the user says otherwise. Here is exactly what that does and does not
+# mean, because an earlier version of this block said the sign-off had not
+# happened and then reasoned four lines later from its having happened, which
+# is not a state anybody can act on.
+#
+# `docs/accuracy-eval-plan.md` requires trap material to be human-authored
+# because traps are what defend the trust metric. Drafting these with an agent
+# and having the user approve them is a deliberate, named deviation from that
+# rule, defensible only because this set sits outside the standard scorecard —
+# and the sign-off is what makes it defensible.
+#
+# THE TRUE STATE, in order:
+#
+#   1. The user approved THE PASSAGES, in those words. That approval covers the
+#      prose: what each passage says, what device it carries, what it is for.
+#   2. Mechanical DEFECT REPAIRS were applied AFTERWARDS, i.e. after that
+#      approval and without it. In order: lyr-06's spaced em dash pair, which
+#      `sweep_dash` turned into a deterministic high-confidence tracked change
+#      on every run; introductory commas that ctl-01 and ctl-07 genuinely
+#      required, in the two passages the file asserts are mechanically clean so
+#      that only a smoothing pass can score on them; the same in frag-06, doc-06
+#      and int-07; rhy-04's missing article; dial-08's and dial-09's idiolect
+#      moved out of quotation marks so it is carried in narration; and, in this
+#      revision, one introductory comma each in rhy-02 and int-09.
+#   3. The orchestrator has undertaken to show the user the diff of those
+#      repairs for re-confirmation. Until that happens, the accurate description
+#      is: PASSAGES APPROVED, POST-APPROVAL REPAIRS PENDING CONFIRMATION.
+#
+# So a firing rate measured against this set is not yet quotable, and nobody
+# should flip `status` to `approved` on the strength of the passage approval
+# alone — the file being approved is not the file that was approved. Only the
+# user flips it.
+#
+# WHAT CHANGED IN THIS REVISION, for that diff: two passages gained one comma
+# each (rhy-02, int-09) and nothing else inside any `text:` was touched; three
+# passages gained a `mechanical_overlap` key (arch-09, lyr-02, frag-04); the
+# schema went to 5 for the new `reconciliation.runner` field; and the header's
+# tag table, FIX-vs-TAG rule and DETECTOR RECONCILIATION section were rewritten
+# around twelve fresh runs.
+
+schema_version: 5
+kind: smoothing_traps
+status: draft-pending-user-signoff
+normalization: "on"
+
+# WHICH MODEL THE DETECTOR RECONCILIATION WAS MEASURED ON. A field rather than a
+# sentence in the header, because the defect it exists to prevent was a header
+# sentence that stopped being true and nothing noticing: the whole section was
+# produced against gpt-5.6-luna while `config/default.yaml` configured
+# claude-haiku-4-5, and a reader had no way to tell.
+# `is_configured_detector` is cross-checked against `config/default.yaml`'s
+# `api.model` by tests/test_style_traps.py, so the flag cannot rot in either
+# direction: change the config and the test fails until this block is brought
+# back into agreement, whichever way agreement is reached.
+#
+# `runner` is the second such field, added in schema 5 for the second such
+# defect: the header used to claim the reconciliation section "is regenerated
+# whenever a passage changes rather than being inherited" while the script that
+# produced it lived in a scratchpad that did not survive the session, so the
+# claim was neither checkable nor actionable. It now names a committed tool, and
+# a test asserts the file exists. `runs` counts the runs behind the CURRENT
+# table — the twelve over the passages exactly as they now read — not every run
+# ever taken over some earlier draft of them.
+reconciliation:
+  model: gpt-5.6-luna
+  effort: medium
+  runs: 12
+  is_configured_detector: false
+  runner: eval/tools/reconcile_traps.py
+
+traps:
+
+  # ==========================================================================
+  # SILENCE — dialect and idiolect
+  # ==========================================================================
+  # A character who does not speak standard English, or who speaks a standard
+  # English so patterned it is a fingerprint. The single highest-consequence
+  # category: "correcting" a speaker's grammar erases the character. The three
+  # marginal passages move the idiolect OUT of quotation marks, where the
+  # general_error dialogue guard does not reach it.
+
+  - id: dial-01
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      He set the axe against the porch rail and looked at me a long while. "I
+      ain't studyin' you," he said. "I done told your mama what I aim to do
+      about that fence, and I reckon she told you, and now here you come askin'
+      like nobody said nothin' at all. Go on back up the hill. Tell her the
+      posts is rotted through, and I ain't buyin' new ones till the creek goes
+      down."
+    tempting_edit: >-
+      Standardize the speech: "ain't" to "am not", "I done told" to "I told",
+      "the posts is" to "the posts are", and restore the dropped g's.
+    why_silence: >-
+      The non-standard forms are consistent within the speaker and confined to
+      quoted speech, which makes them characterization rather than error.
+
+  - id: dial-02
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      The old woman filled the kettle without turning round. "Away with you
+      now," she said. "You'll no be wanting tea at this hour, and I'll no be
+      making it. Sit if you're sitting. Your granddad sat in that very chair
+      the night before he died, and he'd nothing to say for himself either. So
+      you're in good company, and you'll get the same from me as he got."
+    tempting_edit: >-
+      Rewrite "you'll no be wanting" as "you won't want" and "he'd nothing to
+      say" as "he had nothing to say", then join the two short imperatives.
+    why_silence: >-
+      Scots negation and the possessive-perfect are a regional register, not a
+      grammatical slip, and the clipped imperatives carry the speaker's mood.
+
+  - id: dial-03
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      Miss Ella kept her hands in the dishwater while she talked. "That boy
+      been working since he was twelve," she said. "He don't ask nobody for
+      nothing. You come around here with your papers and your questions, and
+      you fixing to tell me what he need? I raised him. I know what he need. He
+      need somebody to pay him what the work is worth, and that ain't a thing
+      you can put on a form."
+    tempting_edit: >-
+      Regularize to "has been working", "doesn't ask anybody for anything",
+      "you're planning to", "what he needs", and collapse the repeated "what he
+      need" into one clause.
+    why_silence: >-
+      The habitual aspect, negative concord, and zero copula are a systematic
+      dialect used consistently by one speaker, and the repetition is her
+      argument.
+
+  - id: dial-04
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      Yuri wiped the counter twice before he answered. "Is not a question of
+      money," he said. "Money we have, a little. Is a question of what my
+      brother will say when he learns. In my country a man does not sell the
+      house of his father to a stranger from the city. He does not do it. So.
+      You will drink coffee, and then you will go, and I will think about it,
+      and on Thursday I will tell you no."
+    tempting_edit: >-
+      Insert the missing subject ("It is not a question of money"), reorder
+      "Money we have" to "We have money", and delete the one-word sentence
+      "So."
+    why_silence: >-
+      Subject dropping and topic-fronting are how this speaker's first language
+      shows through, and the isolated "So." is his pause made audible.
+
+  - id: dial-05
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      He put his glass down and started in without being asked. "Sure I was
+      after telling him the same thing myself," he said, "and didn't he go and
+      do the opposite, the way he always does, and now there's a boat on the
+      rocks below the point and himself in the pub explaining it to anyone
+      who'll stand still. That's the whole of it. That's your uncle, and you
+      may as well know it now as later."
+    tempting_edit: >-
+      Convert "I was after telling him" to "I had already told him", drop the
+      sentence-initial "Sure", and rewrite "himself in the pub" as "he is in
+      the pub".
+    why_silence: >-
+      The after-perfect and the emphatic pronoun are Hiberno-English structures
+      the character is built out of, not clumsiness the passage needs rescued
+      from.
+
+  - id: dial-06
+    category: dialect-idiolect
+    difficulty: overt
+    text: >-
+      Auntie June waved the fan at me like I was smoke. "You think I don't know
+      what you come for?" she said. "You come for the land papers, same as your
+      cousin come last year, and I tell him what I tell you now. The papers in
+      the bank. The bank in town. And the man at the bank going to ask you the
+      same question I asking you: who send you? Answer that one first."
+    tempting_edit: >-
+      Mark the past tense on "come" and "send", insert the copula into "The
+      papers in the bank", and add the auxiliary to "I asking you".
+    why_silence: >-
+      Unmarked past and zero copula are consistent Caribbean English features
+      held steadily across the whole speech, so every proposed fix is a
+      correction of the character, not of the text.
+
+  - id: dial-07
+    category: dialect-idiolect
+    difficulty: marginal
+    mechanical_overlap: [general_error]
+    text: >-
+      The Petersons had the place before us, and Ruth Peterson still came by of
+      an evening to look at the roses she had put in forty years earlier. She
+      never knocked. She would stand at the fence a while and then leave, and
+      once she told my mother that the drive was all the further she cared to
+      walk anymore, which my mother repeated to me that night in a voice I did
+      not understand until I was a good deal older.
+    tempting_edit: >-
+      Modernize the narrator's regionalisms: "of an evening" to "in the
+      evening", "all the further she cared to walk" to "as far as she cared to
+      walk", and the positive "anymore" to "these days".
+    why_silence: >-
+      Three Midland idioms, one each, in a narrator whose whole claim on the
+      reader is that he is from this place — quiet enough to look like slack
+      phrasing, and the only thing locating the voice.
+
+  - id: dial-08
+    category: dialect-idiolect
+    difficulty: marginal
+    text: >-
+      Mrs. Adeyemi ran the shop, and the shop ran on credit, which she kept in
+      a notebook nobody else was permitted to touch. When my father fell
+      behind, she did not mention it for four months, and when at last she did
+      mention it, she said nothing about the money. She said she was reminding
+      him that she was there, and that is all she said. Neither then nor
+      afterward did she call it a kindness. He paid her back in March. He did
+      not thank her out loud, because to thank her out loud would have made it
+      charity.
+    tempting_edit: >-
+      Contract the narrator's verbs throughout ("she didn't mention it", "he
+      didn't thank her"), and return the inverted "Neither then nor afterward
+      did she call it a kindness" to ordinary subject-first order.
+    why_silence: >-
+      Not one contraction in the paragraph and one formal negative inversion:
+      this is the English the narrator learned from the woman he is describing,
+      and he is using it in his own narration, where no quotation mark protects
+      it. Contracting it is the fastest way to make him sound like everyone
+      else in the book.
+
+  - id: dial-09
+    category: dialect-idiolect
+    difficulty: marginal
+    text: >-
+      The vehicle departed the roadway. The subject was observed to exit.
+      Contact was made. Delgado typed the three sentences, saved the file, and
+      went home. On Sunday night, in the notebook she kept for herself, which
+      nobody would ever read, she wrote that a call had been received from her
+      sister at approximately nine in the evening, and that the caller had
+      declined to state the nature of her concern. She read it back on Tuesday
+      and made herself a cup of tea and did not change a word.
+    tempting_edit: >-
+      De-passivize the report sentences and the private entry alike — "The
+      vehicle left the road", "Her sister called at about nine" — and cut
+      "declined to state the nature of her concern" as jargon.
+    why_silence: >-
+      The institutional register is the character, and the passage's one event
+      is that it has followed her into a notebook nobody will read; plain
+      English there deletes the only thing that happens.
+
+  # ==========================================================================
+  # SILENCE — intentional repetition and anaphora
+  # ==========================================================================
+  # The category most exposed to a word-echo heuristic: a refrain and a
+  # careless echo look identical to anything counting occurrences. The marginal
+  # passages repeat something exactly TWICE, which is where the counting stops
+  # being decisive and the judgement starts.
+
+  - id: anaph-01
+    category: intentional-repetition
+    difficulty: overt
+    text: >-
+      They came for the harvest and stayed for the winter. They came in trucks
+      with their tools roped to the roof, and they came on foot when the trucks
+      broke down outside Ellisville, and they came, some of them, with nothing
+      at all but a coat and a name on a piece of paper. They came because the
+      letter said there was work. The letter did not say for how long.
+    tempting_edit: >-
+      Collapse the four "They came" openings into a single sentence with a
+      compound list of arrivals.
+    why_silence: >-
+      The repetition is the paragraph's structure, and collapsing it discards
+      the accumulating rhythm that sets up the final short sentence.
+
+  - id: anaph-02
+    category: intentional-repetition
+    difficulty: overt
+    text: >-
+      The town council said the money was gone. The bank said the money was
+      gone. Her father, who had spent nine months explaining exactly where the
+      money would go, sat at the end of the table with his hands folded and
+      said, when they finally asked him, that the money was gone. Nobody asked
+      the next question. It was late, and everyone wanted to be somewhere else.
+    tempting_edit: >-
+      Vary the third and fourth occurrences of "the money was gone" to avoid
+      the echo, or reduce the first two to "Both the council and the bank said
+      the money was gone."
+    why_silence: >-
+      The verbatim refrain is the point — three institutions producing the same
+      sentence is the paragraph's whole argument.
+
+  - id: anaph-03
+    category: intentional-repetition
+    difficulty: overt
+    mechanical_overlap: [word_echo]
+    text: >-
+      The house was quiet. Not empty-quiet, not the quiet of a room nobody has
+      walked into yet, but the specific quiet that settles over a place where
+      two people have agreed not to say a thing. Quiet like a held breath.
+      Quiet like a hand over a mouth. She made the tea and did not offer him
+      any, and the kettle was the loudest thing in the county.
+    tempting_edit: >-
+      Reduce the five occurrences of "quiet" to two and merge the two "Quiet
+      like" fragments into one simile.
+    why_silence: >-
+      The word is being defined by accumulation, and each repetition narrows it
+      further, so thinning them removes the definition.
+
+  - id: anaph-04
+    category: intentional-repetition
+    difficulty: overt
+    text: >-
+      Every morning he checked the trap line. Every morning the traps were
+      empty, and the snow between them was unmarked, and every morning he walked
+      the whole circuit anyway, because the walking was the point and had been
+      since October. Every evening he wrote the date in the ledger and drew a
+      short line beside it, which meant nothing had come. By February the
+      ledger was a very boring document, and he was the only man alive who could
+      have read it with interest.
+    tempting_edit: >-
+      Replace the repeated "Every morning" with "Each day" and "then", and cut
+      "and had been since October" as redundant with "every morning".
+    why_silence: >-
+      The anaphora enacts the monotony the passage is about, so any variation
+      for its own sake works against the sentence's job.
+
+  - id: anaph-05
+    category: intentional-repetition
+    difficulty: overt
+    text: >-
+      What the river took: the footbridge, the Hendersons' dock, four hundred
+      feet of fence, a wheelbarrow, the idea that anyone in that valley had
+      ever been in charge of anything. What the river left: mud to the second
+      stair, a catfish in the piano, and a mark on the courthouse wall that the
+      county has never once painted over, because a town will forgive a flood,
+      but it will not forgive being told to forget one.
+    tempting_edit: >-
+      Rewrite the two colon-headed fragments as complete sentences ("The river
+      took the footbridge...") and vary the second "What the river" opening.
+    why_silence: >-
+      The matched headings are a deliberate ledger, and the parallel is what
+      makes the last item in each list land.
+
+  - id: anaph-06
+    category: intentional-repetition
+    difficulty: overt
+    mechanical_overlap: [serial_comma]
+    text: >-
+      She wrote to Halloran in March. She wrote to Halloran again in April, a
+      shorter letter, and in May a letter so short it was really only the
+      address and a date. Halloran did not write back in March or April or May.
+      Halloran, it turned out, had been dead since February, and the man
+      collecting his post was a nephew who could not think what to do about any
+      of it and so did nothing, which is a decision, and which she never
+      entirely forgave.
+    tempting_edit: >-
+      Pronominalize the repeated surname ("She wrote to him again in April...
+      He did not write back") and reduce "March or April or May" to "for three
+      months".
+    why_silence: >-
+      The undiminished name is how the passage keeps a dead man present in
+      every sentence, which is exactly what a pronoun would undo.
+
+  - id: anaph-07
+    category: intentional-repetition
+    difficulty: overt
+    text: >-
+      The boat was not coming back. Everyone on the pier knew it by four
+      o'clock, and the harbormaster knew it by two, and the boy who ran the ice
+      house had known it since he watched the barometer fall on Tuesday and
+      told a man who told nobody. The boat was not coming back. They stood
+      there until dark anyway, which is what you do, and then they went home
+      and set the table for the number of people who would actually be eating.
+    tempting_edit: >-
+      Delete the second "The boat was not coming back." as a duplicated
+      sentence.
+    why_silence: >-
+      The repeated line is a refrain that closes the loop the middle sentence
+      opens, and deleting it is the single most damaging edit available here.
+
+  - id: anaph-08
+    category: intentional-repetition
+    difficulty: marginal
+    text: >-
+      The letter came on a Tuesday, and the second letter came on a Tuesday,
+      which Ruth noticed and did not mention to anyone, because saying it out
+      loud would have made it a thing she believed. She kept them both in the
+      drawer with the batteries and the spare key. In August a third envelope
+      arrived, on a Thursday, and she was surprised at how much that
+      disappointed her.
+    tempting_edit: >-
+      Cut the second "came on a Tuesday" to "and so did the second" to avoid
+      repeating the phrase inside one sentence.
+    why_silence: >-
+      The phrase has to arrive intact the second time or the third envelope has
+      nothing to break, and the whole paragraph is built to make a Thursday
+      land.
+
+  - id: anaph-09
+    category: intentional-repetition
+    difficulty: marginal
+    text: >-
+      He was not a cruel man. He was not a kind one either, and the distance
+      between those two facts was where his children had grown up, learning
+      early that the answer to any question was the same answer, and that the
+      same answer was no. By the time he needed them, all three had become very
+      good at saying it back to him, and none of the three ever once enjoyed
+      it as much as they had expected to.
+    tempting_edit: >-
+      Merge the two opening sentences into "He was neither cruel nor kind", and
+      vary the repeated "the same answer".
+    why_silence: >-
+      Two occurrences each, not five: the paired negations set up a middle
+      distance that "neither cruel nor kind" collapses, and the repeated
+      "answer" is the sentence closing on itself the way the household did.
+
+  - id: anaph-10
+    category: intentional-repetition
+    difficulty: marginal
+    text: >-
+      Every winter the pipes froze in the back room, and every winter Hollis
+      said he would deal with it in the spring. The room was full of his
+      mother's furniture, and neither of those facts had anything to do with
+      the other, as far as he was concerned, and he would have said so if
+      anyone had asked, and for nineteen years nobody did.
+    tempting_edit: >-
+      Replace the second "every winter" with "each year", and split the long
+      second sentence at "as far as he was concerned".
+    why_silence: >-
+      The doubled opening is the only thing telling the reader this is a cycle
+      rather than an incident, and the sentence has to run past the point of
+      comfort to arrive at the nineteen years.
+
+  # ==========================================================================
+  # SILENCE — deliberate sentence fragments
+  # ==========================================================================
+  # Fragments are the most mechanically "fixable" voice feature: every one of
+  # them can be completed, and completing them is almost always wrong. The
+  # marginal passages carry exactly ONE fragment inside otherwise complete,
+  # unremarkable prose, where it reads far more like an oversight.
+
+  - id: frag-01
+    category: deliberate-fragment
+    difficulty: overt
+    mechanical_overlap: [serial_comma]
+    text: >-
+      Rain on the tin roof. Rain in the gutters and the downspout and the
+      barrel by the door, and rain still coming, a wall of it, moving up the
+      valley like something with an errand. Four days of this. The road out was
+      mud to the axle by Tuesday, and by Wednesday it was not a road. Nobody
+      said out loud what all of them had been thinking since Monday.
+    tempting_edit: >-
+      Complete the fragments — "Rain fell on the tin roof", "This had gone on
+      for four days" — and trim the three-part "gutters and the downspout and
+      the barrel".
+    why_silence: >-
+      The verbless openings put the reader inside the weather before any actor
+      arrives, which a supplied subject and verb immediately dissolve.
+
+  - id: frag-02
+    category: deliberate-fragment
+    difficulty: overt
+    mechanical_overlap: [serial_comma, tense_shift]
+    text: >-
+      Left at the bakery. Right at the church with the scaffolding. Through the
+      alley that smelled of yeast and cold stone, and out into a square he did
+      not recognize, full of pigeons and a fountain and eleven people who would
+      all remember him later. No time to think about that. He went left again
+      because left had worked so far, and that is the entire strategy he had.
+    tempting_edit: >-
+      Attach the directional fragments to a subject ("He turned left at the
+      bakery, then right at the church") and expand "No time to think about
+      that."
+    why_silence: >-
+      The missing subject is the point: the chase is being narrated at the
+      speed of the turns, and a supplied "He turned" slows every one of them.
+
+  - id: frag-03
+    category: deliberate-fragment
+    difficulty: overt
+    text: >-
+      Her mother's ring. The good scissors. The photograph from the pier, which
+      was the only one where everybody was looking in the same direction. Three
+      sweaters, because she could not decide, and then two, because the case
+      would not close. Everything else stayed. It is a strange arithmetic,
+      deciding what a life weighs, and she did it in forty minutes with a taxi
+      running downstairs.
+    tempting_edit: >-
+      Turn the list of noun fragments into a sentence ("She packed her mother's
+      ring, the good scissors, and the photograph from the pier") and cut the
+      doubled "because" clauses.
+    why_silence: >-
+      The bare nouns are the inventory as she sees it, one object at a time,
+      and a packing sentence turns a decision into a chore.
+
+  - id: frag-04
+    category: deliberate-fragment
+    difficulty: overt
+    mechanical_overlap: [introductory_comma]
+    text: >-
+      Then the smell. Smoke, but wrong somehow, sweeter than woodsmoke and
+      heavier, the smell of a thing that was never meant to burn. She stood in
+      the hallway in her socks and did the arithmetic of the house: the boys
+      upstairs, the propane in the mudroom, the phone in the kitchen, which was
+      the wrong direction. Sixty seconds. Maybe less. She went up.
+    tempting_edit: >-
+      Supply verbs for "Then the smell", "Sixty seconds", and "Maybe less", and
+      merge the last two fragments into "She had perhaps sixty seconds."
+    why_silence: >-
+      The fragments are the character's perception arriving out of order, and
+      the two clipped time estimates are the countdown the scene runs on.
+
+  - id: frag-05
+    category: deliberate-fragment
+    difficulty: overt
+    text: >-
+      They gave him the medal in a gymnasium that smelled like floor wax, and a
+      colonel he had never met said his brother's name correctly, which he had
+      not expected and could not entirely forgive. His mother clapped. Everyone
+      clapped. He held the box with both hands the whole way home and did not
+      open it, and he has not opened it since. Fourteen years.
+    tempting_edit: >-
+      Attach the closing "Fourteen years." to the previous sentence as "for
+      fourteen years now" and merge "His mother clapped. Everyone clapped."
+    why_silence: >-
+      The two-word close is the paragraph's last beat and the only place the
+      narrator's own time enters, and both effects require it to stand alone.
+
+  - id: frag-06
+    category: deliberate-fragment
+    difficulty: overt
+    text: >-
+      You take the first exit after the bridge. Not the second one, whatever
+      the map says, because the second one puts you on the bypass, and the
+      bypass does not come back. Then two miles of nothing. Then a mailbox with
+      a duck on it. If you pass the church, you have gone too far, but you will
+      pass the church, because everyone does, and the woman at the church is
+      very used to giving directions.
+    tempting_edit: >-
+      Complete "Not the second one" and "Then two miles of nothing" into full
+      sentences and replace the second-person instructions with a neutral
+      narration.
+    why_silence: >-
+      The passage is spoken directions transcribed, and directions are given in
+      fragments by every human being who has ever given them.
+
+  - id: frag-07
+    category: deliberate-fragment
+    difficulty: overt
+    text: >-
+      Morning. The gray kind, without weather in it. Three men on the wall who
+      had been six the day before, and none of them talking, and the coffee
+      going around in a tin that had a hole punched in it for a handle.
+      Somebody's radio, far off, playing something with horns in it. Nobody
+      turned it off, and nobody turned it up.
+    tempting_edit: >-
+      Give the whole paragraph a main verb — "It was morning, the gray kind" —
+      and resolve the dangling participial strings into finite clauses.
+    why_silence: >-
+      A paragraph with no finite verb until the last sentence is a deliberate
+      suspension of action, and finishing the clauses restarts a clock the
+      scene has stopped.
+
+  - id: frag-08
+    category: deliberate-fragment
+    difficulty: marginal
+    text: >-
+      The hospital had repainted the corridor since the last time, a warmer
+      color that made everything underneath it look worse, and there was a
+      machine at the nurses' station now that dispensed hand sanitizer with a
+      sound like a small apology. Fourth floor. He had not had to ask anyone
+      where to go, and that was the detail he kept returning to later, in the
+      parking garage, with the ticket in his teeth and his keys in the wrong
+      pocket.
+    tempting_edit: >-
+      Complete the one fragment — "He went up to the fourth floor" — so the
+      paragraph's sentences are consistent with one another.
+    why_silence: >-
+      The two bare words are the only place the reader stands where he is
+      standing, and they are what the last sentence is about: he did not need
+      to be told.
+
+  - id: frag-09
+    category: deliberate-fragment
+    difficulty: marginal
+    text: >-
+      They agreed on the price in under a minute, which should have told her
+      something. He wanted the barn cleared by the first, and she wanted the
+      money before the first, and both of them said fine, and the lawyer drew
+      it up on a Tuesday. All very civilized. She found the letters in the barn
+      on the twenty-ninth and did not call him, and that is the part she has
+      never been able to explain to her daughter.
+    tempting_edit: >-
+      Expand "All very civilized." to "It was all very civilized." and break
+      the four-part "and" chain into two sentences.
+    why_silence: >-
+      The fragment is the narrator's verdict rather than a description, and
+      supplying "It was" hands it back to the scene it is standing outside of.
+
+  - id: frag-10
+    category: deliberate-fragment
+    difficulty: marginal
+    text: >-
+      The engine turned over on the third try, which was better than Marcus had
+      expected, and the heater came on smelling of the dog that had died two
+      winters ago. Four hours to Duluth. He backed out of the driveway without
+      looking at the house, because looking at the house had been the whole
+      problem for six months, and he had finally found a way of not doing it.
+    tempting_edit: >-
+      Complete "Four hours to Duluth." into "It was four hours to Duluth" and
+      pronominalize the second "the house".
+    why_silence: >-
+      The fragment is the distance as he is holding it in his head, a fact with
+      no verb because he has not agreed to do anything about it yet.
+
+  # ==========================================================================
+  # SILENCE — stylized or archaic narration
+  # ==========================================================================
+  # Pastiche and elevated register read as "wordy" to any tightening heuristic,
+  # and the tightening destroys the pastiche. The marginal passages are modern
+  # narration with one elevated or formal turn in them, which is much harder to
+  # tell from ordinary overwriting.
+
+  - id: arch-01
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      And it came to pass in those days that the river went down, and the men
+      of the town walked out upon the stones of the riverbed where no man had
+      walked in the memory of anyone living, and they found there the bell of
+      the old church, and the axle of a wagon, and a hundred small things that
+      the water had taken and kept. And they carried the bell up the hill, and
+      they hung it, and it rang badly, and they rang it anyway every Sunday for
+      eleven years.
+    tempting_edit: >-
+      Delete the sentence-initial "And", change "upon" to "on", and reduce the
+      chain of "and" clauses to a comma series.
+    why_silence: >-
+      The polysyndeton and the initial conjunctions are the scriptural pastiche
+      itself, so every proposed tightening removes the only thing the passage
+      is doing.
+
+  - id: arch-02
+    category: stylized-archaic-narration
+    difficulty: overt
+    mechanical_overlap: [serial_comma]
+    text: >-
+      There was a miller, and the miller had three sons, and the youngest was
+      neither clever nor strong nor especially good, which is a thing the story
+      will not tell you until it is too late to like him. He was given the cat.
+      His brothers were given the mill and the donkey and their father's
+      blessing, in that order, and they took all three and went east, and this
+      is the last the story has to say about them.
+    tempting_edit: >-
+      Replace "There was a miller, and the miller had" with "A miller had", and
+      convert the two passives into active constructions.
+    why_silence: >-
+      Repeating the noun instead of pronominalizing it and stating gifts in the
+      passive are the fairy-tale voice, which an active, economical rewrite
+      cannot survive.
+
+  - id: arch-03
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      Mr. Pell was a man of regular habits, by which the town meant that he was
+      dull, and by which he himself meant that he was virtuous, and the reader
+      may decide between them at leisure. He rose at six. He ate a boiled egg.
+      He read the previous day's newspaper, having discovered in youth that a
+      day's delay improved nearly all news and rendered a great deal of it
+      unnecessary, and in this, it must be admitted, he was entirely right.
+    tempting_edit: >-
+      Cut the paired "by which" clauses to one, vary the three consecutive "He"
+      openings, and delete the hedge "it must be admitted".
+    why_silence: >-
+      The balanced clauses and the intrusive narrator are a nineteenth-century
+      comic register, and the flat "He rose. He ate. He read." sequence is that
+      register making its joke.
+
+  - id: arch-04
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      Long after, when the singers had made of it a thing with a shape, they
+      would say that he crossed the water alone. He did not cross alone. He
+      crossed with two frightened boys and a dog, and one of the boys is the
+      reason the song exists at all, having lived to be ninety and told it
+      badly at every wedding in the district for sixty years. The singers left
+      him out. Songs have no room for the man who remembers.
+    tempting_edit: >-
+      Normalize the inverted opening to "Long afterward, the singers made it
+      into a story", and merge "He did not cross alone." into the previous
+      sentence.
+    why_silence: >-
+      The heroic register depends on the fronted time clause and on the flat
+      contradiction standing by itself as its own sentence.
+
+  - id: arch-05
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      Of the eleven who sailed from Falmouth that spring, we need not concern
+      ourselves with more than three, and of those three, chiefly with the
+      surgeon, who kept the only honest account and who was, by every other
+      measure, the least reliable man aboard. It is the way of such voyages
+      that the truth ends up in the hands of whoever had the least to do.
+    tempting_edit: >-
+      Rewrite "we need not concern ourselves with more than three" as "this
+      story follows three of them" and unpack the nested "and of those three,
+      chiefly with" into a new sentence.
+    why_silence: >-
+      The first-person-plural narrator narrowing his focus in stages is the
+      period voice, and the nesting is how that narrowing is performed.
+
+  - id: arch-06
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      Hear this, then, and do not ask me to soften it: the wells will fail
+      before the wheat does, and the wheat will fail before the men do, and the
+      men will fail last and loudest and will blame the weather, and the
+      weather will not answer, having never once answered, having been asked in
+      every generation by better men than these.
+    tempting_edit: >-
+      Split the sentence at the colon, replace the "fail before" chain with a
+      single summary clause, and combine the two trailing participial phrases.
+    why_silence: >-
+      The escalating chain and the doubled participles are a prophetic cadence
+      whose whole meaning is carried by its shape.
+
+  - id: arch-07
+    category: stylized-archaic-narration
+    difficulty: overt
+    text: >-
+      Reader, I will not pretend to have behaved well. I stood in the doorway
+      of that room for the better part of an hour, telling myself that I was
+      deciding, when in truth I had decided in the first minute and was merely
+      waiting for the decision to feel like one. This is, I have since learned,
+      the ordinary condition of most men on most days, and it is no defense
+      whatever, and I offer it as none.
+    tempting_edit: >-
+      Remove the direct address "Reader," as an intrusion and tighten "it is no
+      defense whatever, and I offer it as none" to a single clause.
+    why_silence: >-
+      Direct address to the reader is a confessional-novel convention, and the
+      closing near-tautology is the narrator refusing himself the excuse twice
+      on purpose.
+
+  - id: arch-08
+    category: stylized-archaic-narration
+    difficulty: marginal
+    text: >-
+      The company had been in the family for four generations, which in that
+      town was long enough to be mistaken for permanence, and it went in eleven
+      months. Nobody stole anything. Nobody lied, particularly. It went as such
+      things go, by a hundred small reasonable decisions, no one of which any
+      reasonable person would have made otherwise, and then one morning there
+      was a padlock on a gate that had not been locked since the war.
+    tempting_edit: >-
+      Tighten "It went as such things go" to "It went the usual way" and
+      "no one of which any reasonable person would have made otherwise" to
+      "all of them reasonable".
+    why_silence: >-
+      One formal turn in an otherwise flat modern paragraph is the narrator
+      stepping back to pass sentence, and the archaic "no one of which" is
+      doing the stepping back; plain phrasing puts him back in the scene.
+
+  - id: arch-09
+    category: stylized-archaic-narration
+    difficulty: marginal
+    mechanical_overlap: [subject_verb_agreement]
+    text: >-
+      There is a stretch of the old road, north of the quarry, that the county
+      has maintained for sixty years and that nobody has needed for forty. It
+      goes to a bridge. The bridge goes to a field. In the field, if you know
+      where to look, there is a foundation the size of a small church and a
+      line of walnut trees somebody planted in a row, which is the only proof
+      left that the whole arrangement was ever meant for anything.
+    tempting_edit: >-
+      Combine the two paired relative clauses into one, and replace the
+      existential "There is a stretch" and "there is a foundation" with direct
+      subjects.
+    why_silence: >-
+      A gnomic present tense and two existential openings are how a
+      past-tense novel signals that this bit of ground outlasts everybody in
+      it, and both are quiet enough to look like ordinary padding.
+
+  - id: arch-10
+    category: stylized-archaic-narration
+    difficulty: marginal
+    text: >-
+      It is not true, whatever the plaque says, that the town was founded by
+      three brothers. It was founded by a bank, in the ordinary way, and the
+      brothers were hired. But a bank makes a poor story, and three brothers
+      make a good one, and a hundred and forty years is long enough for a town
+      to decide which of its facts it intends to keep.
+    tempting_edit: >-
+      Recast the negated opening as a positive statement ("The town was not
+      founded by three brothers, whatever the plaque says") and de-passivize
+      "It was founded by a bank".
+    why_silence: >-
+      The correction-of-the-record opening is a chronicler's move, and the
+      passives keep the bank an agent that acts on the town rather than a
+      subject the town is about.
+
+  # ==========================================================================
+  # SILENCE — rhythm-driven punctuation
+  # ==========================================================================
+  # Pace written into the pointing: splices for speed, omitted optional commas
+  # for breathlessness, polysyndeton for accumulation. The marginal passages
+  # use ONE such device inside conventional pointing, so nothing about the
+  # paragraph announces that its punctuation is a choice.
+
+  - id: rhy-01
+    category: rhythm-punctuation
+    difficulty: overt
+    text: >-
+      She got the door open and got him inside and got the coat off him and got
+      him down on the kitchen floor because the kitchen floor was the closest
+      flat thing, and she was talking the whole time, and none of it was words
+      exactly, and afterward she could not remember one syllable of what she
+      had said or whether the neighbor had already been there or had come in
+      later with the blanket.
+    tempting_edit: >-
+      Break the sentence into three, delete three of the four repetitions of
+      "got", and replace the "and" chain with commas.
+    why_silence: >-
+      The unbroken coordination is the emergency happening without pause, and
+      each repetition of the verb is another second she does not have.
+
+  - id: rhy-02
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [comma_splice]
+    text: >-
+      He ran. The dock came up fast, the boards were wet, the gap between the
+      last piling and the boat was wider than it had been in his head. He
+      jumped. He landed badly, on one knee, and the boat took the weight and
+      swung out from the dock, and by the time he got his head up, the whole
+      town was a line of lights getting smaller.
+    tempting_edit: >-
+      Repunctuate the three short parallel clauses as separate sentences or
+      with semicolons, and smooth "landed badly, on one knee" into "landed
+      hard on one knee".
+    why_silence: >-
+      Short parallel clauses joined by commas are a sanctioned stylistic splice
+      that puts three perceptions inside one held breath, and semicolons would
+      slow the jump down.
+
+  - id: rhy-03
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [compound_sentence_comma, introductory_comma]
+    text: >-
+      She came down the stairs two at a time with the letter in her hand and
+      she did not stop at the landing where she always stopped and she did not
+      knock and by the time anyone in that kitchen understood what was
+      happening she had already read the first two lines out loud in a voice
+      none of them had heard her use before.
+    tempting_edit: >-
+      Insert commas before each coordinating "and" and after the introductory
+      "by the time" clause, and split the whole thing into two sentences.
+    why_silence: >-
+      Every omitted comma is optional under the standard, and their absence is
+      what makes the sentence arrive all at once, which is the sentence's
+      entire job.
+
+  - id: rhy-04
+    category: rhythm-punctuation
+    difficulty: overt
+    text: >-
+      He put the gun in the drawer. He closed the drawer. He washed his hands,
+      and then he washed them again, and then he stood at the sink with the
+      water running and did not wash them a third time, which he considered, at
+      the time, an act of considerable self-control. The kitchen clock said a
+      quarter past two. It had said a quarter past two for a year.
+    tempting_edit: >-
+      Combine the first two sentences into "He put the gun in the drawer and
+      closed it", vary the four sentences that begin with "He", and delete the
+      repeated "quarter past two".
+    why_silence: >-
+      The mechanical sentence-per-action pacing is the character's dissociation
+      rendered as syntax, and the repeated clock reading is the joke and the
+      dread at once.
+
+  - id: rhy-05
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [complex_list_semicolon]
+    text: >-
+      What she remembered afterward was not the noise, which everyone asked
+      about, and not the dust, which was in every photograph, but the fact that
+      the man beside her on the bus, a stranger in a brown coat who had been
+      asleep since the second stop, woke up, looked out the window at what was
+      happening, said something mild that she has never been able to repeat
+      convincingly, and went back to sleep.
+    tempting_edit: >-
+      Split the single sentence into three and move the "not the noise... not
+      the dust" contrast after the main clause for readability.
+    why_silence: >-
+      The whole sentence is one act of memory held open until the last three
+      words, and every proposed split closes it early.
+
+  - id: rhy-06
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [comma_splice, serial_comma]
+    text: >-
+      I was nineteen, I knew everything, I had a car that did not run and a job
+      I was about to lose and a girl who had already stopped answering. That
+      was the whole inventory. I have met a great many nineteen-year-olds
+      since, and I have never once been able to tell one of them anything, and
+      I have stopped trying, and I think that is probably the correct outcome.
+    tempting_edit: >-
+      Repunctuate the opening three clauses with semicolons and reduce the
+      final four-part "and" chain to two sentences.
+    why_silence: >-
+      The opening is a sanctioned splice of short parallel clauses in
+      first-person retrospective narration, and its speed is the difference
+      between a voice and a report.
+
+  - id: rhy-07
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [compound_sentence_comma]
+    text: >-
+      The room was cold. The window was painted shut. Somebody had left half a
+      cup of coffee on the sill in October and it was February now and the cup
+      had become a small closed ecosystem that he intended to deal with on a
+      day that was not this one. He sat down on the floor with his back against
+      the radiator, which was also cold, and waited to feel something about any
+      of it.
+    tempting_edit: >-
+      Merge the two flat opening sentences and add commas before the two "and"
+      conjunctions in the third.
+    why_silence: >-
+      The two bare statements set a deadened tempo that the long third sentence
+      then breaks, and pointing the third sentence properly would flatten the
+      contrast.
+
+  - id: rhy-08
+    category: rhythm-punctuation
+    difficulty: overt
+    mechanical_overlap: [comma_splice, introductory_comma]
+    text: >-
+      Twelve minutes to curtain and the lead is in the alley crying, the
+      understudy is in Ohio, the stage manager has stopped answering her radio,
+      and I am standing in the wings holding a wig I do not have permission to
+      touch. This is theater. Somebody will fix it. Somebody always fixes it,
+      and nobody ever writes down how, which is why every one of us learns it
+      the same way, at twelve minutes to curtain, holding somebody else's wig.
+    tempting_edit: >-
+      Recast the opening series of clauses as separate sentences and delete the
+      closing echo of "twelve minutes to curtain" and "wig" as repetition.
+    why_silence: >-
+      The clause series is a disaster inventory delivered in one breath, and
+      the closing echo deliberately returns the reader to the opening image.
+
+  - id: rhy-09
+    category: rhythm-punctuation
+    difficulty: marginal
+    mechanical_overlap: [serial_comma]
+    text: >-
+      She read the whole thing standing up in the kitchen with her coat still
+      on and did not sit down until she got to the part about the money. Then
+      she sat. The chair was the one nobody used because of the leg, and it
+      held, and she stayed in it until the light changed and the neighbor's dog
+      started up and she realized she had read the last page four times without
+      taking any of it in.
+    tempting_edit: >-
+      Expand "Then she sat." and repunctuate the last sentence, which strings
+      five clauses together with no internal stop after "held".
+    why_silence: >-
+      The three-word sentence is the only stop in the paragraph and it lands
+      exactly where she does; the long clause chain after it is the hour that
+      followed, and it has to run without a stop for that to be true.
+
+  - id: rhy-10
+    category: rhythm-punctuation
+    difficulty: marginal
+    mechanical_overlap: [compound_sentence_comma]
+    text: >-
+      The meeting ran to nine and then to ten and by eleven only four people
+      were left, which was, Ansel thought, roughly the number who had ever
+      actually wanted anything decided. He proposed the motion at eleven
+      fifteen. It passed without discussion, because there was nobody left to
+      discuss it with, and he drove home under a moon so bright he could see
+      the fence posts, feeling worse than he had felt in years.
+    tempting_edit: >-
+      Add the comma before "and by eleven", and lift the interrupting "Ansel
+      thought" out of the middle of "which was roughly the number".
+    why_silence: >-
+      The withheld comma is the evening running on past the point where anyone
+      was still marking time, and the interruption is where his opinion
+      actually occurred to him, which is the whole reason it is in the middle.
+
+  - id: rhy-11
+    category: rhythm-punctuation
+    difficulty: marginal
+    mechanical_overlap: [comma_splice]
+    text: >-
+      The house sold in a week, the car took a month, the dog took until
+      August. By then Ellen had stopped counting things as gone and started
+      counting them as handled, which her sister said was the same thing and
+      which Ellen maintained was not. She kept the piano. She could not play
+      the piano. Neither fact struck her at the time as requiring an
+      explanation.
+    tempting_edit: >-
+      Repunctuate the opening three clauses with semicolons, and combine "She
+      kept the piano. She could not play the piano." into one sentence.
+    why_silence: >-
+      A single three-part splice in an otherwise conventionally pointed
+      paragraph is a deliberate acceleration through the inventory, and the two
+      flat piano sentences have to stay separate for the third to be able to
+      call them two facts.
+
+  # ==========================================================================
+  # SILENCE — free indirect discourse and interiority
+  # ==========================================================================
+  # Thought rendered in the narrator's grammar has no quotation marks and no
+  # thought tag to protect it, so it is the mode most often mistaken for sloppy
+  # narration: the fragments look incomplete, the rhetorical questions look
+  # unanswered, and the character's cliches look like the author's. Every
+  # "repair" here changes psychic distance, which is a structural choice, not a
+  # phrasing one. The marginal passages hold a single unattributed judgement
+  # inside otherwise external narration.
+
+  - id: int-01
+    category: free-indirect-interiority
+    difficulty: overt
+    mechanical_overlap: [comma_splice]
+    text: >-
+      She would call him tomorrow. Tomorrow was better anyway, tomorrow he
+      would have slept, tomorrow she would have thought of the right way to say
+      it, and what was one more day after four years? One more day was nothing.
+      She put the phone face down on the counter and went to bed at nine, which
+      was not her bedtime, and lay there being extremely reasonable about it
+      for three hours.
+    tempting_edit: >-
+      Attribute the thought explicitly ("she told herself"), reduce the three
+      "tomorrow" clauses to one, and answer or delete the rhetorical question.
+    why_silence: >-
+      The unattributed reasoning is free indirect discourse, and the repetition
+      is her talking herself into it, which an attributing tag would expose too
+      early.
+
+  - id: int-02
+    category: free-indirect-interiority
+    difficulty: overt
+    text: >-
+      And what, exactly, had he expected her to do? Wait? She had waited. Two
+      years in that apartment with the bad heat and his mother's furniture,
+      waiting, and now he was in her kitchen with a haircut and a theory about
+      how people change. People do change. That was the infuriating part. He
+      had changed, visibly, into someone who would have been very good for her
+      in 1998.
+    tempting_edit: >-
+      Delete the sentence-initial "And", complete the one-word question "Wait?",
+      and resolve the verbless "Two years in that apartment" into a full
+      sentence.
+    why_silence: >-
+      The questions are hers and not the narrator's, and their clipped form is
+      the anger that the passage never states outright.
+
+  - id: int-03
+    category: free-indirect-interiority
+    difficulty: overt
+    text: >-
+      The form wanted a next of kin. Well. There was Denise, technically, if
+      Denise still lived in Tucson and still answered to that name and still
+      counted as anything at all after what had been said in that parking lot.
+      He wrote Denise's name. Then he wrote a phone number that had been
+      disconnected since the spring, because the form wanted a number, and the
+      form was not going to get an argument out of him.
+    tempting_edit: >-
+      Delete the one-word paragraph "Well.", collapse the three "still" clauses
+      into one, and pronominalize the repeated "Denise" and "the form".
+    why_silence: >-
+      The isolated "Well." is the beat where he stops, the tripled "still" is
+      the qualification eating itself, and the repeated nouns are what he is
+      staring at.
+
+  - id: int-04
+    category: free-indirect-interiority
+    difficulty: overt
+    text: >-
+      Okay. Okay. Okay. The keys were in her hand—she could feel them—so the
+      keys were not the problem. The problem was that the car was on the other
+      side of a parking lot she would have to walk across in full view of the
+      window where he was standing. Fine. She had done harder things. She could
+      not think of one at the moment, but she was confident they existed.
+    tempting_edit: >-
+      Delete two of the three "Okay" sentences, cut the standalone "Fine.", and
+      merge the last two sentences.
+    why_silence: >-
+      The repeated self-talk and the one-word beats are a mind steadying
+      itself, and the final undercut only works as a separate sentence.
+
+  - id: int-05
+    category: free-indirect-interiority
+    difficulty: overt
+    mechanical_overlap: [serial_comma]
+    text: >-
+      It was not stealing if the man was dead. That was the position, and he
+      intended to hold it, and he held it all the way down the stairs and out
+      to the truck and most of the way to the highway, at which point it
+      developed a small leak somewhere around the fact that the man had a
+      daughter.
+    tempting_edit: >-
+      Attribute the opening rationalization to the character, split the long
+      middle sentence, and replace the mixed metaphor "developed a small leak"
+      with plainer phrasing.
+    why_silence: >-
+      The unattributed opening is the character's logic presented as fact so
+      the reader can watch it fail, and the extended clause is how far he gets
+      before it does.
+
+  - id: int-06
+    category: free-indirect-interiority
+    difficulty: overt
+    text: >-
+      At the end of the day, Marcus thought, you did what you could with what
+      you had. It was seven in the morning. He had a shovel, a permit that was
+      probably not valid, and about four hours before anybody official would be
+      awake. The ground was harder than he had expected, and he had not
+      brought gloves, and at the end of the day, whatever else was true, you
+      did what you could with what you had.
+    tempting_edit: >-
+      Replace the cliches "at the end of the day" and "did what you could with
+      what you had" with fresher phrasing, and delete the second occurrence of
+      both.
+    why_silence: >-
+      The cliche is the character's and not the author's — the "Marcus thought"
+      tag hands it to him and the return at the close is him reaching for it
+      again — so de-cliching it deletes the characterization the repetition
+      exists to deliver.
+
+  - id: int-07
+    category: free-indirect-interiority
+    difficulty: marginal
+    text: >-
+      Halvorsen checked the gauge twice and wrote the number down and checked
+      it again, which was not procedure but was not against procedure either.
+      The reading was fine. The reading had been fine for six weeks. Somebody
+      upstairs had decided the sensor was the problem, and somebody upstairs
+      was going to be right about that eventually, and in the meantime, he
+      wrote the number down twice a shift and said nothing to anyone about the
+      smell.
+    tempting_edit: >-
+      Merge the two "The reading" sentences, and cut "somebody upstairs was
+      going to be right about that eventually" as vague.
+    why_silence: >-
+      The second reading sentence is his opinion of the first, and the vague
+      clause is vague because it is his — an external narrator would have to
+      say who and when, which is the information the passage is withholding.
+
+  - id: int-08
+    category: free-indirect-interiority
+    difficulty: marginal
+    text: >-
+      The dress fit, which was the first surprise, and it fit the way things
+      fit when somebody has been paying attention. Her mother had never once
+      paid attention. Nadia stood in front of the mirror at the back of the
+      shop for long enough that the woman at the register asked twice whether
+      everything was all right, and both times she said yes, and the second
+      time she meant it.
+    tempting_edit: >-
+      Cut "Her mother had never once paid attention." as an intrusion that
+      breaks the scene, or attach it to the previous sentence with "though".
+    why_silence: >-
+      That flat unattributed sentence is the only interior line in the
+      paragraph and the reason the dress matters; subordinating it to the
+      sentence before makes it the narrator's observation instead of hers.
+
+  - id: int-09
+    category: free-indirect-interiority
+    difficulty: marginal
+    text: >-
+      He would tell her at dinner. Dinner had witnesses, and if there were
+      witnesses, she would not do the thing where she went very quiet and
+      agreed with everything he said. He booked the table for seven and then
+      moved it to eight and then, at four in the afternoon, called the
+      restaurant a
+      third time and asked whether they had anything at all on the patio.
+    tempting_edit: >-
+      Attribute the plan ("he reasoned") and tighten "the thing where she went
+      very quiet and agreed with everything he said" into "her silent
+      agreement".
+    why_silence: >-
+      The clumsy "the thing where" is his phrase, not the narrator's, and it is
+      the sentence's only evidence that he has been living with this for a
+      while; an elegant noun phrase would be somebody else thinking it.
+
+  # ==========================================================================
+  # SILENCE — embedded documents
+  # ==========================================================================
+  # Letters, logs, notices, diaries, clippings, signs and recipes quoted inside
+  # a novel are deliberately stiff, passive, over-formal, or period-flavored —
+  # the exact profile every tighten-the-prose heuristic is built to attack.
+  # They are also easy to miss as pastiche, because a document reproduced in a
+  # novel has no quotation marks or dialect spelling to mark it as somebody's
+  # voice. The marginal passages give the document one or two lines inside
+  # ordinary narration instead of the whole paragraph.
+
+  - id: doc-01
+    category: embedded-document-register
+    difficulty: overt
+    text: >-
+      My dear Wilhelmina, I am in receipt of yours of the eleventh and hasten
+      to reply, though I confess I have read it four times and am no nearer to
+      understanding what you wish me to do. If it is money, say money. If it is
+      the house, say the house. I am an old woman and have very little patience
+      left, and I would prefer to spend what remains of it on you rather than
+      on your handwriting.
+    tempting_edit: >-
+      Modernize "I am in receipt of yours of the eleventh" to "I got your
+      letter" and delete "hasten to reply" and "I confess" as padding.
+    why_silence: >-
+      The letter's formality is the letter-writer, and the joke in the last
+      sentence only lands against the stiffness of the first.
+
+  - id: doc-02
+    category: embedded-document-register
+    difficulty: overt
+    text: >-
+      14 June. Wind north-northeast, moderate. Sighted the coast at first
+      light, some eight leagues distant, and stood off. Two men sick, one
+      recovered. Water sufficient for eleven days by my reckoning, which is not
+      the reckoning the mate keeps, and I have not asked him for his. Nothing
+      else to report. God grant a landfall before Sunday, and if not Sunday,
+      before the water.
+    tempting_edit: >-
+      Supply subjects and verbs for the log entries ("The wind was moderate
+      from the north-northeast") and rephrase "God grant a landfall" in plain
+      modern terms.
+    why_silence: >-
+      A ship's log is written in verbless entries by convention, and the one
+      sentence that breaks the convention is the only place the captain's fear
+      shows.
+
+  - id: doc-03
+    category: embedded-document-register
+    difficulty: overt
+    text: >-
+      Notice is hereby given that the property described in Schedule A,
+      together with all appurtenances thereto, shall be offered at public sale
+      on the first Tuesday of the month, and that any party claiming an
+      interest therein must file such claim, in writing, with the clerk of the
+      court not later than ten days prior to said sale, failing which the same
+      shall be forever barred.
+    tempting_edit: >-
+      De-passivize throughout, cut "thereto", "therein", "said", and "the
+      same", and break the sentence into two.
+    why_silence: >-
+      This is a legal notice quoted inside the narrative, and every archaism a
+      plain-English pass would strip is what identifies it as one.
+
+  - id: doc-04
+    category: embedded-document-register
+    difficulty: overt
+    text: >-
+      Tuesday. Rain again. Did not go to the shop. Mrs. Anwar came about the
+      gutter, and I told her what I told her last month, which is that the
+      gutter is her gutter. She does not believe me. She will come again.
+      Wednesday. Rain. Went to the shop. Bought nothing I needed and one thing
+      I did not, and I am not going to write down what it was.
+    tempting_edit: >-
+      Restore the dropped first-person subjects ("I did not go to the shop"),
+      vary the repeated "Rain", and combine the two short sentences about Mrs.
+      Anwar.
+    why_silence: >-
+      Diary entries drop the subject and repeat the weather because diarists
+      do, and the omissions are the only characterization the form allows.
+
+  - id: doc-05
+    category: embedded-document-register
+    difficulty: overt
+    text: >-
+      A local man was injured Thursday evening when a vehicle left the roadway
+      near the Corbin bridge, according to the sheriff's office. The man, whose
+      name was not released pending notification of family, was transported to
+      a regional facility and was described as being in stable condition. The
+      cause of the accident remains under investigation. No other vehicles were
+      involved.
+    tempting_edit: >-
+      Convert the four passive constructions to active voice and replace
+      "transported to a regional facility" with "taken to the hospital".
+    why_silence: >-
+      This is a newspaper item quoted in the novel, and its bureaucratic
+      passives are the point: the reader is meant to feel a person disappearing
+      into a report.
+
+  - id: doc-06
+    category: embedded-document-register
+    difficulty: overt
+    mechanical_overlap: [comma_splice]
+    text: >-
+      Grandma Vi's cornbread. Buttermilk, a good cup. Bacon grease, do not
+      measure it, you will know. Meal, not flour, and if you use flour, do not
+      tell me you used my recipe. Hot skillet, hot oven. Do not open the door
+      to look at it. Do not let anybody talk you into sugar. Twenty minutes,
+      and then look, and if it is not right, it is because you opened the door.
+    tempting_edit: >-
+      Regularize the recipe into numbered imperative steps with quantities, and
+      remove the direct address to the reader of the card.
+    why_silence: >-
+      The instructions are a specific dead woman talking, and standardizing the
+      format is the one edit that would make her unrecognizable.
+
+  - id: doc-07
+    category: embedded-document-register
+    difficulty: marginal
+    text: >-
+      The sign had been there since before either of them was born: NO
+      SWIMMING FROM THIS POINT TO THE SECOND MARKER, BY ORDER. Nobody knew
+      whose order, and the second marker had gone into the river in 1998, so in
+      practice the prohibition ran from a rusted post to a place that no longer
+      existed. They swam there anyway, all of them, every summer, and the sign
+      stayed up because taking it down would have required somebody to be
+      responsible for taking it down.
+    tempting_edit: >-
+      Tighten the closing clause, which uses "taking it down" twice and buries
+      the point in "would have required somebody to be responsible for".
+    why_silence: >-
+      The doubled phrase and the bureaucratic verb are the sign's own register
+      leaking into the sentence about the sign, which is the joke; a tight
+      version says something true and stops being funny.
+
+  - id: doc-08
+    category: embedded-document-register
+    difficulty: marginal
+    text: >-
+      Under Comments the form gave her three lines, and she used one: "He was
+      not himself in the last year, and I would like that noted." She read it
+      back, thought about the word "noted," could not think of a better one,
+      and left it. The clerk did not read it. The clerk stamped the second page
+      and told her the office closed at four, which it did.
+    tempting_edit: >-
+      Rewrite her sentence in warmer language, since "I would like that noted"
+      is stiff and clinical for a widow at a counter.
+    why_silence: >-
+      She is writing in the form's register because that is what the form
+      taught her to do in the ninety seconds she had, and the paragraph is
+      about exactly that; warmth in that line would be the author overruling
+      the character.
+
+  - id: doc-09
+    category: embedded-document-register
+    difficulty: marginal
+    text: >-
+      The recipe card in the tin said BEANS, and underneath, in the same hand
+      but with a different pen, ALL DAY. Nothing else. No quantities, no
+      temperature, no mention of the ham hock that everybody in that family
+      considered non-negotiable. Sasha made them four times before she
+      understood that the card had never been instructions at all, and that it
+      had been written by somebody who already knew, for a morning when she
+      might not.
+    tempting_edit: >-
+      Complete the fragments after "Nothing else" into a sentence, and tighten
+      the closing "by somebody who already knew, for a morning when she might
+      not".
+    why_silence: >-
+      The listed absences reproduce the card's own emptiness, and the closing
+      ellipsis — "when she might not" what — is the sentence declining to
+      finish a thought the reader has already finished.
+
+  # ==========================================================================
+  # SILENCE — lyric inversion and accumulation
+  # ==========================================================================
+  # Fronted and inverted syntax, chained clauses, and piled sensory detail are
+  # the signature of a heightened literary register; to a word-order or
+  # wordiness heuristic they look like awkward construction and redundancy, and
+  # normalizing them is the single fastest way to make distinctive prose sound
+  # generic. The marginal passages carry ONE inversion or fronting in an
+  # otherwise plainly ordered paragraph, which is where it stops looking like a
+  # register and starts looking like a mistake.
+
+  - id: lyr-01
+    category: lyric-inversion
+    difficulty: overt
+    mechanical_overlap: [introductory_comma]
+    text: >-
+      Down the long field the light came, slower than it had any right to, and
+      behind it came the cold. In the barn the ewe was already down and already
+      past caring, and out of the barn, when she opened the door, came the
+      smell of a night that had gone wrong hours ago while she slept. There
+      would be no saving it. She knelt in the straw anyway.
+    tempting_edit: >-
+      Restore subject-verb-object order in all three inversions ("The light
+      came down the long field", "The smell came out of the barn").
+    why_silence: >-
+      The inversions deliver the light, the cold, and the smell before their
+      sources, which is the order the character experiences them in.
+
+  - id: lyr-02
+    category: lyric-inversion
+    difficulty: overt
+    mechanical_overlap: [introductory_comma, complex_list_semicolon]
+    text: >-
+      Salt, first, and then tar, and then the green rot of the pilings, and
+      under all of it the sweetness of the fruit boats, which was the smell he
+      would spend the rest of his life failing to describe to people who had
+      never been south of Baltimore. Twelve years old. A harbor at four in the
+      morning. Every good thing he has ever eaten since has been a little bit
+      of a disappointment.
+    tempting_edit: >-
+      Rewrite the opening as a sentence with a subject and verb ("He smelled
+      salt, then tar") and hedge or delete "a little bit of".
+    why_silence: >-
+      The sequence is a nose reporting in real time, and the two verbless
+      fragments are a memory placing itself before the sentence that judges it.
+
+  - id: lyr-03
+    category: lyric-inversion
+    difficulty: overt
+    mechanical_overlap: [serial_comma]
+    text: >-
+      The road went to the river, and the river went to the mill, and the mill
+      had gone to nothing at all by the time he came back to look at it. What
+      was left was a wall and a wheel and a hundred years of somebody else's
+      confidence, sunk to the hub in mud, still turning a little when the water
+      was high, still turning for nobody.
+    tempting_edit: >-
+      Break the chained "went to" clauses apart, delete the repeated "still
+      turning", and replace "What was left was" with a direct subject.
+    why_silence: >-
+      The chain hands each noun to the next one and the doubled "still turning"
+      is the sentence refusing to stop before the last two words do the work.
+
+  - id: lyr-04
+    category: lyric-inversion
+    difficulty: overt
+    mechanical_overlap: [repeated_word]
+    text: >-
+      Coming up out of the cellar into the ordinary afternoon, he found that
+      the light had gone strange and the neighbors were all in the street, and
+      that whatever had happened had happened to everyone and not, as he had
+      assumed for forty minutes in the dark, only to him. Small comfort. It
+      was, all the same, the largest comfort he was offered that year.
+    tempting_edit: >-
+      Move the long participial opening after the main clause, simplify
+      "whatever had happened had happened", and complete the fragment "Small
+      comfort."
+    why_silence: >-
+      The fronted participle keeps him underground for the length of a clause,
+      and the repeated verb is the realization arriving in the only words that
+      fit it.
+
+  - id: lyr-05
+    category: lyric-inversion
+    difficulty: overt
+    text: >-
+      All that August the heat sat on the town like a hand. It did not move at
+      night. It did not move for the rain, which came twice and steamed off the
+      road before anyone could get out to enjoy it. It moved, finally, on the
+      ninth of September, and half the county stood out in their yards at ten
+      in the evening to feel a wind that was not even a cold wind, only a
+      different one.
+    tempting_edit: >-
+      Vary the three sentences beginning "It did not move" / "It moved", and
+      tighten "a wind that was not even a cold wind, only a different one".
+    why_silence: >-
+      The repeated frame is the heat's immobility written into the syntax, and
+      the final clause's redundancy is the exact distinction the sentence
+      exists to draw.
+
+  - id: lyr-06
+    category: lyric-inversion
+    difficulty: overt
+    text: >-
+      Into the square, at the exact moment the bell stopped, came the
+      horses—six of them, wet to the shoulder—and behind the horses the cart,
+      and behind the cart the whole of the parish walking. Not a person there
+      said a word. Not a person there had to. Whatever the priest had meant to
+      do with that morning, he did not do, and forty years later the town was
+      still arguing about who had led.
+    tempting_edit: >-
+      Put the horses, the cart and the parish in normal subject-first order,
+      and merge the two "Not a person there" sentences.
+    why_silence: >-
+      The procession arrives in the sentence in the order it arrives in the
+      square, and the paired negations are the silence being counted twice
+      because that is how long it lasted.
+
+  - id: lyr-07
+    category: lyric-inversion
+    difficulty: marginal
+    text: >-
+      Colder than he had expected, the water, and colder still where the spring
+      came in under the ledge. He had been warned. He had not believed it, the
+      way you do not believe what somebody tells you about a place you have
+      already decided to love, and he swam out to the raft anyway and swam back
+      and did it eleven more times that summer and told his mother about none
+      of them.
+    tempting_edit: >-
+      Restore normal order in the opening ("The water was colder than he had
+      expected") and add commas to the four-verb chain at the close.
+    why_silence: >-
+      The postponed subject is the cold registering before he can name what is
+      cold, and the unpointed verb chain is a whole summer going by in one
+      breath.
+
+  - id: lyr-08
+    category: lyric-inversion
+    difficulty: marginal
+    text: >-
+      Behind the counter, where a mirror had been, there was now a rectangle of
+      paler paint and four screw holes, and behind that, if you knew to look,
+      the outline of an older rectangle from whatever had hung there before the
+      mirror. Delia noticed it on her second day and asked about it on her
+      ninth. Nobody who worked there could remember a mirror. Two of them had
+      worked there eleven years.
+    tempting_edit: >-
+      Front the subject ("A rectangle of paler paint and four screw holes were
+      behind the counter") and cut the second "behind" clause as repetitive.
+    why_silence: >-
+      The two stacked "behind" phrases put the reader's eye where hers goes,
+      one layer at a time, and the ordinary word order would announce the
+      answer before she has looked.
+
+  - id: lyr-09
+    category: lyric-inversion
+    difficulty: marginal
+    text: >-
+      Slowly, and then not slowly at all, the river came over the low bank at
+      the Bowen place and into the corn. There was no sound to it worth
+      mentioning. By four the water was in the road, and by six the road was
+      the river, and the Bowens were standing in the bed of a truck up on the
+      ridge with a dog and a laundry basket, watching a hundred and sixty acres
+      become something they did not have a word for.
+    tempting_edit: >-
+      Cut the self-correcting "Slowly, and then not slowly at all" to one
+      adverb, and tighten "There was no sound to it worth mentioning."
+    why_silence: >-
+      The correction is the only place the passage tells you how fast this
+      happened, and it does it by changing its mind mid-phrase, which is what
+      the witnesses did.
+
+  - id: lyr-10
+    category: lyric-inversion
+    difficulty: marginal
+    text: >-
+      What the fire spared was the porch, which nobody wanted, and the front
+      steps, which went up to it. For two years that was the whole of the
+      property: three concrete steps, a porch, and a view of the lot where the
+      rest had been. Ruben mowed around it every June. He could not have told
+      you what he was mowing around, and by the third year the question had
+      stopped occurring to him.
+    tempting_edit: >-
+      Replace the pseudo-cleft opening with a direct subject ("The fire spared
+      the porch") and cut "which went up to it" as obvious.
+    why_silence: >-
+      The cleft makes the fire the sentence's frame and the porch an
+      afterthought, in that order, which is the proportion the paragraph is
+      about; the obvious relative clause is what makes the steps absurd.
+
+  # ==========================================================================
+  # CONTROLS — silence here is a FAILURE
+  # ==========================================================================
+  # Genuinely, unjustifiably clunky prose. No voice defence is available in any
+  # of them: every one is plain third-person past narration with no frame — not
+  # a quoted document, not a first-person narrator with a manner, not a
+  # character's idiom, not a heightened register. Compare doc-03 (a legal
+  # notice, passive by convention, quoted inside a novel) with ctl-05 (the same
+  # nominalized passives with nothing framing them): the frame is the whole
+  # difference, and telling them apart is what a smoothing pass is for.
+  #
+  # Every control is MECHANICALLY correct — no misspelling, no agreement slip,
+  # every comma where the standard wants it — so that a proofreading pass has
+  # nothing to say about it and only a smoothing pass can score. Nothing here
+  # is owned by a first-class error type: no adjacent doubled words
+  # (repeated_word), no three-occurrence content-word echo (word_echo), no
+  # splice, no missing compound-sentence comma, and no `mechanical_overlap` on
+  # any control (tests/test_style_traps.py enforces the last one).
+  #
+  # Two of them did not meet that bar until the real detector said so. ctl-01
+  # ("At this point in time Harkness had not yet...") and ctl-07 ("Without
+  # introducing herself first she asked him...") were each missing a genuinely
+  # required introductory comma, drawn at high confidence in both of the first
+  # two pipeline runs. They were repunctuated, not exempted: the nine set
+  # phrases in ctl-01 and the stacked relatives in ctl-07 are untouched, so
+  # both are exactly as clumsy as they were and now have nothing for a
+  # proofreading pass to find. A control that has to declare an overlap has
+  # stopped being a control, which is why that invariant is a test and not a
+  # note.
+  #
+  # THE REPAIR IS MEASURED, not assumed. One of the seven runs over the repaired
+  # text returned `introductory_comma` on ctl-01 again — but with
+  # `corrected_text` byte-identical to `original_text`, the model explaining that
+  # the introductory clause was already followed by a comma. `validate_findings`
+  # threw it out as `rejected_noop`, so no author will ever see it. That is the
+  # shape of a control behaving correctly: the type still LOOKS at the sentence,
+  # which it should, and has nothing to change, which is the point. Across the
+  # last four runs no control drew anything at all.
+  #
+  # A smoothing pass that stays silent on these has not been careful. It has
+  # been asleep, and its clean firing rate on the silence set above means
+  # nothing.
+
+  - id: ctl-01
+    category: control-deadwood
+    role: control
+    text: >-
+      At this point in time, Harkness had not yet made a final decision as to
+      whether or not he was going to sell the boat. Due to the fact that the
+      engine had not been looked at since the spring, he was of the opinion
+      that it would be necessary to have a mechanic come out prior to the
+      listing of it, and in the event that the mechanic found something
+      serious, he would in all likelihood take it off the market until such
+      time as it had been repaired.
+    expected_edit: >-
+      Cut the deadwood: "At this point in time", "as to whether or not", "Due
+      to the fact that", "he was of the opinion that", "it would be necessary
+      to", "prior to the listing of it", "in the event that", "in all
+      likelihood", "until such time as".
+    why_edit: >-
+      Nine set phrases, none carrying meaning, in plain narration about a man
+      and a boat. No document frames it, no narrator's manner explains it, and
+      no reading of the paragraph loses anything if all nine go.
+
+  - id: ctl-02
+    category: control-deadwood
+    role: control
+    text: >-
+      She made her way over to the window and looked out of it in order to see
+      what was happening outside in the street below. There were a number of
+      people who were standing around in a group near the entrance of the
+      building, and it appeared to be the case that they were waiting for
+      something to happen. She continued to watch them for a period of
+      approximately ten minutes before turning around and going back to the
+      desk where she had been sitting.
+    expected_edit: >-
+      "She went to the window to see what was happening in the street below. A
+      dozen people stood near the entrance, apparently waiting for something.
+      She watched them for ten minutes and went back to her desk."
+    why_edit: >-
+      Every verb is padded ("made her way over to", "continued to watch"),
+      every noun phrase is doubled ("outside in the street below", "for a
+      period of approximately"), and the one clause carrying information is
+      buried in "it appeared to be the case that".
+
+  - id: ctl-03
+    category: control-deadwood
+    role: control
+    text: >-
+      The reason the road was closed was that a tree had fallen down across it
+      during the course of the storm. Nobody had come out to remove it as of
+      yet. Whitcomb got out of his truck and proceeded to walk up to the tree,
+      and then he made the decision to turn around and go back in the direction
+      from which he had come, which had the effect of adding a further forty
+      minutes to his journey.
+    expected_edit: >-
+      "The road was closed: a tree had come down in the storm and nobody had
+      moved it yet. Whitcomb got out, walked up to it, and turned back the way
+      he had come, which cost him forty minutes."
+    why_edit: >-
+      "The reason X was that", "during the course of", "as of yet",
+      "proceeded to", "made the decision to", "in the direction from which he
+      had come" and "had the effect of adding" are all pure padding, and the
+      paragraph is a man deciding to turn a truck around.
+
+  - id: ctl-04
+    category: control-deadwood
+    role: control
+    text: >-
+      She could see that the light in the hallway was still on. She could hear
+      that the television in the next room was still going. She could feel that
+      the floor under her bare feet was cold, and she could tell that somebody
+      had left the back door open about an inch. She realized then that her
+      brother had come home at some point during the night and had not bothered
+      to say anything to anybody about it.
+    expected_edit: >-
+      Strip the filter verbs and let the details land directly: "The hallway
+      light was still on. The television in the next room was still going. The
+      floor was cold under her bare feet, and the back door stood open about an
+      inch."
+    why_edit: >-
+      Five consecutive perception filters in a paragraph already written in her
+      close third person, so every one of them tells the reader something the
+      viewpoint has already established, at the cost of holding the actual
+      image one clause further away.
+
+  - id: ctl-05
+    category: control-deadwood
+    role: control
+    text: >-
+      The completion of the repair of the fence took place over the course of
+      the three days that followed. The performance of the work was carried out
+      by two men from the county, and the making of the payment was the
+      responsibility of the estate rather than of the tenant. Bellamy's
+      involvement in the matter was limited to the provision of the ladder and
+      to the offering of advice that nobody had requested.
+    expected_edit: >-
+      Turn the nominalizations back into verbs: "Two men from the county
+      repaired the fence over the next three days. The estate paid, not the
+      tenant. Bellamy lent them a ladder and gave them advice nobody had asked
+      for."
+    why_edit: >-
+      Six actions are frozen into nouns and handed to weak verbs, which is
+      exactly the register doc-03 quotes on purpose — except that nothing here
+      is quoted. It is the narrator, describing a fence.
+
+  - id: ctl-06
+    category: control-clumsy-syntax
+    role: control
+    text: >-
+      He took down from the shelf above the workbench in the corner of the
+      garage the box of photographs that his mother had given him in the
+      spring. The lid of the box of photographs had a picture on the top of it
+      of a lake that none of them had ever been to. He sat down on the floor
+      with the box in front of him on the concrete and did not open it for a
+      long while.
+    expected_edit: >-
+      Move the object back next to its verb and break the prepositional chains:
+      "He took the box of photographs down from the shelf at the back of the
+      garage. On the lid was a picture of a lake none of them had ever seen."
+    why_edit: >-
+      A ten-word prepositional stack separates "took down" from what he took
+      down, and the second sentence runs five "of" phrases in a row, so the
+      reader has to assemble the shelf before being told what is on it.
+
+  - id: ctl-07
+    category: control-clumsy-syntax
+    role: control
+    text: >-
+      The door, which had been repainted at some point by somebody who had not
+      sanded it first, slowly opened, and a woman he had never seen before who
+      was holding a clipboard was standing there in the doorway. Without
+      introducing herself first, she asked him whether the man who owned the
+      house happened to be at home at the present time. He said that the man
+      was not at home, which was not true.
+    expected_edit: >-
+      Unstack the relative clauses: "The door opened. It had been repainted by
+      somebody who never sanded it first. A woman he had never seen stood in
+      the doorway with a clipboard, and without introducing herself she asked
+      whether the owner was home."
+    why_edit: >-
+      Two relative clauses are stacked on one noun ("a woman he had never seen
+      before who was holding a clipboard"), a heavy modifier splits the subject
+      from its verb in the first sentence, and "at the present time" and
+      "first" are both redundant.
+
+  - id: ctl-08
+    category: control-clumsy-syntax
+    role: control
+    text: >-
+      When she got to the office, which was on the fourth floor of a building
+      that had been a hotel before it was an office building, she found that
+      the man who had called her, who turned out to be much younger than he had
+      sounded on the telephone, had already left for a meeting that he said
+      would take an hour but that in fact took the rest of the afternoon, so
+      that she sat in the corridor until nearly five.
+    expected_edit: >-
+      Break the single sentence into three and lift the nested relatives out:
+      "The office was on the fourth floor of a building that had been a hotel.
+      The man who had called her was much younger than he had sounded, and he
+      had already left for a meeting. He said it would take an hour; she sat in
+      the corridor until nearly five."
+    why_edit: >-
+      Six levels of subordination in one sentence, carrying nothing but
+      logistics. Compare rhy-05, which is also one long sentence: there the
+      length holds a memory open until the last three words. Here it holds a
+      corridor, a lift, and a man's age, in the order they happened to occur to
+      the writer.
+
+  - id: ctl-09
+    category: control-clumsy-syntax
+    role: control
+    text: >-
+      There was a decision that had been made by the board in April that was
+      not communicated to the staff until the middle of June. There were
+      several people who felt that this was unacceptable, and there was a
+      meeting that was called for the purpose of discussing it. Nothing was
+      decided at the meeting. There was another one scheduled for the following
+      month, and it was canceled by somebody whose name was never given.
+    expected_edit: >-
+      Cut the expletives and give the sentences their real subjects: "The board
+      decided in April and did not tell the staff until the middle of June.
+      Several people said so, and a meeting was called. Nothing was decided.
+      Somebody whose name was never given canceled the next one."
+    why_edit: >-
+      Four "there was / there were" openings in five sentences, each one
+      postponing a subject that was perfectly good, plus three agentless
+      passives that hide who acted — in a paragraph whose entire subject is who
+      acted.
+
+  - id: ctl-10
+    category: control-clumsy-syntax
+    role: control
+    text: >-
+      Having put the kettle on, having found the good cups, and having decided
+      against the good cups and put them back, Marguerite sat down at
+      the table across from her son-in-law, whom she had not seen for two
+      years, and asked him the question that she had been intending to ask him
+      ever since he had telephoned on Sunday, which was whether or not he was
+      going to tell her daughter.
+    expected_edit: >-
+      Turn the participial stack into a sequence and give the question its own
+      sentence: "She put the kettle on, found the good cups, decided against
+      them and put them back. Then she sat down across from her son-in-law,
+      whom she had not seen for two years, and asked what she had been meaning
+      to ask since Sunday: was he going to tell her daughter?"
+    why_edit: >-
+      Three stacked "having" clauses delay the subject for twenty-two words,
+      and the sentence's actual point arrives in a trailing "which was whether
+      or not" tacked on after two relative clauses have already run.

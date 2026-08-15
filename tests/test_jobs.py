@@ -109,6 +109,16 @@ def test_continuity_only_strips_every_other_pass_including_sapling(runner):
     assert cfg.continuity.enabled is True
 
 
+def test_continuity_only_does_not_smooth(runner):
+    """Same rule, the newest pass: "only" has to keep meaning only. Smoothing is
+    a whole-manuscript read plus a judge, and a continuity-only run promises
+    neither of them — nor the margin full of suggestions they produce."""
+    store, r = runner
+    cfg = r.config_for(_job(store, continuity_only=True,
+                            features={"smoothing": True}))
+    assert cfg.smoothing.enabled is False
+
+
 def test_a_record_without_features_keeps_the_config_defaults(runner):
     """Old job records (and untouched panels) carry no features and change
     nothing — storysheet stays off, adjudicate stays on."""

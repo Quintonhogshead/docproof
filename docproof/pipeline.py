@@ -955,6 +955,131 @@ def _sapling_findings(cfg: Config, prepared: Prepared,
     return findings
 
 
+def _smoothing_findings(cfg: Config, prepared: Prepared,
+                        usage: Usage | None = None, *,
+                        out_dir: str | Path | None = None):
+    """The line-editing pass's suggestions, as margin queries, or [] when off.
+
+    Two paid calls: a line editor's read of the manuscript, then a skeptical
+    taste judge over what it proposed. Between them sit the deterministic
+    filters (dialogue, the author's lexicon, the minimal-edit scale) — cheap and
+    absolute, so the judge is only ever asked about candidates that already
+    cleared the rules the pass must never break.
+
+    Reuses the shared confirm valve for the judging, in `mode="suggestion"`:
+    same batching, same abort semantics, same reject log as every other
+    candidate source, but every finding comes back force_query'd. See
+    docproof/smoothing.py for why that is structural rather than a threshold.
+
+    Returns the capped findings and a SmoothingReport, because the number of
+    suggestions the cap withheld is not recoverable from the findings that
+    survived it — and going unreported is the one thing a cap must not do."""
+    from .smoothing import (JUDGE_SYSTEM, PROPOSE_SYSTEM, SmoothingReport,
+                            cap_for, propose, prompt_sha, rank_and_cap)
+    # Whole-document only, like every other pass that reads the book entire. A
+    # selected-sections run must not buy a full-manuscript line edit, and — the
+    # part that would be visible to the author — must not come back with
+    # "Consider: ..." in chapters nobody asked anyone to look at.
+    if not (cfg.smoothing.enabled and prepared.whole_document):
+        if cfg.smoothing.enabled:
+            log.info("Smoothing: skipped — a selected-sections run does not buy "
+                     "a whole-book line edit.")
+        return [], SmoothingReport()
+
+    from itertools import count
+
+    from .providers import build_provider
+    from .rewrite import confirm as smooth_confirm
+    sm = cfg.smoothing
+    doc = prepared.doc
+    usage = usage if usage is not None else Usage()
+
+    pcfg = cfg.model_copy(deep=True)
+    pcfg.api.model = sm.model or cfg.api.model
+    pcfg.api.effort = sm.effort          # applies whether or not `model` is set
+    propose_model = pcfg.api.model
+    cands, filtered = propose(
+        doc.paragraphs, build_provider(pcfg), model=propose_model,
+        max_tokens=sm.max_output_tokens, usage=usage,
+        system=sm.propose_prompt or PROPOSE_SYSTEM,
+        lexicon=prepared.spell.lexicon,
+        # A U.K. manuscript closes dialogue with the mark a U.S. one uses for a
+        # quote inside one, so the dialogue skip has to know which it is. No
+        # variant (a bare Prepared) falls back to the double-quote reading.
+        closing_quotes=(prepared.variant.closing_quotes
+                        if prepared.variant else "”\""),
+        include_dialogue=sm.include_dialogue, edit_guard=cfg.edit_guard,
+        concurrency=cfg.concurrency_for(propose_model))
+    if not cands:
+        # Provenance even on the empty path. A run that proposed nothing and a
+        # run that never happened produce the same findings — and on this pass
+        # silence is the ordinary output, so the difference has to be recorded
+        # rather than inferred. `propose_model` is what says the manuscript was
+        # actually read; see docproof/labels.py.
+        return [], SmoothingReport(
+            filtered=filtered, propose_model=propose_model,
+            judge_model=sm.judge_model,
+            propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM))
+
+    # The judge reads with the same book knowledge the round judge gets. Folded
+    # into its system prompt rather than passed separately: the confirm valve's
+    # user message is the numbered items and nothing else, which is what lets
+    # every candidate source share one batching path.
+    context = "\n\n".join(x for x in (prepared.conventions, prepared.vocabulary,
+                                      prepared.story_sheet) if x)
+    system = sm.judge_prompt or JUDGE_SYSTEM
+    if context:
+        system = f"{system}\n\n{context}"
+    jcfg = cfg.model_copy(deep=True)
+    jcfg.api.model = sm.judge_model
+    jcfg.api.effort = sm.judge_effort
+    rejected: list = []
+    judged = smooth_confirm(
+        cands, doc.paragraphs, build_provider(jcfg), model=sm.judge_model,
+        max_tokens=sm.judge_max_output_tokens, usage=usage, ids=count(1),
+        batch_size=sm.batch_size, reject_sink=rejected,
+        error_type="smoothing", chunk_id="smoothing", id_prefix="sm",
+        concurrency=cfg.concurrency_for(sm.judge_model),
+        system=system, mode="suggestion")
+
+    # Every candidate should come back either affirmed or in the reject log. Any
+    # that did neither were in a batch the judge failed to answer — a truncated
+    # or unparseable reply drops the whole window silently, and the run would
+    # otherwise report the loss as restraint.
+    unjudged = max(0, len(cands) - len(judged) - len(rejected))
+    if unjudged:
+        log.warning("Smoothing: the judge never ruled on %d of %d candidate(s) "
+                    "— a batch reply was truncated or unusable. Treat this "
+                    "run's volume as a floor, not a measurement.",
+                    unjudged, len(cands))
+
+    words = sum(len(p.text.split()) for p in doc.paragraphs)
+    cap = cap_for(words, sm.max_per_1000_words)
+    kept, withheld, below_floor = rank_and_cap(judged, cap, sm.min_confidence)
+    # The judge's rejections are the pass's own taste record: what a strong model
+    # thought was not worth the author's attention. Persisted for the same reason
+    # Sapling's are — it is the only way to measure the valve rather than guess.
+    if out_dir is not None and rejected:
+        import json
+        try:
+            Path(out_dir, "smoothing_rejected.json").write_text(
+                json.dumps(rejected, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as e:                      # debug artifact, never fatal
+            log.warning("Smoothing: could not write reject log: %s", e)
+    log.info("Smoothing: %d suggestion(s) from %d candidate(s) "
+             "(%d filtered before the judge, %d kept as not-worth-raising, "
+             "%d withheld by the cap of %d).",
+             len(kept), len(cands), filtered, len(rejected), withheld, cap)
+    return kept, SmoothingReport(
+        proposed=len(cands), kept=len(kept), withheld=withheld, cap=cap,
+        unjudged=unjudged, filtered=filtered,
+        refused=len(rejected), below_floor=below_floor,
+        propose_model=propose_model, judge_model=sm.judge_model,
+        propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM),
+        judge_prompt_sha=prompt_sha(system))
+
+
 def _promote_low_confidence(cfg: Config, prepared: Prepared,
                             model_findings: list[Finding], usage: Usage, *,
                             out_dir: str | Path | None = None,
@@ -1263,11 +1388,22 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         loss_sink=window_losses)
     if coverage is not None:
         coverage.record_windows(window_losses)
+    # Smoothing goes LAST, and its position is the least of its safeguards. Every
+    # suggestion it emits is force_query'd, and the validator's query branch
+    # never claims a span at all — a question and a tracked change may sit on the
+    # same characters, which is correct: the author should see both. So this is
+    # not the mechanism that keeps a stylistic suggestion from evicting a real
+    # correction; `force_query` is. It is last anyway, so that if that invariant
+    # ever broke, the arbitration would still give every contested span to the
+    # surer source rather than to a matter of taste.
+    smoothing_findings, smoothing_report = _smoothing_findings(
+        cfg, prepared, usage, out_dir=out)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
                 + sapling_findings
                 + model_findings
-                + promoted)
+                + promoted
+                + smoothing_findings)
 
     def _validate(findings):
         return validate_findings(findings, prepared.doc, cfg.min_confidence,
@@ -1326,14 +1462,18 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
                         audit=audit_report, consistency=prepared.consistency,
-                        coverage=coverage)
+                        coverage=coverage, smoothing=smoothing_report,
+                        # Both reassemblers report these; getattr keeps a format
+                        # that predates them constructing rather than crashing.
+                        queried_ids=getattr(stats, "queried", ()),
+                        unplaced_ids=getattr(stats, "unplaced", ()))
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,
                      consistency=prepared.consistency, coverage=coverage,
-                     judges=judge_reports)
+                     judges=judge_reports, smoothing=smoothing_report)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)

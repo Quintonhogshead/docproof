@@ -44,7 +44,13 @@ ALIASES: dict[str, set[str]] = {
 ACTED = frozenset({"validated", "query"})
 
 
-def _family(t: str) -> set[str]:
+def family(t: str) -> set[str]:
+    """Every label that counts as a catch for a case of type `t`.
+
+    Public because the corpus filter needs it too: a case is only unscoreable
+    when NONE of these labels can be produced, and the aliases are exactly the
+    free-form ones (`sweep_doubled_word` for `repeated_word`) that
+    `cfg.error_type_keys` cannot speak about."""
     return {t} | ALIASES.get(t, set())
 
 
@@ -183,7 +189,7 @@ def score(run: EvalRun, threshold: str = "low") -> Scorecard:
         if para_id is None:
             continue
         ts = card.types.setdefault(case.error_type, TypeScore(case.error_type))
-        fam = _family(case.error_type)
+        fam = family(case.error_type)
         flags = acted_of_type(para_id, fam)
         text = text_of.get(para_id, "")
 

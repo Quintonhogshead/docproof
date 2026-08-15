@@ -137,6 +137,7 @@ def _free_finish(cfg: Config) -> None:
     cfg.meaning_check.enabled = False       # the meaning gate's judge
     cfg.fix_check.enabled = False           # the fix check's judge
     cfg.sapling.enabled = False             # per-character bill + confirm valve
+    cfg.smoothing.enabled = False           # a whole-book read plus a judge
     cfg.low_confidence.confirm = False      # the below-gate promotion valve
     cfg.ensemble.verifier_model = None      # the overseer-verifier
 
@@ -737,7 +738,7 @@ class JobRunner:
             cfg.error_types = []
             cfg.sweeps = []
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
-                          "sapling", "consistency", "spellcheck",
+                          "sapling", "smoothing", "consistency", "spellcheck",
                           "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.continuity.enabled = True

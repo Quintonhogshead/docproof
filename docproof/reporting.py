@@ -54,12 +54,22 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
                         normalization=None, audit=None, consistency=None,
-                        coverage=None) -> None:
+                        coverage=None, smoothing=None,
+                        queried_ids: tuple[str, ...] = (),
+                        unplaced_ids: tuple[str, ...] = ()) -> None:
     applied = set(applied_ids)
+    queried = set(queried_ids)
+    unplaced = set(unplaced_ids)
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": doc.source_path,
+        # `error_types` is the CONFIGURED registry keys and nothing else. It
+        # can never name a pass that labels its findings with a free-form
+        # string — the sweeps, LanguageTool, Sapling, the low-confidence valve,
+        # continuity, consistency — so a reader must not take absence from this
+        # list as "that pass did not run". See docproof/labels.py, which owns
+        # that question and answers it from positive evidence instead.
         "config": {"model": cfg.api.model,
                    "error_types": list(cfg.error_type_keys),
                    "error_type_passes": [list(g) for g in cfg.error_type_groups],
@@ -109,14 +119,32 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                                    "truncated_calls": r.truncated_calls}
                                   for r in coverage.unruled]}
                      if coverage is not None else None),
+        # What the smoothing pass did, for anything scoring it. `unjudged` is
+        # the one that must not be inferred: a pass that proposed suggestions
+        # and delivered none looks identical to a restrained one from the
+        # outside, and on this pass silence is the DESIRED output almost
+        # everywhere — which is exactly why silence must never be the
+        # unexamined reading. The prompt fingerprints are here so two runs can
+        # be told apart: a prompt change moves the output more than any knob.
+        "smoothing": (dataclasses.asdict(smoothing)
+                      if smoothing is not None else None),
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
                                for pid, r in doc.skipped],
+        # `applied` says a tracked change was written. `queried` and `unplaced`
+        # say the same for the OTHER channel, and neither is derivable from
+        # `status`: a finding can be status "query" and still never reach the
+        # reader, because both reassemblers require a truthy anchor, refuse a
+        # paragraph outside the main story part, and can fail to attach the
+        # comment itself. Without these, anything counting questions off this
+        # file counts the ones that were GENERATED and calls them delivered.
         "findings": [
             {**dataclasses.asdict(f),
              "anchor": dataclasses.asdict(f.anchor) if f.anchor else None,
-             "applied": f.finding_id in applied}
+             "applied": f.finding_id in applied,
+             "queried": f.finding_id in queried,
+             "unplaced": f.finding_id in unplaced}
             for f in findings
         ],
     }
@@ -162,6 +190,7 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Consistency scan", on(cfg.consistency.enabled)),
         ("Spell scan", on(cfg.spellcheck.enabled)),
         ("Continuity read", on(cfg.continuity.enabled)),
+        ("Smoothing", on(cfg.smoothing.enabled)),
     ]
     L = ["## Settings used\n"]
     L.append(f"- **Reviewer:** `{cfg.api.model}`"
@@ -190,7 +219,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
                      audit=None, consistency=None, coverage=None,
-                     judges=None) -> None:
+                     judges=None, smoothing=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -408,6 +437,30 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
         L.append("")
+
+    # The smoothing pass reports its own volume, because the number it chose NOT
+    # to show is not visible anywhere else. A cap the author cannot see is
+    # indistinguishable from a pass that simply found little, and those are very
+    # different facts about their manuscript.
+    if smoothing is not None and smoothing.proposed:
+        L.append("## Language smoothing\n")
+        L.append(f"{smoothing.kept} suggestion(s) in the margin, from "
+                 f"{smoothing.proposed} the line-editing pass proposed. These "
+                 f"are questions of taste, not corrections: every one is a "
+                 f"{fmt.comment_noun} and none of them changed the text.\n")
+        if smoothing.withheld:
+            L.append(f"**{smoothing.withheld} further suggestion(s) withheld** "
+                     f"— this manuscript's cap is {smoothing.cap}, and the "
+                     f"least confident past that were dropped rather than "
+                     f"crowd the margin.\n")
+        if smoothing.unjudged:
+            # Silence here would read as restraint. It is not: these are
+            # candidates nobody ruled on, so the count above is a floor.
+            L.append(f"**{smoothing.unjudged} of them were never ruled on** — "
+                     f"the reviewing model's reply came back truncated or "
+                     f"unreadable, so those suggestions were neither offered "
+                     f"nor refused. This pass ran incompletely; treat the "
+                     f"count above as a floor rather than a finding.\n")
 
     # Each judge gate gets its own section, because these are a different animal
     # from the queries above: every one of them is a correction the run was going
