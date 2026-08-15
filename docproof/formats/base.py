@@ -23,10 +23,13 @@ class DocumentFormat:
     review_instructions: str
     # The same thing for the app, which renders as plain text.
     where_to_look: str
-    # Where the explanation for each change ends up, when comments are on, in
-    # the format's own word: a Word file holds margin comments, an InDesign
-    # file holds notes and has no margin to put them in. Complete on its own —
-    # every site interpolates it bare, so prefixing "margin " here doubles it.
+    # Where the explanation for each change ends up, when comments are on.
+    # A WHOLE noun, not a format word that callers prefix with "margin " — two
+    # report sites did that and rendered "a margin margin comment" for .docx.
+    # The two are therefore deliberately asymmetric rather than parallel: a
+    # Word comment really does sit in the margin, while an InDesign Note is
+    # inline, read in the Story Editor or the Notes panel. Each format gets the
+    # words its own app uses, and every site drops the noun in unadorned.
     comment_noun: str
 
     preflight: Callable
