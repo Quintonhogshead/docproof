@@ -393,7 +393,14 @@ class ContinuityConfig(BaseModel):
     # glossary's. Cacheable per draft via cache_dir.
     model: str = "claude-fable-5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
-    max_output_tokens: int = Field(default=24000, ge=1)
+    # The ceiling covers the reader's THINKING as well as its findings, and a
+    # frontier model at effort high reasoning over a whole book spends most of
+    # it there. Sized with headroom because a cap is free until generated —
+    # billing is per token produced, and the panel's estimate uses its own
+    # fixed figure — while a truncated read is a fully billed call whose
+    # findings are all lost. build_continuity retries one truncation at double
+    # this, so the ceiling is the common case, not the last line of defense.
+    max_output_tokens: int = Field(default=32000, ge=1)
     # A cap on margin comments, most significant first — the model is asked to
     # order them, and any past this many are dropped.
     max_queries: int = Field(default=40, ge=1)

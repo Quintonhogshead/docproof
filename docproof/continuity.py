@@ -131,7 +131,20 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     overrides the built-in reader instructions when non-empty (the panel's
     editable prompt); with `cache_dir`, the read is pinned per draft (text +
     model + prompt), the same content-addressed cache the glossary and story
-    sheet use — so an edited prompt re-reads rather than returning a stale one."""
+    sheet use — so an edited prompt re-reads rather than returning a stale one.
+
+    A read that stops at `max_tokens` is retried ONCE at double the ceiling.
+    The ceiling covers the model's reasoning as well as its answer, and
+    reasoning spend varies run to run — so a single truncation is a coin flip
+    lost, not proof the book is too big. The chunked passes recover by
+    splitting the window and re-asking; this is one indivisible call with
+    nothing to split, so the only recovery is headroom. The retry re-pays the
+    whole-book input, which is still cheaper than what a truncated read
+    produces today: a fully billed call whose findings are all silently lost
+    (a cut-off structured reply parses as nothing). A retry that fails —
+    truncated again, or the doubled ceiling refused outright by the API —
+    lands on the ordinary error path below, exactly where one failure landed
+    before the retry existed."""
     system = prompt.strip() or _SYSTEM
     doc_text = "\n\n".join(p.text for p in paragraphs)
     if not doc_text.strip():
@@ -148,11 +161,19 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                 return r
             except Exception as e:               # corrupt cache — re-read, don't crash
                 log.warning("continuity cache unreadable (%s); re-reading", e)
-    result = provider.complete_structured(
-        model=model, system=system, user=doc_text,
-        schema=strict_json_schema(ContinuityReport), schema_name="continuity",
-        max_tokens=max_tokens)
-    usage.add(result.usage)
+    def read(ceiling: int):
+        res = provider.complete_structured(
+            model=model, system=system, user=doc_text,
+            schema=strict_json_schema(ContinuityReport),
+            schema_name="continuity", max_tokens=ceiling)
+        usage.add(res.usage)
+        return res
+
+    result = read(max_tokens)
+    if result.stop_reason == "max_tokens":
+        log.warning("continuity read truncated at %d output tokens — "
+                    "retrying once at %d", max_tokens, max_tokens * 2)
+        result = read(max_tokens * 2)
     if result.stop_reason != "ok" or result.parsed is None:
         log.error("continuity pass: %s — proceeding without one",
                   result.error or result.stop_reason)
