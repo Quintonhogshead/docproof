@@ -78,6 +78,15 @@ A query's comment covers the whole sentence it asks about, not the characters
 an edit would have touched. A below-gate comma splice would have changed one
 comma, and a comment hanging off a single comma tells the author nothing.
 
+Both reassemblers place that comment from `Finding.anchor`, so a query without
+one is not written into the file at all. It is therefore never right to hand
+either of them an anchorless question: `summary.md` counts the question as
+raised and tells the author it is in the manuscript, so the anchor is what makes
+that true. `validator.to_query` — the meaning gate's way of withdrawing a change
+into the margin — falls back to the whole paragraph rather than to no span for
+exactly this reason. The one case with no fallback left is an unknown paragraph,
+and the reassemblers count that as `unplaced` rather than dropping it quietly.
+
 ## The two files
 
 ```

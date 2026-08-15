@@ -60,6 +60,12 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": doc.source_path,
+        # `error_types` is the CONFIGURED registry keys and nothing else. It
+        # can never name a pass that labels its findings with a free-form
+        # string — the sweeps, LanguageTool, Sapling, the low-confidence valve,
+        # continuity, consistency — so a reader must not take absence from this
+        # list as "that pass did not run". See docproof/labels.py, which owns
+        # that question and answers it from positive evidence instead.
         "config": {"model": cfg.api.model,
                    "error_types": list(cfg.error_type_keys),
                    "error_type_passes": [list(g) for g in cfg.error_type_groups],
@@ -100,7 +106,14 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         "coverage": ({"total": coverage.total, "reviewed": coverage.reviewed,
                       "gaps": [{"pass": g.pass_label, "chunk_id": g.chunk_id,
                                 "para_ids": list(g.para_ids)}
-                               for g in coverage.gaps]}
+                               for g in coverage.gaps],
+                      # Candidates sent to a batched pass that never came back
+                      # with a verdict — see CoverageLedger.unruled.
+                      "unruled_total": coverage.unruled_total,
+                      "unruled": [{"pass": r.label, "asked": r.asked,
+                                   "answered": r.answered, "lost": r.lost,
+                                   "truncated_calls": r.truncated_calls}
+                                  for r in coverage.unruled]}
                      if coverage is not None else None),
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
@@ -238,6 +251,20 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             for g in coverage.gaps:
                 L.append(f"- **{g.pass_label}** — {len(g.para_ids)} "
                          f"paragraph(s), {_gap_preview(g, paras)}")
+            L.append("")
+        # The same hole one size down: individual candidates a batched pass sent
+        # out and never got a verdict for. It has to be said plainly, because
+        # the alternative reading of a short result is the flattering one — that
+        # the model looked at everything and found little worth changing.
+        if coverage.unruled:
+            L.append(f"**{coverage.unruled_total} candidate(s) never got a "
+                     f"verdict.** They were sent to the model and paid for, but "
+                     f"the reply hit its token ceiling or came back incomplete, "
+                     f"so they were neither corrected nor ruled harmless. They "
+                     f"are missing from the counts below, not counted as "
+                     f"'nothing to fix':\n")
+            for r in coverage.unruled:
+                L.append(f"- **{r.label}** — {r.summary()}")
             L.append("")
 
     if by_type:

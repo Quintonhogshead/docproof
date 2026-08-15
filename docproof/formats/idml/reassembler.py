@@ -289,10 +289,25 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
     # findings take the second is shared policy (docproof/queries.py); only the
     # anchoring below is InDesign's own.
     wanted = wanted_statuses(cfg.query_comments)
-    queries = [f for f in findings if f.status in wanted and f.anchor]
+    # A Note is placed from the finding's anchor, so a query with no span
+    # cannot be written into the file at all — the same loss the .docx side
+    # takes, counted the same way. Silently filtering these would leave
+    # summary.md promising a note the InDesign file does not carry.
+    queries: list[Finding] = []
+    unplaced: list[str] = []
+    for f in findings:
+        if f.status not in wanted:
+            continue
+        if f.anchor:
+            queries.append(f)
+            continue
+        unplaced.append(f.finding_id)
+        log.warning("%s (%s) has no anchor — the question stays out of the "
+                    "file; it is in summary.md and findings.json only.",
+                    f.finding_id, f.error_type)
     if not validated and not queries:
         log.info("No validated findings; document untouched.")
-        return ReassemblyStats((), ())
+        return ReassemblyStats((), (), (), tuple(unplaced))
 
     paras = index_paragraphs(doc)
     date = _stamp()
@@ -300,7 +315,6 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
     applied: list[str] = []
     skipped: list[str] = []
     queried: list[str] = []
-    unplaced: list[str] = []
 
     def refuse(fs: list[Finding]) -> None:
         """A paragraph we will not touch. A withheld correction is `skipped`;

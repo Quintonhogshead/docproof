@@ -384,6 +384,23 @@ def test_a_query_in_a_footnote_is_refused(cfg, tmp_path):
     assert not list(pkg.tree("Stories/Story_ue0.xml").iter("Note"))
 
 
+def test_a_query_with_no_anchor_is_counted_as_unplaced_not_dropped(cfg,
+                                                                   tmp_path):
+    """A Note is placed from the anchor, so a query without one cannot be
+    written — the same loss the .docx side takes, counted the same way rather
+    than filtered out where nothing would ever say the question went missing."""
+    cfg.comments = False
+    pkg = preflight(LAYOUT, "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = next(p.para_id for p in doc.paragraphs if p.text == DOOR)
+    q = query("q-x", pid, DOOR)
+    q = type(q)(**{**q.__dict__, "status": "query", "anchor": None})
+    stats = apply_tracked_changes(pkg, doc, [q], cfg)
+    assert stats.queried == () and stats.unplaced == ("q-x",)
+    assert stats.applied == () and stats.skipped == ()
+    assert notes_in(pkg) == []
+
+
 def test_a_finding_in_a_footnote_is_refused(cfg, tmp_path):
     """Defense in depth: ingest already skips footnotes, but a stale document
     model must not be able to write a Change InDesign would crash on."""
