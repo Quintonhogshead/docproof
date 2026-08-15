@@ -107,6 +107,45 @@ def test_propose_skips_unreviewable_paragraphs(monkeypatch):
     assert lt.propose([_para("body-0", text, reviewable=False)]) == []
 
 
+def test_propose_is_deterministic_and_reports_progress_across_the_pool(monkeypatch):
+    """The scan runs over a thread pool, but candidate order follows the input
+    paragraphs (not whichever check finished first), and progress fires once per
+    reviewable paragraph — the signal that keeps a long scan from looking hung."""
+    paras = [_para(f"body-{i}", f"word{i} here") for i in range(6)]
+    by_text = {p.text: [_match("R_OK", "grammar", 0, 5,
+                               [f"WORD{i}"], f"word{i}")]
+               for i, p in enumerate(paras)}
+    _install(monkeypatch, by_text)
+
+    seen = []
+    cands = lt.propose(paras, workers=4, progress=lambda d, t: seen.append((d, t)))
+
+    assert [c.para_id for c in cands] == [f"body-{i}" for i in range(6)]
+    assert len(seen) == 6 and seen[-1] == (6, 6)           # done climbs to total
+    assert [d for d, _ in seen] == sorted(d for d, _ in seen)  # monotonic
+
+
+def test_propose_survives_a_failing_check_and_keeps_the_rest(monkeypatch):
+    """One paragraph whose check raises drops only its own candidates; the pool
+    keeps scanning the others."""
+    good, bad = _para("body-0", "ok text"), _para("body-1", "boom text")
+
+    class _FlakyTool:
+        def check(self, text):
+            if text == bad.text:
+                raise RuntimeError("server hiccup")
+            return [_match("R_OK", "grammar", 0, 2, ["OK"], "ok")]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(lt, "AVAILABLE", True)
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: _FlakyTool())
+
+    cands = lt.propose([good, bad], workers=2)
+    assert [c.para_id for c in cands] == ["body-0"]
+
+
 # --- config -------------------------------------------------------------------
 
 def test_config_defaults_are_off_and_conservative():

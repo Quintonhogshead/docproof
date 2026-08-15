@@ -305,6 +305,10 @@ languagetool:
   disabled_rules: []        # extra rule ids to drop, atop the built-in
                             # artifact/style denylist (unpaired-quote, caps-start,
                             # whitespace, style advice)
+  workers: 0               # scan threads; 0 = auto (one per usable core). The
+                            # pass caps this at the CPU count, so on a single-core
+                            # VM the scan stays serial. Raise nothing to speed it
+                            # up — give the machine more cores instead.
   # Ceiling per confirm request. The verdicts are terse, but the ceiling has to
   # cover the model's THINKING as well as what it writes back, and on a
   # reasoning model the thinking is most of it. Measured on a real manuscript at

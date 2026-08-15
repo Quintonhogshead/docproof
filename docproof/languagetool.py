@@ -30,7 +30,9 @@ pays for it when `languagetool.enabled` is set. See RewriteCandidate reuse below
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Sequence
 
 from .models import ParagraphRef
 from .rewrite import RewriteCandidate
@@ -77,6 +79,16 @@ def _get_tool(dictionary: str):
     return tool
 
 
+def _usable_cpus() -> int:
+    """Cores this process may actually run on — the cgroup/affinity view, not the
+    host's total. On a Fly shared-cpu-1x this is 1, so the scan pool below stays
+    serial; on a bigger VM it opens up automatically."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))   # Linux, honours cgroups
+    except AttributeError:                             # pragma: no cover - non-Linux
+        return max(1, os.cpu_count() or 1)
+
+
 def shutdown() -> None:
     """Stop any running local servers (call at end of run)."""
     for tool in _tool_cache.values():
@@ -92,31 +104,59 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
             dictionary: str = "en-US",
             disabled_rules: frozenset[str] = DEFAULT_DISABLED_RULES,
             disabled_issue_types: frozenset[str] = DEFAULT_DISABLED_ISSUE_TYPES,
+            workers: int = 0,
+            progress: Callable[[int, int], None] | None = None,
             ) -> list[RewriteCandidate]:
     """Run LanguageTool over each paragraph and return the surviving matches as
     RewriteCandidates (para_id, span, original, replacement) for `rewrite.confirm`.
 
     Only matches with a concrete replacement are kept — the valve needs something
     to apply or to show in a query. `lexicon` is the spell scan's protected words;
-    a misspelling flag on one of them is a name/coinage and is dropped here."""
+    a misspelling flag on one of them is a name/coinage and is dropped here.
+
+    The per-paragraph checks run over a thread pool so a multi-core box scans in
+    parallel; the pool is capped at the usable CPU count (`workers` lowers it,
+    0 = auto), so on a single-core VM it stays the old serial loop. `progress`,
+    if given, is called `(done, total)` as each paragraph's check lands — the
+    scan is otherwise silent for minutes on a long manuscript, and the job card
+    reads that as a hang. Candidate order stays deterministic: the filtering
+    below walks the paragraphs in order, not in completion order."""
     if not AVAILABLE:
         log.warning("LanguageTool not installed; propose() returns nothing.")
         return []
     lex = {w.strip("'’\".,").lower() for w in lexicon}
     tool = _get_tool(dictionary)
 
+    reviewable = [p for p in paragraphs if getattr(p, "reviewable", True)]
+    total = len(reviewable)
+    pool = _usable_cpus()
+    if workers:
+        pool = max(1, min(workers, pool))
+
+    # Scan concurrently, but keep results keyed by input position so the ordered
+    # walk afterwards is unaffected by which check finished first.
+    matches_by_idx: dict[int, list] = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=pool) as ex:
+        futs = {ex.submit(tool.check, p.text): i
+                for i, p in enumerate(reviewable)}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            try:
+                matches_by_idx[i] = fut.result()
+            except Exception as e:       # pragma: no cover - one bad paragraph
+                log.warning("LanguageTool: check failed on %s: %s",
+                            reviewable[i].para_id, e)
+                matches_by_idx[i] = []
+            done += 1
+            if progress:
+                progress(done, total)
+
     cands: list[RewriteCandidate] = []
     seen: set[tuple[str, int, int]] = set()
     dropped = {"rule": 0, "issue": 0, "name": 0, "no_fix": 0}
-    for p in paragraphs:
-        if not getattr(p, "reviewable", True):
-            continue
-        try:
-            matches = tool.check(p.text)
-        except Exception as e:           # pragma: no cover - one bad paragraph
-            log.warning("LanguageTool: check failed on %s: %s", p.para_id, e)
-            continue
-        for m in matches:
+    for i, p in enumerate(reviewable):
+        for m in matches_by_idx.get(i, ()):
             issue = m.rule_issue_type
             if m.rule_id in disabled_rules:
                 dropped["rule"] += 1; continue

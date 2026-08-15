@@ -446,13 +446,17 @@ def _build_judge(cfg, mock: bool):
 
 def _round_config(cfg, k: int, reuse: bool):
     """Round k's config: round 1 uses cfg as-is; later rounds skip the
-    whole-book re-reads (glossary, story sheet) when reuse is on — round 1
-    already caught them, and mechanical fixes create no new ones."""
+    whole-book re-reads (glossary, story sheet) and the mechanical-floor pass
+    when reuse is on — round 1 already caught them, and the confirmed mechanical
+    fixes it applies introduce no new commas/hyphens/missing words for a later
+    round to find. Dropping LanguageTool also drops its per-round scan, which on
+    a large manuscript is minutes of single-core work in its own right."""
     if k == 1 or not reuse:
         return cfg
     rcfg = cfg.model_copy(deep=True)
     rcfg.glossary.enabled = False
     rcfg.storysheet.enabled = False
+    rcfg.languagetool.enabled = False
     return rcfg
 
 
