@@ -641,3 +641,212 @@ def test_every_candidate_is_accounted_for(monkeypatch):
     assert report.refused == 1       # the judge said no
     assert report.unjudged == 1      # never ruled on at all
     assert len(findings) == report.kept
+
+
+# --- Tier C: opt-in recall levers ---------------------------------------------
+#
+# Every lever below is OFF by default: a run that sets none of them sends the
+# shipped prompts, the shipped window size, and the total dialogue skip. The
+# tests pin two things — that the levers do what they claim when turned on, and
+# that with them off nothing about the pass moves, including its fingerprints
+# (the eval keys run-comparability off those, so a flag that changed the output
+# without changing the recorded sha would silently fold incomparable runs).
+
+def test_c1_the_open_proposer_keeps_every_voice_rail_and_drops_only_restraint():
+    """PROPOSE_SYSTEM_OPEN is a separate constant, not an edit of the shipped
+    prompt: every voice-SAFETY line survives verbatim and only the restraint
+    FRAMING is lifted. If this drifts, C1 has either weakened a safety rail or
+    silently reverted A5's two-independent-touches relaxation."""
+    from docproof.smoothing import PROPOSE_SYSTEM, PROPOSE_SYSTEM_OPEN
+    assert PROPOSE_SYSTEM_OPEN != PROPOSE_SYSTEM
+    # Voice-safety and scope rails — must be present in BOTH, verbatim.
+    for rail in [
+        "NEVER suggest anything that touches:",
+        "dialogue, or any words a character speaks or thinks",
+        "invented names, place names, or coined terms",
+        "deliberate sentence fragments",
+        "stylized, archaic, or poetic diction",
+        "repetition that has rhetorical shape",
+        "fit inside a single sentence, and change no more than a few words",
+        "leave the meaning of the sentence identical",
+        "WRONG, it is not yours to make.",   # the mechanical-error wall
+        # A5's relaxation must survive the de-restraint rewrite, not revert:
+        "addresses a genuinely independent, unrelated spot",
+        "do not drop a real smoothing",
+    ]:
+        assert rail in PROPOSE_SYSTEM, rail
+        assert rail in PROPOSE_SYSTEM_OPEN, rail
+    # The restraint SATURATION is only in the shipped prompt, never the open one.
+    for restraint in ["Your job is RESTRAINT",
+                      "Most paragraphs get NOTHING",
+                      "an empty result is the correct"]:
+        assert restraint in PROPOSE_SYSTEM, restraint
+        assert restraint not in PROPOSE_SYSTEM_OPEN, restraint
+
+
+def test_c1_open_sends_and_fingerprints_the_open_prompt(monkeypatch):
+    """The lever swaps the prompt AND records the sha of the prompt it actually
+    sent. The failure this guards is subtle and worse than no fingerprint: swap
+    the prompt at the call site but fingerprint the shipped one, and two runs
+    with different prompts record the same sha — the eval folds them together."""
+    from docproof.smoothing import (PROPOSE_SYSTEM, PROPOSE_SYSTEM_OPEN,
+                                    prompt_sha)
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    script = lambda: [_suggest(_s("body-0", "in a very quiet way", "quietly")),
+                      _verdicts({"index": 1, "is_error": True,
+                                 "confidence": "high"})]
+    _f, rep_r, prov_r = _run(monkeypatch, _cfg(), _prepared(p), script())
+    assert prov_r.calls[0]["system"] == PROPOSE_SYSTEM
+    assert rep_r.propose_prompt_sha == prompt_sha(PROPOSE_SYSTEM)
+
+    _f2, rep_o, prov_o = _run(monkeypatch, _cfg(proposer_restraint="open"),
+                              _prepared(p), script())
+    assert prov_o.calls[0]["system"] == PROPOSE_SYSTEM_OPEN
+    assert rep_o.propose_prompt_sha == prompt_sha(PROPOSE_SYSTEM_OPEN)
+    assert rep_o.propose_prompt_sha != rep_r.propose_prompt_sha
+
+
+def test_c1_an_explicit_propose_prompt_still_wins_over_the_flag(monkeypatch):
+    """`propose_prompt` is the wholesale override and outranks the restraint
+    flag, on both the send and the fingerprint."""
+    from docproof.smoothing import prompt_sha
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    custom = "You are a custom proposer. Return nothing."
+    _f, rep, prov = _run(monkeypatch,
+                         _cfg(proposer_restraint="open", propose_prompt=custom),
+                         _prepared(p), [_suggest()])
+    assert prov.calls[0]["system"] == custom
+    assert rep.propose_prompt_sha == prompt_sha(custom)
+
+
+def test_c2_smaller_windows_split_more_and_lose_no_paragraph():
+    """The satisficing probe: a smaller window makes more reads. Every paragraph
+    still lands in exactly one window, both ways — the size only changes where
+    the cuts fall, never what is covered."""
+    from docproof.smoothing import _windows
+    paras = [_para(f"body-{i}", "word " * 200) for i in range(30)]  # ~1000ch ea
+    big = _windows(paras, 12_000, 60)
+    small = _windows(paras, 5_000, 24)
+    assert len(small) > len(big)
+    assert sum(len(w) for w in big) == 30 == sum(len(w) for w in small)
+
+
+def test_c2_the_window_config_reaches_propose(monkeypatch):
+    """The config values thread all the way to `_windows`: same three big
+    paragraphs, more reads under the smaller setting."""
+    paras = [_para(f"body-{i}", "x " * 2500) for i in range(3)]   # ~5000ch each
+    _fd, _rd, dprov = _run(monkeypatch, _cfg(), _prepared(*paras),
+                           [_suggest(), _suggest(), _suggest()])
+    _fs, _rs, sprov = _run(monkeypatch,
+                           _cfg(propose_chars=5_000, propose_max_paras=24),
+                           _prepared(*paras),
+                           [_suggest(), _suggest(), _suggest()])
+    assert len(dprov.calls) < len(sprov.calls)   # calls == propose windows here
+
+
+def test_c4_the_narrow_judge_changes_only_the_preference_clause():
+    """JUDGE_SYSTEM_NARROW keeps the voice veto and the default-to-no; it only
+    narrows the blanket 'merely-conventional' reject to one that flattens a
+    distinctive choice."""
+    from docproof.smoothing import JUDGE_SYSTEM, JUDGE_SYSTEM_NARROW
+    assert JUDGE_SYSTEM_NARROW != JUDGE_SYSTEM
+    conventional = "trades the author's phrasing for merely-conventional phrasing"
+    assert conventional in JUDGE_SYSTEM
+    assert conventional not in JUDGE_SYSTEM_NARROW
+    assert "flattens a distinctive authorial choice" in JUDGE_SYSTEM_NARROW
+    for kept in ["DEFAULT TO NO.",
+                 "touches dialect, idiolect, a coined term, or a character's "
+                 "voice",
+                 "changes the meaning, the emphasis, or the rhythm of the "
+                 "sentence"]:
+        assert kept in JUDGE_SYSTEM_NARROW, kept
+
+
+def test_c4_narrow_preference_reaches_the_judge_and_moves_its_fingerprint(
+        monkeypatch):
+    """With no book context folded in, the recorded judge sha IS the sha of the
+    chosen judge constant — so a sha match proves the narrow prompt was the one
+    handed to the valve, not merely recorded."""
+    from docproof.smoothing import JUDGE_SYSTEM, JUDGE_SYSTEM_NARROW, prompt_sha
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    script = lambda: [_suggest(_s("body-0", "in a very quiet way", "quietly")),
+                      _verdicts({"index": 1, "is_error": True,
+                                 "confidence": "high"})]
+    _f, rep_n, _pn = _run(monkeypatch, _cfg(judge_preference="narrow"),
+                          _prepared(p), script())
+    _f2, rep_s, _ps = _run(monkeypatch, _cfg(), _prepared(p), script())
+    assert rep_n.judge_prompt_sha == prompt_sha(JUDGE_SYSTEM_NARROW)
+    assert rep_s.judge_prompt_sha == prompt_sha(JUDGE_SYSTEM)
+    assert rep_n.judge_prompt_sha != rep_s.judge_prompt_sha
+
+
+def test_c5_clarity_survives_in_dialogue_when_opted_in(monkeypatch):
+    """The middle setting between the total skip and include_dialogue: an
+    ambiguous pronoun inside speech reaches the judge, which is the taste gate
+    for whether it is a real error or the character's diction."""
+    p = _para("body-0", '"He gave it to him," she said.')
+    findings, report, prov = _run(
+        monkeypatch, _cfg(dialogue_categories=["clarity"]), _prepared(p), [
+            _suggest(_s("body-0", "He gave it to him", "He gave it to the boy",
+                        category="clarity")),
+            _verdicts({"index": 1, "is_error": True, "confidence": "high"}),
+        ])
+    assert len(findings) == 1 and report.proposed == 1
+    assert len(prov.calls) == 2          # the judge WAS paid — it reached it
+
+
+def test_c5_a_non_clarity_fix_in_dialogue_is_still_dropped_and_counted(
+        monkeypatch):
+    """Opting clarity in does not open the door to tightening a character's
+    line: a tighten candidate in dialogue is still dropped before the judge, and
+    still counted in `filtered` so the deterministic tally stays honest."""
+    p = _para("body-0", '"I was just sort of going over there," he said.')
+    findings, report, prov = _run(
+        monkeypatch, _cfg(dialogue_categories=["clarity"]), _prepared(p), [
+            _suggest(_s("body-0", "just sort of going", "going",
+                        category="tighten")),
+        ])
+    assert findings == [] and report.proposed == 0
+    assert report.filtered == 1          # dropped, and accounted for
+    assert len(prov.calls) == 1          # judge never paid
+
+
+def test_c5_clarity_in_dialogue_is_dropped_by_default(monkeypatch):
+    """With the default empty list, dialogue is skipped wholesale — clarity
+    included. The opt-in is the only thing that changes this."""
+    p = _para("body-0", '"He gave it to him," she said.')
+    findings, report, prov = _run(monkeypatch, _cfg(), _prepared(p), [
+        _suggest(_s("body-0", "He gave it to him", "He gave it to the boy",
+                    category="clarity")),
+    ])
+    assert findings == [] and report.proposed == 0
+    assert len(prov.calls) == 1
+
+
+def test_c5_dialogue_categories_refuses_anything_but_clarity():
+    """Widening dialogue smoothing past clarity is the voice risk the skip
+    exists to prevent, so it is refused at config load, not silently accepted."""
+    import pytest
+
+    from docproof.config import SmoothingConfig
+    SmoothingConfig(dialogue_categories=[])            # the default, fine
+    SmoothingConfig(dialogue_categories=["clarity"])   # the one allowed opt-in
+    for bad in (["idiom"], ["flow"], ["clarity", "tighten"]):
+        with pytest.raises(ValueError):
+            SmoothingConfig(dialogue_categories=bad)
+
+
+def test_every_lever_off_by_default_leaves_the_shipped_pass_untouched():
+    """The whole safety story in one assertion: the shipped config sends the
+    shipped prompts and the shipped window, and skips dialogue entirely."""
+    from docproof.smoothing import (JUDGE_SYSTEM, PROPOSE_SYSTEM,
+                                    _PROPOSE_CHARS, _PROPOSE_MAX_PARAS)
+    s = Config().smoothing
+    assert s.proposer_restraint == "restrained"
+    assert s.judge_preference == "strict"
+    assert (s.propose_chars, s.propose_max_paras) == (_PROPOSE_CHARS,
+                                                      _PROPOSE_MAX_PARAS)
+    assert s.dialogue_categories == []
+    # and the chosen constants are the shipped ones (referenced so a rename here
+    # can't quietly drift the defaults away from what the pass ships)
+    assert PROPOSE_SYSTEM and JUDGE_SYSTEM
