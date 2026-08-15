@@ -290,11 +290,32 @@ def confirm(candidates: Sequence[RewriteCandidate],
             reject_sink: list | None = None, loss_sink: list | None = None,
             error_type: str = "rewrite", chunk_id: str = "rewrite",
             id_prefix: str = "r", silent: bool = False,
-            concurrency: int = 1) -> list[Finding]:
+            concurrency: int = 1, system: str | None = None,
+            mode: str = "correction") -> list[Finding]:
     """Skeptically rule on each candidate in context and turn the affirmed ones
     into Findings. Only an error affirmed at `edit_confidence` becomes a tracked
     change; a softer affirmation is force_query'd to the margin, a "keep" yields
     nothing — the same routing that makes the adjudication pass safe.
+
+    `system` replaces the built-in confirm prompt for a source that is not ruling
+    on mechanical errors. Any context a caller wants the judge to have (a story
+    sheet, the conventions, a vocabulary) belongs folded into that string: this
+    valve's user message is the numbered items and nothing else, and keeping it
+    that way is what lets every source share one batching path.
+
+    `mode` picks what an affirmed verdict MEANS.
+
+    - "correction" (the default, and every mechanical caller): the candidate is
+      an error, the verdict decides whether it is sure enough to edit, and the
+      finding quotes the whole paragraph so the validator can shrink it back to
+      the minimal diff.
+    - "suggestion": the candidate is a matter of taste, so an affirmation is
+      never an edit. The finding is force_query'd unconditionally — NOT via
+      `edit_confidence`, which cannot express this (an unrecognised value there
+      falls back to "high" and would let a confident verdict through as a
+      tracked change) — and it quotes the SENTENCE rather than the paragraph,
+      because that is the span the margin comment will cover and a question
+      about a whole paragraph tells the author nothing about where to look.
 
     `concurrency` windows are in flight at once, the verifier's split: the calls
     fan out, the answers fold back in window order on this thread. The order is
@@ -335,7 +356,8 @@ def confirm(candidates: Sequence[RewriteCandidate],
             sent = _sentence_around(text_of[c.para_id], c.start, c.end)
             lines.append(f"{n}. sentence: {sent}\n   edit: {_describe(c)}")
         return provider.complete_structured(
-            model=model, system=_CONFIRM_SYSTEM, user="\n\n".join(lines),
+            model=model, system=system or _CONFIRM_SYSTEM,
+            user="\n\n".join(lines),
             schema=schema, schema_name="verdicts",
             max_tokens=ceiling)
 
@@ -358,7 +380,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
                     usage_sink=usage.add)
                 _fold(rows, window, text_of, findings, reject_sink, ids,
                       edit_floor, error_type=error_type, chunk_id=chunk_id,
-                      id_prefix=id_prefix, silent=silent)
+                      id_prefix=id_prefix, silent=silent, mode=mode)
         except BaseException:
             # Every window was queued up front, and the pool drains its queue on
             # the way out — so without this an abort keeps buying the rest of the
@@ -391,7 +413,7 @@ def _rows_of(parsed: dict) -> dict[int, "_CVerdict"]:
 
 def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
           ids, edit_floor: int, *, error_type: str, chunk_id: str,
-          id_prefix: str, silent: bool) -> None:
+          id_prefix: str, silent: bool, mode: str = "correction") -> None:
     """One window's verdicts, appended to `findings` in the order asked.
 
     `rows` maps a 0-based offset in `window` to that item's verdict, and carries
@@ -403,6 +425,7 @@ def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
     calls around it run on a pool: the id counter, the findings list and the
     reject log are all shared, and none of them may be touched from a worker
     thread."""
+    suggestion = mode == "suggestion"
     for offset in sorted(rows):
         v = rows[offset]
         c = window[offset]
@@ -415,17 +438,43 @@ def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
             continue
         para_text = text_of[c.para_id]
         conf = v.confidence if v.confidence in _RANK else "low"
+        if suggestion:
+            # Quote the sentence, not the paragraph: this finding is going to
+            # the margin, and the quoted span IS the highlighted span there.
+            #
+            # corrected_text carries the suggested wording, and must keep
+            # carrying it. The obvious-looking simplification is the one the
+            # other query-only passes use — `corrected_text=original`, on the
+            # reasoning that a question edits nothing (continuity.py does
+            # exactly this). Here it silently LOSES DATA: the validator's
+            # duplicate key for a force_query finding is
+            # (para_id, start, "query", error_type, corrected_text)
+            # (validator.py, the query branch), so two different suggestions
+            # about one sentence would key identically and the second would be
+            # dropped as rejected_duplicate — the author asked one question
+            # instead of two, with nothing in any report to say so. Continuity
+            # gets away with it because it never files two questions about one
+            # sentence; a line editor does that routinely.
+            # Pinned by tests/test_smoothing.py::
+            # test_two_suggestions_on_one_sentence_stay_two_questions.
+            from .sweeps import sentence_window
+            quote, lo, occurrence = sentence_window(para_text, c.start, c.end)
+            corrected = (quote[:c.start - lo] + c.replacement
+                         + quote[c.end - lo:])
+        else:
+            quote, occurrence = para_text, 1
+            corrected = para_text[:c.start] + c.replacement + para_text[c.end:]
         findings.append(Finding(
             finding_id=f"{id_prefix}-{next(ids):04d}",
             chunk_id=chunk_id,
             para_id=c.para_id,
             error_type=error_type,
-            original_text=para_text,
-            occurrence=1,
-            corrected_text=para_text[:c.start] + c.replacement
-            + para_text[c.end:],
+            original_text=quote,
+            occurrence=occurrence,
+            corrected_text=corrected,
             explanation=_explanation(c),
             confidence=conf,
-            # Only a beyond-doubt affirmation edits; softer ones ask.
-            force_query=_RANK[conf] < edit_floor,
+            # Only a beyond-doubt affirmation edits; softer ones ask. A
+            # suggestion never edits at all, however sure the judge was.
+            force_query=suggestion or _RANK[conf] < edit_floor,
             silent=silent))

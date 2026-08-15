@@ -50,6 +50,11 @@ def _eval_config(cfg: Config) -> Config:
     cfg.min_confidence = "low"
     cfg.consistency.enabled = False
     cfg.spellcheck.enabled = False
+    # Belt and braces: the runner never calls finish() (see the module
+    # docstring), so a finish()-resident pass cannot fire here anyway. The line
+    # is here so that if the eval ever grows a finish() path, the scorecard does
+    # not silently start counting taste against a mechanical trap set.
+    cfg.smoothing.enabled = False
     cfg.audit = "off"
     cfg.change_log = False
     return cfg

@@ -296,6 +296,39 @@ sapling:
   comments: true            # false = apply Sapling edits silently, no margin comment
   cost_per_1k_chars: 0.025  # $ per 1,000 chars — for the pre-run estimate only
 
+# Line-editing pass: the half of a proofreader's job the other passes refuse. A
+# reader proposes small smoothings — a word doing no work, an unidiomatic
+# preposition, an awkward coordination, a rough tense, an ambiguous pronoun —
+# and a skeptical taste judge culls them. QUERY-ONLY and unconditionally so:
+# every finding is a margin comment, never a tracked change, because a smoothing
+# has no right answer, only a better one, and which is better is the author's
+# call. Dialogue is excluded by default and author coinages are filtered out
+# before the judge sees them — voice risk is what these knobs defend. Volume is
+# capped per 1,000 words; anything dropped by the cap is COUNTED in summary.md.
+# Echo is deliberately not a category here: `word_echo` owns it in the taxonomy.
+# OFF by default — a whole extra read plus a judge, and the one pass whose
+# output is taste rather than correctness. Whole-document only.
+# See docproof/smoothing.py.
+smoothing:
+  enabled: false
+  model:                    # unset = api.model (the detector's)
+  effort: medium
+  judge_model: claude-fable-5  # taste is the hard part — a strong judge on purpose;
+                            # its prompts are short, so it is cheap next to the read
+  judge_effort: high
+  include_dialogue: false   # true smooths inside quoted speech — voice risk lives here
+  max_per_1000_words: 3.0   # volume cap; overflow is dropped AND counted in summary.md
+  min_confidence: medium    # drop anything the judge affirms softer than this
+  batch_size: 40            # candidates per judge request
+  max_output_tokens: 4000   # the proposing read
+  judge_max_output_tokens: 16000  # much larger on purpose: a verdict is tiny,
+                            # but on a reasoning model the THINKING counts here
+                            # too, and a truncated judge batch returns no
+                            # verdicts at all — every candidate in it vanishes
+                            # and the run looks restrained instead of broken
+  propose_prompt: ""        # empty = built-in default (see docproof/smoothing.py)
+  judge_prompt: ""          # empty = built-in default
+
 # Fallback $/MTok rates for the cost estimate, used only when api.model is not
 # in docproof/providers/catalog.py (which carries per-model rates). Leave unset
 # to omit the estimate for unknown models.

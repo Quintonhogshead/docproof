@@ -100,7 +100,10 @@ def _gates_only(cfg: Config) -> Config:
         prompts this mode never runs;
       * Sapling is a per-character bill inside `finish`;
       * the low-confidence valve and the ensemble overseer are model calls inside
-        `finish`.
+        `finish`;
+      * smoothing is a whole-manuscript read plus a judge inside `finish`, and
+        its suggestions are already in the record — paying again would buy a
+        second, differently-worded set of the same questions.
 
     Everything left free — the sweeps, the spell scan, the consistency scan —
     stays on, because `finish` needs a prepared document either way and those
@@ -108,6 +111,7 @@ def _gates_only(cfg: Config) -> Config:
     out = cfg.model_copy(deep=True)
     out.storysheet.enabled = False
     out.sapling.enabled = False
+    out.smoothing.enabled = False
     out.low_confidence.confirm = False
     out.ensemble.detectors = []
     out.ensemble.verifier_model = None

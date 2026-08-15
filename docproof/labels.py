@@ -46,6 +46,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "sapling",            # pipeline.py — the Sapling grammar pass
     "low_confidence",     # pipeline.py — the below-gate confirm valve
     "continuity",         # continuity.py — the whole-book contradiction read
+    "smoothing",          # pipeline.py — the opt-in line-editing pass
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
 })
@@ -69,6 +70,7 @@ _SWITCH: dict[str, str] = {
     "languagetool": "languagetool",
     "sapling": "sapling",
     "continuity": "continuity",
+    "smoothing": "smoothing",
     "term_consistency": "consistency",
     "name_consistency": "consistency",
 }
@@ -204,6 +206,17 @@ def _from_telemetry(payload: Mapping[str, Any], label: str) -> str | None:
         if isinstance(usage, Mapping) and _positive(usage.get("sapling_chars")):
             return RAN                       # it billed, so it ran
         return None                          # zero chars proves nothing
+    if label == "smoothing":
+        # The pass writes its own telemetry block, and `propose_model` is set
+        # only on a run that actually read the manuscript — so it answers this
+        # question outright rather than by inference. That matters more here
+        # than elsewhere: a smoothing run that proposes nothing is INDISTIN-
+        # GUISHABLE from one that never happened, judged by its findings alone,
+        # and silence is this pass's ordinary output.
+        block = payload.get("smoothing")
+        if not isinstance(block, Mapping):
+            return None
+        return RAN if block.get("propose_model") else None
     return None
 
 
