@@ -203,81 +203,6 @@
           <span class="muted" id="advanced-summary"></span>
         </button>
 
-        <fieldset class="field" id="prep-options" hidden>
-          <legend>What should it hand back?</legend>
-          <label class="radio">
-            <input type="radio" name="prep-output" value="book" checked>
-            <span><strong>A book-styled reading copy</strong> — the manuscript
-              cleaned up and dressed as a printed Atmosphere interior, for the
-              author and the developmental editors. Title-page lettering
-              follows the book's subject matter</span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="prep-output" value="indesign">
-            <span><strong>A file ready for InDesign</strong> — a clean Word
-              document whose paragraph styles are the template's own, so they
-              map when you place it</span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="prep-output" value="tracked">
-            <span><strong>A tracked-changes Word file</strong> — the same
-              tagging as revisions, to walk in Word before anyone places
-              anything</span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="prep-output" value="both">
-            <span><strong>InDesign + tracked</strong> — one costs no more than
-              the other; the work is in reading the manuscript</span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="prep-output" value="all">
-            <span><strong>All three</strong> — the reading copy, the InDesign
-              file and the redline together</span>
-          </label>
-          <div class="options" id="book-options">
-            <label class="field">
-              <span>Subject matter</span>
-              <select id="prep-subject">
-                <option value="">Let DocProof read it (recommended)</option>
-              </select>
-              <small class="muted">Picks the title-page lettering. Detected
-                from the opening pages unless you choose one.</small>
-            </label>
-            <label class="field">
-              <span>Running-head title</span>
-              <input type="text" id="prep-title"
-                     placeholder="Detected from the title page">
-            </label>
-            <label class="field">
-              <span>Running-head author</span>
-              <input type="text" id="prep-author"
-                     placeholder="Detected from the byline">
-            </label>
-          </div>
-        </fieldset>
-
-        <fieldset class="field review-only">
-          <legend>When?</legend>
-          <label class="radio">
-            <input type="radio" name="mode" value="batch" checked>
-            <span><strong>Overnight</strong> — half price, ready within a
-              few hours
-              <small class="muted">Word manuscripts and InDesign layouts
-                alike.</small></span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="mode" value="now">
-            <span><strong>Right now</strong> — ready in a few minutes, full
-              price</span>
-          </label>
-          <label class="sub" id="schedule-wrap">
-            <input type="checkbox" id="schedule-on">
-            Hold until <input type="time" id="schedule-at" value="23:00">
-            <small class="muted">(your computer must be awake and DocProof
-              open at that time)</small>
-          </label>
-        </fieldset>
-
         <!-- ── Custom view ──────────────────────────────────────────────────
              Was the "Advanced options" <details>. Now a four-tab drawer the
              #customize-toggle above reveals for a review, and renderKind() shows
@@ -515,6 +440,81 @@
             <div id="features-safety" class="features review-only"></div>
           </div>
         </div>
+
+        <fieldset class="field" id="prep-options" hidden>
+          <legend>What should it hand back?</legend>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="book" checked>
+            <span><strong>A book-styled reading copy</strong> — the manuscript
+              cleaned up and dressed as a printed Atmosphere interior, for the
+              author and the developmental editors. Title-page lettering
+              follows the book's subject matter</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="indesign">
+            <span><strong>A file ready for InDesign</strong> — a clean Word
+              document whose paragraph styles are the template's own, so they
+              map when you place it</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="tracked">
+            <span><strong>A tracked-changes Word file</strong> — the same
+              tagging as revisions, to walk in Word before anyone places
+              anything</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="both">
+            <span><strong>InDesign + tracked</strong> — one costs no more than
+              the other; the work is in reading the manuscript</span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="prep-output" value="all">
+            <span><strong>All three</strong> — the reading copy, the InDesign
+              file and the redline together</span>
+          </label>
+          <div class="options" id="book-options">
+            <label class="field">
+              <span>Subject matter</span>
+              <select id="prep-subject">
+                <option value="">Let DocProof read it (recommended)</option>
+              </select>
+              <small class="muted">Picks the title-page lettering. Detected
+                from the opening pages unless you choose one.</small>
+            </label>
+            <label class="field">
+              <span>Running-head title</span>
+              <input type="text" id="prep-title"
+                     placeholder="Detected from the title page">
+            </label>
+            <label class="field">
+              <span>Running-head author</span>
+              <input type="text" id="prep-author"
+                     placeholder="Detected from the byline">
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="field review-only">
+          <legend>When?</legend>
+          <label class="radio">
+            <input type="radio" name="mode" value="batch" checked>
+            <span><strong>Overnight</strong> — half price, ready within a
+              few hours
+              <small class="muted">Word manuscripts and InDesign layouts
+                alike.</small></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="mode" value="now">
+            <span><strong>Right now</strong> — ready in a few minutes, full
+              price</span>
+          </label>
+          <label class="sub" id="schedule-wrap">
+            <input type="checkbox" id="schedule-on">
+            Hold until <input type="time" id="schedule-at" value="23:00">
+            <small class="muted">(your computer must be awake and DocProof
+              open at that time)</small>
+          </label>
+        </fieldset>
 
         <p class="field muted small" id="prep-cost" hidden></p>
 
