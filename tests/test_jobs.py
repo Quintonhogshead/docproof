@@ -119,6 +119,38 @@ def test_continuity_only_does_not_smooth(runner):
     assert cfg.smoothing.enabled is False
 
 
+def test_the_smoothing_feature_enables_the_pass(runner):
+    """The panel's enable-smoothing checkbox routes through apply_features to
+    cfg.smoothing.enabled, like every other per-run pass toggle."""
+    store, r = runner
+    assert r.config_for(_job(store)).smoothing.enabled is False
+    cfg = r.config_for(_job(store, features={"smoothing": True}))
+    assert cfg.smoothing.enabled is True
+
+
+def test_the_smoothing_dials_reach_the_run_config(runner):
+    """The two selects — how much the proposer surfaces, how hard the judge culls
+    — reach cfg.smoothing, applied after the feature toggle so they set HOW the
+    pass behaves when it is on."""
+    store, r = runner
+    cfg = r.config_for(_job(store, features={"smoothing": True},
+                            proposer_restraint="open", judge_harshness="lenient"))
+    assert cfg.smoothing.proposer_restraint == "open"
+    assert cfg.smoothing.judge_harshness == "lenient"
+
+
+def test_a_record_without_the_smoothing_dials_keeps_the_shipped_defaults(runner):
+    """An older record — or an untouched panel — carries the shipped dial
+    positions, so the pass behaves exactly as it ships: restrained + strict."""
+    store, r = runner
+    job = _job(store)
+    assert (job.proposer_restraint, job.judge_harshness) == ("restrained",
+                                                             "strict")
+    cfg = r.config_for(job)
+    assert cfg.smoothing.proposer_restraint == "restrained"
+    assert cfg.smoothing.judge_harshness == "strict"
+
+
 def test_a_record_without_features_keeps_the_config_defaults(runner):
     """Old job records (and untouched panels) carry no features and change
     nothing — storysheet stays off, adjudicate stays on."""
