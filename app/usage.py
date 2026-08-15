@@ -16,7 +16,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from docproof.providers import estimate_cost, lookup
+from docproof.providers import cost_of_usage, lookup
 
 log = logging.getLogger("docproof.app.usage")
 
@@ -29,11 +29,16 @@ def _totals_for(job, read_usage) -> dict:
     if job.api_calls or job.input_tokens or job.output_tokens:
         cost = job.cost
         if cost is None:
-            cost = estimate_cost(job.model,
-                                 input_tokens=job.input_tokens
-                                 + job.cache_write_tokens,
-                                 output_tokens=job.output_tokens,
-                                 batch=job.mode == "batch")
+            # The record carries only aggregate tokens (no per-model split), so
+            # this fallback prices them at job.model — the stored job.cost, set
+            # from the per-model breakdown at finish, is the accurate figure and
+            # the normal path; this only fills a record that never got one.
+            cost = cost_of_usage(
+                {"input_tokens": job.input_tokens,
+                 "output_tokens": job.output_tokens,
+                 "cache_read_input_tokens": job.cache_read_tokens,
+                 "cache_creation_input_tokens": job.cache_write_tokens},
+                fallback_model=job.model, batch=job.mode == "batch")
             # job.cost already folds Sapling in; only the recompute fallback has
             # to add it back so a record missing its stored cost still totals it.
             sap = getattr(job, "sapling_cost", 0.0) or 0.0
@@ -52,12 +57,10 @@ def _totals_for(job, read_usage) -> dict:
         return _empty()
     usage, cost = found
     if cost is None:
-        cost = estimate_cost(
-            job.model,
-            input_tokens=usage.get("input_tokens", 0)
-            + usage.get("cache_creation_input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            batch=job.mode == "batch")
+        # findings.json carries the per-model breakdown, so this is priced right
+        # per model rather than at job.model.
+        cost = cost_of_usage(usage, fallback_model=job.model,
+                             batch=job.mode == "batch")
         sap = usage.get("sapling_cost", 0.0) or 0.0
         if sap:
             cost = (cost or 0.0) + sap

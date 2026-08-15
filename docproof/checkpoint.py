@@ -225,13 +225,27 @@ class Checkpoint:
 
 
 def usage_delta(before: Usage, after: Usage) -> Usage:
-    """What one call added to a running total, as its own Usage."""
-    return Usage(**{f.name: getattr(after, f.name) - getattr(before, f.name)
-                    for f in dataclasses.fields(Usage)})
+    """What one call added to a running total, as its own Usage. The scalar
+    counters subtract directly; `by_model` is a nested dict, so its delta is the
+    per-model, per-field difference — the same shape, carried so a resumed run
+    replays the call's model attribution and not just its token totals."""
+    d = Usage()
+    for f in dataclasses.fields(Usage):
+        if f.name == "by_model":
+            continue
+        setattr(d, f.name, getattr(after, f.name) - getattr(before, f.name))
+    bm: dict = {}
+    for model, tk in after.by_model.items():
+        prev = before.by_model.get(model, {})
+        diff = {k: tk.get(k, 0) - prev.get(k, 0) for k in tk}
+        if any(diff.values()):
+            bm[model] = diff
+    d.by_model = bm
+    return d
 
 
 def snapshot(usage: Usage) -> Usage:
-    return Usage(**dataclasses.asdict(usage))
+    return Usage(**dataclasses.asdict(usage))     # asdict deep-copies by_model
 
 
 def add_usage(usage: Usage, delta: dict) -> None:
@@ -239,4 +253,10 @@ def add_usage(usage: Usage, delta: dict) -> None:
     `Usage.add`, which always counts one api_call — a cached delta carries its
     own count, including the zero of a call that never happened."""
     for name, value in delta.items():
+        if name == "by_model":
+            for model, tk in (value or {}).items():
+                bucket = usage.by_model.setdefault(model, {})
+                for k, v in tk.items():
+                    bucket[k] = bucket.get(k, 0) + int(v or 0)
+            continue
         setattr(usage, name, getattr(usage, name, 0) + int(value or 0))

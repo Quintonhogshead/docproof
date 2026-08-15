@@ -168,7 +168,7 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             model=model, system=system, user=doc_text,
             schema=strict_json_schema(ContinuityReport),
             schema_name="continuity", max_tokens=ceiling)
-        usage.add(res.usage)
+        usage.add(res.usage, model=model)
         return res
 
     result = read(max_tokens)
@@ -843,7 +843,7 @@ def propose_chapter_breaks(
                     raw.append((unit, report_or_res))
                     continue
                 res = report_or_res
-                usage.add(res.usage)              # fold serially: not thread-safe
+                usage.add(res.usage, model=model)  # fold serially: not thread-safe
                 # A read that failed, refused, or truncated loses every break in
                 # that chapter. Counted, not swallowed: an unread chapter that
                 # produces no queries is indistinguishable from a clean one that
@@ -992,10 +992,11 @@ def judge_chapter_breaks(
         try:
             for window, future in pending:
                 res = future.result()
-                usage.add(res.usage)             # fold serially: not thread-safe
+                usage.add(res.usage, model=model)  # fold serially: not thread-safe
                 rows = resolve_window(
                     window, res, fetch=fetch, rows_of=_judge_rows,
-                    max_tokens=max_tokens, report=report, usage_sink=usage.add)
+                    max_tokens=max_tokens, report=report,
+                    usage_sink=lambda ru: usage.add(ru, model=model))
                 for offset in sorted(rows):
                     v = rows[offset]
                     c = window[offset]

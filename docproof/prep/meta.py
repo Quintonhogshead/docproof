@@ -71,7 +71,7 @@ def detect_meta(structure: Structure, design: BookDesign, provider: Provider,
         schema=strict_json_schema(facts_model),
         schema_name="book_facts",
         max_tokens=MAX_OUTPUT_TOKENS)
-    usage.add(result.usage)
+    usage.add(result.usage, model=model)
     if result.stop_reason != "ok" or result.parsed is None:
         log.error("Subject detection failed: %s",
                   result.error or result.stop_reason)

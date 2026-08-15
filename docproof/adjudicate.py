@@ -331,14 +331,15 @@ def adjudicate(candidates: Sequence[Candidate],
         try:
             for window, future in pending:
                 result = future.result()
-                usage.add(result.usage)              # fold serially: not thread-safe
+                usage.add(result.usage, model=model)  # fold serially: not thread-safe
                 # Recovery (halve a truncated window, re-ask an unanswered item)
                 # runs here, on this thread, so the ordering the folding depends
                 # on is untouched. A candidate still unanswered afterwards is
                 # counted in `report`, never mistaken for a "not an error".
                 rows = resolve_window(
                     window, result, fetch=fetch, rows_of=_rows_of,
-                    max_tokens=max_tokens, report=report, usage_sink=usage.add)
+                    max_tokens=max_tokens, report=report,
+                    usage_sink=lambda ru: usage.add(ru, model=model))
                 findings.extend(
                     _findings_from(rows, window, ids, rank, edit_floor))
         except BaseException:

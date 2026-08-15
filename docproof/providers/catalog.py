@@ -111,16 +111,73 @@ def effort_multiplier(model_id: str, effort: str | None) -> float:
     return EFFORT_MULTIPLIER.get(effort, 1.0)
 
 
+# Cache pricing as a multiple of a model's base input rate. Anthropic publishes
+# these directly: a 5-minute cache write costs 1.25x input, a read 0.1x. OpenAI
+# and Gemini bill a cached-input read at ~half and charge nothing extra to write
+# (the write is just ordinary input), so 0.5x/1.0x. Reads dominate a repeated-
+# context run — the whole-book passes re-send the manuscript every call — so
+# dropping them (as the old estimate did) is the larger of the two errors.
+_CACHE_READ_MULT = {"anthropic": 0.10, "openai": 0.50, "gemini": 0.25}
+_CACHE_WRITE_MULT = {"anthropic": 1.25, "openai": 1.0, "gemini": 1.0}
+
+
 def estimate_cost(model_id: str, *, input_tokens: int, output_tokens: int,
+                  cache_read_tokens: int = 0, cache_write_tokens: int = 0,
                   batch: bool = False, effort: str | None = None) -> float | None:
     """Dollars, or None when the model isn't in the catalog.
 
-    `effort` scales the output-token half of the estimate (see
-    EFFORT_MULTIPLIER); omit it to price at the baseline (low) effort."""
+    Cache reads and writes are priced at the vendor's cache multiple of the input
+    rate (see _CACHE_READ_MULT / _CACHE_WRITE_MULT), not the full input rate — on
+    a whole-book run the cache-read count dwarfs the fresh input, so this is what
+    turns the old "upper bound" into a real figure. `effort` scales the output
+    half for a pre-run estimate (see EFFORT_MULTIPLIER); omit it to price actual
+    usage, where the output tokens are already the real count."""
     info = lookup(model_id)
     if info is None:
         return None
     rate = info.batch_discount if batch else 1.0
     scaled_output = output_tokens * effort_multiplier(model_id, effort)
+    read_rate = info.input_per_mtok * _CACHE_READ_MULT.get(info.provider, 0.5)
+    write_rate = info.input_per_mtok * _CACHE_WRITE_MULT.get(info.provider, 1.0)
     return rate * (input_tokens * info.input_per_mtok
+                   + cache_read_tokens * read_rate
+                   + cache_write_tokens * write_rate
                    + scaled_output * info.output_per_mtok) / 1_000_000
+
+
+def cost_of_usage(usage, *, fallback_model: str,
+                  batch: bool = False) -> float | None:
+    """Total model cost for a run, summed at each model's own rate.
+
+    Uses the per-model breakdown a run records (`usage.by_model`) so a mixed
+    OpenAI/Anthropic review is priced correctly, not at one model's rate. Falls
+    back to pricing the flat token total at `fallback_model` for older records
+    that carry no breakdown. Sapling is excluded (it bills per character); the
+    caller adds `usage.sapling_cost`. Accepts a Usage object or a plain dict, so
+    the report path and the stored-record paths share one costing."""
+    def _f(obj, name, default=0):
+        return obj.get(name, default) if isinstance(obj, dict) \
+            else getattr(obj, name, default)
+
+    by_model = _f(usage, "by_model", None)
+    if by_model:
+        total, priced_any = 0.0, False
+        for model_id, tk in by_model.items():
+            c = estimate_cost(
+                model_id or fallback_model,
+                input_tokens=tk.get("input_tokens", 0),
+                output_tokens=tk.get("output_tokens", 0),
+                cache_read_tokens=tk.get("cache_read_input_tokens", 0),
+                cache_write_tokens=tk.get("cache_creation_input_tokens", 0),
+                batch=batch)
+            if c is not None:
+                total += c
+                priced_any = True
+        return total if priced_any else None
+    return estimate_cost(
+        fallback_model,
+        input_tokens=_f(usage, "input_tokens", 0),
+        output_tokens=_f(usage, "output_tokens", 0),
+        cache_read_tokens=_f(usage, "cache_read_input_tokens", 0),
+        cache_write_tokens=_f(usage, "cache_creation_input_tokens", 0),
+        batch=batch)

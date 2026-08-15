@@ -261,7 +261,7 @@ class Analyzer:
         parallel. The bool is whether the provider actually answered: a run that
         checkpoints needs to tell a failed call from a clean chunk, because `[]`
         means both."""
-        usage.add(result.usage)
+        usage.add(result.usage, model=self.cfg.api.model)
         parsed = self._unwrap(result, chunk.chunk_id)
         if parsed is None:
             return [], False

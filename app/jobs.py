@@ -34,7 +34,7 @@ from docproof.prep.convert import ConversionError
 from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
-from docproof.providers import ProviderError, build_provider, estimate_cost, \
+from docproof.providers import ProviderError, build_provider, cost_of_usage, \
     provider_for
 
 from . import features
@@ -1626,10 +1626,7 @@ class JobRunner:
         counts in memory (one call, no checkpoint to reconcile), so it records
         them directly. `_totals_for` reads the record before the folder, so the
         dashboard and the ledger see these with no re-read."""
-        cost = estimate_cost(
-            model,
-            input_tokens=usage.input_tokens + usage.cache_creation_input_tokens,
-            output_tokens=usage.output_tokens, batch=False)
+        cost = cost_of_usage(usage, fallback_model=model, batch=False)
         self.store.update(
             job_id,
             input_tokens=usage.input_tokens,
@@ -1726,11 +1723,10 @@ class JobRunner:
             return
         usage, cost = totals
         if cost is None:
-            cost = estimate_cost(
-                model,
-                input_tokens=usage.get("input_tokens", 0)
-                + usage.get("cache_creation_input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0), batch=batch)
+            # Summed at each model's own rate from the per-model breakdown the
+            # run recorded (falls back to `model` for records that predate it),
+            # so a mixed OpenAI/Anthropic review is not priced at the detector's.
+            cost = cost_of_usage(usage, fallback_model=model, batch=batch)
         # Sapling is billed per character and never in the model estimate, so
         # fold its charge into the recorded total — this is what the email, the
         # spending ledger and the dashboard all read.

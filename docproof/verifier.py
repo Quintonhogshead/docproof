@@ -211,7 +211,7 @@ def _run(cfg: Config, prepared, to_verify: list[Finding], provider: Provider,
                    for pid, fs in by_para.items()]
         for fs, fut in pending:                        # fold serially: usage.add is not thread-safe
             result = fut.result()
-            usage.add(result.usage)
+            usage.add(result.usage, model=cfg.ensemble.verifier_model)
             verdicts.update(verifier.parse(result, fs))
     return verdicts
 
@@ -429,6 +429,6 @@ def _run_judge(to_judge: list[Finding], para_text: dict[str, str],
                    for pid, fs in by_para.items()]
         for fs, fut in pending:                        # fold serially: usage.add is not thread-safe
             result = fut.result()
-            usage.add(result.usage)
+            usage.add(result.usage, model=model)
             verdicts.update(judge.parse(result, fs))
     return verdicts

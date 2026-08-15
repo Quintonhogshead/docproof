@@ -250,7 +250,7 @@ def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
         for group, spent, report in ex.map(do, jobs):
             for u in spent:
-                usage.add(u)                         # fold serially: not thread-safe
+                usage.add(u, model=model)            # fold serially: not thread-safe
             total.merge(report)
             cands.extend(group)
     log_report(total)
@@ -433,7 +433,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
         try:
             for window, future in pending:
                 res = future.result()
-                usage.add(res.usage)                 # fold serially: not thread-safe
+                usage.add(res.usage, model=model)    # fold serially: not thread-safe
                 # Recovery (halve a truncated window, re-ask an unanswered item)
                 # happens here, on this thread, so the ordering the folding
                 # depends on is untouched. Anything still unanswered is counted
@@ -442,7 +442,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
                 rows = resolve_window(
                     window, res, fetch=fetch, rows_of=_rows_of,
                     max_tokens=max_tokens, report=report,
-                    usage_sink=usage.add)
+                    usage_sink=lambda ru: usage.add(ru, model=model))
                 _fold(rows, window, text_of, findings, reject_sink, ids,
                       edit_floor, error_type=error_type, chunk_id=chunk_id,
                       id_prefix=id_prefix, silent=silent, mode=mode)

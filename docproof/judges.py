@@ -405,7 +405,7 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
                    for pid, items in by_para.items()]
         for items, fut in pending:   # fold serially: usage.add is not thread-safe
             result = fut.result()
-            usage.add(result.usage)
+            usage.add(result.usage, model=model)
             for offset, v in judge.parse(result, [f for _, f in items]).items():
                 verdicts[items[offset][0]] = v
 
