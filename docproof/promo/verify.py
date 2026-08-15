@@ -124,7 +124,7 @@ def verify_claims(cfg: Config, prepared: "PreparedPromo", result: PromoResult,
         model=cfg.api.model, system=system, user=user,
         schema=strict_json_schema(_ClaimReport), schema_name="promo_grounding",
         max_tokens=cfg.api.max_output_tokens)
-    usage.add(response.usage)
+    usage.add(response.usage, model=cfg.api.model)
     if response.stop_reason != "ok" or response.parsed is None:
         log.warning("The claim check did not answer (%s); nothing flagged.",
                     response.error or response.stop_reason)

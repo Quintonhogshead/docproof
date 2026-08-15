@@ -128,7 +128,7 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         model=model, system=_SYSTEM, user=doc_text,
         schema=strict_json_schema(Glossary), schema_name="glossary",
         max_tokens=max_tokens)
-    usage.add(result.usage)
+    usage.add(result.usage, model=model)
     if result.stop_reason != "ok" or result.parsed is None:
         log.error("glossary pass: %s — proceeding without a glossary",
                   result.error or result.stop_reason)

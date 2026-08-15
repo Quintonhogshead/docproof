@@ -12,8 +12,8 @@ from docproof.config import Config
 from docproof.error_registry import load_error_types
 from docproof.models import Chunk, ParagraphRef, Usage
 from docproof.providers import (ProviderError, ProviderResult, build_provider,
-                                estimate_cost, lookup, provider_for,
-                                strict_json_schema)
+                                cost_of_usage, estimate_cost, lookup,
+                                provider_for, strict_json_schema)
 from docproof.providers.openai_provider import result_from_response
 from .fakes import USAGE, FakeProvider, finding_result, ids
 from .test_error_types import ERROR_DIR
@@ -183,6 +183,70 @@ def test_every_catalog_model_has_sane_pricing():
     for m in MODELS:
         assert m.input_per_mtok > 0 and m.output_per_mtok > m.input_per_mtok
         assert lookup(m.id) is m
+
+
+def test_estimate_cost_prices_cache_below_the_input_rate():
+    """Cache reads bill at a fraction of input, writes at a premium — the whole
+    reason the old flat estimate was only an 'upper bound'. Anthropic: read 0.1x,
+    write 1.25x of the $5/M input rate on Opus."""
+    assert estimate_cost("claude-opus-5", input_tokens=1_000_000,
+                         output_tokens=0) == pytest.approx(5.0)
+    assert estimate_cost("claude-opus-5", input_tokens=0, output_tokens=0,
+                         cache_read_tokens=1_000_000) == pytest.approx(0.5)
+    assert estimate_cost("claude-opus-5", input_tokens=0, output_tokens=0,
+                         cache_write_tokens=1_000_000) == pytest.approx(6.25)
+
+
+def test_usage_tracks_tokens_per_model():
+    from types import SimpleNamespace
+
+    from docproof.models import Usage
+
+    def _r(i, o, cr=0, cw=0):
+        return SimpleNamespace(input_tokens=i, output_tokens=o,
+                               cache_read_input_tokens=cr,
+                               cache_creation_input_tokens=cw)
+    u = Usage()
+    u.add(_r(100, 10), model="gpt-5.6-luna")
+    u.add(_r(50, 200), model="claude-fable-5")
+    u.add(_r(5, 5))                                    # no model -> "" bucket
+    # Flat totals still add up across every model, for the existing usage line.
+    assert u.input_tokens == 155 and u.output_tokens == 215 and u.api_calls == 3
+    # ...and each model's share is kept for costing.
+    assert u.by_model["gpt-5.6-luna"]["output_tokens"] == 10
+    assert u.by_model["claude-fable-5"]["output_tokens"] == 200
+    assert "" in u.by_model                            # unattributed call bucketed
+
+
+def test_cost_of_usage_sums_each_model_at_its_own_rate():
+    """The bug this fixes: pricing a mixed run at the cheap detector's rate. A
+    Fable read costs 40x a Luna one per output token, and the per-model sum has
+    to reflect that instead of billing everything at Luna."""
+    from types import SimpleNamespace
+
+    from docproof.models import Usage
+
+    def _r(i, o):
+        return SimpleNamespace(input_tokens=i, output_tokens=o,
+                               cache_read_input_tokens=0,
+                               cache_creation_input_tokens=0)
+    u = Usage()
+    u.add(_r(0, 1_000_000), model="gpt-5.6-luna")      # 1M out @ $1.20
+    u.add(_r(0, 1_000_000), model="claude-fable-5")    # 1M out @ $50.00
+    accurate = cost_of_usage(u, fallback_model="gpt-5.6-luna")
+    assert accurate == pytest.approx(51.20)
+    everything_at_luna = estimate_cost("gpt-5.6-luna", input_tokens=0,
+                                       output_tokens=2_000_000)
+    assert everything_at_luna == pytest.approx(2.40)   # the old, wrong number
+    assert accurate > everything_at_luna * 20          # a 20x+ correction
+
+
+def test_cost_of_usage_falls_back_when_a_record_has_no_breakdown():
+    """Old records carry only flat totals; price them at the fallback model
+    rather than returning nothing."""
+    old = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+    assert cost_of_usage(old, fallback_model="claude-opus-5") == pytest.approx(30.0)
+    assert cost_of_usage({}, fallback_model="not-a-model") is None
 
 
 # --- analyzer against a fake --------------------------------------------------

@@ -240,7 +240,7 @@ class Tagger:
             schema_name="paragraph_styles",
             max_tokens=self.max_output_tokens,
         )
-        usage.add(result.usage)
+        usage.add(result.usage, model=self.model)
         if result.stop_reason != "ok" or result.parsed is None:
             log.error("Window %d: %s", window.index,
                       result.error or result.stop_reason)

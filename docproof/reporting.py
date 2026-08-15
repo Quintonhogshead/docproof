@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import Config
 from .models import DocumentModel, Finding, Usage, index_paragraphs
-from .providers import estimate_cost
+from .providers import cost_of_usage, estimate_cost, lookup
 
 log = logging.getLogger("docproof.reporting")
 
@@ -601,11 +601,9 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              f"{usage.input_tokens:,} (+{usage.cache_creation_input_tokens:,} "
              f"cache-write, {usage.cache_read_input_tokens:,} cache-read) · "
              f"output tokens: {usage.output_tokens:,}\n")
-    est = estimate_cost(cfg.api.model,
-                        input_tokens=usage.input_tokens
-                        + usage.cache_creation_input_tokens,
-                        output_tokens=usage.output_tokens,
-                        batch=batch)
+    # Summed at each model's own rate from the per-model breakdown, so a mixed
+    # OpenAI/Anthropic run is priced right rather than at the detector's rate.
+    est = cost_of_usage(usage, fallback_model=cfg.api.model, batch=batch)
     if est is None and cfg.pricing.input_per_mtok and cfg.pricing.output_per_mtok:
         est = ((usage.input_tokens + usage.cache_creation_input_tokens)
                * cfg.pricing.input_per_mtok
@@ -615,13 +613,27 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     # paid for. Broken out on its own line so the sum is legible.
     sapling_cost = getattr(usage, "sapling_cost", 0.0) or 0.0
     if est is not None or sapling_cost:
-        note = "batch rates" if batch else "upper bound"
+        note = "batch rates" if batch else "per model"
         total = (est or 0.0) + sapling_cost
-        L.append(f"Estimated cost ({note} — cache reads bill below the "
-                 f"input rate): **${total:.4f}**\n")
+        L.append(f"Estimated cost ({note}): **${total:.4f}**\n")
+        # Break the bill down by model when the run recorded per-model usage:
+        # this is where a reader sees that the dear Anthropic reads, not the
+        # cheap detector, are what a review actually costs.
+        by_model = getattr(usage, "by_model", None) or {}
+        for model_id, tk in sorted(
+                by_model.items(),
+                key=lambda kv: cost_of_usage(
+                    {"by_model": {kv[0]: kv[1]}}, fallback_model=cfg.api.model,
+                    batch=batch) or 0.0, reverse=True):
+            c = cost_of_usage({"by_model": {model_id: tk}},
+                              fallback_model=cfg.api.model, batch=batch)
+            if c is None:
+                continue
+            name = lookup(model_id).display if lookup(model_id) else \
+                (model_id or "unknown model")
+            L.append(f"- {name}: ${c:.4f} "
+                     f"({tk.get('output_tokens', 0):,} output tokens)\n")
         if sapling_cost:
-            model_line = f"${est:.4f}" if est is not None else "not priced"
-            L.append(f"- Model (`{cfg.api.model}`): {model_line}\n")
             L.append(f"- Sapling grammar check: ${sapling_cost:.4f} "
                      f"({getattr(usage, 'sapling_chars', 0):,} characters at "
                      f"${cfg.sapling.cost_per_1k_chars:g}/1k)\n")

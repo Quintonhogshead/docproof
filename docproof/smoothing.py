@@ -551,7 +551,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         try:
             for n, (_window, future) in enumerate(pending):
                 res = future.result()
-                usage.add(res.usage)              # fold serially: not thread-safe
+                usage.add(res.usage, model=model)  # fold serially: not thread-safe
                 if res.stop_reason != "ok" or res.parsed is None:
                     windows_failed += 1
                     log.error("smoothing propose window %d: %s", n,

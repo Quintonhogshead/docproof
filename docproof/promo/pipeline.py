@@ -154,7 +154,7 @@ def run(cfg: Config, prepared: PreparedPromo,
         schema_name="promo_copy",
         max_tokens=cfg.api.max_output_tokens,
     )
-    usage.add(result.usage)
+    usage.add(result.usage, model=cfg.api.model)
     if result.stop_reason != "ok" or result.parsed is None:
         raise PromoError(
             f"The model did not return promo copy: "
@@ -262,7 +262,7 @@ def run_plan(cfg: Config, prepared: PreparedPlan,
         schema_name="marketing_plan",
         max_tokens=cfg.api.max_output_tokens,
     )
-    usage.add(result.usage)
+    usage.add(result.usage, model=cfg.api.model)
     if result.stop_reason != "ok" or result.parsed is None:
         raise PromoError(
             f"The model did not return a marketing plan: "

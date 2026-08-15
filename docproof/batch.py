@@ -532,7 +532,7 @@ def collect_findings(job: Job, provider: Provider,
                     if res is None:
                         retype.asked += len(chunk.paragraphs)
                         continue
-                    usage.add(res.usage)
+                    usage.add(res.usage, model=cfg.api.model)
                     if res.stop_reason != "ok" or res.parsed is None:
                         retype.asked += len(chunk.paragraphs)
                         if res.stop_reason == "max_tokens":

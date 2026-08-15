@@ -106,7 +106,7 @@ def build_storysheet(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         model=model, system=_SYSTEM, user=doc_text,
         schema=strict_json_schema(StorySheet), schema_name="story_sheet",
         max_tokens=max_tokens)
-    usage.add(result.usage)
+    usage.add(result.usage, model=model)
     if result.stop_reason != "ok" or result.parsed is None:
         log.error("story-sheet pass: %s — proceeding without one",
                   result.error or result.stop_reason)

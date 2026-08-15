@@ -134,12 +134,24 @@ class Usage:
     # model's share. Both stay 0 on a run where Sapling never ran.
     sapling_chars: int = 0
     sapling_cost: float = 0.0
+    # Per-model token counts, so the bill can be summed at each model's own rate.
+    # A review mixes providers — a cheap OpenAI detector with dear Anthropic
+    # reads (continuity, meaning, judge) — and pricing the flat total above at
+    # one model's rate under-counts the expensive half by up to ~40x. Keyed by
+    # model id; each value mirrors the token fields above plus api_calls. A call
+    # whose model is unknown lands under "" and is priced at the caller's
+    # fallback, so nothing regresses for a caller that never passes one.
+    by_model: dict = field(default_factory=dict)
 
-    def add(self, resp_usage) -> None:
+    def add(self, resp_usage, model: str | None = None) -> None:
         self.api_calls += 1
+        bucket = self.by_model.setdefault(model or "", {"api_calls": 0})
+        bucket["api_calls"] = bucket.get("api_calls", 0) + 1
         for f in ("input_tokens", "output_tokens",
                   "cache_creation_input_tokens", "cache_read_input_tokens"):
-            setattr(self, f, getattr(self, f) + (getattr(resp_usage, f, 0) or 0))
+            v = getattr(resp_usage, f, 0) or 0
+            setattr(self, f, getattr(self, f) + v)
+            bucket[f] = bucket.get(f, 0) + v
 
 
 @dataclass(frozen=True)
