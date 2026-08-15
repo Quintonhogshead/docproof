@@ -114,7 +114,11 @@ def test_config_defaults_are_off_and_conservative():
     assert c.enabled is False
     assert c.dictionary == "en-US"
     assert c.edit_confidence == "high"       # deterministic but context-blind
-    assert c.max_output_tokens == 4000
+    # Room for the model's THINKING as well as its verdicts: a batch of 40 needs
+    # ~4,400 output tokens at effort medium and ~8,100 at high on a reasoning
+    # model, so the old 4,000 truncated on real input — and a truncated
+    # structured response carries no verdicts at all.
+    assert c.max_output_tokens == 16000
 
 
 def test_top_level_config_carries_languagetool_off_by_default():

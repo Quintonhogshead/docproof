@@ -54,6 +54,17 @@ class ErrorType:
 REQUIRED = ("key", "name", "version", "detection_prompt", "fix_guidance")
 
 
+def shipped_keys(dir_path: str | Path) -> frozenset[str]:
+    """Every error type a directory defines, enabled or not.
+
+    The closed world of registry keys, which is what tells a caller whether a
+    label it does not recognise is a configured-but-switched-off type or
+    something with no error type at all — see `labels.py` for why those two
+    must not be confused."""
+    return frozenset(p.stem for p in Path(dir_path).glob("*.yaml")
+                     if not p.stem.startswith("_"))
+
+
 def load_error_types(dir_path: str | Path, enabled: list[str], *,
                      override_dir: str | Path | None = None) -> dict[str, ErrorType]:
     """Read the enabled error types, preferring an edited copy where one exists.
@@ -71,7 +82,7 @@ def load_error_types(dir_path: str | Path, enabled: list[str], *,
         if not path.exists():
             raise FileNotFoundError(
                 f"Error type '{key}' is enabled but {path} does not exist. "
-                f"Available: {sorted(p.stem for p in dir_path.glob('*.yaml') if not p.stem.startswith('_'))}")
+                f"Available: {sorted(shipped_keys(dir_path))}")
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             # The override dir holds user-edited copies, and an editor that

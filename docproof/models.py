@@ -161,6 +161,15 @@ class CoverageLedger:
     a silent hole into a line in the report."""
     total: int = 0
     gaps: list[CoverageGap] = field(default_factory=list)
+    # Candidates a batched pass (confirm, adjudication) never got a verdict for,
+    # as WindowReports. Kept beside `gaps` because it is the same kind of hole
+    # one size down: a gap is a whole (pass, chunk) unit nobody reviewed, these
+    # are individual candidates that went out, were paid for, and came back
+    # unruled — usually because the answer hit the token ceiling. They belong in
+    # the report for the same reason: a pass that lost every window emits no
+    # findings, which reads exactly like one that ruled on everything and
+    # affirmed nothing. See docproof/windowing.py.
+    unruled: list = field(default_factory=list)
 
     def record(self, pass_label: str, chunk, ok: bool) -> None:
         self.total += 1
@@ -169,9 +178,18 @@ class CoverageLedger:
                 pass_label, chunk.chunk_id,
                 tuple(p.para_id for p in chunk.paragraphs)))
 
+    def record_windows(self, reports) -> None:
+        """Keep the batched passes that lost something. A clean report is not
+        worth carrying — the report only ever prints the holes."""
+        self.unruled.extend(r for r in reports if r.lost)
+
     @property
     def complete(self) -> bool:
         return not self.gaps
+
+    @property
+    def unruled_total(self) -> int:
+        return sum(r.lost for r in self.unruled)
 
     @property
     def reviewed(self) -> int:

@@ -29,6 +29,7 @@ place. That is a hard failure here rather than a silent misplacement.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from dataclasses import replace
@@ -36,7 +37,7 @@ from pathlib import Path
 
 from .checkpoint import finding_from_dict
 from .config import Config
-from .models import Usage
+from .models import Finding, Usage
 from .pipeline import Outputs, finish, prepare
 
 log = logging.getLogger("docproof.rejudge")
@@ -46,10 +47,14 @@ class RejudgeError(Exception):
     """A re-judge could not be set up — carries the message a person sees."""
 
 
-# Fields written into findings.json that are reporting, not part of a Finding.
-# Each describes what the run DID with a finding, not what the finding is — so
-# a re-judge, which re-decides exactly that, has to drop them before rebuilding.
-_NOT_A_FIELD = ("applied", "queried", "unplaced")
+# A findings.json row is `dataclasses.asdict(finding)` plus whatever reporting
+# hangs off it ("applied" today). Derived from the dataclass rather than listed
+# by hand: a hand-kept list of the reporting keys is a list that rots, and it
+# rots into a TypeError on a button press — every re-judge of every run written
+# after the new key appeared, for a key that was never a Finding field and was
+# always safe to drop. Asking Finding what its fields are cannot fall behind
+# reporting.py, because reporting.py is not the one being asked.
+_FIELDS = frozenset(f.name for f in dataclasses.fields(Finding))
 
 
 def read_run(results_dir: str | Path) -> tuple[list, str]:
@@ -74,8 +79,8 @@ def read_run(results_dir: str | Path) -> tuple[list, str]:
     for row in rows:
         try:
             findings.append(finding_from_dict(
-                {k: v for k, v in row.items() if k not in _NOT_A_FIELD}))
-        except TypeError as e:                # a record from a newer build
+                {k: v for k, v in row.items() if k in _FIELDS}))
+        except TypeError as e:                # a record missing a Finding field
             raise RejudgeError(
                 f"{path} holds a finding this build does not understand "
                 f"({e}).") from e

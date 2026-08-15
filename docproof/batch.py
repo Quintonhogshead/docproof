@@ -313,6 +313,9 @@ def collect_findings(job: Job, provider: Provider,
     # batch review (the production path) would silently skip them.
     ids = itertools.count(1)
     findings = list(findings)
+    # How many candidates each batched pass actually got a verdict for; a window
+    # whose answer hit the token ceiling carries none. See docproof/windowing.py.
+    window_losses: list = []
     glossary_cands: list = []
     if cfg.glossary.enabled and prepared.whole_document:
         from .glossary import (build_glossary, case_drift_findings,
@@ -344,6 +347,7 @@ def collect_findings(job: Job, provider: Provider,
             usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
             edit_confidence=cfg.adjudicate.edit_confidence,
+            loss_sink=window_losses,
             concurrency=cfg.concurrency_for())
 
     # Rewrite-then-diff. When it can ride the batch (the default: rewrite.model
@@ -391,7 +395,7 @@ def collect_findings(job: Job, provider: Provider,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
             edit_confidence=cfg.rewrite.edit_confidence,
-            reject_sink=rewrite_rejects,
+            reject_sink=rewrite_rejects, loss_sink=window_losses,
             concurrency=cfg.concurrency_for(confirm_model))
 
     # LanguageTool mechanical-floor pass: local rules checker proposes, the shared
@@ -419,6 +423,7 @@ def collect_findings(job: Job, provider: Provider,
                 batch_size=cfg.languagetool.batch_size,
                 edit_confidence=cfg.languagetool.edit_confidence,
                 error_type="languagetool", chunk_id="languagetool", id_prefix="lt",
+                loss_sink=window_losses,
                 concurrency=cfg.concurrency_for(lt_model))
         finally:
             lt_shutdown()
@@ -430,6 +435,8 @@ def collect_findings(job: Job, provider: Provider,
     # said it had. Same helper the synchronous path uses, so they stay in step.
     from .providers import build_provider
     findings += continuity_findings(cfg, prepared, ids, usage, build_provider)
+
+    coverage.record_windows(window_losses)
 
     return CollectResult(cfg, prepared, findings, usage, coverage, source,
                          rewrite_rejects)

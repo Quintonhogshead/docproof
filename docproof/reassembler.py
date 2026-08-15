@@ -549,10 +549,28 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     # shared with the IDML reassembler (docproof/queries.py), because the
     # channel a finding belongs in is policy, not markup.
     wanted = wanted_statuses(cfg.query_comments)
-    queries = [f for f in findings if f.status in wanted and f.anchor]
+    # A comment is placed from the finding's anchor, so a query with no span
+    # cannot be written into the document at all. That is a loss, not a filter:
+    # summary.md counts the question as raised and tells the author it is a
+    # comment in the file. So an anchorless one is counted as `unplaced` and
+    # named in the log, rather than disappearing between the report and the
+    # deliverable. validator.to_query only produces one when the paragraph
+    # itself is unknown — which is also the only case nothing here could place.
+    queries: list[Finding] = []
+    unplaced: list[str] = []
+    for f in findings:
+        if f.status not in wanted:
+            continue
+        if f.anchor:
+            queries.append(f)
+            continue
+        unplaced.append(f.finding_id)
+        log.warning("%s (%s) has no anchor — the question stays out of the "
+                    "document; it is in summary.md and findings.json only.",
+                    f.finding_id, f.error_type)
     if not validated and not queries:
         log.info("No validated findings; document untouched.")
-        return ReassemblyStats((), ())
+        return ReassemblyStats((), (), (), tuple(unplaced))
 
     paras = index_paragraphs(doc)
     date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -560,7 +578,6 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     applied: list[str] = []
     skipped: list[str] = []
     queried: list[str] = []
-    unplaced: list[str] = []
     already: list[str] = []
     comments: _Comments | None = None
 

@@ -646,6 +646,11 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # glossary reads the whole book with its own (stronger) model; its casing
     # drift is asked, and its suspected misspellings join the adjudication
     # candidates. The adjudication pass then rules on every candidate in context.
+    # Every batched pass below reports how many of its candidates actually came
+    # back with a verdict. A window whose answer hit the token ceiling carries
+    # NO verdicts at all, and without this its candidates would be
+    # indistinguishable from ones the model looked at and kept.
+    window_losses: list = []
     glossary_cands: list = []
     if cfg.glossary.enabled and prepared.whole_document:
         if on_phase:
@@ -683,6 +688,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             max_tokens=cfg.api.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.adjudicate.batch_size,
             edit_confidence=cfg.adjudicate.edit_confidence,
+            loss_sink=window_losses,
             concurrency=cfg.concurrency_for()))
 
     # Rewrite-then-diff: retype each paragraph minimal-edit, diff for candidates,
@@ -714,6 +720,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage, ids=ids,
             batch_size=cfg.rewrite.batch_size,
             edit_confidence=cfg.rewrite.edit_confidence,
+            loss_sink=window_losses,
             concurrency=cfg.concurrency_for(confirm_model)))
 
     # LanguageTool mechanical-floor pass: a LOCAL rules checker proposes commas,
@@ -744,6 +751,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 batch_size=cfg.languagetool.batch_size,
                 edit_confidence=cfg.languagetool.edit_confidence,
                 error_type="languagetool", chunk_id="languagetool", id_prefix="lt",
+                loss_sink=window_losses,
                 concurrency=cfg.concurrency_for(lt_model)))
         finally:
             lt_shutdown()
@@ -753,6 +761,9 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # continuity_findings.
     findings.extend(continuity_findings(cfg, prepared, ids, usage,
                                         provider_factory, on_phase=on_phase))
+
+    if coverage is not None:
+        coverage.record_windows(window_losses)
 
     return findings, usage
 
@@ -814,7 +825,8 @@ def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
 
 def _sapling_findings(cfg: Config, prepared: Prepared,
                       usage: Usage | None = None, *,
-                      out_dir: str | Path | None = None) -> list[Finding]:
+                      out_dir: str | Path | None = None,
+                      loss_sink: list | None = None) -> list[Finding]:
     """Sapling's suggestions as findings, or [] when the pass is off, has no key,
     or the service can't be reached.
 
@@ -892,7 +904,8 @@ def _sapling_findings(cfg: Config, prepared: Prepared,
             usage=usage if usage is not None else Usage(), ids=count(1),
             batch_size=cfg.sapling.batch_size,
             edit_confidence=cfg.sapling.edit_confidence,
-            reject_sink=rejected, error_type="sapling", chunk_id="sapling",
+            reject_sink=rejected, loss_sink=loss_sink,
+            error_type="sapling", chunk_id="sapling",
             id_prefix="sap", silent=not cfg.sapling.comments,
             concurrency=cfg.concurrency_for(model))
         # The valve's rejections are where a real Sapling catch can die — persist
@@ -944,7 +957,8 @@ def _sapling_findings(cfg: Config, prepared: Prepared,
 
 def _promote_low_confidence(cfg: Config, prepared: Prepared,
                             model_findings: list[Finding], usage: Usage, *,
-                            out_dir: str | Path | None = None
+                            out_dir: str | Path | None = None,
+                            loss_sink: list | None = None
                             ) -> tuple[list[Finding], list[Finding]]:
     """Give a below-`min_confidence` model EDIT one more chance to be applied.
 
@@ -1024,7 +1038,8 @@ def _promote_low_confidence(cfg: Config, prepared: Prepared,
         cands, prepared.doc.paragraphs, provider, model=model,
         max_tokens=lc.max_output_tokens, usage=usage, ids=count(1),
         batch_size=lc.batch_size, edit_confidence=lc.edit_confidence,
-        reject_sink=rejected, error_type="low_confidence",
+        reject_sink=rejected, loss_sink=loss_sink,
+        error_type="low_confidence",
         chunk_id="low_confidence", id_prefix="lc",
         concurrency=cfg.concurrency_for(model))
     if out_dir is not None and rejected:
@@ -1231,7 +1246,12 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # the deterministic sweeps and consistency (so a house-style sweep keeps a
     # contested span, and Sapling's overlap with it is dropped) but ahead of the
     # model, which is the fuzzier source on any span the two both touch.
-    sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out)
+    # Both passes below run the shared confirm valve, so both can lose a window
+    # to a token ceiling; the ledger is what keeps that out of the flattering
+    # reading (see CoverageLedger.unruled).
+    window_losses: list = []
+    sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out,
+                                         loss_sink=window_losses)
     # Below-gate model edits get one more chance to become a tracked change: the
     # confirm valve re-rules each in literary context, so a real dialogue-
     # mechanics catch the type prompts marked "low" is promoted rather than left
@@ -1239,7 +1259,10 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # below-gate edits removed and the valve's verdicts (`promoted`) taking their
     # place; the verdicts go LAST so they yield to every surer source on a span.
     model_findings, promoted = _promote_low_confidence(
-        cfg, prepared, model_findings, usage, out_dir=out)
+        cfg, prepared, model_findings, usage, out_dir=out,
+        loss_sink=window_losses)
+    if coverage is not None:
+        coverage.record_windows(window_losses)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
                 + sapling_findings
