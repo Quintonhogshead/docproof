@@ -64,11 +64,19 @@ class AnthropicProvider:
     def complete_structured(self, *, model: str, system: str, user: str,
                             schema: dict[str, Any], schema_name: str,
                             max_tokens: int) -> ProviderResult:
+        # Stream and reassemble rather than a plain create(): the SDK refuses a
+        # non-streaming request whose max_tokens could run past its 10-minute
+        # ceiling, and the whole-book reads sit well over it — continuity alone
+        # asks 32k, doubled to 64k on a truncation retry. Streaming changes
+        # nothing else; get_final_message() returns the same Message create()
+        # would have, so _to_result reads it unchanged. Batches are exempt (they
+        # are asynchronous by construction) and stay non-streaming below.
         try:
-            resp = self.client.messages.create(
+            with self.client.messages.stream(
                 **self._params(model=model, system=system, user=user,
                                schema=schema, max_tokens=max_tokens,
-                               cache=self.prompt_caching))
+                               cache=self.prompt_caching)) as stream:
+                resp = stream.get_final_message()
         except anthropic.APIStatusError as e:
             return ProviderResult(stop_reason="error",
                                   error=f"{e.status_code}: {e.message}")

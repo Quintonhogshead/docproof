@@ -43,9 +43,11 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   destination = "/data"
 
 [[vm]]
-  size = "shared-cpu-1x"
+  # 2 cores so the LanguageTool scan parallelizes: it is CPU-bound (one paragraph
+  # check pins one core), so on a single core it ran serial — ~27 min on a 6 MB
+  # book. The scan pool caps itself at the core count, so 2x roughly halves it;
+  # the LLM passes are network-bound and unaffected.
+  size = "shared-cpu-2x"
   # 2gb so the LanguageTool pass has room: its JVM wants a ~512 MB heap alongside
-  # the Python web app, and 1gb would OOM under a review. The pass itself is still
-  # off by default (languagetool.enabled: false) — this is headroom for when it's
-  # turned on.
+  # the Python web app, and 1gb would OOM under a review.
   memory = "2gb"

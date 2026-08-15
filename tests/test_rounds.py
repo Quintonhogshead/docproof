@@ -18,7 +18,7 @@ from docproof.config import Config
 from docproof.models import DocumentModel, Finding, ParagraphRef, Usage
 from docproof.providers import ProviderResult
 from docproof.reassembler import apply_tracked_changes, paragraph_view_text
-from docproof.rounds import RoundReview, run_rounds
+from docproof.rounds import RoundReview, _round_config, run_rounds
 from docproof.utils.xml_helpers import DocxPackage, paragraph_text, walk_package
 from docproof.validator import validate_findings
 from tests.fakes import USAGE
@@ -167,3 +167,24 @@ def test_early_stop_when_a_round_adds_too_little(tmp_path):
     result = run_rounds(doc, review, _JudgeProvider({}), count=5,
                         judge_model="m", min_new_edits=1, usage=Usage())
     assert result.rounds_run == 2                          # stopped after the dry round
+
+
+def test_later_rounds_drop_the_whole_book_passes_when_reuse_is_on():
+    """Round 1 runs the config as given; with reuse on, later rounds skip the
+    whole-book re-reads and the mechanical-floor scan — round 1 caught those and
+    its confirmed fixes make no new mechanical errors, so re-running the pass is
+    only cost (a per-round single-core scan on a long book). Reuse off keeps
+    everything, and the original config is never mutated."""
+    cfg = Config()
+    cfg.glossary.enabled = cfg.storysheet.enabled = cfg.languagetool.enabled = True
+
+    assert _round_config(cfg, 1, True) is cfg              # round 1 untouched
+
+    later = _round_config(cfg, 2, True)
+    assert not later.languagetool.enabled
+    assert not later.glossary.enabled and not later.storysheet.enabled
+
+    kept = _round_config(cfg, 2, False)                    # reuse off: nothing dropped
+    assert kept.languagetool.enabled
+
+    assert cfg.languagetool.enabled                        # deep-copied, not mutated

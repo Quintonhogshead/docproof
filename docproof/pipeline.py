@@ -737,7 +737,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             lt_cands = lt_propose(
                 prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
                 dictionary=cfg.languagetool.dictionary,
-                disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules))
+                disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
+                workers=cfg.languagetool.workers, progress=progress)
             lt_provider, lt_model = provider, cfg.api.model
             if cfg.languagetool.confirm_model:
                 lcfg = cfg.model_copy(deep=True)

@@ -604,6 +604,10 @@ class LanguageToolConfig(BaseModel):
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)
+    # Threads for the per-paragraph scan. The pass caps this at the usable CPU
+    # count regardless, so 0 (auto) is one thread per core; on a single-core VM
+    # the scan is serial no matter what. Lower it only to leave cores free.
+    workers: int = Field(default=0, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
     # The confidence at or above which an affirmed fix edits; softer is a margin
