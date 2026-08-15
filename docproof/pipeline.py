@@ -974,9 +974,9 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     Returns the capped findings and a SmoothingReport, because the number of
     suggestions the cap withheld is not recoverable from the findings that
     survived it — and going unreported is the one thing a cap must not do."""
-    from .smoothing import (JUDGE_SYSTEM, JUDGE_SYSTEM_NARROW, PROPOSE_SYSTEM,
-                            PROPOSE_SYSTEM_OPEN, SmoothingReport, cap_for,
-                            propose, prompt_sha, rank_and_cap)
+    from .smoothing import (JUDGE_SYSTEMS, PROPOSE_SYSTEM, PROPOSE_SYSTEM_OPEN,
+                            SmoothingReport, cap_for, propose, prompt_sha,
+                            rank_and_cap)
     # Whole-document only, like every other pass that reads the book entire. A
     # selected-sections run must not buy a full-manuscript line edit, and — the
     # part that would be visible to the author — must not come back with
@@ -1051,12 +1051,11 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     # every candidate source share one batching path.
     context = "\n\n".join(x for x in (prepared.conventions, prepared.vocabulary,
                                       prepared.story_sheet) if x)
-    # Judge prompt resolved once too. C4's judge_preference chooses between the
-    # shipped JUDGE_SYSTEM and JUDGE_SYSTEM_NARROW (which narrows only the
-    # mere-preference veto); an explicit judge_prompt still wins. The context is
-    # folded in after, and judge_prompt_sha below fingerprints the whole thing.
-    system = sm.judge_prompt or (
-        JUDGE_SYSTEM_NARROW if sm.judge_preference == "narrow" else JUDGE_SYSTEM)
+    # Judge prompt resolved once too. C4's judge_harshness selects a rung of the
+    # JUDGE_SYSTEMS dial ("strict" is the shipped prompt); an explicit judge_prompt
+    # still wins. The context is folded in after, and judge_prompt_sha below
+    # fingerprints the whole thing.
+    system = sm.judge_prompt or JUDGE_SYSTEMS[sm.judge_harshness]
     if context:
         system = f"{system}\n\n{context}"
     jcfg = cfg.model_copy(deep=True)

@@ -701,15 +701,20 @@ class SmoothingConfig(BaseModel):
     # it as an isolated A/B, not alongside another proposer change.
     propose_chars: int = Field(default=12_000, ge=1)
     propose_max_paras: int = Field(default=60, ge=1)
-    # C4 — how the judge separates a voice veto from a mere-preference reject.
-    # "strict" is the shipped JUDGE_SYSTEM, which rejects any trade for
-    # "merely-conventional" phrasing on principle — but the human line-edit class
-    # IS conventional-but-correct (who/that, an idiomatic preposition, an
-    # optional comma), so that clause refuses exactly the edits this pass exists
-    # to surface. "narrow" keeps the voice veto and rejects only a trade that
-    # FLATTENS a distinctive authorial choice into a generic one. Low-leverage
-    # until the proposer is loosened, so pair it with proposer_restraint="open".
-    judge_preference: Literal["strict", "narrow"] = "strict"
+    # C4 — the judge's HARSHNESS, as a dial rather than a fixed prompt. The judge
+    # is what decides how much of the proposer's output reaches the author, and
+    # the right setting differs by manuscript and by author, so it is a selector
+    # like the reasoning-effort knob. Four levels, least- to most-rejecting:
+    #   lenient  — lean toward keeping; reject only voice damage / no improvement
+    #   balanced — judge on merits; keep what earns its place, need not reject most
+    #   strict   — DEFAULT TO NO, expect to reject most (the shipped JUDGE_SYSTEM)
+    #   severe   — keep only the undeniable handful
+    # "strict" is the shipped prompt byte-for-byte, so the default changes nothing.
+    # Across the whole dial the three voice-SAFETY vetoes (dialect/idiolect/coined/
+    # character-voice, fragment/rhetorical-repetition, meaning/emphasis/rhythm)
+    # hold verbatim — leniency buys back the merely-conventional and preference
+    # rejects, never the voice line. See JUDGE_SYSTEMS in docproof/smoothing.py.
+    judge_harshness: Literal["lenient", "balanced", "strict", "severe"] = "strict"
     # C5 — clarity-only smoothing INSIDE dialogue. Dialogue is skipped wholesale
     # by default; `include_dialogue` above is the all-or-nothing opt-in, and this
     # is the middle setting. A candidate that overlaps quoted speech is normally

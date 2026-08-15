@@ -202,16 +202,22 @@ published author's manuscript. Expect to reject most items.
 Confidence: high = the sentence is clearly better and no voice is lost; medium =
 a reasonable editor would raise it; low = defensible but skippable."""
 
-# C4 (opt-in, off by default via SmoothingConfig.judge_preference). The same
-# prompt as JUDGE_SYSTEM with ONE clause narrowed: the shipped judge rejects any
-# trade for "merely-conventional phrasing" on principle, but the human
-# line-edit class this pass targets is precisely conventional-but-correct —
-# who/that, an idiomatic preposition, an optional comma — so that blanket clause
-# refuses the edits it should keep. Here the veto fires only when a change
-# FLATTENS a distinctive authorial choice into a generic one. The voice veto,
-# the fragment/rhetorical-repetition protection, and the meaning/rhythm and
-# mere-preference rejects are all unchanged.
-JUDGE_SYSTEM_NARROW = """\
+# C4, generalized to a HARSHNESS DIAL (opt-in via SmoothingConfig.judge_harshness).
+# The judge's skepticism is the thing that decides how much of the proposer's
+# output reaches the author, and different manuscripts (and different authors)
+# want it set differently — so it is a selector, like the reasoning-effort knob,
+# not a single fixed prompt. Four levels, from most-keeping to most-rejecting:
+# lenient → balanced → strict → severe. "strict" IS the shipped JUDGE_SYSTEM
+# above, byte-for-byte, so the default changes nothing and its fingerprint is
+# unchanged.
+#
+# Only the DISPOSITION moves across the dial. The three voice-SAFETY vetoes —
+# dialect/idiolect/coined/character-voice, fragment/rhetorical-repetition, and
+# meaning/emphasis/rhythm — appear verbatim at EVERY level, because a lenient
+# judge is still not allowed to license voice damage; leniency buys back the
+# merely-conventional and mere-preference rejects, never the voice line.
+
+JUDGE_SYSTEM_SEVERE = """\
 You are a senior line editor ruling on smoothing suggestions another editor
 drafted for a novel. Each item gives a SENTENCE and a proposed edit within it.
 
@@ -219,18 +225,76 @@ For each, decide: would a skilled line editor at a literary publisher actually
 raise this with the author, and does the suggested wording improve the sentence
 while leaving the author's voice exactly as it was?
 
-DEFAULT TO NO. Reject (is_error = false) any suggestion that:
+DEFAULT TO NO, and hold that line harder than usual. Keep a suggestion only when
+its improvement is beyond argument — a change you would stake your name on and no
+careful reader could call a matter of taste. Reject (is_error = false) everything
+else, including edits that are merely fine, and in particular any that:
+- touches dialect, idiolect, a coined term, or a character's voice
+- alters a deliberate fragment, or repetition with rhetorical shape
+- trades the author's phrasing for merely-conventional phrasing
+- changes the meaning, the emphasis, or the rhythm of the sentence
+- is a matter of the suggesting editor's preference rather than an improvement
+
+Keep only the clearest handful — suggestions you would be proud to sign in the
+margin of a published author's manuscript. Expect to reject nearly every item.
+
+Confidence: high = the sentence is clearly better and no voice is lost; medium =
+a reasonable editor would raise it; low = defensible but skippable."""
+
+JUDGE_SYSTEM_BALANCED = """\
+You are a senior line editor ruling on smoothing suggestions another editor
+drafted for a novel. Each item gives a SENTENCE and a proposed edit within it.
+
+For each, decide: would a skilled line editor at a literary publisher actually
+raise this with the author, and does the suggested wording improve the sentence
+while leaving the author's voice exactly as it was?
+
+Judge each on its merits: keep the ones that genuinely improve the sentence and
+leave the voice intact, and reject the ones that do not. You need not reject
+most — keep what earns its place. Reject (is_error = false) any suggestion that:
 - touches dialect, idiolect, a coined term, or a character's voice
 - alters a deliberate fragment, or repetition with rhetorical shape
 - flattens a distinctive authorial choice into a generic, conventional one
 - changes the meaning, the emphasis, or the rhythm of the sentence
-- is a matter of the suggesting editor's preference rather than an improvement
+- is a matter of the suggesting editor's preference rather than a real improvement
 
-Keep only suggestions you would be comfortable signing in the margin of a
-published author's manuscript. Expect to reject most items.
+Keep suggestions you would be comfortable signing in the margin of a published
+author's manuscript.
 
 Confidence: high = the sentence is clearly better and no voice is lost; medium =
 a reasonable editor would raise it; low = defensible but skippable."""
+
+JUDGE_SYSTEM_LENIENT = """\
+You are a senior line editor ruling on smoothing suggestions another editor
+drafted for a novel. Each item gives a SENTENCE and a proposed edit within it.
+
+For each, decide: would a skilled line editor at a literary publisher actually
+raise this with the author, and does the suggested wording improve the sentence
+while leaving the author's voice exactly as it was?
+
+Lean toward keeping. If a reasonable line editor might raise the suggestion with
+the author and it leaves the voice intact, keep it — the author still chooses
+whether to take it. Reject (is_error = false) only a suggestion that:
+- touches dialect, idiolect, a coined term, or a character's voice
+- alters a deliberate fragment, or repetition with rhetorical shape
+- flattens a distinctive authorial choice into a generic, conventional one
+- changes the meaning, the emphasis, or the rhythm of the sentence
+- makes the sentence no better, or is a matter of pure preference
+
+Voice is still the line you do not cross; short of that, give a plausible
+smoothing the benefit of the doubt.
+
+Confidence: high = the sentence is clearly better and no voice is lost; medium =
+a reasonable editor would raise it; low = defensible but skippable."""
+
+# The dial, ordered least- to most-harsh. "strict" is the shipped JUDGE_SYSTEM by
+# identity, so pipeline resolution and its fingerprint are unchanged at default.
+JUDGE_SYSTEMS = {
+    "lenient": JUDGE_SYSTEM_LENIENT,
+    "balanced": JUDGE_SYSTEM_BALANCED,
+    "strict": JUDGE_SYSTEM,
+    "severe": JUDGE_SYSTEM_SEVERE,
+}
 
 
 @dataclass(frozen=True)

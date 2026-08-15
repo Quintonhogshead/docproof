@@ -744,40 +744,83 @@ def test_c2_the_window_config_reaches_propose(monkeypatch):
     assert len(dprov.calls) < len(sprov.calls)   # calls == propose windows here
 
 
-def test_c4_the_narrow_judge_changes_only_the_preference_clause():
-    """JUDGE_SYSTEM_NARROW keeps the voice veto and the default-to-no; it only
-    narrows the blanket 'merely-conventional' reject to one that flattens a
-    distinctive choice."""
-    from docproof.smoothing import JUDGE_SYSTEM, JUDGE_SYSTEM_NARROW
-    assert JUDGE_SYSTEM_NARROW != JUDGE_SYSTEM
-    conventional = "trades the author's phrasing for merely-conventional phrasing"
-    assert conventional in JUDGE_SYSTEM
-    assert conventional not in JUDGE_SYSTEM_NARROW
-    assert "flattens a distinctive authorial choice" in JUDGE_SYSTEM_NARROW
-    for kept in ["DEFAULT TO NO.",
-                 "touches dialect, idiolect, a coined term, or a character's "
-                 "voice",
-                 "changes the meaning, the emphasis, or the rhythm of the "
-                 "sentence"]:
-        assert kept in JUDGE_SYSTEM_NARROW, kept
+def test_c4_the_harshness_dial_has_four_distinct_rungs_and_strict_is_the_default():
+    """A selector like the effort knob: four levels, and 'strict' IS the shipped
+    JUDGE_SYSTEM by identity so the default judge is unchanged."""
+    from docproof.smoothing import (JUDGE_SYSTEM, JUDGE_SYSTEMS, prompt_sha)
+    assert list(JUDGE_SYSTEMS) == ["lenient", "balanced", "strict", "severe"]
+    assert JUDGE_SYSTEMS["strict"] is JUDGE_SYSTEM        # byte-identical default
+    assert Config().smoothing.judge_harshness == "strict"
+    # every rung is a genuinely different prompt
+    shas = {lvl: prompt_sha(txt) for lvl, txt in JUDGE_SYSTEMS.items()}
+    assert len(set(shas.values())) == 4
 
 
-def test_c4_narrow_preference_reaches_the_judge_and_moves_its_fingerprint(
+def test_c4_every_harshness_level_keeps_the_voice_safety_vetoes():
+    """Leniency buys back the merely-conventional and preference rejects, never
+    the voice line: the three voice-SAFETY vetoes appear verbatim at EVERY rung,
+    including the most lenient. This is the invariant that keeps the dial safe."""
+    from docproof.smoothing import JUDGE_SYSTEMS
+    for level, prompt in JUDGE_SYSTEMS.items():
+        for veto in [
+            "touches dialect, idiolect, a coined term, or a character's voice",
+            "alters a deliberate fragment, or repetition with rhetorical shape",
+            "changes the meaning, the emphasis, or the rhythm of the sentence",
+        ]:
+            assert veto in prompt, (level, veto)
+
+
+def test_c4_the_dial_is_monotonic_in_disposition():
+    """Each rung's disposition is where the harshness lives, and they ascend:
+    lenient leans to keep, strict defaults to no, severe holds hardest."""
+    from docproof.smoothing import JUDGE_SYSTEMS
+    assert "Lean toward keeping" in JUDGE_SYSTEMS["lenient"]
+    assert "need not reject\nmost" in JUDGE_SYSTEMS["balanced"] \
+        or "need not reject" in JUDGE_SYSTEMS["balanced"]
+    assert "DEFAULT TO NO." in JUDGE_SYSTEMS["strict"]
+    assert "Expect to reject most items." in JUDGE_SYSTEMS["strict"]
+    assert "hold that line harder" in JUDGE_SYSTEMS["severe"]
+    assert "reject nearly every item" in JUDGE_SYSTEMS["severe"]
+    # DEFAULT TO NO belongs to the harsh end only, not the keeping end
+    assert "DEFAULT TO NO" not in JUDGE_SYSTEMS["lenient"]
+    assert "DEFAULT TO NO" not in JUDGE_SYSTEMS["balanced"]
+
+
+def test_c4_the_selected_harshness_reaches_the_judge_and_moves_the_fingerprint(
         monkeypatch):
     """With no book context folded in, the recorded judge sha IS the sha of the
-    chosen judge constant — so a sha match proves the narrow prompt was the one
-    handed to the valve, not merely recorded."""
-    from docproof.smoothing import JUDGE_SYSTEM, JUDGE_SYSTEM_NARROW, prompt_sha
+    chosen rung — so a sha match proves the selected prompt was the one handed to
+    the valve, and default 'strict' records the shipped judge's sha exactly."""
+    from docproof.smoothing import JUDGE_SYSTEMS, prompt_sha
     p = _para("body-0", "She walked over to the door in a very quiet way.")
     script = lambda: [_suggest(_s("body-0", "in a very quiet way", "quietly")),
                       _verdicts({"index": 1, "is_error": True,
                                  "confidence": "high"})]
-    _f, rep_n, _pn = _run(monkeypatch, _cfg(judge_preference="narrow"),
-                          _prepared(p), script())
-    _f2, rep_s, _ps = _run(monkeypatch, _cfg(), _prepared(p), script())
-    assert rep_n.judge_prompt_sha == prompt_sha(JUDGE_SYSTEM_NARROW)
-    assert rep_s.judge_prompt_sha == prompt_sha(JUDGE_SYSTEM)
-    assert rep_n.judge_prompt_sha != rep_s.judge_prompt_sha
+    seen = {}
+    for level in JUDGE_SYSTEMS:
+        _f, rep, _pv = _run(monkeypatch, _cfg(judge_harshness=level),
+                            _prepared(p), script())
+        assert rep.judge_prompt_sha == prompt_sha(JUDGE_SYSTEMS[level]), level
+        seen[level] = rep.judge_prompt_sha
+    # default (no override) matches the strict rung exactly
+    _f, rep_default, _pv = _run(monkeypatch, _cfg(), _prepared(p), script())
+    assert rep_default.judge_prompt_sha == seen["strict"]
+    assert len(set(seen.values())) == 4       # four rungs, four fingerprints
+
+
+def test_c4_an_explicit_judge_prompt_still_wins_over_the_harshness_dial(
+        monkeypatch):
+    """`judge_prompt` is the wholesale override and outranks the dial, on the
+    fingerprint too."""
+    from docproof.smoothing import prompt_sha
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    custom = "You are a custom judge. Keep nothing."
+    _f, rep, _pv = _run(
+        monkeypatch, _cfg(judge_harshness="lenient", judge_prompt=custom),
+        _prepared(p), [_suggest(_s("body-0", "in a very quiet way", "quietly")),
+                       _verdicts({"index": 1, "is_error": True,
+                                  "confidence": "high"})])
+    assert rep.judge_prompt_sha == prompt_sha(custom)
 
 
 def test_c5_clarity_survives_in_dialogue_when_opted_in(monkeypatch):
@@ -843,7 +886,7 @@ def test_every_lever_off_by_default_leaves_the_shipped_pass_untouched():
                                     _PROPOSE_CHARS, _PROPOSE_MAX_PARAS)
     s = Config().smoothing
     assert s.proposer_restraint == "restrained"
-    assert s.judge_preference == "strict"
+    assert s.judge_harshness == "strict"
     assert (s.propose_chars, s.propose_max_paras) == (_PROPOSE_CHARS,
                                                       _PROPOSE_MAX_PARAS)
     assert s.dialogue_categories == []
