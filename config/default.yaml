@@ -320,7 +320,13 @@ smoothing:
   max_per_1000_words: 3.0   # volume cap; overflow is dropped AND counted in summary.md
   min_confidence: medium    # drop anything the judge affirms softer than this
   batch_size: 40            # candidates per judge request
-  max_output_tokens: 4000   # the proposing read
+  max_output_tokens: 16000  # the proposing read — sized like the judge below:
+                            # on a reasoning model the ceiling covers the
+                            # THINKING too, so 4,000 truncated a dense window and
+                            # dropped it whole, which reads as restraint. Unused
+                            # ceiling is free; propose() counts any read that
+                            # still fails so it is reported, not mistaken for
+                            # silence.
   judge_max_output_tokens: 16000  # much larger on purpose: a verdict is tiny,
                             # but on a reasoning model the THINKING counts here
                             # too, and a truncated judge batch returns no

@@ -108,9 +108,11 @@ NEVER suggest anything that touches:
 - repetition that has rhetorical shape
 - a repeated word (a separate pass handles repetition; ignore it here)
 
-Most paragraphs get NOTHING. At most one suggestion per sentence. If a paragraph
-reads well, return nothing for it — an empty result is the correct answer for
-most of a competent novel.
+Most paragraphs get NOTHING. A sentence usually needs at most one suggestion,
+but offer a second when it addresses a genuinely independent, unrelated spot —
+do not drop a real smoothing only because the sentence already has one. If a
+paragraph reads well, return nothing for it — an empty result is the correct
+answer for most of a competent novel.
 
 Quote the ORIGINAL text exactly as it appears, character for character, and keep
 the quote as short as it can be while still containing the whole change.
@@ -154,7 +156,14 @@ class SmoothingReport:
     kept list nor the reject log. The run then reports "0 suggestions from 53
     proposed", which looks exactly like admirable restraint and is in fact a
     pass that never ran. Counted as the candidates the judge never accounted
-    for, so the two cannot be confused."""
+    for, so the two cannot be confused.
+
+    `windows_failed` is the same failure one stage earlier. A propose read whose
+    reply truncated returns nothing, so a whole window of the manuscript is
+    dropped before any candidate exists — invisible in `proposed`, which counts
+    only what a completed read produced. It is the propose-side twin of
+    `unjudged`, and like it would otherwise show up as fewer suggestions and read
+    as restraint."""
     proposed: int = 0        # candidates surviving the deterministic filters
     kept: int = 0            # suggestions the judge affirmed at/above the floor
     withheld: int = 0        # affirmed, then dropped by the per-1,000-words cap
@@ -172,6 +181,13 @@ class SmoothingReport:
     # taste; `below_floor` is a threshold; `unjudged` is a fault. An unexplained
     # remainder would mean a path nobody has found, so the identity is asserted
     # in the tests rather than left as a comment.
+    #
+    # Separate provenance, and deliberately OUTSIDE the identity above: how many
+    # propose reads there were and how many came back truncated or unreadable. A
+    # failed read loses a whole window of the manuscript before it is ever a
+    # candidate, so it cannot be one of the five terms the judge accounts for.
+    windows: int = 0         # propose reads made (one per manuscript window)
+    windows_failed: int = 0  # of those, how many returned nothing usable
     # What produced these numbers. A prompt change moves the output more than
     # any config knob does, so two runs are only comparable when these match —
     # and an eval scoring a pre-change run against a post-change baseline would
@@ -274,12 +290,22 @@ def _too_large(quote: str, suggestion: str, guard) -> bool:
     Queries skip the validator's edit guard entirely (it runs on the tracked-
     change path), so the scale contract has to be kept here or not at all. The
     human data is unambiguous that this is the right shape: phrase rewrites are
-    ~4% of the reference proofreaders' edits and longer rewrites under 1%."""
+    ~4% of the reference proofreaders' edits and longer rewrites under 1%.
+
+    Measured on the SHRUNK diff — the common prefix and suffix trimmed off —
+    exactly as the validator's own guard does, not on the raw quote and
+    suggestion. A smoothing has to quote enough of the sentence to anchor
+    uniquely (an ambiguous pronoun with its distant antecedent, a whole
+    coordinated span) while changing only a word or two, and judging that on the
+    raw length dropped precisely the long-anchor/small-change clarity and flow
+    edits the pass is meant to make."""
     if guard is None or not getattr(guard, "enabled", False):
         return False
-    if len(quote) > guard.max_edit_chars or len(suggestion) > guard.max_edit_chars:
+    from .validator import shrink
+    _pre, deleted, inserted = shrink(quote, suggestion)
+    if len(deleted) > guard.max_edit_chars or len(inserted) > guard.max_edit_chars:
         return True
-    return len(suggestion) - len(quote) > guard.max_added_chars
+    return len(inserted) - len(deleted) > guard.max_added_chars
 
 
 def margin_note(suggestion: str, rationale: str) -> str:
@@ -320,9 +346,19 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             model: str, max_tokens: int, usage, system: str = "",
             lexicon: Sequence[str] = (), closing_quotes: str = "”\"",
             include_dialogue: bool = False, edit_guard=None,
-            concurrency: int = 1) -> tuple[list[RewriteCandidate], int]:
-    """Read the manuscript as a line editor and return sited candidates, plus a
-    count of how many raw suggestions the deterministic filters dropped.
+            concurrency: int = 1
+            ) -> tuple[list[RewriteCandidate], int, int, int]:
+    """Read the manuscript as a line editor and return sited candidates, plus
+    three counts: how many raw suggestions the deterministic filters dropped, how
+    many propose reads were made, and how many of those reads came back truncated
+    or unreadable (and so contributed nothing).
+
+    That last count is not a nicety. A read whose reply hits the token ceiling
+    returns `stop_reason != "ok"` with nothing parsed, and the loop can only skip
+    it — a whole window of the manuscript is lost before any candidate exists. If
+    that goes uncounted the run simply proposes less, which on a pass whose
+    ordinary output is silence reads as restraint rather than as an outage. So it
+    is returned for the caller to report, the way the judge's `unjudged` is.
 
     Nothing here is trusted: a suggestion whose quote does not appear verbatim in
     the paragraph it names is discarded rather than fuzzy-matched, because a
@@ -340,7 +376,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     lex = {w.strip("'’\".,").lower() for w in lexicon}
     windows = _windows(usable)
     if not windows:
-        return [], 0
+        return [], 0, 0, 0
     schema = strict_json_schema(_Suggestions)     # deep-copies; hoist off the pool
 
     def fetch(window):
@@ -351,6 +387,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             schema=schema, schema_name="suggestions", max_tokens=max_tokens)
 
     raw: list[_Suggestion] = []
+    windows_failed = 0
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         pending = [(w, pool.submit(fetch, w)) for w in windows]
         try:
@@ -358,12 +395,14 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                 res = future.result()
                 usage.add(res.usage)              # fold serially: not thread-safe
                 if res.stop_reason != "ok" or res.parsed is None:
+                    windows_failed += 1
                     log.error("smoothing propose window %d: %s", n,
                               res.error or res.stop_reason)
                     continue
                 try:
                     raw.extend(_Suggestions.model_validate(res.parsed).suggestions)
                 except Exception as e:
+                    windows_failed += 1
                     log.error("smoothing propose window %d: bad response: %s",
                               n, e)
         except BaseException:
@@ -377,7 +416,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     dialogue = {} if include_dialogue else {
         pid: quote_spans(t, closing_quotes) for pid, t in text_of.items()}
     cands: list[RewriteCandidate] = []
-    seen: set[tuple[str, int, int]] = set()
+    seen: set[tuple[str, int, int, str]] = set()
     dropped = 0
     for s in raw:
         text = text_of.get(s.para_id)
@@ -402,17 +441,23 @@ def propose(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         if _too_large(original, s.suggestion, edit_guard):
             dropped += 1
             continue
-        if (s.para_id, start, end) in seen:       # one suggestion per span
+        # One suggestion per (span, wording): an exact duplicate is dropped, but
+        # two genuinely different rewrites of the same span both reach the judge,
+        # which rules on each. Keyed the way rewrite.dedup_candidates keys — the
+        # validator's query dedupe already discriminates on corrected_text, so
+        # two alternatives survive as two separate margin questions.
+        if (s.para_id, start, end, s.suggestion) in seen:
             dropped += 1
             continue
-        seen.add((s.para_id, start, end))
+        seen.add((s.para_id, start, end, s.suggestion))
         cands.append(RewriteCandidate(
             para_id=s.para_id, start=start, end=end, original=original,
             replacement=s.suggestion,
             note=margin_note(s.suggestion, s.rationale)))
     log.info("Smoothing proposed %d suggestion(s); %d dropped by the "
-             "deterministic filters.", len(cands), dropped)
-    return cands, dropped
+             "deterministic filters; %d of %d read(s) failed.", len(cands),
+             dropped, windows_failed, len(windows))
+    return cands, dropped, len(windows), windows_failed
 
 
 # --- cap ----------------------------------------------------------------------
