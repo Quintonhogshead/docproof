@@ -341,6 +341,35 @@ def test_findings_json_records_the_query_status(tmp_path):
     assert "Queries" in out.summary_md.read_text()
 
 
+def test_summary_names_the_query_channel_in_the_formats_own_word(tmp_path):
+    """Every site interpolates `fmt.comment_noun` bare, so the noun has to be
+    complete on its own: prefixing "margin " at a site read "margin margin
+    comment" for Word, and folding the prefix into the noun instead read
+    "margin note" for InDesign, which has no margin to put a note in."""
+    from docproof.formats import DOCX, IDML
+    from docproof.reporting import write_summary_md
+
+    cfg = load_config("config/default.yaml")
+    doc = _doc(SPEAKERS)
+    findings = [
+        _finding(status="query"),
+        _finding(finding_id="f-0002", error_type="comma_splice",
+                 confidence="low", status="skipped_low_confidence"),
+        _finding(finding_id="f-0003", error_type="run_on_sentence",
+                 status="rejected_oversized"),
+    ]
+    for fmt, noun in ((DOCX, "margin comment"), (IDML, "note")):
+        out = tmp_path / f"{fmt.suffix.strip('.')}.md"
+        write_summary_md(out, doc=doc, findings=findings, usage=Usage(),
+                         cfg=cfg, applied_ids=(), fmt=fmt)
+        text = out.read_text("utf-8")
+        # One per section that puts a finding in the file: queries, below-gate,
+        # oversized. Plus the closing line, which names the noun on its own.
+        assert text.count(f"each is a {noun} in the reviewed file") == 3
+        assert f"carries a {noun} explaining itself" in text
+        assert "margin margin" not in text
+
+
 def test_the_default_config_ships_the_query_channel_on():
     cfg = load_config("config/default.yaml")
     assert cfg.query_comments is True
