@@ -4,6 +4,7 @@ deterministic date->weekday tier."""
 from __future__ import annotations
 
 import itertools
+import logging
 
 from docproof.continuity import (ContinuityFinding, ContinuityReport,
                                  build_continuity, calendar_findings,
@@ -98,6 +99,129 @@ def test_a_query_routes_through_the_validator_to_the_margin():
     assert doc.paragraphs[1].text[anchor.start:anchor.end] == \
         "Mira turned, her blue eyes bright."
     assert anchor.insert_text == ""                    # a comment inserts nothing
+
+
+# --- punctuation-tolerant locating ---------------------------------------------
+#
+# The ingest normalizer curls straight quotes before review, so the canonical
+# text of a real manuscript holds “ ” ‘ ’ (and house-style nbsp) in ~98% of its
+# sentences — and a model re-typing those marks as ASCII is the routine habit
+# validator.py folds for. Before the fold, that habit silently zeroed the whole
+# model tier: every finding with a retyped mark in either quote was dropped.
+
+def test_a_straight_retyped_quote_survives_the_curly_manuscript():
+    paras = [_para("body-0", "“Mira’s eyes were deep brown,” her mother said."),
+             _para("body-1", "Mira turned, and the girl’s blue eyes flashed.")]
+    cf = _cf(earlier_quote='"Mira\'s eyes were deep brown," her mother said.',
+             quote="Mira turned, and the girl's blue eyes flashed.")
+    out = report_to_findings(ContinuityReport(findings=[cf]), paras,
+                             itertools.count(1))
+    assert len(out) == 1
+    f = out[0]
+    # The anchor is the manuscript's own characters, not the model's ASCII...
+    assert f.original_text == "Mira turned, and the girl’s blue eyes flashed."
+    assert f.corrected_text == f.original_text
+    # ...and so is the earlier sentence the margin comment shows the author.
+    assert "“Mira’s eyes were deep brown,” her mother said." in f.explanation
+
+
+def test_an_nbsp_retyped_as_a_space_still_locates():
+    # House style sets nbsp before an ellipsis; a model re-types a plain
+    # space. The anchor that comes back is the manuscript's own characters,
+    # nbsp included — the comment's display copy may collapse it, the anchor
+    # never does.
+    real = "He waited\u00a0… then walked through the locked door."
+    paras = [_para("body-0", "The door stayed locked all night."),
+             _para("body-1", real)]
+    cf = _cf(category="object",
+             earlier_quote="The door stayed locked all night.",
+             quote="He waited … then walked through the locked door.",
+             question="Who unlocked the door?")
+    out = report_to_findings(ContinuityReport(findings=[cf]), paras,
+                             itertools.count(1))
+    assert len(out) == 1
+    assert out[0].original_text == real          # nbsp, not the model's space
+
+
+def test_a_fold_recovered_query_anchors_through_the_validator():
+    # End to end: the finding _locate recovered through the fold must be one
+    # the validator can anchor exactly — original_text is a real slice and the
+    # occurrence is counted on it, so the exact path lands without the fold.
+    paras = (_para("body-0", "“Mira’s eyes were deep brown,” her mother said."),
+             _para("body-1", "Mira turned, and the girl’s blue eyes flashed."))
+    doc = DocumentModel(source_path="x.docx", paragraphs=paras)
+    cf = _cf(earlier_quote='"Mira\'s eyes were deep brown," her mother said.',
+             quote="Mira turned, and the girl's blue eyes flashed.")
+    findings = report_to_findings(ContinuityReport(findings=[cf]),
+                                  list(paras), itertools.count(1))
+    validated = validate_findings(findings, doc, min_confidence="high")
+    assert [f.status for f in validated] == ["query"]
+    anchor = validated[0].anchor
+    assert doc.paragraphs[1].text[anchor.start:anchor.end] == \
+        "Mira turned, and the girl’s blue eyes flashed."
+
+
+def test_fold_recovery_counts_occurrences_on_the_real_text():
+    # The same sentence twice in one paragraph: the folded search matches the
+    # first copy, and the occurrence stored must be the REAL slice's — what the
+    # validator's exact anchor path counts — or the query lands on the wrong
+    # copy.
+    paras = [_para("body-0", "Petra locked the door at nine."),
+             _para("body-1", "She said it’s time. She said it’s time.")]
+    cf = _cf(earlier_quote="Petra locked the door at nine.",
+             quote="She said it's time.")
+    findings = report_to_findings(ContinuityReport(findings=[cf]), paras,
+                                  itertools.count(1))
+    assert len(findings) == 1
+    assert findings[0].occurrence == 1
+    doc = DocumentModel(source_path="x.docx", paragraphs=tuple(paras))
+    validated = validate_findings(findings, doc, min_confidence="high")
+    assert validated[0].status == "query"
+    assert validated[0].anchor.start == 0               # the first copy
+
+
+def test_the_fold_forgives_typography_never_wording():
+    # A quote that differs in wording — a dropped apostrophe-s changes the
+    # word, not just the mark — still fails to locate and is still dropped:
+    # the guardrail's point survives the fold.
+    paras = [_para("body-0", "Mira’s eyes were deep brown."),
+             _para("body-1", "Mira turned, and the girl’s blue eyes flashed.")]
+    cf = _cf(earlier_quote="Miras eyes were deep brown.",     # not the text
+             quote="Mira turned, and the girl's blue eyes flashed.")
+    assert report_to_findings(ContinuityReport(findings=[cf]), paras,
+                              itertools.count(1)) == []
+
+
+def test_kept_and_dropped_counts_reach_the_log(caplog):
+    # The one visibility line: kept-of-flagged with every drop reason counted,
+    # INFO on a normal run...
+    paras = [_para("body-0", "Mira's eyes were deep brown."),
+             _para("body-1", "Mira turned, her blue eyes bright.")]
+    rep = ContinuityReport(findings=[
+        _cf(),                                          # kept
+        _cf(confidence="low"),                          # below the floor
+        _cf(quote="A sentence found nowhere at all.")])  # unlocatable
+    with caplog.at_level(logging.INFO, logger="docproof.continuity"):
+        out = report_to_findings(rep, paras, itertools.count(1))
+    assert len(out) == 1
+    kept = [r for r in caplog.records if "kept 1 of 3" in r.message]
+    assert kept and kept[0].levelno == logging.INFO
+    assert "1 below medium confidence" in kept[0].message
+    assert "1 with a quote that did not locate" in kept[0].message
+
+
+def test_a_read_whose_findings_all_die_warns(caplog):
+    # ...and a WARNING when a non-empty report kept nothing: the hosted app
+    # records nothing below WARNING, and "flagged but none reached the margin"
+    # is the outcome an operator must be able to tell apart from "found
+    # nothing" — before this line, both were the same silence.
+    paras = [_para("body-0", "Mira's eyes were deep brown.")]
+    rep = ContinuityReport(findings=[
+        _cf(quote="A sentence found nowhere at all.")])
+    with caplog.at_level(logging.INFO, logger="docproof.continuity"):
+        assert report_to_findings(rep, paras, itertools.count(1)) == []
+    warned = [r for r in caplog.records if "kept 0 of 1" in r.message]
+    assert warned and warned[0].levelno == logging.WARNING
 
 
 # --- deterministic calendar tier ----------------------------------------------
