@@ -60,6 +60,12 @@ KEY_PROVIDERS = PROVIDERS + (SAPLING,)
 # slider position — so the UI always sends one of these.
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+# The reviewer default a much older build shipped, frozen into some volumes'
+# settings.json by Settings.save() writing the whole dataclass. Rewritten once
+# to the current shipped default (Settings.model) by the create_app migration.
+LEGACY_DEFAULT_MODEL = "claude-sonnet-5"
+CURRENT_SETTINGS_VERSION = 1
+
 
 @dataclass(frozen=True)
 class Paths:
@@ -184,6 +190,11 @@ class Settings:
     # The .indd a designer places manuscripts into. Empty until somebody says
     # where it is: there is no sensible default for another house's template.
     indesign_template: str = ""
+    # Schema/migration marker. 0 = a file written before the boot migrations
+    # existed (or a legacy on-disk value); bumped once a migration has run so a
+    # deliberate later choice is never re-touched. Not exposed in the Settings
+    # screen — see SettingsUpdate.
+    settings_version: int = 0
 
     @classmethod
     def load(cls, paths: Paths) -> "Settings":

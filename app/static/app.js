@@ -23,9 +23,18 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // The reasoning-effort → output-cost factors and the house
                 // default model, both sent by /api/models so the picker never
                 // hardcodes a server-owned number.
-                effortMultipliers: {}, defaultModel: null, defaultGlossaryModel: null,
+                effortMultipliers: {}, defaultModel: null,
+                // The shipped catalog default, served alongside default_model so
+                // a stale persisted value on the volume can't surface Sonnet.
+                catalogDefaultModel: null, defaultGlossaryModel: null,
                 defaultJudgeModel: null, defaultMeaningModel: null,
                 defaultFixModel: null,
+                // The effort tiers served by /api/presets (id → {controls,
+                // features, sapling policy}), the currently selected tier id
+                // ('light'|'standard'|'hard'|'hammer'|'custom'|null before the
+                // first apply), and whether a Sapling key is configured — the
+                // one signal that decides Hard's Sapling and the Hammer note.
+                presets: {}, tier: null, saplingKeyed: false,
                 // The per-run pass switches, as sent by /api/features: [{id,
                 // label, blurb, group, heavy, default}]. The live on/off state
                 // lives in the rendered checkboxes; collectFeatures() reads it.
@@ -124,6 +133,24 @@ function renderKind() {
     el.hidden = prep || promo;        // both always read the whole manuscript
   });
 
+  // The custom drawer: for a review it is collapsed behind the Customize toggle
+  // (the tier cards are the primary path); for prep/promo, which have no tiers,
+  // it is shown flat — no tab strip, panels stacked — so the model, effort and
+  // glossary pickers it now holds are visible, the .review-only sweep above
+  // having culled everything else.
+  const adv = $('advanced-options');
+  if (adv) {
+    if (prep || promo) {
+      adv.classList.add('flat');
+      adv.hidden = false;
+    } else {
+      adv.classList.remove('flat');
+      adv.hidden = true;
+      const toggle = $('customize-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
   const blocked = usableFiles().filter((f) => !canRun(f));
   const warning = $('kind-warning');
   warning.hidden = blocked.length === 0;
@@ -194,6 +221,13 @@ async function upload(files) {
     hideStaging();
   }
   await loadModels();
+  // Once a review file is staged, open on Standard (the first stage only, so a
+  // later tier or Custom choice survives a re-stage); a re-stage just resyncs
+  // the highlight and price, in case model availability moved.
+  if (kind() === 'review') {
+    if (state.tier === null) maybeInitTier();
+    else reEvaluateTier();
+  }
 }
 
 // The spinner that fills the gap between a drop and the list below it. The
@@ -1010,6 +1044,12 @@ async function loadModels() {
   state.outputGuess = body.output_token_guess || state.outputGuess;
   state.effortMultipliers = body.effort_multipliers || state.effortMultipliers;
   state.defaultModel = body.default_model || state.defaultModel;
+  state.catalogDefaultModel = body.catalog_default_model
+    || state.catalogDefaultModel;
+  // Whether a Sapling key is configured — drives Hard's Sapling pass and the
+  // Hammer card's missing-key note. Served in the /api/models keys block.
+  state.saplingKeyed = !!(body.keys && body.keys.sapling
+                          && body.keys.sapling.configured);
   state.defaultGlossaryModel = body.default_glossary_model
     || state.defaultGlossaryModel;
   state.defaultJudgeModel = body.default_judge_model || state.defaultJudgeModel;
@@ -1031,7 +1071,11 @@ async function loadModels() {
   // model, but always select something — the cost estimate is useful before a
   // key exists, and a blank dropdown looks broken.
   const usable = (id) => models.some((m) => m.id === id && m.available);
+  // The shipped catalog default (gpt-5.6-luna) steps in between the persisted
+  // default and the first-usable sweep, so a stale volume value (a legacy
+  // Sonnet) that is unusable never wins over the model this build ships with.
   const fallback = (usable(state.defaultModel) && state.defaultModel)
+    || (usable(state.catalogDefaultModel) && state.catalogDefaultModel)
     || (models.find((m) => m.available) || models[0] || {}).id
     || '';
   select.value = usable(previous) ? previous : fallback;
@@ -1118,11 +1162,22 @@ async function loadModels() {
   renderCost();
 }
 
-$('model').addEventListener('change', renderCost);
-$('glossary-model').addEventListener('change', renderCost);
+// A governed control changing may move the run off the selected tier and onto
+// "Custom", so these repaint the tier highlight as well as the price.
+$('model').addEventListener('change', () => { renderCost(); reEvaluateTier(); });
+$('glossary-model').addEventListener('change',
+  () => { renderCost(); reEvaluateTier(); });
 if ($('meaning-model')) $('meaning-model').addEventListener('change', renderCost);
 if ($('fix-model')) $('fix-model').addEventListener('change', renderCost);
-$('rounds').addEventListener('change', () => { syncRounds(); renderCost(); });
+if ($('judge-model')) $('judge-model').addEventListener('change',
+  () => { renderCost(); reEvaluateTier(); });
+if ($('confidence')) $('confidence').addEventListener('change', reEvaluateTier);
+// Continuity-only is not a tier control, but priceReview short-circuits on it
+// (it skips every detector pass), so toggling it must reprice the sticky
+// estimate — otherwise the price shown and the run billed disagree.
+if ($('continuity-only')) $('continuity-only').addEventListener('change', renderCost);
+$('rounds').addEventListener('change',
+  () => { syncRounds(); renderCost(); reEvaluateTier(); });
 
 // ── passes & features ─────────────────────────────────────────────────────
 // The submission panel's switches, one per togglable pass, grouped and each
@@ -1170,30 +1225,51 @@ async function loadFeatures() {
 }
 
 function syncRounds() {
-  // The judge instructions only matter with 2+ rounds; reveal them then.
-  const n = Number(($('rounds') || {}).value || 1);
+  // The judge model (Models tab) and instructions (Passes tab) are review-only
+  // and only matter with 2+ rounds; reveal both only then, and only on a review
+  // — otherwise a rounds value left ≥2 by a prior tier would re-show them in the
+  // prep/promo flat drawer, which the .review-only sweep had just hidden.
+  const show = kind() === 'review' && Number(($('rounds') || {}).value || 1) >= 2;
   const judge = $('judge-field');
-  if (judge) judge.hidden = n < 2;
+  if (judge) judge.hidden = !show;
+  const judgeModel = $('judge-model-field');
+  if (judgeModel) judgeModel.hidden = !show;
 }
 
-// A judge gate's model and instructions only matter when its switch is on, so
-// each field follows its switch the way the judge field follows the rounds.
+// A judge gate's model (Models tab) and instructions (Passes tab) only matter
+// when its switch is on, so each follows its switch the way the judge field
+// follows the rounds. The switch may live in any of the three feature hosts, so
+// the selector is scoped to the shared .features class, not one host id.
 function syncJudgeGates() {
-  [['meaning-field', 'meaning_check'], ['fix-field', 'fix_check']]
+  // These fields are review-only, so keep them hidden for prep/promo even when
+  // a gate switch was left on by a prior Hard/Hammer pick — otherwise they would
+  // re-appear in the prep/promo flat drawer the .review-only sweep just cleared.
+  const review = kind() === 'review';
+  [['meaning-field', 'meaning_check'], ['fix-field', 'fix_check'],
+   ['meaning-model-field', 'meaning_check'], ['fix-model-field', 'fix_check']]
     .forEach(([id, feature]) => {
       const field = $(id);
       if (!field) return;
       const sw = document.querySelector(
-        `#features-groups input[data-feature="${feature}"]`);
-      field.hidden = !(sw && sw.checked);
+        `.features input[data-feature="${feature}"]`);
+      field.hidden = !(review && sw && sw.checked);
     });
 }
 
+// Each group renders into its own tab's host: the passes under Passes, the
+// output switches under Output, the safety nets under Safety. collectFeatures()
+// reads them back across all three via the shared .features class.
+const FEATURE_HOSTS = { pass: 'features-groups', output: 'features-output',
+                        safety: 'features-safety' };
+
 function renderFeatures() {
-  const host = $('features-groups');
-  if (!host) return;
-  host.innerHTML = '';
+  Object.values(FEATURE_HOSTS).forEach((id) => {
+    const h = $(id);
+    if (h) h.innerHTML = '';
+  });
   FEATURE_GROUPS.forEach(([group, title]) => {
+    const host = $(FEATURE_HOSTS[group]);
+    if (!host) return;
     const items = state.features.filter((f) => f.group === group);
     if (!items.length) return;
     const section = document.createElement('div');
@@ -1206,6 +1282,15 @@ function renderFeatures() {
     host.append(section);
   });
   syncJudgeGates();
+  // Handle the boot race where the switches render only now, after a file was
+  // staged: a tier already chosen re-asserts its switch values; if none was
+  // chosen yet (an earlier maybeInitTier bailed because the switches were not
+  // rendered), open on Standard now that they are.
+  if (state.tier && state.tier !== 'custom' && state.presets[state.tier]) {
+    applyPresetSwitches(state.tier);
+  } else if (state.tier === null) {
+    maybeInitTier();
+  }
   renderCost();
 }
 
@@ -1235,6 +1320,7 @@ function featureRow(f) {
   input.addEventListener('change', () => {
     if (f.id === 'meaning_check' || f.id === 'fix_check') syncJudgeGates();
     renderCost();
+    reEvaluateTier();
   });
   row.append(input, track, text);
   return row;
@@ -1244,7 +1330,7 @@ function featureRow(f) {
 // user never touched is sent at its default — a harmless no-op on the server.
 function collectFeatures() {
   const out = {};
-  document.querySelectorAll('#features-groups input[data-feature]')
+  document.querySelectorAll('.features input[data-feature]')
     .forEach((el) => { out[el.dataset.feature] = el.checked; });
   return out;
 }
@@ -1283,7 +1369,10 @@ function renderEffort() {
 
 // Both the description and the price move with the dial: a deeper effort costs
 // more, and the estimate must say so as the slider slides.
-$('effort').addEventListener('input', () => { renderEffort(); renderCost(); });
+// Effort is a tier-governed control (a tier sets it, currentMatchesTier compares
+// it), so a drag reprices AND may move the run off the selected tier onto Custom.
+$('effort').addEventListener('input',
+  () => { renderEffort(); renderCost(); reEvaluateTier(); });
 // The oversize override gates the promo run — re-price and re-check when it flips.
 $('promo-oversize-ok').addEventListener('change', renderCost);
 // Releasing the slider makes this the saved default. Fire-and-forget: on the
@@ -1324,9 +1413,9 @@ renderEffort();
 // The reasoning dial changes only what the model writes back, so it scales the
 // output half of the estimate and never the input. Mirrors effort_multiplier
 // on the server: models that ignore effort are never scaled.
-function effortFactor(m) {
+function effortFactor(m, effort) {
   if (!m || !m.supports_effort) return 1;
-  return state.effortMultipliers[effortValue()] || 1;
+  return state.effortMultipliers[effort] || 1;
 }
 
 // Output the model writes scales with whether it must explain each change: the
@@ -1357,24 +1446,56 @@ function bookTokensFor(f) {
   return (f.chunks || []).reduce((n, c) => n + c.est_tokens, 0);
 }
 
-// The review estimate, moving with the switches. The per-chunk detector passes
-// and the rewrite retype ride the overnight batch (its discount); the whole-book
-// reads and the confirm calls are synchronous — full price in both columns.
-// `approx` is set when a pass whose size the book decides (rewrite, LanguageTool)
-// is on, so the panel can say the figure is rough.
-function priceSelection(m) {
-  const feats = collectFeatures();
-  const glossaryId = $('glossary-model').value;
+// The review estimate. Pure over an explicit settings bundle plus the staged
+// files, so the same arithmetic prices the live controls (via bundleFromControls)
+// and each effort-tier chip (via priceBundle) — one code path, no drift. The
+// per-chunk detector passes and the rewrite retype ride the overnight batch (its
+// discount); the whole-book reads, the confirm calls, the meaning/fix gates and
+// the between-round judge are synchronous — full price in both columns. `approx`
+// is set when a pass whose size the book decides (rewrite, LanguageTool, the
+// gates, extra rounds) is on, so the panel can say the figure is rough.
+//
+// bundle: { model:<model object>, effort, glossary_model, rounds, judge_model,
+//   meaning_model, fix_model, features:{id:bool,...}, continuity_only,
+//   min_confidence, mode }.  files: filesToRun() with each file's kept Set
+//   resolved (see stagedReviewFiles).  min_confidence is carried but never
+//   priced — confidence does not move the estimate.
+function priceReview(bundle, files) {
+  const m = bundle.model;
+  if (!m) return { now: null, batch: null, approx: false };
+
+  // Continuity-only: the run skips every detector pass and does just the
+  // whole-book contradiction read, so the estimate is that one read and nothing
+  // else — no per-chunk work, no gates, no rounds multiply, no Sapling.
+  if (bundle.continuity_only) {
+    let full = 0, any = false;
+    files.forEach((f) => {
+      const chunks = f.chunks || [];
+      if (!chunks.length || f.kept.size !== chunks.length) return;   // whole file only
+      const spec = state.features.find((s) => s.id === 'continuity');
+      const cm = modelById(spec && spec.cost && spec.cost.model) || m;
+      const book = bookTokensFor(f);
+      full += (book * cm.input_per_mtok
+        + READ_OUTPUT_TOKENS * cm.output_per_mtok) / 1e6;
+      any = true;
+    });
+    return any ? { now: full, batch: full, approx: false }
+               : { now: null, batch: null, approx: false };
+  }
+
+  const feats = bundle.features;
+  const glossaryId = bundle.glossary_model;
   const outFactor = feats.report_explanations === false
     ? EXPLANATIONS_OFF_OUTPUT : 1;
   let batched = 0;                 // rides the batch discount
   let full = 0;                    // synchronous, full price both columns
   let flat = 0;                    // per-run, not per-round (e.g. Sapling)
+  let reviewedIn = 0;              // input tokens reviewed once — the judge base
   let approx = false;
   let any = false;
 
-  filesToRun().forEach((f) => {
-    const kept = keptFor(f);
+  files.forEach((f) => {
+    const kept = f.kept;
     const passes = f.passes || 1;
     const chunks = f.chunks || [];
     let inTok = 0, reqs = 0;
@@ -1385,26 +1506,25 @@ function priceSelection(m) {
     });
     if (reqs) any = true;
     batched += (inTok * m.input_per_mtok
-      + reqs * state.outputGuess * m.output_per_mtok * effortFactor(m) * outFactor)
-      / 1e6;
+      + reqs * state.outputGuess * m.output_per_mtok
+        * effortFactor(m, bundle.effort) * outFactor) / 1e6;
+    reviewedIn += inTok / (passes || 1);
 
-    // The meaning gate is priced before the whole-document guard below, because
-    // unlike those passes it reads whatever changes a run produces — including
-    // on a partial selection. It scales off the text actually being reviewed,
-    // so a few sections cost a few sections' worth, not a book's.
-    // Each enabled gate is its own pass over the same changes, so two gates on
-    // is two bills — the second is not a discount on the first.
-    [['meaning_check', 'meaning-model'], ['fix_check', 'fix-model']]
-      .forEach(([id, picker]) => {
-        if (feats[id] !== true) return;
-        const spec = state.features.find((s) => s.id === id);
-        const jm = modelById(($(picker) || {}).value)
-          || modelById(spec && spec.cost && spec.cost.model) || m;
-        full += MEANING_SHARE * (inTok / (passes || 1))
-          * (jm.input_per_mtok + jm.output_per_mtok) / 1e6;
-        approx = true;
-        any = true;
-      });
+    // The meaning/fix gates are priced before the whole-document guard below,
+    // because unlike those passes they read whatever changes a run produces —
+    // including on a partial selection. Each enabled gate is its own pass over
+    // the same changes, so two gates on is two bills.
+    [['meaning_check', bundle.meaning_model],
+     ['fix_check', bundle.fix_model]].forEach(([id, pickModel]) => {
+      if (feats[id] !== true) return;
+      const spec = state.features.find((s) => s.id === id);
+      const jm = modelById(pickModel)
+        || modelById(spec && spec.cost && spec.cost.model) || m;
+      full += MEANING_SHARE * (inTok / (passes || 1))
+        * (jm.input_per_mtok + jm.output_per_mtok) / 1e6;
+      approx = true;
+      any = true;
+    });
 
     // The whole-document passes run only when the file is reviewed whole.
     if (kept.size !== chunks.length || !chunks.length) return;
@@ -1429,7 +1549,7 @@ function priceSelection(m) {
       } else if (spec.cost.kind === 'retype') {
         const s = spec.cost.samples || 1;
         batched += s * (book * pm.input_per_mtok
-          + book * pm.output_per_mtok * effortFactor(pm)) / 1e6;
+          + book * pm.output_per_mtok * effortFactor(pm, bundle.effort)) / 1e6;
         approx = true;
       } else if (spec.cost.kind === 'confirm') {
         full += LT_CONFIRM_SHARE * book
@@ -1448,23 +1568,345 @@ function priceSelection(m) {
   });
 
   if (!any) return { now: null, batch: null, approx: false };
-  // Multi-round review runs the whole review once per round, so scale by the
-  // count. This over-counts the whole-book reads a touch (they're reused across
-  // rounds) and doesn't price the between-round judge at all, so any rounds>1
-  // figure is explicitly rough — see the note in renderCost.
-  const rounds = Number(($('rounds') || {}).value || 1);
+
+  // Multi-round review runs the whole review once per round, so scale the
+  // per-round cost by the count. The between-round judge is separate: it runs
+  // once per gap between rounds (rounds − 1 times), reading each round's
+  // corrections on its own — usually stronger — model. Priced like the gates
+  // (findings-scaled off the reviewed text), full price both columns, added
+  // outside the per-round multiply.
+  const rounds = bundle.rounds || 1;
+  let judgeTotal = 0;
+  if (rounds > 1 && bundle.judge_model) {
+    const jm = modelById(bundle.judge_model) || m;
+    judgeTotal = MEANING_SHARE * reviewedIn
+      * (jm.input_per_mtok + jm.output_per_mtok) / 1e6 * (rounds - 1);
+    approx = true;
+  }
   return {
-    now: (batched + full) * rounds + flat,
-    batch: (batched * (m.batch_discount || 1) + full) * rounds + flat,
+    now: (batched + full) * rounds + judgeTotal + flat,
+    batch: (batched * (m.batch_discount || 1) + full) * rounds
+      + judgeTotal + flat,
     approx: approx || rounds > 1,
   };
 }
+
+// Read the live controls into a priceReview bundle. renderCost uses this for the
+// current-controls (Custom) price; the tier chips build their own bundles.
+function bundleFromControls() {
+  return {
+    model: modelById($('model').value),
+    effort: effortValue(),
+    glossary_model: $('glossary-model').value,
+    rounds: Number(($('rounds') || {}).value || 1),
+    judge_model: ($('judge-model') || {}).value || null,
+    meaning_model: ($('meaning-model') || {}).value || null,
+    fix_model: ($('fix-model') || {}).value || null,
+    features: collectFeatures(),
+    continuity_only: !!(($('continuity-only') || {}).checked),
+    min_confidence: ($('confidence') || {}).value,
+    mode: mode(),
+  };
+}
+
+// The staged review files with each file's kept-section Set resolved once, so
+// priceReview stays pure (it reads f.kept, never the selection Map).
+function stagedReviewFiles() {
+  return filesToRun().map((f) => ({ ...f, kept: keptFor(f) }));
+}
+
+// ── effort tiers ────────────────────────────────────────────────────────────
+// A tier is a client-side macro over the controls above: selecting one sets the
+// reviewer, effort, glossary, rounds, the judge/meaning/fix pickers and the pass
+// switches to a bundle served by /api/presets, then reprices. Any later manual
+// change flips the selection to the implicit "Custom" state. The job payload is
+// unchanged — the tier only pre-sets controls the Start handler already reads.
+
+// The reviewer is gpt-5.6-luna at every tier by product decision: depth comes
+// from effort, rounds and passes, never a dearer detector.
+const REVIEWER = 'gpt-5.6-luna';
+const TIER_ORDER = ['light', 'standard', 'hard', 'hammer'];
+// Display names for the job-card badge (a review carries the tier it ran at).
+const TIER_LABELS = { light: 'Light touch', standard: 'Standard', hard: 'Hard',
+                      hammer: 'The Hammer', custom: 'Custom' };
+
+// A model the picker can actually use — in the catalog and keyed.
+function modelUsable(id) {
+  return state.models.some((m) => m.id === id && m.available);
+}
+
+// Fall a bundle model back to something usable, remembering the substitution so
+// the card can say so. Reviewer/glossary/judge are the only realistic misses
+// (Opus with no Anthropic key); Luna is the house reviewer and normally keyed.
+function resolveTierModel(preferred, subs, role) {
+  if (!preferred || preferred === 'off') return preferred || null;
+  if (modelUsable(preferred)) return preferred;
+  const fb = modelUsable(REVIEWER) ? REVIEWER
+    : ((state.models.find((m) => m.available) || {}).id || preferred);
+  if (fb !== preferred) subs.push({ role, wanted: preferred, used: fb });
+  return fb;
+}
+
+// The concrete values a tier resolves to right now, against live key state.
+// The single source both applyPreset and currentMatchesTier read, so applying a
+// tier never immediately reads back as "Custom". Returns null for an unknown id
+// (e.g. /api/presets not loaded yet).
+function resolveTier(tierId) {
+  const p = state.presets && state.presets[tierId];
+  if (!p) return null;
+  const c = p.controls || {};
+  const subs = [];
+  const rounds = c.rounds || 1;
+  // Sapling is a policy: "off" never; "always" unconditional; "if_keyed" only
+  // when a key is configured. Hammer ("always") notes the graceful skip when
+  // unkeyed; Hard ("if_keyed") silently leaves it off.
+  const sapling = p.sapling === 'always'
+    || (p.sapling === 'if_keyed' && state.saplingKeyed);
+  const saplingMissing = p.sapling === 'always' && !state.saplingKeyed;
+  return {
+    tierId,
+    model: resolveTierModel(REVIEWER, subs, 'reviewer'),
+    effort: c.effort,
+    glossary_model: resolveTierModel(c.glossary_model, subs, 'glossary'),
+    rounds,
+    judge_model: rounds > 1
+      ? resolveTierModel(c.judge_model, subs, 'judge')
+      : (c.judge_model || null),
+    meaning_model: c.meaning_model || null,   // null => server default (frontier)
+    fix_model: c.fix_model || null,
+    min_confidence: c.min_confidence || 'medium',
+    features: Object.assign({}, p.features, { sapling }),
+    subs,
+    saplingMissing,
+  };
+}
+
+// A resolved tier as a priceReview bundle: model is a catalog object; the gate
+// models fall back to the house defaults so the chip prices what the server
+// would actually run (the tier leaves them null => claude-fable-5).
+function priceBundle(resolved) {
+  return {
+    model: modelById(resolved.model),
+    effort: resolved.effort,
+    glossary_model: resolved.glossary_model,
+    rounds: resolved.rounds,
+    judge_model: resolved.judge_model,
+    meaning_model: resolved.meaning_model || state.defaultMeaningModel,
+    fix_model: resolved.fix_model || state.defaultFixModel,
+    features: resolved.features,
+    continuity_only: false,
+    min_confidence: resolved.min_confidence,
+    mode: mode(),
+  };
+}
+
+// Set only the pass switches a tier governs. Split out so renderFeatures can
+// re-assert them if the switches render after a tier was already chosen.
+function applyPresetSwitches(tierId) {
+  const b = resolveTier(tierId);
+  if (!b) return;
+  Object.entries(b.features).forEach(([fid, on]) => {
+    const sw = document.querySelector(`.features input[data-feature="${fid}"]`);
+    if (sw) sw.checked = !!on;                 // programmatic — fires no event
+  });
+  syncJudgeGates();
+}
+
+// Apply a tier to every governed control, then reprice and repaint. All sets are
+// programmatic (no change events fire), so this never re-enters reEvaluateTier.
+function applyPreset(tierId) {
+  const b = resolveTier(tierId);
+  if (!b) return;
+  if ($('model')) $('model').value = b.model;
+  setEffort(b.effort);
+  if ($('glossary-model')) $('glossary-model').value = b.glossary_model;
+  if ($('rounds')) $('rounds').value = String(b.rounds);
+  syncRounds();
+  if (b.judge_model && $('judge-model')) $('judge-model').value = b.judge_model;
+  if ($('confidence')) $('confidence').value = b.min_confidence;
+  applyPresetSwitches(tierId);
+  state.tier = tierId;
+  renderCost();
+  paintTierCards(b);
+}
+
+// Whether the live governed controls still equal a tier's resolved bundle. Only
+// the controls a bundle speaks to are compared — editing variant, a section, the
+// timing, a gate model or a prompt is not a deviation.
+function currentMatchesTier(tierId) {
+  const b = resolveTier(tierId);
+  if (!b) return false;
+  const featOn = (fid) => {
+    const sw = document.querySelector(`.features input[data-feature="${fid}"]`);
+    return !!(sw && sw.checked);
+  };
+  if (($('model') || {}).value !== b.model) return false;
+  if (effortValue() !== b.effort) return false;
+  if (($('glossary-model') || {}).value !== b.glossary_model) return false;
+  if (Number(($('rounds') || {}).value || 1) !== b.rounds) return false;
+  if (b.rounds > 1 && b.judge_model
+      && ($('judge-model') || {}).value !== b.judge_model) return false;
+  if (($('confidence') || {}).value !== b.min_confidence) return false;
+  for (const [fid, want] of Object.entries(b.features)) {
+    if (featOn(fid) !== !!want) return false;
+  }
+  return true;
+}
+
+// Recompute the selection from the live controls: the matching tier, or Custom.
+function reEvaluateTier() {
+  if (kind() !== 'review') return;
+  const hit = TIER_ORDER.find((id) => currentMatchesTier(id)) || 'custom';
+  state.tier = hit;
+  paintTierCards(hit === 'custom' ? null : resolveTier(hit));
+}
+
+// Highlight the selected card (or none, for Custom) and show the Hammer's
+// missing-key note. Pricing lives in updateTierPrices.
+function paintTierCards(resolved) {
+  const active = resolved ? resolved.tierId : null;
+  const cards = [...document.querySelectorAll('.tier-card')];
+  cards.forEach((card) => {
+    const on = card.dataset.tier === active;
+    card.setAttribute('aria-checked', on ? 'true' : 'false');
+    card.tabIndex = on ? 0 : -1;                 // roving tabindex
+  });
+  // Custom (nothing checked) still needs one card reachable by Tab.
+  if (active === null && cards[0]) cards[0].tabIndex = 0;
+  const note = $('tier-hammer-sapling-note');
+  if (note) {
+    const hp = state.presets && state.presets.hammer;
+    note.hidden = !(hp && hp.sapling === 'always' && !state.saplingKeyed);
+  }
+}
+
+// Fill each card's price from the same estimate the sticky bar uses, echoing the
+// chosen timing column. Blank while a file is still staging.
+function updateTierPrices() {
+  const files = stagedReviewFiles();
+  document.querySelectorAll('.tier-card').forEach((card) => {
+    const el = card.querySelector('[data-tier-price]');
+    if (!el) return;
+    const resolved = resolveTier(card.dataset.tier);
+    if (!resolved || !files.length) {
+      el.textContent = ''; el.classList.add('pending'); return;
+    }
+    const p = priceReview(priceBundle(resolved), files);
+    const v = mode() === 'batch' ? p.batch : p.now;
+    if (typeof v !== 'number') {
+      el.textContent = ''; el.classList.add('pending'); return;
+    }
+    el.classList.remove('pending');
+    const dollars = v < 0.01 ? v.toFixed(3) : v.toFixed(2);
+    el.textContent = `${p.approx ? '≈' : '~'} $${dollars}`;
+  });
+}
+
+// Apply Standard once, when models, presets, switches and a staged review file
+// are all ready — whichever fetch finishes last triggers it. state.tier===null
+// makes it idempotent, so it fires exactly once and never clobbers a later pick.
+function maybeInitTier() {
+  if (state.tier === null && kind() === 'review'
+      && Object.keys(state.presets || {}).length
+      && document.querySelector('.features input[data-feature]')
+      && filesToRun().length) {
+    applyPreset('standard');
+  }
+}
+
+async function loadPresets() {
+  try {
+    const body = await api('/api/presets');
+    const map = {};
+    (body.tiers || []).forEach((t) => { map[t.id] = t; });
+    state.presets = map;
+  } catch (_) {
+    state.presets = {};        // the tiers just won't apply; Custom still works
+  }
+  maybeInitTier();
+  updateTierPrices();
+}
+
+// Tier cards select a tier; the Customize toggle reveals the tabbed drawer; the
+// sub-tabs switch panels (a distinct class from the global .tab screen router).
+(function wireTierUi() {
+  // The next index for an arrow/Home/End keypress in a roving-tabindex group.
+  const nextIndex = (key, i, len) => {
+    if (key === 'ArrowRight' || key === 'ArrowDown') return (i + 1) % len;
+    if (key === 'ArrowLeft' || key === 'ArrowUp') return (i - 1 + len) % len;
+    if (key === 'Home') return 0;
+    if (key === 'End') return len - 1;
+    return -1;
+  };
+
+  // The tier picker is a radiogroup: click or arrow-key selects a card (arrow
+  // moves and selects, per the radiogroup pattern). paintTierCards keeps the
+  // roving tabindex in step with the checked card.
+  const picker = $('tier-picker');
+  if (picker) {
+    picker.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-tier]');
+      if (card) applyPreset(card.dataset.tier);
+    });
+    picker.addEventListener('keydown', (e) => {
+      const cards = [...picker.querySelectorAll('.tier-card')];
+      const i = cards.indexOf(document.activeElement);
+      if (i < 0) return;
+      const j = nextIndex(e.key, i, cards.length);
+      if (j < 0) return;
+      e.preventDefault();
+      applyPreset(cards[j].dataset.tier);
+      cards[j].focus();
+    });
+  }
+
+  const toggle = $('customize-toggle');
+  const adv = $('advanced-options');
+  if (toggle && adv) {
+    toggle.addEventListener('click', () => {
+      const open = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+      adv.hidden = open;
+    });
+  }
+
+  // The Custom sub-tabs are a tablist: aria-selected marks the active tab, a
+  // roving tabindex keeps only it in the Tab order, and the arrow keys move
+  // between them (selecting on move, the automatic-activation pattern).
+  const tabs = $('custom-tabs');
+  if (tabs && adv) {
+    const subtabs = () => [...tabs.querySelectorAll('.subtab')];
+    const activate = (btn, focus) => {
+      subtabs().forEach((b) => {
+        const on = b === btn;
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+      adv.querySelectorAll('.tabpanel').forEach((p) =>
+        p.classList.toggle('is-active', p.dataset.tab === btn.dataset.tab));
+      if (focus) btn.focus();
+    };
+    tabs.addEventListener('click', (e) => {
+      const btn = e.target.closest('.subtab');
+      if (btn) activate(btn, false);
+    });
+    tabs.addEventListener('keydown', (e) => {
+      const list = subtabs();
+      const i = list.indexOf(document.activeElement);
+      if (i < 0) return;
+      const j = nextIndex(e.key, i, list.length);
+      if (j < 0) return;
+      e.preventDefault();
+      activate(list[j], true);
+    });
+  }
+})();
 
 // Prep sends the whole manuscript once, so its price is simply what the files
 // add up to on this model.
 function pricePrep(m) {
   let cost = 0;
-  const factor = effortFactor(m);
+  const factor = effortFactor(m, effortValue());
   filesToRun().forEach((f) => {
     if (!f.prep) return;
     cost += (f.prep.input_tokens * m.input_per_mtok
@@ -1479,7 +1921,7 @@ function pricePrep(m) {
 // already folded the claim-check pass into these token figures when it is on.
 function pricePromo(m) {
   let cost = 0;
-  const factor = effortFactor(m);
+  const factor = effortFactor(m, effortValue());
   filesToRun().forEach((f) => {
     if (!f.promo) return;
     cost += (f.promo.input_tokens * m.input_per_mtok
@@ -1488,17 +1930,24 @@ function pricePromo(m) {
   return cost;
 }
 
-// The compact figure echoed beside the sticky Start button, so the price is in
-// reach without scrolling back up to the "When?" or cost lines. Empty when
-// there is nothing to price yet; "~ $X" otherwise, marked rough when the
-// estimate is.
+// The one canonical price, echoed beside the sticky Start button. Blank when
+// nothing is staged; "pricing…" while a dropped file is still being preflighted
+// (before its token counts land, so there is no figure yet); "~ $X" once priced,
+// "≈ $X" when the estimate is rough.
 function setStartPrice(value, { approx = false } = {}) {
   const el = $('start-price');
   if (!el) return;
-  if (typeof value !== 'number' || !filesToRun().length) {
+  if (!filesToRun().length) {
     el.textContent = '';
+    el.classList.remove('pending');
     return;
   }
+  if (typeof value !== 'number') {
+    el.textContent = 'pricing…';
+    el.classList.add('pending');
+    return;
+  }
+  el.classList.remove('pending');
   const dollars = value < 0.01 ? value.toFixed(3) : value.toFixed(2);
   el.textContent = `${approx ? '≈' : '~'} $${dollars}`;
 }
@@ -1527,9 +1976,10 @@ function updateAdvancedSummary() {
   el.textContent = ` — ${parts.length ? parts.join(' · ') : 'standard settings'}`;
 }
 
-// Anything toggled inside the drawer refreshes its summary — including the
-// controls (confidence, continuity-only) that don't reprice the estimate and
-// so never passed through renderCost before.
+// Anything toggled inside the drawer refreshes its summary — including a control
+// like confidence that doesn't reprice the estimate and so never passed through
+// renderCost. (continuity-only does reprice; it has its own renderCost listener
+// above.)
 (() => {
   const adv = $('advanced-options');
   if (adv) adv.addEventListener('change', updateAdvancedSummary);
@@ -1563,18 +2013,16 @@ function renderCost() {
     return;
   }
 
-  const price = m ? priceSelection(m) : { now: null, batch: null, approx: false };
-  $('cost-now').textContent = money(price.now);
-  $('cost-batch').textContent = money(price.batch);
-  // The estimate now includes the switched-on passes; the note only stays to
-  // flag that a pass whose size the book decides makes the figure a rough one.
+  const price = m ? priceReview(bundleFromControls(), stagedReviewFiles())
+                  : { now: null, batch: null, approx: false };
+  // The estimate includes the switched-on passes and the between-round judge;
+  // the note only stays to flag that a pass whose size the book decides makes
+  // the figure a rough one.
   const note = $('features-cost-note');
   if (note) note.hidden = !price.approx;
-  // Multi-round figures are the review cost times the round count; the
-  // between-round judge (a stronger model) is not in it, so the real cost is
-  // higher. Say so whenever more than one round is picked.
-  const roundsNote = $('rounds-cost-note');
-  if (roundsNote) roundsNote.hidden = Number(($('rounds') || {}).value || 1) < 2;
+  // The four tier chips price off the same estimate, so they move with the
+  // staged files, the chosen timing, and the Sapling key.
+  updateTierPrices();
 
   const ready = m && m.available && filesToRun().length > 0;
   $('start').disabled = !ready;
@@ -1732,6 +2180,10 @@ $('start').addEventListener('click', async () => {
           meaning_prompt: ($('meaning-prompt') || {}).value || '',
           fix_model: ($('fix-model') || {}).value || null,
           fix_prompt: ($('fix-prompt') || {}).value || '',
+          // The chosen effort tier, stamped on the job card. A macro over the
+          // controls above, so it changes nothing the server runs — only the
+          // label. "custom" once anything is edited off a tier.
+          preset: kind() === 'review' ? (state.tier || '') : '',
           proposer_restraint: ($('proposer-restraint') || {}).value || 'restrained',
           judge_harshness: ($('judge-harshness') || {}).value || 'strict',
           selections: isPrep() ? {} : selectionPayload(),
@@ -2072,6 +2524,10 @@ function renderJobs(jobs) {
     name.className = 'file-name';
     name.textContent = job.filename;
     if (job.format) name.append(' ', formatBadge(job.format.name));
+    // The effort tier a review ran at, if one was recorded.
+    if (job.kind === 'review' && job.preset && TIER_LABELS[job.preset]) {
+      name.append(' ', formatBadge(TIER_LABELS[job.preset]));
+    }
     const status = document.createElement('span');
     status.className = 'job-state'
       + (job.state === 'done' ? ' is-done' : job.state === 'failed' ? ' is-failed' : '');
@@ -4788,6 +5244,7 @@ function startApp() {
   loadFormats().catch(() => {});
   loadModels().catch(() => {});
   loadFeatures().catch(() => {});
+  loadPresets().catch(() => {});
   loadStyleSheet().catch(() => {});
   applyDefaults().catch(() => {});
   if (!WEB) offerUpdateIfBehind();

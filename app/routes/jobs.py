@@ -88,6 +88,10 @@ class JobRequest(BaseModel):
     meaning_prompt: str = ""
     fix_model: str | None = None
     fix_prompt: str = ""
+    # A label for which effort tier the picker applied, carried onto the job card
+    # only. The tier is a client-side macro over the controls above, so this
+    # never changes how the job runs; empty means a custom or older submission.
+    preset: str = ""
     # Smoothing pass tuning. Only bites when the `smoothing` feature is on; None
     # falls back to the config default, so an older page — and the watcher —
     # keep today's behaviour. proposer_restraint = how much the line editor
@@ -375,6 +379,7 @@ def register(app: FastAPI) -> None:
                 meaning_prompt=req.meaning_prompt,
                 fix_model=req.fix_model or "",
                 fix_prompt=req.fix_prompt,
+                preset=req.preset,
                 proposer_restraint=req.proposer_restraint or "restrained",
                 judge_harshness=req.judge_harshness or "strict",
                 selection=(req.selections or {}).get(file_id) or None,

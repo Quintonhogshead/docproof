@@ -221,6 +221,12 @@ class Job:
     meaning_prompt: str = ""
     fix_model: str = ""
     fix_prompt: str = ""
+    # Which effort tier the submitter picked, purely as a label for the results
+    # card ("Light touch", "Standard", "Hard", "The hammer", or "" for a custom
+    # or older run). The tier is a client-side macro over the controls above, so
+    # this changes nothing about how the job runs; it only records what was
+    # chosen. Empty on older records and on any run that didn't send one.
+    preset: str = ""
     # The smoothing pass's two dials, applied only when the "smoothing" feature is
     # on. proposer_restraint = how much the line editor surfaces; judge_harshness
     # = how hard the taste judge culls it. The defaults are the shipped config

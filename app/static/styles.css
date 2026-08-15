@@ -290,6 +290,7 @@ button:hover { border-color: var(--accent); }
   border-top: 1px solid var(--line);
 }
 .start-price { font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.start-price.pending { color: var(--muted); }
 .start-bar .big-button { margin: 0; }
 
 /* A second way to reach the same file — worth offering, not worth competing
@@ -1093,3 +1094,150 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 }
 #sap-doc-zone { margin: 0.5rem 0 1rem; }
 .sap-para { color: var(--muted); font-size: 0.8rem; }
+
+/* ── review effort tiers (simple view) ─────────────────────────────────────
+   The four cards that stand in for the whole options panel on a normal run.
+   Uses only the existing tokens, so the light/dark swap (top of this file)
+   covers them the way it covers .card / .tile / .tab. */
+.tier-picker { text-align: left; }
+.tier-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+}
+/* Reset the global <button> chrome — these are cards, not buttons. */
+.tier-card {
+  font: inherit;
+  text-align: left;
+  display: grid;
+  gap: 0.3rem;
+  align-content: start;
+  padding: 0.95rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  position: relative;
+  transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.tier-card:hover { border-color: var(--accent); }
+.tier-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The chosen tier — accent ring plus a faint accent wash. */
+.tier-card[aria-checked="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+.tier-mark { font-size: 1.2rem; line-height: 1; }
+.tier-name { font-weight: 600; font-size: 0.98rem; letter-spacing: -0.01em; }
+.tier-blurb { font-size: 0.85rem; color: var(--muted); }
+.tier-price {
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  margin-top: 0.15rem;
+}
+.tier-price:empty::before { content: '…'; color: var(--muted); }
+.tier-price.pending { color: var(--muted); }
+
+/* Standard is the house recommendation — a badge and a quiet accent edge. */
+.tier-card.is-recommended { border-color: var(--accent); }
+.tier-badge {
+  position: absolute;
+  top: -0.6rem;
+  left: 1rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 999px;
+  padding: 0.08rem 0.5rem;
+}
+/* The Hammer's missing-key note. Warm, not alarming — same tone as .error. */
+.tier-note { margin: 0.2rem 0 0; font-size: 0.8rem; color: var(--warn); }
+
+/* ── customize toggle ──────────────────────────────────────────────────────
+   Reads like the app's .link / a <summary>, not a chunky button. */
+#customize-toggle {
+  border: 0;
+  background: none;
+  padding: 0.3rem 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+#customize-toggle:hover { text-decoration: underline; }
+#customize-toggle .muted { font-weight: 400; }        /* the #advanced-summary echo */
+#customize-toggle .chev { transition: transform .15s ease; }
+#customize-toggle[aria-expanded="true"] .chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  #customize-toggle .chev { transition: none; }
+}
+
+/* ── custom view (was details.advanced) ────────────────────────────────────
+   Keeps the drawer's top/bottom hairlines, now as a <div>. */
+#advanced-options {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 0;
+  display: grid;
+  gap: 1.1rem;
+}
+
+/* Sub-tabs mirror .tab but are a DISTINCT class so the global .tab screen
+   router never binds them. */
+.subtabs {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.5rem;
+}
+.subtab {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.subtab:hover { background: var(--accent-soft); color: var(--ink); }
+.subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.subtab[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* One panel visible at a time. Not the [hidden] attribute — that carries
+   !important and would fight the flat-mode override below. */
+.tabpanel { display: grid; gap: 1.1rem; }
+.tabpanel:not(.is-active) { display: none; }
+.tabpanel > .field { margin: 0; }
+
+/* prep/promo: renderKind() adds .flat — no tab strip, panels stacked like the
+   old Advanced drawer, .review-only culling the review-specific fields. */
+#advanced-options.flat > .subtabs { display: none; }
+#advanced-options.flat .tabpanel { display: grid; }
+
+/* Phones: let the sub-tab strip scroll sideways like the header nav rather
+   than wrapping into a tall stack. */
+@media (max-width: 34rem) {
+  .subtabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .subtabs::-webkit-scrollbar { display: none; }
+  .subtab { white-space: nowrap; flex: none; }
+}
