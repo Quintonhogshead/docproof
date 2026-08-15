@@ -283,6 +283,46 @@ def test_build_degrades_to_empty_on_a_bad_response():
     assert rep.findings == []                           # review proceeds regardless
 
 
+def test_a_truncated_read_retries_once_at_double_the_ceiling():
+    # The ceiling covers thinking, and reasoning spend varies run to run — one
+    # truncation is a coin flip lost, not proof the book is too big. This is
+    # one indivisible call (no window to split), so the recovery is headroom:
+    # retry once at double, and both calls are billed as the two calls they
+    # were.
+    from tests.fakes import USAGE
+    good = ProviderResult(parsed={"findings": [{
+        "category": "timeline", "earlier_quote": "It was Monday.",
+        "quote": "The next day, Wednesday, they left.",
+        "question": "Where did Tuesday go?", "confidence": "high"}]},
+        usage=USAGE)
+    prov = FakeProvider([
+        ProviderResult(stop_reason="max_tokens", error="output truncated",
+                       usage=USAGE),
+        good])
+    usage = Usage()
+    rep = build_continuity([_para("body-0", "It was Monday.")], prov,
+                           model="claude-fable-5", max_tokens=8000, usage=usage)
+    assert len(rep.findings) == 1                       # the retry's answer
+    assert [c["max_tokens"] for c in prov.calls] == [8000, 16000]
+    assert usage.api_calls == 2                         # the truncation was billed
+
+
+def test_a_read_that_truncates_twice_degrades_to_empty():
+    # The retry is once, not a loop: a second truncation lands on the ordinary
+    # error path — empty report, review proceeds — exactly where one
+    # truncation landed before the retry existed.
+    from tests.fakes import USAGE
+    truncated = ProviderResult(stop_reason="max_tokens",
+                               error="output truncated", usage=USAGE)
+    prov = FakeProvider([truncated, truncated])
+    usage = Usage()
+    rep = build_continuity([_para("body-0", "text")], prov,
+                           model="claude-fable-5", max_tokens=8000, usage=usage)
+    assert rep.findings == []
+    assert len(prov.calls) == 2                         # no third attempt
+    assert usage.api_calls == 2
+
+
 # --- pipeline wiring ----------------------------------------------------------
 
 def test_the_pass_runs_in_the_pipeline_and_emits_a_query(tmp_path):

@@ -186,9 +186,13 @@ continuity:
   effort: high
   # A frontier model at effort high, reading a whole book and writing up to
   # max_queries findings with an explanation each — and it always thinks, so
-  # most of this ceiling is reasoning. One call, all-or-nothing: truncating
-  # loses every continuity finding in the book.
-  max_output_tokens: 24000
+  # most of this ceiling is reasoning. Sized with headroom: a cap costs
+  # nothing until tokens are actually generated, while a truncated read is a
+  # fully billed call whose findings are ALL lost (a cut-off structured reply
+  # parses as nothing). One truncation is retried once at double this ceiling
+  # — reasoning spend varies run to run, and this one call has no window to
+  # split the way the chunked passes recover.
+  max_output_tokens: 32000
   max_queries: 40           # cap on margin comments; most significant first
   min_confidence: medium    # drop "low" — a wrong continuity flag costs trust
   calendar_check: true      # deterministic date->weekday math; no API, query-only
