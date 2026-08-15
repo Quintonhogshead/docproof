@@ -27,7 +27,10 @@ def find_nth(haystack: str, needle: str, n: int) -> int:
 # sentence character for character. Folding both sides recovers it. The fold is
 # deliberately length-preserving — ellipsis (…→...) and whitespace runs are NOT
 # folded — so an offset found in the folded text still indexes the real text,
-# and the tracked change lands on the manuscript's own characters.
+# and the tracked change lands on the manuscript's own characters. The
+# continuity read's two-quote guardrail locates with this same fold
+# (continuity._locate), so the two passes never disagree about what counts as
+# the same sentence.
 _ANCHOR_FOLD = str.maketrans({
     "“": '"', "”": '"',      # “ ”
     "‘": "'", "’": "'",      # ‘ ’
@@ -36,7 +39,7 @@ _ANCHOR_FOLD = str.maketrans({
 })
 
 
-def _fold_punct(s: str) -> str:
+def fold_punct(s: str) -> str:
     return s.translate(_ANCHOR_FOLD)
 
 
@@ -50,7 +53,7 @@ def anchor_offset(haystack: str, needle: str, n: int) -> int:
     s = find_nth(haystack, needle, n)
     if s != -1:
         return s
-    return find_nth(_fold_punct(haystack), _fold_punct(needle), n)
+    return find_nth(fold_punct(haystack), fold_punct(needle), n)
 
 
 def shrink(original: str, corrected: str) -> tuple[int, str, str]:

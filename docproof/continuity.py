@@ -18,9 +18,14 @@ more trust than a missed one earns. Two guardrails buy it. The model must quote
 BOTH sites verbatim — the establishing sentence and the contradicting one — and
 both must locate in the manuscript or the finding is dropped; a hallucinated
 contradiction almost always fabricates or paraphrases a quote, so requiring two
-real anchors is the cheapest strong filter there is. And the deterministic
-calendar tier does its own date→weekday arithmetic in code rather than trusting
-the model to compute it — the model only flags *narrative* timeline slips.
+real anchors is the cheapest strong filter there is. Locating tolerates re-typed
+punctuation — straight marks for the manuscript's curly ones, a space for an
+nbsp — via the validator's own length-preserving fold, because that retype habit
+is routine and nearly every sentence of real fiction carries a curly mark: an
+exact-only search dropped essentially every true finding, which is typography
+vetoing substance. And the deterministic calendar tier does its own date→weekday
+arithmetic in code rather than trusting the model to compute it — the model only
+flags *narrative* timeline slips.
 
 Additive and best-effort, exactly like the glossary and story sheet: any failure
 returns nothing and the review proceeds as if the pass were off.
@@ -42,6 +47,7 @@ from .providers import Provider
 from .providers.base import strict_json_schema
 from .sweeps import occurrence_of
 from .utils.files import write_cache
+from .validator import fold_punct
 
 log = logging.getLogger("docproof.continuity")
 
@@ -175,26 +181,34 @@ def _short(quote: str) -> str:
     return q if len(q) <= _MAX_QUOTE_IN_COMMENT else q[:_MAX_QUOTE_IN_COMMENT - 1] + "…"
 
 
-def _locate(quote: str, ordered: Sequence[ParagraphRef],
-            prefer: str | None) -> tuple[str, int] | None:
-    """Where a verbatim quote lives: (para_id, 1-based occurrence). The model's
-    named paragraph is tried first, then any paragraph — the anchor is what
-    matters, not the model's coordinate. None when the quote is nowhere, which is
-    exactly the hallucinated-quote case the two-quote rule is built to drop."""
+def _locate(quote: str, ordered: Sequence[ParagraphRef]
+            ) -> tuple[str, int, str] | None:
+    """Where a quoted sentence lives: (para_id, 1-based occurrence, and the
+    manuscript's own characters for it).
+
+    Exact first; on failure, the validator's length-preserving punctuation fold
+    (curly quotes, dashes, nbsp — the same `fold_punct` its anchoring retries
+    with). A model re-typing the manuscript's curly punctuation as straight is
+    routine, and on a real manuscript ~98% of sentences carry a foldable mark,
+    so an exact-only search dropped essentially every true finding. Because the
+    fold never moves a character, the slice taken at the folded offset is the
+    manuscript's own text: the anchor and the margin comment keep the author's
+    typography, and the occurrence is counted for that real slice — exactly
+    what the validator's exact anchor path will count when it re-finds it.
+
+    None when the quote is nowhere even after folding, which is the
+    hallucinated-quote case the two-quote rule is built to drop — the fold
+    forgives typography, never wording."""
     quote = quote.strip()
     if not quote:
         return None
-    if prefer:
-        for p in ordered:
-            if p.para_id == prefer:
-                pos = p.text.find(quote)
-                if pos != -1:
-                    return p.para_id, occurrence_of(p.text, quote, pos)
-                break
     for p in ordered:
         pos = p.text.find(quote)
+        if pos == -1:
+            pos = fold_punct(p.text).find(fold_punct(quote))
         if pos != -1:
-            return p.para_id, occurrence_of(p.text, quote, pos)
+            original = p.text[pos:pos + len(quote)]
+            return p.para_id, occurrence_of(p.text, original, pos), original
     return None
 
 
@@ -205,33 +219,46 @@ def report_to_findings(report: ContinuityReport,
     """Turn the model's contradictions into margin-query findings.
 
     Every finding is `force_query` — a question, never an edit. A contradiction
-    survives only when BOTH its quotes locate verbatim in the manuscript (the
-    precision guardrail) and its confidence clears `min_confidence`. The comment
-    anchors at the later, contradicting site, and names the earlier one so an
-    editor can see both ends of the contradiction at once."""
+    survives only when BOTH its quotes locate in the manuscript (the precision
+    guardrail — punctuation-tolerant via `_locate`, so it tests wording, not
+    typography) and its confidence clears `min_confidence`. The comment anchors
+    at the later, contradicting site, and names the earlier one so an editor can
+    see both ends of the contradiction at once — quoting the manuscript's own
+    characters, not the model's transcription.
+
+    One summary line reports what was kept and what was dropped, and why. It is
+    a WARNING when a non-empty report kept nothing: the hosted app records
+    nothing below WARNING, and "the read flagged contradictions but none reached
+    the margin" is precisely the outcome an operator has to be able to see —
+    without it, a guardrail eating the whole read and a read that found nothing
+    are the same silence."""
     threshold = CONFIDENCE_RANK[min_confidence]
     ordered = list(paragraphs)
     out: list[Finding] = []
-    for cf in report.findings:
+    below = unlocated = capped = 0
+    for i, cf in enumerate(report.findings):
         if len(out) >= max_queries:
+            capped = len(report.findings) - i
             break
         if CONFIDENCE_RANK.get(cf.confidence, 0) < threshold:
+            below += 1
             continue
         # Both sites must be real. The earlier quote need only exist somewhere;
         # the later quote must also give us an anchor to attach the comment to.
-        if _locate(cf.earlier_quote, ordered, None) is None:
+        earlier = _locate(cf.earlier_quote, ordered)
+        if earlier is None:
+            unlocated += 1
             log.debug("continuity: earlier quote not found, dropping: %r",
                       cf.earlier_quote[:80])
             continue
-        later = _locate(cf.quote, ordered, None)
+        later = _locate(cf.quote, ordered)
         if later is None:
+            unlocated += 1
             log.debug("continuity: later quote not found, dropping: %r",
                       cf.quote[:80])
             continue
-        para_id, occ = later
-        anchor_para = next(p for p in ordered if p.para_id == para_id)
-        pos = anchor_para.text.find(cf.quote.strip())
-        original = anchor_para.text[pos:pos + len(cf.quote.strip())]
+        para_id, occ, original = later
+        _, _, earlier_text = earlier
         question = " ".join(cf.question.split())
         out.append(Finding(
             finding_id=f"c-{next(ids):04d}",
@@ -242,9 +269,16 @@ def report_to_findings(report: ContinuityReport,
             occurrence=occ,
             corrected_text=original,          # a question edits nothing
             explanation=f'{cf.category}: {question} '
-                        f'(Earlier: "{_short(cf.earlier_quote)}")',
+                        f'(Earlier: "{_short(earlier_text)}")',
             confidence=cf.confidence,
             force_query=True))
+    if report.findings:
+        log.log(logging.INFO if out else logging.WARNING,
+                "Continuity: kept %d of %d flagged contradiction(s) — %d below "
+                "%s confidence, %d with a quote that did not locate, %d past "
+                "the %d-query cap",
+                len(out), len(report.findings), below, min_confidence,
+                unlocated, capped, max_queries)
     return out
 
 

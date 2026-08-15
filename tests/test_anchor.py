@@ -18,7 +18,7 @@ from docproof.models import DocumentModel, Finding, ParagraphRef, Usage
 from docproof.pipeline import finish, prepare
 from docproof.reassembler import paragraph_view_text
 from docproof.utils.xml_helpers import DocxPackage, walk_package
-from docproof.validator import _fold_punct, anchor_offset, validate_findings
+from docproof.validator import anchor_offset, fold_punct, validate_findings
 
 CURLY_APOS = "The grocer chalked fresh apple’s on the board outside."
 
@@ -50,7 +50,7 @@ def test_straight_quotes_match_curly_text():
     hay = "She said “yes” and left."         # curly “ ”
     s = anchor_offset(hay, 'said "yes"', 1)             # straight " "
     assert s != -1
-    assert _fold_punct(hay)[s:s + len('said "yes"')] == 'said "yes"'
+    assert fold_punct(hay)[s:s + len('said "yes"')] == 'said "yes"'
 
 
 def test_em_dash_matches_hyphen_and_nbsp_matches_space():
@@ -61,7 +61,7 @@ def test_em_dash_matches_hyphen_and_nbsp_matches_space():
 def test_the_fold_is_length_preserving():
     # Offsets only stay valid because no character changes width.
     for s in ["“x”", "a—b", "it’s", "a b c"]:
-        assert len(_fold_punct(s)) == len(s)
+        assert len(fold_punct(s)) == len(s)
 
 
 def test_a_genuinely_different_quote_still_fails():
