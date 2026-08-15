@@ -22,7 +22,12 @@ CACHE_KEEP_DAYS = 30
 # settings.json lives and is rewritten only when a setting changes, would be an
 # easy mistake to make. A prune that globbed *.json there would delete it. So the
 # sweep is restricted to names this module writes.
-CACHE_PREFIXES = ("glossary-", "storysheet-", "continuity-")
+# "chapter-continuity-" is its own entry: the glob is anchored at the filename
+# start, so "continuity-*.json" does NOT match "chapter-continuity-*.json". And
+# this pass writes one cache file PER CHAPTER, not one per book, so leaving it
+# unswept would grow the shared volume faster than any other cache.
+CACHE_PREFIXES = ("glossary-", "storysheet-", "continuity-",
+                  "chapter-continuity-")
 
 
 def write_atomic(path: Path, text: str) -> None:

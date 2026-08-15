@@ -302,6 +302,23 @@ def cmd_inventory(args) -> int:
                       f"~${cont:.2f} (one whole-book read, query-only, "
                       f"not batchable)")
 
+    # Chapter continuity reads the book once, split across chapters, plus a small
+    # judge — priced at the document's tokens in, and each chapter's output
+    # ceiling out, so the estimate scales with how the book segments.
+    if cfg.chapter_continuity.enabled:
+        from .continuity import chapters as _chapters
+        cc = cfg.chapter_continuity
+        cc_model = cc.model or cfg.continuity.model or cfg.api.model
+        units = _chapters(prepared.doc.paragraphs, cfg.skip.is_sweep_only,
+                          min_tokens=cc.min_chapter_tokens,
+                          max_tokens=cc.max_chapter_tokens)
+        chap = estimate_cost(cc_model, input_tokens=doc_tokens,
+                             output_tokens=len(units) * cc.max_output_tokens)
+        if chap is not None:
+            print(f"  + chapter continuity on {cc_model}: ~${chap:.2f} "
+                  f"({len(units)} chapter read(s), query-only, plus a small "
+                  f"judge on {cc.judge_model})")
+
     print("\nSections (pass any of these to --only):")
     for row in chunk_outline(prepared):
         print(f"  {row['chunk_id']:<12} {row['paragraphs']:>3} para "

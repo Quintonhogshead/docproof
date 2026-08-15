@@ -267,6 +267,15 @@
                 the correction actually right? Its own pass, so it can use a
                 different model. Switch the check on under Passes.</small>
             </label>
+
+            <label class="field review-only" id="chapter-continuity-model-field">
+              <span>Chapter-continuity model</span>
+              <select id="chapter-continuity-model"></select>
+              <small class="muted">Reads one chapter at a time for in-scene
+                breaks, then judges its own finds. A stronger reader surfaces far
+                more — the reader is the limit here, not the judge. Sets both the
+                reader and the judge. Switch the pass on under Passes.</small>
+            </label>
           </div>
 
           <!-- Passes — depth and which passes run. -->
@@ -333,6 +342,40 @@
                 <small class="muted">The instructions the continuity reader
                   follows. Leave blank to use the built-in default (shown here as
                   the placeholder).</small>
+              </label>
+
+              <hr class="subtle">
+              <p class="muted small">Chapter continuity — a separate read, one
+                chapter at a time, for breaks that close inside a chapter (a
+                character who sits down who never stood, a cigarette lit twice).
+                Turn it on under Passes &amp; features above, or with Continuity
+                only. Pick its model in the Models tab.</p>
+              <label class="field" id="chapter-continuity-sensitivity-field">
+                <span>How hard it looks
+                  <strong id="chapter-continuity-sensitivity-name">Measured</strong></span>
+                <input type="range" id="chapter-continuity-sensitivity"
+                       min="1" max="5" step="1" value="2"
+                       list="chapter-continuity-stops"
+                       aria-describedby="chapter-continuity-sensitivity-blurb">
+                <datalist id="chapter-continuity-stops">
+                  <option value="1" label="Cautious"></option>
+                  <option value="2" label="Measured"></option>
+                  <option value="3" label="Thorough"></option>
+                  <option value="4" label="Searching"></option>
+                  <option value="5" label="Exhaustive"></option>
+                </datalist>
+                <small id="chapter-continuity-sensitivity-blurb" class="muted">Low
+                  raises only the clearest breaks; high raises anything that
+                  conflicts on the page and lets the author wave it off. Every one
+                  is a margin question, never an edit.</small>
+              </label>
+              <label class="field">
+                <span>Chapter-continuity instructions</span>
+                <textarea id="chapter-continuity-prompt" rows="8"
+                          spellcheck="false"></textarea>
+                <small class="muted">The instructions the chapter-scoped reader
+                  follows. Leave blank to use the built-in default (shown as the
+                  placeholder).</small>
               </label>
             </details>
 

@@ -138,6 +138,7 @@ def _free_finish(cfg: Config) -> None:
     cfg.fix_check.enabled = False           # the fix check's judge
     cfg.sapling.enabled = False             # per-character bill + confirm valve
     cfg.smoothing.enabled = False           # a whole-book read plus a judge
+    cfg.chapter_continuity.enabled = False  # per-chapter read plus a judge
     cfg.low_confidence.confirm = False      # the below-gate promotion valve
     cfg.ensemble.verifier_model = None      # the overseer-verifier
 
@@ -211,6 +212,15 @@ class Job:
     # docproof/continuity.py and JobStore.config_for.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The chapter-continuity reader's editable system prompt, edited on the panel;
+    # empty (older records, or a run that left it alone) means the built-in
+    # default. Its on/off rides the `features` map. See docproof/continuity.py.
+    chapter_continuity_prompt: str = ""
+    # The chapter-continuity model (one pick sets both reader and judge) and the
+    # 1–5 sensitivity dial. Empty/None (older records, or a run that left them
+    # alone) means the config default.
+    chapter_continuity_model: str = ""
+    chapter_continuity_sensitivity: int | None = None
     # The two judge gates — one reads every proposed change for whether it moves
     # the sentence's sense, the other for whether the fix is right — each with
     # its own model and editable instructions. Empty (older records, or a run
@@ -733,6 +743,16 @@ class JobRunner:
         # The continuity read's editable prompt (empty = built-in default),
         # applied like the round judge's — the sentinel passes through verbatim.
         cfg.continuity.prompt = job.continuity_prompt
+        # The chapter-continuity reader's editable prompt, applied the same way.
+        cfg.chapter_continuity.prompt = job.chapter_continuity_prompt
+        # One model pick drives both the reader and its judge; the 1–5 sensitivity
+        # dial sets the judge's posture and the confidence floor. Empty/None keeps
+        # the config default. Applied after apply_features, which owns on/off.
+        if job.chapter_continuity_model:
+            cfg.chapter_continuity.model = job.chapter_continuity_model
+            cfg.chapter_continuity.judge_model = job.chapter_continuity_model
+        if job.chapter_continuity_sensitivity is not None:
+            cfg.chapter_continuity.sensitivity = job.chapter_continuity_sensitivity
         # The meaning gate's judge. Applied AFTER apply_features, which owns the
         # gate's on/off: the picker only says which model reads the changes, and
         # an empty pick keeps the config default. Vetted at submit
@@ -749,10 +769,11 @@ class JobRunner:
         # submit, like the other per-run picks.
         cfg.smoothing.proposer_restraint = job.proposer_restraint
         cfg.smoothing.judge_harshness = job.judge_harshness
-        # "Continuity only" strips the run to that one whole-book read: no
-        # detector passes, no sweeps, none of the other whole-book passes — just
-        # the contradiction check and its margin queries. The continuity switch is
-        # forced on regardless of the feature toggle, because it IS the run now.
+        # "Continuity only" strips the run to the continuity reads: no detector
+        # passes, no sweeps, none of the other whole-book passes — just the
+        # whole-book contradiction check, the chapter-scoped in-scene read, and
+        # their margin queries. Both continuity switches are forced on regardless
+        # of the feature toggle, because they ARE the run now.
         if job.continuity_only:
             cfg.error_types = []
             cfg.sweeps = []
@@ -761,6 +782,7 @@ class JobRunner:
                           "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.continuity.enabled = True
+            cfg.chapter_continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:

@@ -401,6 +401,7 @@ def _settings_rows(job) -> list:
               ("consistency", "consistency"),
               ("spellcheck", "spell scan"),
               ("continuity", "continuity read"),
+              ("chapter_continuity", "chapter continuity"),
               ("meaning_check", "meaning check"),
               ("fix_check", "fix check")]
     on = [name for key, name in labels if feats.get(key)]
