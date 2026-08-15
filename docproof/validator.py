@@ -248,15 +248,33 @@ def to_query(f: Finding, doc: DocumentModel) -> Finding:
     that this correction became a question. Same anchoring the query branch of
     `validate_findings` uses.
 
-    A finding whose quote no longer anchors (it did when it validated, so this is
-    belt and braces) comes back as a query with no anchor: still reported, still
-    not applied, which is the safe direction."""
+    A finding whose quote no longer anchors (it did when it validated, so this
+    is belt and braces) falls back to the whole paragraph as its span. It has to
+    get one. A query with no anchor is NOT "still reported, not applied" — both
+    reassemblers place a margin comment from `Finding.anchor` and drop a query
+    that has none, so an anchorless question survives in findings.json and in
+    summary.md while being absent from the file the author opens, which is the
+    one place summary.md promises it will be. The paragraph is the coarsest
+    honest answer to "where", it is always attachable, and it still edits
+    nothing — so the question reaches the reader and the safe direction holds.
+
+    Only an unknown paragraph comes back with no anchor, because there is then
+    nothing at all to hang a comment on; the reassemblers count that as
+    `unplaced` rather than dropping it quietly."""
     para = index_paragraphs(doc).get(f.para_id)
-    s = anchor_offset(para.text, f.original_text, f.occurrence) if para else -1
-    if s == -1:
+    if para is None:
+        log.warning("%s: unknown paragraph %s — withdrawn to the margin with "
+                    "no anchor, so no comment can be written for it.",
+                    f.finding_id, f.para_id)
         return dataclasses.replace(f, status="query", anchor=None,
                                    force_query=True)
-    end = s + len(f.original_text)
+    s = anchor_offset(para.text, f.original_text, f.occurrence)
+    if s == -1:
+        log.warning("%s: quote no longer anchors in %s — the question is hung "
+                    "on the whole paragraph.", f.finding_id, f.para_id)
+        s, end = 0, len(para.text)
+    else:
+        end = s + len(f.original_text)
     return dataclasses.replace(
         f, status="query", force_query=True,
         anchor=Anchor(start=s, end=end, delete_text=para.text[s:end],
