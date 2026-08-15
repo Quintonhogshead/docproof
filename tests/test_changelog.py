@@ -195,7 +195,14 @@ def test_queries_are_listed_and_marked_as_questions(tmp_path):
 
 def test_a_query_is_named_in_the_word_the_format_uses(tmp_path):
     """The log is read beside the manuscript it describes. An author opening an
-    .idml is looking for a note; nothing in that file is called a comment."""
+    .idml is looking for a note; nothing in that file is called a comment.
+
+    The nouns are whole, not a shared "margin " prefix plus a format word: two
+    report sites used to prepend the prefix themselves and rendered "a margin
+    margin comment" for .docx. So the assertions here are on the exact string
+    the log carries, which is what caught that — and the two are asymmetric on
+    purpose, because a Word comment sits in the margin and an InDesign Note
+    does not. Making them parallel is the tempting edit this guards."""
     from docproof.changelog import write_change_log
     from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
     from docproof.variants import load_variant
@@ -212,11 +219,14 @@ def test_a_query_is_named_in_the_word_the_format_uses(tmp_path):
     text, _ = _read(tmp_path / "idml.docx")
     assert "1 question(s) were raised as notes" in text
     assert "each a note in the manuscript" in text
+    assert "margin comment" not in text        # never Word's noun, nor the
+    assert "margin note" not in text           # default; a Note has no margin
 
     write_change_log(tmp_path / "docx.docx", doc=doc, findings=[q], cfg=cfg,
                      applied_ids=(), fmt=DOCX, variant=load_variant("us"))
     text, _ = _read(tmp_path / "docx.docx")
     assert "raised as margin comments" in text
+    assert "margin margin" not in text         # the prefix is not prepended
 
 
 def test_the_log_only_claims_the_questions_the_file_actually_carries(tmp_path):

@@ -32,6 +32,7 @@ from .agreement import canonical_anchors
 from .models import Chunk, Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
+from .windowing import WindowReport, log_report, resolve_window
 
 log = logging.getLogger("docproof.rewrite")
 
@@ -286,7 +287,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
             paragraphs: Sequence[ParagraphRef], provider: Provider, *,
             model: str, max_tokens: int, usage: Usage, ids,
             batch_size: int = 40, edit_confidence: str = "high",
-            reject_sink: list | None = None,
+            reject_sink: list | None = None, loss_sink: list | None = None,
             error_type: str = "rewrite", chunk_id: str = "rewrite",
             id_prefix: str = "r", silent: bool = False,
             concurrency: int = 1, system: str | None = None,
@@ -333,7 +334,13 @@ def confirm(candidates: Sequence[RewriteCandidate],
 
     `silent` marks every emitted Finding as a silent edit (a tracked change with
     no margin comment), for a candidate source that rides under the global
-    `comments` switch — Sapling with `sapling.comments` off."""
+    `comments` switch — Sapling with `sapling.comments` off.
+
+    `loss_sink`, if given, collects this pass's WindowReport — how many
+    candidates actually got a verdict. A candidate whose window truncated is NOT
+    a candidate the model kept: it was paid for and never ruled on, and without
+    that count a pass that lost every window looks exactly like one that read
+    everything and affirmed nothing. See docproof/windowing.py."""
     if not candidates:
         return []
     text_of = {p.para_id: p.text for p in paragraphs}
@@ -343,7 +350,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
                for i in range(0, len(enriched), batch_size)]
     schema = strict_json_schema(_CVerdicts)          # deep-copies; hoist off the pool
 
-    def fetch(window):
+    def fetch(window, ceiling: int = max_tokens):
         lines = []
         for n, c in enumerate(window, 1):
             sent = _sentence_around(text_of[c.para_id], c.start, c.end)
@@ -352,26 +359,26 @@ def confirm(candidates: Sequence[RewriteCandidate],
             model=model, system=system or _CONFIRM_SYSTEM,
             user="\n\n".join(lines),
             schema=schema, schema_name="verdicts",
-            max_tokens=max_tokens)
+            max_tokens=ceiling)
 
+    report = WindowReport(label=f"{error_type} confirm")
     findings: list[Finding] = []
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         pending = [(w, pool.submit(fetch, w)) for w in windows]
         try:
-            for batch_no, (window, future) in enumerate(pending):
+            for window, future in pending:
                 res = future.result()
                 usage.add(res.usage)                 # fold serially: not thread-safe
-                if res.stop_reason != "ok" or res.parsed is None:
-                    log.error("rewrite-confirm batch %d: %s", batch_no,
-                              res.error or res.stop_reason)
-                    continue
-                try:
-                    parsed = _CVerdicts.model_validate(res.parsed)
-                except Exception as e:
-                    log.error("rewrite-confirm batch %d: bad response: %s",
-                              batch_no, e)
-                    continue
-                _fold(parsed, window, text_of, findings, reject_sink, ids,
+                # Recovery (halve a truncated window, re-ask an unanswered item)
+                # happens here, on this thread, so the ordering the folding
+                # depends on is untouched. Anything still unanswered is counted
+                # in `report` and reported below rather than passing for a
+                # "not an error" verdict.
+                rows = resolve_window(
+                    window, res, fetch=fetch, rows_of=_rows_of,
+                    max_tokens=max_tokens, report=report,
+                    usage_sink=usage.add)
+                _fold(rows, window, text_of, findings, reject_sink, ids,
                       edit_floor, error_type=error_type, chunk_id=chunk_id,
                       id_prefix=id_prefix, silent=silent, mode=mode)
         except BaseException:
@@ -382,27 +389,46 @@ def confirm(candidates: Sequence[RewriteCandidate],
             for _w, unstarted in pending:
                 unstarted.cancel()
             raise
+    log_report(report)
     kept = len(reject_sink) if reject_sink is not None else 0
-    log.info("Rewrite: %d correction(s) from %d candidate(s)%s", len(findings),
+    log.info("Rewrite: %d correction(s) from %d candidate(s)%s%s", len(findings),
              len(candidates),
-             f" ({kept} kept as not-an-error)" if reject_sink is not None else "")
+             f" ({kept} kept as not-an-error)" if reject_sink is not None else "",
+             f" — {report.lost} UNRULED" if report.lost else "")
+    if loss_sink is not None:
+        loss_sink.append(report)
     return findings
 
 
-def _fold(parsed, window, text_of: dict, findings: list, reject_sink,
+def _rows_of(parsed: dict) -> dict[int, "_CVerdict"]:
+    """A parsed body as {1-based item number: verdict}, or nothing at all when
+    it does not validate — the caller then treats those items as unanswered and
+    re-asks, rather than counting them as ruled."""
+    try:
+        return {v.index: v for v in _CVerdicts.model_validate(parsed).verdicts}
+    except Exception as e:                           # malformed structured output
+        log.error("confirm: response did not match the schema: %s", e)
+        return {}
+
+
+def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
           ids, edit_floor: int, *, error_type: str, chunk_id: str,
           id_prefix: str, silent: bool, mode: str = "correction") -> None:
     """One window's verdicts, appended to `findings` in the order asked.
+
+    `rows` maps a 0-based offset in `window` to that item's verdict, and carries
+    only the items that actually came back — an offset missing from it was never
+    ruled on, and is deliberately absent from both the findings and the reject
+    log rather than being counted as a "not an error".
 
     Split out of `confirm` so the folding stays a plain serial routine while the
     calls around it run on a pool: the id counter, the findings list and the
     reject log are all shared, and none of them may be touched from a worker
     thread."""
     suggestion = mode == "suggestion"
-    for v in parsed.verdicts:
-        if not (1 <= v.index <= len(window)):
-            continue
-        c = window[v.index - 1]
+    for offset in sorted(rows):
+        v = rows[offset]
+        c = window[offset]
         if not v.is_error:
             if reject_sink is not None:
                 reject_sink.append({

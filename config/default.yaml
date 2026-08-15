@@ -137,7 +137,9 @@ glossary:
                             # real-word errors; a frontier model (Opus) adds the
                             # subtle semantic tail at ~40x the cost — pick per book.
   effort: medium
-  max_output_tokens: 8000
+  # One whole-book read, so a truncation loses the WHOLE glossary (the run
+  # then proceeds without one). The ceiling covers the model's thinking too.
+  max_output_tokens: 16000
   cache_dir:                # a path pins the read per draft (keyed by text+model+
                             # effort+prompt): re-runs of an unchanged draft skip
                             # the cost and see the SAME glossary, so case-drift
@@ -167,7 +169,7 @@ storysheet:
   enabled: false
   model: gpt-5.6-luna
   effort: medium
-  max_output_tokens: 4000
+  max_output_tokens: 12000  # one whole-book read; truncating loses all of it
   cache_dir:                # a path pins the read per draft (text+model+prompt);
                             # blank = the shared default folder, as above
 
@@ -182,7 +184,11 @@ continuity:
   enabled: false
   model: claude-fable-5     # frontier work; opus-5 half-price, sonnet-5 cheaper
   effort: high
-  max_output_tokens: 8000
+  # A frontier model at effort high, reading a whole book and writing up to
+  # max_queries findings with an explanation each — and it always thinks, so
+  # most of this ceiling is reasoning. One call, all-or-nothing: truncating
+  # loses every continuity finding in the book.
+  max_output_tokens: 24000
   max_queries: 40           # cap on margin comments; most significant first
   min_confidence: medium    # drop "low" — a wrong continuity flag costs trust
   calendar_check: true      # deterministic date->weekday math; no API, query-only
@@ -231,7 +237,8 @@ rewrite:
                             # Set it to a DIFFERENT model and the retype runs sync
                             # (can't share the review's batch), losing the discount.
   effort: medium
-  max_output_tokens: 8000
+  max_output_tokens: 16000  # covers the retype AND the confirm valve; see
+                            # languagetool.max_output_tokens for the measurement
   max_span: 48              # a diff whose delete or insert exceeds this is a paraphrase
   max_added: 24             # ...or that adds more than this many net chars — dropped
   samples: 1                # independent retypes per chunk, unioned. >1 lifts recall
@@ -265,7 +272,16 @@ languagetool:
   disabled_rules: []        # extra rule ids to drop, atop the built-in
                             # artifact/style denylist (unpaired-quote, caps-start,
                             # whitespace, style advice)
-  max_output_tokens: 4000   # ceiling per confirm request (verdicts are terse)
+  # Ceiling per confirm request. The verdicts are terse, but the ceiling has to
+  # cover the model's THINKING as well as what it writes back, and on a
+  # reasoning model the thinking is most of it. Measured on a real manuscript at
+  # batch_size 40: ~4,400 tokens at effort medium and ~8,100 at high, varying
+  # run to run — so the old 4,000 truncated on ordinary input, and a truncated
+  # structured response carries no verdicts at all. Sized well clear of the
+  # measurement because an unused ceiling is free: you are billed for the tokens
+  # generated, never for the cap. Truncation is also now recovered from and
+  # counted rather than silently dropping the window (docproof/windowing.py).
+  max_output_tokens: 16000
   batch_size: 40            # candidates per confirm request
   edit_confidence: high     # at/above this an affirmed fix edits; softer = query
   confirm_model:            # unset = api.model confirms; a cheap model is plenty
@@ -345,7 +361,7 @@ low_confidence:
   confirm: false
   edit_confidence: high     # the bar an affirmed below-gate edit clears to apply
   batch_size: 40            # candidates per confirm request
-  max_output_tokens: 4000
+  max_output_tokens: 16000  # the shared confirm valve; see languagetool
   # Unset = the detector's own model confirms. A stronger model here is cheap
   # (the prompts are short) and is the point of a separate confirm valve.
   confirm_model:
@@ -380,7 +396,11 @@ meaning_check:
                             # adds the scripted sweeps and the consistency scan —
                             # punctuation-sized changes these gates can't fault
   flag_unsure: true         # an "unsure" verdict is held back too; off applies it
-  max_output_tokens: 4000
+  # A frontier model at effort high that always thinks, so this ceiling is
+  # mostly reasoning. The gates batch per PARAGRAPH (a few changes per call),
+  # which is what kept 4,000 workable — but a heavily corrected paragraph is
+  # not rare, and a truncated gate applies every change in it unread.
+  max_output_tokens: 12000
   prompt: ""                # empty = built-in default (editable in the review panel)
 
 # Is the replacement the CORRECT fix? Same wiring, same knobs, different
@@ -392,7 +412,7 @@ fix_check:
   effort: high
   scope: model_sources
   flag_unsure: true
-  max_output_tokens: 4000
+  max_output_tokens: 12000   # as meaning_check above
   prompt: ""
 
 # Each entry is ONE API pass over the whole document. A bare key runs alone;
