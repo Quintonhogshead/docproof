@@ -63,6 +63,16 @@ def register(app: FastAPI) -> None:
             value = getattr(update, field_name)
             if value is not None:
                 setattr(s, field_name, value)
+        # An explicit reviewer choice is a deliberate one, so mark the settings
+        # current: the one-shot legacy-default boot migration only rewrites a
+        # stored model whose settings_version is behind, so stamping it here means
+        # a model an admin actually picked (even claude-sonnet-5 on a fresh,
+        # never-migrated install) is never silently reverted to the shipped
+        # default on the next boot. Only an explicit model PUT stamps — an
+        # effort-only save (model is None) leaves the version alone, so a legacy
+        # volume still frozen on Sonnet is still repaired by the migration.
+        if update.model is not None:
+            s.settings_version = settingslib.CURRENT_SETTINGS_VERSION
         for provider, value in (("anthropic", update.anthropic_key),
                                 ("openai", update.openai_key),
                                 ("gemini", update.gemini_key),

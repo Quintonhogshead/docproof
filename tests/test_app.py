@@ -1125,6 +1125,11 @@ def test_models_endpoint_prices_the_staged_files(client):
     assert by_id["claude-haiku-4-5"]["cost_now"] < opus["cost_now"]
     # The between-round judge picker opens on the house default (default.yaml).
     assert body["default_judge_model"] == "gpt-5.6-sol"
+    # The reviewer picker opens on the shipped default (gpt-5.6-luna), and the
+    # catalog default is exposed independently so a stale persisted value can't
+    # surface Sonnet.
+    assert body["default_model"] == "gpt-5.6-luna"
+    assert body["catalog_default_model"] == "gpt-5.6-luna"
 
 
 def test_settings_round_trip_never_returns_a_key(client, monkeypatch):
@@ -1147,6 +1152,59 @@ def test_settings_round_trip_never_returns_a_key(client, monkeypatch):
 def test_settings_survive_a_restart(client, tmp_path):
     client.put("/api/settings", json={"model": "claude-opus-5"})
     assert Settings.load(Paths(tmp_path)).model == "claude-opus-5"
+
+
+def test_boot_migrates_a_legacy_sonnet_default_to_luna(tmp_path):
+    from app.main import create_app
+    paths = Paths(tmp_path).ensure()
+    # A volume file frozen by an older build: model + no settings_version.
+    paths.settings_file.write_text(
+        '{"model": "claude-sonnet-5", "effort": "high"}', "utf-8")
+    app = create_app(tmp_path, start_runner=False)
+    assert app.state.settings.model == "gpt-5.6-luna"   # in memory
+    assert app.state.settings.effort == "high"          # untouched
+    reloaded = Settings.load(paths)
+    assert reloaded.model == "gpt-5.6-luna"             # persisted
+    assert reloaded.settings_version == 1               # one-shot stamp
+
+
+def test_boot_leaves_a_non_sonnet_default_alone(tmp_path):
+    from app.main import create_app
+    paths = Paths(tmp_path).ensure()
+    paths.settings_file.write_text('{"model": "claude-opus-5"}', "utf-8")
+    create_app(tmp_path, start_runner=False)
+    assert Settings.load(paths).model == "claude-opus-5"
+
+
+def test_boot_leaves_a_deliberate_stamped_sonnet_alone(tmp_path):
+    """A Sonnet chosen after the migration ran (settings_version already 1) is a
+    deliberate choice the one-shot guard must never revert."""
+    from app.main import create_app
+    paths = Paths(tmp_path).ensure()
+    paths.settings_file.write_text(
+        '{"model": "claude-sonnet-5", "settings_version": 1}', "utf-8")
+    create_app(tmp_path, start_runner=False)
+    assert Settings.load(paths).model == "claude-sonnet-5"
+
+
+def test_an_explicit_model_choice_is_stamped_and_survives_a_restart(client, tmp_path):
+    """An admin picking a model (even Sonnet) on a fresh, never-migrated install
+    stamps settings_version via the PUT, so the one-shot legacy migration never
+    silently reverts it on the next boot."""
+    from app.main import create_app
+    resp = client.put("/api/settings", json={"model": "claude-sonnet-5"})
+    assert resp.status_code == 200
+    assert Settings.load(Paths(tmp_path)).settings_version == 1   # stamped by the PUT
+    app = create_app(tmp_path, start_runner=False)                # a later boot
+    assert app.state.settings.model == "claude-sonnet-5"          # left alone
+
+
+def test_an_effort_only_save_does_not_stamp_the_version(client, tmp_path):
+    """An effort-only PUT must NOT stamp — so a legacy volume still frozen on the
+    old Sonnet default is still repaired by the boot migration, not sealed in."""
+    resp = client.put("/api/settings", json={"effort": "high"})
+    assert resp.status_code == 200
+    assert Settings.load(Paths(tmp_path)).settings_version == 0
 
 
 # --- reasoning effort ---------------------------------------------------------

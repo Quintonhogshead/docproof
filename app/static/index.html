@@ -138,11 +138,70 @@
       </fieldset>
 
       <div class="options">
-        <label class="field">
-          <span id="model-label">Which reviewer?</span>
-          <select id="model"></select>
-          <small id="model-blurb" class="muted"></small>
-        </label>
+        <!-- ── Effort tiers (simple view) ───────────────────────────────────
+             A client-side macro over the controls in #advanced-options below.
+             Selecting a card sets the reviewer, effort, glossary, rounds, the
+             judge/meaning/fix pickers and the pass switches to the tier's
+             bundle (served by /api/presets). Any later manual change flips the
+             picker to the implicit "Custom" state. Review-only: prep and promo
+             don't use tiers, so the whole block hides for them and the custom
+             drawer opens flat instead. -->
+        <div class="field review-only tier-picker" id="tier-picker"
+             role="radiogroup" aria-label="How thorough should this review be?">
+          <span>How thorough should this review be?</span>
+          <div class="tier-cards">
+            <button type="button" class="tier-card" data-tier="light"
+                    role="radio" aria-checked="false" tabindex="-1">
+              <span class="tier-mark" aria-hidden="true">🪶</span>
+              <span class="tier-name">Light touch</span>
+              <span class="tier-blurb">A fast single pass — grammar and typos,
+                nothing heavy. Cheapest.</span>
+              <span class="tier-price" data-tier-price></span>
+            </button>
+
+            <button type="button" class="tier-card is-recommended"
+                    data-tier="standard" role="radio" aria-checked="true"
+                    tabindex="0">
+              <span class="tier-badge">Recommended</span>
+              <span class="tier-mark" aria-hidden="true">📘</span>
+              <span class="tier-name">Standard</span>
+              <span class="tier-blurb">The house default — a considered pass
+                with the mechanical floor on.</span>
+              <span class="tier-price" data-tier-price></span>
+            </button>
+
+            <button type="button" class="tier-card" data-tier="hard"
+                    role="radio" aria-checked="false" tabindex="-1">
+              <span class="tier-mark" aria-hidden="true">🔎</span>
+              <span class="tier-name">Hard</span>
+              <span class="tier-blurb">Two judged rounds, continuity and story
+                sheet, every change read for meaning.</span>
+              <span class="tier-price" data-tier-price></span>
+            </button>
+
+            <button type="button" class="tier-card" data-tier="hammer"
+                    role="radio" aria-checked="false" tabindex="-1">
+              <span class="tier-mark" aria-hidden="true">🔨</span>
+              <span class="tier-name">The Hammer</span>
+              <span class="tier-blurb">Everything on — three rounds,
+                rewrite-and-compare, Sapling, both change gates.</span>
+              <span class="tier-price" data-tier-price></span>
+              <p class="tier-note" id="tier-hammer-sapling-note" hidden>Sapling
+                key missing — add one under Admin; the run continues without
+                it.</p>
+            </button>
+          </div>
+        </div>
+
+        <!-- Reveals the tabbed custom view, pre-filled from the selected tier.
+             #advanced-summary rides here so updateAdvancedSummary() keeps
+             writing the live "what differs from the tier" echo. -->
+        <button type="button" id="customize-toggle" class="review-only"
+                aria-expanded="false" aria-controls="advanced-options">
+          <span class="chev" aria-hidden="true">›</span>
+          <span>Customize this review</span>
+          <span class="muted" id="advanced-summary"></span>
+        </button>
 
         <fieldset class="field" id="prep-options" hidden>
           <legend>What should it hand back?</legend>
@@ -201,15 +260,15 @@
           <legend>When?</legend>
           <label class="radio">
             <input type="radio" name="mode" value="batch" checked>
-            <span><strong>Overnight</strong> — half the cost, ready within a
-              few hours <em id="cost-batch"></em>
+            <span><strong>Overnight</strong> — half price, ready within a
+              few hours
               <small class="muted">Word manuscripts and InDesign layouts
                 alike.</small></span>
           </label>
           <label class="radio">
             <input type="radio" name="mode" value="now">
             <span><strong>Right now</strong> — ready in a few minutes, full
-              price <em id="cost-now"></em></span>
+              price</span>
           </label>
           <label class="sub" id="schedule-wrap">
             <input type="checkbox" id="schedule-on">
@@ -219,178 +278,218 @@
           </label>
         </fieldset>
 
-        <details class="field advanced" id="advanced-options">
-          <summary>Advanced options
-            <span class="muted" id="advanced-summary"></span></summary>
+        <!-- ── Custom view ──────────────────────────────────────────────────
+             Was the "Advanced options" <details>. Now a four-tab drawer the
+             #customize-toggle above reveals for a review, and renderKind() shows
+             flat (no tab strip) for prep/promo. Every control keeps its id: the
+             tier macro and the job payload read them exactly as before. -->
+        <div class="field advanced" id="advanced-options" hidden>
+          <nav class="subtabs" id="custom-tabs" role="tablist"
+               aria-label="Custom review settings">
+            <button type="button" class="subtab" id="subtab-models"
+                    data-tab="models" role="tab" aria-selected="true"
+                    aria-controls="panel-models" tabindex="0">Models</button>
+            <button type="button" class="subtab" id="subtab-passes"
+                    data-tab="passes" role="tab" aria-selected="false"
+                    aria-controls="panel-passes" tabindex="-1">Passes</button>
+            <button type="button" class="subtab" id="subtab-output"
+                    data-tab="output" role="tab" aria-selected="false"
+                    aria-controls="panel-output" tabindex="-1">Output</button>
+            <button type="button" class="subtab" id="subtab-safety"
+                    data-tab="safety" role="tab" aria-selected="false"
+                    aria-controls="panel-safety" tabindex="-1">Safety</button>
+          </nav>
 
-          <label class="field" id="effort-field">
-            <span>How hard should it think?
-              <strong id="effort-name">Low</strong></span>
-            <input type="range" id="effort" min="1" max="5" step="1" value="1"
-                   list="effort-stops" aria-describedby="effort-blurb">
-            <datalist id="effort-stops">
-              <option value="1" label="Low"></option>
-              <option value="2" label="Medium"></option>
-              <option value="3" label="High"></option>
-              <option value="4" label="Very high"></option>
-              <option value="5" label="Max"></option>
-            </datalist>
-            <small id="effort-blurb" class="muted"></small>
-          </label>
+          <!-- Models — the five model pickers. -->
+          <div class="tabpanel is-active" id="panel-models" data-tab="models"
+               role="tabpanel" aria-labelledby="subtab-models">
+            <label class="field">
+              <span id="model-label">Which reviewer?</span>
+              <select id="model"></select>
+              <small id="model-blurb" class="muted"></small>
+            </label>
 
-          <label class="field" id="glossary-field">
-            <span>First-pass glossary reader</span>
-            <select id="glossary-model"></select>
-            <small class="muted">One whole-book read before the review — it
-              catches real-word typos (a “calvary” regiment) and name casing the
-              page-by-page pass misses. “Off” skips it.</small>
-          </label>
+            <label class="field" id="glossary-field">
+              <span>First-pass glossary reader</span>
+              <select id="glossary-model"></select>
+              <small class="muted">One whole-book read before the review — it
+                catches real-word typos (a “calvary” regiment) and name casing
+                the page-by-page pass misses. “Off” skips it.</small>
+            </label>
 
-          <label class="field review-only" id="rounds-field">
-            <span>Review rounds</span>
-            <select id="rounds">
-              <option value="1">1 — standard</option>
-              <option value="2">2</option>
-              <option value="3">3 — intensive</option>
-              <option value="4">4</option>
-            </select>
-            <small class="muted">Each extra round re-reads the previous round's
-              corrections, with a strong judge ruling between rounds. Catches
-              more; costs more.</small>
-            <p id="rounds-cost-note" class="muted small" hidden>The estimate is
-              the review cost times the number of rounds. The between-round judge
-              runs on a stronger model and isn't included, so expect the real
-              cost to be somewhat higher.</p>
-          </label>
-
-          <details class="field review-only" id="judge-field" hidden>
-            <summary>Between-round judge<span class="muted"> — the model and
-              instructions that decide each change</span></summary>
-            <label class="field" id="judge-model-field">
+            <label class="field review-only" id="judge-model-field" hidden>
               <span>Judge model</span>
               <select id="judge-model"></select>
               <small class="muted">The model that rules on every correction
                 between rounds. It runs far fewer calls than the review itself,
-                so a strong model here is worth it.</small>
+                so a strong model here is worth it. Only used with 2+ rounds;
+                the instructions live under Passes.</small>
             </label>
-            <label class="field">
-              <span>Judge instructions</span>
-              <textarea id="judge-prompt" rows="8" spellcheck="false"></textarea>
-              <small class="muted">The instructions the judge follows when
-                deciding which corrections to keep. Leave blank to use the
-                built-in default (shown here as the placeholder).</small>
-            </label>
-            <small class="muted">Only used with 2+ rounds.</small>
-          </details>
 
-          <details class="field review-only" id="continuity-field">
-            <summary>Continuity read<span class="muted"> — contradictions across
-              the whole book</span></summary>
-            <label class="field checkbox">
-              <span><input type="checkbox" id="continuity-only"> Continuity only
-                — run just this read, skip the full review</span>
-              <small class="muted">The whole-book contradiction read on its own:
-                no detector passes, no sweeps, no Sapling. You get margin queries
-                — timeline slips, age or date breaks, an attribute that drifts —
-                and nothing is edited. Leave off to run it as one pass inside a
-                normal review (switch it on under Passes &amp; features for
-                that).</small>
-            </label>
-            <label class="field">
-              <span>Continuity instructions</span>
-              <textarea id="continuity-prompt" rows="8"
-                        spellcheck="false"></textarea>
-              <small class="muted">The instructions the continuity reader
-                follows. Leave blank to use the built-in default (shown here as
-                the placeholder).</small>
-            </label>
-          </details>
-
-          <details class="field review-only" id="meaning-field" hidden>
-            <summary>Meaning check<span class="muted"> — the model that reads
-              every change before it ships</span></summary>
-            <label class="field" id="meaning-model-field">
+            <label class="field review-only" id="meaning-model-field" hidden>
               <span>Meaning-check model</span>
               <select id="meaning-model"></select>
               <small class="muted">The last reader before the author. It sees
                 every correction this run would make — the model's own,
                 Sapling's, LanguageTool's — and holds back any that changes what
-                a sentence means. One short call per paragraph that has changes,
-                so a frontier model here costs little and is the whole point.</small>
+                a sentence means. Switch the check on under Passes.</small>
             </label>
-            <label class="field">
-              <span>Meaning-check instructions</span>
-              <textarea id="meaning-prompt" rows="8" spellcheck="false"></textarea>
-              <small class="muted">The instructions it follows when deciding
-                whether a change alters meaning. Leave blank to use the built-in
-                default (shown here as the placeholder).</small>
-            </label>
-            <small class="muted">Switch the check on under Passes &amp; features.
-              A held-back change becomes a margin question, never a silent
-              edit.</small>
-          </details>
 
-          <details class="field review-only" id="fix-field" hidden>
-            <summary>Fix check<span class="muted"> — the model that checks each
-              correction is right</span></summary>
-            <label class="field" id="fix-model-field">
+            <label class="field review-only" id="fix-model-field" hidden>
               <span>Fix-check model</span>
               <select id="fix-model"></select>
-              <small class="muted">The same last read as the meaning check, on
-                the other question: is the correction actually right? Runs as its
-                own pass, so it can use a different model — or run without the
-                meaning check, and vice versa.</small>
+              <small class="muted">The same last read on the other question: is
+                the correction actually right? Its own pass, so it can use a
+                different model. Switch the check on under Passes.</small>
             </label>
-            <label class="field">
-              <span>Fix-check instructions</span>
-              <textarea id="fix-prompt" rows="8" spellcheck="false"></textarea>
-              <small class="muted">The instructions it follows when deciding
-                whether a correction is the right one. Leave blank to use the
-                built-in default (shown here as the placeholder).</small>
+          </div>
+
+          <!-- Passes — depth and which passes run. -->
+          <div class="tabpanel" id="panel-passes" data-tab="passes"
+               role="tabpanel" aria-labelledby="subtab-passes">
+            <label class="field" id="effort-field">
+              <span>How hard should it think?
+                <strong id="effort-name">Low</strong></span>
+              <input type="range" id="effort" min="1" max="5" step="1" value="1"
+                     list="effort-stops" aria-describedby="effort-blurb">
+              <datalist id="effort-stops">
+                <option value="1" label="Low"></option>
+                <option value="2" label="Medium"></option>
+                <option value="3" label="High"></option>
+                <option value="4" label="Very high"></option>
+                <option value="5" label="Max"></option>
+              </datalist>
+              <small id="effort-blurb" class="muted"></small>
             </label>
-            <small class="muted">Switch the check on under Passes &amp; features.
-              A held-back change becomes a margin question, never a silent
-              edit.</small>
-          </details>
 
-          <details class="field review-only" id="features-field">
-            <summary>Passes &amp; features<span class="muted"> — what runs on
-              this review</span></summary>
-            <p id="features-cost-note" class="muted small" hidden>The estimate
-              includes the passes you've switched on. Rewrite and the mechanical
-              check are approximate — their cost depends on what the book
-              throws.</p>
-            <div id="features-groups" class="features"></div>
-            <small class="muted">Ensemble review (several detectors plus a
-              verifier) isn't a simple switch — it stays a config-file
-              choice.</small>
-          </details>
+            <label class="field review-only" id="rounds-field">
+              <span>Review rounds</span>
+              <select id="rounds">
+                <option value="1">1 — standard</option>
+                <option value="2">2</option>
+                <option value="3">3 — intensive</option>
+                <option value="4">4</option>
+              </select>
+              <small class="muted">Each extra round re-reads the previous round's
+                corrections, with a strong judge ruling between rounds. Catches
+                more; costs more.</small>
+            </label>
 
-          <label class="field review-only">
-            <span>How careful should it be?</span>
-            <select id="confidence">
-              <option value="high">Only changes it's sure about</option>
-              <option value="medium" selected>Balanced (recommended)</option>
-              <option value="low">Flag anything questionable</option>
-            </select>
-          </label>
+            <details class="field review-only" id="features-field">
+              <summary>Passes &amp; features<span class="muted"> — what runs on
+                this review</span></summary>
+              <p id="features-cost-note" class="muted small" hidden>The estimate
+                includes the passes you've switched on. Rewrite and the
+                mechanical check are approximate — their cost depends on what the
+                book throws.</p>
+              <div id="features-groups" class="features"></div>
+              <small class="muted">Ensemble review (several detectors plus a
+                verifier) isn't a simple switch — it stays a config-file
+                choice.</small>
+            </details>
 
-          <label class="field review-only">
-            <span>Which English is it written in?</span>
-            <select id="variant">
-              <option value="" selected>House default</option>
-              <option value="us">American</option>
-              <option value="uk">British</option>
-              <option value="ca">Canadian</option>
-              <option value="au">Australian</option>
-            </select>
-            <small class="muted">Sets which mark opens dialogue, percent vs per
-              cent, date formats and the that/which rule, and picks the spell
-              scan's dictionary. Never guessed from the text — leaving this on
-              the house default is how a British book comes back
-              Americanized.</small>
-          </label>
-        </details>
+            <details class="field review-only" id="continuity-field">
+              <summary>Continuity read<span class="muted"> — contradictions
+                across the whole book</span></summary>
+              <label class="field checkbox">
+                <span><input type="checkbox" id="continuity-only"> Continuity
+                  only — run just this read, skip the full review</span>
+                <small class="muted">The whole-book contradiction read on its
+                  own: no detector passes, no sweeps, no Sapling. You get margin
+                  queries — timeline slips, age or date breaks, an attribute that
+                  drifts — and nothing is edited. Leave off to run it as one pass
+                  inside a normal review (switch it on under Passes &amp;
+                  features above).</small>
+              </label>
+              <label class="field">
+                <span>Continuity instructions</span>
+                <textarea id="continuity-prompt" rows="8"
+                          spellcheck="false"></textarea>
+                <small class="muted">The instructions the continuity reader
+                  follows. Leave blank to use the built-in default (shown here as
+                  the placeholder).</small>
+              </label>
+            </details>
+
+            <details class="field review-only" id="judge-field" hidden>
+              <summary>Between-round judge instructions<span class="muted"> —
+                how each change is decided between rounds</span></summary>
+              <label class="field">
+                <span>Judge instructions</span>
+                <textarea id="judge-prompt" rows="8"
+                          spellcheck="false"></textarea>
+                <small class="muted">The instructions the judge follows when
+                  deciding which corrections to keep. Leave blank to use the
+                  built-in default (shown here as the placeholder). The model is
+                  set under Models. Only used with 2+ rounds.</small>
+              </label>
+            </details>
+
+            <details class="field review-only" id="meaning-field" hidden>
+              <summary>Meaning-check instructions<span class="muted"> — reads
+                every change before it ships</span></summary>
+              <label class="field">
+                <span>Meaning-check instructions</span>
+                <textarea id="meaning-prompt" rows="8"
+                          spellcheck="false"></textarea>
+                <small class="muted">The instructions it follows when deciding
+                  whether a change alters meaning. Leave blank to use the
+                  built-in default. The model is set under Models. A held-back
+                  change becomes a margin question, never a silent edit.</small>
+              </label>
+            </details>
+
+            <details class="field review-only" id="fix-field" hidden>
+              <summary>Fix-check instructions<span class="muted"> — checks each
+                correction is right</span></summary>
+              <label class="field">
+                <span>Fix-check instructions</span>
+                <textarea id="fix-prompt" rows="8" spellcheck="false"></textarea>
+                <small class="muted">The instructions it follows when deciding
+                  whether a correction is the right one. Leave blank to use the
+                  built-in default. The model is set under Models. A held-back
+                  change becomes a margin question, never a silent edit.</small>
+              </label>
+            </details>
+          </div>
+
+          <!-- Output — what the run writes, and the English variant. -->
+          <div class="tabpanel" id="panel-output" data-tab="output"
+               role="tabpanel" aria-labelledby="subtab-output">
+            <div id="features-output" class="features review-only"></div>
+
+            <label class="field review-only">
+              <span>Which English is it written in?</span>
+              <select id="variant">
+                <option value="" selected>House default</option>
+                <option value="us">American</option>
+                <option value="uk">British</option>
+                <option value="ca">Canadian</option>
+                <option value="au">Australian</option>
+              </select>
+              <small class="muted">Sets which mark opens dialogue, percent vs per
+                cent, date formats and the that/which rule, and picks the spell
+                scan's dictionary. Never guessed from the text — leaving this on
+                the house default is how a British book comes back
+                Americanized.</small>
+            </label>
+          </div>
+
+          <!-- Safety — care level and the safety nets. -->
+          <div class="tabpanel" id="panel-safety" data-tab="safety"
+               role="tabpanel" aria-labelledby="subtab-safety">
+            <label class="field review-only">
+              <span>How careful should it be?</span>
+              <select id="confidence">
+                <option value="high">Only changes it's sure about</option>
+                <option value="medium" selected>Balanced (recommended)</option>
+                <option value="low">Flag anything questionable</option>
+              </select>
+            </label>
+
+            <div id="features-safety" class="features review-only"></div>
+          </div>
+        </div>
 
         <p class="field muted small" id="prep-cost" hidden></p>
 

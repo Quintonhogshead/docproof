@@ -50,6 +50,10 @@ def register(app: FastAPI) -> None:
                 "output_token_guess": common.OUTPUT_TOKEN_GUESS,
                 "effort_multipliers": EFFORT_MULTIPLIER,
                 "default_model": app.state.settings.model,
+                # The shipped catalog default, read from a fresh Settings()
+                # instance so it is never the pollutable persisted value. The
+                # picker prefers this over an unusable/absent persisted default.
+                "catalog_default_model": settingslib.Settings().model,
                 "default_glossary_model": app.state.settings.glossary_model,
                 # The between-round judge's default model, so the panel's judge
                 # picker opens on the house choice without hardcoding it.

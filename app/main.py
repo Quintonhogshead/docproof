@@ -44,7 +44,8 @@ class FreshStaticFiles(StaticFiles):
         response = await super().get_response(path, scope)
         response.headers.setdefault("Cache-Control", "no-cache")
         return response
-from .settings import (CONFIG_PATH, ENV_VARS, KEY_PROVIDERS, PROVIDERS, Paths,
+from .settings import (CONFIG_PATH, CURRENT_SETTINGS_VERSION, ENV_VARS,
+                       KEY_PROVIDERS, LEGACY_DEFAULT_MODEL, PROVIDERS, Paths,
                        Settings, default_root, field_in_settings_file,
                        resource_root)
 from .update import Rebuilder
@@ -105,6 +106,24 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)
+    # One-time repair of a legacy reviewer default. Older builds shipped
+    # claude-sonnet-5; because Settings.save() persists the whole dataclass,
+    # any save under that build (even nudging the effort slider) froze
+    # model="claude-sonnet-5" into settings.json on the volume, and /api/models
+    # then serves that stale value as default_model forever — overriding the
+    # gpt-5.6-luna default this build ships. Rewrite it once and stamp
+    # settings_version so a *deliberate* Sonnet chosen afterward is never
+    # touched again. Guard on an existing file so a fresh install is left with
+    # no settings.json (the shipped default already applies).
+    if (paths.settings_file.is_file()
+            and settings.settings_version < CURRENT_SETTINGS_VERSION):
+        if settings.model == LEGACY_DEFAULT_MODEL:
+            log.warning(
+                "Migrating legacy reviewer default %r -> %r in %s.",
+                settings.model, Settings().model, paths.settings_file)
+            settings.model = Settings().model      # the shipped default
+        settings.settings_version = CURRENT_SETTINGS_VERSION
+        settings.save(paths)
     if web:
         # On a server there is no user Documents folder and no durable results
         # location off the mounted volume: finished documents written anywhere

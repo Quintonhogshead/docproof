@@ -221,6 +221,12 @@ class Job:
     meaning_prompt: str = ""
     fix_model: str = ""
     fix_prompt: str = ""
+    # Which effort tier the submitter picked, purely as a label for the results
+    # card ("Light touch", "Standard", "Hard", "The hammer", or "" for a custom
+    # or older run). The tier is a client-side macro over the controls above, so
+    # this changes nothing about how the job runs; it only records what was
+    # chosen. Empty on older records and on any run that didn't send one.
+    preset: str = ""
     # Multi-round progress: which round a running multi-round review is on, and
     # how many it will run. Both 0 on single reviews and older records; the card
     # reads them only when total_rounds > 1. Set by _run_rounds' on_progress

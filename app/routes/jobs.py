@@ -79,6 +79,10 @@ class JobRequest(BaseModel):
     meaning_prompt: str = ""
     fix_model: str | None = None
     fix_prompt: str = ""
+    # A label for which effort tier the picker applied, carried onto the job card
+    # only. The tier is a client-side macro over the controls above, so this
+    # never changes how the job runs; empty means a custom or older submission.
+    preset: str = ""
 
 
 class RejudgeRequest(BaseModel):
@@ -348,6 +352,7 @@ def register(app: FastAPI) -> None:
                 meaning_prompt=req.meaning_prompt,
                 fix_model=req.fix_model or "",
                 fix_prompt=req.fix_prompt,
+                preset=req.preset,
                 selection=(req.selections or {}).get(file_id) or None,
                 created_at=datetime.now(timezone.utc).isoformat(),
                 kind=req.kind,
