@@ -124,6 +124,46 @@ def test_anthropic_requests_omit_what_fable_rejects(monkeypatch):
     assert params["output_config"]["effort"] == "low"
 
 
+def test_anthropic_sync_path_streams_not_creates(monkeypatch):
+    """The synchronous call must stream: the SDK rejects a non-streaming request
+    whose max_tokens could exceed 10 minutes, and the whole-book reads (32k,
+    doubled on retry) are over that line. This pins streaming so a revert to a
+    plain create() — which failed a real continuity read in production — trips
+    here first. get_final_message() returns the same Message create() would."""
+    import types
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    from docproof.providers.anthropic_provider import AnthropicProvider
+
+    msg = types.SimpleNamespace(
+        stop_reason="end_turn",
+        content=[types.SimpleNamespace(type="text", text='{"verdicts": []}')],
+        usage=types.SimpleNamespace(input_tokens=7, output_tokens=2,
+                                    cache_creation_input_tokens=0,
+                                    cache_read_input_tokens=0))
+
+    class _StreamCtx:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get_final_message(self): return msg
+
+    used = []
+
+    class _Messages:
+        def stream(self, **kw): used.append("stream"); return _StreamCtx()
+        def create(self, **kw): used.append("create"); return msg
+
+    p = AnthropicProvider(effort="low")
+    p.client = types.SimpleNamespace(messages=_Messages())
+
+    result = p.complete_structured(
+        model="claude-fable-5", system="s", user="u",
+        schema={"type": "object"}, schema_name="t", max_tokens=32000)
+
+    assert used == ["stream"]                       # streamed, never create()
+    assert result.parsed == {"verdicts": []}
+    assert result.usage.input_tokens == 7
+
+
 def test_cost_estimate_uses_catalog_and_batch_discount():
     full = estimate_cost("claude-opus-5", input_tokens=1_000_000,
                          output_tokens=1_000_000)
