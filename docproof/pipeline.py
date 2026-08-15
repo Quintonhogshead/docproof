@@ -1113,11 +1113,18 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
 def _chapter_continuity_findings(cfg: Config, prepared: Prepared,
                                  usage: Usage | None = None, *,
                                  out_dir: str | Path | None = None,
-                                 book_anchors: frozenset[tuple[str, str]] = frozenset()):
+                                 book_anchors: frozenset[tuple[str, str]] = frozenset(),
+                                 batch_reads: dict | None = None):
     """The chapter-scoped continuity read's queries and a ChapterContinuityReport,
     or [] when off. The third reading distance: the class of break that closes
     inside one chapter and is invisible to both the per-paragraph detectors and
     the whole-book read.
+
+    `batch_reads`, when given, is the chapter-read batch's results keyed by
+    custom_id (docproof/batch.py) — the propose stage rode a batch for the 0.5x
+    discount, so its reads are parsed here rather than bought synchronously. None
+    (the sync path, and any run where the reads did not ride a batch) reads each
+    chapter live. The judge always runs here, synchronously, either way.
 
     Two paid stages, like smoothing: a per-chapter read that proposes in-scene
     breaks, then a skeptical judge over what survives the deterministic filters
@@ -1132,7 +1139,8 @@ def _chapter_continuity_findings(cfg: Config, prepared: Prepared,
     survived, and on this pass silence is the ordinary output — so the difference
     between a restrained run and a failed one has to be recorded, not inferred."""
     from .continuity import (ChapterContinuityReport, breaks_to_findings,
-                             chapters, default_chapter_continuity_prompt,
+                             chapter_reads_from_batch, chapters,
+                             default_chapter_continuity_prompt,
                              judge_chapter_breaks, propose_chapter_breaks)
     cc = cfg.chapter_continuity
     if not (cc.enabled and prepared.whole_document):
@@ -1170,14 +1178,22 @@ def _chapter_continuity_findings(cfg: Config, prepared: Prepared,
     else:
         log.info("Chapter continuity: segmented into %d chapter(s).", len(units))
 
-    pcfg = cfg.model_copy(deep=True)
-    pcfg.api.model = propose_model
-    pcfg.api.effort = cc.effort
-    cands, filtered, read_failed = propose_chapter_breaks(
-        units, build_provider(pcfg), model=propose_model,
-        max_tokens=cc.max_output_tokens, usage=usage, system=cc.prompt,
-        effort=cc.effort, cache_dir=cache_dir_for(cc.cache_dir),
-        concurrency=cfg.concurrency_for(propose_model), book_anchors=book_anchors)
+    if batch_reads is not None:
+        # The reads rode a batch (docproof/batch.py). Parse them here rather than
+        # buying them live; the units re-segment identically off the unchanged
+        # document, so the custom_ids map back by index.
+        cands, filtered, read_failed = chapter_reads_from_batch(
+            units, batch_reads, usage, book_anchors)
+    else:
+        pcfg = cfg.model_copy(deep=True)
+        pcfg.api.model = propose_model
+        pcfg.api.effort = cc.effort
+        cands, filtered, read_failed = propose_chapter_breaks(
+            units, build_provider(pcfg), model=propose_model,
+            max_tokens=cc.max_output_tokens, usage=usage, system=cc.prompt,
+            effort=cc.effort, cache_dir=cache_dir_for(cc.cache_dir),
+            concurrency=cfg.concurrency_for(propose_model),
+            book_anchors=book_anchors)
     if not cands:
         return [], ChapterContinuityReport(
             chapters=len(units), read_failed=read_failed, filtered=filtered,
@@ -1490,7 +1506,8 @@ def _replay_judge_gates(prepared: Prepared, validated: list,
 def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
            batch: bool = False, coverage=None, verify_provider=None,
-           judge_held: list[dict] | None = None) -> Outputs:
+           judge_held: list[dict] | None = None,
+           chapter_batch_reads: dict | None = None) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
@@ -1566,7 +1583,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         for f in model_findings if f.error_type == "continuity")
     chapter_continuity_findings, chapter_continuity_report = \
         _chapter_continuity_findings(cfg, prepared, usage, out_dir=out,
-                                     book_anchors=book_anchors)
+                                     book_anchors=book_anchors,
+                                     batch_reads=chapter_batch_reads)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
                 + sapling_findings

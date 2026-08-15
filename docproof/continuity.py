@@ -785,6 +785,151 @@ def _chapter_cache_key(doc_text: str, model: str, system: str,
     return _cache_key(doc_text, model, system, effort)
 
 
+# --- reads as batch requests (the propose stage can ride a batch) -------------
+#
+# A chapter read is one independent request, and there are N of them — the
+# textbook batch candidate, and where nearly all this pass's cost lives. So the
+# reads can be submitted as their own batch for the discount and parsed at
+# collect. These helpers are the seam: the sync path (propose_chapter_breaks)
+# and the batch path (chapter_reads_from_batch) build the same request and parse
+# the same reply, then hand the results to the same `_sited_candidates`.
+
+CC_BATCH_PREFIX = "cc-"
+
+
+def chapter_read_custom_id(index: int) -> str:
+    """The batch custom_id for a unit's read. The index is the ChapterUnit.index,
+    and `chapters()` is deterministic, so re-segmenting the unchanged document at
+    collect reproduces the same indices — how the results map back to units."""
+    return f"{CC_BATCH_PREFIX}{index}"
+
+
+def is_chapter_read_id(custom_id: str) -> bool:
+    return custom_id.startswith(CC_BATCH_PREFIX)
+
+
+def chapter_read_schema() -> dict:
+    return strict_json_schema(SceneBreakReport)
+
+
+def chapter_read_user(unit: ChapterUnit) -> str:
+    return "\n\n".join(p.text for p in unit.paragraphs)
+
+
+def resolve_chapter_system(system: str) -> str:
+    """The read's system prompt: the caller's, or the built-in default. Shared so
+    the request the batch sends and the sync read send are byte-identical."""
+    return system.strip() or _CHAPTER_SYSTEM
+
+
+def _sited_candidates(
+        raw: Sequence[tuple[ChapterUnit, SceneBreakReport]],
+        book_anchors: frozenset[tuple[str, str]],
+        ) -> tuple[list[_ChapterCand], int]:
+    """Turn each unit's SceneBreakReport into sited candidates, dropping any that
+    fail the deterministic filters and returning how many were dropped. Shared by
+    the sync and batch paths — the reads differ, the filtering must not.
+
+    A break survives only when BOTH quotes locate verbatim in the SAME unit (the
+    precision guardrail), it is not a self-quote, the whole-book read did not get
+    there first (`book_anchors`), and no other break already claimed its later
+    site (one question per span — a chapter read can flag one pivotal sentence as
+    breaking two earlier facts, and two margin questions on one span would collide
+    in the validator, the second silently lost)."""
+    cands: list[_ChapterCand] = []
+    dropped = 0
+    seen: set[tuple[str, str]] = set()
+    for unit, report in raw:
+        ordered = list(unit.paragraphs)
+        for sb in report.findings:
+            # `_locate` is punctuation-tolerant and returns the manuscript's OWN
+            # characters for the match — so the anchor and the "(Earlier: …)"
+            # comment keep the author's typography, not the model's transcription.
+            later = _locate(sb.quote, ordered)
+            earlier = _locate(sb.earlier_quote, ordered)
+            if later is None or earlier is None:
+                dropped += 1
+                continue
+            if sb.quote.strip() == sb.earlier_quote.strip():   # not two sentences
+                dropped += 1
+                continue
+            para_id, occ, original = later
+            _, _, earlier_original = earlier
+            key = (para_id, " ".join(original.split()))
+            if key in book_anchors:              # the book read asked it already
+                dropped += 1
+                continue
+            if key in seen:                       # one question per later site
+                dropped += 1
+                continue
+            seen.add(key)
+            cands.append(_ChapterCand(
+                chapter=unit.index, category=sb.category, para_id=para_id,
+                occurrence=occ, original=original, earlier=earlier_original,
+                question=" ".join(sb.question.split()),
+                confidence=sb.confidence))
+    return cands, dropped
+
+
+def chapter_reads_from_batch(
+        units: Sequence[ChapterUnit], results: dict, usage: Usage,
+        book_anchors: frozenset[tuple[str, str]] = frozenset(),
+        ) -> tuple[list[_ChapterCand], int, int]:
+    """Parse a chapter-continuity batch's results (custom_id -> ProviderResult)
+    into sited candidates, folding usage and counting reads that FAILED.
+
+    The batch bought the reads hours ago, so a truncated one cannot be split and
+    re-asked the way the synchronous path never had to — it is simply a read
+    failure, counted like any other, because an unread chapter that yields no
+    queries looks exactly like a clean one that earned none. A unit with no result
+    is a failure UNLESS its text was empty (those were never submitted).
+
+    The batch path does not use the per-chapter read cache the sync path keeps: a
+    fresh batch submission has nothing to hit anyway, and its results are the
+    reads. Results are keyed by `chapter_read_custom_id(unit.index)`, so the
+    document must re-segment at collect into the same units it was submitted with
+    — which it does, `chapters()` being deterministic on unchanged input. If a
+    style change since submit (which `content_hash` does not cover) shifted the
+    boundaries, a mismatch is logged; correctness still holds, because a read
+    mapped to the wrong unit has its quotes fail to locate there and is dropped."""
+    submitted = sum(1 for k in results if is_chapter_read_id(k))
+    non_empty = sum(1 for u in units if chapter_read_user(u).strip())
+    if submitted and submitted != non_empty:
+        log.warning("chapter-continuity: %d read(s) were submitted but the "
+                    "document now segments into %d chapter(s) — a style change "
+                    "since submit may have shifted the boundaries; reads that no "
+                    "longer line up are dropped.", submitted, non_empty)
+    raw: list[tuple[ChapterUnit, SceneBreakReport]] = []
+    read_failed = 0
+    for unit in units:
+        res = results.get(chapter_read_custom_id(unit.index))
+        if res is None:
+            if not chapter_read_user(unit).strip():        # empty unit, not sent
+                raw.append((unit, SceneBreakReport()))
+            else:
+                log.error("chapter-continuity: unit %d has no batch result",
+                          unit.index)
+                read_failed += 1
+            continue
+        usage.add(res.usage)
+        if res.stop_reason != "ok" or res.parsed is None:
+            log.error("chapter-continuity: unit %d batch read failed: %s",
+                      unit.index, res.error or res.stop_reason)
+            read_failed += 1
+            continue
+        try:
+            raw.append((unit, SceneBreakReport.model_validate(res.parsed)))
+        except Exception as e:
+            log.error("chapter-continuity: unit %d bad batch response: %s",
+                      unit.index, e)
+            read_failed += 1
+    cands, dropped = _sited_candidates(raw, book_anchors)
+    log.info("Chapter continuity (batch): %d candidate(s) across %d unit(s); "
+             "%d dropped by the filters%s.", len(cands), len(units), dropped,
+             f", {read_failed} unit read(s) FAILED" if read_failed else "")
+    return cands, dropped, read_failed
+
+
 def propose_chapter_breaks(
         units: Sequence[ChapterUnit], provider: Provider, *, model: str,
         max_tokens: int, usage: Usage, system: str = "", effort: str | None = None,
@@ -806,12 +951,12 @@ def propose_chapter_breaks(
     proposer; each unit's read is cached per draft (text + model + effort +
     prompt) so re-reviewing a manuscript where one chapter changed re-reads only
     that chapter."""
-    system = system.strip() or _CHAPTER_SYSTEM
-    schema = strict_json_schema(SceneBreakReport)      # deep-copies; hoist off pool
+    system = resolve_chapter_system(system)
+    schema = chapter_read_schema()                     # deep-copies; hoist off pool
     cdir = Path(cache_dir) if cache_dir else None
 
     def read(unit: ChapterUnit):
-        doc_text = "\n\n".join(p.text for p in unit.paragraphs)
+        doc_text = chapter_read_user(unit)
         if not doc_text.strip():
             return SceneBreakReport(), None
         cache_path = None
@@ -874,52 +1019,7 @@ def propose_chapter_breaks(
                 unstarted.cancel()
             raise
 
-    cands: list[_ChapterCand] = []
-    dropped = 0
-    # One question per later site. A margin query is keyed by its anchor span
-    # (validator.py, the force_query branch keys on para_id/offset/corrected_text,
-    # and a question edits nothing, so corrected_text == original for all of
-    # these) — so two breaks pinned to the SAME sentence would collide there and
-    # the second would be silently dropped as a duplicate, uncounted. A chapter
-    # read does produce that: one pivotal sentence can contradict two earlier
-    # facts. Drop the second HERE, where it is counted, and where the report's
-    # `kept` then matches what actually reaches the margin. The same-span pattern
-    # the smoothing proposer keeps, for the same reason.
-    seen: set[tuple[str, str]] = set()
-    for unit, report in raw:
-        ordered = list(unit.paragraphs)
-        for sb in report.findings:
-            # `_locate` is punctuation-tolerant and returns the manuscript's OWN
-            # characters for the match — so the anchor and the "(Earlier: …)"
-            # comment keep the author's typography, not the model's transcription.
-            later = _locate(sb.quote, ordered)
-            earlier = _locate(sb.earlier_quote, ordered)
-            # Both sites must be real AND in this chapter. A hallucinated
-            # contradiction almost always fabricates or paraphrases a quote, so
-            # requiring two real, same-chapter anchors is the cheapest strong
-            # filter there is.
-            if later is None or earlier is None:
-                dropped += 1
-                continue
-            if sb.quote.strip() == sb.earlier_quote.strip():   # not two sentences
-                dropped += 1
-                continue
-            para_id, occ, original = later
-            _, _, earlier_original = earlier
-            key = (para_id, " ".join(original.split()))
-            # The book read got there first: do not ask the same question twice.
-            if key in book_anchors:
-                dropped += 1
-                continue
-            if key in seen:                       # one question per later site
-                dropped += 1
-                continue
-            seen.add(key)
-            cands.append(_ChapterCand(
-                chapter=unit.index, category=sb.category, para_id=para_id,
-                occurrence=occ, original=original, earlier=earlier_original,
-                question=" ".join(sb.question.split()),
-                confidence=sb.confidence))
+    cands, dropped = _sited_candidates(raw, book_anchors)
     log.info("Chapter continuity: %d candidate(s) across %d unit(s); %d dropped "
              "by the deterministic filters%s.", len(cands), len(units), dropped,
              f", {read_failed} unit read(s) FAILED" if read_failed else "")

@@ -450,10 +450,25 @@ def _round_config(cfg, k: int, reuse: bool):
     when reuse is on — round 1 already caught them, and the confirmed mechanical
     fixes it applies introduce no new commas/hyphens/missing words for a later
     round to find. Dropping LanguageTool also drops its per-round scan, which on
-    a large manuscript is minutes of single-core work in its own right."""
+    a large manuscript is minutes of single-core work in its own right.
+
+    Chapter continuity is forced off in EVERY per-round config: it is a
+    whole-book pass that runs once in the final finish(), and its reads would
+    otherwise buy a fresh batch every round. The final finish uses the original
+    cfg, so the pass still runs there — synchronously, since the final finish is
+    not a batch-submit boundary."""
     if k == 1 or not reuse:
-        return cfg
+        # Round 1 (and every round with reuse off) runs the config as given —
+        # EXCEPT that chapter continuity, a once-per-book pass, must never buy a
+        # per-round batch. Copy only when there is something to force off, so the
+        # common case keeps returning cfg unchanged.
+        if not cfg.chapter_continuity.enabled:
+            return cfg
+        rcfg = cfg.model_copy(deep=True)
+        rcfg.chapter_continuity.enabled = False
+        return rcfg
     rcfg = cfg.model_copy(deep=True)
+    rcfg.chapter_continuity.enabled = False
     rcfg.glossary.enabled = False
     rcfg.storysheet.enabled = False
     rcfg.languagetool.enabled = False
