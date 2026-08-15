@@ -200,6 +200,35 @@ continuity:
   cache_dir:                # a path pins the read per draft (text+model+prompt);
                             # blank = the shared default folder, as above
 
+# Chapter-scoped continuity read: the third reading distance. The chunk detectors
+# read a paragraph at a time and the continuity read above reads the whole book at
+# once; this reads one CHAPTER at a time, for the break that closes inside a chapter
+# and is invisible to both — a character who sits down who never stood, someone who
+# leaves a room then speaks in it, a cigarette lit twice, dawn that becomes evening
+# in one scene, a reply to a question no one asked. Built on the taste judge's shape:
+# read each chapter, drop any break whose two quotes don't both land in it, let a
+# skeptical judge cull the rest, cap the volume per chapter. Query-only by design;
+# dialogue IS in scope (a contradiction spoken aloud is still one). OFF by default,
+# whole-document only. See docproof/continuity.py.
+chapter_continuity:
+  enabled: false
+  model:                    # the chapter reader; blank = the continuity model, then api.model
+  effort: high
+  max_output_tokens: 8000   # per chapter; a reasoning model spends most of this thinking
+  judge_model: claude-fable-5   # the skeptical precision gate, on its own line
+  judge_effort: high
+  judge_max_output_tokens: 16000  # a truncated judge batch returns no verdicts at all
+  batch_size: 40            # candidates per judge request
+  sensitivity: 2            # "how hard it looks", 1-5: bundles judge posture + floor.
+                            # 1 Cautious · 2 Measured (default) · 3 Thorough ·
+                            # 4 Searching · 5 Exhaustive. See continuity.py.
+  max_per_chapter: 10       # the volume cap — the chapter is this pass's natural unit
+  min_chapter_tokens: 1000  # a smaller unit (an epigraph) merges into a neighbour
+  max_chapter_tokens: 120000  # a bigger unit is size-split; a headingless book too
+  cache_dir:                # a path pins each chapter's read per draft (text+model+prompt)
+  prompt: ""                # the chapter reader's system prompt; blank = built-in
+  judge_prompt: ""          # the judge's system prompt; blank = built-in
+
 # Multi-round review: review the manuscript `count` times, each round reading the
 # previous round's corrected text, with a strong judge ruling on every correction
 # between rounds. All approved changes are composed into one tracked-change file

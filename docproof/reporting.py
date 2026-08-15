@@ -54,7 +54,7 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         applied_ids: tuple[str, ...],
                         batch: bool = False, sweeps=None, spell=None,
                         normalization=None, audit=None, consistency=None,
-                        coverage=None, smoothing=None,
+                        coverage=None, smoothing=None, chapter_continuity=None,
                         queried_ids: tuple[str, ...] = (),
                         unplaced_ids: tuple[str, ...] = ()) -> None:
     applied = set(applied_ids)
@@ -128,6 +128,13 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         # be told apart: a prompt change moves the output more than any knob.
         "smoothing": (dataclasses.asdict(smoothing)
                       if smoothing is not None else None),
+        # What the chapter-continuity pass did, for the same reason and with the
+        # same accounting identity — proposed == kept + withheld + below_floor +
+        # refused + unjudged — plus the models and prompt fingerprints that say
+        # the manuscript was actually read on a run whose ordinary output is
+        # nothing.
+        "chapter_continuity": (dataclasses.asdict(chapter_continuity)
+                               if chapter_continuity is not None else None),
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
@@ -190,6 +197,7 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Consistency scan", on(cfg.consistency.enabled)),
         ("Spell scan", on(cfg.spellcheck.enabled)),
         ("Continuity read", on(cfg.continuity.enabled)),
+        ("Chapter continuity", on(cfg.chapter_continuity.enabled)),
         ("Smoothing", on(cfg.smoothing.enabled)),
     ]
     L = ["## Settings used\n"]
@@ -219,7 +227,7 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
                      audit=None, consistency=None, coverage=None,
-                     judges=None, smoothing=None) -> None:
+                     judges=None, smoothing=None, chapter_continuity=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -475,6 +483,43 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      f"reply came back truncated or unreadable, so those parts "
                      f"of the manuscript were never read for smoothing. Any "
                      f"count above is a floor rather than a full read.\n")
+
+    # Chapter continuity reports its own volume for the same reason as smoothing:
+    # the per-chapter cap and the judge's refusals are not visible in the findings
+    # that survived, and on this pass silence is the ordinary output — so a
+    # restrained run and a failed one have to be told apart.
+    cc = chapter_continuity
+    # Print when the pass proposed something OR when a read failed: a run where
+    # every chapter read failed proposes nothing, and that is the one time the
+    # section matters most — hiding it would report the failure as restraint.
+    if cc is not None and (cc.proposed or cc.read_failed):
+        L.append("## Chapter continuity\n")
+        L.append(f"{cc.kept} question(s) in the margin, from {cc.proposed} "
+                 f"in-chapter break(s) the read proposed across {cc.chapters} "
+                 f"chapter(s). These are questions, not corrections: every one is "
+                 f"a {fmt.comment_noun} and none of them changed the text.\n")
+        if cc.refused:
+            L.append(f"The judge set aside {cc.refused} as not genuine breaks — "
+                     f"a device the reader is meant to hold open, or a "
+                     f"contradiction the chapter resolves between its two "
+                     f"sentences.\n")
+        if cc.withheld:
+            L.append(f"**{cc.withheld} further question(s) withheld** — the cap is "
+                     f"{cc.cap} per chapter, and the least confident past that "
+                     f"were dropped rather than crowd one chapter's margin.\n")
+        if cc.unjudged:
+            # As with smoothing: candidates nobody ruled on, so the count is a floor.
+            L.append(f"**{cc.unjudged} of them were never ruled on** — the judge's "
+                     f"reply came back truncated or unreadable, so those breaks "
+                     f"were neither raised nor set aside. This pass ran "
+                     f"incompletely; treat the count above as a floor.\n")
+        if cc.read_failed:
+            # A chapter never read earns no queries the same way a clean one does;
+            # only this line tells the two apart.
+            L.append(f"**{cc.read_failed} chapter(s) could not be read** — the "
+                     f"read failed, was refused, or truncated, so any break in "
+                     f"those chapters was missed entirely. Treat the count above "
+                     f"as covering only the chapters that were read.\n")
 
     # Each judge gate gets its own section, because these are a different animal
     # from the queries above: every one of them is a correction the run was going

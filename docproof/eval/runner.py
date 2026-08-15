@@ -55,6 +55,7 @@ def _eval_config(cfg: Config) -> Config:
     # is here so that if the eval ever grows a finish() path, the scorecard does
     # not silently start counting taste against a mechanical trap set.
     cfg.smoothing.enabled = False
+    cfg.chapter_continuity.enabled = False   # finish()-resident too; same reason
     cfg.audit = "off"
     cfg.change_log = False
     return cfg

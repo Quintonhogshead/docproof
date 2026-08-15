@@ -62,4 +62,10 @@ def register(app: FastAPI) -> None:
                 # author, and the passes where a frontier model is the point.
                 "default_meaning_model":
                     load_config(CONFIG_PATH).meaning_check.model,
-                "default_fix_model": load_config(CONFIG_PATH).fix_check.model}
+                "default_fix_model": load_config(CONFIG_PATH).fix_check.model,
+                # The chapter-continuity reader's default: its own model, else the
+                # whole-book continuity read's — the picker sets both reader and
+                # judge, so it opens on the house continuity model.
+                "default_chapter_continuity_model":
+                    (load_config(CONFIG_PATH).chapter_continuity.model
+                     or load_config(CONFIG_PATH).continuity.model)}

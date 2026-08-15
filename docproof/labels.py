@@ -46,6 +46,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "sapling",            # pipeline.py — the Sapling grammar pass
     "low_confidence",     # pipeline.py — the below-gate confirm valve
     "continuity",         # continuity.py — the whole-book contradiction read
+    "chapter_continuity", # continuity.py — the chapter-scoped in-scene break read
     "smoothing",          # pipeline.py — the opt-in line-editing pass
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
@@ -70,6 +71,7 @@ _SWITCH: dict[str, str] = {
     "languagetool": "languagetool",
     "sapling": "sapling",
     "continuity": "continuity",
+    "chapter_continuity": "chapter_continuity",
     "smoothing": "smoothing",
     "term_consistency": "consistency",
     "name_consistency": "consistency",
@@ -214,6 +216,15 @@ def _from_telemetry(payload: Mapping[str, Any], label: str) -> str | None:
         # GUISHABLE from one that never happened, judged by its findings alone,
         # and silence is this pass's ordinary output.
         block = payload.get("smoothing")
+        if not isinstance(block, Mapping):
+            return None
+        return RAN if block.get("propose_model") else None
+    if label == "chapter_continuity":
+        # Same shape as smoothing, and for the same reason: a chapter read that
+        # proposes nothing is indistinguishable from one that never ran by its
+        # findings alone. `propose_model` is set only when the manuscript was
+        # actually read, so it answers outright.
+        block = payload.get("chapter_continuity")
         if not isinstance(block, Mapping):
             return None
         return RAN if block.get("propose_model") else None

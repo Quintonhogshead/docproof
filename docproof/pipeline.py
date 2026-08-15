@@ -1109,6 +1109,133 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
         judge_prompt_sha=prompt_sha(system))
 
 
+def _chapter_continuity_findings(cfg: Config, prepared: Prepared,
+                                 usage: Usage | None = None, *,
+                                 out_dir: str | Path | None = None,
+                                 book_anchors: frozenset[tuple[str, str]] = frozenset()):
+    """The chapter-scoped continuity read's queries and a ChapterContinuityReport,
+    or [] when off. The third reading distance: the class of break that closes
+    inside one chapter and is invisible to both the per-paragraph detectors and
+    the whole-book read.
+
+    Two paid stages, like smoothing: a per-chapter read that proposes in-scene
+    breaks, then a skeptical judge over what survives the deterministic filters
+    (both quotes in the same chapter; no break the whole-book read already asked,
+    via `book_anchors`). Every finding is force_query'd, and the volume is capped
+    per chapter. Runs in finish(), so it happens exactly once per book even under
+    multi-round — the same reason smoothing lives here rather than on the two
+    per-round pre-finish paths. Whole-document only, like every whole-book pass.
+
+    Returns the findings and a report because the number the cap withheld and the
+    number the judge never ruled on are not recoverable from the findings that
+    survived, and on this pass silence is the ordinary output — so the difference
+    between a restrained run and a failed one has to be recorded, not inferred."""
+    from .continuity import (ChapterContinuityReport, breaks_to_findings,
+                             chapters, default_chapter_continuity_prompt,
+                             judge_chapter_breaks, propose_chapter_breaks)
+    cc = cfg.chapter_continuity
+    if not (cc.enabled and prepared.whole_document):
+        if cc.enabled:
+            log.info("Chapter continuity: skipped — a selected-sections run does "
+                     "not buy a whole-book chapter read.")
+        return [], ChapterContinuityReport()
+
+    from itertools import count
+
+    from .providers import build_provider
+    from .smoothing import prompt_sha
+    usage = usage if usage is not None else Usage()
+
+    # The chapter reader's model: its own, else the whole-book read's, else the
+    # detector's. Per-chapter reading is easier than whole-book needle-finding, so
+    # a cheaper model may earn its place here.
+    propose_model = cc.model or cfg.continuity.model or cfg.api.model
+    # Fingerprint the RESOLVED prompt: a whitespace-only override is stripped away
+    # at the point of use (propose_chapter_breaks does `system.strip() or default`)
+    # so hashing the raw value would record a prompt that never ran and mark two
+    # equivalent runs as non-comparable.
+    propose_prompt = cc.prompt.strip() or default_chapter_continuity_prompt()
+
+    units = chapters(prepared.doc.paragraphs, cfg.skip.is_sweep_only,
+                     min_tokens=cc.min_chapter_tokens,
+                     max_tokens=cc.max_chapter_tokens)
+    if not units:
+        return [], ChapterContinuityReport(
+            propose_model=propose_model, judge_model=cc.judge_model,
+            propose_prompt_sha=prompt_sha(propose_prompt))
+    if not any(u.title for u in units):
+        log.info("Chapter continuity: no chapter markers found; reading in "
+                 "%d book-sized window(s) instead.", len(units))
+    else:
+        log.info("Chapter continuity: segmented into %d chapter(s).", len(units))
+
+    pcfg = cfg.model_copy(deep=True)
+    pcfg.api.model = propose_model
+    pcfg.api.effort = cc.effort
+    cands, filtered, read_failed = propose_chapter_breaks(
+        units, build_provider(pcfg), model=propose_model,
+        max_tokens=cc.max_output_tokens, usage=usage, system=cc.prompt,
+        effort=cc.effort, cache_dir=cache_dir_for(cc.cache_dir),
+        concurrency=cfg.concurrency_for(propose_model), book_anchors=book_anchors)
+    if not cands:
+        return [], ChapterContinuityReport(
+            chapters=len(units), read_failed=read_failed, filtered=filtered,
+            propose_model=propose_model, judge_model=cc.judge_model,
+            propose_prompt_sha=prompt_sha(propose_prompt))
+
+    # The "how hard it looks" dial picks the judge's posture and the confidence
+    # floor together; a non-empty judge_prompt override still wins over the posture.
+    from .continuity import sensitivity_profile
+    base_judge, floor = sensitivity_profile(cc.sensitivity)
+    # The judge reads with the same book knowledge the smoothing judge gets —
+    # folded into its system prompt, since a per-chapter read lacks the context a
+    # whole-book one has, and the story sheet is the cheap stand-in (e.g. a book
+    # whose nonlinear structure is established, not a break).
+    context = "\n\n".join(x for x in (prepared.conventions, prepared.vocabulary,
+                                      prepared.story_sheet) if x)
+    judge_base = cc.judge_prompt.strip() or base_judge
+    full_judge_system = f"{judge_base}\n\n{context}" if context else judge_base
+
+    jcfg = cfg.model_copy(deep=True)
+    jcfg.api.model = cc.judge_model
+    jcfg.api.effort = cc.judge_effort
+    rejected: list = []
+    affirmed, unjudged = judge_chapter_breaks(
+        cands, build_provider(jcfg), model=cc.judge_model,
+        max_tokens=cc.judge_max_output_tokens, usage=usage,
+        batch_size=cc.batch_size, system=full_judge_system,
+        reject_sink=rejected, concurrency=cfg.concurrency_for(cc.judge_model))
+
+    findings, withheld, below_floor = breaks_to_findings(
+        affirmed, count(1), min_confidence=floor,
+        max_per_chapter=cc.max_per_chapter)
+
+    # The judge's rejections are this pass's own taste record — what a strong model
+    # thought not worth the author's attention. Persisted for the same reason
+    # smoothing's are: the only way to tune the judge rather than guess.
+    if out_dir is not None and rejected:
+        import json
+        try:
+            Path(out_dir, "chapter_continuity_rejected.json").write_text(
+                json.dumps(rejected, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except OSError as e:                          # debug artifact, never fatal
+            log.warning("Chapter continuity: could not write reject log: %s", e)
+    log.info("Chapter continuity: %d query/queries from %d candidate(s) across "
+             "%d chapter(s) (%d filtered pre-judge, %d refused by the judge, "
+             "%d withheld by the per-chapter cap of %d).",
+             len(findings), len(cands), len(units), filtered, len(rejected),
+             withheld, cc.max_per_chapter)
+    return findings, ChapterContinuityReport(
+        chapters=len(units), read_failed=read_failed, proposed=len(cands),
+        kept=len(findings), withheld=withheld, cap=cc.max_per_chapter,
+        unjudged=unjudged, filtered=filtered, refused=len(rejected),
+        below_floor=below_floor, propose_model=propose_model,
+        judge_model=cc.judge_model,
+        propose_prompt_sha=prompt_sha(propose_prompt),
+        judge_prompt_sha=prompt_sha(full_judge_system))
+
+
 def _promote_low_confidence(cfg: Config, prepared: Prepared,
                             model_findings: list[Finding], usage: Usage, *,
                             out_dir: str | Path | None = None,
@@ -1427,12 +1554,25 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # surer source rather than to a matter of taste.
     smoothing_findings, smoothing_report = _smoothing_findings(
         cfg, prepared, usage, out_dir=out)
+    # Chapter-scoped continuity rides alongside smoothing, and for the same
+    # reasons: it is a whole-book pass whose every finding is force_query'd, and
+    # finish() runs exactly once per book. It is handed the anchors the whole-book
+    # continuity read already flagged (both are error_type "continuity" — the
+    # model read and the calendar tier), so the two passes never ask the author
+    # the same question twice.
+    book_anchors = frozenset(
+        (f.para_id, " ".join(f.original_text.split()))
+        for f in model_findings if f.error_type == "continuity")
+    chapter_continuity_findings, chapter_continuity_report = \
+        _chapter_continuity_findings(cfg, prepared, usage, out_dir=out,
+                                     book_anchors=book_anchors)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
                 + sapling_findings
                 + model_findings
                 + promoted
-                + smoothing_findings)
+                + smoothing_findings
+                + chapter_continuity_findings)
 
     def _validate(findings):
         return validate_findings(findings, prepared.doc, cfg.min_confidence,
@@ -1492,6 +1632,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         normalization=prepared.normalization,
                         audit=audit_report, consistency=prepared.consistency,
                         coverage=coverage, smoothing=smoothing_report,
+                        chapter_continuity=chapter_continuity_report,
                         # Both reassemblers report these; getattr keeps a format
                         # that predates them constructing rather than crashing.
                         queried_ids=getattr(stats, "queried", ()),
@@ -1502,7 +1643,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                      spell=prepared.spell,
                      normalization=prepared.normalization, audit=audit_report,
                      consistency=prepared.consistency, coverage=coverage,
-                     judges=judge_reports, smoothing=smoothing_report)
+                     judges=judge_reports, smoothing=smoothing_report,
+                     chapter_continuity=chapter_continuity_report)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)

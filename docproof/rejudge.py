@@ -112,6 +112,11 @@ def _gates_only(cfg: Config) -> Config:
     out.storysheet.enabled = False
     out.sapling.enabled = False
     out.smoothing.enabled = False
+    # Chapter continuity is a per-chapter read plus a judge inside finish(), the
+    # same shape as smoothing — and unlike the whole-book continuity read (which
+    # runs pre-finish and so is never reached here), it WOULD re-fire on a
+    # re-judge and buy a second, differently-worded set of the same questions.
+    out.chapter_continuity.enabled = False
     out.low_confidence.confirm = False
     out.ensemble.detectors = []
     out.ensemble.verifier_model = None

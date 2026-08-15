@@ -435,6 +435,92 @@ class ContinuityConfig(BaseModel):
         return self
 
 
+class ChapterContinuityConfig(BaseModel):
+    """The chapter-scoped continuity read: the third reading distance. The chunk
+    detectors read a paragraph at a time and the whole-book continuity read reads
+    everything at once; this reads one CHAPTER at a time, for the class of break
+    that closes inside a chapter and is invisible to both — a character who sits
+    down who never stood, someone who leaves a room then speaks in it, a cigarette
+    lit twice, dawn that becomes evening in one scene, a reply to a question no one
+    asked.
+
+    Built on the taste judge's shape, not the book read's: a chapter-scoped reader
+    has less context and over-proposes, so a skeptical judge is the precision gate.
+    Read each chapter once, drop any break whose two quotes do not both land in
+    that same chapter (the guardrail that also keeps it off the book read's
+    territory), let a skeptical judge rule on the survivors, and cap the volume per
+    chapter so the margin stays readable.
+
+    Query-only by design and unconditionally so, exactly like the book read: every
+    finding is force_query'd — a margin comment, never a tracked change — because
+    which of two contradictory facts is right is the author's call. Dialogue is IN
+    scope here, unlike the smoothing pass: a contradiction spoken aloud is still a
+    contradiction. OFF by default, opt-in per run, whole-document only. See
+    docproof/continuity.py."""
+    enabled: bool = False
+    # The chapter reader. Unset falls back to the whole-book read's model, then to
+    # api.model — per-chapter reading is easier than whole-book needle-finding, so
+    # a cheaper model may prove out here by eye.
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # Per chapter the read is small next to a whole book, but a reasoning model
+    # spends most of this ceiling thinking; sized so a dense chapter's findings
+    # are not truncated.
+    max_output_tokens: int = Field(default=8000, ge=1)
+    # The skeptical judge — the precision gate. A strong model on its own line,
+    # like the smoothing judge: telling a real in-scene break from a device the
+    # reader is meant to hold open is the hard part of this pass.
+    judge_model: str = "claude-fable-5"
+    judge_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # The judge's visible output is tiny (a verdict is three fields) but on a
+    # reasoning model the thinking counts against this; sized from the propose
+    # ceiling like the smoothing judge, since a truncated batch returns no
+    # verdicts at all and every candidate in it vanishes.
+    judge_max_output_tokens: int = Field(default=16000, ge=1)
+    batch_size: int = Field(default=40, ge=1)   # candidates per judge request
+    # "How hard it looks" — one 1–5 dial (the panel's slider) that bundles the
+    # judge's posture with the confidence floor, monotonically stricter → looser:
+    #   1 Cautious (strict judge, high floor) · 2 Measured (strict, medium — the
+    #   ship default) · 3 Thorough (strict, low) · 4 Searching (loose, medium) ·
+    #   5 Exhaustive (loose, low). See sensitivity_profile() in continuity.py. A
+    #   non-empty `judge_prompt` below overrides the posture the level selects.
+    sensitivity: int = Field(default=2, ge=1, le=5)
+    # The volume cap, per CHAPTER — the chapter is this pass's natural unit, so ten
+    # questions in one chapter is where a margin stops being read. Ranked by the
+    # judge's confidence; everything past the cap is dropped AND counted.
+    max_per_chapter: int = Field(default=10, ge=1)
+    # A unit below this many tokens (an epigraph, a part divider) is merged into a
+    # neighbour rather than buying its own read; a unit above max_chapter_tokens is
+    # size-split, so a headingless manuscript still reads in book-sized windows.
+    min_chapter_tokens: int = Field(default=1000, ge=1)
+    max_chapter_tokens: int = Field(default=120_000, ge=1)
+    # A path pins each chapter's read per draft (text + model + effort + prompt):
+    # re-reviewing a manuscript where one chapter changed re-reads only that
+    # chapter. Unset is the shared default folder, not off; see glossary.cache_dir.
+    cache_dir: str | None = None
+    # The chapter reader's system prompt, editable per job in the panel like the
+    # book read's. Empty (the default) uses the built-in one in continuity.py; a
+    # non-empty value replaces it wholesale, and — being part of the cache key — a
+    # changed prompt re-reads rather than returning a stale result.
+    prompt: str = ""
+    # The judge's system prompt, editable for tuning. Empty uses the built-in one.
+    judge_prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_model(self):
+        from .providers.catalog import lookup
+        if not self.enabled:
+            return self
+        if self.model is not None and lookup(self.model) is None:
+            raise ValueError(
+                f"chapter_continuity.model '{self.model}' is not in the catalog")
+        if lookup(self.judge_model) is None:
+            raise ValueError(
+                f"chapter_continuity.judge_model '{self.judge_model}' "
+                "is not in the catalog")
+        return self
+
+
 class RewriteConfig(BaseModel):
     """The rewrite-then-diff pass: the model retypes each paragraph minimal-edit,
     the diff against the source becomes candidates, and a skeptical confirm pass
@@ -1028,6 +1114,8 @@ class Config(BaseModel):
     glossary: GlossaryConfig = Field(default_factory=GlossaryConfig)
     storysheet: StorySheetConfig = Field(default_factory=StorySheetConfig)
     continuity: ContinuityConfig = Field(default_factory=ContinuityConfig)
+    chapter_continuity: ChapterContinuityConfig = Field(
+        default_factory=ChapterContinuityConfig)
     adjudicate: AdjudicateConfig = Field(default_factory=AdjudicateConfig)
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)

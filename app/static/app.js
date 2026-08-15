@@ -28,7 +28,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // a stale persisted value on the volume can't surface Sonnet.
                 catalogDefaultModel: null, defaultGlossaryModel: null,
                 defaultJudgeModel: null, defaultMeaningModel: null,
-                defaultFixModel: null,
+                defaultFixModel: null, defaultChapterContinuityModel: null,
                 // The effort tiers served by /api/presets (id → {controls,
                 // features, sapling policy}), the currently selected tier id
                 // ('light'|'standard'|'hard'|'hammer'|'custom'|null before the
@@ -1056,6 +1056,8 @@ async function loadModels() {
   state.defaultMeaningModel = body.default_meaning_model
     || state.defaultMeaningModel;
   state.defaultFixModel = body.default_fix_model || state.defaultFixModel;
+  state.defaultChapterContinuityModel = body.default_chapter_continuity_model
+    || state.defaultChapterContinuityModel;
 
   const select = $('model');
   const previous = select.value;
@@ -1159,6 +1161,27 @@ async function loadModels() {
       || '';
     fixSel.value = usable(fprev) ? fprev : fdefault;
   }
+
+  // The chapter-continuity reader (which also judges its own finds): the same
+  // catalog, defaulting to the house continuity model. The reader is the limit
+  // for this pass, so a strong model here is where the recall comes from.
+  const chapterCont = $('chapter-continuity-model');
+  if (chapterCont) {
+    const cprev = chapterCont.value;
+    chapterCont.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+      opt.disabled = !m.available;
+      chapterCont.append(opt);
+    });
+    const cdefault = (usable(state.defaultChapterContinuityModel)
+                      && state.defaultChapterContinuityModel)
+      || (models.find((m) => m.available) || models[0] || {}).id
+      || '';
+    chapterCont.value = usable(cprev) ? cprev : cdefault;
+  }
   renderCost();
 }
 
@@ -1169,6 +1192,19 @@ $('glossary-model').addEventListener('change',
   () => { renderCost(); reEvaluateTier(); });
 if ($('meaning-model')) $('meaning-model').addEventListener('change', renderCost);
 if ($('fix-model')) $('fix-model').addEventListener('change', renderCost);
+if ($('chapter-continuity-model'))
+  $('chapter-continuity-model').addEventListener('change', renderCost);
+// The sensitivity dial is not a tier control and does not move the price; it only
+// names the level it is on. 1 Cautious … 5 Exhaustive, matching the datalist.
+if ($('chapter-continuity-sensitivity')) {
+  const CC_SENS = { 1: 'Cautious', 2: 'Measured', 3: 'Thorough',
+                    4: 'Searching', 5: 'Exhaustive' };
+  const sens = $('chapter-continuity-sensitivity');
+  const nm = $('chapter-continuity-sensitivity-name');
+  const render = () => { if (nm) nm.textContent = CC_SENS[Number(sens.value)] || ''; };
+  sens.addEventListener('input', render);
+  render();
+}
 if ($('judge-model')) $('judge-model').addEventListener('change',
   () => { renderCost(); reEvaluateTier(); });
 if ($('confidence')) $('confidence').addEventListener('change', reEvaluateTier);
@@ -1208,6 +1244,11 @@ async function loadFeatures() {
       // falls back to it.
       if ($('continuity-prompt') && body.continuity) {
         $('continuity-prompt').placeholder = body.continuity.prompt_default || '';
+      }
+      // The chapter-scoped reader's prompt, the same way.
+      if ($('chapter-continuity-prompt') && body.chapter_continuity) {
+        $('chapter-continuity-prompt').placeholder =
+          body.chapter_continuity.prompt_default || '';
       }
       // And the meaning gate's, which reveals itself when its switch goes on.
       if ($('meaning-prompt') && body.meaning) {
@@ -2176,6 +2217,12 @@ $('start').addEventListener('click', async () => {
           judge_model: ($('judge-model') || {}).value || null,
           continuity_prompt: ($('continuity-prompt') || {}).value || '',
           continuity_only: !!(($('continuity-only') || {}).checked),
+          chapter_continuity_prompt:
+            ($('chapter-continuity-prompt') || {}).value || '',
+          chapter_continuity_model:
+            ($('chapter-continuity-model') || {}).value || null,
+          chapter_continuity_sensitivity:
+            Number(($('chapter-continuity-sensitivity') || {}).value) || null,
           meaning_model: ($('meaning-model') || {}).value || null,
           meaning_prompt: ($('meaning-prompt') || {}).value || '',
           fix_model: ($('fix-model') || {}).value || null,

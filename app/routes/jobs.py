@@ -79,9 +79,17 @@ class JobRequest(BaseModel):
     judge_model: str | None = None
     # The continuity read's editable system prompt; empty means the built-in
     # default. continuity_only runs that whole-book contradiction read on its
-    # own, with every detector pass and sweep stripped off.
+    # own, with every detector pass and sweep stripped off — and, with it, the
+    # chapter-scoped read below.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The chapter-continuity reader's editable system prompt; empty means the
+    # built-in default. Its on/off rides the `features` map like every other pass.
+    chapter_continuity_prompt: str = ""
+    # The chapter-continuity model (one pick sets both reader and judge) and the
+    # 1–5 sensitivity dial. None means the config default for each.
+    chapter_continuity_model: str | None = None
+    chapter_continuity_sensitivity: int | None = None
     # The judge gates' models and editable instructions. None/empty falls back to
     # the config default; each gate itself is a feature toggle.
     meaning_model: str | None = None
@@ -316,6 +324,24 @@ def register(app: FastAPI) -> None:
             raise HTTPException(
                 400, f"No API key saved for {info.display}. Add one in "
                      f"Settings first.")
+        # The chapter-continuity model, if picked: reject an unknown id, and
+        # demand a key only when the pass will actually run (its switch, or
+        # continuity-only, or a house config that ships it on).
+        if req.chapter_continuity_model:
+            ccinfo = lookup(req.chapter_continuity_model)
+            if ccinfo is None:
+                raise HTTPException(
+                    400, f"Unknown chapter-continuity model "
+                         f"{req.chapter_continuity_model!r}")
+            cc_on = (req.features or {}).get("chapter_continuity")
+            if cc_on is None:
+                _house = _house or load_config(CONFIG_PATH)
+                cc_on = _house.chapter_continuity.enabled
+            if (bool(cc_on) or req.continuity_only) and \
+                    not settingslib.get_api_key(ccinfo.provider):
+                raise HTTPException(
+                    400, f"No API key saved for {ccinfo.display} (the "
+                         f"chapter-continuity model). Add one in Settings first.")
 
         # Every id is resolved before any job is enqueued: a 404 halfway
         # through used to leave the earlier files already running — the page
@@ -375,6 +401,9 @@ def register(app: FastAPI) -> None:
                 judge_model=req.judge_model or "",
                 continuity_prompt=req.continuity_prompt,
                 continuity_only=req.continuity_only,
+                chapter_continuity_prompt=req.chapter_continuity_prompt,
+                chapter_continuity_model=req.chapter_continuity_model or "",
+                chapter_continuity_sensitivity=req.chapter_continuity_sensitivity,
                 meaning_model=req.meaning_model or "",
                 meaning_prompt=req.meaning_prompt,
                 fix_model=req.fix_model or "",
@@ -411,7 +440,8 @@ def register(app: FastAPI) -> None:
         # Continuity likewise carries an editable prompt (its reader's system
         # prompt) and a run-alone switch, so its default rides alongside the
         # catalog the same way the round judge's does.
-        from docproof.continuity import default_continuity_prompt
+        from docproof.continuity import (default_chapter_continuity_prompt,
+                                          default_continuity_prompt)
         # Each judge gate is a boolean in the catalog above, but its judge also
         # carries an editable prompt, so those defaults ride alongside the same
         # way the round judge's does.
@@ -420,6 +450,8 @@ def register(app: FastAPI) -> None:
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
                            "judge_prompt_default": default_judge_prompt()},
                 "continuity": {"prompt_default": default_continuity_prompt()},
+                "chapter_continuity": {
+                    "prompt_default": default_chapter_continuity_prompt()},
                 "meaning": {"prompt_default": default_prompt("meaning")},
                 "fix": {"prompt_default": default_prompt("fix")}}
 

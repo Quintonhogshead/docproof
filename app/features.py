@@ -78,6 +78,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "read; a free date-versus-weekday check rides along.",
         "pass", ("continuity", "enabled"), heavy=True),
     FeatureSpec(
+        "chapter_continuity", "Chapter continuity — in-scene breaks",
+        "Reads one chapter at a time for breaks that close inside it — a character "
+        "who sits down who never stood, someone who leaves a room then speaks in "
+        "it, a cigarette lit twice, dawn that becomes evening in one scene. A "
+        "skeptical judge culls them and each is a margin question, never an edit. "
+        "Adds a per-chapter read plus a judge.",
+        "pass", ("chapter_continuity", "enabled"), heavy=True),
+    FeatureSpec(
         "rewrite", "Rewrite-and-compare pass",
         "The model retypes each paragraph with the smallest possible edits, and "
         "the differences become candidates a skeptical confirm step rules on. A "
@@ -236,6 +244,13 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "read", "model": cfg.storysheet.model}
     if fid == "continuity":
         return {"kind": "read", "model": cfg.continuity.model}
+    if fid == "chapter_continuity":
+        # Priced as a whole-book read: split across chapters, it reads the book
+        # once, plus a small judge whose cost tracks the candidate count. Same
+        # three-tier model fallback the pipeline resolves at point of use.
+        return {"kind": "read",
+                "model": (cfg.chapter_continuity.model or cfg.continuity.model
+                          or cfg.api.model)}
     if fid == "rewrite":
         return {"kind": "retype", "model": cfg.rewrite.model,
                 "samples": cfg.rewrite.samples}
