@@ -1326,7 +1326,11 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         sweeps=prepared.sweep_reports, spell=prepared.spell,
                         normalization=prepared.normalization,
                         audit=audit_report, consistency=prepared.consistency,
-                        coverage=coverage)
+                        coverage=coverage,
+                        # Both reassemblers report these; getattr keeps a format
+                        # that predates them constructing rather than crashing.
+                        queried_ids=getattr(stats, "queried", ()),
+                        unplaced_ids=getattr(stats, "unplaced", ()))
     write_summary_md(out / "summary.md", doc=prepared.doc, findings=validated,
                      usage=usage, cfg=cfg, applied_ids=stats.applied,
                      batch=batch, fmt=fmt, sweeps=prepared.sweep_reports,

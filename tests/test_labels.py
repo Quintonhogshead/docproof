@@ -55,7 +55,11 @@ OPAQUE = {
 # Keys a findings.json row carries that are not Finding fields. `rejudge.read_run`
 # drops anything outside the dataclass rather than matching this list, so this is
 # a description of reporting.py, not a thing rejudge depends on staying current.
-REPORTING_ONLY = {"applied"}
+# Reporting keys findings.json hangs off a Finding row. `applied` says a
+# tracked change was written; `queried` and `unplaced` say the same for the
+# other channel, and neither is derivable from `status` — a query can be
+# status "query" and still never reach the reader.
+REPORTING_ONLY = {"applied", "queried", "unplaced"}
 
 
 def _registry_keys() -> set[str]:

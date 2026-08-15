@@ -384,6 +384,42 @@ def test_a_query_in_a_footnote_is_refused(cfg, tmp_path):
     assert not list(pkg.tree("Stories/Story_ue0.xml").iter("Note"))
 
 
+def test_queried_counts_notes_in_the_file_not_questions_intended(cfg, tmp_path):
+    """`queried` has to mean "the reader can see this", not "we meant to show
+    it" — findings.json now publishes it per finding, so a field that counted
+    intentions would relocate the old overcount and give it an authoritative
+    name. Asserted where the two can actually diverge: one question that lands
+    and one the reassembler refuses, in a single run."""
+    from docproof.models import Anchor, ParagraphRef
+    cfg.comments = True
+    cfg.revision_author = "docproof"
+    pkg = preflight(LAYOUT, "abort")
+    doc = build_document_model(pkg, cfg)
+    fn_text = "A footnote with its own sentence, it also runs on."
+    doc = type(doc)(source_path=doc.source_path,
+                    paragraphs=doc.paragraphs + (ParagraphRef(
+                        "story-ue0-fn0-p0000", "Stories/Story_ue0.xml",
+                        "footnote", fn_text, "NormalParagraphStyle"),),
+                    skipped=doc.skipped)
+
+    lands = query("q-ok", "story-ue0-p0002", DOOR)
+    refused = query("q-fn", "story-ue0-fn0-p0000", fn_text)
+    refused = type(refused)(**{**refused.__dict__, "status": "query",
+                               "anchor": Anchor(0, len(fn_text), fn_text, "")})
+    validated = validate_findings([lands], doc, cfg.min_confidence,
+                                  query_types=SPEAKER) + [refused]
+    stats = apply_tracked_changes(pkg, doc, validated, cfg)
+    out = tmp_path / "reviewed.idml"
+    pkg.save(out)
+    after = IdmlPackage(out)
+
+    # Two questions went in; one is in the file.
+    assert len(validated) == 2
+    assert stats.queried == ("q-ok",) and stats.unplaced == ("q-fn",)
+    # The count and the deliverable agree — which is the whole claim.
+    assert len(stats.queried) == len(notes_in(after)) == 1
+    assert notes_in(after) == ["Who is speaking here?"]
+
 def test_a_query_with_no_anchor_is_counted_as_unplaced_not_dropped(cfg,
                                                                    tmp_path):
     """A Note is placed from the anchor, so a query without one cannot be
