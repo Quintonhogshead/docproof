@@ -648,7 +648,14 @@ class SmoothingConfig(BaseModel):
     # than it earns.
     min_confidence: Literal["low", "medium", "high"] = "medium"
     batch_size: int = Field(default=40, ge=1)   # candidates per judge request
-    max_output_tokens: int = Field(default=4000, ge=1)
+    # The proposing read. Sized like the judge below and for the same reason: on
+    # a reasoning model the ceiling covers the THINKING too, so 4,000 truncated a
+    # dense window on real input — and unlike the judge, a truncated propose read
+    # is dropped whole and shows up only as fewer suggestions, which reads as
+    # restraint. An unused ceiling is free; you are billed for tokens generated,
+    # never for the cap. propose() also counts any read that still fails, so a
+    # residual truncation is reported rather than mistaken for silence.
+    max_output_tokens: int = Field(default=16000, ge=1)
     # The judge gets its own, much larger ceiling. Its VISIBLE output is tiny —
     # a verdict is three fields — but on a reasoning model the thinking counts
     # against this budget too, and judging forty literary calls at high effort

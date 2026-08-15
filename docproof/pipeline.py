@@ -998,7 +998,7 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
     pcfg.api.model = sm.model or cfg.api.model
     pcfg.api.effort = sm.effort          # applies whether or not `model` is set
     propose_model = pcfg.api.model
-    cands, filtered = propose(
+    cands, filtered, n_windows, windows_failed = propose(
         doc.paragraphs, build_provider(pcfg), model=propose_model,
         max_tokens=sm.max_output_tokens, usage=usage,
         system=sm.propose_prompt or PROPOSE_SYSTEM,
@@ -1010,15 +1010,25 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
                         if prepared.variant else "”\""),
         include_dialogue=sm.include_dialogue, edit_guard=cfg.edit_guard,
         concurrency=cfg.concurrency_for(propose_model))
+    if windows_failed:
+        # The propose-side twin of the unjudged warning below. A read that
+        # truncated dropped a whole window of the manuscript, which shows up only
+        # as fewer suggestions unless it is said out loud.
+        log.warning("Smoothing: %d of %d reading pass(es) came back truncated or "
+                    "unreadable, so those parts of the manuscript went unread — "
+                    "treat this run's volume as a floor. Raising "
+                    "smoothing.max_output_tokens is the fix if it recurs.",
+                    windows_failed, n_windows)
     if not cands:
         # Provenance even on the empty path. A run that proposed nothing and a
         # run that never happened produce the same findings — and on this pass
         # silence is the ordinary output, so the difference has to be recorded
         # rather than inferred. `propose_model` is what says the manuscript was
-        # actually read; see docproof/labels.py.
+        # actually read; see docproof/labels.py. `windows_failed` distinguishes a
+        # genuinely quiet read from one where every window truncated.
         return [], SmoothingReport(
-            filtered=filtered, propose_model=propose_model,
-            judge_model=sm.judge_model,
+            filtered=filtered, windows=n_windows, windows_failed=windows_failed,
+            propose_model=propose_model, judge_model=sm.judge_model,
             propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM))
 
     # The judge reads with the same book knowledge the round judge gets. Folded
@@ -1075,6 +1085,7 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
         proposed=len(cands), kept=len(kept), withheld=withheld, cap=cap,
         unjudged=unjudged, filtered=filtered,
         refused=len(rejected), below_floor=below_floor,
+        windows=n_windows, windows_failed=windows_failed,
         propose_model=propose_model, judge_model=sm.judge_model,
         propose_prompt_sha=prompt_sha(sm.propose_prompt or PROPOSE_SYSTEM),
         judge_prompt_sha=prompt_sha(system))

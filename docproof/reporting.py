@@ -442,25 +442,39 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     # to show is not visible anywhere else. A cap the author cannot see is
     # indistinguishable from a pass that simply found little, and those are very
     # different facts about their manuscript.
-    if smoothing is not None and smoothing.proposed:
+    # Rendered when the pass proposed anything OR when a reading pass failed —
+    # the second half matters because a run whose every window truncated
+    # proposes nothing, and gating solely on `proposed` would hide that outage
+    # behind the same silence the pass produces on a clean read.
+    if smoothing is not None and (smoothing.proposed or smoothing.windows_failed):
         L.append("## Language smoothing\n")
-        L.append(f"{smoothing.kept} suggestion(s) in the margin, from "
-                 f"{smoothing.proposed} the line-editing pass proposed. These "
-                 f"are questions of taste, not corrections: every one is a "
-                 f"{fmt.comment_noun} and none of them changed the text.\n")
-        if smoothing.withheld:
-            L.append(f"**{smoothing.withheld} further suggestion(s) withheld** "
-                     f"— this manuscript's cap is {smoothing.cap}, and the "
-                     f"least confident past that were dropped rather than "
-                     f"crowd the margin.\n")
-        if smoothing.unjudged:
-            # Silence here would read as restraint. It is not: these are
-            # candidates nobody ruled on, so the count above is a floor.
-            L.append(f"**{smoothing.unjudged} of them were never ruled on** — "
-                     f"the reviewing model's reply came back truncated or "
-                     f"unreadable, so those suggestions were neither offered "
-                     f"nor refused. This pass ran incompletely; treat the "
-                     f"count above as a floor rather than a finding.\n")
+        if smoothing.proposed:
+            L.append(f"{smoothing.kept} suggestion(s) in the margin, from "
+                     f"{smoothing.proposed} the line-editing pass proposed. These "
+                     f"are questions of taste, not corrections: every one is a "
+                     f"{fmt.comment_noun} and none of them changed the text.\n")
+            if smoothing.withheld:
+                L.append(f"**{smoothing.withheld} further suggestion(s) withheld**"
+                         f" — this manuscript's cap is {smoothing.cap}, and the "
+                         f"least confident past that were dropped rather than "
+                         f"crowd the margin.\n")
+            if smoothing.unjudged:
+                # Silence here would read as restraint. It is not: these are
+                # candidates nobody ruled on, so the count above is a floor.
+                L.append(f"**{smoothing.unjudged} of them were never ruled on** — "
+                         f"the reviewing model's reply came back truncated or "
+                         f"unreadable, so those suggestions were neither offered "
+                         f"nor refused. This pass ran incompletely; treat the "
+                         f"count above as a floor rather than a finding.\n")
+        if smoothing.windows_failed:
+            # The read itself, not the judge — a whole window of the manuscript
+            # went unread. Reported for the same reason as `unjudged`: on this
+            # pass a shortfall is invisible against its ordinary silence.
+            L.append(f"**{smoothing.windows_failed} of {smoothing.windows} "
+                     f"reading pass(es) did not complete** — the line editor's "
+                     f"reply came back truncated or unreadable, so those parts "
+                     f"of the manuscript were never read for smoothing. Any "
+                     f"count above is a floor rather than a full read.\n")
 
     # Each judge gate gets its own section, because these are a different animal
     # from the queries above: every one of them is a correction the run was going

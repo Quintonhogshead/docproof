@@ -332,6 +332,55 @@ def test_an_oversized_rewrite_is_dropped_before_the_judge(monkeypatch):
     assert findings == [] and report.proposed == 0
 
 
+def test_a_long_anchor_with_a_small_change_survives_the_size_guard(monkeypatch):
+    """The guard measures the SHRUNK diff, not the raw quote. A smoothing has to
+    quote enough of the sentence to anchor uniquely while changing a word or two;
+    measuring the raw length dropped exactly those long-anchor/small-change edits.
+    Paired with the oversized test above: same guard, opposite verdict."""
+    quote = ("The letter that she had been waiting for since the start of the "
+             "summer finally came")
+    assert len(quote) > 64                       # the raw guard would have dropped it
+    p = _para("body-0", quote + ".")
+    findings, report, _prov = _run(monkeypatch, _cfg(), _prepared(p), [
+        _suggest(_s("body-0", quote,
+                    quote.replace("finally came", "finally arrived"),
+                    category="idiom")),
+        _verdicts({"index": 1, "is_error": True, "confidence": "high"}),
+    ])
+    assert report.proposed == 1 and len(findings) == 1
+
+
+def test_two_alternatives_for_one_span_both_reach_the_judge(monkeypatch):
+    """The propose dedupe keys on (span, wording), not span alone, so two genuinely
+    different rewrites of the same words both reach the judge — which rules on
+    each. An exact duplicate would still collapse."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    findings, report, _prov = _run(monkeypatch, _cfg(max_per_1000_words=500),
+                                   _prepared(p), [
+        _suggest(_s("body-0", "in a very quiet way", "quietly"),
+                 _s("body-0", "in a very quiet way", "silently")),
+        _verdicts({"index": 1, "is_error": True, "confidence": "high"},
+                  {"index": 2, "is_error": True, "confidence": "high"}),
+    ])
+    assert report.proposed == 2
+    # And both survive validation as two distinct margin questions.
+    validated = validate_findings(findings, _prepared(p).doc, "low")
+    assert [f.status for f in validated] == ["query", "query"]
+
+
+def test_an_exact_duplicate_suggestion_is_still_dropped(monkeypatch):
+    """The other half of the (span, wording) key: the same rewrite proposed twice
+    is one question, not two."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    _findings, report, _prov = _run(monkeypatch, _cfg(max_per_1000_words=500),
+                                    _prepared(p), [
+        _suggest(_s("body-0", "in a very quiet way", "quietly"),
+                 _s("body-0", "in a very quiet way", "quietly")),
+        _verdicts({"index": 1, "is_error": True, "confidence": "high"}),
+    ])
+    assert report.proposed == 1
+
+
 def test_the_judge_can_refuse_a_suggestion(monkeypatch):
     p = _para("body-0", "She walked over to the door in a very quiet way.")
     findings, report, _prov = _run(monkeypatch, _cfg(), _prepared(p), [
@@ -417,6 +466,20 @@ def test_a_judge_that_refused_everything_is_not_reported_as_failure(monkeypatch)
     assert report.proposed == 1 and report.kept == 0 and report.unjudged == 0
 
 
+def test_a_truncated_reading_pass_is_counted_not_read_as_restraint(monkeypatch):
+    """The propose-side twin of the unjudged case, one stage earlier. A read that
+    hits the token ceiling returns nothing parsed and drops a whole window of the
+    manuscript — counted, so it is never mistaken for a quiet read."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    findings, report, prov = _run(monkeypatch, _cfg(), _prepared(p), [
+        ProviderResult(stop_reason="max_tokens"),   # the read truncated: nothing back
+    ])
+    assert findings == [] and report.proposed == 0
+    assert report.windows == 1 and report.windows_failed == 1
+    # The judge was never reached — there was nothing to rule on.
+    assert len(prov.calls) == 1
+
+
 def test_the_unjudged_count_reaches_summary_md(tmp_path):
     from docproof.formats import DOCX
     from docproof.reporting import write_summary_md
@@ -445,6 +508,24 @@ def test_the_withheld_count_reaches_summary_md(tmp_path):
                                                cap=3))
     text = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "6 further suggestion(s) withheld" in text
+
+
+def test_a_failed_reading_pass_reaches_summary_md(tmp_path):
+    """A run whose every window truncated proposes nothing, so the section must
+    render on the failure count, not only on `proposed` — otherwise the outage
+    hides behind the same silence a clean read produces."""
+    from docproof.formats import DOCX
+    from docproof.reporting import write_summary_md
+    from docproof.smoothing import SmoothingReport
+    doc = DocumentModel(source_path="x.docx",
+                        paragraphs=(_para("body-0", "Some prose here."),))
+    write_summary_md(tmp_path / "summary.md", doc=doc, findings=[],
+                     usage=Usage(), cfg=Config(), applied_ids=(), fmt=DOCX,
+                     smoothing=SmoothingReport(proposed=0, windows=3,
+                                               windows_failed=2))
+    text = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert "Language smoothing" in text
+    assert "2 of 3 reading pass(es) did not complete" in text
 
 
 # --- unit: the deterministic helpers ------------------------------------------
