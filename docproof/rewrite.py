@@ -140,10 +140,19 @@ def _diff_candidates(para: ParagraphRef, corrected: str, *,
 
 
 def candidates_from_result(chunk: Chunk, parsed: dict | None, *,
-                           max_add: int = 24, max_span: int = 48
+                           max_add: int = 24, max_span: int = 48,
+                           report: WindowReport | None = None
                            ) -> list[RewriteCandidate]:
     """Turn one chunk's rewrite response (a `_Rewritten` payload, however it was
-    obtained — a live call or a batch result) into size-guarded candidates."""
+    obtained — a live call or a batch result) into size-guarded candidates.
+
+    `report`, if given, counts how many of the chunk's paragraphs actually came
+    back retyped. The batch collector cannot split and re-ask the way `propose`
+    does — the requests were bought hours ago — so counting is all it can do, and
+    it is the difference between a truncated retype reading as a paragraph with
+    nothing to fix and reading as a paragraph nobody looked at."""
+    if report is not None:
+        report.asked += len(chunk.paragraphs)
     if not parsed:
         return []
     try:
@@ -153,11 +162,15 @@ def candidates_from_result(chunk: Chunk, parsed: dict | None, *,
         return []
     by_id = {p.para_id: p for p in chunk.paragraphs}
     cands: list[RewriteCandidate] = []
+    seen = 0
     for pr in obj.paragraphs:
         para = by_id.get(pr.id)
         if para is not None:
+            seen += 1
             cands.extend(_diff_candidates(
                 para, pr.corrected, max_add=max_add, max_span=max_span))
+    if report is not None:
+        report.answered += seen
     return cands
 
 
@@ -182,46 +195,98 @@ def dedup_candidates(cands: Sequence[RewriteCandidate]) -> list[RewriteCandidate
 def propose(chunks: Sequence[Chunk], provider: Provider, *, model: str,
             max_tokens: int, usage: Usage, max_add: int = 24,
             max_span: int = 48, workers: int = 8, samples: int = 1,
-            diverse: bool = True) -> list[RewriteCandidate]:
+            diverse: bool = True,
+            loss_sink: list | None = None) -> list[RewriteCandidate]:
     """Rewrite every paragraph live and return the size-guarded diffs as
     candidates. With `samples` > 1 each chunk is retyped that many times and the
     diffs are unioned — a stochastic retype catches overlapping but not identical
     errors, so the union lifts recall. With `diverse`, each sample looks hardest
     for a different error class (see lens_system); without it they share the plain
     prompt. The synchronous path; batch review builds the same requests into its
-    batch and calls `candidates_from_result` at collect. Calls run concurrently."""
+    batch and calls `candidates_from_result` at collect. Calls run concurrently.
+
+    Unlike the verdict passes, this one's output is proportional to its INPUT —
+    it retypes every paragraph it is given — so a chunk that truncates is
+    genuinely too big for the ceiling, and halving it is both the correct remedy
+    and an effective one. A paragraph that still never comes back retyped is
+    counted in `loss_sink`: it generated no candidates, which is indistinguishable
+    from a paragraph the model read and found nothing wrong with.
+    """
     schema = rewrite_schema()
 
     def do(job: tuple[Chunk, int]):
-        """Returns (candidates, usage-or-None). The usage comes back rather than
-        being folded here: this runs on the pool, and Usage.add is a lock-free
-        read-modify-write, so adding from N workers silently loses updates and
-        under-reports what the run cost."""
+        """Returns (candidates, [usage], report). Usage and the loss report both
+        come back rather than being folded here: this runs on the pool, and both
+        Usage.add and the report's counters are lock-free read-modify-write, so
+        touching either from N workers silently loses updates — under-reporting
+        what the run cost, and what it failed to read."""
         chunk, sample = job
+        report = WindowReport(label="rewrite retype")
         if not chunk.paragraphs:
-            return [], None
+            return [], [], report
         system = lens_system(sample) if diverse else PROPOSE_SYSTEM
-        res = provider.complete_structured(
-            model=model, system=system, user=render(chunk.paragraphs),
-            schema=schema, schema_name="rewritten", max_tokens=max_tokens)
-        if res.stop_reason != "ok" or not res.parsed:
-            log.warning("rewrite: chunk %s returned %s", chunk.chunk_id,
-                        res.error or res.stop_reason)
-            return [], res.usage
-        return candidates_from_result(chunk, res.parsed, max_add=max_add,
-                                      max_span=max_span), res.usage
+        spent: list = []
+
+        def fetch(paragraphs, ceiling: int = max_tokens):
+            res = provider.complete_structured(
+                model=model, system=system, user=render(paragraphs),
+                schema=schema, schema_name="rewritten", max_tokens=ceiling)
+            spent.append(res.usage)          # every call, including the first
+            return res
+
+        rows = resolve_window(chunk.paragraphs, fetch(chunk.paragraphs),
+                              fetch=fetch, rows_of=_retype_rows,
+                              max_tokens=max_tokens, report=report)
+        if report.lost:
+            log.warning("rewrite: chunk %s — %d paragraph(s) were never "
+                        "retyped, so they produced no candidates.",
+                        chunk.chunk_id, report.lost)
+        return (_candidates_from_rows(chunk.paragraphs, rows, max_add=max_add,
+                                      max_span=max_span), spent, report)
 
     jobs = [(chunk, s) for s in range(max(1, samples)) for chunk in chunks]
     cands: list[RewriteCandidate] = []
+    total = WindowReport(label="rewrite retype")
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        for group, spent in ex.map(do, jobs):
-            if spent is not None:
-                usage.add(spent)                     # fold serially: not thread-safe
+        for group, spent, report in ex.map(do, jobs):
+            for u in spent:
+                usage.add(u)                         # fold serially: not thread-safe
+            total.merge(report)
             cands.extend(group)
+    log_report(total)
+    if loss_sink is not None:
+        loss_sink.append(total)
     cands = dedup_candidates(cands)
-    log.info("Rewrite: %d candidate diff(s) from %d chunk(s) x %d sample(s)",
-             len(cands), len(chunks), max(1, samples))
+    log.info("Rewrite: %d candidate diff(s) from %d chunk(s) x %d sample(s)%s",
+             len(cands), len(chunks), max(1, samples),
+             f" — {total.lost} paragraph retype(s) LOST" if total.lost else "")
     return cands
+
+
+def _retype_rows(parsed: dict, items) -> dict[int, "_Para"]:
+    """A retype response as {1-based position in `items`: rewritten paragraph}.
+
+    The wire protocol keys by para_id rather than by item number, so the mapping
+    needs the list that was actually asked about — which changes every time a
+    window is halved. A paragraph absent from the response is left unanswered
+    and re-asked rather than being taken for "nothing to change here"."""
+    try:
+        obj = _Rewritten.model_validate(parsed)
+    except Exception as e:
+        log.warning("rewrite: bad response: %s", e)
+        return {}
+    at = {p.para_id: i for i, p in enumerate(items, 1)}
+    return {at[pr.id]: pr for pr in obj.paragraphs if pr.id in at}
+
+
+def _candidates_from_rows(paragraphs, rows: dict, *, max_add: int,
+                          max_span: int) -> list[RewriteCandidate]:
+    """Size-guarded diffs for the paragraphs that actually came back retyped."""
+    out: list[RewriteCandidate] = []
+    for offset in sorted(rows):
+        out.extend(_diff_candidates(paragraphs[offset], rows[offset].corrected,
+                                    max_add=max_add, max_span=max_span))
+    return out
 
 
 # --- confirm: rule on each proposed edit in context ---------------------------
@@ -378,7 +443,7 @@ def confirm(candidates: Sequence[RewriteCandidate],
     return findings
 
 
-def _rows_of(parsed: dict) -> dict[int, "_CVerdict"]:
+def _rows_of(parsed: dict, items) -> dict[int, "_CVerdict"]:
     """A parsed body as {1-based item number: verdict}, or nothing at all when
     it does not validate — the caller then treats those items as unanswered and
     re-asks, rather than counting them as ruled."""

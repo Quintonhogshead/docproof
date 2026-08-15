@@ -74,6 +74,16 @@ class WindowReport:
     def clean(self) -> bool:
         return self.lost == 0
 
+    def merge(self, other: "WindowReport") -> None:
+        """Fold another report in. A pass whose calls run on a worker pool gives
+        each job its OWN report — these counters are read-modify-write, so
+        sharing one across threads would under-count exactly the losses the
+        report exists to surface — and folds them here, serially."""
+        self.asked += other.asked
+        self.answered += other.answered
+        self.truncated_calls += other.truncated_calls
+        self.extra_calls += other.extra_calls
+
     def summary(self) -> str:
         bits = [f"{self.answered}/{self.asked} item(s) ruled on"]
         if self.truncated_calls:
@@ -97,7 +107,7 @@ class _Ask:
 
 def resolve_window(window: Sequence[Any], first_result, *,
                    fetch: Callable[[Sequence[Any], int], Any],
-                   rows_of: Callable[[Any], dict[int, Any]],
+                   rows_of: Callable[[Any, Sequence[Any]], dict[int, Any]],
                    max_tokens: int,
                    report: WindowReport,
                    usage_sink: Callable[[Any], None] | None = None,
@@ -105,10 +115,16 @@ def resolve_window(window: Sequence[Any], first_result, *,
     """Every answer this window can be made to give, keyed by 0-based offset.
 
     `fetch(items, ceiling)` asks the model about a sub-list and returns a
-    ProviderResult; `rows_of(parsed)` turns a parsed body into {1-based item
-    number: row}, and returns {} for a body that does not validate. `first_result`
-    is the answer the caller already has in hand, so the happy path costs no
-    extra call.
+    ProviderResult; `rows_of(parsed, items)` turns a parsed body into {1-based
+    item number: row}, and returns {} for a body that does not validate.
+    `first_result` is the answer the caller already has in hand, so the happy
+    path costs no extra call.
+
+    `rows_of` is handed the items as well as the body because not every wire
+    protocol numbers its answers: the verdict passes key by "item N", but the
+    rewrite retype keys by para_id, and only the caller's list says which
+    position that is. The sub-list shrinks as a window is halved, so this cannot
+    be closed over — it has to be passed in.
 
     Anything still unanswered when recovery is exhausted is counted in `report`
     and simply absent from the returned mapping — the caller folds what it got
@@ -122,7 +138,8 @@ def resolve_window(window: Sequence[Any], first_result, *,
         given is dropped rather than wrapped around."""
         if result is None or result.parsed is None:
             return
-        for n, row in rows_of(result.parsed).items():
+        items = [window[o] for o in offsets]
+        for n, row in rows_of(result.parsed, items).items():
             if 1 <= n <= len(offsets):
                 got[offsets[n - 1]] = row
 
@@ -130,17 +147,26 @@ def resolve_window(window: Sequence[Any], first_result, *,
         """What still needs asking after `result` came back for `ask`."""
         before = len(got)
         absorb(result, ask.offsets)
-        if result is not None and result.stop_reason == "max_tokens":
+        stop = result.stop_reason if result is not None else "error"
+        if stop == "max_tokens":
             report.truncated_calls += 1
         missing = [o for o in ask.offsets if o not in got]
         if not missing:
             return []
+        # A refusal or a transport error is not a size problem, so neither
+        # halving nor re-asking changes the answer — and the SDK has already
+        # spent api.max_retries on the transport case. Retrying here would buy
+        # the same failure again, once per half, all the way down. Give up and
+        # let the report carry it.
+        if stop in ("refusal", "error"):
+            log.error("%s: %d item(s) unanswerable (%s); not retried.",
+                      report.label, len(missing),
+                      (result.error if result is not None else None) or stop)
+            return []
         # Shrink when the model gave us nothing to go on — an explicit
         # truncation, or a window that answered none of what it was asked, which
         # is likelier to be too big than to be unanswerable.
-        shrink = (result is None or result.stop_reason == "max_tokens"
-                  or len(got) == before)
-        return _requeue(ask, missing, shrink)
+        return _requeue(ask, missing, stop == "max_tokens" or len(got) == before)
 
     head = _Ask(offsets=list(range(len(window))), ceiling=max_tokens)
     queue = follow_up(head, first_result)

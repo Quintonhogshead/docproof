@@ -707,7 +707,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
             max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
             workers=cfg.rewrite.workers, samples=cfg.rewrite.samples,
-            diverse=cfg.rewrite.diverse)
+            diverse=cfg.rewrite.diverse, loss_sink=window_losses)
         confirm_provider, confirm_model = rw_provider, rcfg.api.model
         if cfg.rewrite.confirm_model:
             ccfg = cfg.model_copy(deep=True)

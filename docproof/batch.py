@@ -364,25 +364,48 @@ def collect_findings(job: Job, provider: Provider,
         rcfg.api.effort = cfg.rewrite.effort
         rw_provider = build_provider(rcfg)
         if rewrite_batched(cfg):
+            from .windowing import WindowReport, log_report
             rcands = []
+            # The retypes were bought hours ago, so a truncated one cannot be
+            # split and re-asked the way the synchronous path does — but it must
+            # still be counted. Left uncounted, a paragraph whose retype hit the
+            # ceiling produces no candidates, which is exactly what a paragraph
+            # with nothing wrong in it produces.
+            retype = WindowReport(label="rewrite retype (batch)")
             for chunk in prepared.chunks:
                 for s in range(cfg.rewrite.samples):
                     res = results.get(custom_id_rewrite(chunk.chunk_id, s))
                     if res is None:
+                        retype.asked += len(chunk.paragraphs)
                         continue
                     usage.add(res.usage)
+                    if res.stop_reason != "ok" or res.parsed is None:
+                        retype.asked += len(chunk.paragraphs)
+                        if res.stop_reason == "max_tokens":
+                            retype.truncated_calls += 1
+                        log.warning("rewrite: chunk %s sample %d returned %s; "
+                                    "%d paragraph(s) were not retyped.",
+                                    chunk.chunk_id, s,
+                                    res.error or res.stop_reason,
+                                    len(chunk.paragraphs))
+                        continue
                     rcands += candidates_from_result(
                         chunk, res.parsed, max_add=cfg.rewrite.max_added,
-                        max_span=cfg.rewrite.max_span)
+                        max_span=cfg.rewrite.max_span, report=retype)
+            log_report(retype)
+            window_losses.append(retype)
             rcands = dedup_candidates(rcands)
             log.info("Rewrite: %d candidate diff(s) from the batch "
-                     "(%d sample(s))", len(rcands), cfg.rewrite.samples)
+                     "(%d sample(s))%s", len(rcands), cfg.rewrite.samples,
+                     f" — {retype.lost} paragraph retype(s) LOST"
+                     if retype.lost else "")
         else:
             rcands = propose(
                 prepared.chunks, rw_provider, model=rcfg.api.model,
                 max_tokens=cfg.rewrite.max_output_tokens, usage=usage,
                 max_add=cfg.rewrite.max_added, max_span=cfg.rewrite.max_span,
-                workers=cfg.rewrite.workers, samples=cfg.rewrite.samples)
+                workers=cfg.rewrite.workers, samples=cfg.rewrite.samples,
+                loss_sink=window_losses)
         confirm_provider, confirm_model = rw_provider, rcfg.api.model
         if cfg.rewrite.confirm_model:
             ccfg = cfg.model_copy(deep=True)

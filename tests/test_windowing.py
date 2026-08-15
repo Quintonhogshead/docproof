@@ -34,7 +34,7 @@ def _truncated():
                           error="output truncated")
 
 
-def _rows_of(parsed):
+def _rows_of(parsed, items):
     return {v["index"]: v for v in parsed["verdicts"]}
 
 
@@ -135,7 +135,7 @@ def test_a_body_that_fails_the_schema_is_unanswered_not_ruled():
         list("ab"), ProviderResult(parsed={"nonsense": True}, usage=U),
         fetch=lambda items, ceiling: ProviderResult(parsed={"nonsense": True},
                                                     usage=U),
-        rows_of=lambda p: {}, max_tokens=4000, report=report)
+        rows_of=lambda p, items: {}, max_tokens=4000, report=report)
     assert got == {} and report.lost == 2
 
 
@@ -275,3 +275,166 @@ def test_the_report_says_what_never_got_a_verdict(tmp_path):
     assert "40 candidate(s) never got a verdict" in text
     assert "- **languagetool confirm**" in text
     assert "- **adjudication**" not in text   # nothing was lost there
+
+
+# --- the retype pass ----------------------------------------------------------
+#
+# propose() differs from the verdict passes in kind: its output is proportional
+# to its INPUT (it retypes every paragraph it is given), so a chunk that
+# truncates is genuinely too big and halving actually fixes it. What it shares
+# is the failure mode — a paragraph never retyped generates no candidates, which
+# is exactly what a clean paragraph generates.
+
+def _chunk(paras):
+    from docproof.models import Chunk
+    return Chunk(chunk_id="c-000", paragraphs=tuple(paras),
+                 est_tokens=sum(len(p.text) // 4 for p in paras))
+
+
+def _retyped(paras, edit=True):
+    """A retype response covering `paras`, each with one letter changed."""
+    return ProviderResult(usage=U, parsed={"paragraphs": [
+        {"id": p.para_id,
+         "corrected": p.text.replace("cat", "bat") if edit else p.text}
+        for p in paras]})
+
+
+def test_propose_halves_a_truncated_chunk_rather_than_losing_it():
+    from docproof.rewrite import propose
+
+    paras = _para(4)
+    sizes = []
+
+    class P:
+        name = "fake"
+
+        def __init__(self):
+            self.first = True
+
+        def complete_structured(self, **kw):
+            # Answer about the paragraphs actually asked about — a halved window
+            # carries a different slice, and a response keyed to the wrong ids
+            # is (correctly) read as no answer at all.
+            asked = [p for p in paras if f"[{p.para_id}]" in kw["user"]]
+            sizes.append(len(asked))
+            if self.first and len(asked) == 4:
+                self.first = False
+                return _truncated()
+            return _retyped(asked)
+
+    losses: list = []
+    cands = propose([_chunk(paras)], P(), model="m", max_tokens=4000,
+                    usage=Usage(), workers=1, loss_sink=losses)
+    assert sizes[0] == 4 and sizes[1:] == [2, 2]   # halved after the truncation
+    assert losses[0].lost == 0
+    assert losses[0].truncated_calls == 1
+    assert cands                                    # candidates actually recovered
+
+
+def test_propose_counts_paragraphs_it_never_managed_to_retype():
+    """The point of the change: 0 candidates from a truncated chunk must not
+    read as 'the model found nothing to fix here'."""
+    from docproof.rewrite import propose
+
+    paras = _para(4)
+
+    class P:
+        name = "fake"
+
+        def complete_structured(self, **kw):
+            return _truncated()
+
+    losses: list = []
+    cands = propose([_chunk(paras)], P(), model="m", max_tokens=4000,
+                    usage=Usage(), workers=1, loss_sink=losses)
+    assert cands == []
+    assert losses[0].asked == 4 and losses[0].lost == 4
+    assert not losses[0].clean
+
+
+def test_propose_re_asks_a_paragraph_the_model_skipped():
+    """A retype can come back clean, parse, validate — and simply omit a
+    paragraph. That is not 'nothing to change'; it was never read."""
+    from docproof.rewrite import propose
+
+    paras = _para(4)
+    asked = []
+
+    class P:
+        name = "fake"
+
+        def complete_structured(self, **kw):
+            ids = [p.para_id for p in paras if f"[{p.para_id}]" in kw["user"]]
+            asked.append(ids)
+            covered = [p for p in paras if p.para_id in ids]
+            # First answer drops the last paragraph it was given.
+            return _retyped(covered[:-1] if len(covered) > 1 else covered)
+
+    losses: list = []
+    propose([_chunk(paras)], P(), model="m", max_tokens=4000, usage=Usage(),
+            workers=1, loss_sink=losses)
+    assert len(asked) > 1                    # the skipped one was chased
+    assert losses[0].lost == 0
+
+
+def test_propose_counts_every_sample_and_bills_every_retry():
+    from docproof.rewrite import propose
+
+    paras = _para(2)
+
+    class P:
+        name = "fake"
+
+        def complete_structured(self, **kw):
+            return _retyped(paras)
+
+    usage = Usage()
+    losses: list = []
+    propose([_chunk(paras)], P(), model="m", max_tokens=4000, usage=usage,
+            workers=1, samples=2, diverse=True, loss_sink=losses)
+    assert losses[0].asked == 4              # 2 paragraphs x 2 samples
+    assert usage.output_tokens == 20         # both calls billed
+
+
+def test_batch_collect_counts_a_truncated_retype_it_cannot_re_ask():
+    """The batch path bought its retypes hours ago, so counting is all it has —
+    and before this it did not even log, it just produced no candidates."""
+    from docproof.rewrite import candidates_from_result
+
+    paras = _para(3)
+    report = WindowReport(label="rewrite retype (batch)")
+    # A truncated batch result arrives as parsed=None.
+    out = candidates_from_result(_chunk(paras), None, report=report)
+    assert out == []
+    assert report.asked == 3 and report.lost == 3
+
+
+def test_batch_collect_counts_a_partial_retype():
+    from docproof.rewrite import candidates_from_result
+
+    paras = _para(3)
+    report = WindowReport(label="rewrite retype (batch)")
+    body = _retyped(paras[:2]).parsed          # one paragraph missing
+    candidates_from_result(_chunk(paras), body, report=report)
+    assert report.asked == 3 and report.answered == 2 and report.lost == 1
+
+
+def test_a_refusal_is_not_retried_because_shrinking_cannot_fix_it():
+    """Halving answers a SIZE problem. A refusal is not one, and the SDK has
+    already spent its retries on the transport case — re-asking would buy the
+    same failure once per half, all the way down."""
+    report = WindowReport(label="t")
+    calls = count()
+
+    def fetch(items, ceiling):
+        next(calls)
+        return ProviderResult(usage=U, stop_reason="refusal",
+                              error="model declined")
+
+    got = resolve_window(
+        list("abcdefgh"),
+        ProviderResult(usage=U, stop_reason="refusal", error="model declined"),
+        fetch=fetch, rows_of=_rows_of, max_tokens=4000, report=report)
+    assert got == {}
+    assert next(calls) == 0                  # not one retry was bought
+    assert report.lost == 8                  # ...and it is still reported

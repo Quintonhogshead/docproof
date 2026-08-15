@@ -358,7 +358,7 @@ def adjudicate(candidates: Sequence[Candidate],
     return findings
 
 
-def _rows_of(parsed: dict) -> dict[int, "_Verdict"]:
+def _rows_of(parsed: dict, items) -> dict[int, "_Verdict"]:
     """A parsed body as {1-based item number: verdict}, or nothing at all when it
     does not validate — the caller then treats those items as unanswered and
     re-asks, rather than counting them as ruled."""
