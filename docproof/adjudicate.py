@@ -35,6 +35,7 @@ from .models import Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
 from .spellscan import _WORD, _dictionary
+from .windowing import WindowReport, log_report, resolve_window
 
 log = logging.getLogger("docproof.adjudicate")
 
@@ -286,7 +287,7 @@ def adjudicate(candidates: Sequence[Candidate],
                paragraphs: Sequence[ParagraphRef],
                provider: Provider, *, model: str, max_tokens: int,
                usage: Usage, ids, batch_size: int = 40,
-               edit_confidence: str = "high",
+               edit_confidence: str = "high", loss_sink: list | None = None,
                concurrency: int = 1) -> list[Finding]:
     """Ask the model to rule on each candidate in context and turn confident
     misspellings into Findings. Safety is in the routing, not the detector: only
@@ -314,34 +315,32 @@ def adjudicate(candidates: Sequence[Candidate],
                for i in range(0, len(enriched), batch_size)]
     schema = strict_json_schema(_Verdicts)           # deep-copies; hoist off the pool
 
-    def fetch(window):
+    def fetch(window, ceiling: int = max_tokens):
         numbered = [(n + 1, c, sent) for n, (c, _para, sent) in enumerate(window)]
         return provider.complete_structured(
             model=model, system=_SYSTEM, user=_build_user(numbered),
             schema=schema, schema_name="verdicts",
-            max_tokens=max_tokens)
+            max_tokens=ceiling)
 
+    report = WindowReport(label="adjudication")
     findings: list[Finding] = []
     rank = {"low": 0, "medium": 1, "high": 2}
     edit_floor = rank.get(edit_confidence, 2)
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         pending = [(w, pool.submit(fetch, w)) for w in windows]
         try:
-            for batch_no, (window, future) in enumerate(pending):
+            for window, future in pending:
                 result = future.result()
                 usage.add(result.usage)              # fold serially: not thread-safe
-                if result.stop_reason != "ok" or result.parsed is None:
-                    log.error("adjudication batch %d: %s", batch_no,
-                              result.error or result.stop_reason)
-                    continue
-                try:
-                    parsed = _Verdicts.model_validate(result.parsed)
-                except Exception as e:               # malformed structured output
-                    log.error("adjudication batch %d: bad response: %s",
-                              batch_no, e)
-                    continue
+                # Recovery (halve a truncated window, re-ask an unanswered item)
+                # runs here, on this thread, so the ordering the folding depends
+                # on is untouched. A candidate still unanswered afterwards is
+                # counted in `report`, never mistaken for a "not an error".
+                rows = resolve_window(
+                    window, result, fetch=fetch, rows_of=_rows_of,
+                    max_tokens=max_tokens, report=report, usage_sink=usage.add)
                 findings.extend(
-                    _findings_from(parsed, window, ids, rank, edit_floor))
+                    _findings_from(rows, window, ids, rank, edit_floor))
         except BaseException:
             # Every window was queued up front, and the pool drains its queue on
             # the way out — so without this an abort keeps buying the rest of the
@@ -350,23 +349,41 @@ def adjudicate(candidates: Sequence[Candidate],
             for _w, unstarted in pending:
                 unstarted.cancel()
             raise
-    log.info("Adjudication: %d correction(s) from %d candidate(s)",
-             len(findings), len(candidates))
+    log_report(report)
+    if loss_sink is not None:
+        loss_sink.append(report)
+    log.info("Adjudication: %d correction(s) from %d candidate(s)%s",
+             len(findings), len(candidates),
+             f" — {report.lost} UNRULED" if report.lost else "")
     return findings
 
 
-def _findings_from(parsed: "_Verdicts", window, ids, rank: dict,
+def _rows_of(parsed: dict) -> dict[int, "_Verdict"]:
+    """A parsed body as {1-based item number: verdict}, or nothing at all when it
+    does not validate — the caller then treats those items as unanswered and
+    re-asks, rather than counting them as ruled."""
+    try:
+        return {v.index: v for v in _Verdicts.model_validate(parsed).verdicts}
+    except Exception as e:                           # malformed structured output
+        log.error("adjudication: response did not match the schema: %s", e)
+        return {}
+
+
+def _findings_from(rows: dict, window, ids, rank: dict,
                    edit_floor: int) -> list[Finding]:
-    """One window's verdicts as Findings, in the order the model answered.
+    """One window's verdicts as Findings, in the order they were asked.
+
+    `rows` maps a 0-based offset in `window` to that item's verdict and carries
+    only what actually came back; a candidate missing from it was never ruled on
+    and yields nothing, which is what `adjudicate`'s WindowReport counts.
 
     Split out of `adjudicate` only so the folding stays a plain serial routine
     while the calls around it run on a pool: everything here touches shared
     state (the id counter) and must not be reached from a worker thread."""
     findings: list[Finding] = []
-    for v in parsed.verdicts:
-        if not (1 <= v.index <= len(window)):
-            continue
-        cand, para_text, _sentence = window[v.index - 1]
+    for offset in sorted(rows):
+        v = rows[offset]
+        cand, para_text, _sentence = window[offset]
         if not v.is_error or not v.correction.strip():
             continue
         correction = _match_case(cand.word, v.correction.strip())

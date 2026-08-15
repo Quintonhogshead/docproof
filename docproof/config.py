@@ -331,7 +331,7 @@ class GlossaryConfig(BaseModel):
     # the cost; the app's submission panel offers the pick per book.
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
-    max_output_tokens: int = Field(default=8000, ge=1)
+    max_output_tokens: int = Field(default=16000, ge=1)
     # Where to pin the whole-book read per draft: a content-addressed cache
     # (keyed by text + model + effort + prompt) so re-reviewing an unchanged
     # draft reuses the read instead of paying for it again, and — since the read
@@ -393,7 +393,7 @@ class ContinuityConfig(BaseModel):
     # glossary's. Cacheable per draft via cache_dir.
     model: str = "claude-fable-5"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
-    max_output_tokens: int = Field(default=8000, ge=1)
+    max_output_tokens: int = Field(default=24000, ge=1)
     # A cap on margin comments, most significant first — the model is asked to
     # order them, and any past this many are dropped.
     max_queries: int = Field(default=40, ge=1)
@@ -443,7 +443,7 @@ class RewriteConfig(BaseModel):
     # than needle-finding). Defaults to whatever api.model is when unset.
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
-    max_output_tokens: int = Field(default=8000, ge=1)
+    max_output_tokens: int = Field(default=16000, ge=1)
     # Candidate size guards: a diff bigger than these is a paraphrase, not a fix.
     max_span: int = Field(default=48, ge=1)     # chars in the delete or insert
     max_added: int = Field(default=24, ge=0)    # net chars a fix may add
@@ -511,7 +511,7 @@ class LanguageToolConfig(BaseModel):
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)
-    max_output_tokens: int = Field(default=4000, ge=1)
+    max_output_tokens: int = Field(default=16000, ge=1)
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
     # The confidence at or above which an affirmed fix edits; softer is a margin
     # query. High by default — LanguageTool is deterministic but context-blind.
@@ -564,7 +564,7 @@ class SaplingConfig(BaseModel):
     # affirmation is a margin query, never a silent change. High by default —
     # Sapling is confident and context-blind, so the LLM's doubt should ask, not
     # edit.
-    max_output_tokens: int = Field(default=4000, ge=1)
+    max_output_tokens: int = Field(default=16000, ge=1)
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
     edit_confidence: Literal["low", "medium", "high"] = "high"
     # The confirm model. Unset = api.model (the detector's) does its own
@@ -675,7 +675,7 @@ class StorySheetConfig(BaseModel):
     enabled: bool = False
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
-    max_output_tokens: int = Field(default=4000, ge=1)
+    max_output_tokens: int = Field(default=12000, ge=1)
     # A path pins the read per draft, like glossary.cache_dir — and, like it,
     # unset means the shared default folder rather than no cache.
     cache_dir: str | None = None
@@ -742,7 +742,7 @@ class LowConfidenceConfig(BaseModel):
     the private harness before shipping it on, exactly as rewrite/languagetool/
     sapling are gated. Knobs mirror SaplingConfig's confirm block."""
     confirm: bool = False
-    max_output_tokens: int = Field(default=4000, ge=1)
+    max_output_tokens: int = Field(default=16000, ge=1)
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
     edit_confidence: Literal["low", "medium", "high"] = "high"
     # The confirm model. Unset = api.model (the detector's) does its own
@@ -799,7 +799,7 @@ class JudgeGateConfig(BaseModel):
     # stop a silent change, and a judge that cannot vouch for one has not vouched
     # for it. Off applies anything not positively flagged.
     flag_unsure: bool = True
-    max_output_tokens: int = Field(default=4000, ge=1)
+    max_output_tokens: int = Field(default=12000, ge=1)
     # The judge's instructions, meant to be edited per job in the review panel.
     # Empty uses the built-in default (docproof.judges.default_prompt(key)), so
     # clearing the field reverts to it.
