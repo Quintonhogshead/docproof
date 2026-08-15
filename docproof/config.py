@@ -645,10 +645,20 @@ class SmoothingConfig(BaseModel):
     max_per_1000_words: float = Field(default=3.0, gt=0)
     # Drop anything the judge affirms softer than this, before the cap. A
     # suggestion the judge is lukewarm about costs the author more attention
-    # than it earns.
+    # than it earns. C3 of the recall roadmap is simply lowering this to "low"
+    # and letting the ranked cap be the single volume control — no code change,
+    # since "low" is already a value; it stays at "medium" by default because it
+    # surfaces the judge's defensible-but-skippable calls, the most FP-prone.
     min_confidence: Literal["low", "medium", "high"] = "medium"
     batch_size: int = Field(default=40, ge=1)   # candidates per judge request
-    max_output_tokens: int = Field(default=4000, ge=1)
+    # The proposing read. Sized like the judge below and for the same reason: on
+    # a reasoning model the ceiling covers the THINKING too, so 4,000 truncated a
+    # dense window on real input — and unlike the judge, a truncated propose read
+    # is dropped whole and shows up only as fewer suggestions, which reads as
+    # restraint. An unused ceiling is free; you are billed for tokens generated,
+    # never for the cap. propose() also counts any read that still fails, so a
+    # residual truncation is reported rather than mistaken for silence.
+    max_output_tokens: int = Field(default=16000, ge=1)
     # The judge gets its own, much larger ceiling. Its VISIBLE output is tiny —
     # a verdict is three fields — but on a reasoning model the thinking counts
     # against this budget too, and judging forty literary calls at high effort
@@ -662,6 +672,75 @@ class SmoothingConfig(BaseModel):
     # replaces it wholesale.
     propose_prompt: str = ""
     judge_prompt: str = ""
+
+    # --- Tier C: opt-in recall levers ---------------------------------------
+    # Each of these defaults to today's behaviour, so a run that sets none of
+    # them is byte-for-byte the shipped pass. They exist so the proposer's
+    # restraint, the judge's preference-veto, the window size, and the dialogue
+    # skip can each be loosened and MEASURED without changing what a production
+    # run does until a flag is set. None is a proven recall gain yet (the pass
+    # reads statistically indistinguishable from null on the current corpus), so
+    # none ships on. See docproof/smoothing.py and the taste-pass recall memo.
+
+    # C1 — where the proposer's restraint lives. "restrained" is the shipped
+    # PROPOSE_SYSTEM; "open" swaps in PROPOSE_SYSTEM_OPEN, which keeps every
+    # voice-safety constraint (the NEVER-touch block, single-sentence,
+    # meaning-identical, the mechanical-error wall) VERBATIM but drops the "say
+    # almost nothing" framing, leaving the skeptical judge as the sole taste
+    # gate. The proposer is the binding constraint on how much this pass
+    # surfaces — a fully-open, unjudged read still finds only ~100 on a whole
+    # novel — so this is the lever with the most movement, and the most voice
+    # risk, which is why it is off by default and gated on measurement.
+    proposer_restraint: Literal["restrained", "open"] = "restrained"
+    # C2 — how much manuscript goes into one propose read. Smaller windows probe
+    # whether a "most paragraphs get nothing" proposer satisfices: it surfaces a
+    # similar handful whatever the window holds, so per-paragraph recall would
+    # fall as the window grows. Defaults are today's constants; ~5000 / ~24 is
+    # the setting to test. Smaller windows also give less cross-paragraph
+    # context, on which the rhetorical-repetition protections partly rely — run
+    # it as an isolated A/B, not alongside another proposer change.
+    propose_chars: int = Field(default=12_000, ge=1)
+    propose_max_paras: int = Field(default=60, ge=1)
+    # C4 — the judge's HARSHNESS, as a dial rather than a fixed prompt. The judge
+    # is what decides how much of the proposer's output reaches the author, and
+    # the right setting differs by manuscript and by author, so it is a selector
+    # like the reasoning-effort knob. Four levels, least- to most-rejecting:
+    #   lenient  — lean toward keeping; reject only voice damage / no improvement
+    #   balanced — judge on merits; keep what earns its place, need not reject most
+    #   strict   — DEFAULT TO NO, expect to reject most (the shipped JUDGE_SYSTEM)
+    #   severe   — keep only the undeniable handful
+    # "strict" is the shipped prompt byte-for-byte, so the default changes nothing.
+    # Across the whole dial the three voice-SAFETY vetoes (dialect/idiolect/coined/
+    # character-voice, fragment/rhetorical-repetition, meaning/emphasis/rhythm)
+    # hold verbatim — leniency buys back the merely-conventional and preference
+    # rejects, never the voice line. See JUDGE_SYSTEMS in docproof/smoothing.py.
+    judge_harshness: Literal["lenient", "balanced", "strict", "severe"] = "strict"
+    # C5 — clarity-only smoothing INSIDE dialogue. Dialogue is skipped wholesale
+    # by default; `include_dialogue` above is the all-or-nothing opt-in, and this
+    # is the middle setting. A candidate that overlaps quoted speech is normally
+    # dropped before the judge; if its category is listed here it survives to the
+    # judge instead. Only "clarity" is permitted (enforced below): an ambiguous
+    # pronoun can be a real error even in speech, whereas tightening or
+    # re-idioming a character's diction is exactly the voice damage the dialogue
+    # skip exists to prevent. Empty (the default) is today's total skip. The 9
+    # dialect/idiolect silence-trap items are the tripwire if this is widened.
+    dialogue_categories: list[str] = Field(default_factory=list)
+
+    @field_validator("dialogue_categories")
+    @classmethod
+    def _clarity_only_in_dialogue(cls, value):
+        """Only clarity may be smoothed inside dialogue. An ambiguous pronoun can
+        be a genuine error even in speech; tightening or re-idioming a
+        character's line is the voice damage the dialogue skip exists to prevent,
+        so the wider categories are refused at load rather than silently accepted
+        and quietly changing a character's diction."""
+        bad = [c for c in value if c != "clarity"]
+        if bad:
+            raise ValueError(
+                "smoothing.dialogue_categories may contain only 'clarity'; got "
+                f"{bad}. Widening dialogue smoothing past clarity is the voice "
+                "risk the dialogue skip is there to prevent.")
+        return value
 
     @model_validator(mode="after")
     def _known_model(self):

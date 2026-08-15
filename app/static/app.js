@@ -1732,6 +1732,8 @@ $('start').addEventListener('click', async () => {
           meaning_prompt: ($('meaning-prompt') || {}).value || '',
           fix_model: ($('fix-model') || {}).value || null,
           fix_prompt: ($('fix-prompt') || {}).value || '',
+          proposer_restraint: ($('proposer-restraint') || {}).value || 'restrained',
+          judge_harshness: ($('judge-harshness') || {}).value || 'strict',
           selections: isPrep() ? {} : selectionPayload(),
         }),
       });
