@@ -58,18 +58,29 @@ def query_text(f: Finding) -> str:
     return " ".join(parts)
 
 
-def wanted_statuses(query_comments: bool) -> set[str]:
-    """Which findings take the query channel.
+def shows_margin_comment(f: Finding, *, query_comments: bool,
+                         not_applied_comments: bool) -> bool:
+    """Whether a not-applied finding leaves a margin comment on the delivered
+    document, or lives only in the change log, summary.md and findings.json.
 
-    A query-only error type always does — asking is its whole output, so there
-    is no other channel for it to fall back to, and it is written even with
-    comments otherwise off. Below-gate and oversized findings join it when
-    `query_comments` is on: the model thought something was wrong but not
-    confidently enough to touch it, which is what a margin question is for, and
-    an oversized fix is a real catch whose repair is too large to auto-apply.
-    Surfacing either beats dropping the information silently."""
-    wanted = {"query"}
-    if query_comments:
-        wanted.add("skipped_low_confidence")
-        wanted.add("rejected_oversized")
-    return wanted
+    Two kinds reach the margin, and they are treated differently:
+
+    * A genuine query — a question from an asking pass (continuity, fact-check,
+      consistency, an unconverted number-rule site) — always leaves one. Asking
+      is its only channel; there is nothing else for it to be.
+
+    * A correction the tool chose not to make — an edit a judge gate or the
+      verifier withdrew (`withheld`), a below-gate catch, an oversized fix —
+      leaves one only when `not_applied_comments` is on. Off by default, so the
+      document carries the changes and the real questions, not a commentary on
+      what was declined; the change log still records every one. When it is on,
+      `query_comments` still decides the below-gate and oversized ones, so
+      turning it on restores the prior behaviour exactly."""
+    if f.status == "query" and not f.withheld:
+        return True                          # genuine asking-pass query: always
+    if not not_applied_comments:
+        return False                         # declined edits: log-only by default
+    if f.status == "query":                  # a judge/verifier-withheld edit
+        return True
+    return (f.status in ("skipped_low_confidence", "rejected_oversized")
+            and query_comments)

@@ -438,6 +438,11 @@ def _run(tmp_path, texts, *, max_chunks=None, **cfg_kw):
     d.save(src)
     cfg = load_config("config/default.yaml")
     cfg.error_types = ["comma_splice"]
+    # These tests isolate name/term consistency; the residual number pass would
+    # otherwise spell out incidental prose numbers in the fixtures ("night 5")
+    # and inflate the applied count with changes that have nothing to do with
+    # the behaviour under test.
+    cfg.residuals.enabled = False
     for k, v in cfg_kw.items():
         setattr(cfg, k, v)
     prepared = prepare(cfg, src, "config/error_types", max_chunks=max_chunks)

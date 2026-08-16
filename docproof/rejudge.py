@@ -134,8 +134,13 @@ def _reopen_held_gates(findings: list[Finding], results_dir, cfg: Config
     for f in findings:
         key = (f.para_id, f.original_text, f.occurrence, f.corrected_text)
         if f.force_query and key in reopen:
+            # withheld=False as well: the record stamped it withheld when the gate
+            # held it (validator.to_query), and it hides the change from the page.
+            # A reopened finding is getting a fresh verdict, so it is not withheld
+            # right now — if the gate holds it again, to_query re-stamps it; if the
+            # gate keeps it, it ships as an ordinary applied change, not a hidden one.
             out.append(replace(f, status="pending", force_query=False,
-                               anchor=None,
+                               withheld=False, anchor=None,
                                explanation=reopen[key] or f.explanation))
             n += 1
         else:

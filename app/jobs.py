@@ -8,12 +8,15 @@ in-flight sync job.
 """
 from __future__ import annotations
 
+import faulthandler
 import json
 import logging
+import os
 import queue
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -54,6 +57,13 @@ POLL_SECONDS = 120
 # retries forever and the card reads "almost done" the whole time. Three leaves
 # room for a transient blip while still converging on a visible failure.
 MAX_COLLECT_ATTEMPTS = 3
+
+# How long a single heavy engine call (batch submit's prepare, or a collect's
+# full-book rewrite) may run before the app starts saying so in the logs. Not a
+# kill switch — Python threads can't be killed, and abandoning one leaves it
+# racing its replacement — just visibility: a stack dump names the hang so the
+# next freeze is diagnosable from `fly logs` rather than guesswork.
+ENGINE_STALL_SECONDS = int(os.environ.get("DOCPROOF_STALL_MINUTES", "45")) * 60
 
 # State → what the user reads. Keep the vocabulary out of the vendor's world:
 # no "batch", no "API", no "chunks".
@@ -636,8 +646,10 @@ class JobRunner:
         `done` is deliberately left alone — the resumed run races back through
         the cached part in moments, and resetting the bar to zero used to be
         the visible face of resetting the *spend* to zero, which is the thing
-        that no longer happens. Batch jobs need nothing: the ticker finds them
-        by their manifest."""
+        that no longer happens. A batch review still *waiting* on the vendor
+        needs nothing: the ticker finds it by its manifest. One caught mid-
+        *collect* is flipped back to "waiting" so the ticker re-polls and hands
+        it off again, because collect no longer runs on the ticker — see below."""
         for job in self.store.all():
             # Prep and promo are included at "collecting" too: neither has
             # vendor-side state, and both claim their results folder before
@@ -672,6 +684,18 @@ class JobRunner:
                 log.info("Re-queueing %s, interrupted by a restart", job.id)
                 self.store.update(job.id, state="queued")
                 self.queue.put(job.id)
+            elif (job.mode == "batch" and job.state == "collecting"
+                  and not (job.is_prep or job.is_promo)):
+                # An interrupted collect of a batch review: the results are
+                # still paid-for at the vendor. Back to "waiting" rather than
+                # straight onto the queue — the ticker re-polls, spends an
+                # attempt against MAX_COLLECT_ATTEMPTS exactly as a first try
+                # would, and does the one legal enqueue itself. (The ticker used
+                # to find these by re-entering "collecting"; it no longer looks
+                # there, so nothing else would pick this up.)
+                log.info("Collect of %s was interrupted by a restart; "
+                         "returning it to the ticker.", job.id)
+                self.store.update(job.id, state="waiting")
             elif job.state == "queued":
                 self.queue.put(job.id)
 
@@ -1207,7 +1231,15 @@ class JobRunner:
             # batch is). It runs to completion here, sync or batch by mode.
             self._run_rounds(job_id)
         elif job.mode == "batch":
-            self._submit_batch(job_id)
+            # Two legs on the worker now, told apart by state: a "collecting"
+            # job is a ready batch the ticker just handed off to be written; any
+            # other state (queued, retried) is one still to be submitted. Both
+            # do a heavy whole-book prepare, so serialising them on this single
+            # thread is what keeps them from overlapping and deadlocking.
+            if job.state == "collecting":
+                self._collect_batch(job_id)
+            else:
+                self._submit_batch(job_id)
         else:
             self._run_now(job_id)
 
@@ -1794,9 +1826,11 @@ class JobRunner:
         self.store.update(job_id, stage="preparing")
         try:
             provider = self._provider(cfg)
-            batch_job = batchlib.submit(cfg, job.source_path, self.error_dir,
-                                        provider, self.store.paths.jobs,
-                                        selection=job.selection)
+            with self._stall_alarm(job_id, "Submitting"):
+                batch_job = batchlib.submit(cfg, job.source_path,
+                                            self.error_dir, provider,
+                                            self.store.paths.jobs,
+                                            selection=job.selection)
         except (ProviderError, IngestError, batchlib.BatchError,
                 FileNotFoundError, ValueError) as e:
             self.store.update_if(job_id, expect=job.state, state="failed",
@@ -1835,8 +1869,12 @@ class JobRunner:
 
         One pass at a time, and a second caller is turned away rather than
         queued: the ticker thread and `POST /api/tick` both come through here,
-        and two passes over the same ready batch would collect it twice into
-        two folders. Whoever holds the lock is already doing the looking."""
+        and two passes over the same ready batch would each try to hand it off.
+        Two handoffs can't both fire — the CAS waiting→collecting in
+        `_advance_batch` lets exactly one through — but turning the second
+        caller away keeps the pass cheap. The heavy collect no longer runs
+        here: it is queued to the worker, so this mutex is now held only for
+        cheap polls and the archive sweep, and stays free during a collect."""
         if not self._tick_mutex.acquire(blocking=False):
             return
         try:
@@ -1849,13 +1887,15 @@ class JobRunner:
                     if self.store.update_if(job.id, expect="scheduled",
                                             state="queued"):
                         self.queue.put(job.id)
-                # `collecting` is included so a job interrupted partway through
-                # collection is picked up again: the results are still at the
-                # vendor, and both poll and collect can be re-run. Prep is
-                # never at a vendor — the worker owns it start to finish — so
-                # the ticker leaves it alone rather than looking for a batch
-                # that isn't there.
-                elif job.state in ("waiting", "collecting") and not job.is_prep:
+                # Only `waiting` here now. `collecting` is no longer ticker-
+                # owned: once a batch is ready, `_advance_batch` hands it to the
+                # worker and the worker writes it. A collect interrupted by a
+                # restart is flipped back to `waiting` by `resume_interrupted`,
+                # so it re-enters through this same door. Prep is never at a
+                # vendor — the worker owns it start to finish — so the ticker
+                # leaves it alone rather than looking for a batch that isn't
+                # there.
+                elif job.state == "waiting" and not job.is_prep:
                     self._advance_batch(job)
             # After the batch work, the Drive archive's retry-and-backfill pass.
             # Held inside the same mutex as the loop above, so an inline archive
@@ -1927,8 +1967,50 @@ class JobRunner:
 
         # CAS for the same reason the scheduled→queued promotion has one: the
         # job was read at the top of the pass, and its state may have moved on.
-        if self.store.update_if(job.id, expect=job.state, state="collecting",
+        # It is also the enqueue guard — only the caller that flips
+        # waiting→collecting may put the id on the queue, so one ready batch can
+        # never be queued twice across ticks. `expect="waiting"` because that is
+        # the only state the ticker calls this in now (recover() sends a failed
+        # job back to "waiting" first, so it too comes through here). The heavy
+        # collect then runs on the worker thread, where it serialises with
+        # submit instead of racing it — they share the LanguageTool JVM cache,
+        # and the overlap was the deadlock.
+        if self.store.update_if(job.id, expect="waiting", state="collecting",
                                 collect_attempts=attempt) is None:
+            return
+        self.queue.put(job.id)
+
+    def _collect_batch(self, job_id: str) -> None:
+        """Worker-side second half of a batch review: re-ingest, fold the
+        vendor's findings, run the whole-book post-passes, and write the
+        document. The ticker hands a ready batch here (state "collecting") so
+        this heavy prepare can never overlap `_submit_batch`'s equally heavy
+        one — a single worker thread runs both, one at a time.
+
+        Own error handling, mirroring the old `_advance_batch` tail, so the
+        watcher's hand-driven `_drain` (which calls `run_one` on its own thread)
+        behaves exactly as the live worker does."""
+        job = self.store.get(job_id)
+        if job is None or job.state != "collecting":
+            # Deleted, or failed/cancelled while its id sat in the queue.
+            return
+        batch_id = self._batch_job_id(job)
+        if batch_id is None:
+            self.store.update(job_id, state="failed",
+                              error="Lost track of this review; start it again.")
+            return
+        cfg = self.config_for(job)
+        try:
+            batch_job = batchlib.load(self.store.paths.jobs, batch_id)
+            provider = self._provider(cfg)
+        except (batchlib.BatchError, ProviderError) as e:
+            self.store.update(job_id, state="failed", error=str(e))
+            return
+        if batch_job.state != "ready":
+            # Shouldn't happen — the ticker only hands off a batch it polled
+            # ready — but a stale manifest goes back to the ticker to re-poll
+            # rather than raising inside collect. The spent attempt stays spent.
+            self.store.update_if(job_id, expect="collecting", state="waiting")
             return
         out = self._claim_results_dir(job)
 
@@ -1937,21 +2019,51 @@ class JobRunner:
             # whole-book post-passes, finish), and this is how the card and its
             # step tracker follow along rather than sitting on "almost done"
             # for the entire stretch. Same callback _run_now hands run_sync.
-            self.store.update(job.id, stage=name)
+            self.store.update(job_id, stage=name)
 
         try:
-            outputs = batchlib.collect(batch_job, provider, self.error_dir,
-                                       self.store.paths.jobs, out_dir=out,
-                                       on_phase=on_phase)
+            with self._stall_alarm(job_id, "Collecting"):
+                outputs = batchlib.collect(batch_job, provider, self.error_dir,
+                                           self.store.paths.jobs, out_dir=out,
+                                           on_phase=on_phase)
         except Exception as e:                # noqa: BLE001
             # Anything uncaught here would otherwise leave the job in
-            # `collecting`, which the ticker now retries — so a permanent
-            # failure has to become a state the user can see and retry.
-            log.exception("Collecting %s failed", job.id)
-            self._release_results_dir(job.id)
-            self.store.update(job.id, state="failed", error=str(e))
+            # `collecting`, which nothing would pick up — so a permanent
+            # failure has to become a state the user can see and recover.
+            log.exception("Collecting %s failed", job_id)
+            self._release_results_dir(job_id)
+            self.store.update(job_id, state="failed", error=str(e))
             return
-        self.store.update(job.id, state="done", **_tallies(outputs),
+        self.store.update(job_id, state="done", **_tallies(outputs),
                           results_dir=str(out), error=None, stage="")
-        self._record_usage(job.id, out, cfg.api.model, batch=True)
-        self._notify_done(job.id)
+        self._record_usage(job_id, out, cfg.api.model, batch=True)
+        self._notify_done(job_id)
+
+    @contextmanager
+    def _stall_alarm(self, job_id: str, what: str,
+                     timeout: float = ENGINE_STALL_SECONDS):
+        """Around a heavy engine call: if it runs past `timeout`, log loudly and
+        dump every thread's stack to stderr (which is what reaches `fly logs`),
+        repeating each interval until the call returns. Diagnosis, not
+        intervention — Python threads can't be killed, and abandoning one leaves
+        it racing its replacement, so the job still ends only through its own
+        success / failure / restart paths. The alarm just names the hang."""
+        finished = threading.Event()
+
+        def alarm() -> None:
+            while not finished.wait(timeout):
+                log.error("%s for job %s has been running over %d minutes; "
+                          "dumping all thread stacks.", what, job_id,
+                          int(timeout // 60))
+                try:
+                    faulthandler.dump_traceback(all_threads=True)
+                except Exception:             # noqa: BLE001 - never break the run
+                    pass
+
+        watcher = threading.Thread(target=alarm, daemon=True,
+                                   name=f"docproof-stall-{job_id}")
+        watcher.start()
+        try:
+            yield
+        finally:
+            finished.set()

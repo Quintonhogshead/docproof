@@ -270,7 +270,7 @@ def to_query(f: Finding, doc: DocumentModel) -> Finding:
                     "no anchor, so no comment can be written for it.",
                     f.finding_id, f.para_id)
         return dataclasses.replace(f, status="query", anchor=None,
-                                   force_query=True)
+                                   force_query=True, withheld=True)
     s = anchor_offset(para.text, f.original_text, f.occurrence)
     if s == -1:
         log.warning("%s: quote no longer anchors in %s — the question is hung "
@@ -279,7 +279,7 @@ def to_query(f: Finding, doc: DocumentModel) -> Finding:
     else:
         end = s + len(f.original_text)
     return dataclasses.replace(
-        f, status="query", force_query=True,
+        f, status="query", force_query=True, withheld=True,
         anchor=Anchor(start=s, end=end, delete_text=para.text[s:end],
                       insert_text=""))
 

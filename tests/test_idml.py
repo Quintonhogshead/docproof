@@ -337,9 +337,10 @@ def test_a_query_and_a_change_in_one_paragraph_both_land(cfg, tmp_path):
 
 
 def test_a_below_gate_finding_becomes_a_note_carrying_its_suggestion(cfg, tmp_path):
-    """With query_comments on, a change the model was not confident enough to
-    make is a question instead — and says what it would have done."""
+    """With not_applied_comments on, a change the model was not confident enough
+    to make is a question instead — and says what it would have done."""
     cfg.query_comments = True
+    cfg.not_applied_comments = True
     low = Finding("l-1", "chunk-000", "story-ue0-p0002", "comma_splice", DOOR,
                   1, DOOR.replace("door,", "door;"), "Two clauses.", "low")
     stats, _, after = _apply(cfg, [low], tmp_path)

@@ -232,13 +232,25 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
     queries = [f for f in findings if f.status == "query"]
+    # The "Queries" section is for genuine questions — an asking pass, a name
+    # pair — which always reach the margin. A withheld edit (a judge's or the
+    # verifier's, "Not applied: …") is a different animal: it has its own gate
+    # section below, and by default it stays out of the document, so listing it
+    # here as a margin question would double-count it and overstate what the
+    # file carries.
+    genuine_queries = [f for f in queries if not f.withheld]
     # Oversized findings are a real catch with too large a fix; they get their
     # own section (and a margin comment) rather than the terse rejected list.
     oversized = [f for f in findings if f.status == "rejected_oversized"]
     rejected = [f for f in findings if f.status.startswith("rejected")
                 and f.status != "rejected_oversized"]
+    # The below-gate and oversized findings reach the margin only when
+    # not_applied_comments puts declined corrections there AND query_comments
+    # still admits these two kinds. Off by default, they live here and in the
+    # change log, not in the document — so only claim the comment when it exists.
     in_margin = (f", and each is a {fmt.comment_noun} in the reviewed "
-                 f"file" if cfg.query_comments else "")
+                 f"file" if (cfg.query_comments and cfg.not_applied_comments)
+                 else "")
 
     L: list[str] = []
     L.append(f"# docproof review — {Path(doc.source_path).name}\n")
@@ -430,18 +442,14 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                          f"{f.confidence} confidence){detail}\n")
                 L.append(f"> {f.original_text}\n>\n> → {f.corrected_text}\n")
 
-    if queries:
+    if genuine_queries:
         L.append("## Queries — questions, not corrections\n")
-        L.append(f"{len(queries)} finding(s) from types that ask rather than "
-                 f"correct, because the answer is the author's to make — "
+        L.append(f"{len(genuine_queries)} finding(s) from types that ask rather "
+                 f"than correct, because the answer is the author's to make — "
                  f"where a line of dialogue belongs is not a punctuation fix. "
                  f"Nothing here changed the document, and each is a "
-                 f"{fmt.comment_noun} in the reviewed file.\n"
-                 if cfg.query_comments else
-                 f"{len(queries)} finding(s) from types that ask rather than "
-                 f"correct. They appear here only — `query_comments` is off, "
-                 f"so they were not written into the manuscript.\n")
-        for f in queries:
+                 f"{fmt.comment_noun} in the reviewed file.\n")
+        for f in genuine_queries:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r} — {f.explanation}")
         L.append("")
@@ -551,8 +559,8 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      f"nothing was held back.\n")
         else:
             L.append(f"{report.n_withheld} did not clearly pass, so they were "
-                     f"NOT applied. Each is a question instead, with the reason "
-                     f"below; nothing here changed the document.\n")
+                     f"NOT applied; each is listed below with the reason. "
+                     f"Nothing here changed the document.\n")
         for f in held:
             L.append(f"- **{f.para_id}** ({f.error_type}): "
                      f"{f.original_text!r}\n"

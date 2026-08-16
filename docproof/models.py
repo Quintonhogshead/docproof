@@ -106,6 +106,14 @@ class Finding:
     # findings keep their margin notes. Never routes a finding away from the
     # tracked-change channel — it only suppresses the note beside it.
     silent: bool = False
+    # Set only by validator.to_query: this finding was a validated edit that a
+    # judge gate or the overseer-verifier withdrew to the margin — a correction
+    # the tool chose not to make, as opposed to a genuine question from an asking
+    # pass (continuity, fact-check, an unconverted number-rule site). It reads
+    # "Not applied: …" in the margin, and `not_applied_comments` keeps it out of
+    # the document by default while the change log still records it. Inert for a
+    # finding that reaches the margin any other way.
+    withheld: bool = False
 
 
 @dataclass(frozen=True)
