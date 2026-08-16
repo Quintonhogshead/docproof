@@ -160,3 +160,33 @@ def test_the_variant_picks_the_dictionary_unless_told_otherwise():
     cfg = load_config("config/default.yaml")
     assert cfg.spellcheck.dictionary is None, \
         "a pinned dictionary would silently override every variant"
+
+
+# --- variant respellings (DP-003) ---------------------------------------------
+
+def test_us_respell_covers_the_missed_evidence():
+    """'grey' and 'travellers' survived a U.S. manuscript because en_US
+    accepts both; the respell list is what finally raises them."""
+    us = load_variant("us")
+    assert us.respell_map["grey"] == "gray"
+    assert us.respell_map["travellers"] == "travelers"
+
+
+def test_respell_lists_are_mirrored_not_shared():
+    uk = load_variant("uk")
+    assert uk.respell_map["gray"] == "grey"
+    assert "grey" not in uk.respell_map
+
+
+def test_respell_sites_every_occurrence_as_its_own_ruling():
+    from docproof.adjudicate import generate
+    from docproof.models import ParagraphRef
+    ps = [ParagraphRef("body-0000", "word/document.xml", "body",
+                       "The grey sky met the travellers at dawn, and "
+                       "Mr. Grey watched them pass.", "Normal")]
+    cands = generate(ps, respell=load_variant("us").respell_map)
+    respell = [c for c in cands if c.kind == "respell"]
+    # Three sites — the proper-noun "Grey" included, because keeping it is
+    # the adjudicator's call to make in context, not the generator's.
+    assert len(respell) == 3
+    assert {c.suggestion for c in respell} == {"gray", "travelers"}

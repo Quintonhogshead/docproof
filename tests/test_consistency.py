@@ -492,7 +492,9 @@ NAME_TEXTS = ([f"Rían walked the wall at dusk on night {i} of the siege."
 
 def test_a_run_corrects_the_stray_name(tmp_path):
     import zipfile
-    _, out = _run(tmp_path, NAME_TEXTS)
+    # comments=True: the shipped default now quiets edit explanations for the
+    # author's sake; this test is about the explanation machinery itself.
+    _, out = _run(tmp_path, NAME_TEXTS, comments=True)
     assert out.applied == 1                      # the stray, and nothing else
     comments = zipfile.ZipFile(out.reviewed_path).read(
         "word/comments.xml").decode()

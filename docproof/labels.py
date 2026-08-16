@@ -50,6 +50,10 @@ FREE_FORM: frozenset[str] = frozenset({
     "smoothing",          # pipeline.py — the opt-in line-editing pass
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
+    "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
+    "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
+    "heading_case",       # sweeps.py — headings set in title case
+    "fact_check",         # factcheck.py — the external-world read
 })
 
 # Every scripted sweep's key is free-form too. They are enumerated by
@@ -75,6 +79,10 @@ _SWITCH: dict[str, str] = {
     "smoothing": "smoothing",
     "term_consistency": "consistency",
     "name_consistency": "consistency",
+    # The pair queries ride the spell scan's hygiene pass, so the spell scan's
+    # switch is the one that governs whether they can exist.
+    "near_duplicate_name": "spellcheck",
+    "fact_check": "factcheck",
 }
 
 
@@ -115,6 +123,11 @@ def will_produce(cfg, label: str, *, known_types=None) -> str:
         return RAN if label in (cfg.sweeps or ()) else DID_NOT_RUN
     if label == "low_confidence":
         return RAN if cfg.low_confidence.confirm else DID_NOT_RUN
+    if label == "unclosed_quote":
+        # Governed by a style flag, not a pass's own `.enabled`.
+        return RAN if cfg.style.unclosed_quote_queries else DID_NOT_RUN
+    if label == "heading_case":
+        return RAN if cfg.style.heading_title_case else DID_NOT_RUN
     switch = _SWITCH.get(label)
     if switch is not None:
         return RAN if getattr(cfg, switch).enabled else DID_NOT_RUN

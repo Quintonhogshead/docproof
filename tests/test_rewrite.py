@@ -274,3 +274,18 @@ def test_build_requests_gives_diverse_samples_distinct_prompts(tmp_path):
     rw2 = [r for r in build_requests(cfg, prep)
            if r.custom_id.startswith(REWRITE_PREFIX)]
     assert len({r.system for r in rw2}) == 1
+
+
+def test_explanation_voice_follows_the_channel():
+    """DP-009: an applied edit speaks declaratively; only a margin question
+    hedges. Mixing 'may be an error' with a committed tracked change taught
+    reviewers to doubt every comment."""
+    from docproof.rewrite import RewriteCandidate, _explanation
+    c = RewriteCandidate(para_id="body-0000", start=0, end=4,
+                         original="teh", replacement="the")
+    assert _explanation(c, applied=True) == '"teh" corrected to "the".'
+    assert "may be an error" in _explanation(c, applied=False)
+    ins = RewriteCandidate(para_id="body-0000", start=4, end=4,
+                           original="", replacement="to")
+    assert _explanation(ins, applied=True) == 'Missing text: "to" inserted.'
+    assert "suggested: insert" in _explanation(ins, applied=False)

@@ -251,8 +251,12 @@ def test_the_authors_own_words_are_named_as_protected(tmp_path):
     out = _run(tmp_path, ["The cold marches were where Kaelith crossed at dawn.",
                           "By dusk Kaelith had not returned home."])
     text, _ = _read(out.change_log)
-    assert "Kaelith" in text
-    assert "protected from correction" in text
+    # The full checklist, with the count beside the word: the exemption list
+    # is the one part of the pass that shields text from checking, so the log
+    # renders all of it for a human eye, not a truncated aside.
+    assert "Kaelith (2×)" in text
+    assert "Words taken on trust" in text
+    assert "protected from spell-checking" in text
 
 
 def test_the_audit_result_is_stated(tmp_path):

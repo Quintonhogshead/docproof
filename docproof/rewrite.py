@@ -338,9 +338,20 @@ def _describe(c: RewriteCandidate) -> str:
     return f'"{c.original}" -> "{c.replacement}"'
 
 
-def _explanation(c: RewriteCandidate) -> str:
+def _explanation(c: RewriteCandidate, *, applied: bool = False) -> str:
+    """What rides beside the finding. Voice follows the channel (DP-009): a
+    committed tracked change gets a declarative reason — hedging beside an
+    applied edit reads as the tool doubting its own work — and only a margin
+    question keeps the "may be / suggested" framing, because there it IS a
+    suggestion."""
     if c.note:
         return c.note
+    if applied:
+        if not c.original:
+            return f'Missing text: "{c.replacement}" inserted.'
+        if not c.replacement:
+            return f'"{c.original}" deleted as extraneous.'
+        return f'"{c.original}" corrected to "{c.replacement}".'
     if not c.original:
         return f'Possible missing text — suggested: insert "{c.replacement}".'
     if not c.replacement:
@@ -529,6 +540,7 @@ def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
         else:
             quote, occurrence = para_text, 1
             corrected = para_text[:c.start] + c.replacement + para_text[c.end:]
+        will_query = suggestion or _RANK[conf] < edit_floor
         findings.append(Finding(
             finding_id=f"{id_prefix}-{next(ids):04d}",
             chunk_id=chunk_id,
@@ -537,9 +549,9 @@ def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
             original_text=quote,
             occurrence=occurrence,
             corrected_text=corrected,
-            explanation=_explanation(c),
+            explanation=_explanation(c, applied=not will_query),
             confidence=conf,
             # Only a beyond-doubt affirmation edits; softer ones ask. A
             # suggestion never edits at all, however sure the judge was.
-            force_query=suggestion or _RANK[conf] < edit_floor,
+            force_query=will_query,
             silent=silent))

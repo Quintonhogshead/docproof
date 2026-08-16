@@ -78,6 +78,7 @@ STAGE_STATE = {
     "preparing": "Reading your manuscript",
     "reviewing": "Reviewing ({done} of {total} sections)",
     "glossary": "Building the glossary for the whole book",
+    "factcheck": "Checking the book against the world",
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",

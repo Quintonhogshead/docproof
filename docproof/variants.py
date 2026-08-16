@@ -40,6 +40,17 @@ class Variant:
     primary_quote: str              # "double" | "single" — what opens dialogue
     conventions: str                # the prose the model is given
     confirm: bool = False           # ask the press to confirm before final
+    # Spellings VALID in English but wrong for this variant, mapped to the
+    # variant's own form (grey → gray for a U.S. run). The dictionary cannot
+    # catch these — "grey" passes en_US — and a per-chunk read glides over
+    # them, so each occurrence is put in front of the adjudication pass to
+    # rule on in context; a proper noun ("Mr. Grey", the Aldwych Theatre)
+    # survives that ruling. Stored as pairs because the dataclass is frozen.
+    respell: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def respell_map(self) -> dict[str, str]:
+        return dict(self.respell)
 
     @property
     def closing_quotes(self) -> str:
@@ -92,6 +103,13 @@ def load_variant(key: str, dir_path: str | None = None) -> Variant:
         raise ValueError(
             f"{path}: primary_quote must be 'single' or 'double', "
             f"not {data['primary_quote']!r}")
+    respell = data.get("respell") or {}
+    if not isinstance(respell, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) and k.strip()
+            and v.strip() for k, v in respell.items()):
+        raise ValueError(
+            f"{path}: respell must map wrong-variant spellings to this "
+            f"variant's own (grey: gray), strings both sides")
     return Variant(
         key=data["key"], name=data["name"],
         authorities=tuple(data.get("authorities", ())),
@@ -99,4 +117,6 @@ def load_variant(key: str, dir_path: str | None = None) -> Variant:
         primary_quote=data["primary_quote"],
         conventions=data["conventions"].strip(),
         confirm=bool(data.get("confirm", False)),
+        respell=tuple(sorted((k.strip(), v.strip())
+                             for k, v in respell.items())),
     )

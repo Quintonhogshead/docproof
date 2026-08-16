@@ -2,6 +2,49 @@ key: us
 name: U.S. English
 dictionary: en_US
 primary_quote: double
+
+# Spellings the en_US dictionary ACCEPTS but that are another variant's — the
+# dictionary will never flag them, so each occurrence goes to the adjudication
+# pass, which converts ordinary prose and keeps proper names (Mr. Grey, the
+# Aldwych Theatre) and verbatim quoted matter. Curated for words that are
+# unambiguously British in running U.S. prose; a press can extend it here.
+respell:
+  grey: gray
+  greys: grays
+  greyed: grayed
+  greying: graying
+  greyish: grayish
+  greyer: grayer
+  greyest: grayest
+  traveller: traveler
+  travellers: travelers
+  travelled: traveled
+  travelling: traveling
+  cancelled: canceled
+  cancelling: canceling
+  labelled: labeled
+  labelling: labeling
+  modelled: modeled
+  modelling: modeling
+  marvellous: marvelous
+  jewellery: jewelry
+  counsellor: counselor
+  counsellors: counselors
+  woollen: woolen
+  whilst: while
+  learnt: learned
+  spelt: spelled
+  leant: leaned
+  spoilt: spoiled
+  theatre: theater
+  theatres: theaters
+  centre: center
+  centres: centers
+  aeroplane: airplane
+  aeroplanes: airplanes
+  moustache: mustache
+  moustaches: mustaches
+  pyjamas: pajamas
 authorities:
   - The Chicago Manual of Style, 17th edition
   - Merriam-Webster, for spelling

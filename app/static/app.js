@@ -2428,6 +2428,10 @@ const STAGE_FLOW = [
   { id: 'glossary', label: 'Building the glossary', optional: true,
     quip: 'Learning your invented names and spellings so they’re never quietly '
         + '“corrected” against you.' },
+  { id: 'factcheck', label: 'Fact check', optional: true,
+    quip: 'One read against the world outside the book — names, history, '
+        + 'geography — asking, never editing: fiction bends the world on '
+        + 'purpose.' },
   { id: 'adjudicate', label: 'Real-word typos', optional: true,
     quip: 'Weighing the sneaky ones — “form” for “from”, “lead” for “led” — that '
         + 'a spellchecker sails right past.' },

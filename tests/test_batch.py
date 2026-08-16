@@ -102,6 +102,23 @@ def test_collect_names_its_stages_for_the_step_tracker(tmp_path):
     assert stages == ["preparing", "reviewing", "glossary", "writing"]
 
 
+def test_collect_names_the_factcheck_stage_when_the_pass_is_on(tmp_path):
+    """The external-world read announces itself between the glossary and the
+    write, exactly where collect runs it — even when the read itself degrades
+    (best-effort, like the glossary), because the pass genuinely starts."""
+    cfg = _cfg()
+    cfg.factcheck.enabled = True
+    provider = ScriptedBatchProvider([_splice_result()], pending_polls=0)
+    job = batchlib.submit(cfg, FIXTURES / "simple.docx", ERROR_DIR,
+                          provider, tmp_path)
+    batchlib.poll(job, provider, tmp_path)
+    stages = []
+    batchlib.collect(batchlib.load(tmp_path, job.job_id), provider,
+                     ERROR_DIR, tmp_path, on_phase=stages.append)
+    assert stages == ["preparing", "reviewing", "glossary", "factcheck",
+                      "writing"]
+
+
 def test_collect_refuses_an_edited_source(tmp_path):
     source = tmp_path / "simple.docx"
     source.write_bytes((FIXTURES / "simple.docx").read_bytes())

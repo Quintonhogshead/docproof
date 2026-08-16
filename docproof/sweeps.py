@@ -114,11 +114,13 @@ def sentence_window(text: str, start: int, end: int) -> tuple[str, int, int]:
 
 
 def _sentence_starts_at(text: str, pos: int) -> bool:
-    """Whether `pos` begins a sentence, so a spelled-out word takes a capital."""
+    """Whether `pos` begins a sentence, so a spelled-out word takes a capital.
+    A line break inside the paragraph (w:br in the canonical text) counts:
+    what follows it opens its own line."""
     i = pos - 1
     while i >= 0 and text[i] in _SP + "\"“”'‘’":
         i -= 1
-    return i < 0 or text[i] in ".!?…"
+    return i < 0 or text[i] in ".!?…\n"
 
 
 # --- ellipsis ----------------------------------------------------------------
@@ -170,7 +172,7 @@ def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
 
 # --- dashes ------------------------------------------------------------------
 
-_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—)(?P<post>[ \t\u00a0]*)")
+_DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \t\u00a0]*)")
 
 
 def _sweep_dash(text: str, variant=None) -> list[Hit]:
@@ -193,6 +195,23 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             # is being used as a sentence break, which house style sets as an
             # unspaced em dash.
             if not (m.group("pre") and m.group("post")):
+                continue
+            replacement, why = "—", ("House style sets a sentence-break dash "
+                                     "as an unspaced em dash.")
+        elif run == "-":
+            # A single hyphen reads as a dash ONLY standing alone between
+            # words: "it was late - too late". Unspaced it is a compound
+            # (well-known) and none of this sweep's business; between digits
+            # it is arithmetic or a loose range, both judgment calls; at a
+            # line edge it is a bullet or a dangling mark.
+            if not (m.group("pre") and m.group("post")):
+                continue
+            if not before or not after:
+                continue
+            if before.isdigit() and after.isdigit():
+                continue
+            if not ((before.isalnum() or before in _CLOSING_QUOTES)
+                    and (after.isalnum() or after in "\"“‘'")):
                 continue
             replacement, why = "—", ("House style sets a sentence-break dash "
                                      "as an unspaced em dash.")
@@ -279,6 +298,29 @@ def ordinal_word(n: int) -> str | None:
     if ones == 0:
         return _TENS_ORDINAL[tens]
     return f"{_TENS_CARDINAL[tens]}-{_ONES[ones]}"
+
+
+_ONES_CARDINAL = ("zero", "one", "two", "three", "four", "five", "six",
+                  "seven", "eight", "nine")
+_TEENS_CARDINAL = ("ten", "eleven", "twelve", "thirteen", "fourteen",
+                   "fifteen", "sixteen", "seventeen", "eighteen", "nineteen")
+
+
+def cardinal_word(n: int) -> str | None:
+    """"98" -> "ninety-eight". None outside 0–100, the range the house
+    spells out."""
+    if not 0 <= n <= 100:
+        return None
+    if n == 100:
+        return "one hundred"
+    if n < 10:
+        return _ONES_CARDINAL[n]
+    if n < 20:
+        return _TEENS_CARDINAL[n - 10]
+    tens, ones = divmod(n, 10)
+    if ones == 0:
+        return _TENS_CARDINAL[tens]
+    return f"{_TENS_CARDINAL[tens]}-{_ONES_CARDINAL[ones]}"
 
 
 def _sweep_century(text: str, variant=None) -> list[Hit]:
@@ -468,6 +510,261 @@ def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
                 "A sentence ends without terminal punctuation.")]
 
 
+# --- punctuation against a closing quote --------------------------------------
+
+# A period or comma AFTER a curly closing double quote. U.S. convention (and
+# the house style) sets both inside; the human pass fixed `thanks".` four
+# times where the model glided. Curly marks only: a straight " the normalizer
+# left straight is one it could not tell from an opener, and this sweep must
+# not out-guess it.
+_QUOTE_THEN_PUNCT = re.compile(r"”([.,])")
+
+
+def _sweep_quote_punctuation(text: str, variant=None) -> list[Hit]:
+    """Move a period or comma inside the closing double quote — or drop it
+    when the quotation already ends with terminal punctuation ("Go!”." keeps
+    only the exclamation). Double-primary variants only: U.K. and Australian
+    logical placement legitimately sets marks outside."""
+    if variant is not None and variant.opens_dialogue_with_single:
+        return []
+    hits: list[Hit] = []
+    for m in _QUOTE_THEN_PUNCT.finditer(text):
+        before = text[m.start() - 1] if m.start() > 0 else ""
+        if not before or before.isdigit() or before.isspace():
+            continue      # an inch mark after a digit, or a mark adrift
+        if before == ",":
+            continue      # ,". is malformed both ways round: a judgment call
+        punct = m.group(1)
+        if before in ".!?…":
+            replacement = "”"
+            why = ("House style sets periods and commas inside a closing "
+                   "quotation mark; this quotation already ends with its own "
+                   "punctuation, so the mark after the quote is dropped.")
+        else:
+            replacement = punct + "”"
+            why = ("House style sets periods and commas inside a closing "
+                   "quotation mark.")
+        hits.append(Hit(m.start(), m.end(), replacement, why))
+    return hits
+
+
+# --- nested quotations ---------------------------------------------------------
+
+_NESTED_WHY = ("A quotation inside dialogue takes single quotation marks "
+               "(U.S. convention).")
+
+
+def _sweep_nested_quote(text: str, variant=None) -> list[Hit]:
+    """Demote a double-quoted phrase INSIDE double-quoted dialogue to single
+    quotes — “the ‘Wave of Autonomy’” — the systematic conversion the human
+    pass made ~17 times and the model pass never did.
+
+    Only where the ground is completely firm: double-primary variants, no
+    straight quotes left in the paragraph (the normalizer could not place
+    those), doubles perfectly balanced (the unclosed-quote check owns
+    imbalance), and only one level down — a quote nested inside a nested
+    quote alternates back to double and is rare enough to leave to a reader.
+    Anything else returns no hits at all: a wrongly-demoted quote pair is two
+    edits an author must notice and reject together."""
+    if variant is not None and variant.opens_dialogue_with_single:
+        return []
+    if '"' in text or text.count("“") != text.count("”"):
+        return []
+    hits: list[Hit] = []
+    stack: list[int] = []                    # positions of unmatched “
+    for i, ch in enumerate(text):
+        if ch == "“":
+            stack.append(i)
+        elif ch == "”":
+            if not stack:                    # malformed: counts lied
+                return []
+            start = stack.pop()
+            if len(stack) == 1:              # this pair sat inside exactly one
+                hits.append(Hit(start, start + 1, "‘", _NESTED_WHY))
+                hits.append(Hit(i, i + 1, "’", _NESTED_WHY))
+    return hits
+
+
+# --- headings in title case ----------------------------------------------------
+
+# The words Chicago sets lowercase mid-title: articles, coordinating
+# conjunctions, and prepositions. Prepositions of every length, per Chicago —
+# with the known cost that a particle used adverbially ("Waking Up Slow")
+# cannot be told from a preposition by a script and will be lowercased; the
+# edit is a tracked change the author can reject, and the first/last-word rule
+# protects the commonest cases ("Coming Up").
+_TITLE_MINOR = frozenset("""
+a an the and but or nor for so yet as at by down from in into like near of
+off on onto out over past per to up upon via with within without about above
+across after against along among around before behind below beneath beside
+between beyond during inside outside through toward towards under until
+""".split())
+
+# Small roman numerals as a closed list rather than a pattern: a pattern
+# admits real words ("mix" is a valid numeral), and "Part ii" deserves
+# "Part II" while "did" must never become "DID".
+_ROMAN = frozenset("""
+ii iii iv vi vii viii ix xi xii xiii xiv xv xvi xvii xviii xix xx
+""".split())
+
+_TITLE_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
+# A word after one of these opens a subtitle or a new line, and takes a
+# capital the way a first word does.
+_TITLE_OPENERS = ":—–\n"
+
+_TITLE_WHY = "House style sets headings in title case."
+
+
+def title_case_hits(text: str) -> list[Hit]:
+    """The word-level edits that set one heading in Chicago title case.
+
+    Word-level on purpose: one finding per word keeps every diff a character
+    or two, each rejectable on its own, instead of one wholesale retype of the
+    line. Conservative where styling could be deliberate: a heading with no
+    lowercase letters at all (CHAPTER ONE) is left whole, and any word already
+    carrying a capital anywhere (McCoy, EVTOL, iPhone, I) is left alone — the
+    only words touched are entirely-lowercase ones and a stray capitalized
+    minor word ("The Shape Of Things" loses only the Of)."""
+    if not any(c.islower() for c in text):
+        return []                     # all-caps or letterless: a styling choice
+    words = list(_TITLE_WORD.finditer(text))
+    if not words:
+        return []
+    last_of_line: set[int] = set()
+    for i, m in enumerate(words):
+        gap = text[m.end():words[i + 1].start()] if i + 1 < len(words) else ""
+        if i + 1 == len(words) or "\n" in gap:
+            last_of_line.add(i)
+    hits: list[Hit] = []
+    for i, m in enumerate(words):
+        w = m.group(0)
+        lead = text[words[i - 1].end():m.start()] if i else text[:m.start()]
+        first = i == 0 or any(ch in lead for ch in _TITLE_OPENERS)
+        edge = first or i in last_of_line
+        lower = w.lower()
+        if lower in _ROMAN:
+            want = lower.upper()      # Part ii -> Part II, wherever it stands
+        elif not edge and lower in _TITLE_MINOR:
+            if w != lower.capitalize():
+                continue              # "OF" is styling; only "Of" is drift
+            want = lower
+        elif w.islower():
+            want = w[0].upper() + w[1:]
+        else:
+            continue                  # carries its own casing: leave it
+        if want != w:
+            hits.append(Hit(m.start(), m.end(), want, _TITLE_WHY))
+    return hits
+
+
+def heading_case_findings(paragraphs: Sequence[ParagraphRef],
+                          skip) -> tuple[list[Finding], SweepReport]:
+    """Title-case every heading-styled paragraph, as ordinary sweep findings
+    plus the flagged/remaining counts the change log quotes.
+
+    "Heading-styled" is the press's own definition — the styles the skip
+    config lists as sweep-only — so the paragraphs this touches are exactly
+    the ones no model pass reviews. That gap is what left "the shape of
+    things to come" untouched through an entire run (DP-006); folding the
+    headings' names into the scripted pass closes it without ever showing a
+    heading to a model."""
+    findings: list[Finding] = []
+    flagged = remaining = 0
+    n = 0
+    for para in paragraphs:
+        if not skip.is_sweep_only(para.style):
+            continue
+        hits = title_case_hits(para.text)
+        if not hits:
+            continue
+        flagged += len(hits)
+        for hit in hits:
+            window, lo, occurrence = sentence_window(para.text, hit.start,
+                                                     hit.end)
+            corrected = (window[:hit.start - lo] + hit.replacement
+                         + window[hit.end - lo:])
+            n += 1
+            findings.append(Finding(
+                finding_id=f"hc-{n:04d}",
+                chunk_id="sweep",
+                para_id=para.para_id,
+                error_type="heading_case",
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=corrected,
+                explanation=hit.explanation,
+                confidence="high"))
+        remaining += len(title_case_hits(apply_hits(para.text, hits)))
+    report = SweepReport("heading_case", "Headings set in title case",
+                         flagged, remaining)
+    if flagged:
+        log.info("heading_case: %d word(s) recased across headings, "
+                 "%d remaining", flagged, remaining)
+    return findings, report
+
+
+# --- unclosed quotations (a question, never an edit) ---------------------------
+
+def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
+                            variant=None) -> list[Finding]:
+    """A paragraph whose double quotes do not balance, raised as a margin
+    query. Not a Sweep: the one legitimate imbalance — speech running on
+    across paragraphs — can only be recognised by looking at the NEXT
+    paragraph, which a per-paragraph pattern cannot do.
+
+    The convention: a multi-paragraph speech omits the closing quote on every
+    paragraph but its last, and each continuation paragraph RE-OPENS with a
+    quotation mark. So an unclosed paragraph whose successor opens with one is
+    the convention at work; an unclosed paragraph whose successor does not is
+    where a closing quote has gone missing ("…without blinking. Steve says,
+    agitated." — the human's catch, fully absent from the model pass).
+
+    Curly marks only, double-primary variants only, and any paragraph still
+    carrying a straight " is left alone: the normalizer could not settle those
+    marks, so no count of them is evidence. Queries change nothing, so a
+    false positive here costs a margin note, never an edit."""
+    if variant is not None and variant.opens_dialogue_with_single:
+        return []
+    findings: list[Finding] = []
+    n = 0
+    for i, para in enumerate(paragraphs):
+        text = para.text
+        opens, closes = text.count("“"), text.count("”")
+        if opens == closes or '"' in text:
+            continue
+        if opens > closes:
+            nxt = next((p for p in paragraphs[i + 1:]
+                        if p.part == para.part and p.location == para.location),
+                       None)
+            if nxt is not None and nxt.text.lstrip()[:1] == "“":
+                continue          # speech carried into the next paragraph
+            at = text.rfind("“")
+            why = ("A quotation opens here and never closes, and the next "
+                   "paragraph does not reopen with a quotation mark — a "
+                   "closing quote may be missing.")
+        else:
+            at = text.find("”")
+            why = ("A closing quotation mark here has no opening partner in "
+                   "this paragraph — a quote may be missing or stray.")
+        window, _lo, occurrence = sentence_window(text, at, at + 1)
+        n += 1
+        findings.append(Finding(
+            finding_id=f"uq-{n:04d}",
+            chunk_id="sweep",
+            para_id=para.para_id,
+            error_type="unclosed_quote",
+            original_text=window,
+            occurrence=occurrence,
+            corrected_text=window,
+            explanation=why,
+            confidence="medium",
+            force_query=True))
+    if findings:
+        log.info("Unbalanced quotation marks: %d paragraph(s) queried.",
+                 len(findings))
+    return findings
+
+
 # --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
@@ -483,6 +780,10 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_dialogue_tag),
     Sweep("sweep_terminal_period", "Missing sentence-final period",
           _sweep_terminal_period),
+    Sweep("sweep_quote_punctuation", "Punctuation inside closing quotes",
+          _sweep_quote_punctuation),
+    Sweep("sweep_nested_quote", "Nested quotations set in singles",
+          _sweep_nested_quote),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

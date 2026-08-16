@@ -13,11 +13,17 @@ from lxml import etree
 from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
 from .queries import query_span, query_text, wanted_statuses
-from .utils.xml_helpers import (CT_NS, DELTEXT_TAG, DEL_TAG, DR_NS, DocxPackage,
-                                INS_TAG, P_TAG, PR_NS, RPR_TAG, R_TAG, T_TAG,
-                                TEXT_SKIP_ANCESTORS,
+from .utils.xml_helpers import (BR_TAG, CR_TAG, CT_NS, DELTEXT_TAG, DEL_TAG,
+                                DR_NS, DocxPackage, INS_TAG, P_TAG, PR_NS,
+                                RPR_TAG, R_TAG, TAB_TAG, T_TAG,
+                                TEXT_SKIP_ANCESTORS, VIRTUAL_CHARS,
                                 W_NS, merge_adjacent_runs, paragraph_text, qn,
                                 set_text, walk_package)
+
+# The tags that hold one or more characters of a run's canonical text — w:t
+# plus the single-character break/tab elements. What _ensure_boundary must
+# treat as splittable content, and what an insertion may need to write.
+_CONTENT_TAGS = (T_TAG, BR_TAG, CR_TAG, TAB_TAG)
 
 log = logging.getLogger("docproof.reassembler")
 
@@ -37,11 +43,15 @@ class ReassemblyStats:
 # --- offset map and run splitting --------------------------------------------
 
 def _text_spans(p) -> list[tuple[etree._Element, int, int]]:
+    """Every content element with its [start, end) slice of the canonical
+    text. w:t spans its text; a break or tab is the one character it renders
+    as (see VIRTUAL_CHARS) — which is what keeps these offsets equal to
+    paragraph_text's, the invariant all surgery below rests on."""
     spans, off = [], 0
-    from .utils.xml_helpers import iter_text_elements
-    for t in iter_text_elements(p):
-        n = len(t.text or "")
-        spans.append((t, off, off + n))
+    from .utils.xml_helpers import T_TAG as _T, iter_content_elements
+    for el in iter_content_elements(p):
+        n = len(el.text or "") if el.tag == _T else 1
+        spans.append((el, off, off + n))
         off += n
     return spans
 
@@ -105,18 +115,36 @@ def _ensure_boundary(p, off: int) -> None:
             return
         if s == off and e > s:
             r = t.getparent()
-            prior_text = False
+            prior_content = False
             for c in r:
                 if c is t:
                     break
-                if c.tag == T_TAG:
-                    prior_text = True
-            if prior_text:                   # boundary between two w:t of one run
+                if c.tag in _CONTENT_TAGS:   # text OR a break/tab character
+                    prior_content = True
+            if prior_content:            # boundary inside one run's content
                 _split_run(r, t, 0)
             return
 
 
 # --- the core operation -------------------------------------------------------
+
+_VIRTUAL_SPLIT = re.compile(r"([\n\t])")
+
+
+def _append_run_content(r: etree._Element, s: str) -> None:
+    """Append `s` to run `r` as OOXML content: plain text as w:t, each newline
+    or tab as the w:br/w:tab element it stands for — the inverse of
+    VIRTUAL_CHARS, so inserted text round-trips through paragraph_text."""
+    for piece in _VIRTUAL_SPLIT.split(s):
+        if not piece:
+            continue
+        if piece == "\n":
+            etree.SubElement(r, BR_TAG)
+        elif piece == "\t":
+            etree.SubElement(r, TAB_TAG)
+        else:
+            set_text(etree.SubElement(r, T_TAG), piece)
+
 
 def _rev_el(tag: str, ids, author: str, date: str) -> etree._Element:
     return etree.Element(qn(tag), {qn("w:id"): str(next(ids)),
@@ -183,8 +211,7 @@ def apply_replacement(p, a: Anchor, author: str, date: str, ids
         r = etree.SubElement(ins, R_TAG)
         if rpr is not None:
             r.insert(0, copy.deepcopy(rpr))
-        t = etree.SubElement(r, T_TAG)
-        set_text(t, a.insert_text)
+        _append_run_content(r, a.insert_text)
         ins_parent.insert(ins_at, ins)
 
     first = dels[0] if dels else ins
@@ -289,6 +316,13 @@ def paragraph_view_text(p, mode: Literal["accept", "reject"]) -> str:
                     walk(c)
             elif c.tag in (T_TAG, DELTEXT_TAG):
                 parts.append(c.text or "")
+            elif c.tag in VIRTUAL_CHARS and (c.tag != TAB_TAG
+                                             or el.tag == R_TAG):
+                # The same one-character rendering paragraph_text gives a
+                # break or tab, so the audit compares like with like. The run
+                # check mirrors iter_content_elements: a w:tab under
+                # w:pPr/w:tabs is a tab-stop definition, not a character.
+                parts.append(VIRTUAL_CHARS[c.tag])
             elif c.tag in TEXT_SKIP_ANCESTORS:
                 # A textbox's own text and an mc:Fallback duplicate are not this
                 # paragraph's canonical text — iter_text_elements skips them, so

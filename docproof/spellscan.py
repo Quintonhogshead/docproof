@@ -64,6 +64,32 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class NearDuplicate:
+    """A protected name demoted because another protected name sits one edit
+    away and decisively owns the book. The one failure mode name-protection
+    has left: 'Hollingworth' earns the same protection 'Hollingsworth' does,
+    and the misspelled character is then the one error the pipeline
+    structurally cannot find."""
+    word: str            # the rarer surface, as written
+    count: int
+    suggestion: str      # the dominant surface (for the plural-casing case,
+                         # the dominant's casing carried onto the plural)
+    of: str              # the dominant surface it is one edit from
+    of_count: int
+
+
+@dataclass(frozen=True)
+class NamePair:
+    """Two protected names one edit apart with counts too close to call.
+    Demoting either would risk renaming a character, so this is a question for
+    a person, not a candidate for a model."""
+    a: str
+    a_count: int
+    b: str               # the rarer of the two
+    b_count: int
+
+
+@dataclass(frozen=True)
 class SpellScan:
     """What the dictionary found, and nothing it decided."""
     lexicon: tuple[str, ...] = ()        # written as names: protect
@@ -74,6 +100,12 @@ class SpellScan:
     unknown: int = 0
     available: bool = True               # False when no dictionary was loadable
     dictionary: str = ""                 # which set actually answered
+    # Occurrence counts for the protected words, aligned with `lexicon`, so
+    # the change log can render the do-not-flag list as a reviewable checklist
+    # ("Hollingsworth (212)") instead of a truncated aside.
+    lexicon_counts: tuple[int, ...] = ()
+    near_duplicates: tuple[NearDuplicate, ...] = ()   # demoted: adjudicate each
+    name_pairs: tuple[NamePair, ...] = ()             # too close: ask once
 
     def prompt_section(self) -> str:
         """The document vocabulary, as the model should read it. Empty when
@@ -177,7 +209,10 @@ def _sentence_initial(text: str, pos: int) -> bool:
     while i >= 0 and text[i] in " \t \"“”'‘’(":
         quoted = quoted or text[i] in "\"“‘'("
         i -= 1
-    if i < 0 or text[i] in ".!?…":
+    # A line break (a Shift+Enter inside the paragraph) opens a line the
+    # way a full stop opens a sentence: the capital after it is the
+    # line's doing, not the author's.
+    if i < 0 or text[i] in ".!?…\n":
         return True
     return quoted and text[i] in ",:;—–-"
 
@@ -219,6 +254,103 @@ def _regular_form(word: str, dic) -> str:
     return ""
 
 
+# --- near-duplicate hygiene ---------------------------------------------------
+
+def _one_edit_apart(a: str, b: str) -> bool:
+    """One substitution, insertion, deletion or adjacent transposition apart.
+    Both arguments lowercase; equal strings are zero edits, not one."""
+    if a == b:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    if len(b) - len(a) > 1:
+        return False
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    if len(a) == len(b):
+        if a[i + 1:] == b[i + 1:]:                       # substitution
+            return True
+        return (i + 1 < len(a) and a[i] == b[i + 1]      # transposition
+                and a[i + 1] == b[i] and a[i + 2:] == b[i + 2:])
+    return a[i:] == b[i + 1:]                            # insertion
+
+
+def _fold_diacritics(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", s)
+                   if not unicodedata.combining(c))
+
+
+# Below this length, one edit is most of the word, and two short names a
+# letter apart (Kai and Kay, Ana and Anna) are far more often two people than
+# one misspelled. The plural-casing check has its own evidence — the shared
+# stem — and ignores this floor.
+_NEAR_DUP_MIN_LEN = 5
+
+
+def _near_duplicate_pass(lexicon: list[str], counts: Mapping[str, int], *,
+                         dominance: int
+                         ) -> tuple[list[str], list[NearDuplicate],
+                                    list[NamePair]]:
+    """Split the protected list into what stays protected, what is demoted to
+    adjudication, and what becomes a question.
+
+    Three outcomes, by the shape of the evidence:
+      * plural with the wrong casing ("Evtols" beside "EVTOL") — demoted with
+        the dominant casing carried onto the plural ("EVTOLs"), however close
+        the counts: a plural styles itself after its singular.
+      * one edit apart and decisively lopsided (`dominance`-to-one) — the
+        rarer is demoted with the dominant as its suggestion. The lopsided
+        count answers the question before it is asked, the same bar the
+        consistency scan's name corrections use.
+      * one edit apart and close — a NamePair for the author. Demoting either
+        would risk renaming a character, which is the one mistake this module
+        exists to prevent.
+
+    Diacritic-only pairs (Rian beside Rían) are left alone: the consistency
+    scan's name-drift check owns those, with casing-aware machinery this
+    module should not duplicate."""
+    order = sorted(lexicon, key=lambda s: (-counts[s], s.lower()))
+    out: list[str] = []
+    demoted: dict[str, NearDuplicate] = {}
+    pairs: list[NamePair] = []
+    for i, a in enumerate(order):
+        if a in demoted:
+            continue
+        al = a.lower()
+        for b in order[i + 1:]:                  # b is never commoner than a
+            if b in demoted:
+                continue
+            bl = b.lower()
+            if bl == al + "s" or al == bl + "s":
+                # The dominant form sets the casing: a rarer plural should be
+                # the dominant singular plus s, a rarer singular the dominant
+                # plural minus it.
+                expected = (a + "s") if bl == al + "s" else a[:-1]
+                if b != expected:
+                    demoted[b] = NearDuplicate(
+                        word=b, count=counts[b], suggestion=expected,
+                        of=a, of_count=counts[a])
+                continue                         # a cased-alike plural is fine
+            if len(al) < _NEAR_DUP_MIN_LEN or len(bl) < _NEAR_DUP_MIN_LEN:
+                continue
+            if not _one_edit_apart(al, bl):
+                continue
+            if _fold_diacritics(al) == _fold_diacritics(bl):
+                continue                         # the consistency scan's case
+            if counts[a] >= dominance * counts[b]:
+                demoted[b] = NearDuplicate(
+                    word=b, count=counts[b], suggestion=a,
+                    of=a, of_count=counts[a])
+            else:
+                pairs.append(NamePair(a, counts[a], b, counts[b]))
+    for s in lexicon:
+        if s not in demoted:
+            out.append(s)
+    return out, list(demoted.values()), pairs
+
+
 @dataclass
 class _Seen:
     count: int = 0
@@ -239,7 +371,9 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
          min_occurrences: int = 2, suggestion_limit: int = 25,
          allowlist: Sequence[str] = (),
          denylist: Mapping[str, str] | None = None,
-         dictionary: str = "en_US") -> SpellScan:
+         dictionary: str = "en_US",
+         near_duplicates: bool = True,
+         near_duplicate_dominance: int = 5) -> SpellScan:
     """Read every paragraph, and sort what the dictionary does not know."""
     if not enabled:
         return SpellScan(available=False)
@@ -273,7 +407,6 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
     lexicon: list[str] = []
     candidates: list[Candidate] = []
     recurring: list[Candidate] = []
-    denied: set[str] = set()
     for word in sorted(seen):
         entry = seen[word]
         if word in deny:
@@ -283,7 +416,6 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
             # shown as something to look at, whatever the casing or the count.
             candidates.append(Candidate(entry.surface, tuple(entry.para_ids),
                                         suggestions=(deny[word],)))
-            denied.add(entry.surface)
             continue
         if known(word):
             continue
@@ -309,17 +441,34 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
             # Said to the model as evidence rather than acted on here.
             recurring.append(Candidate(entry.surface, tuple(entry.para_ids)))
 
+    # Hygiene on the protection itself, before anyone is told to trust it: two
+    # protected names one edit apart are more likely one character misspelled
+    # than two characters named alike, and granting both immunity is how a
+    # main character's surname ships wrong on every page. A decisively rarer
+    # twin is demoted (the model will rule on it in context); a close split is
+    # a question only the author can settle.
+    demoted, pairs = [], []
+    if near_duplicates:
+        lexicon, demoted, pairs = _near_duplicate_pass(
+            lexicon, {s: seen[s.lower()].count for s in lexicon},
+            dominance=near_duplicate_dominance)
+        for nd in demoted:
+            candidates.append(Candidate(nd.word,
+                                        tuple(seen[nd.word.lower()].para_ids),
+                                        suggestions=(nd.suggestion,)))
+
     # suggest() costs about a quarter-second a word and is the only slow part
     # of this module, so it runs on a bounded prefix and never on the lexicon —
     # asking what "Kaelith" should have been is how the damage starts. A word
-    # that already came apart into a stem needs no guess: it carries its own.
+    # that already came apart into a stem or carries a suggestion (the
+    # denylist's fix, a demoted near-duplicate's dominant twin) needs no guess.
     if suggestion_limit > 0:
         asked = 0
         for pile in (candidates, recurring):
             for i, c in enumerate(pile):
                 if asked >= suggestion_limit:
                     break
-                if c.stem or c.word in denied:   # both already carry their fix
+                if c.stem or c.suggestions:      # already carries its fix
                     continue
                 asked += 1
                 try:
@@ -332,9 +481,23 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
                        recurring=tuple(recurring), tokens=tokens,
                        unique=len(seen),
                        unknown=len(lexicon) + len(candidates) + len(recurring),
-                       dictionary=dictionary)
+                       dictionary=dictionary,
+                       lexicon_counts=tuple(seen[s.lower()].count
+                                            for s in lexicon),
+                       near_duplicates=tuple(demoted),
+                       name_pairs=tuple(pairs))
     log.info("Spell scan: %d tokens, %d unique, %d unknown → %d protected as "
              "names, %d to look at, %d repeated", result.tokens, result.unique,
              result.unknown, len(result.lexicon), len(result.candidates),
              len(result.recurring))
+    if demoted:
+        log.info("Spell scan: %d near-duplicate name(s) demoted from "
+                 "protection: %s", len(demoted),
+                 "; ".join(f"{d.word} ({d.count}×) → {d.suggestion} "
+                           f"({d.of_count}×)" for d in demoted))
+    if pairs:
+        log.info("Spell scan: %d near-identical name pair(s) raised to the "
+                 "author: %s", len(pairs),
+                 "; ".join(f"{p.a} ({p.a_count}×) / {p.b} ({p.b_count}×)"
+                           for p in pairs))
     return result
