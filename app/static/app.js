@@ -2428,6 +2428,10 @@ const STAGE_FLOW = [
   { id: 'glossary', label: 'Building the glossary', optional: true,
     quip: 'Learning your invented names and spellings so they’re never quietly '
         + '“corrected” against you.' },
+  { id: 'factcheck', label: 'Fact check', optional: true,
+    quip: 'One read against the world outside the book — names, history, '
+        + 'geography — asking, never editing: fiction bends the world on '
+        + 'purpose.' },
   { id: 'adjudicate', label: 'Real-word typos', optional: true,
     quip: 'Weighing the sneaky ones — “form” for “from”, “lead” for “led” — that '
         + 'a spellchecker sails right past.' },
@@ -2440,6 +2444,37 @@ const STAGE_FLOW = [
   { id: 'continuity', label: 'Continuity read', optional: true,
     quip: 'Reading cover to cover for facts the book contradicts about itself — '
         + 'ages, dates, eye colours, the day of the week.' },
+  // Multi-round only: the judge between rounds. No switch backs it (it rides
+  // the rounds choice), so it appears in the flow only while it is running.
+  { id: 'round_judge', label: 'Judging the round', optional: true,
+    quip: 'A strong judge reads every correction this round proposed — only '
+        + 'what it vouches for is applied and read by the next round.' },
+  // The wrap-up passes. These used to hide under "Writing your document",
+  // which on a big book meant minutes of judge and whole-book work with no
+  // sign of which was running. verify and low_confidence are config-file
+  // choices with no switch, so like round_judge they only show while current.
+  { id: 'verify', label: 'Cross-checking findings', optional: true,
+    quip: 'A second model reads what the detectors agreed on and strikes '
+        + 'anything it can’t vouch for.' },
+  { id: 'sapling', label: 'Sapling grammar check', optional: true,
+    quip: 'A second opinion from a dedicated grammar service — every '
+        + 'suggestion vetted in context before it can touch your voice.' },
+  { id: 'low_confidence', label: 'Second look at soft calls', optional: true,
+    quip: 'Re-reading the model’s quieter hunches in context, promoting the '
+        + 'real catches and letting the rest go.' },
+  { id: 'smoothing', label: 'Line-editing suggestions', optional: true,
+    quip: 'A line editor reads the whole book for small smoothings, a '
+        + 'skeptical taste judge culls them, and every survivor reaches you '
+        + 'as a question — never an edit.' },
+  { id: 'chapter_continuity', label: 'Chapter continuity', optional: true,
+    quip: 'Reading scene by scene for breaks that close inside a chapter — '
+        + 'the cigarette lit twice, the dawn that turns to evening mid-scene.' },
+  { id: 'meaning_check', label: 'Meaning check', optional: true,
+    quip: 'One last read of every change, asking the question that matters '
+        + 'most: does the sentence still mean what you meant?' },
+  { id: 'fix_check', label: 'Fix check', optional: true,
+    quip: 'The same last read, asking the other question: is each correction '
+        + 'actually the right repair?' },
   { id: 'writing', label: 'Writing your document',
     quip: 'Folding every accepted change back in and packaging up your files.' },
 ];
@@ -2456,7 +2491,10 @@ const REJUDGE_FLOW = [
 // Which of the steps this particular job will run, in order. The always-on ones
 // stay; an optional one is kept only when the job's toggles ask for it, so the
 // tracker doesn't promise a pass that never fires. The current stage is always
-// kept, even if a toggle says otherwise, so the tracker can never lose its place.
+// kept, even if a toggle says otherwise, so the tracker can never lose its
+// place — and that clause alone is what admits the stages no switch backs
+// (round_judge, verify, low_confidence): they surface while running and are
+// never promised in advance.
 function stageFlowFor(job) {
   if (job.stage === 'judging') return REJUDGE_FLOW;
   const f = job.features || {};
@@ -2465,18 +2503,21 @@ function stageFlowFor(job) {
     if (s.id === job.stage) return true;
     if (!s.optional) return true;
     if (s.id === 'glossary') return job.glossary_model !== 'off';
-    return on(s.id);            // adjudicate, rewrite, languagetool, continuity
+    return on(s.id);            // every switch-backed pass, by its feature id
   });
 }
 
 // A review shows the step tracker while it is actively working through the
-// pipeline: a sync run (state "running") or the "preparing" read that comes
-// just before it (still "queued"). Prep and promo have their own single-step
-// lives and set no stage, so they never show one.
+// pipeline: a sync run (state "running"), the "preparing" read that comes just
+// before it (still "queued"), or a batch run collecting — collect re-walks the
+// same steps (re-ingest, fold, the whole-book passes, writing), and is the
+// stretch that used to read as one long "almost done". Prep and promo have
+// their own single-step lives and set no stage, so they never show one.
 function tracksStages(job) {
   return job.kind === 'review' && !!job.stage
     && stageFlowFor(job).some((s) => s.id === job.stage)
-    && (job.state === 'running' || job.state === 'queued');
+    && (job.state === 'running' || job.state === 'queued'
+        || job.state === 'collecting');
 }
 
 function stageElapsed(job) {

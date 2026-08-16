@@ -131,6 +131,28 @@ def test_on_progress_reports_each_round_then_its_sections(tmp_path, cfg):
     assert calls == [(1, 2, 0, 0), (1, 2, 1, 1), (2, 2, 0, 0), (2, 2, 1, 1)]
 
 
+def test_on_phase_cycles_the_stages_each_round_then_writes(tmp_path, cfg):
+    """The stage story of a multi-round run: every round announces the working-
+    document rebuild, its review steps, and the between-rounds judge; the final
+    finish announces the assembly. The round number from on_progress is what
+    keeps the repetition legible on a card."""
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the cat sat", "He ran he fell")
+    review = FakeProvider([
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the cat sat", corrected="the dog sat"),
+        finding_result(para_id="body-0001", error_type="comma_splice",
+                       original="He ran he fell", corrected="He ran, he fell"),
+    ])
+    stages = []
+    run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                    review_provider=review, judge_provider=_ApproveJudge(),
+                    on_phase=stages.append)
+    assert stages == ["preparing", "reviewing", "round_judge",
+                      "preparing", "reviewing", "round_judge", "writing"]
+
+
 def test_rounds_run_leaves_a_composed_snapshot(tmp_path, cfg):
     """The driver snapshots its composed findings before finish — the rebuild
     source for download-anyway when the audit fails after the paid rounds."""

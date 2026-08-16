@@ -305,7 +305,7 @@ def _make_docx(path, *paragraphs):
 
 
 def _finish_with(tmp_path, monkeypatch, text, findings, results,
-                 gates=("meaning",), **mc):
+                 gates=("meaning",), on_phase=None, **mc):
     """Run pipeline.finish over a real document with the named gate(s) on and the
     judges' answers scripted. Returns (outputs, provider)."""
     import docproof.providers as providers_mod
@@ -328,7 +328,7 @@ def _finish_with(tmp_path, monkeypatch, text, findings, results,
     monkeypatch.setattr(providers_mod, "build_provider", lambda _c: provider)
     prepared = prepare(cfg, src, "config/error_types")
     out = finish(prepared, list(findings), Usage(), cfg,
-                 out_dir=tmp_path / "out", source_path=src)
+                 out_dir=tmp_path / "out", source_path=src, on_phase=on_phase)
     return out, provider
 
 
@@ -359,6 +359,33 @@ def test_finish_applies_an_edit_that_preserves_meaning(tmp_path, monkeypatch):
         [_verdicts({"item": 1, "verdict": "keep", "reason": ""})])
     assert out.applied == 1
     assert "Held back" not in (tmp_path / "out" / "summary.md").read_text("utf-8")
+
+
+def test_finish_names_each_gate_and_then_the_write(tmp_path, monkeypatch):
+    """finish() announces each pass as it starts — the app's card and step
+    tracker read these — one stage per gate, in gate order, and "writing" only
+    once the document is actually being assembled."""
+    stages = []
+    out, provider = _finish_with(
+        tmp_path, monkeypatch, PARA,
+        [_edit("f-1", PARA, "He could not have known the road was bared.")],
+        [_verdicts({"item": 1, "verdict": "keep", "reason": ""}),
+         _verdicts({"item": 1, "verdict": "keep", "reason": ""})],
+        gates=("meaning", "fix"), on_phase=stages.append)
+    assert stages == ["meaning_check", "fix_check", "writing"]
+    assert len(provider.calls) == 2              # each stage was a real judge
+
+
+def test_a_gate_with_nothing_to_judge_announces_no_stage(tmp_path, monkeypatch):
+    """An enabled gate over a run with no tracked changes makes no call and
+    must claim no step — the tracker would otherwise show a judge reading
+    nothing. Only the assembly announces itself."""
+    stages = []
+    _, provider = _finish_with(tmp_path, monkeypatch, PARA, [], [],
+                               gates=("meaning", "fix"),
+                               on_phase=stages.append)
+    assert stages == ["writing"]
+    assert provider.calls == []
 
 
 def test_withdrawing_a_change_does_not_promote_the_edit_it_was_blocking(

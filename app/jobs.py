@@ -70,18 +70,33 @@ PLAIN_STATE = {
 
 # The steps a running review moves through, in order. The per-chunk detector
 # loop ("reviewing") is the one with a real count; the rest are whole-book passes
-# that run after it, each a single stretch of work with no per-call progress —
+# that run around it, each a single stretch of work with no per-call progress —
 # so the card names the step instead of leaving the bar frozen at 100%. Keyed by
-# the stage ids the pipeline's on_phase callback emits, plus the two the app sets
-# itself around the run (preparing, writing). See Job.plain_state.
+# the stage ids the pipeline's on_phase callback emits (run_sync, finish, and
+# batch collect all speak it now), plus "preparing", which the app also sets
+# itself ahead of the run. See Job.plain_state.
 STAGE_STATE = {
     "preparing": "Reading your manuscript",
     "reviewing": "Reviewing ({done} of {total} sections)",
     "glossary": "Building the glossary for the whole book",
+    "factcheck": "Checking the book against the world",
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",
     "continuity": "Reading the whole book for continuity",
+    # Multi-round only: the between-rounds judge that rules on each round's
+    # corrections before the next round reads the corrected text.
+    "round_judge": "Putting this round's corrections to the judge",
+    # The finish()-time passes, which used to hide under "writing" — on a big
+    # book, many minutes of whole-book reads and judges with no sign of which
+    # was running. Same ids as the feature switches wherever one exists.
+    "verify": "Cross-checking the detectors' findings",
+    "sapling": "Running the Sapling grammar check",
+    "low_confidence": "Second look at the softer catches",
+    "smoothing": "Reading for line-editing suggestions",
+    "chapter_continuity": "Reading each chapter for continuity",
+    "meaning_check": "Checking every change keeps your meaning",
+    "fix_check": "Checking every fix is the right fix",
     "writing": "Almost done — writing your document",
     # A re-judge is not the pipeline above: it runs the gates over a finished
     # run's corrections and writes a new deliverable, emitting this one stage and
@@ -1229,7 +1244,12 @@ class JobRunner:
                                 done=0, total=0, review_round=1,
                                 total_rounds=job.rounds) is None:
             return
-        self.store.update(job_id, stage="reviewing")
+        # "preparing", not "reviewing": the driver's first act is the whole-book
+        # ingest (spell scan, story sheet), and the rounds cycle the stages from
+        # there — each round re-emits "preparing" while its working document is
+        # rebuilt, walks the review stages, then "round_judge" as the judge
+        # takes that round's corrections.
+        self.store.update(job_id, stage="preparing")
 
         def on_progress(rnd: int, total_rounds: int, done: int,
                         total: int) -> None:
@@ -1238,6 +1258,11 @@ class JobRunner:
             # round number is what keeps that legible. See Job.plain_state.
             self.store.update(job_id, review_round=rnd,
                               total_rounds=total_rounds, done=done, total=total)
+
+        def on_phase(name: str) -> None:
+            # Which step the current round is on — same callback _run_now hands
+            # run_sync and finish, so a rounds card names its steps too.
+            self.store.update(job_id, stage=name)
 
         out = self._claim_results_dir(job)
         should_cancel = lambda: self._cancel_pending(job_id)  # noqa: E731
@@ -1248,13 +1273,13 @@ class JobRunner:
                     str(out / "rounds-ws"), out_dir=out,
                     review_provider=review_provider,
                     judge_provider=judge_provider, on_progress=on_progress,
-                    should_cancel=should_cancel)
+                    should_cancel=should_cancel, on_phase=on_phase)
             else:
                 outputs = run_sync_rounds(
                     cfg, job.source_path, self.error_dir, out_dir=out,
                     review_provider=review_provider,
                     judge_provider=judge_provider, on_progress=on_progress,
-                    should_cancel=should_cancel)
+                    should_cancel=should_cancel, on_phase=on_phase)
         except JobCancelled:
             # An abort mid-run: stop cleanly (cancelled, not failed), releasing
             # the results dir and discarding the checkpoint. The calls already
@@ -1333,11 +1358,16 @@ class JobRunner:
         except JobCancelled:
             self._abort(job_id)
             return
-        self.store.update(job_id, stage="writing")
+        # finish() speaks the same on_phase callback: each of its paid passes
+        # (Sapling, smoothing, the judge gates, …) names itself as it starts,
+        # and "writing" is emitted only once the document is actually being
+        # assembled — so the card no longer claims "writing your document"
+        # through many minutes of judge and whole-book passes.
         out = self._claim_results_dir(job)
         try:
             outputs = finish(prepared, findings, usage, cfg, out_dir=out,
-                             source_path=job.source_path, coverage=coverage)
+                             source_path=job.source_path, coverage=coverage,
+                             on_phase=on_phase)
         except AuditError as e:
             # No reviewed document was written — that is the point — but the
             # summary and findings were, and they name the paragraph that did
@@ -1756,6 +1786,12 @@ class JobRunner:
         if job is None or job.state not in ("queued", "running"):
             return
         cfg = self.config_for(job)
+        # Submission ingests the document and makes the whole-book reads (spell
+        # scan, story sheet) while building the requests — minutes on a big
+        # book, which read as a stuck "Waiting to start" without this. Cleared
+        # on the flip to waiting: the overnight card has its own message, and
+        # collect starts the stage story over from "preparing".
+        self.store.update(job_id, stage="preparing")
         try:
             provider = self._provider(cfg)
             batch_job = batchlib.submit(cfg, job.source_path, self.error_dir,
@@ -1775,7 +1811,7 @@ class JobRunner:
                                                              encoding="utf-8")
         if self.store.update_if(job_id, expect=job.state, state="waiting",
                                 total=batch_job.request_count,
-                                error=None) is None:
+                                error=None, stage="") is None:
             # Cancelled while the batch was on its way to the vendor. It can't
             # be unsubmitted, so say what it cost: the id file names it.
             log.warning("Job %s was cancelled during submission; batch %s is "
@@ -1895,9 +1931,18 @@ class JobRunner:
                                 collect_attempts=attempt) is None:
             return
         out = self._claim_results_dir(job)
+
+        def on_phase(name: str) -> None:
+            # Collect re-walks the pipeline's steps (re-ingest, fold, the
+            # whole-book post-passes, finish), and this is how the card and its
+            # step tracker follow along rather than sitting on "almost done"
+            # for the entire stretch. Same callback _run_now hands run_sync.
+            self.store.update(job.id, stage=name)
+
         try:
             outputs = batchlib.collect(batch_job, provider, self.error_dir,
-                                       self.store.paths.jobs, out_dir=out)
+                                       self.store.paths.jobs, out_dir=out,
+                                       on_phase=on_phase)
         except Exception as e:                # noqa: BLE001
             # Anything uncaught here would otherwise leave the job in
             # `collecting`, which the ticker now retries — so a permanent
@@ -1907,6 +1952,6 @@ class JobRunner:
             self.store.update(job.id, state="failed", error=str(e))
             return
         self.store.update(job.id, state="done", **_tallies(outputs),
-                          results_dir=str(out), error=None)
+                          results_dir=str(out), error=None, stage="")
         self._record_usage(job.id, out, cfg.api.model, batch=True)
         self._notify_done(job.id)
