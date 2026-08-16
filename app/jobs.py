@@ -36,6 +36,7 @@ from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
 from docproof.providers import ProviderError, build_provider, cost_of_usage, \
     provider_for
+from docproof.utils.files import write_atomic
 
 from . import features
 from .settings import Paths, Settings, get_api_key
@@ -486,8 +487,11 @@ class JobStore:
             d = self.dir(job.id)
             d.mkdir(parents=True, exist_ok=True)
             job.updated_at = _now()
-            (d / APP_MANIFEST).write_text(json.dumps(asdict(job), indent=2),
-                                          encoding="utf-8")
+            # The lock serializes writers only: get() reads this file from the
+            # API, ticker, and worker threads without taking it, so the write
+            # must land atomically or a reader can catch it half-written and
+            # see a live job as unreadable.
+            write_atomic(d / APP_MANIFEST, json.dumps(asdict(job), indent=2))
         return job
 
     def get(self, job_id: str) -> Job | None:

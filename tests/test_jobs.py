@@ -7,6 +7,7 @@ that race deterministically instead of hoping a live thread loses it.
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -409,6 +410,38 @@ def test_update_if_only_wins_when_the_state_still_matches(runner):
     # Correct expectation: applied.
     assert store.update_if("j1", expect="queued", state="cancelled").state \
         == "cancelled"
+
+
+def test_a_reader_never_catches_the_manifest_half_written(runner):
+    """save() holds the store lock but get() does not — the API polls a job
+    while the worker updates it. A plain write_text truncated the manifest
+    before rewriting it, so a get() landing in that window parsed an empty or
+    partial file and returned None for a perfectly healthy job (the rare
+    AttributeError flake in test_a_null_selection_means_the_whole_document).
+    The atomic tmp-then-replace must leave no such window."""
+    store, _ = runner
+    job = _job(store)
+    stop = threading.Event()
+    problems = []
+
+    def read_back():
+        try:
+            while not stop.is_set():
+                if store.get(job.id) is None:
+                    problems.append("get() returned None during a save()")
+                    return
+        except Exception as e:                  # noqa: BLE001 - fail the test
+            problems.append(repr(e))
+
+    reader = threading.Thread(target=read_back)
+    reader.start()
+    try:
+        for _ in range(1000):
+            store.save(job)
+    finally:
+        stop.set()
+        reader.join()
+    assert problems == []
 
 
 # --- recovering a batch that landed after the collect failed ------------------

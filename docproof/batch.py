@@ -23,6 +23,7 @@ from .models import CoverageLedger, Usage
 from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
                        continuity_findings, finish, prepare)
 from .providers import BatchRequest, BatchStatus, Provider
+from .utils.files import write_atomic
 
 log = logging.getLogger("docproof.batch")
 
@@ -231,7 +232,9 @@ def save(job: Job, workspace: str | Path) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     job.updated_at = _now()
     path = d / MANIFEST_NAME
-    path.write_text(json.dumps(asdict(job), indent=2), encoding="utf-8")
+    # Atomic because the app reads this manifest from other threads (the
+    # ticker loads it every poll) with no lock shared with the writer.
+    write_atomic(path, json.dumps(asdict(job), indent=2))
     return path
 
 
