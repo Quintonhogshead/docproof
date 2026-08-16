@@ -86,6 +86,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "Adds a per-chapter read plus a judge.",
         "pass", ("chapter_continuity", "enabled"), heavy=True),
     FeatureSpec(
+        "factcheck", "Fact check — the world outside the book",
+        "One whole-book read for real-world slips: institutional names and "
+        "acronym expansions (the NTSB is Transportation, not Traffic), "
+        "historical figures and events, geography, currencies. Every catch is "
+        "a margin question, never an edit — fiction bends the world on "
+        "purpose. Adds a whole-book read at the glossary's price.",
+        "pass", ("factcheck", "enabled"), heavy=True),
+    FeatureSpec(
         "rewrite", "Rewrite-and-compare pass",
         "The model retypes each paragraph with the smallest possible edits, and "
         "the differences become candidates a skeptical confirm step rules on. A "
@@ -151,11 +159,30 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "Builds the book's own vocabulary as a do-not-flag list for the model "
         "passes, so a coined name is not read as a typo. Classifies, never "
         "edits.", "pass", ("spellcheck", "enabled")),
+    FeatureSpec(
+        "heading_case", "Headings set in title case",
+        "Set chapter titles and section headings in Chicago title case as "
+        "word-level tracked changes — “the shape of things to come” becomes "
+        "“The Shape of Things to Come”. All-caps headings and names carrying "
+        "their own capitals are left as styled. Free: no API call.",
+        "pass", ("style", "heading_title_case")),
+    FeatureSpec(
+        "residuals", "Number-rule leftovers as queries",
+        "After every gate, re-scan for numerals to one hundred, percent "
+        "signs, and digit ordinals no edit touched, and query each — so the "
+        "spell-out rule ends the run applied everywhere or visibly waived, "
+        "never just mostly. Free: no API call.",
+        "pass", ("residuals", "enabled")),
     # -- what the run writes ---------------------------------------------------
     FeatureSpec(
-        "comments", "Margin comments",
-        "Findings that ask rather than correct become Word margin comments. Off "
-        "leaves them in the summary only.", "output", ("comments",)),
+        "comments", "Explain applied edits in the margin",
+        "A margin comment beside each tracked change, saying why it was made. "
+        "Off quiets the margin for an author-facing copy: every correction is "
+        "still a tracked change to accept or reject, every reason is still in "
+        "the change log, and genuine questions (continuity, fact check, name "
+        "pairs) still appear as comments — they are a separate channel. Also "
+        "governs the top-of-document protected-words note.",
+        "output", ("comments",)),
     FeatureSpec(
         "sapling_comments", "Explain Sapling changes",
         "Give each Sapling grammar edit a margin comment naming what it fixed. "
@@ -244,6 +271,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "read", "model": cfg.storysheet.model}
     if fid == "continuity":
         return {"kind": "read", "model": cfg.continuity.model}
+    if fid == "factcheck":
+        return {"kind": "read", "model": cfg.factcheck.model}
     if fid == "chapter_continuity":
         # Priced as a whole-book read: split across chapters, it reads the book
         # once, plus a small judge whose cost tracks the candidate count. Same

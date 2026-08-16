@@ -3,6 +3,39 @@ name: Australian English
 dictionary: en_AU
 primary_quote: single
 confirm: true
+
+# Macquarie spelling follows British for these. Each occurrence is
+# adjudicated in context; proper names keep their spelling.
+respell:
+  gray: grey
+  grays: greys
+  grayed: greyed
+  graying: greying
+  grayish: greyish
+  traveler: traveller
+  travelers: travellers
+  traveled: travelled
+  traveling: travelling
+  canceled: cancelled
+  canceling: cancelling
+  labeled: labelled
+  labeling: labelling
+  modeled: modelled
+  modeling: modelling
+  marvelous: marvellous
+  jewelry: jewellery
+  counselor: counsellor
+  counselors: counsellors
+  woolen: woollen
+  theater: theatre
+  theaters: theatres
+  center: centre
+  centers: centres
+  airplane: aeroplane
+  airplanes: aeroplanes
+  mustache: moustache
+  mustaches: moustaches
+  pajamas: pyjamas
 authorities:
   - The Oxford Style Manual, including the Oxford Guide to Style
   - The Macquarie Dictionary, for spelling

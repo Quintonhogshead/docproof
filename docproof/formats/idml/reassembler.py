@@ -392,7 +392,7 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
                 first = apply_replacement(para, anchor, author, date)
                 applied.append(f.finding_id)
                 touched = changed = True
-                if cfg.comments and first is not None:
+                if cfg.comments and not f.silent and first is not None:
                     attach_note(first, f.explanation or f"{f.error_type} fix",
                                 author, date)
 

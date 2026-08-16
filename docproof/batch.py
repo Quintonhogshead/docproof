@@ -492,6 +492,14 @@ def collect_findings(job: Job, provider: Provider,
                 edit_dominance=cfg.glossary.case_edit_dominance,
                 edit_min_count=cfg.glossary.case_edit_min_count)
 
+    # The external-world read rides collect the same way the glossary does:
+    # one synchronous call, queries only, cached per draft.
+    if cfg.factcheck.enabled and prepared.whole_document:
+        from .factcheck import factcheck_findings
+        from .providers import build_provider
+        findings += factcheck_findings(
+            cfg, prepared.doc.paragraphs, usage, build_provider)
+
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         from .adjudicate import adjudicate, merge_candidates
         cands = merge_candidates(prepared.adjudicate_candidates, glossary_cands)
