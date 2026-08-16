@@ -8,6 +8,7 @@ that race deterministically instead of hoping a live thread loses it.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -588,7 +589,9 @@ def test_collecting_gives_up_after_the_cap_instead_of_looping(runner,
 
 def test_each_collect_attempt_is_counted_before_it_runs(runner, monkeypatch):
     """So a crash that leaves no trace still spends one of the tries — otherwise
-    the counter never moves and the loop is back."""
+    the counter never moves and the loop is back. The count is written by the
+    ticker's handoff (the CAS waiting→collecting), before the worker ever runs
+    the collect, so a process death between the two still spends one."""
     store, r = runner
     _ready_batch(store, state="waiting", collect_attempts=0)
     _stub_vendor(monkeypatch)
@@ -598,11 +601,129 @@ def test_each_collect_attempt_is_counted_before_it_runs(runner, monkeypatch):
 
     monkeypatch.setattr("app.jobs.batchlib.collect", crash)
 
+    # The ticker only hands off: it counts the attempt, flips to collecting, and
+    # queues the id for the worker — it does not collect.
+    r._advance_batch(store.get("j1"))
+    handed_off = store.get("j1")
+    assert handed_off.collect_attempts == 1
+    assert handed_off.state == "collecting"
+    assert r.queue.get_nowait() == "j1"
+
+    # The worker runs the (crashing) collect. The attempt stays spent, and the
+    # crash becomes a visible, recoverable failure rather than a silent retry.
+    r.run_one("j1")
+    failed = store.get("j1")
+    assert failed.state == "failed"
+    assert "OOM mid-write" in (failed.error or "")
+    assert failed.collect_attempts == 1
+
+
+# --- collect runs on the worker, never the ticker -----------------------------
+#
+# The deadlock these guard against: collect used to run inline on the ticker
+# thread while the worker ran a submit, and the two heavy whole-book passes
+# (which share the LanguageTool JVM) could park on each other. Collect now hands
+# off to the single worker thread, so it can never overlap a submit.
+
+def test_a_ready_batch_is_handed_to_the_worker_not_collected_on_the_tick(
+        runner, monkeypatch):
+    store, r = runner
+    _ready_batch(store, state="waiting", collect_attempts=0)
+    _stub_vendor(monkeypatch)
+
+    def no_collect(*a, **k):
+        raise AssertionError("collect must run on the worker, not the ticker")
+
+    monkeypatch.setattr("app.jobs.batchlib.collect", no_collect)
+
     r._advance_batch(store.get("j1"))
 
-    # The attempt was persisted before collect ran, so the count advanced even
-    # though the collect itself blew up.
+    # Handed off, not collected: state flipped, attempt spent, id queued.
+    updated = store.get("j1")
+    assert updated.state == "collecting"
+    assert updated.collect_attempts == 1
+    assert r.queue.get_nowait() == "j1"
+
+
+def test_a_collecting_job_is_not_enqueued_again_by_the_next_tick(runner,
+                                                                 monkeypatch):
+    """Once handed off, a job sits in the queue as "collecting"; the ticker no
+    longer looks at "collecting", so a second pass must not queue it twice."""
+    store, r = runner
+    _ready_batch(store, state="waiting", collect_attempts=0)
+    _stub_vendor(monkeypatch)
+    monkeypatch.setattr("app.jobs.batchlib.collect",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("no collect on the tick")))
+
+    r.tick_once()                       # first pass: hands off
+    assert store.get("j1").state == "collecting"
+    assert r.queue.get_nowait() == "j1"
+
+    r.tick_once()                       # second pass: must be a no-op for j1
+    assert r.queue.empty()
     assert store.get("j1").collect_attempts == 1
+
+
+def test_restart_returns_an_interrupted_collect_to_the_ticker(runner,
+                                                              monkeypatch):
+    """A collect caught mid-flight by a restart is flipped back to "waiting" so
+    the ticker re-polls and hands it off again — spending another attempt,
+    exactly as a first try would, so a crash-loop still converges on the cap."""
+    store, r = runner
+    _ready_batch(store, state="collecting", collect_attempts=1)
+    _stub_vendor(monkeypatch)
+
+    r.resume_interrupted()
+
+    resumed = store.get("j1")
+    assert resumed.state == "waiting"
+    assert resumed.collect_attempts == 1      # untouched by the flip
+    assert r.queue.empty()                    # the ticker enqueues, not resume
+
+    # The next tick re-polls (ready), spends the next attempt, and hands off.
+    r._advance_batch(store.get("j1"))
+    handed = store.get("j1")
+    assert handed.state == "collecting"
+    assert handed.collect_attempts == 2
+    assert r.queue.get_nowait() == "j1"
+
+
+def test_a_job_that_left_collecting_while_queued_is_skipped(runner, monkeypatch):
+    """The id can sit in the queue after the record has moved on (deleted, or
+    failed by a cap-exhausted recover). The worker must not collect it."""
+    store, r = runner
+    _ready_batch(store, state="collecting", collect_attempts=1)
+    monkeypatch.setattr("app.jobs.batchlib.collect",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("must not collect a non-collecting job")))
+
+    store.update("j1", state="failed")
+    r.run_one("j1")
+
+    assert store.get("j1").state == "failed"
+
+
+def test_the_stall_alarm_names_a_long_call(runner, monkeypatch, caplog):
+    """A call that runs past the timeout logs loudly and dumps every thread's
+    stack; a fast one does neither."""
+    import logging
+    store, r = runner
+    dumps = []
+    monkeypatch.setattr("app.jobs.faulthandler.dump_traceback",
+                        lambda **k: dumps.append(k))
+
+    with caplog.at_level(logging.ERROR, logger="docproof.app.jobs"):
+        with r._stall_alarm("j1", "Collecting", timeout=0.02):
+            time.sleep(0.1)
+    assert dumps, "a call past the timeout should dump thread stacks"
+    assert any("running over" in rec.message for rec in caplog.records)
+
+    dumps.clear()
+    caplog.clear()
+    with r._stall_alarm("j1", "Collecting", timeout=5):
+        pass                             # returns at once, well under the timeout
+    assert not dumps
 
 
 # --- resuming what was already paid for ---------------------------------------
