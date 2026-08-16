@@ -175,9 +175,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "pass", ("residuals", "enabled")),
     # -- what the run writes ---------------------------------------------------
     FeatureSpec(
-        "comments", "Margin comments",
-        "Findings that ask rather than correct become Word margin comments. Off "
-        "leaves them in the summary only.", "output", ("comments",)),
+        "comments", "Explain applied edits in the margin",
+        "A margin comment beside each tracked change, saying why it was made. "
+        "Off quiets the margin for an author-facing copy: every correction is "
+        "still a tracked change to accept or reject, every reason is still in "
+        "the change log, and genuine questions (continuity, fact check, name "
+        "pairs) still appear as comments — they are a separate channel. Also "
+        "governs the top-of-document protected-words note.",
+        "output", ("comments",)),
     FeatureSpec(
         "sapling_comments", "Explain Sapling changes",
         "Give each Sapling grammar edit a margin comment naming what it fixed. "
