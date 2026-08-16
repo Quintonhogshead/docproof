@@ -167,6 +167,89 @@ def content_hash(doc: DocumentModel) -> str:
     return h.hexdigest()
 
 
+def _collapse_repeated_comments(validated: list, doc: DocumentModel,
+                                threshold: int) -> int:
+    """Leave one comment where the same rule explanation would repeat past
+    `threshold`, and silence the copies (DP-008).
+
+    2,643 comments against the humans' 31 is a review burden of its own, and
+    dozens were the identical house-style sentence — 79 copies of the dash
+    rule. The edits all stand; the first instance (document order) keeps the
+    note, says how many siblings it speaks for, and points at the change log,
+    which lists every one. Queries are never collapsed: each is its own
+    question. Returns how many comments were silenced."""
+    if threshold <= 0:
+        return 0
+    order = {p.para_id: i for i, p in enumerate(doc.paragraphs)}
+    groups: dict[tuple[str, str], list[int]] = {}
+    for i, f in enumerate(validated):
+        if f.status != "validated" or f.silent or not f.explanation:
+            continue
+        groups.setdefault((f.error_type, f.explanation), []).append(i)
+    silenced = 0
+    for (_etype, expl), idxs in groups.items():
+        if len(idxs) <= threshold:
+            continue
+        idxs.sort(key=lambda i: (
+            order.get(validated[i].para_id, len(order)),
+            validated[i].anchor.start if validated[i].anchor else 0))
+        first = idxs[0]
+        validated[first] = replace(validated[first], explanation=(
+            f"{expl} Applied {len(idxs)} times in this manuscript; the "
+            f"comment appears once here, and the change log lists every "
+            f"instance."))
+        for i in idxs[1:]:
+            validated[i] = replace(validated[i], silent=True)
+        silenced += len(idxs) - 1
+    if silenced:
+        log.info("Comment collapse: %d repeated rule note(s) silenced; each "
+                 "rule keeps one counted comment.", silenced)
+    return silenced
+
+
+def _name_pair_queries(spell: SpellScan, paragraphs) -> list[Finding]:
+    """One margin question per near-identical protected-name pair the spell
+    scan could not call — counts too close for the lopsided-majority rule.
+
+    A question, never a candidate: with the counts close, a model asked
+    sentence by sentence has no more evidence than the counts do, and the cost
+    of a wrong "fix" is a renamed character. The author knows whether these
+    are one person or two; nobody else can."""
+    if not spell.name_pairs:
+        return []
+    import re
+
+    from .sweeps import sentence_window
+    findings: list[Finding] = []
+    for i, pair in enumerate(spell.name_pairs, start=1):
+        pat = re.compile(r"(?<![A-Za-z’'])" + re.escape(pair.b)
+                         + r"(?![A-Za-z’'])", re.IGNORECASE)
+        site = next(((p, m) for p in paragraphs
+                     for m in [pat.search(p.text)] if m), None)
+        if site is None:
+            continue
+        p, m = site
+        window, _lo, occ = sentence_window(p.text, m.start(), m.end())
+        findings.append(Finding(
+            finding_id=f"nd-{i:04d}",
+            chunk_id="consistency",
+            para_id=p.para_id,
+            error_type="near_duplicate_name",
+            original_text=window,
+            occurrence=occ,
+            corrected_text=window,
+            explanation=(
+                f"Two near-identical name spellings run through this "
+                f"manuscript: “{pair.a}” ({pair.a_count}×) and “{pair.b}” "
+                f"({pair.b_count}×). If they are one character, one spelling "
+                f"is wrong throughout; if they are two, nothing needs to "
+                f"change. The counts are too close for this pass to decide, "
+                f"so both were left as written — worth settling once."),
+            confidence="medium",
+            force_query=True))
+    return findings
+
+
 def _unprotect_near_miss(spell: SpellScan, candidates) -> SpellScan:
     """Drop from the protected lexicon every word that generation escalated to a
     near-miss candidate.
@@ -186,8 +269,14 @@ def _unprotect_near_miss(spell: SpellScan, candidates) -> SpellScan:
             if getattr(c, "kind", "") == "near_miss"}
     if not near:
         return spell
-    return dataclasses.replace(spell, lexicon=tuple(
-        w for w in spell.lexicon if w.lower() not in near))
+    counts = dict(zip(spell.lexicon, spell.lexicon_counts))
+    kept = tuple(w for w in spell.lexicon if w.lower() not in near)
+    return dataclasses.replace(
+        spell, lexicon=kept,
+        # The counts ride alongside the lexicon by position, so they are
+        # filtered with it — a checklist that numbered the wrong words would
+        # be worse than the truncated note it replaced.
+        lexicon_counts=tuple(counts[w] for w in kept) if counts else ())
 
 
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
@@ -279,6 +368,13 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                  if p.para_id in covered or (whole and not p.reviewable)]
         sweep_findings, sweep_reports = run_sweeps(
             swept, cfg.sweeps, variant, ellipsis_style=cfg.style.ellipsis)
+        # Unbalanced quotation marks ride with the sweeps but are not one: the
+        # only legitimate imbalance (speech running on) needs the NEXT
+        # paragraph to recognise, so it runs over the covered list whole.
+        # Queries only — they claim no spans and edit nothing.
+        if cfg.style.unclosed_quote_queries:
+            from .sweeps import unclosed_quote_findings
+            sweep_findings += unclosed_quote_findings(swept, variant)
 
         # The spell scan reads the WHOLE document even when the run covers a
         # few sections. It changes nothing, so reading more costs nothing — and
@@ -289,11 +385,19 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                            min_occurrences=cfg.spellcheck.min_occurrences,
                            suggestion_limit=cfg.spellcheck.suggestion_limit,
                            allowlist=cfg.spellcheck.allowlist,
-                           denylist=cfg.spellcheck.denylist,
+                           # The variant's respellings ride the denylist here:
+                           # for the scan both are just "carries its own fix,
+                           # never protected". The adjudicator gets them as
+                           # their own kind, where the distinction matters.
+                           denylist={**variant.respell_map,
+                                     **cfg.spellcheck.denylist},
                            # An explicit dictionary wins; otherwise the variant
                            # picks one, which is the whole point of stating it.
                            dictionary=cfg.spellcheck.dictionary
-                           or variant.dictionary)
+                           or variant.dictionary,
+                           near_duplicates=cfg.spellcheck.near_duplicates,
+                           near_duplicate_dominance=(
+                               cfg.spellcheck.near_duplicate_dominance))
 
         # Whole-document, and only on a whole-document run: "you write this
         # three ways" is not a claim a review of two chapters can make.
@@ -306,6 +410,10 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             name_dominance=cfg.consistency.name_dominance,
             name_min_count=cfg.consistency.name_min_count)
         consistency_findings = to_findings(consistency, doc.paragraphs)
+        # Near-identical protected names too close to call ride the same
+        # deterministic prefix as the consistency queries: one question per
+        # pair, at the rarer spelling's first occurrence, changing nothing.
+        consistency_findings += _name_pair_queries(spell, doc.paragraphs)
 
         # Suspected typos to adjudicate later, generated now off the same spell
         # scan. Whole-document only (it reads the lexicon) and consumed on the
@@ -313,10 +421,16 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         # document-wide signal in one place.
         adjudicate_candidates = []
         if cfg.adjudicate.enabled and whole:
-            from .adjudicate import generate
-            adjudicate_candidates = generate(
+            from .adjudicate import generate, site_word_candidates
+            # The demoted near-duplicates go first: on any site both claim,
+            # the dominant-name suggestion outranks a dictionary guess.
+            adjudicate_candidates = site_word_candidates(
+                {nd.word: nd.suggestion for nd in spell.near_duplicates},
+                doc.paragraphs, kind="near_dup")
+            adjudicate_candidates += generate(
                 doc.paragraphs, protected=spell.lexicon,
                 denylist=cfg.spellcheck.denylist,
+                respell=variant.respell_map,
                 dictionary=cfg.spellcheck.dictionary or variant.dictionary,
                 near_miss_gap=cfg.adjudicate.near_miss_gap,
                 min_len=cfg.adjudicate.min_word_len,
@@ -673,6 +787,15 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 scan=cfg.glossary.case_drift_scan,
                 edit_dominance=cfg.glossary.case_edit_dominance,
                 edit_min_count=cfg.glossary.case_edit_min_count))
+
+    # The external-world read: one call, queries only. Whole-document only,
+    # like every pass that claims to have read the book.
+    if cfg.factcheck.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("factcheck")
+        from .factcheck import factcheck_findings
+        findings.extend(factcheck_findings(
+            cfg, prepared.doc.paragraphs, usage, provider_factory))
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         if on_phase:
@@ -1619,6 +1742,24 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # "validated", so the second neither sees it nor is billed for it.
     judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held)
+    # Residual coverage, after every gate has settled what is actually being
+    # edited: number-rule trigger sites no surviving edit touched become
+    # margin queries, so a rule the model applied to most-but-not-all matches
+    # ends the run accounted for instead of silently partial. Validated
+    # separately (they need the settled anchors to know what was touched);
+    # queries claim no spans, so the second validation cannot evict anything.
+    if cfg.residuals.enabled:
+        from .residuals import residual_queries
+        covered_ids = {p.para_id for c in prepared.chunks
+                       for p in c.paragraphs}
+        residual = residual_queries(
+            [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
+            validated, max_per_rule=cfg.residuals.max_per_rule)
+        validated += _validate(residual)
+    # One comment per repeated rule explanation, the rest silenced — after
+    # every gate has settled which edits stand, so the count in the surviving
+    # comment is the count in the manuscript.
+    _collapse_repeated_comments(validated, prepared.doc, cfg.comment_collapse)
     # Verifier rejections were never candidates for a tracked change, but they
     # belong in the report so the author sees what the overseer set aside.
     validated = validated + verifier_rejected

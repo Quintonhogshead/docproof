@@ -86,6 +86,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "Adds a per-chapter read plus a judge.",
         "pass", ("chapter_continuity", "enabled"), heavy=True),
     FeatureSpec(
+        "factcheck", "Fact check — the world outside the book",
+        "One whole-book read for real-world slips: institutional names and "
+        "acronym expansions (the NTSB is Transportation, not Traffic), "
+        "historical figures and events, geography, currencies. Every catch is "
+        "a margin question, never an edit — fiction bends the world on "
+        "purpose. Adds a whole-book read at the glossary's price.",
+        "pass", ("factcheck", "enabled"), heavy=True),
+    FeatureSpec(
         "rewrite", "Rewrite-and-compare pass",
         "The model retypes each paragraph with the smallest possible edits, and "
         "the differences become candidates a skeptical confirm step rules on. A "
@@ -151,6 +159,13 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "Builds the book's own vocabulary as a do-not-flag list for the model "
         "passes, so a coined name is not read as a typo. Classifies, never "
         "edits.", "pass", ("spellcheck", "enabled")),
+    FeatureSpec(
+        "residuals", "Number-rule leftovers as queries",
+        "After every gate, re-scan for numerals to one hundred, percent "
+        "signs, and digit ordinals no edit touched, and query each — so the "
+        "spell-out rule ends the run applied everywhere or visibly waived, "
+        "never just mostly. Free: no API call.",
+        "pass", ("residuals", "enabled")),
     # -- what the run writes ---------------------------------------------------
     FeatureSpec(
         "comments", "Margin comments",
@@ -244,6 +259,8 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "read", "model": cfg.storysheet.model}
     if fid == "continuity":
         return {"kind": "read", "model": cfg.continuity.model}
+    if fid == "factcheck":
+        return {"kind": "read", "model": cfg.factcheck.model}
     if fid == "chapter_continuity":
         # Priced as a whole-book read: split across chapters, it reads the book
         # once, plus a small judge whose cost tracks the candidate count. Same

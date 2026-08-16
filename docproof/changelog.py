@@ -283,13 +283,44 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"added new text the original did not contain. A proofreading pass "
             f"corrects; it does not rewrite or invent, so these were held back "
             f"rather than applied.")
-    if spell is not None and spell.available and spell.lexicon:
-        d.add_paragraph(
-            f"{len(spell.lexicon)} word(s) not in the dictionary were written "
-            f"as names — coined terms, invented places, characters — and so "
-            f"protected from correction: "
-            f"{', '.join(spell.lexicon[:30])}"
-            + ("…" if len(spell.lexicon) > 30 else "") + ".")
+    # --- the words taken on trust -------------------------------------------
+    # The full protected list, never a truncated aside. This is the one part
+    # of the pass that shields text from checking, so it is rendered as a
+    # checklist a person can actually review — alphabetical, so near-identical
+    # spellings sit next to each other, with each word's occurrence count.
+    if spell is not None and spell.available and (
+            spell.lexicon or spell.near_duplicates or spell.name_pairs):
+        d.add_heading("Words taken on trust — please verify", level=1)
+        if spell.lexicon:
+            counts = dict(zip(spell.lexicon, spell.lexicon_counts))
+            listed = ", ".join(
+                f"{w} ({counts[w]}×)" if counts.get(w) else w
+                for w in sorted(spell.lexicon, key=str.lower))
+            d.add_paragraph(
+                f"{len(spell.lexicon)} word(s) not in the dictionary are "
+                f"written as names — coined terms, invented places, "
+                f"characters — and were protected from spell-checking on that "
+                f"evidence. Nothing flagged them; nothing ever would have. If "
+                f"any word below is NOT spelled as the author intends, it is "
+                f"wrong everywhere it appears and this pass could not have "
+                f"caught it — that is what this list is for:")
+            d.add_paragraph(listed + ".")
+        if spell.near_duplicates:
+            d.add_paragraph(
+                f"{len(spell.near_duplicates)} near-duplicate name(s) were "
+                f"NOT taken on trust, because a protected name one edit away "
+                f"decisively owns the book. Each occurrence was ruled on in "
+                f"context instead: " + "; ".join(
+                    f"{nd.word} ({nd.count}×), one edit from {nd.of} "
+                    f"({nd.of_count}×)" for nd in spell.near_duplicates)
+                + ".")
+        if spell.name_pairs:
+            d.add_paragraph(
+                f"{len(spell.name_pairs)} near-identical name pair(s) were "
+                f"too close in usage for this pass to call, so both spellings "
+                f"stand and a query marks each pair: " + "; ".join(
+                    f"{p.a} ({p.a_count}×) beside {p.b} ({p.b_count}×)"
+                    for p in spell.name_pairs) + ".")
     if spell is not None and spell.available and spell.recurring:
         d.add_paragraph(
             f"{len(spell.recurring)} word(s) not in the dictionary were used "
@@ -297,8 +328,8 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
             f"the model as the book's likely vocabulary — evidence, not "
             f"protection — and read in context rather than corrected, because a "
             f"misspelling an author repeats reads the same as a coinage: "
-            f"{', '.join(c.word for c in spell.recurring[:30])}"
-            + ("…" if len(spell.recurring) > 30 else "") + ".")
+            f"{', '.join(sorted((c.word for c in spell.recurring),
+                                key=str.lower))}.")
 
     # --- coverage and honesty ------------------------------------------------
     d.add_heading("Footnotes and endnotes", level=1)

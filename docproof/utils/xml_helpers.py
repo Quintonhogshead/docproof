@@ -36,6 +36,9 @@ P_TAG        = qn("w:p")
 R_TAG        = qn("w:r")
 RPR_TAG      = qn("w:rPr")
 T_TAG        = qn("w:t")
+BR_TAG       = qn("w:br")
+CR_TAG       = qn("w:cr")
+TAB_TAG      = qn("w:tab")
 DELTEXT_TAG  = qn("w:delText")
 TBL_TAG      = qn("w:tbl")
 TR_TAG       = qn("w:tr")
@@ -56,25 +59,57 @@ TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
 
 # --- The canonical text contract --------------------------------------------
 
+# Run content that IS a character but holds no w:t text: a soft line break, a
+# carriage return, a tab. Left unrendered, the two halves of a Shift+Enter line
+# fuse ("The Ripple Effect" + "QX Countdown" reads "...EffectQX..."), which
+# poisons word-level scans and shows the model a run-on no author wrote. Each
+# renders as the whitespace character Word itself treats it as. w:tab is only
+# content INSIDE a run — the same tag under w:pPr/w:tabs is a tab-stop
+# definition, not a character — hence the parent check in the iterator.
+VIRTUAL_CHARS = {BR_TAG: "\n", CR_TAG: "\n", TAB_TAG: "\t"}
+
+
+def virtual_char(el: etree._Element) -> str:
+    """The character a non-text content element renders as, or ""."""
+    return "" if el.tag == T_TAG else VIRTUAL_CHARS[el.tag]
+
+
+def _skipped(el: etree._Element, p: etree._Element) -> bool:
+    node = el.getparent()
+    while node is not None and node is not p:
+        if node.tag in TEXT_SKIP_ANCESTORS:
+            return True
+        node = node.getparent()
+    return False
+
+
+def iter_content_elements(p: etree._Element) -> Iterator[etree._Element]:
+    """All character-bearing descendants of a paragraph, in document order:
+    w:t text plus the break/tab elements that render as one character each
+    (see VIRTUAL_CHARS). Excludes textbox content and mc:Fallback duplicates.
+    THE anchoring contract: ingest, validator, and reassembler all derive
+    paragraph text — and every character offset into it — from exactly this
+    function."""
+    for el in p.iter(T_TAG, BR_TAG, CR_TAG, TAB_TAG):
+        if el.tag == TAB_TAG and (el.getparent() is None
+                                  or el.getparent().tag != R_TAG):
+            continue                       # a tab STOP under w:pPr, not content
+        if not _skipped(el, p):
+            yield el
+
+
 def iter_text_elements(p: etree._Element) -> Iterator[etree._Element]:
-    """All w:t descendants of a paragraph, in document order, excluding
-    textbox content and mc:Fallback duplicates. THE anchoring contract:
-    ingest, validator, and reassembler all derive paragraph text from
-    exactly this function."""
-    for t in p.iter(T_TAG):
-        node = t.getparent()
-        skip = False
-        while node is not None and node is not p:
-            if node.tag in TEXT_SKIP_ANCESTORS:
-                skip = True
-                break
-            node = node.getparent()
-        if not skip:
-            yield t
+    """Only the w:t descendants, same exclusions. For callers that edit text
+    nodes in place (the normalizer, run merging) rather than measure offsets —
+    offsets come from iter_content_elements, never from this."""
+    for el in iter_content_elements(p):
+        if el.tag == T_TAG:
+            yield el
 
 
 def paragraph_text(p: etree._Element) -> str:
-    return "".join(t.text or "" for t in iter_text_elements(p))
+    return "".join((el.text or "") if el.tag == T_TAG else VIRTUAL_CHARS[el.tag]
+                   for el in iter_content_elements(p))
 
 
 def set_text(t: etree._Element, s: str) -> None:

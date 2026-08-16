@@ -22,7 +22,8 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .utils.xml_helpers import iter_text_elements, paragraph_text, set_text
+from .utils.xml_helpers import (T_TAG, iter_content_elements, paragraph_text,
+                                set_text)
 
 log = logging.getLogger("docproof.normalize")
 
@@ -186,21 +187,34 @@ def _apply_untracked(p, edits: list[tuple[int, int, str]]) -> None:
     """Rewrite the paragraph's text elements in place, with no revision
     markup. Right to left, so an edit never moves the ground under the next
     one; spans are recomputed each time because the previous edit changed
-    them."""
+    them.
+
+    Offsets are canonical-text offsets, so the span map must count the
+    break/tab elements as the one character each renders as — the edits were
+    measured against paragraph_text, and a map built from w:t alone would land
+    every edit after a soft line break one character early. No quote curl or
+    space collapse ever overlaps a break or tab (the patterns match quote marks
+    and ASCII spaces only), so those elements are never rewritten — they just
+    have to occupy their character."""
     for start, end, replacement in sorted(edits, key=lambda e: e[0],
                                           reverse=True):
         spans, off = [], 0
-        for t in iter_text_elements(p):
-            n = len(t.text or "")
-            spans.append((t, off, off + n))
+        for el in iter_content_elements(p):
+            n = len(el.text or "") if el.tag == T_TAG else 1
+            spans.append((el, off, off + n))
             off += n
-        touched = [(t, lo, hi) for t, lo, hi in spans if hi > start and lo < end]
-        for i, (t, lo, hi) in enumerate(touched):
-            text = t.text or ""
+        touched = [(el, lo, hi) for el, lo, hi in spans
+                   if hi > start and lo < end]
+        placed = False
+        for el, lo, hi in touched:
+            if el.tag != T_TAG:
+                continue
+            text = el.text or ""
             a, b = max(start, lo) - lo, min(end, hi) - lo
-            # The replacement lands whole in the first element it touches; the
-            # rest just lose their share of the span.
-            set_text(t, text[:a] + (replacement if i == 0 else "") + text[b:])
+            # The replacement lands whole in the first text element the span
+            # touches; the rest just lose their share of it.
+            set_text(el, text[:a] + ("" if placed else replacement) + text[b:])
+            placed = True
 
 
 def normalize_package(pkg, *, quotes: bool = True, spaces: bool = True,

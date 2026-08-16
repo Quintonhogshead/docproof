@@ -102,6 +102,14 @@ spellcheck:
     abit: a bit
     inspite: in spite
     ofcourse: of course
+  # Hygiene on the protected list itself: two protected names one edit apart
+  # (Hollingworth beside Hollingsworth) are more often one misspelled
+  # character than two characters named alike. When one owns the book
+  # dominance-to-one, the rarer is demoted to the adjudication pass; close
+  # counts become a query for the author; a rarer plural cased unlike its
+  # singular (Evtols beside EVTOL) is demoted whatever the ratio.
+  near_duplicates: true
+  near_duplicate_dominance: 5
 
 # One term written more than one way — blood-cursed against bloodcursed, safe
 # keeping against safekeeping. The rule per-paragraph review structurally
@@ -156,6 +164,23 @@ glossary:
                             # one (and seen case_edit_min_count+ times) corrects
                             # the stray as a tracked change; otherwise it asks
   case_edit_min_count: 8
+
+# One whole-book read for REAL-WORLD factual slips — institutional names and
+# acronym expansions (the NTSB is Transportation, not Traffic), historical
+# figures and events, geography, currencies. The class the human second
+# reviewer catches in passing and a per-chunk grammar pass structurally
+# cannot. Every catch is a margin QUERY, never an edit: fiction bends the
+# world on purpose, so a fact is the author's to settle. Cached per draft and
+# priced for its own model, like the glossary. Off by default: a whole extra
+# read, opt-in until proven — flip it here or per run in the app panel.
+factcheck:
+  enabled: false
+  model: gpt-5.6-luna
+  effort: medium
+  max_output_tokens: 16000
+  max_queries: 40           # the margin is an author's attention; overflow is
+                            # logged, not placed
+  cache_dir:                # blank = the shared default folder, as above
 
 # The whole-book story sheet: one read that gives the detector passes the
 # narrative facts a per-paragraph check cannot know — who narrates, in what
@@ -493,6 +518,11 @@ error_types:
 #     space  — a plain space on both sides.
 style:
   ellipsis: nbsp            # nbsp (house style) | closed | space
+  # A paragraph whose double quotes do not balance — and whose successor does
+  # not reopen with one, so it is not multi-paragraph speech — gets a margin
+  # query. A question, never an edit; the one fully-missing closing quote in
+  # the benchmark manuscript was invisible to every other pass.
+  unclosed_quote_queries: true
 
 # A safety net against a model pass overstepping proofreading into rewriting.
 # A proofreading fix is minimal by contract, so an edit that replaces a large
@@ -518,6 +548,18 @@ sweeps:
   - sweep_compound_number
   - sweep_dialogue_tag
   - sweep_terminal_period
+  - sweep_quote_punctuation   # . and , inside a closing double quote (US)
+  - sweep_nested_quote        # doubles inside dialogue demote to singles
+
+# After every gate has settled which edits stand, re-scan the reviewed text
+# for number-rule trigger sites no edit touched — bare numerals to one
+# hundred, percent signs, digit ordinals — and raise each as a margin query.
+# A rule applied to some-but-not-all matches erodes trust faster than a rule
+# that is absent; this ends the run with the rule executed or accounted for.
+# Free: no API call. See docproof/residuals.py.
+residuals:
+  enabled: true
+  max_per_rule: 150         # overflow is logged loudly, never silently dropped
 
 # Ensemble review. Empty `detectors` (the default) is single-detector mode:
 # api.model runs once, nothing is merged, no verifier runs — exactly the
@@ -543,6 +585,11 @@ tracked_changes_policy: abort   # abort | accept_all_first | ignore
 audit: strict               # strict | warn | off
 output_dir: output
 comments: true              # margin comment on every tracked change
+# Beyond this many identical rule explanations (79 copies of the dash rule, in
+# one measured run), only the first edit keeps its comment — with a count and
+# a pointer at the change log, which lists every instance. The edits all
+# stand; this collapses the note beside them. 0 keeps every comment.
+comment_collapse: 3
 # Two channels, never blurred: a tracked change is a correction the author
 # accepts or rejects, a comment is a question that edits nothing. Query-only
 # error types always land as comments; this decides whether findings below

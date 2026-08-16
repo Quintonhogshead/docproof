@@ -109,6 +109,7 @@ def _best_neighbour(word: str, dic, *, min_len: int) -> tuple[str | None, float]
 def generate(paragraphs: Sequence[ParagraphRef], *,
              protected: Sequence[str] = (),
              denylist: Mapping[str, str] | None = None,
+             respell: Mapping[str, str] | None = None,
              dictionary: str = "en_US",
              near_miss_gap: float = 2.5,
              min_len: int = 4,
@@ -137,10 +138,18 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
     through near_miss, and only when a common word sits within near_miss_gap
     zipf points — a genuine coinage has no common twin. `denylist` overrides
     both protection and the dictionary: a denylisted word is always ruled on.
+
+    `respell` maps spellings that are valid English but the wrong VARIANT for
+    this manuscript (grey in a U.S. book) to the variant's own form. Like the
+    denylist it is always ruled on — the dictionary accepts these words, so
+    nothing else would ever raise them — but it gets its own kind, because
+    the question the model must answer is different: not "is this a typo" but
+    "is this ordinary prose, or a proper name that keeps its spelling".
     """
     dic = _dictionary(dictionary)
     protected_l = {w.lower() for w in protected}
     deny = {k.lower().strip(): v for k, v in (denylist or {}).items()}
+    respell_map = {k.lower().strip(): v for k, v in (respell or {}).items()}
 
     # One decision per distinct surface spelling, then applied to each of its
     # occurrences: a typo repeated through the book is one judgement, many fixes.
@@ -158,6 +167,12 @@ def generate(paragraphs: Sequence[ParagraphRef], *,
         # so no dictionary lookup or neighbour search can talk it out of ruling.
         if wl in deny:
             verdicts[wl] = (deny[wl], "denylist")
+            continue
+        # Then the variant respellings, ahead of the known() skip that would
+        # otherwise clear them — being in the dictionary is exactly why they
+        # need their own channel.
+        if wl in respell_map:
+            verdicts[wl] = (respell_map[wl], "respell")
             continue
         is_protected = wl in protected_l
         known = _known(dic, wl)
@@ -254,17 +269,53 @@ word truly is a typo. Set is_error true ONLY when the word is a real misspelling
 in context and you can give the word the author plainly meant. When in any \
 doubt, set is_error false — never "correct" a word that could be deliberate. \
 Reserve high confidence for cases beyond argument (staired -> stared); use \
-medium or low whenever the word might be intended.\
+medium or low whenever the word might be intended.
+
+One kind of item is different: a VARIANT RESPELLING. The word is valid English \
+— the dictionary accepts it — but it is another variant's spelling, and this \
+manuscript's declared English writes it as the given form (grey -> gray in a \
+U.S. book). For those, set is_error true with the given form when the word is \
+ordinary prose, at high confidence; keep it (is_error false) only when it is \
+part of a proper name (Mr. Grey, the Aldwych Theatre), inside text reproduced \
+verbatim (a sign, a letter, a quoted title), or deliberate dialect voice.\
 """
 
 
 def _build_user(batch: list[tuple[int, Candidate, str]]) -> str:
     lines = []
     for n, cand, sentence in batch:
-        hint = f'  possible correction: "{cand.suggestion}"' if cand.suggestion else ""
+        if cand.kind == "respell":
+            hint = (f'  VARIANT RESPELLING — this manuscript\'s English '
+                    f'writes it "{cand.suggestion}"')
+        elif cand.suggestion:
+            hint = f'  possible correction: "{cand.suggestion}"'
+        else:
+            hint = ""
         lines.append(f'{n}. word: "{cand.word}"\n'
                      f'   sentence: {sentence}\n{hint}'.rstrip())
     return "\n\n".join(lines)
+
+
+def site_word_candidates(words: Mapping[str, str],
+                         paragraphs: Sequence[ParagraphRef], *,
+                         kind: str) -> list[Candidate]:
+    """Each word → suggestion pair, sited at every occurrence of the word, as
+    Candidates of the given kind. Case-insensitive on the match (the word is a
+    specific surface, but a sentence-start or SHOUTED copy is the same word);
+    the suggestion is passed through as given — for a demoted name it IS the
+    dominant surface, casing and all, so no case-mapping is wanted."""
+    cands: list[Candidate] = []
+    for word, suggestion in words.items():
+        if not word or not suggestion:
+            continue
+        pat = re.compile(r"(?<![A-Za-z’'])" + re.escape(word)
+                         + r"(?![A-Za-z’'])", re.IGNORECASE)
+        for p in paragraphs:
+            for m in pat.finditer(p.text):
+                cands.append(Candidate(
+                    para_id=p.para_id, word=m.group(0), start=m.start(),
+                    end=m.end(), suggestion=suggestion, kind=kind))
+    return cands
 
 
 def merge_candidates(*groups: Sequence[Candidate]) -> list[Candidate]:
@@ -393,6 +444,17 @@ def _findings_from(rows: dict, window, ids, rank: dict,
         corrected_para = (para_text[:cand.start] + correction
                           + para_text[cand.end:])
         conf = v.confidence if v.confidence in rank else "low"
+        if cand.kind == "respell":
+            explanation = (f'"{cand.word}" is a valid spelling, but not this '
+                           f'manuscript\'s English variant, which writes '
+                           f'"{correction}".')
+        elif cand.kind == "near_dup":
+            explanation = (f'"{cand.word}" is one letter from '
+                           f'"{correction}", the spelling this book uses '
+                           f'throughout.')
+        else:
+            explanation = (f'"{cand.word}" appears to be a misspelling of '
+                           f'"{correction}".')
         findings.append(Finding(
             finding_id=f"a-{next(ids):04d}",
             chunk_id="adjudicate",
@@ -401,8 +463,7 @@ def _findings_from(rows: dict, window, ids, rank: dict,
             original_text=para_text,
             occurrence=1,
             corrected_text=corrected_para,
-            explanation=f'"{cand.word}" appears to be a misspelling of '
-                        f'"{correction}".',
+            explanation=explanation,
             confidence=conf,
             # Only a high-confidence call is trusted as a silent edit; a
             # softer one asks rather than changes.

@@ -209,6 +209,11 @@ class StyleConfig(BaseModel):
       space  — a plain space on both sides.
     The trailing space is the same in every mode; only the lead differs."""
     ellipsis: Literal["nbsp", "closed", "space"] = "nbsp"
+    # A paragraph whose double quotation marks do not balance — and whose
+    # successor does not reopen with one, so it is not multi-paragraph speech
+    # — gets a margin query. A question, never an edit: the fix (where the
+    # missing mark goes) is a judgment. Double-primary variants only.
+    unclosed_quote_queries: bool = True
 
 
 class EditGuardConfig(BaseModel):
@@ -265,6 +270,15 @@ class SpellcheckConfig(BaseModel):
         "eachother": "each other", "atleast": "at least", "incase": "in case",
         "everytime": "every time", "abit": "a bit", "inspite": "in spite",
         "ofcourse": "of course"})
+    # Hygiene on the protected list itself: two protected names one edit apart
+    # ("Hollingworth" beside "Hollingsworth") are more often one misspelled
+    # character than two characters named alike. When one decisively owns the
+    # book (dominance-to-one), the rarer is demoted to the adjudication pass;
+    # when the counts are close, the pair is raised to the author as a query.
+    # A rarer plural cased unlike its singular ("Evtols" beside "EVTOL") is
+    # demoted regardless of the ratio. See docproof/spellscan.py.
+    near_duplicates: bool = True
+    near_duplicate_dominance: int = Field(default=5, ge=2)
 
 
 class ConsistencyConfig(BaseModel):
@@ -864,6 +878,39 @@ class DetectorSpec(BaseModel):
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
 
 
+class FactcheckConfig(BaseModel):
+    """One whole-book read for REAL-WORLD factual slips — institutional names
+    and acronym expansions, historical figures and events, geography — the
+    class the human second reviewer caught 3-of-4 of and the pipeline caught
+    none (DP-004). Every catch is a margin query, never an edit: fiction
+    bends the world on purpose, so a fact is the author's to settle. Additive
+    and best-effort like the glossary; cached per draft; priced for its own
+    model. Off by default: a whole extra read, opt-in until proven — the same
+    bar every other added read clears. See docproof/factcheck.py."""
+    enabled: bool = False
+    model: str = "gpt-5.6-luna"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    max_output_tokens: int = Field(default=16000, ge=1)
+    # The margin is an author's attention: past this many, the rest are
+    # logged, not placed.
+    max_queries: int = Field(default=40, ge=1)
+    # None = the shared whole-book cache (see default_cache_dir).
+    cache_dir: str | None = None
+
+
+class ResidualsConfig(BaseModel):
+    """After validation, re-scan the reviewed text for number-rule trigger
+    sites (bare numerals to one hundred, percent signs, digit ordinals) that
+    no validated edit touched, and raise each as a margin query. A rule
+    applied to some-but-not-all of its matches erodes reviewer trust faster
+    than a rule that is absent; this makes the leftover visible. Queries only
+    — nothing is edited. See docproof/residuals.py."""
+    enabled: bool = True
+    # Per rule, so a statistics-heavy manuscript cannot flood the margin. The
+    # overflow is logged, never silently dropped.
+    max_per_rule: int = Field(default=150, ge=1)
+
+
 class EnsembleConfig(BaseModel):
     """Several detectors reviewing each chunk, their findings merged by
     agreement, then a stronger verifier adjudicating before anything reaches the
@@ -1125,6 +1172,8 @@ class Config(BaseModel):
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
+    factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
+    residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
@@ -1155,6 +1204,11 @@ class Config(BaseModel):
     audit: Literal["strict", "warn", "off"] = "strict"
     output_dir: str = "output"
     comments: bool = True
+    # Beyond this many identical rule explanations, only the first edit keeps
+    # its margin comment (with a count and a pointer at the change log); the
+    # rest apply silently. 0 leaves every comment in place. Tracked changes
+    # are never collapsed — this is about the note beside them, not the edit.
+    comment_collapse: int = Field(default=3, ge=0)
     # The other half of the two-channel model: findings that ask rather than
     # correct become margin comments with no revision around them. Query-only
     # error types always do; this decides whether below-gate findings join

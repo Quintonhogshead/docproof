@@ -116,3 +116,51 @@ def test_every_finding_carries_both_keys(tmp_path):
     for row in rows.values():
         assert isinstance(row["queried"], bool)
         assert isinstance(row["unplaced"], bool)
+
+
+# --- comment collapse (DP-008) -------------------------------------------------
+
+def test_repeated_rule_comments_collapse_to_one_counted_note():
+    from docproof.models import Anchor, Finding, DocumentModel, ParagraphRef
+    from docproof.pipeline import _collapse_repeated_comments
+
+    paras = tuple(ParagraphRef(f"body-{i:04d}", "word/document.xml", "body",
+                               "Some prose - and more.", "Normal")
+                  for i in range(5))
+    doc = DocumentModel(source_path="x.docx", paragraphs=paras)
+    why = "House style sets a sentence-break dash as an unspaced em dash."
+
+    def edit(i):
+        return Finding(f"s-{i:04d}", "sweep", f"body-{i:04d}", "sweep_dash",
+                       "Some prose - and more.", 1, "Some prose—and more.",
+                       why, "high", status="validated",
+                       anchor=Anchor(10, 13, " - ", "—"))
+
+    validated = [edit(i) for i in range(5)]
+    silenced = _collapse_repeated_comments(validated, doc, threshold=3)
+    assert silenced == 4
+    assert not validated[0].silent
+    assert "Applied 5 times" in validated[0].explanation
+    assert all(f.silent for f in validated[1:])
+    # The copies keep their own explanation for the change log's Why column.
+    assert validated[1].explanation == why
+
+
+def test_collapse_leaves_small_groups_and_queries_alone():
+    from docproof.models import Anchor, Finding, DocumentModel, ParagraphRef
+    from docproof.pipeline import _collapse_repeated_comments
+
+    paras = tuple(ParagraphRef(f"body-{i:04d}", "word/document.xml", "body",
+                               "text", "Normal") for i in range(4))
+    doc = DocumentModel(source_path="x.docx", paragraphs=paras)
+    small = [Finding(f"s-{i}", "sweep", f"body-{i:04d}", "sweep_dash",
+                     "text", 1, "text2", "same why", "high",
+                     status="validated", anchor=Anchor(0, 1, "t", "T"))
+             for i in range(3)]
+    queries = [Finding(f"q-{i}", "sweep", f"body-{i:04d}", "unclosed_quote",
+                       "text", 1, "text", "same question", "medium",
+                       status="query", anchor=Anchor(0, 4, "text", ""))
+               for i in range(4)]
+    validated = small + queries
+    assert _collapse_repeated_comments(validated, doc, threshold=3) == 0
+    assert not any(f.silent for f in validated)
