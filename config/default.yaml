@@ -590,7 +590,15 @@ tracked_changes_policy: abort   # abort | accept_all_first | ignore
 # without a revision mark around it — which the accepted view cannot show you.
 audit: strict               # strict | warn | off
 output_dir: output
-comments: true              # margin comment on every tracked change
+# Margin comments explaining applied edits. OFF by house choice: thousands of
+# explanation notes overwhelm an author (the benchmark run wrote one per 24
+# words), and every reason still lands in the change log beside its change.
+# Genuine questions — continuity, fact check, name pairs, below-gate queries —
+# are a separate channel and appear as comments regardless. Flip this on per
+# run in the panel ("Explain applied edits in the margin") for a staff-review
+# copy. The top-of-document protected-words note rides on this too; the same
+# list, with counts, is always in the change log.
+comments: false
 # Beyond this many identical rule explanations (79 copies of the dash rule, in
 # one measured run), only the first edit keeps its comment — with a count and
 # a pointer at the change log, which lists every instance. The edits all

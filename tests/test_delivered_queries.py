@@ -164,3 +164,14 @@ def test_collapse_leaves_small_groups_and_queries_alone():
     validated = small + queries
     assert _collapse_repeated_comments(validated, doc, threshold=3) == 0
     assert not any(f.silent for f in validated)
+
+
+def test_shipped_default_quiets_edit_explanations_but_not_questions():
+    """The house choice after the benchmark report: an author-facing margin
+    carries questions, not a running commentary. The reasons still ship — in
+    the change log, beside each change."""
+    from docproof.config import load_config
+    cfg = load_config("config/default.yaml")
+    assert cfg.comments is False
+    assert cfg.query_comments is True
+    assert cfg.change_log is True

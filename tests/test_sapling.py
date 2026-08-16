@@ -535,6 +535,10 @@ def test_silent_findings_get_no_margin_comment(tmp_path, monkeypatch):
     cfg = _cfg_with_sapling(True)
     cfg.sapling.confirm = False        # blind fold-in; no LLM valve in this test
     cfg.audit = "off"
+    # The contrast under test is sapling.comments (the per-pass silent flag);
+    # the global switch has to be on for either side to write anything now
+    # that the shipped default quiets edit explanations.
+    cfg.comments = True
     prepared = prepare(cfg, src, "config/error_types")
     on = finish(prepared, [], Usage(), cfg, out_dir=tmp_path / "on",
                 source_path=src)

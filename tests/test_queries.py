@@ -350,6 +350,9 @@ def test_summary_names_the_query_channel_in_the_formats_own_word(tmp_path):
     from docproof.reporting import write_summary_md
 
     cfg = load_config("config/default.yaml")
+    # The closing line under test is the comments-on wording; the shipped
+    # default now ships with edit explanations off.
+    cfg.comments = True
     doc = _doc(SPEAKERS)
     findings = [
         _finding(status="query"),
