@@ -2616,11 +2616,24 @@ function renderJobs(jobs) {
     if (job.kind === 'review' && job.preset && TIER_LABELS[job.preset]) {
       name.append(' ', formatBadge(TIER_LABELS[job.preset]));
     }
-    const status = document.createElement('span');
-    status.className = 'job-state'
-      + (job.state === 'done' ? ' is-done' : job.state === 'failed' ? ' is-failed' : '');
-    status.textContent = job.plain_state;
-    head.append(name, status);
+    // While the step tracker is shown it already names the current step, so a
+    // header that repeats that exact label prints the same words twice — most
+    // visibly "Reading your manuscript", which the header (plain_state) and the
+    // lit "preparing" step word identically. Drop the header echo in that case
+    // and let the tracker carry it; every other step already reads differently
+    // in the two places, so only the true duplicate is suppressed.
+    const currentStep = tracksStages(job)
+      && (stageFlowFor(job).find((s) => s.id === job.stage) || {});
+    const echoesTracker = currentStep && currentStep.label === job.plain_state;
+    if (!echoesTracker) {
+      const status = document.createElement('span');
+      status.className = 'job-state'
+        + (job.state === 'done' ? ' is-done' : job.state === 'failed' ? ' is-failed' : '');
+      status.textContent = job.plain_state;
+      head.append(name, status);
+    } else {
+      head.append(name);
+    }
     li.append(head);
 
     // "preparing" runs before the job flips to "running" (state is still

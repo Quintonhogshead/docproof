@@ -721,7 +721,10 @@ def test_batch_job_waits_then_collects_on_a_tick(client, provider):
     assert waiting["state"] == "waiting"
     assert "overnight" in waiting["plain_state"]
 
+    # The tick polls the batch ready and hands it to the worker; the worker
+    # writes the document, so wait for it to drain before reading the result.
     client.post("/api/tick")
+    client.app_state.runner.wait_idle()
     done = client.get(f"/api/jobs/{job['id']}").json()
     assert done["state"] == "done", done.get("error")
     assert client.get(f"/api/jobs/{job['id']}/file/docx").status_code == 200
@@ -742,6 +745,7 @@ def test_an_indesign_layout_can_go_overnight_too(client, provider):
     assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "waiting"
 
     client.post("/api/tick")
+    client.app_state.runner.wait_idle()
     done = client.get(f"/api/jobs/{job['id']}").json()
     assert done["state"] == "done", done.get("error")
     assert done["applied"] == 1
@@ -845,11 +849,16 @@ def test_a_crash_midway_through_collection_is_picked_up_again(client, provider):
     client.app_state.runner.wait_idle()
 
     # The app died after the results landed but before the document was
-    # written. They are still at the vendor and already paid for, so the next
-    # tick has to finish the job rather than leave it saying "almost done".
+    # written. They are still at the vendor and already paid for, so the job
+    # has to finish rather than sit saying "almost done". A restart is what
+    # re-queues an interrupted collect now: resume_interrupted flips it back to
+    # "waiting", the tick re-polls and hands it to the worker, and the worker
+    # writes it.
     client.app_state.store.update(job["id"], state="collecting")
+    client.app_state.runner.resume_interrupted()
 
     client.post("/api/tick")
+    client.app_state.runner.wait_idle()
     done = client.get(f"/api/jobs/{job['id']}").json()
     assert done["state"] == "done", done.get("error")
     assert client.get(f"/api/jobs/{job['id']}/file/docx").status_code == 200
@@ -864,10 +873,13 @@ def test_collection_that_keeps_failing_asks_for_attention(client, monkeypatch):
         raise RuntimeError("disk is full")
 
     monkeypatch.setattr("app.jobs.batchlib.collect", boom)
+    # The tick hands the ready batch to the worker; the worker runs the
+    # (failing) collect, so wait for it to drain before reading the outcome.
     client.post("/api/tick")
+    client.app_state.runner.wait_idle()
 
     failed = client.get(f"/api/jobs/{job['id']}").json()
-    # Not left in `collecting`, which the ticker would now retry forever.
+    # Not left in `collecting`, which nothing would pick up again.
     assert failed["state"] == "failed"
     assert "disk is full" in failed["error"]
     assert client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
@@ -904,12 +916,27 @@ def test_a_restarted_app_resumes_an_in_flight_batch(client, provider, tmp_path):
     client.app_state.runner.wait_idle()
     assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "waiting"
 
-    # A brand new runner over the same directory — nothing carried in memory.
+    # A brand new runner over the same directory — nothing carried in memory,
+    # and no worker thread (this runner is never start()ed). The tick finds the
+    # ready batch and hands it off; with no worker draining the queue, the job
+    # sits at "collecting" until run_one is driven by hand.
     settings = Settings(output_dir=str(tmp_path / "out"))
     fresh = JobRunner(JobStore(Paths(tmp_path)), settings,
                       config_path=client.app_state.runner.config_path)
     fresh.tick_once()
+    assert fresh.store.get(job["id"]).state == "collecting"
+    fresh.run_one(job["id"])
     assert fresh.store.get(job["id"]).state == "done"
+
+
+def test_building_the_app_arms_the_stack_dumper(tmp_path):
+    """faulthandler is on after create_app, so a crash writes a Python
+    traceback and `kill -USR1` dumps every thread's stack to the logs — the one
+    way to pin a future deadlock on the frozen production binary."""
+    import faulthandler
+
+    create_app(tmp_path, start_runner=False)
+    assert faulthandler.is_enabled()
 
 
 # --- results folders ----------------------------------------------------------
@@ -1036,6 +1063,7 @@ def test_a_review_can_be_limited_to_chosen_sections(client, provider):
     assert len(provider.calls[0]["requests"]) == len(picked)
 
     client.post("/api/tick")
+    client.app_state.runner.wait_idle()
     assert client.get(f"/api/jobs/{job['id']}").json()["state"] == "done"
 
 
