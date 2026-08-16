@@ -91,14 +91,23 @@ def _touch(r1: tuple[int, int], r2: tuple[int, int]) -> bool:
     return False
 
 
-def _best(cluster: list[tuple[Finding, bool]]) -> Finding:
-    """The representative for a cluster: prefer a finding whose quote anchored
-    exactly (cleanest form), then higher confidence, then the lowest id for a
-    stable choice."""
+def _best(cluster: list[tuple], span: tuple[int, int] | None = None) -> Finding:
+    """The representative for a cluster: prefer a finding whose edit COVERS the
+    whole cluster span, then one whose quote anchored exactly (cleanest form),
+    then higher confidence, then the lowest id for a stable choice.
+
+    Coverage comes first because a coupled repair and one of its halves cluster
+    together — the bundled "two and three" touches the same span as a lone "two"
+    — and the half must not be crowned representative: it would make the merged
+    finding correct only half the sentence. The whole repair spans the union;
+    the half does not."""
     def key(item):
-        f, exact = item
-        return (0 if exact else 1, -CONFIDENCE_RANK.get(f.confidence, 0),
-                f.finding_id)
+        f, exact = item[0], item[1]
+        region = item[2] if len(item) > 2 else None
+        covers = (span is not None and region is not None
+                  and region[0] <= span[0] and region[1] >= span[1])
+        return (0 if covers else 1, 0 if exact else 1,
+                -CONFIDENCE_RANK.get(f.confidence, 0), f.finding_id)
     return min(cluster, key=key)[0]
 
 
@@ -134,17 +143,20 @@ def merge(findings: list[Finding], doc: DocumentModel) -> list[Finding]:
         for f, region, exact in items:
             for cl in clusters:
                 if _touch(region, cl["span"]):
-                    cl["members"].append((f, exact))
+                    cl["members"].append((f, exact, region))
                     cl["inserts"].add(region[2])
                     cl["span"] = (min(cl["span"][0], region[0]),
                                   max(cl["span"][1], region[1]))
                     break
             else:
-                clusters.append({"members": [(f, exact)], "inserts": {region[2]},
+                clusters.append({"members": [(f, exact, region)],
+                                 "inserts": {region[2]},
                                  "span": (region[0], region[1])})
         for cl in clusters:
-            rep = _best(cl["members"])
-            provenance = tuple(sorted({f.detector for f, _ in cl["members"]}))
+            # The full cluster span is known only now every member has joined, so
+            # coverage (a bundled repair vs one of its halves) is decided here.
+            rep = _best(cl["members"], cl["span"])
+            provenance = tuple(sorted({m[0].detector for m in cl["members"]}))
             out.append((order.get(para_id, 1 << 30), cl["span"][0],
                         replace(rep, agreement=len(provenance),
                                 provenance=provenance,

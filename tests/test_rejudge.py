@@ -150,6 +150,89 @@ def test_nothing_else_is_paid_for(tmp_path, monkeypatch):
     assert out.applied == 1
 
 
+def _gated_first_run(tmp_path, monkeypatch, results,
+                     corrected="He could have known the road was barred."):
+    """A finished review whose meaning gate WITHHELD its one change — so the
+    record holds it as a margin query, and meaning_held.json sits beside it."""
+    src = _book(tmp_path)
+    cfg = load_config("config/default.yaml")
+    cfg.audit = "off"
+    cfg.meaning_check.enabled = True
+    provider = FakeProvider(list(results))
+    monkeypatch.setattr(providers_mod, "build_provider", lambda _c: provider)
+    prepared = prepare(cfg, src, ERRORS)
+    f = Finding(finding_id="f-1", chunk_id="c0", para_id="body-0000",
+                error_type="homophone_confusion", original_text=PARA,
+                occurrence=1, corrected_text=corrected,
+                explanation="dropped negation", confidence="high")
+    return finish(prepared, [f], Usage(), cfg, out_dir=tmp_path / "run1",
+                  source_path=src)
+
+
+def test_a_gate_held_change_is_reopened_on_rejudge(tmp_path, monkeypatch):
+    """The answer to 'can I cleanly re-judge a finished book?'. A change the gate
+    held in the first run is frozen into the record as a margin query, which the
+    validator would route straight past a re-run gate. Re-judging reopens it — the
+    mechanism that lets a smarter gate rescue a pair the old one wrongly split —
+    and here the fresh verdict keeps it, so it is recovered and applied."""
+    first = _gated_first_run(tmp_path, monkeypatch, [_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "Drops the negation."})])
+    assert first.applied == 0 and first.judge_held == 1      # held, not shipped
+    assert (tmp_path / "run1" / "meaning_held.json").is_file()
+
+    out, provider = _rejudged(tmp_path, monkeypatch, [_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""})])
+    assert len(provider.calls) == 1                          # the gate re-ruled it
+    assert out.applied == 1                                  # and this time kept it
+
+
+def test_a_reopened_change_the_gate_still_holds_stays_held(tmp_path, monkeypatch):
+    """Reopening only offers the change a fresh verdict; it does not force one in.
+    A change the improved gate still will not vouch for stays a margin query, no
+    worse off than the frozen one it started as."""
+    _gated_first_run(tmp_path, monkeypatch, [_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "Drops the negation."})])
+    out, _ = _rejudged(tmp_path, monkeypatch, [_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "Still drops the negation."})])
+    assert out.applied == 0
+    summary = (tmp_path / "run2" / "summary.md").read_text("utf-8")
+    assert "Still drops the negation." in summary
+
+
+def test_a_split_pair_the_old_gate_killed_is_recovered_on_rejudge(tmp_path,
+                                                                  monkeypatch):
+    """The reported failure, recovered on a finished book. In run 1 the gate
+    withholds BOTH halves of a coupled numeral repair — what a per-half gate did,
+    seeing "two and 3" and "2 and three" each as an inconsistency. Both are frozen
+    into the record as margin queries. A re-judge reopens them, the improved gate
+    reads the sentence as it will actually ship (both numerals spelled out), and
+    keeps both — the whole point of being able to re-judge a finished manuscript."""
+    text = "There were 2 and 3 owls."
+    src = _book(tmp_path, text)
+    cfg = load_config("config/default.yaml")
+    cfg.audit = "off"
+    cfg.meaning_check.enabled = True
+    killer = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "Leaves 3 a bare digit."},
+        {"item": 2, "verdict": "withhold", "reason": "Leaves 2 a bare digit."})])
+    monkeypatch.setattr(providers_mod, "build_provider", lambda _c: killer)
+    prepared = prepare(cfg, src, ERRORS)
+    a = Finding("f-1", "c0", "body-0000", "number_style", text, 1,
+                "There were two and 3 owls.", "spell out the 2", "high")
+    b = Finding("f-2", "c0", "body-0000", "number_style", text, 1,
+                "There were 2 and three owls.", "spell out the 3", "high")
+    first = finish(prepared, [a, b], Usage(), cfg,
+                   out_dir=tmp_path / "run1", source_path=src)
+    assert first.applied == 0 and first.judge_held == 2      # old gate killed both
+
+    out, provider = _rejudged(tmp_path, monkeypatch, [_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""},
+        {"item": 2, "verdict": "keep", "reason": ""})])
+    assert out.applied == 2                                  # both recovered
+    # ...and they reached the re-run gate as one shipped sentence, not two halves
+    assert "There were two and three owls." in provider.calls[0]["user"]
+
+
 def test_running_with_no_gate_on_is_refused(tmp_path):
     _first_run(tmp_path)
     cfg = load_config("config/default.yaml")

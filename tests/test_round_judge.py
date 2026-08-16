@@ -160,6 +160,22 @@ def test_empty_instructions_fall_back_to_the_default():
     assert RoundsConfig().judge_prompt == ""           # panel field defaults empty
 
 
+def test_same_sentence_siblings_are_shown_with_the_combined_sentence():
+    """A coupled repair split into two findings quotes the same sentence twice.
+    The judge is shown them as a set, with the sentence as it reads once both are
+    applied — so it does not reject a half for an inconsistency the other removes."""
+    text = "There were 2 and 3 owls."
+    a = _f("f-1", "body-0000", text, "There were two and 3 owls.",
+           etype="number_style")
+    b = _f("f-2", "body-0000", text, "There were 2 and three owls.",
+           etype="number_style")
+    rendered = RoundJudge({}, _JudgeProvider(), "m")._render(text, [a, b])
+    assert "also correcting this same sentence: f-2" in rendered   # shown to f-1
+    assert "also correcting this same sentence: f-1" in rendered   # shown to f-2
+    assert ("the sentence with all of them applied: "
+            "'There were two and three owls.'") in rendered
+
+
 # --- config ------------------------------------------------------------------
 
 def test_rounds_config_is_inert_by_default():

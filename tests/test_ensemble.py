@@ -173,6 +173,24 @@ def test_same_span_different_fix_is_flagged_disputed():
     assert out[0].agreement == 2 and out[0].disputed_fix
 
 
+def test_merge_crowns_the_whole_repair_over_one_of_its_halves():
+    """A coupled repair (both numerals spelled out) and one detector's half of it
+    land on overlapping spans and cluster together. The representative must be the
+    WHOLE repair, not the half — a half would leave the merged finding correcting
+    only part of the sentence. The half is given the lower id on purpose, so only
+    span-coverage (not the id tiebreak) can pick the right one."""
+    doc = _doc("There were 2 and 3 owls.")
+    out = merge([
+        _f("f-0001", "There were 2 and 3 owls.",
+           "There were two and 3 owls.", 0, etype="number_style"),        # half
+        _f("f-0002", "There were 2 and 3 owls.",
+           "There were two and three owls.", 1, etype="number_style"),     # whole
+    ], doc)
+    assert len(out) == 1
+    assert out[0].corrected_text == "There were two and three owls."
+    assert out[0].agreement == 2
+
+
 def test_an_unanchorable_finding_passes_through_as_a_singleton():
     doc = _doc("A perfectly clean sentence sits here.")
     out = merge([_f("f-0001", "text that is simply not present",
