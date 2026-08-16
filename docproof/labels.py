@@ -52,6 +52,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "name_consistency",   # consistency.py NAME_KEY
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
+    "heading_case",       # sweeps.py — headings set in title case
     "fact_check",         # factcheck.py — the external-world read
 })
 
@@ -125,6 +126,8 @@ def will_produce(cfg, label: str, *, known_types=None) -> str:
     if label == "unclosed_quote":
         # Governed by a style flag, not a pass's own `.enabled`.
         return RAN if cfg.style.unclosed_quote_queries else DID_NOT_RUN
+    if label == "heading_case":
+        return RAN if cfg.style.heading_title_case else DID_NOT_RUN
     switch = _SWITCH.get(label)
     if switch is not None:
         return RAN if getattr(cfg, switch).enabled else DID_NOT_RUN

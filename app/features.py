@@ -160,6 +160,13 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "passes, so a coined name is not read as a typo. Classifies, never "
         "edits.", "pass", ("spellcheck", "enabled")),
     FeatureSpec(
+        "heading_case", "Headings set in title case",
+        "Set chapter titles and section headings in Chicago title case as "
+        "word-level tracked changes — “the shape of things to come” becomes "
+        "“The Shape of Things to Come”. All-caps headings and names carrying "
+        "their own capitals are left as styled. Free: no API call.",
+        "pass", ("style", "heading_title_case")),
+    FeatureSpec(
         "residuals", "Number-rule leftovers as queries",
         "After every gate, re-scan for numerals to one hundred, percent "
         "signs, and digit ordinals no edit touched, and query each — so the "

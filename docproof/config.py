@@ -214,6 +214,12 @@ class StyleConfig(BaseModel):
     # — gets a margin query. A question, never an edit: the fix (where the
     # missing mark goes) is a judgment. Double-primary variants only.
     unclosed_quote_queries: bool = True
+    # Set heading-styled paragraphs (the skip config's sweep-only styles) in
+    # Chicago title case, as word-level tracked changes: "the shape of things
+    # to come" -> "The Shape of Things to Come". All-caps headings and words
+    # carrying their own capitals (McCoy, EVTOL) are left as styled. This is
+    # the typesetting half of a heading pass — no model ever reads one.
+    heading_title_case: bool = True
 
 
 class EditGuardConfig(BaseModel):

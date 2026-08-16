@@ -79,14 +79,20 @@ def _notes_statement(doc) -> str:
 
 
 def _limits(cfg, doc, findings, spell) -> list[str]:
+    heading_clause = (
+        "Heading-styled paragraphs got the scripted checks and the "
+        "title-case pass, but no model read"
+        if getattr(cfg.style, "heading_title_case", False) else
+        "Heading-styled paragraphs got the scripted checks but no model read")
     lines = [
         "This was a mechanical and grammatical pass. It does not read for "
         "plot, character, pacing, structure, or fact — nothing here should be "
         "taken as a comment on the writing.",
         "Every paragraph of running text was read, and the scripted checks "
-        "above ran over all of them exhaustively. Paragraphs skipped by style "
-        "— headings, titles, table-of-contents lines — were not reviewed, "
-        f"though they were included in the audit ({len(doc.skipped)} skipped).",
+        f"above ran over all of them exhaustively. {heading_clause}; "
+        "title pages and table-of-contents lines were not touched at all, "
+        f"though they were included in the audit ({len(doc.skipped)} "
+        "skipped).",
         "Text that is not paragraph text was not reviewed: words inside "
         "images, charts, embedded objects, and text boxes.",
         "Corrections are proposed, not imposed. Everything in the table above "

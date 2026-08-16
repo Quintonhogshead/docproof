@@ -523,6 +523,12 @@ style:
   # query. A question, never an edit; the one fully-missing closing quote in
   # the benchmark manuscript was invisible to every other pass.
   unclosed_quote_queries: true
+  # Set heading-styled paragraphs (skip.sweep_only, "Heading*" by default) in
+  # Chicago title case, as word-level tracked changes: "the shape of things
+  # to come" -> "The Shape of Things to Come". All-caps headings and words
+  # carrying their own capitals (McCoy, EVTOL) are left as styled. Free: no
+  # API call, and no model ever reads a heading.
+  heading_title_case: true
 
 # A safety net against a model pass overstepping proofreading into rewriting.
 # A proofreading fix is minimal by contract, so an edit that replaces a large

@@ -375,6 +375,16 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         if cfg.style.unclosed_quote_queries:
             from .sweeps import unclosed_quote_findings
             sweep_findings += unclosed_quote_findings(swept, variant)
+        # The heading pass: title-case the paragraphs the skip config marks as
+        # headings. Style-aware, so it cannot be a plain per-paragraph sweep,
+        # but its findings and its flagged/remaining counts ride the same
+        # channel — the change log quotes it beside the other scripted checks.
+        if cfg.style.heading_title_case:
+            from .sweeps import heading_case_findings
+            heading_findings, heading_report = heading_case_findings(
+                swept, cfg.skip)
+            sweep_findings += heading_findings
+            sweep_reports.append(heading_report)
 
         # The spell scan reads the WHOLE document even when the run covers a
         # few sections. It changes nothing, so reading more costs nothing — and

@@ -585,6 +585,124 @@ def _sweep_nested_quote(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- headings in title case ----------------------------------------------------
+
+# The words Chicago sets lowercase mid-title: articles, coordinating
+# conjunctions, and prepositions. Prepositions of every length, per Chicago —
+# with the known cost that a particle used adverbially ("Waking Up Slow")
+# cannot be told from a preposition by a script and will be lowercased; the
+# edit is a tracked change the author can reject, and the first/last-word rule
+# protects the commonest cases ("Coming Up").
+_TITLE_MINOR = frozenset("""
+a an the and but or nor for so yet as at by down from in into like near of
+off on onto out over past per to up upon via with within without about above
+across after against along among around before behind below beneath beside
+between beyond during inside outside through toward towards under until
+""".split())
+
+# Small roman numerals as a closed list rather than a pattern: a pattern
+# admits real words ("mix" is a valid numeral), and "Part ii" deserves
+# "Part II" while "did" must never become "DID".
+_ROMAN = frozenset("""
+ii iii iv vi vii viii ix xi xii xiii xiv xv xvi xvii xviii xix xx
+""".split())
+
+_TITLE_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
+# A word after one of these opens a subtitle or a new line, and takes a
+# capital the way a first word does.
+_TITLE_OPENERS = ":—–\n"
+
+_TITLE_WHY = "House style sets headings in title case."
+
+
+def title_case_hits(text: str) -> list[Hit]:
+    """The word-level edits that set one heading in Chicago title case.
+
+    Word-level on purpose: one finding per word keeps every diff a character
+    or two, each rejectable on its own, instead of one wholesale retype of the
+    line. Conservative where styling could be deliberate: a heading with no
+    lowercase letters at all (CHAPTER ONE) is left whole, and any word already
+    carrying a capital anywhere (McCoy, EVTOL, iPhone, I) is left alone — the
+    only words touched are entirely-lowercase ones and a stray capitalized
+    minor word ("The Shape Of Things" loses only the Of)."""
+    if not any(c.islower() for c in text):
+        return []                     # all-caps or letterless: a styling choice
+    words = list(_TITLE_WORD.finditer(text))
+    if not words:
+        return []
+    last_of_line: set[int] = set()
+    for i, m in enumerate(words):
+        gap = text[m.end():words[i + 1].start()] if i + 1 < len(words) else ""
+        if i + 1 == len(words) or "\n" in gap:
+            last_of_line.add(i)
+    hits: list[Hit] = []
+    for i, m in enumerate(words):
+        w = m.group(0)
+        lead = text[words[i - 1].end():m.start()] if i else text[:m.start()]
+        first = i == 0 or any(ch in lead for ch in _TITLE_OPENERS)
+        edge = first or i in last_of_line
+        lower = w.lower()
+        if lower in _ROMAN:
+            want = lower.upper()      # Part ii -> Part II, wherever it stands
+        elif not edge and lower in _TITLE_MINOR:
+            if w != lower.capitalize():
+                continue              # "OF" is styling; only "Of" is drift
+            want = lower
+        elif w.islower():
+            want = w[0].upper() + w[1:]
+        else:
+            continue                  # carries its own casing: leave it
+        if want != w:
+            hits.append(Hit(m.start(), m.end(), want, _TITLE_WHY))
+    return hits
+
+
+def heading_case_findings(paragraphs: Sequence[ParagraphRef],
+                          skip) -> tuple[list[Finding], SweepReport]:
+    """Title-case every heading-styled paragraph, as ordinary sweep findings
+    plus the flagged/remaining counts the change log quotes.
+
+    "Heading-styled" is the press's own definition — the styles the skip
+    config lists as sweep-only — so the paragraphs this touches are exactly
+    the ones no model pass reviews. That gap is what left "the shape of
+    things to come" untouched through an entire run (DP-006); folding the
+    headings' names into the scripted pass closes it without ever showing a
+    heading to a model."""
+    findings: list[Finding] = []
+    flagged = remaining = 0
+    n = 0
+    for para in paragraphs:
+        if not skip.is_sweep_only(para.style):
+            continue
+        hits = title_case_hits(para.text)
+        if not hits:
+            continue
+        flagged += len(hits)
+        for hit in hits:
+            window, lo, occurrence = sentence_window(para.text, hit.start,
+                                                     hit.end)
+            corrected = (window[:hit.start - lo] + hit.replacement
+                         + window[hit.end - lo:])
+            n += 1
+            findings.append(Finding(
+                finding_id=f"hc-{n:04d}",
+                chunk_id="sweep",
+                para_id=para.para_id,
+                error_type="heading_case",
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=corrected,
+                explanation=hit.explanation,
+                confidence="high"))
+        remaining += len(title_case_hits(apply_hits(para.text, hits)))
+    report = SweepReport("heading_case", "Headings set in title case",
+                         flagged, remaining)
+    if flagged:
+        log.info("heading_case: %d word(s) recased across headings, "
+                 "%d remaining", flagged, remaining)
+    return findings, report
+
+
 # --- unclosed quotations (a question, never an edit) ---------------------------
 
 def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
