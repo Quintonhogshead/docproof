@@ -26,7 +26,7 @@ from lxml import etree
 
 from ...config import Config
 from ...models import Anchor, DocumentModel, Finding, index_paragraphs
-from ...queries import query_span, query_text, wanted_statuses
+from ...queries import query_span, query_text, shows_margin_comment
 from .walker import (CHANGE, CONTENT, CSR, DELETED, DESIGNMAP, DOCUMENT_USER,
                      INSERTED, NOTE, PSR, IdmlPackage, paragraph_text,
                      walk_package)
@@ -288,15 +288,19 @@ def apply_tracked_changes(pkg: IdmlPackage, doc: DocumentModel,
     # the author accepts or rejects, and a question that edits nothing. Which
     # findings take the second is shared policy (docproof/queries.py); only the
     # anchoring below is InDesign's own.
-    wanted = wanted_statuses(cfg.query_comments)
     # A Note is placed from the finding's anchor, so a query with no span
     # cannot be written into the file at all — the same loss the .docx side
     # takes, counted the same way. Silently filtering these would leave
     # summary.md promising a note the InDesign file does not carry.
+    def _to_margin(f: Finding) -> bool:
+        return shows_margin_comment(
+            f, query_comments=cfg.query_comments,
+            not_applied_comments=cfg.not_applied_comments)
+
     queries: list[Finding] = []
     unplaced: list[str] = []
     for f in findings:
-        if f.status not in wanted:
+        if not _to_margin(f):
             continue
         if f.anchor:
             queries.append(f)
