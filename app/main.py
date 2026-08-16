@@ -6,8 +6,11 @@ returns JSON. The pipeline itself lives in docproof/.
 """
 from __future__ import annotations
 
+import faulthandler
+import io
 import logging
 import os
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +24,22 @@ from .lock import FolderLock
 from starlette.types import Scope
 
 log = logging.getLogger("docproof.app.main")
+
+
+def _install_faulthandler() -> None:
+    """Crash tracebacks to stderr, and `kill -USR1 <pid>` dumps every thread's
+    stack there too — which is what reaches `fly logs`. This exists because a
+    thread deadlock in the batch engine was only diagnosable by guesswork on a
+    frozen production binary py-spy couldn't read. Guarded and idempotent: the
+    windowed desktop build can have no real stderr, and Windows has no SIGUSR1
+    (faulthandler.register isn't present there), and tests build many apps."""
+    try:
+        faulthandler.enable()
+        if hasattr(faulthandler, "register") and hasattr(signal, "SIGUSR1"):
+            faulthandler.register(signal.SIGUSR1, all_threads=True)
+    except (AttributeError, ValueError, RuntimeError, OSError,
+            io.UnsupportedOperation):
+        log.info("faulthandler unavailable in this environment; continuing.")
 
 
 class FreshStaticFiles(StaticFiles):
@@ -103,6 +122,7 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
     gate over every /api route) and makes each request's work belong to the
     user who made it. `web=False` is the desktop app, unchanged — no accounts,
     no gate, one local owner. Everything between the two builds is shared."""
+    _install_faulthandler()
     paths = Paths(root or default_root()).ensure()
     lock = FolderLock(paths.root).acquire() if start_runner else None
     settings = Settings.load(paths)

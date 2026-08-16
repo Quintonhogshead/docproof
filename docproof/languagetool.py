@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
@@ -65,18 +66,26 @@ def all_disabled_rules(extra: Sequence[str] = ()) -> frozenset[str]:
 
 
 _tool_cache: dict[str, object] = {}
+# Guards the cache dict and shutdown()'s teardown, so a create and a close can't
+# race to leave a half-built or already-closed server behind. It protects the
+# cache *structure* only — it is NOT what makes concurrent LanguageTool use
+# safe. The batch engine guarantees that: submit and collect (the two heavy
+# passes that call in here) both run on the one worker thread and so never
+# overlap. This lock is cheap insurance for any future caller that forgets that.
+_cache_lock = threading.Lock()
 
 
 def _get_tool(dictionary: str):
     """One long-lived local server per dictionary. The first call downloads the
     jar (~260 MB, cached under ~/.cache) and boots a JVM; reused thereafter."""
-    tool = _tool_cache.get(dictionary)
-    if tool is None:
-        log.info("LanguageTool: starting local server (%s)…", dictionary)
-        tool = language_tool_python.LanguageTool(dictionary)
-        _tool_cache[dictionary] = tool
-        log.info("LanguageTool: server up.")
-    return tool
+    with _cache_lock:
+        tool = _tool_cache.get(dictionary)
+        if tool is None:
+            log.info("LanguageTool: starting local server (%s)…", dictionary)
+            tool = language_tool_python.LanguageTool(dictionary)
+            _tool_cache[dictionary] = tool
+            log.info("LanguageTool: server up.")
+        return tool
 
 
 def _usable_cpus() -> int:
@@ -91,12 +100,13 @@ def _usable_cpus() -> int:
 
 def shutdown() -> None:
     """Stop any running local servers (call at end of run)."""
-    for tool in _tool_cache.values():
-        try:
-            tool.close()
-        except Exception:                # pragma: no cover
-            pass
-    _tool_cache.clear()
+    with _cache_lock:
+        for tool in _tool_cache.values():
+            try:
+                tool.close()
+            except Exception:                # pragma: no cover
+                pass
+        _tool_cache.clear()
 
 
 def propose(paragraphs: Sequence[ParagraphRef], *,

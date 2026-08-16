@@ -48,6 +48,9 @@ primary_region = "iad"        # pick one near your users: fly platform regions
   # book. The scan pool caps itself at the core count, so 2x roughly halves it;
   # the LLM passes are network-bound and unaffected.
   size = "shared-cpu-2x"
-  # 2gb so the LanguageTool pass has room: its JVM wants a ~512 MB heap alongside
-  # the Python web app, and 1gb would OOM under a review.
-  memory = "2gb"
+  # 4gb is the standard: the LanguageTool JVM wants a ~512 MB heap alongside the
+  # Python web app, and a batch peak (a submit's ingest and a collect's write can
+  # run back-to-back on the worker) squeezed the old 2gb to ~535 MB free with no
+  # swap — the memory pressure that helped tip the engine into a freeze. 4gb is
+  # cheap headroom so a busy batch never runs the machine that close to the edge.
+  memory = "4gb"
