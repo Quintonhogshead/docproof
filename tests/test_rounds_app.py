@@ -147,21 +147,32 @@ def test_a_record_without_round_fields_reads_as_a_single_review(runner):
 
 
 def test_run_rounds_reports_progress_onto_the_job(runner, monkeypatch):
-    """_run_rounds threads on_progress into the driver, and the callback lands
-    round/done/total on the record — the whole path the card reads."""
+    """_run_rounds threads on_progress AND on_phase into the driver, and the
+    callbacks land round/done/total and the stage on the record — the whole
+    path the card reads. The fake walks each round the way the real driver
+    does: announce the round, "preparing" while the working document is
+    rebuilt, then "reviewing" as the sections fold."""
     from docproof.pipeline import Outputs
 
     store, r = runner
     states = []
 
     def fake_sync_rounds(cfg, source, error_dir, *, out_dir, review_provider,
-                         judge_provider, on_progress=None, **kw):
-        assert on_progress is not None
-        for call in ((1, 2, 0, 0), (1, 2, 4, 4), (2, 2, 0, 0), (2, 2, 4, 4)):
-            on_progress(*call)
+                         judge_provider, on_progress=None, on_phase=None, **kw):
+        assert on_progress is not None and on_phase is not None
+
+        def snap():
             j = store.get("j1")
             states.append((j.review_round, j.total_rounds, j.done, j.total,
                            j.plain_state()))
+
+        for rnd in (1, 2):
+            on_progress(rnd, 2, 0, 0)
+            on_phase("preparing")
+            snap()
+            on_phase("reviewing")
+            on_progress(rnd, 2, 4, 4)
+            snap()
         return Outputs(reviewed_path=out_dir / "x.docx",
                        summary_md=out_dir / "s.md",
                        findings_json=out_dir / "f.json",
@@ -172,9 +183,9 @@ def test_run_rounds_reports_progress_onto_the_job(runner, monkeypatch):
     r._run_rounds(_job(store, rounds=2, model="claude-sonnet-5").id)
 
     assert states == [
-        (1, 2, 0, 0, "Round 1 of 2 — reviewing"),
+        (1, 2, 0, 0, "Reading your manuscript"),
         (1, 2, 4, 4, "Round 1 of 2 — reviewing (4 of 4 sections)"),
-        (2, 2, 0, 0, "Round 2 of 2 — reviewing"),
+        (2, 2, 0, 0, "Reading your manuscript"),
         (2, 2, 4, 4, "Round 2 of 2 — reviewing (4 of 4 sections)"),
     ]
     assert store.get("j1").state == "done"

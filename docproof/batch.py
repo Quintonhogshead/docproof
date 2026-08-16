@@ -416,7 +416,8 @@ class CollectResult:
 
 
 def collect_findings(job: Job, provider: Provider,
-                     error_dir: str | Path) -> CollectResult:
+                     error_dir: str | Path, *,
+                     on_phase=None) -> CollectResult:
     """Fetch a batch's results and run every synchronous post-step, returning
     the RAW findings before the document is assembled — the point a caller can
     act on them. `collect` wraps this with finish; the multi-round driver runs
@@ -424,7 +425,13 @@ def collect_findings(job: Job, provider: Provider,
 
     The source document is re-ingested here: the walker is deterministic, so
     re-reading an unchanged file reproduces the exact paragraph list the
-    requests were built from. The hash check enforces "unchanged"."""
+    requests were built from. The hash check enforces "unchanged".
+
+    `on_phase` is `run_sync`'s callback, spoken here with the same stage ids:
+    collect re-walks the same steps the synchronous path does — re-ingest
+    ("preparing"), folding the batch's answers ("reviewing"), then each
+    whole-book post-step — and without it the whole stretch reads as one
+    opaque "almost done" however many paid passes it still has to make."""
     cfg = Config.model_validate(job.config)
     source = Path(job.source_path)
     if not source.is_file():
@@ -432,6 +439,8 @@ def collect_findings(job: Job, provider: Provider,
             f"{job.source_name} is no longer at {source}. Put the file back, "
             f"or start a new review.")
 
+    if on_phase:
+        on_phase("preparing")
     prepared = prepare(cfg, source, error_dir, selection=job.selection)
     if prepared.content_hash != job.content_hash:
         raise BatchError(
@@ -439,6 +448,8 @@ def collect_findings(job: Job, provider: Provider,
             f"submitted, so the corrections no longer line up with the text. "
             f"Start a new review of the current version.")
 
+    if on_phase:
+        on_phase("reviewing")
     results = provider.collect_batch(job.batch_id) if job.batch_id else {}
     coverage = CoverageLedger()
     findings, usage = _assemble(cfg, prepared, results, provider, coverage)
@@ -472,6 +483,8 @@ def collect_findings(job: Job, provider: Provider,
     window_losses: list = []
     glossary_cands: list = []
     if cfg.glossary.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("glossary")
         from .glossary import (build_glossary, case_drift_findings,
                                suspects_to_candidates)
         from .providers import build_provider
@@ -493,6 +506,8 @@ def collect_findings(job: Job, provider: Provider,
                 edit_min_count=cfg.glossary.case_edit_min_count)
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
+        if on_phase:
+            on_phase("adjudicate")
         from .adjudicate import adjudicate, merge_candidates
         cands = merge_candidates(prepared.adjudicate_candidates, glossary_cands)
         findings += adjudicate(
@@ -510,6 +525,8 @@ def collect_findings(job: Job, provider: Provider,
     # (a different rewrite.model) they run synchronously now. Either way the
     # light confirm pass runs here.
     if cfg.rewrite.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("rewrite")
         from .providers import build_provider
         from .rewrite import (candidates_from_result, confirm,
                               dedup_candidates, propose)
@@ -579,6 +596,8 @@ def collect_findings(job: Job, provider: Provider,
     # confirm valve rules. Propose is local (no batch requests), so it runs here
     # at collect either way; only the light confirm calls hit the API.
     if cfg.languagetool.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("languagetool")
         from .languagetool import (all_disabled_rules, propose as lt_propose,
                                    shutdown as lt_shutdown)
         from .providers import build_provider
@@ -611,7 +630,8 @@ def collect_findings(job: Job, provider: Provider,
     # continuity reads at all while summary.md (and the pre-run estimate) both
     # said it had. Same helper the synchronous path uses, so they stay in step.
     from .providers import build_provider
-    findings += continuity_findings(cfg, prepared, ids, usage, build_provider)
+    findings += continuity_findings(cfg, prepared, ids, usage, build_provider,
+                                    on_phase=on_phase)
 
     coverage.record_windows(window_losses)
 
@@ -621,15 +641,15 @@ def collect_findings(job: Job, provider: Provider,
 
 def collect(job: Job, provider: Provider, error_dir: str | Path,
             workspace: str | Path, *,
-            out_dir: str | Path | None = None) -> Outputs:
+            out_dir: str | Path | None = None, on_phase=None) -> Outputs:
     """Fetch a batch's results and assemble the reviewed document."""
-    r = collect_findings(job, provider, error_dir)
+    r = collect_findings(job, provider, error_dir, on_phase=on_phase)
     out = Path(out_dir) if out_dir else job_dir(workspace, job.job_id) / "results"
     if r.cfg.rewrite.enabled and r.prepared.whole_document and r.rewrite_rejects:
         _write_rewrite_rejects(out, r.rewrite_rejects)
     outputs = finish(r.prepared, r.findings, r.usage, r.cfg, out_dir=out,
                      source_path=r.source, batch=True, coverage=r.coverage,
-                     chapter_batch_reads=r.chapter_reads)
+                     chapter_batch_reads=r.chapter_reads, on_phase=on_phase)
     job.state = "done"
     save(job, workspace)
     log.info("Job %s collected: %d change(s) applied", job.job_id,

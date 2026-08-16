@@ -84,6 +84,24 @@ def test_manifest_survives_a_process_restart(tmp_path):
     assert data["batch"] is True
 
 
+def test_collect_names_its_stages_for_the_step_tracker(tmp_path):
+    """Collect re-walks the pipeline's steps — re-ingest, folding the batch's
+    answers, the whole-book post-steps, then assembly — and names each through
+    on_phase so the app's card can show them instead of one long "almost
+    done". With the shipped defaults that is the re-ingest, the fold, the
+    glossary read (announced even though it degrades without a reachable
+    provider — the pass genuinely starts), and the write."""
+    provider = ScriptedBatchProvider([_splice_result()], pending_polls=0)
+    job = batchlib.submit(_cfg(), FIXTURES / "simple.docx", ERROR_DIR,
+                          provider, tmp_path)
+    batchlib.poll(job, provider, tmp_path)
+    stages = []
+    outputs = batchlib.collect(batchlib.load(tmp_path, job.job_id), provider,
+                               ERROR_DIR, tmp_path, on_phase=stages.append)
+    assert outputs.applied == 1                  # the review itself still lands
+    assert stages == ["preparing", "reviewing", "glossary", "writing"]
+
+
 def test_collect_refuses_an_edited_source(tmp_path):
     source = tmp_path / "simple.docx"
     source.write_bytes((FIXTURES / "simple.docx").read_bytes())

@@ -274,7 +274,8 @@ def _merge_usage(dst: Usage, src) -> None:
 
 def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
                     review_provider=None, judge_provider=None,
-                    mock_findings=None, on_progress=None, should_cancel=None):
+                    mock_findings=None, on_progress=None, should_cancel=None,
+                    on_phase=None):
     """Run multi-round review synchronously and write the deliverable.
 
     Returns the same `Outputs` as a single review. `review_provider` and
@@ -288,6 +289,13 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
     still being rebuilt and re-ingested then), and again per folded call as that
     round's run_sync counts its sections. The section count starts over every
     round; the round number is what keeps that legible on a card.
+
+    `on_phase`, if given, is run_sync's stage callback, cycled once per round:
+    "preparing" while the working document is rebuilt and re-ingested, the
+    review stages as that round's run_sync walks them, then "round_judge" as
+    the between-rounds judge takes this round's corrections. The final
+    finish's passes speak through it too. A caller's step display starts over
+    each round — the round number from `on_progress` is what keeps it legible.
 
     `should_cancel`, if given, is polled at each round's start and forwarded into
     that round's run_sync (which polls it per folded call); when it first returns
@@ -322,6 +330,8 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
             raise JobCancelled()
         if on_progress:
             on_progress(k, cfg.rounds.count, 0, 0)
+        if on_phase:
+            on_phase("preparing")
         rcfg = _round_config(cfg, k, reuse)
         if k == 1:
             prepared = prepared0
@@ -339,22 +349,28 @@ def run_sync_rounds(cfg, input_path, error_dir, *, out_dir, source_path=None,
                 lambda done, total: on_progress(k, cfg.rounds.count,
                                                 done, total))
             raw, u = run_sync(rcfg, prepared, review_provider,
-                              progress=progress, should_cancel=should_cancel)
+                              progress=progress, should_cancel=should_cancel,
+                              on_phase=on_phase)
         _merge_usage(usage, u)
         rr, fmt = _round_review(prepared, raw)
         if k == 1:
             captured["format"] = fmt
+        # The judge takes this round's corrections the moment review() returns
+        # (see run_rounds), so the stage is named here — the loop itself stays
+        # free of phase plumbing.
+        if on_phase:
+            on_phase("round_judge")
         return rr
 
     result = _drive(cfg, prepared0, orig_doc, review, judge_provider, usage)
     return _finalize(cfg, prepared0, base_path, result, captured["format"],
-                     usage, out_dir, source_path)
+                     usage, out_dir, source_path, on_phase=on_phase)
 
 
 def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
                      source_path=None, review_provider=None,
                      judge_provider=None, poll_interval=30.0,
-                     on_progress=None, should_cancel=None):
+                     on_progress=None, should_cancel=None, on_phase=None):
     """Run multi-round review on the batch path and write the deliverable.
 
     Each round submits a review batch on the current working document, waits for
@@ -404,10 +420,18 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
             raise JobCancelled()
         if on_progress:
             on_progress(k, cfg.rounds.count, 0, 0)
+        if on_phase:
+            on_phase("preparing")
         rcfg = _round_config(cfg, k, reuse)
         wpath = _working_docx(rounds_dir, orig_doc, base_path, k, edits_by_para)
         job = batchlib.submit(rcfg, str(wpath), error_dir, review_provider,
                               workspace)
+        # "reviewing" for the whole vendor wait: with total_rounds on the job
+        # record this is what renders as "Round k — processing overnight"
+        # rather than a stuck "Reading your manuscript". Collect then walks the
+        # stages itself (re-ingest, fold, the post-passes).
+        if on_phase:
+            on_phase("reviewing")
         while True:
             batchlib.poll(job, review_provider, workspace)
             if job.state == "ready":
@@ -418,18 +442,23 @@ def run_batch_rounds(cfg, input_path, error_dir, workspace, *, out_dir,
             if should_cancel and should_cancel():
                 raise JobCancelled()
             time.sleep(poll_interval)
-        r = batchlib.collect_findings(job, review_provider, error_dir)
+        r = batchlib.collect_findings(job, review_provider, error_dir,
+                                      on_phase=on_phase)
         _merge_usage(usage, r.usage)
         if reuse and k > 1:                          # judge context; detectors already ran
             r.prepared.story_sheet = prepared0.story_sheet
         rr, fmt = _round_review(r.prepared, r.findings)
         if k == 1:
             captured["format"] = fmt
+        # Same as the sync adapter: the judge starts on these corrections the
+        # moment this returns.
+        if on_phase:
+            on_phase("round_judge")
         return rr
 
     result = _drive(cfg, prepared0, orig_doc, review, judge_provider, usage)
     return _finalize(cfg, prepared0, base_path, result, captured["format"],
-                     usage, out_dir, source_path)
+                     usage, out_dir, source_path, on_phase=on_phase)
 
 
 # --- shared driver helpers (sync and batch) ----------------------------------
@@ -527,7 +556,7 @@ def _drive(cfg, prepared0, orig_doc, review, judge_provider, usage):
 
 
 def _finalize(cfg, prepared0, base_path, result, fmt_findings, usage, out_dir,
-              source_path):
+              source_path, *, on_phase=None):
     """Assemble the deliverable with the existing finish. The composed layers
     already contain the sweep and consistency edits (folded every round), so this
     prepared has those emptied to avoid applying them twice; a fresh package off
@@ -558,4 +587,4 @@ def _finalize(cfg, prepared0, base_path, result, fmt_findings, usage, out_dir,
              "%d rejected", result.rounds_run, len(result.edits),
              len(result.queries), len(result.rejected))
     return finish(prepared_final, findings, usage, cfg,
-                  out_dir=out_dir, source_path=source_path)
+                  out_dir=out_dir, source_path=source_path, on_phase=on_phase)

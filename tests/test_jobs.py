@@ -194,6 +194,14 @@ def test_a_running_review_names_the_step_it_is_on():
         == "Reviewing (3 of 10 sections)"
     assert "Rewriting" in Job(**common, stage="rewrite").plain_state()
     assert "glossary" in Job(**common, stage="glossary").plain_state()
+    # The finish()-time passes name themselves too, instead of hiding under
+    # "writing your document" — and a collecting batch reads its stages the
+    # same way, since collect is where those passes actually run.
+    assert "meaning" in Job(**common, stage="meaning_check").plain_state()
+    assert "Sapling" in Job(**common, stage="sapling").plain_state()
+    collecting = dict(common, state="collecting")
+    assert "line-editing" in Job(**collecting, stage="smoothing").plain_state()
+    assert "judge" in Job(**common, stage="round_judge").plain_state()
 
 
 def test_a_record_without_a_stage_keeps_the_plain_running_message():
