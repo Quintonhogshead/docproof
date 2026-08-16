@@ -187,13 +187,21 @@ _RULES: tuple[_Rule, ...] = (
 
 
 def _touched_spans(validated: Sequence[Finding]) -> dict[str, list[tuple[int, int]]]:
-    """Anchored spans per paragraph that some validated edit already covers. A
-    trigger site inside one is being fixed; only the untouched sites are
-    residue. Queries and rejected findings do not count — a question is not a
-    conversion."""
+    """Anchored spans per paragraph another finding already speaks for. A
+    trigger site inside one is not residue; only the untouched sites are.
+
+    Two kinds count. A validated edit is fixing the site. A query or a withheld
+    edit (an anchored `query`/`skipped_low_confidence`/`rejected_oversized`) has
+    already *raised* the site — the model asked about it, or a gate deliberately
+    left it alone — so converting it here would both re-apply what a gate
+    declined and second-guess a question already on the record. A bare rejection
+    (no anchor, or a no-anchor/overlap/duplicate discard) claims no span and so
+    never suppresses a residue site."""
+    covered = {"validated", "query", "skipped_low_confidence",
+               "rejected_oversized"}
     spans: dict[str, list[tuple[int, int]]] = {}
     for f in validated:
-        if f.status == "validated" and f.anchor is not None:
+        if f.status in covered and f.anchor is not None:
             spans.setdefault(f.para_id, []).append(
                 (f.anchor.start, f.anchor.end))
     return spans

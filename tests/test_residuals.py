@@ -65,6 +65,20 @@ def test_a_site_a_validated_edit_touches_is_not_residue():
     assert q([p], validated=[fixed]) == []
 
 
+def test_a_site_a_gate_withheld_or_queried_finding_covers_is_left_alone():
+    """A span a gate deliberately left as a question — a withheld edit, or a
+    query — is spoken for. The residual pass must not convert it: doing so would
+    re-apply what a gate declined and second-guess a question already raised."""
+    p = para("It took 17 minutes to land.")
+    start = p.text.index("17")
+    for status in ("query", "skipped_low_confidence", "rejected_oversized"):
+        held = Finding("h-1", "c", p.para_id, "number_style", p.text, 1,
+                       "", "", "high", status=status,
+                       anchor=Anchor(start, start + 2, "17", ""),
+                       withheld=(status == "query"))
+        assert q([p], validated=[held]) == [], f"{status} should suppress residue"
+
+
 def test_an_ordinal_is_never_half_converted():
     """A number with a suffix — "2nd", "86th" — must never have its digits spelled
     out while the suffix is left ("twond"). The cardinal apply pass excludes any
