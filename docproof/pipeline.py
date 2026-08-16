@@ -1523,19 +1523,26 @@ def _held_key(f) -> tuple:
 
 
 def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
-                     usage: Usage, *, out_dir, replay: list[dict] | None):
+                     usage: Usage, *, out_dir, replay: list[dict] | None,
+                     on_phase=None):
     """Run every enabled judge gate over `validated`, in place.
 
     Returns (reports, held) — the per-gate reports for the run report, and how
     many changes were withdrawn into the margin. With `replay` supplied and the
     gates off, an earlier run's verdicts are re-applied instead, costing
     nothing — and those count as held too, because the document in the author's
-    hands holds them back however the verdict was reached."""
+    hands holds them back however the verdict was reached.
+
+    `on_phase` names each gate as it starts ruling — the ids are the gates'
+    feature ids, so the app's step tracker matches its switches — and only when
+    the gate actually has changes to read, so a run with nothing to judge never
+    announces a step that does no work."""
     from .judges import SPECS, screen
     from .validator import to_query
 
-    gates = [(cfg.meaning_check, SPECS["meaning"]), (cfg.fix_check, SPECS["fix"])]
-    if not any(g.enabled for g, _ in gates):
+    gates = [("meaning_check", cfg.meaning_check, SPECS["meaning"]),
+             ("fix_check", cfg.fix_check, SPECS["fix"])]
+    if not any(g.enabled for _, g, _s in gates):
         return [], (_replay_judge_gates(prepared, validated, replay)
                     if replay else 0)
 
@@ -1543,7 +1550,7 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
     context = "\n\n".join(x for x in (prepared.conventions,
                                       prepared.vocabulary) if x)
     reports, rows = [], []
-    for gate, spec in gates:
+    for stage_id, gate, spec in gates:
         if not gate.enabled:
             continue
         # Eligibility is a position range, not a set of ids. `proposed` is built
@@ -1572,6 +1579,8 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
                           and validated[i].chunk_id in ("sweep", "consistency"))]
         if not where:
             continue
+        if on_phase:
+            on_phase(stage_id)
         # Built only now, and only if there is something to judge: this is the
         # far end of a run that has already been paid for, and a client
         # constructed for a manuscript with no changes in it would raise on a
@@ -1640,7 +1649,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
            out_dir: str | Path, source_path: str | Path,
            batch: bool = False, coverage=None, verify_provider=None,
            judge_held: list[dict] | None = None,
-           chapter_batch_reads: dict | None = None) -> Outputs:
+           chapter_batch_reads: dict | None = None, on_phase=None) -> Outputs:
     """Validate, write tracked changes, save, and report.
 
     `coverage` (a CoverageLedger, if the caller tracked one) records which
@@ -1649,7 +1658,15 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
 
     `verify_provider` is the overseer-verifier's client; when the ensemble
     configures a verifier and none is passed, one is built from
-    ensemble.verifier_model. Ignored entirely in single-detector mode."""
+    ensemble.verifier_model. Ignored entirely in single-detector mode.
+
+    `on_phase` is the same callback `run_sync` takes, continued: each paid pass
+    in here announces itself as it begins — "verify" / "sapling" /
+    "low_confidence" / "smoothing" / "chapter_continuity", then the judge gates
+    ("meaning_check" / "fix_check"), then "writing" once the document is
+    actually being assembled. Without it everything below used to hide under
+    the caller's single "writing" stage, which on a big book meant many minutes
+    of judge and whole-book passes with no sign of which was running."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     # With the ensemble on, fold the detectors' findings into one list first,
@@ -1663,6 +1680,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         model_findings = merge(model_findings, prepared.doc)
         ens = cfg.ensemble
         if ens.verifier_model and ens.verify_policy != "none":
+            if on_phase:
+                on_phase("verify")
             from .verifier import verify_findings
             if verify_provider is None:
                 from .providers import build_provider
@@ -1682,6 +1701,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # to a token ceiling; the ledger is what keeps that out of the flattering
     # reading (see CoverageLedger.unruled).
     window_losses: list = []
+    if on_phase and cfg.sapling.enabled:
+        on_phase("sapling")
     sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out,
                                          loss_sink=window_losses)
     # Below-gate model edits get one more chance to become a tracked change: the
@@ -1690,6 +1711,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # to a margin comment. Off by default. `model_findings` comes back with the
     # below-gate edits removed and the valve's verdicts (`promoted`) taking their
     # place; the verdicts go LAST so they yield to every surer source on a span.
+    if on_phase and cfg.low_confidence.confirm:
+        on_phase("low_confidence")
     model_findings, promoted = _promote_low_confidence(
         cfg, prepared, model_findings, usage, out_dir=out,
         loss_sink=window_losses)
@@ -1703,6 +1726,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # correction; `force_query` is. It is last anyway, so that if that invariant
     # ever broke, the arbitration would still give every contested span to the
     # surer source rather than to a matter of taste.
+    if on_phase and cfg.smoothing.enabled and prepared.whole_document:
+        on_phase("smoothing")
     smoothing_findings, smoothing_report = _smoothing_findings(
         cfg, prepared, usage, out_dir=out)
     # Chapter-scoped continuity rides alongside smoothing, and for the same
@@ -1714,6 +1739,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     book_anchors = frozenset(
         (f.para_id, " ".join(f.original_text.split()))
         for f in model_findings if f.error_type == "continuity")
+    if on_phase and cfg.chapter_continuity.enabled and prepared.whole_document:
+        on_phase("chapter_continuity")
     chapter_continuity_findings, chapter_continuity_report = \
         _chapter_continuity_findings(cfg, prepared, usage, out_dir=out,
                                      book_anchors=book_anchors,
@@ -1751,7 +1778,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # only ever removes, and a change the first withdrew is no longer
     # "validated", so the second neither sees it nor is billed for it.
     judge_reports, held_count = _run_judge_gates(
-        cfg, prepared, validated, usage, out_dir=out, replay=judge_held)
+        cfg, prepared, validated, usage, out_dir=out, replay=judge_held,
+        on_phase=on_phase)
     # Residual coverage, after every gate has settled what is actually being
     # edited: number-rule trigger sites no surviving edit touched become
     # margin queries, so a rule the model applied to most-but-not-all matches
@@ -1770,6 +1798,10 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # every gate has settled which edits stand, so the count in the surviving
     # comment is the count in the manuscript.
     _collapse_repeated_comments(validated, prepared.doc, cfg.comment_collapse)
+    # Every paid pass is behind us — the residual scan and the comment collapse
+    # above are free and local — so what's left is assembling the document.
+    if on_phase:
+        on_phase("writing")
     # Verifier rejections were never candidates for a tracked change, but they
     # belong in the report so the author sees what the overseer set aside.
     validated = validated + verifier_rejected
