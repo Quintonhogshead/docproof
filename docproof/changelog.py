@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Finding
-from .queries import wanted_statuses
+from .queries import shows_margin_comment
 
 log = logging.getLogger("docproof.changelog")
 
@@ -150,9 +150,10 @@ def write_change_log(path: Path, *, doc, findings: list[Finding], cfg,
     # applies rather than by a second count that can drift from it — and named
     # in the format's own word, because an InDesign file holds notes and this
     # log is read beside the file it describes.
-    wanted = wanted_statuses(cfg.query_comments)
     in_margin = [f for f in queries + low + oversized
-                 if f.status in wanted and f.anchor]
+                 if f.anchor and shows_margin_comment(
+                     f, query_comments=cfg.query_comments,
+                     not_applied_comments=cfg.not_applied_comments)]
     noun = fmt.comment_noun if fmt is not None else "margin comment"
 
     d = docx.Document()

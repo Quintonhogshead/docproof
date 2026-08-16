@@ -1220,6 +1220,17 @@ class Config(BaseModel):
     # error types always do; this decides whether below-gate findings join
     # them, or stay in summary.md where only an editor will see them.
     query_comments: bool = True
+    # Whether a correction the tool chose NOT to make leaves a margin comment on
+    # the document. Three kinds: an edit a judge gate or the verifier withdrew
+    # (the "Not applied: …" note), a below-gate catch, an oversized fix. OFF by
+    # default: these are recorded in the change log and findings.json, but the
+    # delivered document stays clean of them — an author reads the changes and
+    # the genuine queries, not a running commentary on what was declined. Turn
+    # it on to put them back in the margin (then `query_comments` still decides
+    # the below-gate/oversized ones, exactly as before). A genuine query — a
+    # question from an asking pass (continuity, fact-check, consistency, an
+    # unconverted number-rule site) — is unaffected and always shown.
+    not_applied_comments: bool = False
     # A single comment at the top of the reviewed file naming the words the
     # spell scan left out of the check — protected as the author's own and never
     # flagged. It puts "these were taken on trust, verify them" in front of the

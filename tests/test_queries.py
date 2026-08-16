@@ -232,7 +232,7 @@ def test_a_below_gate_finding_becomes_a_query_comment(tmp_path):
                  "corrected_text": "The manuscript was finished; nobody wanted it.",
                  "explanation": "Two independent clauses joined by a comma.",
                  "confidence": "low"}],
-               error_types=["comma_splice"])
+               error_types=["comma_splice"], not_applied_comments=True)
     assert out.applied == 0
     texts = _comment_texts(out.reviewed_path)
     assert any("left as written" in t for t in texts)
@@ -252,7 +252,7 @@ def test_an_oversized_edit_becomes_a_comment_not_a_silent_rejection(tmp_path):
                [{"para_id": "body-0000", "error_type": "comma_splice",
                  "original_text": original, "corrected_text": corrected,
                  "explanation": "Run-on.", "confidence": "high"}],
-               error_types=["comma_splice"])
+               error_types=["comma_splice"], not_applied_comments=True)
     assert out.applied == 0                       # never a tracked change
     texts = _comment_texts(out.reviewed_path)
     assert any("too large to apply" in t for t in texts)
@@ -288,7 +288,7 @@ def test_a_query_comment_highlights_the_sentence_not_the_edit_site(tmp_path):
                  "original_text": text,
                  "corrected_text": "The manuscript was finished; nobody wanted it.",
                  "explanation": "Splice.", "confidence": "low"}],
-               error_types=["comma_splice"])
+               error_types=["comma_splice"], not_applied_comments=True)
     assert list(_comment_ranges(out.reviewed_path).values()) == [text]
 
 
@@ -302,6 +302,48 @@ def test_query_comments_can_be_turned_off(tmp_path):
     assert _comment_texts(out.reviewed_path) == []
     # ...but it is still reported, so nothing is lost silently.
     assert "Possibly intentional" in out.summary_md.read_text()
+
+
+def test_a_below_gate_finding_is_log_only_by_default(tmp_path):
+    """not_applied_comments defaults off: a declined correction leaves no margin
+    comment on the document, but is still named in summary.md. The author reads
+    the changes and the genuine questions, not a commentary on what was not done."""
+    out = _run(tmp_path, ["The manuscript was finished, nobody wanted it."],
+               [{"para_id": "body-0000", "error_type": "comma_splice",
+                 "original_text": "The manuscript was finished, nobody wanted it.",
+                 "corrected_text": "The manuscript was finished; nobody wanted it.",
+                 "explanation": "Two clauses joined by a comma.",
+                 "confidence": "low"}],
+               error_types=["comma_splice"])            # default: flag off
+    assert out.applied == 0
+    assert _comment_texts(out.reviewed_path) == []       # nothing on the page
+    assert "Possibly intentional" in out.summary_md.read_text()   # but recorded
+
+
+def test_a_withheld_edit_is_log_only_by_default(tmp_path):
+    """A judge/verifier withdrawal ("Not applied: …") is a declined correction,
+    so it too stays out of the document by default while the report keeps it."""
+    from docproof.models import Anchor
+    from docproof.reassembler import apply_tracked_changes
+    from docproof.validator import to_query
+    text = "He left. She waited a long time. Nobody came."
+    cfg, pkg, doc, pid = _one_para_docx(tmp_path, text)      # default config
+    f = _finding(finding_id="w-1", para_id=pid, error_type="comma_splice",
+                 original_text="He left.", corrected_text="He departed.",
+                 explanation="Withheld by the gate.", status="validated",
+                 anchor=Anchor(0, 8, "He left.", "He departed."))
+    stats = apply_tracked_changes(pkg, doc, [to_query(f, doc)], cfg)
+    assert stats.queried == () and stats.applied == ()      # nothing written
+    # Turning the switch on brings it back to the margin.
+    cfg.not_applied_comments = True
+    cfg2, pkg2, doc2, pid2 = _one_para_docx(tmp_path, text)
+    cfg2.not_applied_comments = True
+    g = _finding(finding_id="w-2", para_id=pid2, error_type="comma_splice",
+                 original_text="He left.", corrected_text="He departed.",
+                 explanation="Withheld by the gate.", status="validated",
+                 anchor=Anchor(0, 8, "He left.", "He departed."))
+    stats2 = apply_tracked_changes(pkg2, doc2, [to_query(g, doc2)], cfg2)
+    assert stats2.queried == ("w-2",)
 
 
 def test_a_query_and_a_change_coexist_in_one_paragraph(tmp_path):
@@ -351,8 +393,11 @@ def test_summary_names_the_query_channel_in_the_formats_own_word(tmp_path):
 
     cfg = load_config("config/default.yaml")
     # The closing line under test is the comments-on wording; the shipped
-    # default now ships with edit explanations off.
+    # default now ships with edit explanations off. not_applied_comments on so
+    # the below-gate and oversized sections also claim their margin comment —
+    # this test is about the noun, not the gating.
     cfg.comments = True
+    cfg.not_applied_comments = True
     doc = _doc(SPEAKERS)
     findings = [
         _finding(status="query"),
@@ -497,6 +542,9 @@ def test_a_fallback_anchored_query_reaches_the_document(tmp_path):
     from docproof.validator import to_query
     text = "He left. She waited a long time. Nobody came."
     cfg, pkg, doc, pid = _one_para_docx(tmp_path, text)
+    # A withheld edit reaches the margin only with this on; the test is about
+    # where the fallback comment lands, not whether it is shown by default.
+    cfg.not_applied_comments = True
 
     # A validated change whose quote no longer matches the paragraph — the
     # belt-and-braces branch of to_query.

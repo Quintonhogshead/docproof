@@ -12,7 +12,7 @@ from lxml import etree
 
 from .config import Config
 from .models import Anchor, DocumentModel, Finding, index_paragraphs
-from .queries import query_span, query_text, wanted_statuses
+from .queries import query_span, query_text, shows_margin_comment
 from .utils.xml_helpers import (BR_TAG, CR_TAG, CT_NS, DELTEXT_TAG, DEL_TAG,
                                 DR_NS, DocxPackage, INS_TAG, P_TAG, PR_NS,
                                 RPR_TAG, R_TAG, TAB_TAG, T_TAG,
@@ -582,7 +582,6 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     # and a question that edits nothing. Which findings take the second is
     # shared with the IDML reassembler (docproof/queries.py), because the
     # channel a finding belongs in is policy, not markup.
-    wanted = wanted_statuses(cfg.query_comments)
     # A comment is placed from the finding's anchor, so a query with no span
     # cannot be written into the document at all. That is a loss, not a filter:
     # summary.md counts the question as raised and tells the author it is a
@@ -590,10 +589,15 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
     # named in the log, rather than disappearing between the report and the
     # deliverable. validator.to_query only produces one when the paragraph
     # itself is unknown — which is also the only case nothing here could place.
+    def _to_margin(f: Finding) -> bool:
+        return shows_margin_comment(
+            f, query_comments=cfg.query_comments,
+            not_applied_comments=cfg.not_applied_comments)
+
     queries: list[Finding] = []
     unplaced: list[str] = []
     for f in findings:
-        if f.status not in wanted:
+        if not _to_margin(f):
             continue
         if f.anchor:
             queries.append(f)

@@ -611,6 +611,16 @@ comment_collapse: 3
 # an editor sees them.
 query_comments: true
 
+# A correction the tool chose NOT to make — an edit a judge or the verifier
+# withdrew (the "Not applied: …" note), a below-gate catch, an oversized fix.
+# false keeps these OUT of the delivered document: they are recorded in the
+# change log and findings.json, but the author reads the changes and the genuine
+# queries, not a commentary on what was declined. true puts them back in the
+# margin (then query_comments still governs the below-gate/oversized ones). A
+# genuine query from an asking pass (continuity, fact-check, an unconverted
+# number site) is unaffected and always shown.
+not_applied_comments: false
+
 # One comment at the very top of the reviewed file, naming the words the spell
 # scan left out of the check (treated as the author's own and never flagged), so
 # a proofreader sees what was taken on trust before reading a line. Rides on

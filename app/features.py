@@ -192,8 +192,18 @@ FEATURES: tuple[FeatureSpec, ...] = (
     FeatureSpec(
         "query_comments", "Below-gate queries as comments",
         "Also surface softer, below-threshold findings as margin queries, "
-        "instead of only in summary.md where an editor alone would see them.",
+        "instead of only in summary.md where an editor alone would see them. "
+        "Only takes effect when “Comment on corrections not made” is on.",
         "output", ("query_comments",)),
+    FeatureSpec(
+        "not_applied_comments", "Comment on corrections not made",
+        "Put a margin comment on the document for a correction the tool chose "
+        "NOT to make — an edit a judge or the verifier withdrew (“Not "
+        "applied: …”), a below-gate catch, an oversized fix. Off keeps "
+        "the document clean of these: they are recorded in the change log and "
+        "findings.json only. Genuine questions (continuity, fact check, name "
+        "pairs, unconverted numbers) still appear as comments either way.",
+        "output", ("not_applied_comments",)),
     FeatureSpec(
         "change_log", "Change-log document",
         "The Word change log handed to the author alongside the manuscript: what "
