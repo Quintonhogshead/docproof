@@ -61,6 +61,12 @@ deliberate fragment or stylistic choice, or the "fix" itself is wrong.
 For a finding marked disputed (reviewers proposed different fixes), keep it and \
 put the single correct fix in chosen_fix; otherwise leave chosen_fix empty.
 
+When several findings correct the same sentence you are shown them together with \
+the sentence as it reads once all of them are applied. Judge each on that \
+repaired sentence, and never reject or downgrade one for an inconsistency that a \
+companion finding in the same sentence removes — a pair like 2 -> two and 3 -> \
+three is right together though each looks wrong alone.
+
 Your job is to catch clear false positives, not to relitigate every judgment \
 call. When you are unsure, prefer downgrade over reject: a missed comment costs \
 the author far less than a lost correction. Put a short reason on every reject \
@@ -75,6 +81,60 @@ def _bump(confidence: str) -> str:
     except ValueError:
         return confidence
     return _CONFIDENCE_ORDER[min(i + 1, len(_CONFIDENCE_ORDER) - 1)]
+
+
+# --- siblings: findings that fix one sentence together ------------------------
+#
+# ONE FINDING PER ERROR splits a coupled repair — "2 and 3" spelled out to "two
+# and three" — into two findings, each correcting only its own half. Shown one at
+# a time, each half reads as an error the other did not fix ("two and 3"), and a
+# reviewer that rules per-finding can reject or downgrade both. These passes run
+# BEFORE the judge gates, so they get the first chance to waste a pair. The cure
+# is the same one the gates use: show the siblings together, with the sentence as
+# it reads once all of them are applied, and tell the model to judge on that.
+# Same-sentence siblings quote the same sentence verbatim, so they share
+# original_text and occurrence exactly — no offsets needed to find them.
+
+def _sibling_groups(findings: Sequence[Finding]
+                    ) -> dict[tuple[str, int], list[Finding]]:
+    groups: dict[tuple[str, int], list[Finding]] = {}
+    for f in findings:
+        groups.setdefault((f.original_text, f.occurrence), []).append(f)
+    return groups
+
+
+def _combined_sentence(group: Sequence[Finding]) -> str | None:
+    """The shared sentence with every sibling's fix applied, or None when their
+    edits overlap or will not place — best-effort context, never load-bearing."""
+    from .agreement import canonical_anchors
+    base = group[0].original_text
+    edits = []
+    for f in group:
+        edits.extend(canonical_anchors(f.original_text, f.corrected_text))
+    edits.sort(key=lambda a: a.start)
+    for a, b in zip(edits, edits[1:]):
+        if a.end > b.start:                    # not cleanly disjoint — don't guess
+            return None
+    out = base
+    for a in sorted(edits, key=lambda a: a.start, reverse=True):
+        out = out[:a.start] + a.insert_text + out[a.end:]
+    return out
+
+
+def _sibling_lines(f: Finding, groups: dict[tuple[str, int], list[Finding]]
+                   ) -> list[str]:
+    """The extra rendered lines that tell a reviewer this finding shares its
+    sentence with others, and what the sentence reads like once they are all
+    applied. Empty for a finding that stands alone."""
+    group = groups.get((f.original_text, f.occurrence), [])
+    if len(group) < 2:
+        return []
+    mates = ", ".join(g.finding_id for g in group if g is not f)
+    lines = [f"  also correcting this same sentence: {mates}"]
+    combined = _combined_sentence(group)
+    if combined is not None:
+        lines.append(f"  the sentence with all of them applied: {combined!r}")
+    return lines
 
 
 class Verifier:
@@ -98,15 +158,18 @@ class Verifier:
 
     def _render(self, para_text: str, findings: Sequence[Finding]) -> str:
         lines = [f"PARAGRAPH:\n{para_text}\n", "FINDINGS:"]
+        groups = _sibling_groups(findings)
         for f in findings:
             et = self.types.get(f.error_type)
             rule = et.detection_prompt if et else f.error_type
-            lines.append(
+            block = [
                 f"- finding_id={f.finding_id} type={f.error_type} "
-                f"reviewers={f.agreement} disputed={'yes' if f.disputed_fix else 'no'}\n"
-                f"  flagged: {f.original_text!r}\n"
-                f"  proposed: {f.corrected_text!r}\n"
-                f"  rule for {f.error_type}: {rule}")
+                f"reviewers={f.agreement} disputed={'yes' if f.disputed_fix else 'no'}",
+                f"  flagged: {f.original_text!r}",
+                f"  proposed: {f.corrected_text!r}",
+                *_sibling_lines(f, groups),
+                f"  rule for {f.error_type}: {rule}"]
+            lines.append("\n".join(block))
         lines.append("\nReturn a verdict for every finding_id above.")
         return "\n".join(lines)
 
@@ -244,6 +307,12 @@ text. Use this whenever you are unsure.
 — dialect, a coined name or term, a deliberate fragment or stylistic choice — or \
 the proposed fix itself introduces an error.
 
+When several findings correct the same sentence you are shown them together with \
+the sentence as it reads once all of them are applied. Judge each on that \
+repaired sentence, and never reject or query one for an inconsistency that a \
+companion finding in the same sentence removes — a pair like 2 -> two and 3 -> \
+three is right together though each looks wrong alone.
+
 When in doubt, query; never reject on a hunch. A missed correction and an extra \
 margin question both cost the author far less than a wrong change applied \
 silently and carried into the next round. Reject only clear false positives.
@@ -327,14 +396,17 @@ class RoundJudge:
 
     def _render(self, para_text: str, findings: Sequence[Finding]) -> str:
         lines = [f"PARAGRAPH:\n{para_text}\n", "PROPOSED CORRECTIONS:"]
+        groups = _sibling_groups(findings)
         for f in findings:
             et = self.types.get(f.error_type)
             rule = et.detection_prompt if et else f.error_type
-            lines.append(
-                f"- finding_id={f.finding_id} type={f.error_type}\n"
-                f"  flagged: {f.original_text!r}\n"
-                f"  proposed: {f.corrected_text!r}\n"
-                f"  rule for {f.error_type}: {rule}")
+            block = [
+                f"- finding_id={f.finding_id} type={f.error_type}",
+                f"  flagged: {f.original_text!r}",
+                f"  proposed: {f.corrected_text!r}",
+                *_sibling_lines(f, groups),
+                f"  rule for {f.error_type}: {rule}"]
+            lines.append("\n".join(block))
         lines.append("\nReturn a verdict for every finding_id above.")
         return "\n".join(lines)
 

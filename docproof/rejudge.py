@@ -87,6 +87,65 @@ def read_run(results_dir: str | Path) -> tuple[list, str]:
     return findings, str(payload.get("source") or "")
 
 
+def _recover_explanation(note: str) -> str:
+    """The correction's own explanation, dug back out of the margin note the gate
+    wrote over it. `_margin_note` builds "<proposal>. Not applied: <reason>", so
+    the head is the sentence the proposing pass would have shown — the right
+    comment to carry if this change is now KEPT rather than held again."""
+    head = note.split(". Not applied:")[0].strip()
+    return head or note
+
+
+def _reopen_held_gates(findings: list[Finding], results_dir, cfg: Config
+                       ) -> list[Finding]:
+    """Hand the gates their own past withholds back as fresh candidates.
+
+    A change a gate held is frozen into findings.json as a margin query
+    (force_query set), and `validate_findings` routes anything force_query'd
+    straight to the margin BEFORE a gate sees it. So a re-judge with a smarter
+    gate — one that reads a split pair together instead of a half at a time —
+    would never get to reconsider the very changes it exists to rescue. The gate
+    also wrote each held change into `meaning_held.json` beside findings.json,
+    keyed exactly as here, which is what lets us pick out its withholds (and only
+    its — a verifier or smoothing downgrade is force_query'd too, and must stay
+    a question) and reopen them.
+
+    Only the gates being RE-RUN reopen their own holds: re-judging with the
+    meaning gate on and the fix gate off reopens what meaning held and leaves
+    what fix held a question, which is what 'the fix gate is off now' means. A
+    change reopened here is either kept afresh by the improved gate or held
+    again — never worse off than the frozen query it started as."""
+    from .pipeline import read_meaning_held
+    rows = read_meaning_held(results_dir)
+    if not rows:
+        return findings
+    enabled = {k for k, on in (("meaning", cfg.meaning_check.enabled),
+                               ("fix", cfg.fix_check.enabled)) if on}
+    reopen: dict[tuple, str] = {}
+    for r in rows:
+        if r.get("judge") in enabled:
+            key = (r.get("para_id"), r.get("original_text"),
+                   r.get("occurrence"), r.get("corrected_text"))
+            reopen[key] = _recover_explanation(r.get("explanation", "") or "")
+    if not reopen:
+        return findings
+
+    out, n = [], 0
+    for f in findings:
+        key = (f.para_id, f.original_text, f.occurrence, f.corrected_text)
+        if f.force_query and key in reopen:
+            out.append(replace(f, status="pending", force_query=False,
+                               anchor=None,
+                               explanation=reopen[key] or f.explanation))
+            n += 1
+        else:
+            out.append(f)
+    if n:
+        log.info("Re-judge: reopened %d gate-held change(s) for a fresh verdict "
+                 "under the current gates.", n)
+    return out
+
+
 def _gates_only(cfg: Config) -> Config:
     """A copy of `cfg` with every paid pass off except the judge gates.
 
@@ -143,6 +202,10 @@ def rejudge(cfg: Config, results_dir: str | Path, *, out_dir: str | Path,
     cfg = _gates_only(cfg)
 
     findings, recorded = read_run(results_dir)
+    # A gate's own past withholds are frozen as margin queries in the record; give
+    # them back to the (possibly smarter) gates being re-run, so a re-judge can
+    # actually rescue a split pair the old gate wrongly held. See the helper.
+    findings = _reopen_held_gates(findings, results_dir, cfg)
     src = Path(source or recorded)
     if not src.is_file():
         raise RejudgeError(

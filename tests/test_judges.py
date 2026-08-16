@@ -411,7 +411,11 @@ def test_withdrawing_a_change_does_not_promote_the_edit_it_was_blocking(
 def test_the_gate_never_evicts_a_change_it_approved(tmp_path, monkeypatch):
     """Three findings where the middle one loses a span contest. Holding back
     the first must not let that loser in, and must not cost the third — a
-    safety pass that deletes a correction it vouched for is worse than no pass."""
+    safety pass that deletes a correction it vouched for is worse than no pass.
+
+    f-1 and f-3 fix the same sentence, so withholding f-1 re-judges f-3 alone —
+    the survivors of a part-withheld sentence are re-confirmed without the change
+    that was withdrawn, never re-validated (so the overlap loser f-2 stays out)."""
     text = "The old man walked slowly down the road."
     a = _edit("f-1", text, "The old man strode slowly down the road.")
     b = _edit("f-2", text, "The old man ran down the road.")
@@ -419,8 +423,10 @@ def test_the_gate_never_evicts_a_change_it_approved(tmp_path, monkeypatch):
     out, provider = _finish_with(
         tmp_path, monkeypatch, text, [a, b, c],
         [_verdicts({"item": 1, "verdict": "withhold", "reason": "Strode is not walked."},
-                   {"item": 2, "verdict": "keep", "reason": ""})])
-    assert len(provider.calls) == 1
+                   {"item": 2, "verdict": "keep", "reason": ""}),
+         # f-3 re-judged alone once f-1 is withdrawn, and re-confirmed.
+         _verdicts({"item": 2, "verdict": "keep", "reason": ""})])
+    assert len(provider.calls) == 2
     # f-1 withdrawn, f-3 (approved) still applied, f-2 still not promoted.
     assert out.applied == 1
     summary = (tmp_path / "out" / "summary.md").read_text("utf-8")
@@ -457,6 +463,68 @@ def test_the_loop_stops_once_nothing_new_appears(tmp_path, monkeypatch):
         [_verdicts({"item": 1, "verdict": "keep", "reason": ""})])
     assert len(provider.calls) == 1
     assert out.applied == 1
+
+
+# --- cohorts: a split pair is judged as the sentence it will ship as ----------
+
+def test_a_split_pair_renders_as_the_sentence_it_will_ship_as():
+    """The reported failure at its root. Two findings each spell out one numeral
+    of a pair, so ONE FINDING PER ERROR splits the repair in two. Shown apart,
+    each is a sentence a house rule has just made inconsistent ("two and 3"), and
+    a careful judge withholds it — both die. Rendered together, the judge reads
+    the sentence as it will actually ship, and each item's own change beside it."""
+    from docproof.models import Anchor
+    text = "There were 2 and 3 owls."
+    a = replace(_edit("f-1", text, "There were two and 3 owls."),
+                status="validated", anchor=Anchor(11, 12, "2", "two"))
+    b = replace(_edit("f-2", text, "There were 2 and three owls."),
+                status="validated", anchor=Anchor(17, 18, "3", "three"))
+    rendered = Judge(MEANING, FakeProvider(), "m")._render(text, [a, b])
+    assert "as it will read: 'There were two and three owls.'" in rendered
+    assert "item 1 makes only this change: '2' -> 'two'" in rendered
+    assert "item 2 makes only this change: '3' -> 'three'" in rendered
+    assert "applied together with item(s): 2" in rendered   # shown to item 1
+    assert "applied together with item(s): 1" in rendered   # shown to item 2
+    assert "as corrected:" not in rendered                  # the lone-change form
+
+
+def test_a_split_pair_both_survive_when_judged_together(tmp_path, monkeypatch):
+    """End to end: the pair the old gate would have split-killed now reaches the
+    judge as one sentence, and both halves ship on a single call."""
+    text = "There were 2 and 3 owls."
+    out, provider = _finish_with(
+        tmp_path, monkeypatch, text,
+        [_edit("f-1", text, "There were two and 3 owls."),
+         _edit("f-2", text, "There were 2 and three owls.")],
+        [_verdicts({"item": 1, "verdict": "keep", "reason": ""},
+                   {"item": 2, "verdict": "keep", "reason": ""})])
+    assert out.applied == 2
+    assert len(provider.calls) == 1                          # one joint call
+    assert "There were two and three owls." in provider.calls[0]["user"]
+
+
+def test_a_stranded_survivor_is_re_judged_without_its_companion(tmp_path,
+                                                                monkeypatch):
+    """Joint rendering does not settle the mixed verdict. When one half of a pair
+    is kept and the other withheld, the kept half was vouched for beside a
+    companion now being withdrawn — so it is re-judged alone, and if it was only
+    right with its twin it is withdrawn too. Here that closes the strand: neither
+    ships, and both wait in the margin."""
+    text = "There were 2 and 3 owls."
+    out, provider = _finish_with(
+        tmp_path, monkeypatch, text,
+        [_edit("f-1", text, "There were two and 3 owls."),
+         _edit("f-2", text, "There were 2 and three owls.")],
+        [_verdicts({"item": 1, "verdict": "keep", "reason": ""},
+                   {"item": 2, "verdict": "withhold", "reason": "Leaves 3 a digit."}),
+         # f-1 re-judged alone, and it is wrong once its companion is gone.
+         _verdicts({"item": 1, "verdict": "withhold",
+                    "reason": "'two' is inconsistent with the digit 3."})])
+    assert len(provider.calls) == 2
+    assert out.applied == 0
+    summary = (tmp_path / "out" / "summary.md").read_text("utf-8")
+    assert "Leaves 3 a digit." in summary
+    assert "inconsistent with the digit 3." in summary
 
 
 def test_a_clean_manuscript_never_builds_a_judge(tmp_path, monkeypatch):

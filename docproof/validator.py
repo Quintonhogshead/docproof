@@ -288,7 +288,16 @@ def _oversteps(deleted: str, inserted: str, guard) -> bool:
     """Whether a minimal diff is too big to be a proofreading fix: it re-types a
     span wider than the size cap, or it adds more net new text than the growth
     cap. Pure deletions never trip the growth cap — removing text is not
-    fabrication."""
+    fabrication.
+
+    The span is measured from the first changed character to the last, so a
+    correction that rewrites a sentence end to end trips even when each individual
+    touch is small (a run-on made grammatical scatters capitals and punctuation
+    across the whole line). A COUPLED repair whose two touches sit far apart is
+    kept out of this path a different way — the analyzer bundles only touches
+    close together, and lets a wide pair travel as two separate findings the
+    judge gates then rule on as one sentence — so this stays the blunt, safe
+    rewrite-catcher it has always been."""
     if len(deleted) > guard.max_edit_chars or len(inserted) > guard.max_edit_chars:
         return True
     return len(inserted) - len(deleted) > guard.max_added_chars

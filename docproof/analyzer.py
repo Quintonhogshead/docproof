@@ -84,6 +84,20 @@ ONE FINDING PER ERROR
 - If a sentence contains two errors, emit two findings — one per error, each
   labelled with its own error_type, and each correcting only its own error.
   Never bundle unrelated fixes into a single corrected_text.
+- A COUPLED repair is the exception, and is ONE finding, not two. Some fixes are
+  a single decision that lands in two nearby places and is only correct if both
+  land: a pair of numerals a rule spells out together (2 and 3 -> two and three),
+  an opening bracket or quotation mark and the mate it is missing, dialogue whose
+  closing punctuation and the following speech tag's capital move as one. Put the
+  WHOLE repair in a single corrected_text and give it the error_type of the rule
+  that drives it. Splitting it leaves each half looking like a fresh error — "two
+  and 3" reads as inconsistent as surely as "2 and 3" did — and a later checker,
+  shown one half at a time, may keep neither. Bundle only when the two touches
+  are CLOSE — the same clause, a few words apart. When the coupled spots are far
+  apart in the sentence, emit them as separate findings after all; a later check
+  reads them back together as one sentence. "Unrelated" above is the operative
+  word: bundle a nearby coupled repair, never two errors that merely share a
+  sentence.
 - Do not report the same error twice under two different error types. Pick the
   section that defines it most precisely.
 

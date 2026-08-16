@@ -77,6 +77,15 @@ becomes a question in the margin for the author instead.
 - unsure: the paragraph in front of you genuinely does not settle it. This is \
 not a hedge — if you can answer, answer.
 
+Some items are shown together because their changes land in the same sentence \
+and will be applied together. For each of those you get one "as it will read" — \
+the sentence with EVERY one of those changes made — and then, per item, the \
+single change that item is responsible for. Judge each item's own change as it \
+reads inside that combined sentence, not inside a half-corrected one. In \
+particular, never withhold an item for an inconsistency that another listed item \
+in the same sentence removes: "2" -> "two" and "3" -> "three" are each wrong \
+alone and right together, so both are keeps.
+
 Put one short sentence of reason on every "withhold" and "unsure" — it is what \
 the author reads in the margin. Leave reason empty for "keep".
 
@@ -294,6 +303,116 @@ def _change_view(f: Finding, para_text: str) -> tuple[str, str]:
     return window, after
 
 
+# --- cohorts: changes that ship together are judged together -----------------
+#
+# The pipeline forces a coupled repair to arrive in pieces. "2 and 3" -> "two and
+# three" under the spell-out rule is one thought, but ONE FINDING PER ERROR (see
+# the analyzer) splits it into two findings, each correcting only its own
+# numeral — so one reads "two and 3" and the other "2 and three". A judge shown
+# either alone sees a sentence a house rule has just made INCONSISTENT and,
+# rightly by its own lights, withholds it. Both die, and the sentence the author
+# wanted — both numerals spelled out — was never on the table.
+#
+# A cohort is the group of changes that land in one sentence and therefore ship
+# as one sentence. Rendered jointly, the judge reads "two and three" and keeps
+# both. The grouping is deliberately generous: two truly independent fixes that
+# merely share a sentence are cohorted too, which is harmless — judged jointly a
+# good pair both keep, and the one case that needs care (one member held, one
+# kept) is closed by re-judging the survivor alone, below. Missing a real couple
+# is the only failure mode, so proximity across a sentence boundary links as
+# well — a dialogue tag's closing-quote repunctuation and the following word's
+# lowercasing are one repair the sentence splitter would otherwise cut in two.
+
+_COHORT_GAP = 40           # chars between two edits still counted as one repair
+_MAX_COHORT_ROUNDS = 4     # a safety bound; the held set grows every real round
+
+
+def _anchor_span(f: Finding, para_text: str) -> tuple[int, int] | None:
+    """Where f's edit sits in the paragraph, or None when it carries no anchor
+    that still matches the text — then it cannot be spliced beside another and is
+    judged alone, exactly as before cohorts existed."""
+    a = f.anchor
+    if a is None or para_text[a.start:a.end] != a.delete_text:
+        return None
+    return a.start, a.end
+
+
+def _cohorts(findings: Sequence[Finding], para_text: str,
+             active: set[int]) -> list[list[int]]:
+    """Partition the `active` findings of one paragraph into ship-together
+    groups, as lists of indices into `findings` (in order).
+
+    Two findings link when their edits share a sentence, or sit within
+    `_COHORT_GAP` characters of each other across a boundary. Union-find over
+    those links; a finding with no usable anchor is always its own group."""
+    from .sweeps import sentence_window
+    idx = sorted(active)
+    span: dict[int, tuple[int, int]] = {}
+    win: dict[int, tuple[int, int]] = {}
+    for i in idx:
+        s = _anchor_span(findings[i], para_text)
+        if s is not None:
+            span[i] = s
+            w, lo, _ = sentence_window(para_text, s[0], s[1])
+            win[i] = (lo, lo + len(w))
+    parent = {i: i for i in idx}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    anchored = [i for i in idx if i in span]
+    for a_pos, i in enumerate(anchored):
+        for j in anchored[a_pos + 1:]:
+            same_sentence = not (win[i][1] <= win[j][0] or win[j][1] <= win[i][0])
+            gap = max(span[i][0], span[j][0]) - min(span[i][1], span[j][1])
+            if same_sentence or gap <= _COHORT_GAP:
+                parent[find(i)] = find(j)
+
+    groups: dict[int, list[int]] = {}
+    for i in idx:
+        groups.setdefault(find(i), []).append(i)
+    return [sorted(g) for g in groups.values()]
+
+
+def _cohort_view(findings: Sequence[Finding], idxs: Sequence[int],
+                 para_text: str) -> tuple[str, str]:
+    """The sentence a cohort ships as: the smallest window covering every
+    member's edit, before and after ALL of them are applied. Members are
+    validated and non-overlapping, so they compose right-to-left cleanly."""
+    from .sweeps import sentence_window
+    spans = [_anchor_span(findings[i], para_text) for i in idxs]
+    lo_edit = min(s[0] for s in spans)
+    hi_edit = max(s[1] for s in spans)
+    window, lo, _ = sentence_window(para_text, lo_edit, hi_edit)
+    after = window
+    for i in sorted(idxs, key=lambda k: findings[k].anchor.start, reverse=True):
+        a = findings[i].anchor
+        after = after[:a.start - lo] + a.insert_text + after[a.end - lo:]
+    return window, after
+
+
+def _own_change(f: Finding) -> str:
+    """The one edit an item is responsible for, as delete -> insert, so a judge
+    reading a jointly-rendered sentence knows which span is this item's to rule
+    on and which belong to its companions."""
+    a = f.anchor
+    return f"{(a.delete_text if a else f.original_text)!r} -> " \
+           f"{(a.insert_text if a else f.corrected_text)!r}"
+
+
+def _is_flagged(verdict: dict | None, flag_unsure: bool) -> bool:
+    """Whether a verdict withholds the change. One definition, shared by the
+    per-paragraph loop and the final fold, so the two can never disagree about
+    what 'held' means."""
+    if verdict is None:
+        return False
+    v = verdict.get("verdict")
+    return v == "withhold" or (flag_unsure and v == "unsure")
+
+
 class Judge:
     """One paragraph's changes in, verdicts out. `fetch` is pure — no shared
     state, no usage bookkeeping — so paragraphs judge concurrently and the caller
@@ -312,35 +431,65 @@ class Judge:
         self.system_prompt = "\n\n".join(parts)
         self.schema = strict_json_schema(_Verdicts)
 
-    def _render(self, para_text: str, findings: Sequence[Finding]) -> str:
+    def _render(self, para_text: str, findings: Sequence[Finding],
+                active: set[int] | None = None) -> str:
+        # Item numbers are GLOBAL (1-based over `findings`) so a verdict always
+        # lands on the same change whether it was asked in the first round or a
+        # later survivors-only one. `active` narrows which items are shown, never
+        # how they are numbered.
+        act = set(range(len(findings))) if active is None else set(active)
+        companions: dict[int, list[int]] = {}
+        joint: dict[int, tuple[str, str]] = {}
+        for coh in _cohorts(findings, para_text, act):
+            if len(coh) < 2:
+                continue                       # a lone change renders as it always did
+            before, after = _cohort_view(findings, coh, para_text)
+            for i in coh:
+                companions[i] = [j + 1 for j in coh if j != i]
+                joint[i] = (before, after)
         lines = [f"PARAGRAPH:\n{para_text}\n", "PROPOSED CHANGES:"]
-        for n, f in enumerate(findings, start=1):
+        for n, f in enumerate(findings):
+            if n not in act:
+                continue
             # Numbered, and deliberately bare: the error type and the rule that
             # produced the change are withheld, because naming them invites the
             # judge to re-litigate whether the change should have been made at
             # all — which earlier passes already settled — instead of answering
             # the one question asked here.
-            before, after = _change_view(f, para_text)
-            lines.append(
-                f"- item {n}\n"
-                f"  as written: {before!r}\n"
-                f"  as corrected: {after!r}")
+            if n in joint:
+                before, after = joint[n]
+                mates = ", ".join(str(c) for c in companions[n])
+                lines.append(
+                    f"- item {n + 1}\n"
+                    f"  as written: {before!r}\n"
+                    f"  as it will read: {after!r}\n"
+                    f"  item {n + 1} makes only this change: {_own_change(f)}\n"
+                    f"  applied together with item(s): {mates}")
+            else:
+                before, after = _change_view(f, para_text)
+                lines.append(
+                    f"- item {n + 1}\n"
+                    f"  as written: {before!r}\n"
+                    f"  as corrected: {after!r}")
         lines.append("\nReturn a verdict for every item number above.")
         return "\n".join(lines)
 
-    def fetch(self, para_text: str, findings: Sequence[Finding]):
+    def fetch(self, para_text: str, findings: Sequence[Finding],
+              active: set[int] | None = None):
         return self.provider.complete_structured(
             model=self.model, system=self.system_prompt,
-            user=self._render(para_text, findings),
+            user=self._render(para_text, findings, active),
             schema=self.schema, schema_name="verdicts",
             max_tokens=self.max_tokens)
 
-    def parse(self, result, findings: Sequence[Finding]) -> dict[int, dict]:
+    def parse(self, result, findings: Sequence[Finding],
+              active: set[int] | None = None) -> dict[int, dict]:
         """Verdicts keyed by 0-based offset into `findings`. A judge that
         refused, truncated, or returned junk yields nothing — the caller then
         leaves those changes exactly as they were, so a hiccup here can never
         silently withhold or drop a correction. An item number outside the list
-        it was given is dropped rather than wrapped around."""
+        it was given — or outside `active`, when a survivors-only round asked
+        about only some of it — is dropped rather than wrapped around."""
         if result.stop_reason != "ok" or result.parsed is None:
             log.error("%s: no usable answer for %d change(s): %s",
                       self.spec.label, len(findings),
@@ -352,8 +501,47 @@ class Judge:
             log.error("%s: answer did not match the schema: %s",
                       self.spec.label, e)
             return {}
+        act = set(range(len(findings))) if active is None else set(active)
         return {v.item - 1: v.model_dump()
-                for v in parsed.verdicts if 1 <= v.item <= len(findings)}
+                for v in parsed.verdicts
+                if 1 <= v.item <= len(findings) and v.item - 1 in act}
+
+
+def _judge_paragraph(judge: Judge, para_text: str, findings: Sequence[Finding],
+                     flag_unsure: bool):
+    """One paragraph's changes to a fixpoint. Returns (verdicts_by_index,
+    results) — the verdicts keyed by offset into `findings`, and every raw
+    result so the caller can bill each API call's usage serially.
+
+    Round one judges every change inside the sentence it will ship in. A cohort
+    that comes back MIXED — some kept, some held — is the one case joint
+    rendering does not settle on its own: the kept member was vouched for beside
+    a companion that is now being withdrawn, so it would ship into a sentence
+    that no longer holds together. Those survivors are re-judged with the held
+    members gone, and only those; the held set only grows, so this settles in a
+    couple of rounds (and is capped regardless, failing open on whatever
+    verdicts are in hand)."""
+    verdicts: dict[int, dict] = {}
+    results = []
+    kept = set(range(len(findings)))
+    to_judge = set(kept)
+    for _ in range(_MAX_COHORT_ROUNDS):
+        if not to_judge:
+            break
+        result = judge.fetch(para_text, findings, to_judge)
+        results.append(result)
+        verdicts.update(judge.parse(result, findings, to_judge))
+        held = {i for i in to_judge if _is_flagged(verdicts.get(i), flag_unsure)}
+        if not held:
+            break
+        kept -= held
+        recheck: set[int] = set()
+        for coh in _cohorts(findings, para_text, to_judge):
+            survivors = [i for i in coh if i not in held]
+            if survivors and any(i in held for i in coh):   # a mixed cohort
+                recheck.update(survivors)
+        to_judge = recheck & kept
+    return verdicts, results
 
 
 def _margin_note(f: Finding, reason: str) -> str:
@@ -400,21 +588,21 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
     # onto the caller's positions — no finding_id anywhere in the round trip.
     verdicts: dict[int, dict] = {}
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
-        pending = [(items, pool.submit(judge.fetch, para_text[pid],
-                                       [f for _, f in items]))
+        pending = [(items, pool.submit(_judge_paragraph, judge, para_text[pid],
+                                       [f for _, f in items], flag_unsure))
                    for pid, items in by_para.items()]
         for items, fut in pending:   # fold serially: usage.add is not thread-safe
-            result = fut.result()
-            usage.add(result.usage, model=model)
-            for offset, v in judge.parse(result, [f for _, f in items]).items():
+            para_verdicts, results = fut.result()
+            for r in results:        # a paragraph may take more than one call
+                usage.add(r.usage, model=model)
+            for offset, v in para_verdicts.items():
                 verdicts[items[offset][0]] = v
 
-    flagged = {"withhold"} | ({"unsure"} if flag_unsure else set())
     withheld: list[Finding] = []
     positions: list[int] = []
     for pos, f in enumerate(findings):
         v = verdicts.get(pos)
-        if v is None or v["verdict"] not in flagged:   # fail open on no answer
+        if not _is_flagged(v, flag_unsure):            # fail open on no answer
             continue
         reason = (v.get("reason") or "").strip()
         note = reason or (spec.withhold_note if v["verdict"] == "withhold"
