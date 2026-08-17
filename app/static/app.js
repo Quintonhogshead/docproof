@@ -6330,6 +6330,10 @@ function applyDrawer() {
   });
   drawer.hidden = !x;
   layout.classList.toggle('with-drawer', !!x);
+  // Widen the whole Automations surface while a drawer is open, so the table
+  // keeps every column beside the drawer instead of shrinking under it.
+  const screen = $('screen-watch');
+  if (screen) screen.classList.toggle('wf-wide', !!x);
   if (x) {
     $('wf-drawer-title').textContent = x.name;
     $('wf-drawer-sub').textContent = x.trigger.text + ' → ' + x.effect;
