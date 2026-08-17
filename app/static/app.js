@@ -105,63 +105,142 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   if (corr) corr.addEventListener('input', renderCost);
 })();
 
-// Reading an author's redlined Word file or a plain list into the corrections
-// textarea. Both produce a draft edit list a person reviews before applying —
-// the model (list path only) proposes; nothing is applied here.
+// Reading a marked-up PDF proof, an author's redlined Word file, or a plain
+// list into the corrections textarea. Each produces a draft edit list a person
+// reviews before applying — the model (PDF and list paths) proposes; nothing is
+// applied here. The status card reports the read as it happens, prominently.
 (() => {
+  const statusEl = $('corrections-extract-status');
   const note = $('corrections-extract-note');
-  if (!note) return;
-  const say = (msg) => { note.textContent = msg; note.hidden = false; };
-  const fill = (body) => {
+  if (!statusEl || !note) return;
+  const progressEl = $('corrections-extract-progress');
+  const bar = $('corrections-extract-bar');
+
+  // The status card: a headline line, and (during a batched read) a progress
+  // bar. Tone colours the left edge — '' working, 'done', 'error' — so the copy
+  // itself needn't carry the whole signal.
+  const show = (msg, tone = '') => {
+    note.textContent = msg;
+    statusEl.hidden = false;
+    statusEl.classList.toggle('is-done', tone === 'done');
+    statusEl.classList.toggle('is-error', tone === 'error');
+  };
+  const setProgress = (done, total) => {
+    if (!progressEl || !bar) return;
+    if (!total) { progressEl.hidden = true; return; }
+    progressEl.hidden = false;
+    bar.style.width = `${Math.round((done / total) * 100)}%`;
+  };
+  const hideProgress = () => { if (progressEl) progressEl.hidden = true; };
+
+  const setEdits = (edits) => {
     const ta = $('corrections-input');
-    ta.value = body.json;
+    ta.value = JSON.stringify(edits, null, 2);
     ta.dispatchEvent(new Event('input', { bubbles: true }));   // re-gate Start
-    const bits = [`${body.count} correction${body.count === 1 ? '' : 's'} read`];
-    if (body.issues && body.issues.length) {
-      bits.push(`${body.issues.length} couldn’t be read (`
-        + body.issues.map((i) => i.reason).slice(0, 2).join('; ') + ')');
+  };
+  const plural = (n) => (n === 1 ? '' : 's');
+  const summarise = (count, issues, noun) => {
+    const bits = [`${count} correction${plural(count)} read${noun ? ` ${noun}` : ''}`];
+    if (issues && issues.length) {
+      bits.push(`${issues.length} couldn’t be read (`
+        + issues.map((i) => i.reason).slice(0, 2).join('; ') + ')');
     }
     bits.push('review below, then Apply corrections');
-    say(bits.join(' · '));
+    show(bits.join(' · '), 'done');
+    hideProgress();
   };
 
-  // A file-upload extractor (PDF proof or redlined Word file): both POST the
-  // file and drop the resulting edit list into the textarea.
-  const fileExtract = (btnId, inputId, endpoint, chooseMsg) => {
-    const btn = $(btnId);
-    if (!btn) return;
-    btn.addEventListener('click', async () => {
-      const file = (($(inputId) || {}).files || [])[0];
-      if (!file) { say(chooseMsg); return; }
-      const label = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Reading…';
-      try {
-        const body = new FormData();
-        body.append('file', file);
-        fill(await api(endpoint, { method: 'POST', body }));
-      } catch (e) { say(e.message); }
-      finally { btn.disabled = false; btn.textContent = label; }
-    });
+  // A single-call read (Word file or plain list): drop the list in and summarise.
+  const fillFromBody = (body) => {
+    setEdits(JSON.parse(body.json));
+    summarise(body.count, body.issues, '');
   };
-  fileExtract('extract-pdf', 'corrections-pdf',
-    '/api/corrections/extract-pdf', 'Choose a PDF proof first.');
-  fileExtract('extract-docx', 'corrections-docx',
-    '/api/corrections/extract-docx', 'Choose a Word file first.');
 
+  // Reading a marked-up PDF is two-phase: the server pulls the comments
+  // (instant, free) and hands back bounded batches; we read each batch into
+  // edits in turn, filling the textarea and climbing the bar as they land. A big
+  // proof that once hung on one silent call — and, past the model's output
+  // ceiling, truncated and lost every edit — now fills in steadily and cannot
+  // truncate. A batch that fails leaves the edits read so far in place.
+  const readPdf = async () => {
+    const btn = $('extract-pdf');
+    const file = (($('corrections-pdf') || {}).files || [])[0];
+    if (!file) { show('Choose a PDF proof first.', 'error'); return; }
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Reading…';
+    const edits = [];
+    const issues = [];
+    try {
+      show('Reading the proof…');
+      setProgress(0, 1);
+      const form = new FormData();
+      form.append('file', file);
+      const { count, batches } = await api('/api/corrections/read-pdf',
+        { method: 'POST', body: form });
+      for (let i = 0; i < batches.length; i += 1) {
+        setProgress(i, batches.length);
+        show(`Reading ${count} comment${plural(count)}… batch ${i + 1} of `
+          + `${batches.length} · ${edits.length} edit${plural(edits.length)} so far`);
+        // Sequential on purpose: the bar climbs a batch at a time, and each
+        // small call is safe on its own. eslint-disable-next-line no-await-in-loop
+        const part = await api('/api/corrections/extract-list', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text: batches[i] }),
+        });
+        edits.push(...JSON.parse(part.json));
+        if (part.issues) issues.push(...part.issues);
+        setEdits(edits);                      // fill live so the count is seen to grow
+      }
+      setProgress(batches.length, batches.length);
+      summarise(edits.length, issues, `from ${count} comment${plural(count)}`);
+    } catch (e) {
+      const kept = edits.length
+        ? ` ${edits.length} edit${plural(edits.length)} read so far are below — `
+          + 'try Read the PDF again to finish.'
+        : '';
+      show(`${e.message}${kept}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  };
+  const pdfBtn = $('extract-pdf');
+  if (pdfBtn) pdfBtn.addEventListener('click', readPdf);
+
+  // A redlined Word file: deterministic, one call, no cost.
+  const docxBtn = $('extract-docx');
+  if (docxBtn) docxBtn.addEventListener('click', async () => {
+    const file = (($('corrections-docx') || {}).files || [])[0];
+    if (!file) { show('Choose a Word file first.', 'error'); return; }
+    const label = docxBtn.textContent;
+    docxBtn.disabled = true;
+    docxBtn.textContent = 'Reading…';
+    try {
+      show('Reading the Word file…');
+      const form = new FormData();
+      form.append('file', file);
+      fillFromBody(await api('/api/corrections/extract-docx',
+        { method: 'POST', body: form }));
+    } catch (e) { show(e.message, 'error'); }
+    finally { docxBtn.disabled = false; docxBtn.textContent = label; }
+  });
+
+  // A plain, free-form list read by the house model.
   const listBtn = $('extract-list');
   if (listBtn) listBtn.addEventListener('click', async () => {
     const text = (($('corrections-list-text') || {}).value || '').trim();
-    if (!text) { say('Paste a list of corrections first.'); return; }
+    if (!text) { show('Paste a list of corrections first.', 'error'); return; }
     const label = listBtn.textContent;
     listBtn.disabled = true;
     listBtn.textContent = 'Reading…';
     try {
-      fill(await api('/api/corrections/extract-list', {
+      show('Reading the list…');
+      fillFromBody(await api('/api/corrections/extract-list', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text }),
       }));
-    } catch (e) { say(e.message); }
+    } catch (e) { show(e.message, 'error'); }
     finally { listBtn.disabled = false; listBtn.textContent = label; }
   });
 })();

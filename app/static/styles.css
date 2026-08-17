@@ -410,6 +410,25 @@ textarea {
   100% { transform: translateX(320%); }
 }
 
+/* The corrections extractor's live status: a prominent card that reports the
+   read as it happens — how many comments were found, a batch progress bar, and
+   a plain-language result or error. Deliberately not muted: this is the one
+   place the panel tells the reviewer whether a big proof is actually moving. */
+.extract-status {
+  margin: 0.65rem 0 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.extract-note { margin: 0; font-size: 0.92rem; line-height: 1.4; color: var(--ink); font-weight: 500; }
+.extract-status.is-done { border-left-color: var(--ok); }
+.extract-status.is-error { border-left-color: var(--warn); background: transparent; }
+.extract-status.is-error .extract-note { color: var(--warn); }
+.extract-progress { height: 6px; background: var(--line); border-radius: 999px; margin: 0.55rem 0 0; overflow: hidden; }
+.extract-progress-bar { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+
 /* The step tracker: the whole pipeline a review walks, finished steps checked
    off, the current one lit with its quip. See stageTracker in app.js. */
 .stages { list-style: none; margin: 0.7rem 0 0; padding: 0;

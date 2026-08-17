@@ -300,3 +300,55 @@ def test_a_non_pdf_upload_to_extract_pdf_is_refused(client):
     r = client.post("/api/corrections/extract-pdf",
                     files={"file": ("notes.txt", b"not a pdf")})
     assert r.status_code == 400 and "PDF" in r.json()["detail"]
+
+
+def test_read_pdf_hands_back_batches_and_costs_nothing(client, monkeypatch,
+                                                       tmp_path):
+    """The first, deterministic half of the panel's read: the comments are
+    pulled and split into bounded batches, with no model call at all — a big
+    proof splits so the panel can read it a batch at a time."""
+    # One comment per batch, so the two-comment proof yields two batches.
+    monkeypatch.setattr("app.routes.jobs.CORRECTIONS_PDF_BATCH_SIZE", 1)
+    # A provider would raise if anything tried to call the model here.
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda *a, **k: pytest.fail("read-pdf must not call a model"))
+    pdf = _proof(tmp_path / "proof.pdf")
+    with pdf.open("rb") as fh:
+        r = client.post("/api/corrections/read-pdf",
+                        files={"file": ("proof.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    assert len(body["batches"]) == 2
+    assert all("comment:" in b for b in body["batches"])
+
+
+def test_extract_pdf_reads_a_big_proof_in_bounded_batches(client, monkeypatch,
+                                                          tmp_path):
+    """The truncation fix: a proof whose comments exceed one batch is read in
+    several bounded model calls, and the edits accumulate across them — so a
+    large mark-up can't overrun the output ceiling and silently lose everything.
+    Here batch size 1 forces one call per comment; both edits come back."""
+    monkeypatch.setattr("app.routes.jobs.CORRECTIONS_PDF_BATCH_SIZE", 1)
+    provider = FakeProvider([
+        ProviderResult(parsed={"edits": [
+            {"find": "fish oil", "replace": "petroleum jelly", "instruction": "",
+             "kind": "mechanical", "occurrence": 0}]},
+            usage=NormalizedUsage(input_tokens=200, output_tokens=40)),
+        ProviderResult(parsed={"edits": [
+            {"find": "tobacco", "replace": "candlestick", "instruction": "",
+             "kind": "mechanical", "occurrence": 0}]},
+            usage=NormalizedUsage(input_tokens=200, output_tokens=40))])
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda cfg, api_key=None: provider)
+    pdf = _proof(tmp_path / "proof.pdf")
+    with pdf.open("rb") as fh:
+        r = client.post("/api/corrections/extract-pdf",
+                        files={"file": ("proof.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2                       # accumulated across two calls
+    non_batch_calls = [c for c in provider.calls if not c.get("batch")]
+    assert len(non_batch_calls) == 2                # one model call per batch

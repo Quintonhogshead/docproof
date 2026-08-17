@@ -185,6 +185,22 @@ def comments_source(comments: list[PdfComment]) -> str:
     return "\n".join(lines)
 
 
+def comments_source_batches(comments: list[PdfComment],
+                            batch_size: int = 40) -> list[str]:
+    """The comments split into batches, each formatted as its own corrections
+    source. A marked-up proof can carry hundreds of comments; turning them all
+    into edits in one model call overruns the output ceiling and truncates —
+    silently losing every edit, since a half-finished structured reply parses as
+    nothing. Reading a bounded batch at a time keeps each call small, fast and
+    safe, and lets the caller show progress. Each batch re-states the framing
+    header (via `comments_source`) so it stands alone; the per-batch numbering
+    restarts, which is fine — the numbers are only the model's local reference."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    return [comments_source(comments[i:i + batch_size])
+            for i in range(0, len(comments), batch_size)]
+
+
 def pdf_corrections_source(path: str | Path) -> tuple[str, list[PdfComment]]:
     """Read a commented PDF and return (source-text-for-the-extractor, comments).
     The text is empty when the PDF carries no comments."""

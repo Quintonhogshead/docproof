@@ -18,7 +18,7 @@ prep's subject detection does, so it works on whichever model the caller wired.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
@@ -113,3 +113,33 @@ def extract_edits(source_text: str, provider: Provider, *, model: str,
     # {"edits": [...]} wrapper the schema produces, so validation lands in one
     # place whether a list was typed or extracted.
     return parse_edits(result.parsed)
+
+
+def extract_edits_batched(sources: Sequence[str], provider: Provider, *,
+                          model: str, usage: Usage,
+                          max_tokens: int = MAX_OUTPUT_TOKENS,
+                          progress: Callable[[int, int, ParseResult], None]
+                          | None = None) -> ParseResult:
+    """Extract several bounded corrections sources in turn, concatenated into one
+    `ParseResult`. Each source is read by its own model call, so no single call
+    can overrun the output ceiling and truncate — the failure mode that silently
+    dropped every edit when a large proof was read in one shot.
+
+    Edits keep their source order (batch 1's edits, then batch 2's, …), which is
+    the order the reviewer expects. `usage` accrues across all calls. A batch
+    that fails raises `ExtractionError` as the single-call form does — the caller
+    decides whether to surface a partial result; the batches read so far are not
+    lost, because the caller drives the loop when it wants per-batch recovery.
+    `progress(done, total, cumulative)` is called after each batch."""
+    all_edits: list = []
+    all_issues: list = []
+    total = len(sources)
+    for i, src in enumerate(sources, 1):
+        result = extract_edits(src, provider, model=model, usage=usage,
+                               max_tokens=max_tokens)
+        all_edits.extend(result.edits)
+        all_issues.extend(result.issues)
+        if progress is not None:
+            progress(i, total,
+                     ParseResult(edits=tuple(all_edits), issues=tuple(all_issues)))
+    return ParseResult(edits=tuple(all_edits), issues=tuple(all_issues))
