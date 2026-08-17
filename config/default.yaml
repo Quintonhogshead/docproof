@@ -34,6 +34,7 @@ prep:
   style_sheet: prep/house_styles.yaml
   tagging_prompt: prep/tagging.yaml
   book_design: prep/book_design.yaml  # the interior look of the book output
+  indesign_template: prep/house_template.idml  # the IDML the "indesign" output fills
   max_paragraphs_per_window: 120   # one request per window
   token_budget: 6000               # ...whichever limit comes first
   context_paragraphs: 8            # already-labelled paragraphs sent for continuity

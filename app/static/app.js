@@ -3168,37 +3168,17 @@ function handOver(job, which, note) {
   });
 }
 
-// The last manual step, done for you: open the house template, flow the tagged
-// manuscript in, save the result beside everything else this job wrote.
-function placeButton(job, note) {
+// The InDesign file opens with the whole book in one primary frame; InDesign
+// reflows on edit, not on open, so the designer runs this one-time script once
+// to thread it across pages. A plain download — it installs into the Scripts
+// panel, and the file itself carries the install steps in its header comment.
+function reflowButton() {
   const button = document.createElement('button');
-  button.textContent = 'Place into the InDesign template';
-  button.addEventListener('click', async () => {
-    button.disabled = true;
-    note.className = 'action-note muted';
-    note.textContent = 'Placing — this takes a minute, longer if InDesign is '
-      + 'still starting up. InDesign will open.';
-    note.hidden = false;
-    try {
-      const { filename } = await api(`/api/jobs/${job.id}/place`,
-                                     { method: 'POST' });
-      note.className = 'action-note ok';
-      note.textContent = `Placed. ${filename} is in the same folder, and it is `
-        + 'showing in the Finder.';
-    } catch (err) {
-      note.className = 'action-note error';
-      note.textContent = err.message;
-      // The one failure with somewhere to go: no template chosen yet.
-      if (/Settings/.test(err.message)) {
-        const go = document.createElement('button');
-        go.textContent = 'Open Settings';
-        go.className = 'link';
-        go.addEventListener('click', () => show('settings'));
-        note.append(' ', go);
-      }
-    } finally {
-      button.disabled = false;
-    }
+  button.textContent = 'Get the one-time reflow script';
+  button.title = 'Install once in InDesign (Scripts panel), then run it with '
+    + 'a DocProof file open to flow the book across pages.';
+  button.addEventListener('click', () => {
+    window.location.href = '/api/prep/reflow-script';
   });
   return button;
 }
@@ -3399,8 +3379,9 @@ function prepActions(job) {
   }
   if (wrote.includes('indesign')) {
     actions.append(openButton(job, 'indesign',
-      WEB ? 'Download the InDesign-ready file' : 'Open the file for InDesign',
+      WEB ? 'Download the InDesign file (IDML)' : 'Open the file in InDesign',
       note));
+    actions.append(reflowButton());
   }
   if (wrote.includes('tracked')) {
     actions.append(openButton(job, 'tracked',
@@ -3418,8 +3399,6 @@ function prepActions(job) {
   if (!WEB) {
     actions.append(
       openButton(job, first, 'Show in Finder', note, { reveal: true }));
-    // Placing needs InDesign on a Mac; there is none behind a web build.
-    if (wrote.includes('indesign')) actions.append(placeButton(job, note));
   }
 
   const bits = [];

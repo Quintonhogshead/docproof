@@ -28,13 +28,17 @@ from .styles import StyleSheet, load_style_sheet
 from .tagger import (Tagger, TaggingPrompt, load_tagging_prompt, render_window)
 from .verify import Verification, VerificationFailed, verify_output
 from .writers.book import write_book
-from .writers.clean import WriteStats, write_clean
+from .writers.clean import WriteStats
+from .writers.indesign_idml import (discover_body_story, verify_idml,
+                                    write_indesign_idml)
 from .writers.tracked import write_tracked
 
 log = logging.getLogger("docproof.prep.pipeline")
 
 OUTPUT_KINDS = ("book", "indesign", "tracked")
 _PREFIXES = {"book": "book_", "indesign": "tagged_", "tracked": "tracked_"}
+# The InDesign output is an IDML the designer opens; the other two are .docx.
+_EXTENSIONS = {"book": ".docx", "indesign": ".idml", "tracked": ".docx"}
 # One label per paragraph, and the paragraph id is most of it.
 OUTPUT_TOKENS_PER_PARAGRAPH = 25
 
@@ -47,6 +51,7 @@ class PreparedPrep:
     prompt: TaggingPrompt
     windows: list[Window]
     design: BookDesign | None = None
+    indesign_template: Path | None = None
     system_tokens: int = 0
 
     @property
@@ -91,6 +96,19 @@ def resolve(config_dir: str | Path, value: str) -> Path:
     return path if path.is_absolute() else Path(config_dir) / path
 
 
+def _resolve_template(cfg: Config, config_dir: str | Path,
+                      override_dir: str | Path | None) -> Path:
+    """The house IDML template, preferring a publisher's drop-in replacement —
+    the same override rule the style sheet uses, so a house that has its own
+    real template swaps it in without a code change."""
+    shipped = resolve(config_dir, cfg.prep.indesign_template)
+    if override_dir:
+        replacement = Path(override_dir) / shipped.name
+        if replacement.is_file():
+            return replacement
+    return shipped
+
+
 def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
             override_dir: str | Path | None = None) -> PreparedPrep:
     """Open the manuscript, read every paragraph, and load the house style set.
@@ -105,10 +123,12 @@ def prepare(cfg: Config, input_path: str | Path, *, config_dir: str | Path,
                                  override_dir=override_dir)
     design = load_book_design(resolve(config_dir, cfg.prep.book_design),
                               override_dir=override_dir)
+    template = _resolve_template(cfg, config_dir, override_dir)
     tagger = _tagger(cfg, sheet, prompt, provider=None)
     prepared = PreparedPrep(
         pkg=pkg, structure=structure, sheet=sheet, prompt=prompt,
         windows=tagger.plan_windows(structure), design=design,
+        indesign_template=template,
         system_tokens=estimate_tokens(tagger.system_prompt))
     log.info("Prep ready: %d paragraphs, %d window(s), style sheet '%s'.",
              prepared.paragraph_count, prepared.request_count, sheet.name)
@@ -203,20 +223,44 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
     failures: list[str] = []
 
     for kind in kinds:
-        path = out / f"{_prefix(kind)}{stem}.docx"
+        path = out / f"{_prefix(kind)}{stem}{_EXTENSIONS[kind]}"
         # A fresh package per file: the writers mutate in place, and the
         # tracked file has to start from the manuscript, not from the clean
         # one.
         pkg = DocxPackage(Path(prepared.structure.source_path))
+
+        # The InDesign output is an IDML, written from a copy of the house
+        # template rather than saved as a .docx — but built by running the same
+        # verified clean transform first, so it says exactly what the clean
+        # .docx would. Its verification reads the author's words back out of the
+        # IDML instead of a .docx.
+        if kind == "indesign":
+            template = prepared.indesign_template
+            if template is None or not Path(template).is_file():
+                failures.append(
+                    "The InDesign output needs the house template; "
+                    "cfg.prep.indesign_template did not resolve to a file.")
+                continue
+            stats[kind] = write_indesign_idml(
+                pkg, prepared.structure, plan, prepared.sheet, path,
+                template_path=template,
+                strip_formatting=cfg.prep.strip_direct_formatting)
+            if not cfg.prep.verify:
+                written[kind] = path
+                continue
+            try:
+                checks.extend(verify_idml(prepared.structure, path, plan.glyph,
+                                          discover_body_story(template)))
+                written[kind] = path
+            except VerificationFailed as e:
+                path.unlink(missing_ok=True)
+                failures.append(str(e))
+            continue
+
         if kind == "book":
             stats[kind] = write_book(
                 pkg, prepared.structure, plan, prepared.sheet,
                 prepared.design, book_meta,
-                strip_formatting=cfg.prep.strip_direct_formatting)
-            views = ("clean",)
-        elif kind == "indesign":
-            stats[kind] = write_clean(
-                pkg, prepared.structure, plan, prepared.sheet,
                 strip_formatting=cfg.prep.strip_direct_formatting)
             views = ("clean",)
         else:

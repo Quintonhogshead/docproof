@@ -95,7 +95,7 @@ def test_prep_produces_a_tagged_file_and_its_notes(client):
     assert job["flags"] >= 1                      # the byline the model raised
 
     results = Path(job["results_dir"])
-    assert (results / "tagged_googledoc.docx").is_file()
+    assert (results / "tagged_googledoc.idml").is_file()
     assert (results / "prep_notes.md").is_file()
     assert not (results / "tracked_googledoc.docx").exists()
 
@@ -103,13 +103,13 @@ def test_prep_produces_a_tagged_file_and_its_notes(client):
 def test_the_output_toggle_decides_which_files_are_written(client):
     both = start_prep(client, upload(client)["id"], output="both")
     results = Path(both["results_dir"])
-    assert (results / "tagged_googledoc.docx").is_file()
+    assert (results / "tagged_googledoc.idml").is_file()
     assert (results / "tracked_googledoc.docx").is_file()
 
     tracked = start_prep(client, upload(client)["id"], output="tracked")
     results = Path(tracked["results_dir"])
     assert (results / "tracked_googledoc.docx").is_file()
-    assert not (results / "tagged_googledoc.docx").exists()
+    assert not (results / "tagged_googledoc.idml").exists()
 
 
 def test_the_book_output_writes_the_reading_copy(client):
@@ -122,7 +122,7 @@ def test_the_book_output_writes_the_reading_copy(client):
     assert job["verified"] is True
     results = Path(job["results_dir"])
     assert (results / "book_googledoc.docx").is_file()
-    assert not (results / "tagged_googledoc.docx").exists()
+    assert not (results / "tagged_googledoc.idml").exists()
     # The merged answers the sketch was built with, for the panel.
     assert job["prep_book"]["subject"] == "fantasy"
     assert job["prep_book"]["title"] == "Witch in the Wall"
@@ -158,7 +158,7 @@ def test_prep_is_never_queued_overnight(client):
 
 def test_both_files_are_downloadable_by_name(client):
     job = start_prep(client, upload(client)["id"], output="both")
-    for which, expected in (("indesign", "tagged_googledoc.docx"),
+    for which, expected in (("indesign", "tagged_googledoc.idml"),
                             ("tracked", "tracked_googledoc.docx"),
                             ("notes", "prep_notes.md")):
         r = client.get(f"/api/jobs/{job['id']}/file/{which}")
@@ -237,86 +237,43 @@ def test_dropping_in_your_own_style_guide_replaces_the_shipped_one(client):
     assert notes["style_sheet"]["name"] == "Riverbend Books"
 
 
-# --- placing into the InDesign template ----------------------------------------
+# --- opening the InDesign (IDML) file ------------------------------------------
 
-@pytest.fixture
-def indesign(client, monkeypatch, tmp_path):
-    """A Mac with InDesign on it, and a placer that writes the file it claims
-    to have written. No application is started."""
-    template = tmp_path / "House prose.indd"
-    template.write_bytes(b"template")
-    client.app_state.settings.indesign_template = str(template)
-
-    calls = []
-    monkeypatch.setattr("docproof.prep.place.find_indesign", lambda: "/Applications/ID.app")
+def test_opening_the_indesign_file_opens_the_idml(client, monkeypatch):
+    """The InDesign deliverable is an IDML that IS the placed document — InDesign
+    turns it into an INDD on open — so there is no Place step. 'place' just opens
+    the .idml; no template, no InDesign automation."""
+    opened = []
     monkeypatch.setattr("app.routes.common.open_path",
-                        lambda path, *, reveal=False: None)
-    monkeypatch.setattr("sys.platform", "darwin")
-
-    def fake_place(tpl, tagged, out):
-        calls.append({"template": Path(tpl), "tagged": Path(tagged),
-                      "out": Path(out)})
-        Path(out).write_bytes(b"an InDesign document")
-        return Path(out)
-
-    monkeypatch.setattr("docproof.prep.place.place_into_template", fake_place)
-    return calls
-
-
-def test_placing_hands_indesign_the_template_and_the_tagged_file(client,
-                                                                 indesign):
+                        lambda path, *, reveal=False: opened.append(Path(path)))
     job = start_prep(client, upload(client)["id"])
     resp = client.post(f"/api/jobs/{job['id']}/place")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["filename"] == "placed_googledoc.indd"
-
-    call, = indesign
-    assert call["template"].name == "House prose.indd"
-    assert call["tagged"].name == "tagged_googledoc.docx"
-    # It lands beside everything else this job wrote, not in a temp folder.
-    assert call["out"].parent == Path(job["results_dir"])
-    assert call["out"].is_file()
+    assert resp.json()["filename"] == "tagged_googledoc.idml"
+    assert opened and opened[0].name == "tagged_googledoc.idml"
+    # It opens the file this job wrote, in place.
+    assert opened[0].parent == Path(job["results_dir"])
 
 
-def test_placing_without_a_template_points_at_settings(client, indesign):
-    client.app_state.settings.indesign_template = ""
-    job = start_prep(client, upload(client)["id"])
-    resp = client.post(f"/api/jobs/{job['id']}/place")
-    assert resp.status_code == 400
-    assert "Settings" in resp.json()["detail"]
-    assert not indesign
-
-
-def test_a_template_that_has_moved_says_so(client, indesign):
-    client.app_state.settings.indesign_template = "/nowhere/House.indd"
-    job = start_prep(client, upload(client)["id"])
-    resp = client.post(f"/api/jobs/{job['id']}/place")
-    assert resp.status_code == 400 and "/nowhere/House.indd" in resp.json()["detail"]
-
-
-def test_a_review_job_cannot_be_placed(client, indesign):
-    """Placing is the end of prep. A reviewed document has nothing to flow."""
+def test_a_review_job_has_no_indesign_file(client):
+    """A reviewed document was never prepared for layout, so there is nothing
+    to open in InDesign."""
     staged = upload(client)
     job = client.post("/api/jobs", json={"file_ids": [staged["id"]],
                                          "model": "claude-haiku-4-5",
                                          "mode": "now"}).json()["jobs"][0]
     client.app_state.runner.wait_idle()
     resp = client.post(f"/api/jobs/{job['id']}/place")
-    assert resp.status_code == 400 and "prepared for layout" in resp.json()["detail"]
+    assert resp.status_code == 400 and "prepared" in resp.json()["detail"]
 
 
-def test_what_indesign_said_went_wrong_reaches_the_user(client, indesign,
-                                                        monkeypatch):
-    from docproof.prep.place import PlaceError
-
-    def boom(*a, **k):
-        raise PlaceError("InDesign reported: The template is locked.")
-
-    monkeypatch.setattr("docproof.prep.place.place_into_template", boom)
-    job = start_prep(client, upload(client)["id"])
-    resp = client.post(f"/api/jobs/{job['id']}/place")
-    assert resp.status_code == 400
-    assert "The template is locked." in resp.json()["detail"]
+def test_the_reflow_script_is_downloadable(client):
+    """The one-time reflow script the designer installs to flow the book across
+    pages after opening the IDML."""
+    resp = client.get("/api/prep/reflow-script")
+    assert resp.status_code == 200
+    assert "DocProof-reflow.jsx" in resp.headers["content-disposition"]
+    assert "nextTextFrame" in resp.text and "Reflow" in resp.text
 
 
 def test_the_template_is_remembered_between_launches(client, tmp_path):
@@ -404,8 +361,8 @@ def test_the_styles_come_back_with_the_formatting_to_adjust(client):
 
 
 def test_adjusting_a_style_reaches_the_tagged_document(client):
-    """The point of the sliders: a change made in Settings is in the .docx the
-    designer places, not just in a preference file."""
+    """The point of the sliders: a change made in Settings is in the IDML the
+    designer opens, not just in a preference file."""
     resp = client.put("/api/prep/styles/format", json={
         "styles": {"chapter # / title": {"size": 24, "space_before": 36}},
         "scene_break_glyph": "# # #"})
@@ -414,12 +371,12 @@ def test_adjusting_a_style_reaches_the_tagged_document(client):
     assert client.get("/api/prep/styles").json()["glyph"] == "# # #"
 
     job = start_prep(client, upload(client)["id"])
-    tagged = Path(job["results_dir"]) / "tagged_googledoc.docx"
+    tagged = Path(job["results_dir"]) / "tagged_googledoc.idml"
     with zipfile.ZipFile(tagged) as z:
-        styles_xml = z.read("word/styles.xml").decode("utf-8")
-    # Word measures type in half-points.
-    assert 'w:styleId="ChapterTitle"' in styles_xml
-    assert '<w:sz w:val="48"/>' in styles_xml
+        styles_xml = z.read("Resources/Styles.xml").decode("utf-8")
+    # The chapter style, by its house name, carries the adjusted 24pt size.
+    assert 'Name="chapter # / title"' in styles_xml
+    assert 'PointSize="24"' in styles_xml
 
 
 def test_adjusting_styles_never_touches_what_indesign_matches_on(client):

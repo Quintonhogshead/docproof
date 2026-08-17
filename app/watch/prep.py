@@ -45,6 +45,7 @@ from .state import FileRecord, WatchState
 log = logging.getLogger("docproof.app.watch.prep")
 
 MARKDOWN_MIME = "text/markdown"
+IDML_MIME = "application/vnd.adobe.indesign-idml-package"
 
 # appProperties allow about 124 bytes for a key and its value together. The
 # whole reason lives on the job record and in the log; what goes to Drive is
@@ -164,32 +165,41 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
 def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     """What of this run belongs in the folder, and what to call it there.
 
-    Prep writes internal names (`tagged_*.docx`, `tracked_*.docx`,
-    `prep_notes.md`); the folder belongs to people, so each is renamed to the
-    house stage series on the way out — `<surname> - book 0.docx` for the
-    InDesign-ready deliverable, with the tracked-changes copy and the notes
-    beside it under the same base (see `naming.py`).
+    Prep writes internal names (`book_*.docx`, `tagged_*.idml`,
+    `tracked_*.docx`, `prep_notes.md`); the folder belongs to people, so each is
+    renamed to the house stage series on the way out — `<surname> - book 0.*`
+    for the deliverable, with the companions beside it under the same base (see
+    `naming.py`).
 
-    The deliverable takes the bare base name. If a run made no InDesign-ready
-    file (a tracked-only prep), the tracked file takes it instead, so the folder
-    always has one `<base>.docx` to hand to the next stage."""
+    The deliverable takes the bare base name, by priority: the book-styled
+    reading copy, then the InDesign-ready IDML, then the redline — and it keeps
+    its own extension (`.docx` for the reading copy, `.idml` for the InDesign
+    file). Whatever is not the bare deliverable sits beside it under a suffix."""
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return []
     base = naming.format_base(Path(job.filename).stem or "manuscript")
     book = sorted(out.glob("book_*.docx"))
-    tagged = sorted(out.glob("tagged_*.docx"))
+    # The InDesign-ready deliverable is an IDML the designer opens, not a .docx.
+    tagged = sorted(out.glob("tagged_*.idml"))
     tracked = sorted(out.glob("tracked_*.docx"))
     found: list[Artifact] = []
-    # The book-styled reading copy outranks the InDesign-ready file, which
-    # outranks the redline; whatever exists first takes the bare base name.
-    primary = book or tagged or tracked
+    # The bare <base> deliverable, by priority, carrying its own extension.
+    if book:
+        primary = ("book", book[0], ".docx", DOCX_MIME)
+    elif tagged:
+        primary = ("indesign", tagged[0], ".idml", IDML_MIME)
+    elif tracked:
+        primary = ("tracked", tracked[0], ".docx", DOCX_MIME)
+    else:
+        primary = None
     if primary:
-        found.append(Artifact(primary[0], f"{base}.docx", DOCX_MIME))
-    if tagged and primary is not tagged:    # beside the book copy
+        _, path, ext, mime = primary
+        found.append(Artifact(path, f"{base}{ext}", mime))
+    if tagged and (primary is None or primary[0] != "indesign"):
         found.append(Artifact(tagged[0],
-                              f"{base}{naming.INDESIGN_SUFFIX}.docx", DOCX_MIME))
-    if tracked and primary is not tracked:  # the redline sits beside it
+                              f"{base}{naming.INDESIGN_SUFFIX}.idml", IDML_MIME))
+    if tracked and (primary is None or primary[0] != "tracked"):
         found.append(Artifact(tracked[0],
                               f"{base}{naming.TRACKED_SUFFIX}.docx", DOCX_MIME))
     notes = out / "prep_notes.md"

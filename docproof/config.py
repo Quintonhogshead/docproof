@@ -119,6 +119,12 @@ class PrepConfig(BaseModel):
     # heads, drop caps, and the subject-matter display fonts. Like the style
     # sheet, a file — a different look is a different YAML.
     book_design: str = "prep/book_design.yaml"
+    # The house InDesign template the "indesign" output flows the book into,
+    # as IDML — trim, margins, master pages and the primary text frame. Like the
+    # style sheet, a file: a different house look is a different template. The
+    # paragraph styles themselves are written in from the style sheet, so a bare
+    # template needs only the geometry.
+    indesign_template: str = "prep/house_template.idml"
     # A window is one request. The paragraph cap is what keeps the model from
     # skipping entries in a long list; the token budget is what keeps a window
     # of dense prose from being far bigger than a window of dialogue.

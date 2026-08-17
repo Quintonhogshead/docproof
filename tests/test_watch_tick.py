@@ -121,7 +121,8 @@ def test_asking_for_both_files_uploads_both(tmp_path, ws, provider):
 
     run(tmp_path, ws, opener)
 
-    assert "Wolves - book 0.docx" in uploads_in(opener)
+    # "both" is the InDesign IDML deliverable plus the tracked-changes redline.
+    assert "Wolves - book 0.idml" in uploads_in(opener)
     assert "Wolves - book 0 - tracked changes.docx" in uploads_in(opener)
 
 
@@ -267,7 +268,7 @@ def test_a_crash_between_two_uploads_only_sends_the_missing_ones(
     run(tmp_path, ws, opener)
 
     assert len(landed) == 1
-    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
+    assert set(uploads_in(opener)) == {"Wolves - book 0.idml",
                                        "Wolves - book 0 - tracked changes.docx",
                                        "Wolves - book 0 - notes.md"}
 
@@ -327,7 +328,10 @@ def eats_a_word(monkeypatch):
         return stats
 
     monkeypatch.setattr(clean_writer, "write_clean", writer)
-    monkeypatch.setattr("docproof.prep.pipeline.write_clean", writer)
+    # The InDesign writer binds write_clean at import; patch it there too so a
+    # drifted word is caught whichever output a run writes.
+    monkeypatch.setattr("docproof.prep.writers.indesign_idml.write_clean",
+                        writer)
 
 
 def test_a_file_whose_words_drifted_reaches_nobody(tmp_path, ws, provider,

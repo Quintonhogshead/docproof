@@ -37,9 +37,15 @@ The desktop `.app` is a separate thing (built with PyInstaller from
 - **In:** Word `.docx` uploads. **Out:** a tracked-changes `.docx` you download.
 - **Accounts** are individual and **created only by an administrator** — there
   is no public sign-up page.
-- **Not on the web build:** the InDesign "prepare for layout" step (it needs a
-  Mac with InDesign), the Google Drive watcher, and the desktop self-updater.
-  These are hidden automatically when running as the web build.
+- **Manuscript prep** produces the InDesign-ready file as an **IDML** the
+  designer opens directly (InDesign turns it into an INDD on open) — generated
+  server-side, no Adobe software on the box. After opening, the designer runs
+  the one-time **reflow script** (downloadable from the results screen) to flow
+  the book across pages, since InDesign only reflows on edit, not on open.
+- **Not on the web build:** the Google Drive watcher and the desktop
+  self-updater. These are hidden automatically when running as the web build.
+  (Opening the IDML and running the reflow script happen on the designer's own
+  Mac, not the server.)
 
 ---
 

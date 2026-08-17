@@ -7,6 +7,7 @@ to do nothing else to the author's text. Everything else is detail.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from lxml import etree
@@ -78,6 +79,42 @@ def styles_in(path) -> dict[str, str]:
         el = wp.element.find(f"{qn('w:pPr')}/{qn('w:pStyle')}")
         out[wp.para_id] = names.get(el.get(qn("w:val"))) if el is not None else None
     return out
+
+
+def idml_styles_in(path) -> list[str]:
+    """Applied paragraph-style NAMES, in document order, read from the IDML the
+    InDesign output now produces. The IDML carries no para_id, so this is a
+    list, not a map — the order is the assertion."""
+    import zipfile
+
+    from docproof.prep.writers.indesign_idml import discover_body_story
+    body_story = discover_body_story(path)
+    with zipfile.ZipFile(path) as z:
+        styles = etree.fromstring(z.read("Resources/Styles.xml"))
+        self_to_name = {e.get("Self"): e.get("Name")
+                        for e in styles.iter("ParagraphStyle")}
+        story = etree.fromstring(z.read(f"Stories/Story_{body_story}.xml"))
+    return [self_to_name.get(psr.get("AppliedParagraphStyle"),
+                             psr.get("AppliedParagraphStyle"))
+            for psr in story.iter("ParagraphStyleRange")]
+
+
+def clean_docx(cfg, prepared, tmp_path, canned=None):
+    """Run the clean transform straight and return the .docx it makes.
+
+    The InDesign deliverable is IDML now, but that IDML is built by running this
+    same clean transform first and transcoding it — so the docx-level cleanup
+    (blanks removed, edges trimmed, italics and link styles applied) is tested
+    here, on the transform itself, where those assertions are legible."""
+    from docproof.prep.writers.clean import write_clean
+    tags, _ = preplib.run_mock(prepared, canned)
+    plan = rules.build_plan(prepared.structure, tags, prepared.sheet)
+    pkg = DocxPackage(Path(prepared.structure.source_path))
+    write_clean(pkg, prepared.structure, plan, prepared.sheet,
+                strip_formatting=cfg.prep.strip_direct_formatting)
+    path = tmp_path / "clean.docx"
+    pkg.save(path)
+    return path
 
 
 # --- reading ------------------------------------------------------------------
@@ -163,15 +200,18 @@ def test_an_image_on_its_own_line_is_read_as_content_not_blank(tmp_path):
 
 
 def test_an_image_on_its_own_line_survives_the_clean_file(cfg, tmp_path):
-    """End to end: the drawing, the VML shape and the object are all still in the
-    InDesign-ready file, not removed as blank lines."""
+    """End to end: the drawing, the VML shape and the object are all still in a
+    .docx output, not removed as blank lines. Checked on the book output because
+    it keeps the manuscript's own objects; the InDesign (IDML) output is
+    text-only by design — images stay the designer's job — so it is not the
+    place to assert image survival."""
     prepared = preplib.prepare(cfg, _write_docx(tmp_path / "img.docx", _IMAGE_DOC),
                                config_dir=CONFIG_DIR)
     tags, usage = preplib.run_mock(prepared)
     outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
                              source_path=tmp_path / "img.docx",
-                             outputs=["indesign"])
-    body = DocxPackage(outputs.documents["indesign"]).tree("word/document.xml")
+                             outputs=["book"])
+    body = DocxPackage(outputs.documents["book"]).tree("word/document.xml")
     for tag in ("w:drawing", "w:pict", "w:object"):
         assert body.find(f".//{qn(tag)}") is not None, f"{tag} was dropped"
 
@@ -399,7 +439,7 @@ def test_a_tagged_contents_survives_verification(cfg, tmp_path):
                              source_path=FIXTURES / "toc.docx",
                              outputs=["indesign"])
     assert all(check.ok for check in outputs.verifications)
-    assert styles_in(outputs.documents["indesign"])[TOC_STYLED] == "toc entry"
+    assert "toc entry" in idml_styles_in(outputs.documents["indesign"])
 
 
 def test_a_manuscript_with_a_textbox_survives_verification(cfg, tmp_path):
@@ -426,18 +466,48 @@ def test_a_manuscript_with_a_textbox_survives_verification(cfg, tmp_path):
 
 def test_the_clean_file_is_tagged_end_to_end(cfg, prepared, tmp_path):
     outputs = run(cfg, prepared, tmp_path, REALISTIC)
-    applied = styles_in(outputs.documents["indesign"])
-    assert list(applied.values()) == [
+    applied = idml_styles_in(outputs.documents["indesign"])
+    assert applied == [
         "title page", "copyright", "chapter # / title", "body first",
         "body para", "scene break", "body first", "body para",
         "front/backmatter title", "body first"]
     approved = {s.name for s in prepared.sheet.styles}
-    assert set(applied.values()) <= approved       # no stray styles at all
+    assert set(applied) <= approved                 # no stray styles at all
+
+
+def test_the_indesign_output_is_a_valid_idml(cfg, prepared, tmp_path):
+    """The InDesign deliverable is a well-formed IDML package: mimetype first
+    and stored, every part well-formed XML, the house styles carry their
+    formatting, italics survive, and an inserted scene break is in the story."""
+    import zipfile
+
+    from docproof.prep.writers.indesign_idml import discover_body_story
+    path = run(cfg, prepared, tmp_path, REALISTIC).documents["indesign"]
+
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        assert names[0] == "mimetype"
+        assert z.getinfo("mimetype").compress_type == zipfile.ZIP_STORED
+        assert z.read("mimetype") == b"application/vnd.adobe.indesign-idml-package"
+        for name in names:                          # every XML part parses
+            if name.endswith(".xml"):
+                etree.fromstring(z.read(name))
+        styles = etree.fromstring(z.read("Resources/Styles.xml"))
+        by_name = {e.get("Name"): e for e in styles.iter("ParagraphStyle")}
+        story = z.read(f"Stories/Story_{discover_body_story(path)}.xml").decode()
+
+    # Body carries its first-line indent; the chapter head is centred and bold.
+    assert by_name["body para"].get("FirstLineIndent") == "18"
+    assert by_name["chapter # / title"].get("Justification") == "CenterAlign"
+    assert by_name["chapter # / title"].get("FontStyle") == "Bold"
+    # The author's one italic word survives as a local italic run.
+    assert 'FontStyle="Italic"' in story and "much" in story
+    # The inserted scene break is really in the text.
+    assert "***" in story
 
 
 def test_the_clean_file_is_cleaned_up(cfg, prepared, tmp_path):
-    outputs = run(cfg, prepared, tmp_path, REALISTIC)
-    pkg = DocxPackage(outputs.documents["indesign"])
+    pkg = DocxPackage(clean_docx(cfg, prepared, tmp_path, REALISTIC))
     body = pkg.tree(BODY_PART)
     texts = [paragraph_text(p) for p in body.iter(qn("w:p"))]
     assert not any(t.strip() == "" for t in texts)          # blanks gone
@@ -448,8 +518,7 @@ def test_the_clean_file_is_cleaned_up(cfg, prepared, tmp_path):
 
 
 def test_italics_and_links_survive_the_cleanup(cfg, prepared, tmp_path):
-    outputs = run(cfg, prepared, tmp_path, REALISTIC)
-    pkg = DocxPackage(outputs.documents["indesign"])
+    pkg = DocxPackage(clean_docx(cfg, prepared, tmp_path, REALISTIC))
     body = pkg.tree(BODY_PART)
     italics = [t.text for t in body.iter(qn("w:t"))
                if t.getparent().find(f"{qn('w:rPr')}/{qn('w:i')}") is not None]
@@ -533,11 +602,14 @@ def test_a_file_whose_words_drifted_is_not_shipped(cfg, prepared, tmp_path,
         return stats
 
     monkeypatch.setattr(clean_writer, "write_clean", eats_a_word)
-    monkeypatch.setattr("docproof.prep.pipeline.write_clean", eats_a_word)
+    # The InDesign writer bound write_clean at import; patch it there too, since
+    # that is the path the "indesign" output runs through.
+    monkeypatch.setattr("docproof.prep.writers.indesign_idml.write_clean",
+                        eats_a_word)
 
     with pytest.raises(preplib.VerificationFailed, match="word 2[0-9]"):
         run(cfg, prepared, tmp_path, REALISTIC)
-    assert not (tmp_path / "tagged_googledoc.docx").exists()
+    assert not (tmp_path / "tagged_googledoc.idml").exists()
     # The notes are still written: they are how anyone finds out what happened.
     assert "Nothing was shipped" in (tmp_path / "prep_notes.md").read_text("utf-8")
 

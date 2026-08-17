@@ -15,8 +15,6 @@ from typing import get_args
 from docproof import batch as batchlib
 from docproof.config import SmoothingConfig, load_config
 from docproof.formats import get_format
-from docproof.prep import place as placelib
-from docproof.prep.place import PlaceError
 from docproof.providers import estimate_cost, lookup
 from docproof.variants import VARIANT_KEYS
 
@@ -144,7 +142,9 @@ def _result_name(job: Job, which: str) -> str | None:
         "summary": "summary.md",
         "findings": "findings.json",
         "book": f"book_{stem}.docx",
-        "indesign": f"tagged_{stem}.docx",
+        # The InDesign deliverable is now an IDML the designer opens directly —
+        # no Place step. (Kept name "indesign" so existing buttons/routing work.)
+        "indesign": f"tagged_{stem}.idml",
         "tracked": f"tracked_{stem}.docx",
         "notes": "prep_notes.md",
         "prep": "prep.json",
@@ -790,43 +790,40 @@ def register(app: FastAPI) -> None:
     @app.post("/api/jobs/{job_id}/place")
     def place_in_indesign(job_id: str,
                           owner: str = Depends(owner_for)) -> dict:
-        """Flow a finished prep job into the house template.
+        """Open the InDesign deliverable.
 
-        Synchronous on purpose. This takes a minute and the user is watching
-        InDesign do it — a job that reported back later would be stranger than
-        a button that waits."""
+        The InDesign output is now an IDML that *is* the placed document —
+        InDesign turns it into an INDD on open — so there is no separate Place
+        step to run. On the desktop this just opens the file in InDesign; the
+        web build hands the .idml over as a download instead (this endpoint is
+        desktop-only)."""
         job = _owned_job(job_id, owner)
         if job is None or not job.results_dir:
             raise HTTPException(404, "No results for this job yet")
         if not job.is_prep:
             raise HTTPException(
-                400, "Only a manuscript prepared for layout can be placed.")
+                400, "Only a prepared manuscript has an InDesign file.")
         if job.state != "done":
             raise HTTPException(400, "This one is not finished yet.")
-        tagged = _result_path(job, "indesign")
+        idml = _result_path(job, "indesign")
+        common.open_path(idml, reveal=True)
+        return {"ok": True, "filename": idml.name, "path": str(idml)}
 
-        template = (app.state.settings.indesign_template or "").strip()
-        if not template:
-            raise HTTPException(
-                400, "Choose your InDesign template in Settings first — "
-                     "DocProof places the manuscript into a copy of it.")
-        if not Path(template).is_file():
-            raise HTTPException(
-                400, f"The template is not at {template} any more. Set it "
-                     f"again in Settings.")
-        if sys.platform != "darwin":
-            raise HTTPException(501, "Placing needs InDesign on a Mac.")
-        if placelib.find_indesign() is None:
-            raise HTTPException(
-                400, "InDesign does not appear to be installed on this Mac.")
+    @app.get("/api/prep/reflow-script")
+    def reflow_script() -> FileResponse:
+        """The one-time InDesign reflow script the designer installs.
 
-        out = Path(job.results_dir) / _result_name(job, "placed")
-        try:
-            placed = placelib.place_into_template(template, tagged, out)
-        except PlaceError as e:
-            raise HTTPException(400, str(e))
-        common.open_path(placed, reveal=True)
-        return {"ok": True, "filename": placed.name, "path": str(placed)}
+        A DocProof IDML opens with the whole book in one primary text frame;
+        InDesign only reflows on edit, not on open, so the designer runs this
+        once to thread the book across pages. Shipped in the config resources so
+        the same file backs the desktop and web builds."""
+        from ..settings import resource_root
+        path = resource_root() / "config" / "prep" / "reflow.jsx"
+        if not path.is_file():
+            raise HTTPException(404, "The reflow script is missing from this "
+                                     "build.")
+        return FileResponse(path, filename="DocProof-reflow.jsx",
+                            media_type="text/javascript")
 
     @app.get("/api/jobs/{job_id}/prep")
     def prep_notes(job_id: str, owner: str = Depends(owner_for)) -> dict:
@@ -847,7 +844,7 @@ def register(app: FastAPI) -> None:
         data["files"] = {kind: _present(name)
                          for kind, name in
                          (("book", f"book_{Path(job.filename).stem}.docx"),
-                          ("indesign", f"tagged_{Path(job.filename).stem}.docx"),
+                          ("indesign", f"tagged_{Path(job.filename).stem}.idml"),
                           ("tracked", f"tracked_{Path(job.filename).stem}.docx"))}
         return data
 

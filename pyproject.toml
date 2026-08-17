@@ -84,7 +84,7 @@ include = ["docproof*", "app*", "config*"]
 app = ["static/*"]
 config = ["*.yaml"]
 "config.error_types" = ["*.yaml"]
-"config.prep" = ["*.yaml"]
+"config.prep" = ["*.yaml", "*.idml", "*.jsx"]
 # The book-output fonts, embedded into book_*.docx files at write time.
 "config.prep.fonts" = ["*.ttf", "README.md"]
 "config.prep.fonts.licenses" = ["*.txt"]
