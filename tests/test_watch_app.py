@@ -179,6 +179,45 @@ def test_both_clocks_can_be_set_from_the_panel(client):
     assert ws.auto_ticks is True and ws.tick_every_minutes == 30
 
 
+def test_the_in_app_clock_can_be_given_set_times(client):
+    """The server's only schedule: fixed times of day, no launchd involved."""
+    body = client.put("/api/watch", json={
+        "auto_ticks": True,
+        "tick_at_times": ["17:00", "9:00", "09:00"],   # unsorted, unpadded, dup
+        "tick_timezone": "America/New_York",
+    }).json()
+
+    ws = WatchSettings.load(client.home)
+    # Normalised on the way in: padded, deduped and sorted.
+    assert ws.tick_at_times == ["09:00", "17:00"]
+    assert ws.tick_timezone == "America/New_York"
+    assert body["watch"]["tick_at_times"] == ["09:00", "17:00"]
+    # And the panel is handed a next-look it can show without doing the maths.
+    assert body["watch"]["next_tick_at"]
+
+
+def test_an_empty_times_list_hands_the_interval_clock_its_job_back(client):
+    configured(client, tick_at_times=["09:00"])
+
+    client.put("/api/watch", json={"tick_at_times": []})
+
+    assert WatchSettings.load(client.home).tick_at_times == []
+
+
+def test_a_bad_time_is_refused(client):
+    answer = client.put("/api/watch", json={"tick_at_times": ["nine o'clock"]})
+
+    assert answer.status_code == 400
+    assert WatchSettings.load(client.home).tick_at_times == []
+
+
+def test_a_bad_time_zone_is_refused(client):
+    answer = client.put("/api/watch", json={"tick_timezone": "Mars/Olympus"})
+
+    assert answer.status_code == 400
+    assert WatchSettings.load(client.home).tick_timezone == ""
+
+
 def test_the_archive_can_be_set_up_from_the_panel(client):
     body = client.put("/api/watch", json={
         "archive_enabled": True,

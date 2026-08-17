@@ -4494,6 +4494,11 @@ function renderWatch(body, quiet) {
   renderWatchBanner(body);
   renderWatchFiles(w.files);
   applyWatchSchedule(body.can_schedule);
+  // Cheap and keystroke-safe, so they run on the five-second poll too: showing
+  // the editor follows the checkbox, and "next look" is a clock that should
+  // keep ticking without a deliberate reload.
+  $('watch-inapp-schedule').hidden = !w.auto_ticks;
+  renderWatchNextRun(w);
   if (quiet) return;
 
   $('watch-folder').value = w.folder_id || '';
@@ -4509,6 +4514,7 @@ function renderWatch(body, quiet) {
   $('watch-archive-folder').value = w.archive_folder_id || '';
   $('watch-archive-source').checked = w.archive_include_source;
   $('watch-auto').checked = w.auto_ticks;
+  fillWatchSchedule(w);
   $('watch-agent').checked = w.times.length > 0;
   if (w.times.length) $('watch-times').value = w.times.join(',');
   $('watch-client-id').value = '';
@@ -4895,6 +4901,9 @@ $('watch-agent').addEventListener('change', async () => {
 $('watch-auto').addEventListener('change', async () => {
   const note = $('watch-schedule-note');
   note.hidden = true;
+  // Reveal the editor with the switch, before the round trip, so turning the
+  // clock on shows what it will do rather than an empty pause.
+  $('watch-inapp-schedule').hidden = !$('watch-auto').checked;
   try {
     await api('/api/watch', {
       method: 'PUT',
@@ -4903,7 +4912,157 @@ $('watch-auto').addEventListener('change', async () => {
     });
   } catch (err) {
     $('watch-auto').checked = !$('watch-auto').checked;
+    $('watch-inapp-schedule').hidden = !$('watch-auto').checked;
     watchNote(note, err.message, 'error');
+  }
+});
+
+// The in-app clock's "run at set times" editor. This is the whole schedule on
+// the always-on server, which cannot use launchd; on a Mac it sits beside the
+// launch agent above, the clock that also runs while DocProof is closed.
+
+function watchScheduleMode() {
+  const on = document.querySelector('input[name="watch-mode"]:checked');
+  return on ? on.value : 'times';
+}
+
+function setWatchScheduleMode(mode) {
+  document.querySelectorAll('input[name="watch-mode"]').forEach((r) => {
+    r.checked = r.value === mode;
+  });
+  $('watch-times-editor').hidden = mode !== 'times';
+  $('watch-interval-editor').hidden = mode !== 'interval';
+}
+
+function addTimeRow(value) {
+  const li = document.createElement('li');
+  const input = document.createElement('input');
+  input.type = 'time';
+  input.value = value || '09:00';
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'remove';
+  remove.textContent = '×';
+  remove.setAttribute('aria-label', 'Remove this time');
+  remove.addEventListener('click', () => li.remove());
+  li.append(input, remove);
+  $('watch-time-list').append(li);
+  return input;
+}
+
+// Populated once, then reselected each render. `Intl.supportedValuesOf` gives
+// the full IANA list where the browser has it; the blank option is "this
+// machine's own time", which on the server is UTC — so a fresh setup defaults
+// to the zone the browser is in, not to Greenwich.
+function fillWatchTimezones(selected) {
+  const sel = $('watch-tz');
+  if (!sel.dataset.filled) {
+    const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    let zones = [];
+    try { zones = Intl.supportedValuesOf('timeZone'); } catch (_) { zones = []; }
+    if (!zones.length && detected) zones = [detected];
+    const blank = document.createElement('option');
+    blank.value = '';
+    blank.textContent = detected
+      ? `This machine (${detected})` : "This machine's own time";
+    sel.append(blank);
+    zones.forEach((z) => {
+      const o = document.createElement('option');
+      o.value = z;
+      o.textContent = z;
+      sel.append(o);
+    });
+    sel.dataset.filled = '1';
+    sel.dataset.detected = detected;
+  }
+  sel.value = selected;
+}
+
+function fillWatchSchedule(w) {
+  const times = w.tick_at_times || [];
+  // A saved zone wins, blank included; but a setup nobody has touched takes the
+  // browser's, so the times a person types mean their own clock rather than the
+  // server's UTC one before they have picked anything.
+  const detected = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const fresh = !times.length && !w.tick_timezone;
+  fillWatchTimezones(fresh ? detected : w.tick_timezone);
+  const list = $('watch-time-list');
+  list.innerHTML = '';
+  times.forEach((t) => addTimeRow(t));
+  if (!list.children.length) addTimeRow('09:00');  // one row, ready to edit
+  $('watch-every').value = w.tick_every_minutes || 60;
+  setWatchScheduleMode(times.length ? 'times' : 'interval');
+}
+
+function renderWatchNextRun(w) {
+  const el = $('watch-next-run');
+  if (!el) return;
+  if (w.auto_ticks && w.next_tick_at) {
+    const when = new Date(w.next_tick_at);
+    el.textContent = 'Next look ' + when.toLocaleString([], {
+      weekday: 'short', hour: 'numeric', minute: '2-digit',
+    });
+  } else {
+    el.textContent = '';
+  }
+}
+
+function watchScheduleSaved(w) {
+  if (w.tick_at_times && w.tick_at_times.length) {
+    const where = w.tick_timezone ? ` (${w.tick_timezone})` : '';
+    return `DocProof will look at ${w.tick_at_times.join(', ')}${where}, `
+      + 'every day while it is running.';
+  }
+  return `DocProof will look every ${w.tick_every_minutes} minutes while it `
+    + 'is running.';
+}
+
+document.querySelectorAll('input[name="watch-mode"]').forEach((r) => {
+  r.addEventListener('change', () => setWatchScheduleMode(watchScheduleMode()));
+});
+
+$('watch-time-add').addEventListener('click', () => {
+  addTimeRow('09:00').focus();
+});
+
+$('watch-schedule-save').addEventListener('click', async () => {
+  const button = $('watch-schedule-save');
+  const note = $('watch-schedule-note');
+  note.hidden = true;
+  const mode = watchScheduleMode();
+  const payload = { auto_ticks: true };
+  if (mode === 'times') {
+    const times = [...$('watch-time-list')
+      .querySelectorAll('input[type="time"]')]
+      .map((i) => i.value).filter(Boolean);
+    if (!times.length) {
+      watchNote(note, 'Add a time, or switch to “Every so often”.', 'error');
+      return;
+    }
+    payload.tick_at_times = times;
+    payload.tick_timezone = $('watch-tz').value;
+  } else {
+    payload.tick_at_times = [];        // hand the interval clock its job back
+    const every = parseInt($('watch-every').value, 10);
+    if (!(every >= 5 && every <= 1440)) {
+      watchNote(note, 'Minutes must be between 5 and 1440.', 'error');
+      return;
+    }
+    payload.tick_every_minutes = every;
+  }
+  button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    renderWatch(body);
+    watchNote(note, watchScheduleSaved(body.watch), 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally {
+    button.disabled = false;
   }
 });
 

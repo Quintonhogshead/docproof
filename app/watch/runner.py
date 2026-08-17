@@ -34,8 +34,10 @@ from app.lock import FolderInUse, FolderLock, describe_owner
 from app.settings import Paths
 
 from . import auth as authlib
+from . import daily
 from . import tick as ticklib
 from .drive import AuthExpired, DriveError
+from .schedule import ScheduleError
 from .hubspot import HubSpotAuthError, HubSpotError
 from .settings import WatchSettings
 from .state import last_tick
@@ -107,6 +109,11 @@ class WatchRunner:
         self._last: TickOutcome | None = None
         self._signin: SignIn | None = None
         self._timer: threading.Thread | None = None
+        # When the fixed-times clock first looked at an unstamped folder. Held
+        # in memory, not on disk: it is the floor that keeps enabling a schedule
+        # from firing for a time already past today, and a fresh start re-arming
+        # to "now" costs at most a slightly late first pass, never a repeat.
+        self._armed_at: datetime | None = None
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -263,10 +270,29 @@ class WatchRunner:
         ws = WatchSettings.load(self.home)
         if not ws.auto_ticks or missing(ws) is not None or self.busy:
             return False
+        now = datetime.now(timezone.utc)
         stamp = last_tick(self.home)
-        if stamp is not None:
+        if ws.tick_at_times:
+            # Fixed times of day — the server's clock, since it cannot use
+            # launchd. Arm on first sight so turning a schedule on does not fire
+            # for a time already past today; the floor is the later of that and
+            # the last real pass, so neither clock repeats the other's work.
+            if self._armed_at is None:
+                self._armed_at = now
+            floor = stamp or self._armed_at
+            try:
+                if not daily.due(ws.tick_at_times, ws.tick_timezone,
+                                 floor=floor, now=now):
+                    return False
+            except ScheduleError:
+                # A hand-edited watch.json with a bad time or zone should not
+                # spin the log every minute — it is left for a person to fix.
+                log.warning("Ignoring an unusable watch schedule (%r in %r)",
+                            ws.tick_at_times, ws.tick_timezone)
+                return False
+        elif stamp is not None:
             due = stamp + timedelta(minutes=ws.tick_every_minutes)
-            if datetime.now(timezone.utc) < due:
+            if now < due:
                 # Something looked recently — quite possibly the scheduled
                 # agent, a minute before the app was opened.
                 return False

@@ -25,6 +25,7 @@ from . import common
 from .. import settings as settingslib
 from ..settings import ENV_VARS
 from ..watch import auth as authlib
+from ..watch import daily as dailylib
 from ..watch import schedule as schedulelib
 from ..watch import status as watchlib
 from ..watch.drive import DriveError
@@ -50,6 +51,11 @@ class WatchUpdate(BaseModel):
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
     auto_ticks: bool | None = None
     tick_every_minutes: int | None = Field(default=None, ge=5, le=1440)
+    # Fixed times of day for the in-app clock, as ["HH:MM", …], and the zone
+    # they are read in. An empty list turns the fixed-times clock off and hands
+    # the interval above back its job; a missing field leaves both untouched.
+    tick_at_times: list[str] | None = None
+    tick_timezone: str | None = None
     # The Drive output archive. A separate folder box (an address or a bare id,
     # parsed like the watched folder), a switch, and whether to keep the source.
     archive_enabled: bool | None = None
@@ -157,6 +163,25 @@ def register(app: FastAPI) -> None:
                 ws.archive_folder_id = folder_id_from(update.archive_folder)
             except ValueError as e:
                 raise HTTPException(400, str(e)) from None
+        # The times are normalised on the way in — parsed, padded, deduped and
+        # sorted — so the panel gets back a clean list whatever a person typed,
+        # and both clocks read the same shape. An empty list is a real value: it
+        # turns the fixed-times clock off, so it is set rather than skipped.
+        if update.tick_at_times is not None:
+            try:
+                times = (schedulelib.parse_times(update.tick_at_times)
+                         if update.tick_at_times else [])
+            except schedulelib.ScheduleError as e:
+                raise HTTPException(400, str(e)) from None
+            ws.tick_at_times = [f"{h:02d}:{m:02d}" for h, m in times]
+        if update.tick_timezone is not None:
+            tz = update.tick_timezone.strip()
+            if tz:
+                try:
+                    dailylib.zone(tz)         # validate; the value is the name
+                except schedulelib.ScheduleError as e:
+                    raise HTTPException(400, str(e)) from None
+            ws.tick_timezone = tz
         for name in ("upload_notes", "upload_failure_note",
                      "require_source_label",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",

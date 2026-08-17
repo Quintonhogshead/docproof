@@ -12,13 +12,16 @@ and a question should not make folders.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.jobs import JobStore
 from app.settings import Paths, get_api_key
 
 from . import auth as authlib
+from . import daily
 from . import schedule as schedulelib
+from .schedule import ScheduleError
 from .settings import GOOGLE_KEY, WatchSettings
 from .state import STATE_FILE, WatchState, last_tick
 
@@ -77,6 +80,9 @@ def status(home: str | Path, *, get_key=None,
         "max_files_per_tick": ws.max_files_per_tick,
         "auto_ticks": ws.auto_ticks,
         "tick_every_minutes": ws.tick_every_minutes,
+        "tick_at_times": list(ws.tick_at_times),
+        "tick_timezone": ws.tick_timezone,
+        "next_tick_at": _next_tick(ws),
         "archive_enabled": ws.archive_enabled,
         "archive_folder_id": ws.archive_folder_id,
         "archive_include_source": ws.archive_include_source,
@@ -88,6 +94,23 @@ def status(home: str | Path, *, get_key=None,
         "last_tick_at": stamp.isoformat() if stamp else None,
         "files": _files(root),
     }
+
+
+def _next_tick(ws: WatchSettings) -> str | None:
+    """When the in-app clock will next look, as ISO UTC, for the panel to show.
+
+    Only for the fixed-times clock and only while it is on: the interval clock's
+    next look depends on when the last one ran, which the panel already shows,
+    and an off clock has no next look to promise. A bad hand-edited schedule
+    says nothing rather than raising — the panel is not where that gets fixed."""
+    if not (ws.auto_ticks and ws.tick_at_times):
+        return None
+    try:
+        nxt = daily.next_run(ws.tick_at_times, ws.tick_timezone,
+                             now=datetime.now(timezone.utc))
+    except ScheduleError:
+        return None
+    return nxt.isoformat() if nxt else None
 
 
 def _agent_readable() -> bool:

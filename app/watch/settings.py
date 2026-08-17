@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import urllib.parse
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from app.settings import Settings
@@ -111,8 +111,21 @@ class WatchSettings:
     # spending money.
     auto_ticks: bool = False
     # How often that clock *considers* a pass. It considers; the "last looked"
-    # stamp and the folder lock decide.
+    # stamp and the folder lock decide. Used only when no fixed times are set
+    # below — the two are the same clock in its two moods, "every so often" and
+    # "at set times".
     tick_every_minutes: int = 60
+    # Fixed times of day for the in-app clock, as "HH:MM" strings. Empty keeps
+    # the interval above, so an install that never sets one is unchanged. Non-
+    # empty makes the clock run at these times instead — the always-on server's
+    # answer to launchd, which it cannot use. Read in `tick_timezone`; decided
+    # by `daily.due`.
+    tick_at_times: list[str] = field(default_factory=list)
+    # The zone `tick_at_times` is read in, an IANA name like "America/New_York".
+    # Empty means the machine's own time — which is what a Mac's launchd would
+    # use too — but a server runs in UTC, so a name is how "look at nine in the
+    # morning" means nine where the people are rather than nine in Greenwich.
+    tick_timezone: str = ""
     # An address to email when a pass leaves something a person must sort out — a
     # surname matching two ready Projects, or a manuscript that failed prep.
     # Empty means send nothing. Delivered through Gmail as the signed-in Google

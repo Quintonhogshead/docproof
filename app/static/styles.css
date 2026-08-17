@@ -230,6 +230,26 @@ legend { font-weight: 600; font-size: 0.92rem; padding: 0 0.35rem; }
 .row { display: flex; gap: 0.5rem; }
 .row input { flex: 1; }
 
+/* DocWatch — the in-app "run at set times" editor. One row per time, an
+   input and a way to take it back out, stacked so a dozen times still read. */
+#watch-inapp-schedule { display: grid; gap: 0.9rem; margin-top: 0.8rem; }
+#watch-inapp-schedule .segmented { width: fit-content; }
+#watch-times-editor { display: grid; gap: 0.6rem; }
+.time-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.time-list li { display: flex; gap: 0.5rem; align-items: center; }
+.time-list input[type="time"] { width: 8rem; flex: 0 0 auto; }
+.time-list .remove {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 1.1rem; line-height: 1; padding: 0.2rem 0.4rem;
+}
+.time-list .remove:hover { color: var(--danger, #c0392b); }
+#watch-inapp-schedule .field { max-width: 22rem; }
+#watch-inapp-schedule .inline { display: flex; gap: 0.4rem; align-items: center; }
+#watch-inapp-schedule .inline input { width: 5.5rem; }
+.watch-schedule-actions { align-items: center; }
+.watch-schedule-actions button { flex: 0 0 auto; }
+#watch-next-run { font-size: 0.88rem; }
+
 select, input[type="text"], input[type="email"], input[type="password"], input[type="time"] {
   font: inherit;
   padding: 0.45rem 0.6rem;

@@ -388,7 +388,17 @@ def test_status_says_when_it_will_next_look(home, capsys, agent, monkeypatch):
 
     run(home, "status")
 
-    assert "Runs at: 06:00" in capsys.readouterr().out
+    assert "Runs at (while closed): 06:00" in capsys.readouterr().out
+
+
+def test_status_says_the_in_app_set_times(home, capsys, agent):
+    configured(home, auto_ticks=True, tick_at_times=["09:00", "17:00"],
+               tick_timezone="America/New_York")
+
+    run(home, "status")
+
+    out = capsys.readouterr().out
+    assert "Runs at (while open):   09:00, 17:00 (America/New_York)" in out
 
 
 def test_status_says_when_nothing_is_scheduled(home, capsys, agent):
