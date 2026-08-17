@@ -134,6 +134,12 @@
           <span><strong>Write promo copy</strong> — a teaser and twelve social
             posts, drawn from the whole book; lands in the Promo tab</span>
         </label>
+        <label class="radio">
+          <input type="radio" name="kind" value="corrections">
+          <span><strong>Apply corrections</strong> — take a finished InDesign
+            file (exported as IDML) and a list of corrections, apply them
+            exactly, and check nothing else moved</span>
+        </label>
         <p id="kind-warning" class="muted small" hidden></p>
       </fieldset>
 
@@ -556,6 +562,31 @@
                      placeholder="Detected from the byline">
             </label>
           </div>
+        </fieldset>
+
+        <fieldset class="field" id="corrections-options" hidden>
+          <legend>The corrections to apply</legend>
+          <label class="field">
+            <span>Corrections list</span>
+            <textarea id="corrections-input" rows="10"
+              placeholder='[
+  {"find": "Their were", "replace": "There were"},
+  {"find": "teh", "replace": "the", "occurrence": 2},
+  {"find": "Chapter One", "replace": "", "kind": "design",
+   "instruction": "move this chapter to a right-hand page"}
+]'></textarea>
+            <small class="muted">A JSON list. Each entry is the exact text to
+              <code>find</code> and what to <code>replace</code> it with; a
+              deletion has an empty <code>replace</code>. Add
+              <code>"occurrence": 2</code> to pick the 2nd match when the text
+              appears more than once, or <code>"kind": "design"</code> for a
+              layout request that is flagged, not applied. Terse
+              <code>["find", "replace"]</code> pairs work too.</small>
+          </label>
+          <p class="field muted small">One InDesign file at a time — a
+            corrections list is specific to the book it was written for. The
+            file, the corrections, and the check are all deterministic: no model
+            reads them, and it costs nothing.</p>
         </fieldset>
 
         <fieldset class="field review-only">

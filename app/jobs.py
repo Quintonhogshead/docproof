@@ -127,6 +127,14 @@ PROMO_STATE = {
     "collecting": "Almost done — writing your files",
 }
 
+# Corrections is deterministic and quick: no model, no vendor, no batch. It
+# anchors the edit list to the exported IDML and writes the corrected file, so
+# the card only ever passes through these before "Ready".
+CORR_STATE = {
+    "running": "Applying your corrections",
+    "collecting": "Almost done — writing your file",
+}
+
 PREP_OUTPUTS = {"book": ["book"], "indesign": ["indesign"],
                 "tracked": ["tracked"], "both": ["indesign", "tracked"],
                 "all": ["book", "indesign", "tracked"]}
@@ -297,8 +305,14 @@ class Job:
     updated_at: str = ""
     # What this job is: a grammar review, or manuscript prep for the house
     # InDesign template. Older records have no `kind` and are reviews.
-    kind: str = "review"               # review | prep | promo
+    kind: str = "review"               # review | prep | promo | corrections
     prep_output: str = "indesign"      # book | indesign | tracked | both | all
+    # Corrections only: the corrections list the designer's exported IDML is to
+    # be edited by, as the JSON the parser accepts (docproof.corrections.parse).
+    # Kept on the record — not a model prompt, just the input — so a retry
+    # replays it and the completion log can say how many it carried. Empty on
+    # every other kind.
+    corrections: str = ""
     # Prep, book output only: the operator's per-job answers for the sketch —
     # subject matter (picks the title-page face), running-head title and
     # author. Empty means "use what the detector reads off the opening pages",
@@ -354,6 +368,11 @@ class Job:
     tagged: int | None = None          # paragraphs given a style
     flags: int | None = None           # things prep wants a human to decide
     verified: bool | None = None       # the author's words came through intact
+    # Corrections only: how many changes the after file carries that the list
+    # did not ask for — the verifier's collateral-damage count. `applied` is the
+    # count that landed and `flags` the count refused for a human, reusing the
+    # same fields prep does; this one has no prep analogue. None on other kinds.
+    discrepancies: int | None = None
     # Promo only: how many capitalised terms in the copy appear nowhere in the
     # manuscript — the grounding check's count, surfaced so a card can flag it.
     unverified: int | None = None
@@ -408,6 +427,10 @@ class Job:
         return self.kind == "prep"
 
     @property
+    def is_corrections(self) -> bool:
+        return self.kind == "corrections"
+
+    @property
     def is_promo(self) -> bool:
         return self.kind == "promo"
 
@@ -420,7 +443,8 @@ class Job:
 
     def plain_state(self) -> str:
         extra = (PREP_STATE if self.is_prep
-                 else PROMO_STATE if self.is_promo else {})
+                 else PROMO_STATE if self.is_promo
+                 else CORR_STATE if self.is_corrections else {})
         states = {**PLAIN_STATE, **extra}
         # A running review names the actual step it is on, so the card doesn't
         # read "reviewing" while the rewrite pass retypes the book. Only reviews
@@ -454,6 +478,7 @@ class Job:
         d["is_prep"] = self.is_prep
         d["is_promo"] = self.is_promo
         d["is_plan"] = self.is_plan
+        d["is_corrections"] = self.is_corrections
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -1261,6 +1286,8 @@ class JobRunner:
             return
         if job.is_prep:
             self._run_prep(job_id)
+        elif job.is_corrections:
+            self._run_corrections(job_id)
         elif job.is_promo:
             self._run_promo(job_id)
         elif job.rounds > 1:
@@ -1579,6 +1606,58 @@ class JobRunner:
                           verified=all(c.ok for c in outputs.verifications),
                           words=outputs.words)
         self._record_usage(job_id, out, cfg.api.model, batch=False)
+        self._finish(job_id)
+
+    # -- corrections ----------------------------------------------------------
+
+    def _run_corrections(self, job_id: str) -> None:
+        """Apply a corrections list to the designer's exported IDML.
+
+        Deterministic and quick: the edit list is anchored to the exact text it
+        names and each span replaced, then the result is verified against the
+        list, all in pure Python (see docproof.corrections). No model, no
+        vendor, no batch — so, unlike a review, there is no provider to build and
+        nothing to bill; it runs to completion here on the worker thread like
+        prep, but leaner."""
+        from docproof.corrections.run import apply_corrections
+
+        job = self.store.get(job_id)
+        if job is None or job.state not in ("queued", "running"):
+            return
+        # Nothing paid-for happens below, but keep the compare-and-swap the other
+        # runners use: a cancel that landed while the job sat in the queue is
+        # honoured, and the card reads "applying" instead of a stale "waiting".
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=0) is None:
+            return
+        if self._cancel_pending(job_id):
+            self._abort(job_id)
+            return
+
+        out = self._claim_results_dir(job)
+        try:
+            outputs = apply_corrections(job.source_path, job.corrections, out)
+        except (ValueError, OSError) as e:
+            # A corrections list the parser refuses whole (malformed JSON), or a
+            # source that will not read — fail with the sentence, and give the
+            # empty results folder back so the next run names cleanly.
+            self._release_results_dir(job_id)
+            self.store.update_if(job_id, expect="running", state="failed",
+                                 error=str(e))
+            return
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+
+        # `applied`/`flags` reuse the fields prep and review already fill so the
+        # dashboard and card counters need no new plumbing; `discrepancies` is
+        # the one figure corrections adds, and `verified` carries the clean flag.
+        # cost is a hard 0.0 — the deliverable is honest about being free.
+        self.store.update(
+            job_id, state="done", results_dir=str(out), error=None,
+            applied=outputs.applied, flags=outputs.flagged,
+            discrepancies=outputs.discrepancies, verified=outputs.clean,
+            cost=0.0)
         self._finish(job_id)
 
     # -- promo ----------------------------------------------------------------

@@ -18,8 +18,11 @@ from docproof.corrections.apply import all_occurrences, apply_edits
 from docproof.corrections.idml import parse_story, read_stories
 from docproof.corrections.model import (AMBIGUOUS, APPLIED, APPLIED_EXACTLY,
                                         CROSSES_PARAGRAPH, DESIGN, DEVIATES,
-                                        Edit, MISSING, NOT_FOUND,
-                                        ROUTED_TO_DESIGN)
+                                        Edit, JUDGMENT, MECHANICAL, MISSING,
+                                        NOT_FOUND, ROUTED_TO_DESIGN)
+from docproof.corrections.parse import ParseIssue, parse_edits
+from docproof.corrections.run import (apply_corrections, corrected_name,
+                                      verify_corrections)
 from docproof.corrections.verify import verify
 
 from .conftest import FIXTURES
@@ -223,6 +226,266 @@ def test_verification_flags_a_paragraph_that_was_merged(tmp_path):
     report = verify(LAYOUT, merged, edits)
     assert report.structure_changed
     assert not report.clean
+
+
+# --- parsing a structured list ------------------------------------------------
+
+def test_a_list_of_dicts_becomes_edits():
+    result = parse_edits([
+        {"find": "Their were", "replace": "There were"},
+        {"find": "teh", "replace": "the", "occurrence": 2},
+    ])
+    assert result.ok
+    assert not result.issues
+    e0, e1 = result.edits
+    assert (e0.find, e0.replace, e0.occurrence) == ("Their were", "There were", 0)
+    assert (e1.find, e1.replace, e1.occurrence) == ("teh", "the", 2)
+    # An id is generated for every entry that carries none.
+    assert [e.id for e in result.edits] == ["c1", "c2"]
+
+
+def test_field_aliases_are_understood():
+    """A corrections note says 'original'/'corrected', a model says 'from'/'to';
+    both mean find/replace."""
+    result = parse_edits([
+        {"original": "colour", "corrected": "color"},
+        {"from": "grey", "to": "gray", "note": "US spelling"},
+    ])
+    assert result.ok
+    assert (result.edits[0].find, result.edits[0].replace) == ("colour", "color")
+    assert (result.edits[1].find, result.edits[1].replace) == ("grey", "gray")
+    assert result.edits[1].instruction == "US spelling"
+
+
+def test_a_json_string_is_parsed():
+    result = parse_edits('[{"find": "a", "replace": "b"}]')
+    assert result.ok
+    assert result.edits[0].find == "a"
+
+
+def test_json_bytes_are_parsed():
+    result = parse_edits(b'[{"find": "a", "replace": "b"}]')
+    assert result.ok and result.edits[0].replace == "b"
+
+
+def test_a_json_file_is_parsed(tmp_path):
+    p = tmp_path / "corrections.json"
+    p.write_text('[{"find": "a", "replace": "b"}]', encoding="utf-8")
+    result = parse_edits(p)
+    assert result.ok and result.edits[0].find == "a"
+
+
+def test_a_wrapper_object_with_an_edits_key_is_unwrapped():
+    result = parse_edits({"edits": [{"find": "a", "replace": "b"}]})
+    assert result.ok and len(result.edits) == 1
+
+
+def test_a_lone_dict_is_one_entry():
+    result = parse_edits({"find": "a", "replace": "b"})
+    assert result.ok and len(result.edits) == 1
+
+
+def test_a_terse_pair_becomes_an_edit():
+    result = parse_edits([["Their were", "There were"],
+                          ["teh", "the", "typo"]])
+    assert result.ok
+    assert (result.edits[0].find, result.edits[0].replace) == ("Their were",
+                                                               "There were")
+    assert result.edits[1].instruction == "typo"
+
+
+def test_an_explicit_id_is_kept_and_generated_ids_avoid_it():
+    result = parse_edits([
+        {"find": "a", "replace": "b"},
+        {"id": "c2", "find": "c", "replace": "d"},   # collides with the default
+        {"find": "e", "replace": "f"},
+    ])
+    ids = [e.id for e in result.edits]
+    assert ids[1] == "c2"                 # the explicit one is honoured
+    assert len(set(ids)) == 3             # nothing generated collides with it
+
+
+def test_a_duplicate_explicit_id_is_flagged():
+    result = parse_edits([
+        {"id": "x", "find": "a", "replace": "b"},
+        {"id": "x", "find": "c", "replace": "d"},
+    ])
+    assert len(result.edits) == 1
+    assert result.issues and "duplicate id" in result.issues[0].reason
+
+
+def test_kind_is_normalized_and_an_unknown_kind_is_flagged():
+    result = parse_edits([
+        {"find": "Chapter One", "replace": "", "kind": "Design",
+         "instruction": "move to a right-hand page"},
+        {"find": "maybe", "replace": "perhaps", "type": "JUDGMENT"},
+        {"find": "x", "replace": "y", "kind": "guesswork"},
+    ])
+    assert result.edits[0].kind == DESIGN
+    assert result.edits[1].kind == JUDGMENT
+    assert len(result.issues) == 1
+    assert "unknown kind" in result.issues[0].reason
+    assert result.issues[0].index == 2
+
+
+def test_occurrence_is_coerced_and_bad_values_flagged():
+    ok = parse_edits([{"find": "a", "replace": "b", "occurrence": "3"}])
+    assert ok.edits[0].occurrence == 3
+    bad = parse_edits([{"find": "a", "replace": "b", "occurrence": -1},
+                       {"find": "c", "replace": "d", "occurrence": "later"}])
+    assert not bad.edits
+    assert len(bad.issues) == 2
+
+
+def test_a_missing_find_on_a_text_edit_is_flagged():
+    result = parse_edits([{"replace": "the"}])           # nothing to anchor to
+    assert not result.edits
+    assert "no find text" in result.issues[0].reason
+
+
+def test_a_design_entry_may_carry_no_find_but_needs_an_instruction():
+    ok = parse_edits([{"kind": "design",
+                       "instruction": "start Part Two on a recto"}])
+    assert ok.ok and ok.edits[0].kind == DESIGN and ok.edits[0].find == ""
+    empty = parse_edits([{"kind": "design"}])
+    assert not empty.edits and empty.issues
+
+
+def test_a_pure_deletion_is_kept():
+    result = parse_edits([{"find": " for good measure", "replace": ""}])
+    assert result.ok and result.edits[0].is_deletion
+
+
+def test_a_non_object_entry_is_flagged_not_dropped():
+    result = parse_edits([{"find": "a", "replace": "b"}, "just a string", 42])
+    assert len(result.edits) == 1
+    assert len(result.issues) == 2
+    assert all(isinstance(i, ParseIssue) for i in result.issues)
+    assert {i.index for i in result.issues} == {1, 2}
+
+
+def test_non_text_find_or_replace_is_flagged():
+    result = parse_edits([{"find": 7, "replace": "x"},
+                          {"find": "a", "replace": ["b"]}])
+    assert not result.edits
+    assert len(result.issues) == 2
+
+
+def test_an_empty_list_parses_to_nothing_cleanly():
+    result = parse_edits([])
+    assert result.ok and not result.edits
+
+
+def test_malformed_json_raises():
+    with pytest.raises(ValueError):
+        parse_edits("{not json")
+
+
+def test_a_non_list_source_raises():
+    with pytest.raises(ValueError):
+        parse_edits("42")                # valid JSON, but not a list of edits
+
+
+def test_parsed_edits_apply_and_verify_clean(tmp_path):
+    """The whole chain end to end: a structured list parses to edits, applies to
+    the real IDML, and verifies clean — the parser feeds the deterministic core
+    with no impedance mismatch."""
+    result = parse_edits([
+        {"find": "Their were", "replace": "There were"},
+        {"find": "mistakes here", "replace": "errors here"},
+    ])
+    assert result.ok
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, list(result.edits))
+    assert report.applied == 2
+    assert story_text(out)[4] == "There were several errors here to find."
+    assert verify(LAYOUT, out, list(result.edits)).clean
+
+
+# --- the run end to end -------------------------------------------------------
+
+import json as _json
+
+
+def test_apply_corrections_writes_a_file_and_a_report(tmp_path):
+    out = tmp_path / "job"
+    result = apply_corrections(LAYOUT, [
+        {"find": "Their were", "replace": "There were"},
+    ], out)
+    assert result.corrected_idml.exists()
+    assert result.corrected_idml.name == corrected_name(LAYOUT)
+    assert result.report_md.exists() and result.report_json.exists()
+    assert result.applied == 1
+    assert result.clean
+    # The corrected file really carries the change.
+    assert story_text(result.corrected_idml)[4] == \
+        "There were several mistakes here to find."
+    # The source is untouched.
+    assert story_text(LAYOUT)[4] == "Their were several mistakes here to find."
+
+
+def test_the_json_report_is_machine_readable(tmp_path):
+    out = tmp_path / "job"
+    result = apply_corrections(LAYOUT, [
+        {"find": "Their were", "replace": "There were"},
+        {"find": "not in the book at all", "replace": "x"},
+    ], out)
+    payload = _json.loads(result.report_json.read_text(encoding="utf-8"))
+    assert payload["mode"] == "apply"
+    assert payload["deterministic"] is True
+    assert payload["apply"]["applied"] == 1
+    flagged = payload["apply"]["flagged"]
+    assert len(flagged) == 1 and flagged[0]["status"] == NOT_FOUND
+    # The unanchored edit is not clean, and the flag count reflects it.
+    assert result.flagged == 1
+    assert not result.clean
+
+
+def test_a_parse_issue_is_carried_into_the_run(tmp_path):
+    out = tmp_path / "job"
+    result = apply_corrections(LAYOUT, [
+        {"find": "Their were", "replace": "There were"},
+        {"replace": "orphan with no find"},          # unparseable
+    ], out)
+    assert result.applied == 1
+    assert not result.parse.ok
+    assert not result.clean                          # a dropped entry is not clean
+    payload = _json.loads(result.report_json.read_text(encoding="utf-8"))
+    assert len(payload["parse"]["issues"]) == 1
+    assert "no find text" in result.report_md.read_text(encoding="utf-8")
+
+
+def test_verify_corrections_audits_a_foreign_after_file(tmp_path):
+    """The audit case: the book was corrected by another tool. Given before,
+    after and the list, the run reports the change nobody asked for."""
+    edits = [{"find": "Their were", "replace": "There were"}]
+    # Produce an "after" file the way a hand-run script might — with an extra,
+    # unrequested change sneaked in.
+    clean = tmp_path / "clean.idml"
+    apply_edits(LAYOUT, clean, list(parse_edits(edits).edits))
+    tampered = tmp_path / "tampered.idml"
+    apply_edits(clean, tampered, [
+        Edit(id="x", find="third paragraph", replace="THIRD paragraph")])
+
+    out = tmp_path / "audit"
+    result = verify_corrections(LAYOUT, tampered, edits, out)
+    assert result.corrected_idml is None          # we wrote no file
+    assert result.apply is None
+    assert result.discrepancies >= 1
+    assert not result.clean
+    md = result.report_md.read_text(encoding="utf-8")
+    assert "Unaccounted changes" in md
+    assert "THIRD paragraph" in md
+
+
+def test_a_clean_run_reports_clean(tmp_path):
+    out = tmp_path / "job"
+    result = apply_corrections(LAYOUT, [
+        {"find": "Their were", "replace": "There were"},
+        {"find": "mistakes here", "replace": "errors here"},
+    ], out)
+    assert result.clean
+    assert "Clean." in result.report_md.read_text(encoding="utf-8")
 
 
 # --- the package stays valid --------------------------------------------------

@@ -92,11 +92,18 @@ const prepOutput = () =>
   document.querySelector('input[name="prep-output"]:checked').value;
 const isPrep = () => kind() === 'prep';
 const isPromo = () => kind() === 'promo';
+const isCorrections = () => kind() === 'corrections';
 
 document.querySelectorAll('input[name="kind"]').forEach((r) =>
   r.addEventListener('change', () => { renderFiles(); renderKind(); }));
 document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   r.addEventListener('change', () => { renderBookOptions(); renderCost(); }));
+// The corrections list gates its own Start button — enable it the moment there
+// is something to apply.
+(() => {
+  const corr = $('corrections-input');
+  if (corr) corr.addEventListener('input', renderCost);
+})();
 
 // The subject/title/author boxes only matter when a book-styled copy is
 // among the outputs.
@@ -110,10 +117,12 @@ function renderBookOptions() {
 function renderKind() {
   const prep = isPrep();
   const promo = isPromo();
-  // Review's options (confidence, sections, batch schedule) belong to neither
-  // prep nor promo; prep's output options belong only to prep.
+  const corrections = isCorrections();
+  // Review's options (confidence, sections, batch schedule) belong only to a
+  // review; prep's output options belong only to prep; corrections has its own
+  // panel and no model at all.
   document.querySelectorAll('.review-only').forEach((el) => {
-    el.hidden = prep || promo;
+    el.hidden = prep || promo || corrections;
   });
   // Two review-only fields have a second condition on top of the kind — the
   // between-round judge needs 2+ rounds, the meaning gate needs its switch on —
@@ -121,24 +130,29 @@ function renderKind() {
   syncRounds();
   syncJudgeGates();
   $('prep-options').hidden = !prep;
+  const corr = $('corrections-options');
+  if (corr) corr.hidden = !corrections;
   renderBookOptions();
   $('prep-cost').hidden = !prep;
   $('promo-cost').hidden = !promo;
   $('model-label').textContent = promo ? 'Which model should write it?'
     : prep ? 'Which model should read it?' : 'Which reviewer?';
   $('start').textContent = promo ? 'Write promo copy'
-    : prep ? 'Format the manuscript' : 'Start review';
+    : prep ? 'Format the manuscript'
+    : corrections ? 'Apply corrections' : 'Start review';
   $('staged-title').textContent = promo ? 'Ready to write copy'
-    : prep ? 'Ready to prepare' : 'Ready to review';
+    : prep ? 'Ready to prepare'
+    : corrections ? 'Ready to correct' : 'Ready to review';
   document.querySelectorAll('details.sections').forEach((el) => {
-    el.hidden = prep || promo;        // both always read the whole manuscript
+    el.hidden = prep || promo || corrections;   // all read the whole document
   });
 
   // The custom drawer: for a review it is collapsed behind the Customize toggle
   // (the tier cards are the primary path); for prep/promo, which have no tiers,
   // it is shown flat — no tab strip, panels stacked — so the model, effort and
   // glossary pickers it now holds are visible, the .review-only sweep above
-  // having culled everything else.
+  // having culled everything else. Corrections runs no model, so the whole
+  // drawer stays hidden for it, like a review with the drawer collapsed.
   const adv = $('advanced-options');
   if (adv) {
     if (prep || promo) {
@@ -164,10 +178,12 @@ function renderKind() {
 
 const canRun = (f) => {
   if (isPromo()) return f.can_promo !== false;
+  if (isCorrections()) return f.can_correct !== false;
   return isPrep() ? f.can_prep !== false : f.can_review !== false;
 };
 const reasonBlocked = (f) =>
-  (isPromo() ? f.promo_error : isPrep() ? f.prep_error : f.review_error)
+  (isPromo() ? f.promo_error : isCorrections() ? f.correct_error
+   : isPrep() ? f.prep_error : f.review_error)
   || 'cannot be used for this.';
 
 // ── dropping files ────────────────────────────────────────────────────────
@@ -913,7 +929,10 @@ function renderFiles() {
       state.files.splice(i, 1); renderFiles(); loadModels();
     });
     li.append(name, meta, drop);
-    if (f.ok && !isPrep() && f.chunks && f.chunks.length > 1) {
+    // Only a review picks sections. An .idml is preflighted for review too, so
+    // it carries chunks — but under prep/promo/corrections it is read whole.
+    if (f.ok && !isPrep() && !isPromo() && !isCorrections()
+        && f.chunks && f.chunks.length > 1) {
       li.append(sectionPicker(f));
     }
     if (f.note) {
@@ -929,6 +948,10 @@ function renderFiles() {
 }
 
 function fileSummary(f) {
+  if (isCorrections()) {
+    if (!f.can_correct) return f.correct_error || 'cannot be corrected.';
+    return 'InDesign file — ready to apply corrections';
+  }
   if (isPrep()) {
     if (!f.prep) return f.prep_error || 'cannot be prepared.';
     const p = f.prep;
@@ -1023,7 +1046,8 @@ const usableIds = () => usableFiles().map((f) => f.id);
 // Files with nothing ticked are simply left out of the run — as are files this
 // job can't be done to at all, like an InDesign layout you asked to prep.
 const filesToRun = () => usableFiles().filter(
-  (f) => canRun(f) && (isPrep() || isPromo() || keptFor(f).size > 0));
+  (f) => canRun(f) && (isPrep() || isPromo() || isCorrections()
+                       || keptFor(f).size > 0));
 
 function selectionPayload() {
   const out = {};
@@ -2209,6 +2233,15 @@ function renderCost() {
     return;
   }
 
+  if (isCorrections()) {
+    // Deterministic and free — no model, no price. The button waits on one
+    // correctable file and a non-empty corrections list.
+    const hasList = (($('corrections-input') || {}).value || '').trim().length > 0;
+    $('start').disabled = !(filesToRun().length > 0 && hasList);
+    setStartPrice(null);
+    return;
+  }
+
   const price = m ? priceReview(bundleFromControls(), stagedReviewFiles())
                   : { now: null, batch: null, approx: false };
   // The estimate includes the switched-on passes and the between-round judge;
@@ -2351,15 +2384,20 @@ $('start').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          file_ids: filesToRun().map((f) => f.id),
+          // Corrections run one InDesign file at a time — a list is specific to
+          // its book — so only the first goes even if several are staged.
+          file_ids: (isCorrections()
+            ? filesToRun().slice(0, 1) : filesToRun()).map((f) => f.id),
           model: $('model').value,
           kind: kind(),
+          corrections: isCorrections()
+            ? (($('corrections-input') || {}).value || '') : '',
           prep_output: prepOutput(),
           prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
           prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
           prep_author: isPrep() ? ($('prep-author') || {}).value.trim() : '',
-          mode: isPrep() ? 'now' : mode(),
-          schedule_at: (!isPrep() && mode() === 'batch'
+          mode: (isPrep() || isCorrections()) ? 'now' : mode(),
+          schedule_at: (!isPrep() && !isCorrections() && mode() === 'batch'
                         && $('schedule-on').checked)
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
@@ -2882,6 +2920,8 @@ function renderJobs(jobs) {
 
     if (job.ready && job.is_prep) {
       li.append(prepActions(job));
+    } else if (job.ready && job.is_corrections) {
+      li.append(correctionsActions(job));
     } else if (job.ready) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
@@ -3441,6 +3481,165 @@ function prepActions(job) {
       + 'manuscript. Read the prep notes before passing it on.';
   wrap.append(where);
   return wrap;
+}
+
+function correctionsActions(job) {
+  const wrap = document.createElement('div');
+  const actions = document.createElement('div');
+  actions.className = 'job-actions';
+  const note = actionNote();
+
+  actions.append(openButton(job, 'corrected',
+    WEB ? 'Download the corrected file (IDML)'
+        : 'Open the corrected file in InDesign', note));
+  const read = document.createElement('button');
+  read.textContent = 'Read the corrections report';
+  read.addEventListener('click', () => openCorrectionsReport(job));
+  actions.append(read);
+  actions.append(openButton(job, 'corrections-notes',
+    WEB ? 'Download the report (Markdown)' : 'Open the report notes', note,
+    { quiet: true }));
+  if (!WEB) {
+    actions.append(
+      openButton(job, 'corrected', 'Show in Finder', note, { reveal: true }));
+  }
+
+  const bits = [];
+  if (typeof job.applied === 'number') bits.push(`${job.applied} applied`);
+  if (job.flags) bits.push(`${job.flags} for a human`);
+  if (job.discrepancies) {
+    bits.push(`${job.discrepancies} unaccounted change`
+      + `${job.discrepancies === 1 ? '' : 's'}`);
+  }
+  if (job.results_name) bits.push(`saved in “${job.results_name}”`);
+  if (bits.length) {
+    const meta = document.createElement('span');
+    meta.className = 'file-meta';
+    meta.textContent = bits.join(' · ');
+    actions.append(meta);
+  }
+  driveActions(actions, note, job);
+  wrap.append(actions, note);
+
+  const where = document.createElement('p');
+  where.className = 'where';
+  where.textContent = job.verified
+    ? 'Every correction landed exactly, and nothing else in the file changed — '
+      + 'checked word for word, not assumed. Open the corrected .idml in '
+      + 'InDesign; it reflows on open.'
+    : 'Heads up: some corrections were refused, or the file changed in ways the '
+      + 'list did not ask for. Read the report before passing it on.';
+  wrap.append(where);
+  return wrap;
+}
+
+async function openCorrectionsReport(job) {
+  let d;
+  try {
+    d = await api(`/api/jobs/${job.id}/corrections`);
+  } catch (err) {
+    alert(`Couldn't load the corrections report: ${err.message}`);
+    return;
+  }
+  const url = URL.createObjectURL(
+    new Blob([correctionsReportHTML(d)], { type: 'text/html' }));
+  if (!window.open(url, '_blank')) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `corrections - ${d.source_name || 'file'}.html`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// A self-contained printable report from corrections.json — the same three
+// stages the notes .md carries (parse, apply, verify), in the shared report
+// styling. Every value came from a document, so all of it is escaped.
+function correctionsReportHTML(d) {
+  const num = (n) => Number(n || 0).toLocaleString();
+  const ap = d.apply || {};
+  const v = d.verify || {};
+  const issues = (d.parse || {}).issues || [];
+  const flagged = ap.flagged || [];
+  const disc = v.discrepancies || [];
+  const rightNum = ' style="text-align:right;font-variant-numeric:tabular-nums"';
+  const change = (o) => {
+    const f = esc(o.find || ''); const r = esc(o.replace || '');
+    if (f && !r) return `delete “${f}”`;
+    if (!f) return r ? `“${r}”` : esc(o.instruction || '');
+    return `“${f}” → “${r}”`;
+  };
+
+  const title = `Corrections — ${d.source_name || 'file'}`;
+  const gen = d.generated_at ? new Date(d.generated_at).toLocaleString() : '';
+  const clean = v.clean && !flagged.length && issues.length === 0;
+
+  const cards = '<div class="cards">'
+    + `<div class="card"><span class="n">${num(ap.applied)}</span>`
+    + '<span class="l">applied</span></div>'
+    + `<div class="card"><span class="n">${num(flagged.length)}</span>`
+    + '<span class="l">for a human</span></div>'
+    + `<div class="card"><span class="n">${num(disc.length)}</span>`
+    + '<span class="l">unaccounted changes</span></div>'
+    + `<div class="card"><span class="n">${clean ? '✓' : '—'}</span>`
+    + '<span class="l">clean</span></div></div>';
+
+  const headline = clean
+    ? '<p class="headline">✓ <b>Every correction landed exactly, and nothing '
+      + 'else in the file changed.</b></p>'
+    : '<p class="headline" style="background:#fbeae2"><b>Some corrections need a '
+      + 'human, or the file changed in ways the list did not ask for.</b> '
+      + 'See below.</p>';
+
+  const issuesHTML = issues.length
+    ? `<h2>Corrections that could not be read — ${num(issues.length)}</h2>`
+      + '<p class="blurb">Skipped; nothing was guessed.</p>'
+      + issues.map((i) =>
+        `<p><b>Entry ${num((i.index || 0) + 1)}</b> <span class="caveat">`
+        + `${esc(i.reason)}</span></p>`).join('')
+    : '';
+
+  const flaggedHTML = flagged.length
+    ? `<h2>For a human — ${num(flagged.length)}</h2>`
+      + '<p class="blurb">Each of these was refused rather than guessed at.</p>'
+      + flagged.map((o) => `<div class="flag"><code>${esc(o.id)}</code> `
+        + `${change(o)}${o.detail ? ' — ' + esc(o.detail) : ''}</div>`).join('')
+    : '';
+
+  const discHTML = disc.length
+    ? `<h2>Unaccounted changes — ${num(disc.length)}</h2>`
+      + '<p class="blurb">Present in the file, asked for by no correction.</p>'
+      + '<table><thead><tr><th>Where</th><th>Was</th><th>Now</th></tr></thead>'
+      + '<tbody>' + disc.map((x) => {
+        const where = `story ${esc(x.story_id)}`
+          + (x.paragraph >= 0 ? `, ¶ ${num(x.paragraph)}` : '');
+        return `<tr><td>${where}</td><td>${esc(x.before)}</td>`
+          + `<td>${esc(x.after)}</td></tr>`;
+      }).join('') + '</tbody></table>'
+    : '';
+
+  const verifyHTML = '<h2>Verification</h2>'
+    + '<p class="blurb">The corrected file is compared word for word against '
+    + 'what a clean apply of the list should produce — so an unrequested change '
+    + 'has nowhere to hide.</p>'
+    + `<p>Paragraphs: ${num(v.paragraphs_before)} before, `
+    + `${num(v.paragraphs_after)} after`
+    + (v.structure_changed
+      ? ' — <b>a paragraph was added, removed or merged</b>' : '') + '.</p>'
+    + (disc.length ? '' : '<p>No unaccounted changes.</p>');
+
+  return '<!doctype html><html><head><meta charset="utf-8">'
+    + `<title>${esc(title)}</title><style>${REPORT_CSS}`
+    + '.flag{border-left:3px solid var(--accent-soft);padding:.2em .8em;'
+    + 'margin:.4em 0}.flag code{color:var(--accent)}</style></head><body>'
+    + '<div class="wrap"><header class="rep"><span class="brand">DocProof</span>'
+    + `<h1>${esc(title)}</h1>`
+    + '<p class="sub">Deterministic — no model, no cost'
+    + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
+    + cards + headline + issuesHTML + flaggedHTML + discHTML + verifyHTML
+    + '</div></body></html>';
 }
 
 // ── the report ────────────────────────────────────────────────────────────

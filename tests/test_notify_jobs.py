@@ -56,6 +56,14 @@ def test_completion_for_job_speaks_each_pipeline():
     _, review, _ = notify.completion_for_job(_job(kind="review", applied=42))
     assert "Proofread" in review and "Changes applied: 42" in review
 
+    _, corr, _ = notify.completion_for_job(_job(
+        kind="corrections", filename="Shams - a thousand touches.idml",
+        applied=548, flags=7, discrepancies=0, verified=True))
+    assert "Corrections" in corr and "Applied: 548" in corr
+    assert "Refused for a human: 7" in corr and "Clean: yes" in corr
+    # No model dials — the engine is deterministic — so the settings group says so.
+    assert "deterministic — no model, no cost" in corr
+
 
 def test_the_review_email_reports_both_channels():
     """A proofread hands back corrections AND questions. The log said only the

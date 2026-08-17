@@ -326,12 +326,20 @@ def maybe_complete(token: str, ws, job, file, rec, uploaded: list[str],
 # the pipeline actually did: a proofread reports changes, a format reports styled
 # paragraphs, promo reports the copy and its grounding flags.
 
-PIPELINE_LABEL = {"review": "Proofread", "prep": "Format", "promo": "Promo copy"}
+PIPELINE_LABEL = {"review": "Proofread", "prep": "Format", "promo": "Promo copy",
+                  "corrections": "Corrections"}
 SOURCE_LABEL = {"app": "Dropped in the app", "watch": "Watched folder"}
 
 
 def _result_group(job) -> tuple[str, list]:
     """The one group that differs by pipeline: what this job produced."""
+    if job.kind == "corrections":
+        return ("Corrections", [
+            ("Applied", _int(job.applied), None),
+            ("Refused for a human", _int(job.flags), None),
+            ("Unaccounted changes", _int(job.discrepancies), None),
+            ("Clean", "yes" if job.verified else "no", None),
+        ])
     if job.kind == "promo":
         return ("Promo copy", [
             ("Words read", _int(job.words), None),
@@ -380,6 +388,10 @@ def _settings_rows(job) -> list:
     """What the run was set to do, from the job record — so the email says not
     just what it cost but what it actually ran. Reflects the choices a person
     made on the panel; the attached summary carries the fully-resolved list."""
+    # Corrections runs no model, so none of the review dials below apply — say
+    # what it is instead of a page of defaults it never read.
+    if getattr(job, "kind", "") == "corrections":
+        return [("Engine", "deterministic — no model, no cost", None)]
     feats = getattr(job, "features", None) or {}
     rows = [("Confidence gate",
              getattr(job, "min_confidence", None) or "default", None)]

@@ -38,7 +38,10 @@ _HARSHNESS_LEVELS = get_args(
 
 class JobRequest(BaseModel):
     file_ids: list[str] = Field(min_length=1)
-    model: str
+    # Empty is allowed so a corrections job — which runs no model — need not send
+    # one. Review and prep still require a real model: `lookup("")` returns None
+    # and the create route 400s, exactly as it did when this had no default.
+    model: str = ""
     mode: str = "batch"                       # "now" | "batch"
     schedule_at: str | None = None            # "HH:MM" local
     min_confidence: str = "medium"
@@ -55,9 +58,14 @@ class JobRequest(BaseModel):
     # file_id → chunk ids to review. A file absent from this map, or a null
     # entry, means the whole document.
     selections: dict[str, list[str] | None] | None = None
-    # What to do with these documents: review them for errors, or prepare them
-    # for the house InDesign template.
-    kind: str = "review"                      # "review" | "prep"
+    # What to do with these documents: review them for errors, prepare them for
+    # the house InDesign template, or apply a corrections list to an exported
+    # InDesign file.
+    kind: str = "review"                      # "review" | "prep" | "corrections"
+    # Corrections only: the corrections list, as the JSON the parser accepts
+    # (a list of {find, replace, …}, or [find, replace] pairs). Empty on every
+    # other kind. The IDML it edits is the single uploaded file.
+    corrections: str = ""
     prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
     # Book output only: the operator's answers for the sketch. Empty means
     # "let the detector read them off the opening pages".
@@ -149,7 +157,15 @@ def _result_name(job: Job, which: str) -> str | None:
         "notes": "prep_notes.md",
         "prep": "prep.json",
         "placed": f"placed_{stem}.indd",
+        # Corrections: the corrected IDML the designer reopens, and its report.
+        "corrected": f"{stem}_corrected.idml",
+        "corrections-notes": "corrections_notes.md",
+        "corrections": "corrections.json",
     }
+    if job.is_corrections and which in ("document", "docx"):
+        # One "open it" button gives back the corrected file, whatever the
+        # generic caller asked for.
+        return names["corrected"]
     if job.is_prep and which in ("document", "docx"):
         # Whatever this job actually wrote, so one "open it" button works for
         # any output choice — counting the archive as well as the disk, so a
@@ -178,6 +194,59 @@ def _result_path(job: Job, which: str) -> Path:
     if not path.is_file():
         raise HTTPException(404, f"{name} is missing")
     return path
+
+
+def _create_corrections(req: JobRequest, owner: str, paths: Paths,
+                        runner: JobRunner) -> dict:
+    """Create a corrections job: one exported IDML, one corrections list.
+
+    Deterministic and free, so none of the review/prep vetting (models, keys,
+    rounds, the spend cap) applies — but the two inputs are checked here, in
+    front of the person who chose them, rather than failing the run at write
+    time: exactly one .idml, and a corrections list that parses to at least one
+    edit."""
+    if len(req.file_ids) != 1:
+        raise HTTPException(
+            400, "Corrections take one InDesign file at a time — a corrections "
+                 "list is specific to the book it was written for.")
+    source = common.resolve_upload(paths, req.file_ids[0], owner)
+    if source is None:
+        raise HTTPException(404, f"Uploaded file {req.file_ids[0]!r} is gone")
+    if source.suffix.lower() != ".idml":
+        raise HTTPException(
+            400, "Corrections are applied to an InDesign file — export the "
+                 ".indd as IDML (File → Export → InDesign Markup) and upload "
+                 "that.")
+    if not req.corrections.strip():
+        raise HTTPException(400, "Paste the corrections list to apply.")
+    # Parse now so a list that is malformed as a whole (not valid JSON), or that
+    # yields nothing usable, is refused here rather than as a failed job later.
+    # Partial issues are fine — the run applies the good edits and reports the
+    # rest — so only an empty result is turned away.
+    from docproof.corrections.parse import parse_edits
+    try:
+        parsed = parse_edits(req.corrections)
+    except ValueError as e:
+        raise HTTPException(400, f"The corrections list could not be read: {e}")
+    if not parsed.edits:
+        detail = (parsed.issues[0].reason if parsed.issues
+                  else "the list held no corrections")
+        raise HTTPException(400, f"No usable corrections were found — {detail}.")
+
+    group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
+    job = Job(
+        id=batchlib.new_job_id(source.name),
+        filename=source.name,
+        source_path=str(source),
+        model="",                             # deterministic; no model runs
+        mode="now",                           # never batched
+        group_id=group_id,
+        kind="corrections",
+        corrections=req.corrections,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        owner_id=owner,
+    )
+    return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
 
 
 def register(app: FastAPI) -> None:
@@ -248,8 +317,15 @@ def register(app: FastAPI) -> None:
         runner: JobRunner = app.state.runner
         if req.mode not in ("now", "batch"):
             raise HTTPException(400, "mode must be 'now' or 'batch'")
-        if req.kind not in ("review", "prep"):
-            raise HTTPException(400, "kind must be 'review' or 'prep'")
+        if req.kind not in ("review", "prep", "corrections"):
+            raise HTTPException(
+                400, "kind must be 'review', 'prep' or 'corrections'")
+        # Corrections is its own short, deterministic path: one exported IDML plus
+        # a corrections list, no model and no cost. It shares nothing with the
+        # review/prep validation below (models, keys, rounds, the spend cap), so
+        # it is handled here and returns before any of it.
+        if req.kind == "corrections":
+            return _create_corrections(req, owner, paths, runner)
         if req.prep_output not in ("book", "indesign", "tracked", "both", "all"):
             raise HTTPException(
                 400, "prep_output must be 'book', 'indesign', 'tracked', "
@@ -847,6 +923,20 @@ def register(app: FastAPI) -> None:
                           ("indesign", f"tagged_{Path(job.filename).stem}.idml"),
                           ("tracked", f"tracked_{Path(job.filename).stem}.docx"))}
         return data
+
+    @app.get("/api/jobs/{job_id}/corrections")
+    def corrections_report(job_id: str,
+                           owner: str = Depends(owner_for)) -> dict:
+        """What the corrections run applied, refused and found unaccounted, read
+        back for the results screen. The same corrections.json the report writer
+        left behind (docproof.corrections.report)."""
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        path = _resolve_result(job, "corrections.json")
+        if path is None:
+            raise HTTPException(404, "This job has no corrections report")
+        return json.loads(path.read_text("utf-8"))
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:

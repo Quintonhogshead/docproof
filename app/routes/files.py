@@ -80,11 +80,19 @@ def register(app: FastAPI) -> None:
         review, review_error = _review_preflight(cfg, dest)
         prep, prep_error = _prep_preflight(cfg, paths, dest)
         promo, promo_error = _promo_preflight(cfg, paths, dest)
+        # Corrections edit a finished InDesign file, so an .idml can be corrected
+        # and nothing else can — the check is the suffix, no parse needed. (An
+        # unreadable .idml still fails at run time and is reported there.)
+        can_correct = dest.suffix.lower() == ".idml"
+        correct_error = (None if can_correct else
+                         "Corrections need an InDesign file — export the .indd "
+                         "as IDML and upload that.")
         entry.update(review or {}, review_error=review_error,
                      prep=prep, prep_error=prep_error,
                      promo=promo, promo_error=promo_error,
                      can_review=review is not None, can_prep=prep is not None,
-                     can_promo=promo is not None)
+                     can_promo=promo is not None,
+                     can_correct=can_correct, correct_error=correct_error)
         entry["ok"] = (review is not None or prep is not None
                        or promo is not None)
         if not entry["ok"]:
