@@ -1,0 +1,133 @@
+key: terminal_mark
+name: Wrong terminal mark
+version: 1
+# The detector gap this fills: nothing owned a wrong sentence-ending mark. The
+# sweep_terminal_period sweep is append-only — it can add a missing period, but
+# it can never turn a period into a question mark — and no model pass claimed
+# the case either, so a direct question set with a period ("Where did you put
+# the keys.") passed every stage untouched. This type is that missing owner.
+#
+# Ships INERT: it is not in any error_types pass in config/default.yaml. Deciding
+# a line is "really a question" is a judgment, so it ASKS (channel: query) rather
+# than editing, and it is precision-unproven — enable it only after gating it on
+# a real manuscript (eval/cases/terminal_mark.yaml + the redding corpus), the
+# same way compound_sentence_comma and unnecessary_comma ship inert.
+channel: query
+
+detection_prompt: |
+  A sentence written as a direct question but ended with a period instead of a
+  question mark — "Where did you put the keys." — reads wrong the moment a
+  reader hears the rising intonation the punctuation denies. No other pass owns
+  this: the sentence is grammatical, spelled right, and correctly a period for
+  a statement; only its being a QUESTION makes the mark wrong. Because whether
+  a line is a genuine question or a statement the author shaped that way is a
+  judgment, this type asks rather than corrects — it points at the mark and
+  leaves the change to the author.
+
+  The whole sentence you are asking about must sit inside the paragraph you are
+  reporting on. Judge it in the context you are given, but flag only a mark that
+  is inside this paragraph.
+
+  FLAG, as a question, only a sentence whose SYNTAX is unmistakably that of a
+  direct question, yet which ends in a period (or, in dialogue, a period before
+  the closing quote):
+  - Subject–auxiliary inversion, the plainest signal: "Are you coming with us."
+    "Did he ever call you back." "Have they signed it yet." "Can you hear me."
+    "Would you really do that."
+  - A main-clause wh-question — who, what, where, when, why, how, which, whose,
+    whom in question position, usually with inversion: "Why would he lie to me
+    now." "What do you want from me." "How are we supposed to pay for this."
+  These land most often in dialogue and in a character's unspoken thought.
+
+  The default answer for this type is silence. Most periods are right, and a
+  wrong query — one that tells an author a plain statement is a question — is
+  worse than a missed one, because it teaches them to stop reading the margin.
+
+  Do NOT flag — this list is where the false positives die, so weigh it before
+  every finding:
+  - An INDIRECT or embedded question, which correctly takes a period. The
+    interrogative word heads a subordinate clause, not a question: "She asked
+    where he had gone." "I wonder why he left." "He couldn't tell whether it
+    was raining." "They wanted to know who did it." There is no inversion in
+    the main clause, and no reader hears a question. This is the single most
+    common trap.
+  - A statement or exclamation that merely begins with or contains a wh-word:
+    "What she wanted was silence." "Whatever he decided, it was too late."
+    "How that dog loved to run." "What a mess." An exclamation is the author's
+    to end with a period or an exclamation point; it is not a question.
+  - An inverted phrase that is an exclamation or an idiom, not a request for an
+    answer: "Would you look at that." "Aren't they lovely." "Boy, was I wrong."
+  - A polite request or command deliberately softened and set with a period:
+    "Would you please keep your voice down." "Will you stop that." The author
+    chose the period to make it an order rather than a question; leave it.
+  - A bare declarative that could be a question only from intonation: "You're
+    not serious." "You actually said that to her." Flag one of these only when
+    the surrounding lines make the question reading unmistakable — it plainly
+    gets an answer, or it is part of an interrogation. Otherwise stay silent;
+    the period may be exactly the flat, disbelieving beat the author wanted.
+  - A rhetorical question the author closed with a period on purpose for that
+    falling, resigned tone. When you truly cannot tell, a gentle query still
+    fits, but do not flag a line that plainly reads as a statement of feeling.
+  - The exclamation-point question ("."→"!"). Whether a line deserves an
+    exclamation point is entirely the author's; this type is about the missing
+    QUESTION MARK only, never emphasis.
+  - A tag question ("You're coming, aren't you."). tag_question_comma owns the
+    punctuation of tag questions; leave the whole tag-question line to it.
+  - A sentence with NO terminal punctuation at all. Supplying a first mark is
+    the sweep_terminal_period sweep's job, not this type's — this type only
+    ever changes a mark that is already there from a period to a question mark.
+  - A sentence already ending in a question mark, exclamation point, ellipsis,
+    or an em dash that marks an interruption. Those are finished.
+  - Questions inside quoted matter the author is reproducing rather than
+    writing — an epigraph, a letter, a document, a transcript.
+
+fix_guidance: |
+  This type never edits. Set corrected_text to the quoted text exactly as it
+  appears — repeat original_text unchanged, character for character, including
+  the period you are asking about — and put the observation in explanation,
+  phrased as a question the author can answer: quote the sentence, say that it
+  reads as a direct question, and ask whether its period should be a question
+  mark. Quote exactly the one sentence whose mark is in doubt. Never write the
+  version with the question mark in; changing the mark is the author's call,
+  and the whole reason this is a query and not a change.
+
+confidence_guidance: |
+  Every finding of this type becomes a comment, whatever its confidence, so
+  confidence describes how sure you are rather than gating anything — but it is
+  read, so let it steer you toward silence when you are unsure.
+  high   — unmistakable interrogative syntax: subject–auxiliary inversion or a
+           main-clause wh-question, ending in a period, with nothing to suggest
+           it is rhetorical, embedded, or a softened command.
+  medium — interrogative syntax that could also be read as rhetorical or
+           exclamatory; the query helps, but the author may have meant the
+           period. Say as much in the comment.
+  low    — a declarative that is a question only from context or intonation.
+           Prefer silence unless the surrounding lines make the question
+           reading unmistakable; when in real doubt, do not drop to low, stay
+           silent.
+
+examples:
+  - text: "She turned the letter over in her hands. Why would he write to her now, after all this time. There was no address on the back, no name at all."
+    finding:
+      original_text: "She turned the letter over in her hands. Why would he write to her now, after all this time. There was no address on the back, no name at all."
+      corrected_text: "She turned the letter over in her hands. Why would he write to her now, after all this time. There was no address on the back, no name at all."
+      explanation: "\"Why would he write to her now, after all this time\" reads as a direct question but ends with a period — should the period be a question mark?"
+      confidence: high
+  - text: "“Have you even looked at the map.” He shook it open across the dashboard."
+    finding:
+      original_text: "“Have you even looked at the map.” He shook it open across the dashboard."
+      corrected_text: "“Have you even looked at the map.” He shook it open across the dashboard."
+      explanation: "\"Have you even looked at the map\" is a direct question set with a period — did you mean a question mark?"
+      confidence: high
+  - text: "He read the wire twice. How could they possibly know already. The presses had been running since midnight."
+    finding:
+      original_text: "He read the wire twice. How could they possibly know already. The presses had been running since midnight."
+      corrected_text: "He read the wire twice. How could they possibly know already. The presses had been running since midnight."
+      explanation: "\"How could they possibly know already\" reads as a question — a question mark rather than a period? If it is rhetorical, leave it."
+      confidence: medium
+  - text: "She asked him where he had been all night, and he only shrugged and looked at the floor."
+    finding: null
+  - text: "What she wanted more than anything just then was a full night's sleep."
+    finding: null
+  - text: "Well, would you look at that, he thought, and slowed the car to a crawl."
+    finding: null
