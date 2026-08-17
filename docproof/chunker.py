@@ -18,8 +18,20 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _MAX_CONTEXT_PARAS = 3
 
 
-def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
-    budget = cfg.chunking.token_budget
+def chunk_document(doc: DocumentModel, cfg: Config, *,
+                   token_budget: int | None = None,
+                   id_prefix: str = "") -> tuple[Chunk, ...]:
+    """Pack reviewable paragraphs into chunks under a token budget.
+
+    `token_budget` overrides `chunking.token_budget` for a single category that
+    asks for a tighter (or looser) read; the default is the global budget, so a
+    caller that passes nothing gets the historical chunking exactly. `id_prefix`
+    namespaces the chunk ids: two categories chunked at different budgets pack
+    different paragraphs into `chunk-000`, so a prefix keeps their ids distinct
+    wherever a (pass, chunk) pair is a key — the default-budget set uses the
+    empty prefix, so its ids, and every cache/checkpoint/batch id built from
+    them, are unchanged."""
+    budget = token_budget if token_budget is not None else cfg.chunking.token_budget
     chunks: list[Chunk] = []
     cur: list[ParagraphRef] = []
     cur_tokens = 0
@@ -27,7 +39,8 @@ def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
     def flush() -> None:
         nonlocal cur, cur_tokens
         if cur:
-            chunks.append(Chunk(f"chunk-{len(chunks):03d}", tuple(cur), cur_tokens))
+            chunks.append(Chunk(f"{id_prefix}chunk-{len(chunks):03d}",
+                                tuple(cur), cur_tokens))
             cur, cur_tokens = [], 0
 
     for p in doc.paragraphs:
@@ -39,7 +52,7 @@ def chunk_document(doc: DocumentModel, cfg: Config) -> tuple[Chunk, ...]:
         if t > budget:                       # oversized paragraph: its own chunk(s)
             flush()
             for piece in _oversized_pieces(p, cfg):
-                chunks.append(Chunk(f"chunk-{len(chunks):03d}", (piece,),
+                chunks.append(Chunk(f"{id_prefix}chunk-{len(chunks):03d}", (piece,),
                                     estimate_tokens(piece.text)))
             continue
         if cur and cur_tokens + t > budget:

@@ -311,8 +311,15 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
         created_at=_now(),
         config=cfg.model_dump(mode="json"),
         # Resolved rather than echoed: whatever narrowed the run, the manifest
-        # records the chunk ids that actually went out.
-        selection=[c.chunk_id for c in prepared.chunks],
+        # records every chunk id that actually went out — across every pass's
+        # chunk set (a custom-budget category has its own ids) plus the default
+        # set the rewrite pass rides — so collect re-derives and pins exactly the
+        # same partial review. Ids are budget-namespaced, so the union is
+        # unambiguous.
+        selection=sorted(
+            {c.chunk_id for c in prepared.chunks}
+            | {c.chunk_id for p in prepared.effective_pass_plan
+               for c in p.chunks}),
         prompts=pass_prompts(cfg, prepared),
     )
     save(job, workspace)
@@ -338,17 +345,20 @@ def build_requests(cfg: Config, prepared: Prepared) -> list[BatchRequest]:
     the rate limit) synchronously at collect."""
     from .analyzer import render_chunk
 
-    analyzers = build_analyzers(cfg, prepared.groups, None,
+    analyzers = build_analyzers(cfg, prepared.pass_types, None,
                                 itertools.count(1), prepared.vocabulary,
                                 prepared.conventions, prepared.story_sheet)
+    # One request per (pass, chunk), each pass over ITS chunk set (a repeated or
+    # custom-budget category differs from the default). analyzers[prun.index]
+    # lines up because build_analyzers consumed the same plan order.
     requests = [
-        BatchRequest(custom_id=custom_id(i, chunk.chunk_id),
-                     system=analyzer.system_prompt,
+        BatchRequest(custom_id=custom_id(prun.index, chunk.chunk_id),
+                     system=analyzers[prun.index].system_prompt,
                      user=render_chunk(chunk),
-                     schema=analyzer.schema,
-                     schema_name=analyzer.schema_name)
-        for i, analyzer in enumerate(analyzers)
-        for chunk in prepared.chunks
+                     schema=analyzers[prun.index].schema,
+                     schema_name=analyzers[prun.index].schema_name)
+        for prun in prepared.effective_pass_plan
+        for chunk in prun.chunks
     ]
     if rewrite_batched(cfg) and prepared.whole_document:
         from .rewrite import PROPOSE_SYSTEM, lens_system, render, rewrite_schema
@@ -686,19 +696,23 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
     still fails is recorded in `coverage` so the report names it."""
     ids = itertools.count(1)
     usage = Usage()
-    analyzers = build_analyzers(cfg, prepared.groups, provider, ids,
+    analyzers = build_analyzers(cfg, prepared.pass_types, provider, ids,
                                 prepared.vocabulary, prepared.conventions,
                                 prepared.story_sheet)
+    plan = prepared.effective_pass_plan
     findings: list = []
     recovered = 0
     unrecovered = 0
 
     # Ordered by pass then chunk so finding IDs come out in the same order a
     # synchronous run would produce — including any recovered inline, which
-    # keeps the validator's span-claim precedence between passes intact.
-    for i, analyzer in enumerate(analyzers):
-        for chunk in prepared.chunks:
-            result = results.get(custom_id(i, chunk.chunk_id))
+    # keeps the validator's span-claim precedence between passes intact. Each
+    # pass reads its own chunk set (custom-budget or repeated categories differ
+    # from the default), so iterate the plan, not one shared chunk list.
+    for prun in plan:
+        analyzer = analyzers[prun.index]
+        for chunk in prun.chunks:
+            result = results.get(custom_id(prun.index, chunk.chunk_id))
             found: list = []
             ok = False
             if result is not None:
@@ -715,9 +729,9 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
 
     # Rewrite requests (rw-*) ride this batch but are assembled separately, in
     # collect(); they are not "unknown", so keep them out of the warning.
-    unknown = {r for r in set(results) - {custom_id(i, c.chunk_id)
-                                          for i in range(len(analyzers))
-                                          for c in prepared.chunks}
+    unknown = {r for r in set(results) - {custom_id(prun.index, c.chunk_id)
+                                          for prun in plan
+                                          for c in prun.chunks}
                if not r.startswith(REWRITE_PREFIX)}
     if recovered:
         log.info("%d batch request(s) had no usable result and were recovered "

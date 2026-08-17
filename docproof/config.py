@@ -3,7 +3,7 @@ from __future__ import annotations
 import fnmatch
 import os
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, NamedTuple
 
 import yaml
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
@@ -1157,6 +1157,57 @@ class FixCheckConfig(JudgeGateConfig):
     judge_key: ClassVar[str] = "fix"
 
 
+class PassSpec(NamedTuple):
+    """One DEFINED error-type category from `error_types`: its keys, how many
+    times to read it, and an optional per-category chunk budget (None = the
+    global `chunking.token_budget`). This is the category as written; expanding
+    `passes` into individual API passes, and resolving the budget into a chunk
+    set, happens in the pipeline where the chunks live."""
+    keys: tuple[str, ...]
+    passes: int = 1
+    token_budget: int | None = None
+
+
+_ERROR_ENTRY_KEYS = frozenset({"group", "passes", "token_budget"})
+
+
+def _normalize_error_entry(entry) -> PassSpec:
+    """One `error_types` entry -> PassSpec. Accepts a bare key, a list of keys,
+    or a mapping {group, passes?, token_budget?}. Raises ValueError on a shape
+    the schema does not allow (the field validator relies on this)."""
+    if isinstance(entry, str):
+        return PassSpec((entry,))
+    if isinstance(entry, (list, tuple)):
+        return PassSpec(tuple(entry))
+    if isinstance(entry, dict):
+        unknown = set(entry) - _ERROR_ENTRY_KEYS
+        if unknown:
+            raise ValueError(
+                f"error_types: unknown key(s) {sorted(unknown)} in a group "
+                f"mapping; allowed: {sorted(_ERROR_ENTRY_KEYS)}")
+        group = entry.get("group")
+        if isinstance(group, str):
+            group = [group]
+        if not isinstance(group, (list, tuple)) or not group:
+            raise ValueError(
+                "error_types: a group mapping needs a non-empty 'group' list")
+        passes = entry.get("passes", 1)
+        if not isinstance(passes, int) or isinstance(passes, bool) or passes < 1:
+            raise ValueError(
+                f"error_types: 'passes' must be an integer >= 1, got {passes!r}")
+        budget = entry.get("token_budget")
+        if budget is not None and (
+                not isinstance(budget, int) or isinstance(budget, bool)
+                or budget < 1):
+            raise ValueError(
+                f"error_types: 'token_budget' must be an integer >= 1, "
+                f"got {budget!r}")
+        return PassSpec(tuple(group), passes, budget)
+    raise ValueError(
+        "error_types: each entry must be a key, a list of keys, or a mapping "
+        "with a 'group' list")
+
+
 class Config(BaseModel):
     # CLI flags overwrite fields after load; validate those too.
     model_config = ConfigDict(validate_assignment=True)
@@ -1197,10 +1248,13 @@ class Config(BaseModel):
     # Americanized. See docproof/variants.py.
     variant: Literal["us", "uk", "ca", "au"] = "us"
     min_confidence: Literal["low", "medium", "high"] = "medium"
-    # Each entry is one API pass over the whole document: a bare key runs alone,
-    # a list of keys runs as a single combined pass. Grouping trades a little
-    # detection focus for a large cut in input tokens — see docs/error-types.md.
-    error_types: list[str | list[str]] = Field(default_factory=list)
+    # Each entry is one error-type category: a bare key runs alone, a list of
+    # keys runs as a single combined pass, and a mapping {group, passes?,
+    # token_budget?} tunes that one category — how many times it is read and at
+    # what chunk size — without touching the global budget or the other
+    # categories. Grouping trades a little detection focus for a large cut in
+    # input tokens — see docs/error-types.md.
+    error_types: list[str | list[str] | dict] = Field(default_factory=list)
     # Deterministic house-style sweeps, run before any model pass so their
     # edits get first claim on a span. These cost nothing and, unlike a read,
     # can report their own final match count. An empty list turns them off.
@@ -1260,16 +1314,19 @@ class Config(BaseModel):
     def _validate_error_types(cls, value):
         seen: set[str] = set()
         for entry in value:
-            keys = [entry] if isinstance(entry, str) else entry
-            if not keys:
+            spec = _normalize_error_entry(entry)   # raises on a bad shape
+            if not spec.keys:
                 raise ValueError("error_types: a group must list at least one key")
-            for key in keys:
-                if not key or not key.strip():
-                    raise ValueError("error_types: keys must be non-empty")
+            for key in spec.keys:
+                if not isinstance(key, str) or not key.strip():
+                    raise ValueError("error_types: keys must be non-empty strings")
                 if key in seen:
+                    # A key belongs to exactly one category. To read a category
+                    # more than once use its `passes:`, not the same key twice —
+                    # two groups sharing a key would double every finding.
                     raise ValueError(
-                        f"error_types: '{key}' appears more than once; a key in "
-                        f"two passes would review the document twice for it")
+                        f"error_types: '{key}' appears more than once; put a key "
+                        f"in a single category and use 'passes' to repeat it")
                 seen.add(key)
         return value
 
@@ -1289,14 +1346,24 @@ class Config(BaseModel):
         return value
 
     @property
+    def error_type_specs(self) -> tuple[PassSpec, ...]:
+        """One PassSpec per DEFINED category, carrying its repeat count and its
+        optional per-category chunk budget. Repeats are NOT expanded here — a
+        category with passes=2 is one PassSpec whose `passes` is 2; the pipeline
+        expands it once it has the chunks."""
+        return tuple(_normalize_error_entry(entry) for entry in self.error_types)
+
+    @property
     def error_type_groups(self) -> tuple[tuple[str, ...], ...]:
-        """error_types normalized to one tuple per pass."""
-        return tuple((entry,) if isinstance(entry, str) else tuple(entry)
-                     for entry in self.error_types)
+        """The keys of each defined category, one tuple per category. Repeat
+        counts and budgets do not change which types exist, so this stays the
+        keys-only view every downstream (query/format channels, labels) reads."""
+        return tuple(spec.keys for spec in self.error_type_specs)
 
     @property
     def error_type_keys(self) -> tuple[str, ...]:
-        """Every enabled key, flat, in pass order."""
+        """Every enabled key, flat, in category order (each key once, however
+        many times its category is read)."""
         return tuple(k for group in self.error_type_groups for k in group)
 
     def concurrency_for(self, model: str | None = None) -> int:

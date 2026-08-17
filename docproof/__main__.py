@@ -258,13 +258,21 @@ def cmd_inventory(args) -> int:
         return 2
 
     doc_tokens = sum(c.est_tokens for c in prepared.chunks)
+    plan = prepared.effective_pass_plan
     print(f"{len(prepared.doc.paragraphs)} reviewable paragraphs → "
           f"{len(prepared.chunks)} chunks (~{doc_tokens:,} document tokens)")
     print(f"{len(cfg.error_type_keys)} error type(s) in "
-          f"{len(prepared.groups)} pass(es) → {prepared.request_count} API "
-          f"calls, ~{prepared.est_document_tokens:,} document tokens sent")
-    for group in cfg.error_type_groups:
-        print(f"  pass: {' + '.join(group)}")
+          f"{len(cfg.error_type_groups)} category/-ies, {len(plan)} pass(es) → "
+          f"{prepared.request_count} API calls, "
+          f"~{prepared.est_document_tokens:,} document tokens sent")
+    for spec in cfg.error_type_specs:
+        extra = []
+        if spec.passes > 1:
+            extra.append(f"x{spec.passes}")
+        if spec.token_budget:
+            extra.append(f"@{spec.token_budget}t")
+        suffix = f"  ({', '.join(extra)})" if extra else ""
+        print(f"  category: {' + '.join(spec.keys)}{suffix}")
 
     swept = sum(r.flagged for r in prepared.sweep_reports)
     if prepared.sweep_reports:
@@ -847,9 +855,9 @@ def _run_mock(cfg, prepared, canned):
     ids = itertools.count(1)
     usage = Usage()
     findings = []
-    for group in prepared.groups:
-        analyzer = MockAnalyzer(group, canned, ids)
-        for chunk in prepared.chunks:
+    for prun in prepared.effective_pass_plan:
+        analyzer = MockAnalyzer(list(prun.types), canned, ids)
+        for chunk in prun.chunks:
             found, _ = analyzer.analyze_chunk(chunk, usage)
             findings.extend(found)
     return findings, usage

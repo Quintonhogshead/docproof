@@ -41,6 +41,23 @@ class JobCancelled(Exception):
     wrong, the work was called off."""
 
 
+@dataclass(frozen=True)
+class PassRun:
+    """One expanded detector pass, ready to run. `index` is the pass_index in
+    every (pass, chunk) key — checkpoint keys, batch custom ids, coverage — so
+    it must be unique and stable. `chunks` is the set this pass reads: a category
+    with its own `token_budget` carries its own chunking here, while every
+    default-budget pass shares the one set. A category read `repeats` times
+    contributes that many PassRuns with identical types and chunks but distinct
+    indices, so their keys never collide and the validator dedups the overlap."""
+    index: int
+    types: tuple[ErrorType, ...]
+    chunks: tuple[Chunk, ...]
+    token_budget: int
+    repeat: int = 1              # 1-based: which read of the category this is
+    repeats: int = 1             # how many reads the category asks for
+
+
 @dataclass
 class Prepared:
     pkg: object                  # the format's package wrapper
@@ -83,6 +100,31 @@ class Prepared:
     # multiplier the request count and token estimate need — every detector is
     # the whole review over again.
     n_detectors: int = 1
+    # The expanded run plan: one PassRun per (category x repeat), each carrying
+    # the chunk set it reads (a category with its own token_budget has its own
+    # chunking). prepare() always fills this; a manually built Prepared leaves it
+    # empty and `effective_pass_plan` synthesizes the historical one-pass-per-
+    # group-over-`chunks` plan, so old call sites keep working unchanged.
+    pass_plan: list["PassRun"] = field(default_factory=list)
+
+    @property
+    def effective_pass_plan(self) -> tuple["PassRun", ...]:
+        """The run plan, synthesizing the legacy one (one pass per defined group
+        over the shared `chunks`, default budget) when `pass_plan` is unset."""
+        if self.pass_plan:
+            return tuple(self.pass_plan)
+        # Budget 0 is a "not recorded" sentinel: a hand-built Prepared has no cfg
+        # to resolve it, and this synthesized plan is only ever used for its
+        # types and its shared chunk set, never its budget.
+        return tuple(
+            PassRun(i, tuple(group), tuple(self.chunks), 0, 1, 1)
+            for i, group in enumerate(self.groups))
+
+    @property
+    def pass_types(self) -> list[tuple[ErrorType, ...]]:
+        """Types per pass, in pass-index order — what build_analyzers consumes so
+        `analyzers[pass_index]` lines up with the plan (repeats included)."""
+        return [p.types for p in self.effective_pass_plan]
 
     @property
     def conventions(self) -> str:
@@ -117,19 +159,28 @@ class Prepared:
 
     @property
     def request_count(self) -> int:
-        return len(self.chunks) * len(self.groups) * self.n_detectors
+        # One request per (pass, chunk, detector). Passes no longer share a
+        # single chunk set — a repeated category contributes its chunks once per
+        # read, a custom-budget category its own chunk count — so sum the plan.
+        chunks = sum(len(p.chunks) for p in self.effective_pass_plan)
+        return chunks * self.n_detectors
 
     @property
     def est_document_tokens(self) -> int:
         # Context paragraphs ride the user turn and are billed on every chunk of
         # every pass, so they belong in the tokens-sent estimate even though
         # they are not the document's own text. Every detector sends the whole
-        # thing again, hence the n_detectors multiplier.
+        # thing again, hence the n_detectors multiplier. Summed per pass so a
+        # tighter-budget or repeated category is priced for what it actually
+        # sends, not the default chunking.
         from .utils.tokens import estimate_tokens
-        own = sum(c.est_tokens for c in self.chunks)
-        context = sum(estimate_tokens(p.text)
-                      for c in self.chunks for p in c.context_paragraphs)
-        return (own + context) * len(self.groups) * self.n_detectors
+        total = 0
+        for p in self.effective_pass_plan:
+            own = sum(c.est_tokens for c in p.chunks)
+            context = sum(estimate_tokens(par.text)
+                          for c in p.chunks for par in c.context_paragraphs)
+            total += own + context
+        return total * self.n_detectors
 
 
 @dataclass(frozen=True)
@@ -326,8 +377,32 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     # so it skips the snapshot.
     baseline = fmt.snapshot(pkg, "current") if (analyses and fmt.snapshot) else {}
     doc = fmt.build_document_model(pkg, cfg)
-    chunks = list(chunk_document(doc, cfg))
-    all_chunk_ids = {c.chunk_id for c in chunks}
+
+    # A chunk set per distinct token budget the categories ask for. The default
+    # budget keeps the empty id prefix, so its chunk ids — and every cache,
+    # checkpoint and batch id built from them — are byte-identical to a run
+    # before per-category budgets existed. Only a category that overrides the
+    # budget gets its own (namespaced) set, built once and shared by every
+    # category on that budget.
+    default_budget = cfg.chunking.token_budget
+    chunk_sets: dict[int, tuple[Chunk, ...]] = {}
+
+    def chunks_for(budget: int) -> tuple[Chunk, ...]:
+        if budget not in chunk_sets:
+            prefix = "" if budget == default_budget else f"b{budget}-"
+            chunk_sets[budget] = chunk_document(
+                doc, cfg, token_budget=budget, id_prefix=prefix)
+        return chunk_sets[budget]
+
+    chunks_for(default_budget)                       # the shared/default set
+    for spec in cfg.error_type_specs:
+        chunks_for(spec.token_budget or default_budget)
+
+    # Selection and max_chunks are validated against — and applied to — every
+    # budget's ids at once. Ids are namespaced by budget, so a picked id maps to
+    # exactly one set and the batch manifest can pin the union unambiguously.
+    all_chunk_ids = {c.chunk_id for cs in chunk_sets.values() for c in cs}
+    wanted: set | None = None
     if selection is not None:
         wanted = set(selection)
         unknown = wanted - all_chunk_ids
@@ -335,17 +410,44 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             raise ValueError(
                 f"No such section(s) in this document: "
                 f"{', '.join(sorted(unknown))}")
-        chunks = [c for c in chunks if c.chunk_id in wanted]
-        if len(chunks) < len(all_chunk_ids):
-            log.info("Reviewing %d selected section(s)", len(chunks))
+
+    def _select(cs: tuple[Chunk, ...]) -> tuple[Chunk, ...]:
+        out = cs
+        if wanted is not None:
+            out = tuple(c for c in out if c.chunk_id in wanted)
+        if max_chunks:
+            out = out[:max_chunks]
+        return out
+
+    filtered = {b: _select(cs) for b, cs in chunk_sets.items()}
+    chunks = list(filtered[default_budget])          # the set sweeps/outline read
+    if wanted is not None and len(chunks) < len(chunk_sets[default_budget]):
+        log.info("Reviewing %d selected section(s)", len(chunks))
     if max_chunks:
-        chunks = chunks[:max_chunks]
-        log.info("Reviewing only the first %d chunk(s)", len(chunks))
+        log.info("Reviewing only the first %d chunk(s) per pass", max_chunks)
+
     registry = load_error_types(error_dir, cfg.error_type_keys,
                                 override_dir=cfg.error_type_override_dir)
     groups = [[registry[k] for k in group] for group in cfg.error_type_groups]
-    log.info("%d error type(s) in %d pass(es): %s", len(cfg.error_type_keys),
-             len(groups), "; ".join("+".join(g) for g in cfg.error_type_groups))
+
+    # Expand the categories into the run plan: one PassRun per (category x read),
+    # each pointing at its budget's filtered chunk set, numbered so every
+    # (pass, chunk) key stays unique across repeats and budgets.
+    pass_plan: list[PassRun] = []
+    for spec in cfg.error_type_specs:
+        budget = spec.token_budget or default_budget
+        types = tuple(registry[k] for k in spec.keys)
+        pchunks = filtered[budget]
+        for r in range(spec.passes):
+            pass_plan.append(PassRun(len(pass_plan), types, pchunks,
+                                     budget, r + 1, spec.passes))
+    log.info("%d error type(s) in %d category/-ies, %d pass(es): %s",
+             len(cfg.error_type_keys), len(groups), len(pass_plan),
+             "; ".join(
+                 "+".join(s.keys)
+                 + (f" x{s.passes}" if s.passes > 1 else "")
+                 + (f" @{s.token_budget}t" if s.token_budget else "")
+                 for s in cfg.error_type_specs))
 
     # A selection that names every chunk IS a whole-document run. The batch
     # manifest deliberately records the resolved chunk ids of a full review
@@ -483,7 +585,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         adjudicate_candidates = []
         story_sheet = ""
 
-    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups, fmt=fmt,
+    return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups,
+                    pass_plan=pass_plan, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
                     spell=spell, normalization=norm, baseline=baseline,
                     variant=variant, consistency=consistency,
@@ -684,18 +787,22 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             dcfg.api.effort = effort
             dprov = provider_factory(dcfg)
         det_analyzers.append(build_analyzers(
-            dcfg, prepared.groups, dprov, ids,
+            dcfg, prepared.pass_types, dprov, ids,
             prepared.vocabulary, prepared.conventions, prepared.story_sheet))
 
     # The work list, in the order results must be folded back in: pass, then
     # chunk, then detector. With one detector this is (pass, chunk), the legacy
-    # order and legacy keys.
+    # order and legacy keys. A pass reads its OWN chunk set (a custom-budget or
+    # repeated category differs from the default), so iterate the plan, not a
+    # single shared chunk list.
+    plan = prepared.effective_pass_plan
     work = []
-    for pass_i in range(len(prepared.groups)):
-        for chunk in prepared.chunks:
+    for prun in plan:
+        for chunk in prun.chunks:
             for d in range(len(specs)):
-                work.append((det_analyzers[d][pass_i], chunk,
-                             _ckpt_key(pass_i, chunk.chunk_id, d), d, pass_i))
+                work.append((det_analyzers[d][prun.index], chunk,
+                             _ckpt_key(prun.index, chunk.chunk_id, d), d,
+                             prun.index))
 
     usage = Usage()
     findings: list = []
