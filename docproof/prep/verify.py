@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..reassembler import paragraph_view_text
-from ..utils.xml_helpers import DocxPackage, paragraph_text, walk_package
+from ..utils.xml_helpers import (DocxPackage, TEXTBOX_LOCATION, paragraph_text,
+                                 walk_package)
 from .ingest import BODY_PART
 from .model import Structure
 
@@ -85,7 +86,13 @@ def output_stream(path: str | Path, glyph: str, *, view: str = "clean") -> list[
     texts: list[str] = []
     held = ""
     for wp in walk_package(pkg):
-        if wp.part != BODY_PART:
+        if wp.part != BODY_PART or wp.location == TEXTBOX_LOCATION:
+            # The same paragraphs `build_structure` set aside as untouched:
+            # a textbox is layout the author placed by hand, read by neither
+            # side of this check. Counting it here but not in the source stream
+            # would fail every manuscript that floats a pull quote or a cover
+            # title in the body — the words are real, they are just not the
+            # running text prep is answering for.
             continue
         text = (paragraph_text(wp.element) if view == "clean"
                 else paragraph_view_text(wp.element, view))
