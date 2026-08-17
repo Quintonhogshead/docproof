@@ -11,11 +11,14 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app.jobs import JobRunner
+from app.jobs import Job, JobRunner, JobStore
 from app.main import create_app
+from app.settings import Paths, Settings
 
 from .conftest import FIXTURES
 from .fakes import LABELS, USAGE, TaggingProvider
+
+CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
 
 
 @pytest.fixture
@@ -542,3 +545,21 @@ def test_a_job_record_from_before_prep_existed_still_loads(client):
     assert job.kind == "review" and not job.is_prep
     assert job.prep_output == "indesign" and job.cost is None
     assert client.get("/api/jobs/old-job").json()["plain_state"] == "Ready"
+
+
+# --- which interior a prep run uses -------------------------------------------
+
+def test_watch_prep_swaps_in_the_plain_manuscript_design(tmp_path):
+    """A watched-folder prep hands back the plain manuscript; the app's own
+    prep keeps the paperback sketch. Same 'book' output, different interior."""
+    store = JobStore(Paths(tmp_path).ensure())
+    runner = JobRunner(store, Settings(), config_path=CONFIG)
+    base = dict(filename="simple.docx",
+                source_path=str(FIXTURES / "simple.docx"),
+                model="claude-sonnet-5", mode="now", kind="prep",
+                prep_output="book")
+    watched = store.save(Job(id="w1", source="watch", **base))
+    manual = store.save(Job(id="a1", source="app", **base))
+    assert (runner.config_for(watched).prep.book_design
+            == "prep/book_manuscript.yaml")
+    assert runner.config_for(manual).prep.book_design == "prep/book_design.yaml"

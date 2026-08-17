@@ -72,6 +72,7 @@ class Subject:
 
 @dataclass(frozen=True)
 class RunningHeads:
+    enabled: bool = True         # false leaves the head band empty
     verso: str = "author"        # "author" | "title"
     recto: str = "title"
     size: float = 9
@@ -97,6 +98,7 @@ class BookDesign:
     default_subject: str
     running_heads: RunningHeads
     folio_size: float
+    folio: bool
     drop_caps: DropCaps
     path: str
 
@@ -105,6 +107,14 @@ class BookDesign:
     @property
     def subject_choices(self) -> tuple[str, ...]:
         return tuple(self.subjects)
+
+    @property
+    def needs_meta(self) -> bool:
+        """Whether this design reads the manuscript's subject, title and
+        author. A plain design that sets nothing in the display face and hangs
+        no running heads uses none of them, so the run can skip the detection
+        call — and its cost — entirely."""
+        return bool(self.display_styles) or self.running_heads.enabled
 
     def subject(self, key: str | None) -> Subject:
         """The subject to design for, falling back to the default for an
@@ -231,13 +241,19 @@ def load_book_design(path: str | Path, *,
             f"{source}: default_subject '{default_subject}' is not one of the "
             f"subjects defined in this file.")
 
-    heads_raw = raw.get("running_heads") or {}
+    # `running_heads: false` (or an empty mapping with enabled: false) leaves
+    # the pages bare — no author/title band. Anything else is the mapping.
+    heads_field = raw.get("running_heads")
+    heads_enabled = heads_field is not False
+    heads_raw = heads_field if isinstance(heads_field, dict) else {}
+    heads_enabled = heads_enabled and bool(heads_raw.get("enabled", True))
     for side in ("verso", "recto"):
         value = heads_raw.get(side)
         if value is not None and value not in ("author", "title"):
             raise BookDesignError(
                 f"{source}: running_heads.{side} must be 'author' or 'title'.")
     heads = RunningHeads(
+        enabled=heads_enabled,
         verso=str(heads_raw.get("verso", "author")),
         recto=str(heads_raw.get("recto", "title")),
         size=float(heads_raw.get("size", 9)),
@@ -248,6 +264,11 @@ def load_book_design(path: str | Path, *,
     drops = DropCaps(lines=int(drops_raw.get("lines", 3) or 0),
                      after=tuple(str(n) for n in drops_raw.get("after") or ()))
 
+    # `folio: false` prints no page numbers; otherwise the mapping's size.
+    folio_field = raw.get("folio")
+    folio_enabled = folio_field is not False
+    folio_raw = folio_field if isinstance(folio_field, dict) else {}
+
     design = BookDesign(
         version=int(raw.get("version", 1)),
         name=str(raw.get("name") or source.stem),
@@ -255,7 +276,8 @@ def load_book_design(path: str | Path, *,
         display_styles=tuple(str(n) for n in raw.get("display_styles") or ()),
         subjects=subjects, default_subject=default_subject,
         running_heads=heads,
-        folio_size=float((raw.get("folio") or {}).get("size", 10)),
+        folio_size=float(folio_raw.get("size", 10)),
+        folio=folio_enabled,
         drop_caps=drops, path=str(source))
     log.info("Book design '%s' v%d: %d styled style(s), %d subject(s), "
              "default '%s'.", design.name, design.version, len(styles),

@@ -1,0 +1,129 @@
+# DocWatch's plain reading copy — "as basic as can be."
+#
+# This is the interior DocWatch hands back to the watched folder: a manuscript
+# in the plainest possible dress. Times New Roman, 12 point, US Letter, one-inch
+# margins, a centered page number at the foot, no running heads, no drop caps,
+# no subject-matter display faces. Nearly everything on the page is the same
+# 12-point body face; chapter titles are 14-point, and the only other
+# distinctions are bold, italic, centering and a page break before a chapter.
+#
+# It is the same shape of file as book_design.yaml (the app's Atmosphere
+# paperback sketch) and is read by the same code — it simply switches every
+# ornament off. The app's manual "book" output is unaffected: this file is
+# swapped in for watched-folder prep only (config.py `watch_book_design`,
+# JobRunner.config_for). To change what DocWatch hands back, edit this file (or
+# drop a replacement into the prep override directory) — no code changes.
+#
+# Measurements: page/margins in inches, everything else in points.
+# `line` is a line-spacing multiple (1.0 = single).
+
+version: 1
+name: DocWatch plain manuscript
+
+page:
+  width: 8.5
+  height: 11
+  margins:
+    top: 1.0
+    bottom: 1.0
+    inside: 1.0
+    outside: 1.0
+    header: 0.5
+    footer: 0.5
+  mirror_margins: false     # a plain, single-sided page — no gutter that flips
+
+# One face for the whole document. Times New Roman is a system font on every
+# machine that opens a .docx, so nothing is embedded — the file stays small and
+# the look is identical everywhere.
+fonts:
+  body:
+    family: Times New Roman
+    files: []
+  heading:
+    family: Times New Roman
+    files: []
+
+# No author/title band across the top of the page, but a plain centered page
+# number at the foot. Running heads can be turned on by replacing `false` with a
+# mapping (see book_design.yaml for the shape); the folio turns off with
+# `folio: false`. With running heads off, the number sits on every page after
+# the first.
+running_heads: false
+folio:
+  size: 12          # the page number, in the 12-point body face
+
+# No dropped initial on chapter openers.
+drop_caps:
+  lines: 0
+
+# House styles in 12-point Times New Roman (chapter titles 14). Body paragraphs
+# are left-aligned with a half-inch first-line indent and no space between them —
+# the classic typed-manuscript look. The other headings stay at 12, set apart by
+# weight, centering and a page break. To double-space the body, set `line: 2.0`
+# on "body para" and "body first".
+styles:
+  "body para":
+    {font: body, size: 12, line: 1.0, indent: 36, space_after: 0}
+  "body first":
+    {font: body, size: 12, line: 1.0, indent: 0, space_after: 0}
+  "scene break":
+    {font: body, size: 12, align: center, space_before: 12, space_after: 12}
+  "chapter # / title":
+    {font: heading, size: 14, bold: true, align: center, space_before: 24,
+     space_after: 24, page_break_before: true, keep_next: true}
+  "chapter subtitle":
+    {font: heading, size: 12, italic: true, align: center, space_after: 18,
+     keep_next: true}
+  "part #":
+    {font: heading, size: 12, bold: true, align: center, space_before: 24,
+     space_after: 12, page_break_before: true, keep_next: true}
+  "part title":
+    {font: heading, size: 12, bold: true, align: center, space_after: 24,
+     page_break_before: true, keep_next: true}
+  "title page":
+    {font: heading, size: 12, bold: true, align: center, space_before: 96,
+     space_after: 24, keep_next: true}
+  "front/backmatter title":
+    {font: heading, size: 12, bold: true, align: center, space_before: 24,
+     space_after: 24, page_break_before: true, keep_next: true}
+  "toc entry":
+    {font: body, size: 12, space_after: 4}
+  "copyright":
+    {font: body, size: 12, align: left, space_after: 8, line: 1.0,
+     page_break_before: true, space_before: 96}
+  "epigraph":
+    {font: body, size: 12, italic: true, align: center, space_before: 12,
+     space_after: 3, line: 1.0}
+  "epigraph source":
+    {font: body, size: 12, align: center, space_after: 18}
+  "Subhead A":
+    {font: heading, size: 12, bold: true, space_before: 18, space_after: 6,
+     keep_next: true}
+  "Subhead B":
+    {font: heading, size: 12, italic: true, space_before: 14, space_after: 6,
+     keep_next: true}
+  "captions":
+    {font: body, size: 12, align: center, space_before: 6, space_after: 12}
+  "tables":
+    {font: body, size: 12, space_after: 3}
+  "endnotes":
+    {font: body, size: 12, space_after: 3}
+  "references":
+    {font: body, size: 12, space_after: 3, indent: -18}
+  "bibliography":
+    {font: body, size: 12, space_after: 3, indent: -18}
+
+# Nothing is set in a display face — the whole document is the body face.
+display_styles: []
+
+# The loader wants at least one subject, and the book writer wants a default
+# even when it reads no subject. With `display_styles` empty and detection
+# skipped (BookDesign.needs_meta is false for this design), it is never used to
+# pick a face — it only satisfies the schema. One entry, the body face, is enough.
+subjects:
+  plain:
+    family: Times New Roman
+    file: ""
+    describe: Plain manuscript — no subject-matter styling.
+
+default_subject: plain

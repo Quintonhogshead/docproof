@@ -36,6 +36,14 @@ subject-matter → display-face map. Like the style sheet, a replacement dropped
 into the prep override directory wins wholesale, and the app's Settings screen
 reads the subjects out of it.
 
+> **DocWatch is the exception.** The watched folder hands back the same
+> `book_<name>.docx` output, but dressed by a deliberately plain interior —
+> `config/prep/book_manuscript.yaml` (Times New Roman, 12 point, US Letter, a
+> centered page number, chapter titles at 14 — no display faces, no running
+> heads), swapped in for watched-folder runs only. Because that design sets
+> nothing in a display face and hangs no running heads, the subject/title/author
+> detection below is skipped entirely on those runs. See [watch.md](watch.md).
+
 Three facts about the manuscript feed the design:
 
 - **subject** — picks the title-page display face (`IM FELL English` for
