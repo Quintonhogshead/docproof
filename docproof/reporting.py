@@ -117,7 +117,11 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                       "unruled": [{"pass": r.label, "asked": r.asked,
                                    "answered": r.answered, "lost": r.lost,
                                    "truncated_calls": r.truncated_calls}
-                                  for r in coverage.unruled]}
+                                  for r in coverage.unruled],
+                      # Whole passes that fell open and produced nothing — see
+                      # CoverageLedger.degraded.
+                      "degraded": [{"pass": d.label, "reason": d.reason}
+                                   for d in coverage.degraded]}
                      if coverage is not None else None),
         # What the smoothing pass did, for anything scoring it. `unjudged` is
         # the one that must not be inferred: a pass that proposed suggestions
@@ -280,6 +284,17 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
 
     if coverage is not None:
         L.append("## Coverage\n")
+        # Whole passes that fell open and produced nothing — the most severe hole,
+        # because unlike a gap the pass did not run at all. A dead or unkeyed
+        # judge/continuity/glossary model lands here, and a "done" run that
+        # skipped a paid pass otherwise reads exactly like one that ran it clean.
+        if coverage.degraded:
+            L.append(f"**{len(coverage.degraded)} pass(es) did not run** and were "
+                     f"skipped — their findings are entirely absent, not clean. "
+                     f"Check the model's API key:\n")
+            for d in coverage.degraded:
+                L.append(f"- **{d.label}** — {d.reason}")
+            L.append("")
         if coverage.complete:
             L.append(f"All {coverage.total} pass×section unit(s) were reviewed "
                      f"— no section was lost to a provider refusal, a truncated "

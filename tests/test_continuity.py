@@ -278,9 +278,14 @@ def test_build_degrades_to_empty_on_a_bad_response():
     from tests.fakes import USAGE
     prov = FakeProvider([ProviderResult(stop_reason="error", error="refused",
                                         usage=USAGE)])
+    seen = []
     rep = build_continuity([_para("body-0", "text")], prov,
-                           model="claude-fable-5", max_tokens=8000, usage=Usage())
+                           model="claude-fable-5", max_tokens=8000, usage=Usage(),
+                           on_degraded=seen.append)
     assert rep.findings == []                           # review proceeds regardless
+    # ...but the fall-open is reported, not silent — the reason reaches the caller
+    # so the run can name a paid pass that produced nothing.
+    assert seen == ["refused"]
 
 
 def test_a_truncated_read_retries_once_at_double_the_ceiling():

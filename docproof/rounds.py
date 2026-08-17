@@ -30,7 +30,8 @@ from typing import Callable
 
 from .editlayer import Contribution, EditLayer, RoundEdit
 from .error_registry import ErrorType
-from .models import DocumentModel, Finding, Usage, index_paragraphs
+from .models import (CoverageLedger, DocumentModel, Finding, Usage,
+                     index_paragraphs)
 from .providers import Provider
 from .validator import find_nth, validate_findings
 from .verifier import adjudicate_round
@@ -586,5 +587,10 @@ def _finalize(cfg, prepared0, base_path, result, fmt_findings, usage, out_dir,
     log.info("Multi-round review: %d round(s), %d change(s), %d quer(y/ies), "
              "%d rejected", result.rounds_run, len(result.edits),
              len(result.queries), len(result.rejected))
+    # A fresh ledger for the finalizing finish(): its whole-book reads and judge
+    # gates run once here, and a pass that falls open (a dead key) must reach the
+    # job card from the multi-round path too, not only the single-review one.
+    coverage = CoverageLedger()
     return finish(prepared_final, findings, usage, cfg,
-                  out_dir=out_dir, source_path=source_path, on_phase=on_phase)
+                  out_dir=out_dir, source_path=source_path, on_phase=on_phase,
+                  coverage=coverage)

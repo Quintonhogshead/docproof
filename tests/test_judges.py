@@ -352,6 +352,37 @@ def test_finish_holds_back_a_meaning_changing_edit(tmp_path, monkeypatch):
     assert out.queried == 1
 
 
+def test_a_gate_that_errors_out_is_recorded_as_degraded(tmp_path, monkeypatch):
+    """A judge whose provider call errors (a dead key) reads nothing, so every
+    change it was given is applied unread — and that fall-open reaches the
+    coverage ledger, so summary.md and the job card can say the gate did not run
+    instead of the run reading as clean."""
+    import docproof.providers as providers_mod
+    from docproof.config import load_config
+    from docproof.models import CoverageLedger
+    from docproof.pipeline import finish, prepare
+
+    src = _make_docx(tmp_path / "book.docx", PARA)
+    findings = [replace(_edit("f-1", PARA,
+                              "He could not have known the road was bared."),
+                        para_id="body-0000")]
+    cfg = load_config("config/default.yaml")
+    cfg.audit = "off"
+    cfg.meaning_check.enabled = True
+    # The judge's one call comes back an error, exactly as a deactivated key does.
+    provider = FakeProvider([ProviderResult(stop_reason="error",
+                                            error="401: deactivated", usage=USAGE)])
+    monkeypatch.setattr(providers_mod, "build_provider", lambda _c: provider)
+    prepared = prepare(cfg, src, "config/error_types")
+    coverage = CoverageLedger()
+    out = finish(prepared, list(findings), Usage(), cfg,
+                 out_dir=tmp_path / "out", source_path=src, coverage=coverage)
+    assert out.applied == 1                       # applied unread, not withheld
+    assert [d.label for d in coverage.degraded] == ["meaning-check gate"]
+    assert out.warnings and "meaning-check gate" in out.warnings[0]
+    assert "did not run" in (tmp_path / "out" / "summary.md").read_text("utf-8")
+
+
 def test_finish_applies_an_edit_that_preserves_meaning(tmp_path, monkeypatch):
     out, _ = _finish_with(
         tmp_path, monkeypatch, PARA,

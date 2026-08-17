@@ -149,6 +149,12 @@ class Outputs:
     # predates them still constructs.
     queried: int = 0
     judge_held: int = 0
+    # Human-readable, non-fatal warnings the run wants on the job card: chiefly
+    # whole passes that fell open and produced nothing (a dead or unkeyed
+    # judge/continuity/glossary model). Empty on a clean run. Kept short — the
+    # full accounting is summary.md's Coverage section — because the card only
+    # needs to say "this 'done' run quietly skipped a paid pass, go look".
+    warnings: list[str] = field(default_factory=list)
 
 
 def content_hash(doc: DocumentModel) -> str:
@@ -789,7 +795,10 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             model=cfg.glossary.model,
             max_tokens=cfg.glossary.max_output_tokens, usage=usage,
             effort=cfg.glossary.effort,
-            cache_dir=cache_dir_for(cfg.glossary.cache_dir))
+            cache_dir=cache_dir_for(cfg.glossary.cache_dir),
+            on_degraded=(
+                (lambda reason: coverage.record_degraded("glossary read", reason))
+                if coverage is not None else None))
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings.extend(case_drift_findings(
@@ -894,7 +903,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     # written out here, so the two paths cannot drift apart — see
     # continuity_findings.
     findings.extend(continuity_findings(cfg, prepared, ids, usage,
-                                        provider_factory, on_phase=on_phase))
+                                        provider_factory, on_phase=on_phase,
+                                        coverage=coverage))
 
     if coverage is not None:
         coverage.record_windows(window_losses)
@@ -903,7 +913,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
 
 
 def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
-                        provider_factory, *, on_phase=None) -> list[Finding]:
+                        provider_factory, *, on_phase=None,
+                        coverage=None) -> list[Finding]:
     """The whole-book continuity read's findings, or [] when the pass is off.
 
     One frontier read of the whole manuscript for facts it contradicts about
@@ -947,7 +958,10 @@ def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
             max_tokens=cfg.continuity.max_output_tokens, usage=usage,
             prompt=cfg.continuity.prompt,
             effort=cfg.continuity.effort,
-            cache_dir=cache_dir_for(cfg.continuity.cache_dir))
+            cache_dir=cache_dir_for(cfg.continuity.cache_dir),
+            on_degraded=(
+                (lambda reason: coverage.record_degraded("continuity read", reason))
+                if coverage is not None else None))
         out.extend(report_to_findings(
             report, prepared.doc.paragraphs, ids,
             min_confidence=cfg.continuity.min_confidence,
@@ -1524,7 +1538,7 @@ def _held_key(f) -> tuple:
 
 def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
                      usage: Usage, *, out_dir, replay: list[dict] | None,
-                     on_phase=None):
+                     on_phase=None, coverage=None):
     """Run every enabled judge gate over `validated`, in place.
 
     Returns (reports, held) — the per-gate reports for the run report, and how
@@ -1607,6 +1621,14 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
                   "corrected_text": f.corrected_text,
                   "explanation": f.explanation} for f in report.withheld]
         reports.append(report)
+        # A gate that could not read some of what it was given (a dead key, a
+        # refusal, a truncated batch) applied those changes unread — the exact
+        # silent hole a re-pinned-but-unkeyed judge leaves. Summary.md already
+        # names it per gate; this also carries it to the job card.
+        if coverage is not None and report.unread:
+            coverage.record_degraded(
+                f"{stage_id.replace('_', '-')} gate",
+                f"{report.unread} change(s) applied unread")
 
     # Persist what was held back. The verdicts live nowhere else — the checkpoint
     # only carries raw detector output, written long before finish() runs — so
@@ -1779,7 +1801,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # "validated", so the second neither sees it nor is billed for it.
     judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held,
-        on_phase=on_phase)
+        on_phase=on_phase, coverage=coverage)
     # Residual coverage, after every gate has settled what is actually being
     # edited: number-rule trigger sites no surviving edit touched become
     # margin queries, so a rule the model applied to most-but-not-all matches
@@ -1872,4 +1894,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                    applied=len(stats.applied), findings=len(validated),
                    change_log=change_log,
                    queried=sum(1 for f in validated if f.status == "query"),
-                   judge_held=held_count)
+                   judge_held=held_count,
+                   warnings=([f"{d.label}: {d.reason}"
+                              for d in coverage.degraded]
+                             if coverage is not None else []))

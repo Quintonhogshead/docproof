@@ -450,6 +450,15 @@ textarea {
   .rejudge-gate { grid-template-columns: minmax(0, 1fr); }
 }
 .job-error { margin-top: 0.5rem; font-size: 0.88rem; }
+/* A done-but-degraded run: a paid pass fell open and produced nothing. Amber,
+   not red — the review still finished and its other passes stand. */
+.job-warning {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--warn);
+  border-left: 2px solid var(--warn);
+  padding-left: 0.6rem;
+}
 .action-note { margin: 0.5rem 0 0; font-size: 0.88rem; }
 
 /* ── a newer version is ready ──────────────────────────────────────────── */
