@@ -486,12 +486,21 @@ def _round_config(cfg, k: int, reuse: bool):
     whole-book pass that runs once in the final finish(), and its reads would
     otherwise buy a fresh batch every round. The final finish uses the original
     cfg, so the pass still runs there — synchronously, since the final finish is
-    not a batch-submit boundary."""
-    if k == 1 or not reuse:
-        # Round 1 (and every round with reuse off) runs the config as given —
-        # EXCEPT that chapter continuity, a once-per-book pass, must never buy a
-        # per-round batch. Copy only when there is something to force off, so the
-        # common case keeps returning cfg unchanged.
+    not a batch-submit boundary.
+
+    Quote/space normalization is forced off for every round after the first. The
+    base is normalized exactly once (round 1, W0); a later round reviews a
+    working document rebuilt from the edit layers, whose text is that normalized
+    base with the approved edits folded in. Re-normalizing it on re-ingest would
+    curl a quote or collapse a double space that an edit introduced, so the
+    re-ingested working text would no longer match the layer's render and
+    run_rounds would abort ("the working document is out of step"). The layers
+    are the source of truth after round 1, so the working copy must be read back
+    verbatim."""
+    if k == 1:
+        # Round 1 runs the config as given — EXCEPT that chapter continuity, a
+        # once-per-book pass, must never buy a per-round batch. Copy only when
+        # there is something to force off, so the common case returns cfg as-is.
         if not cfg.chapter_continuity.enabled:
             return cfg
         rcfg = cfg.model_copy(deep=True)
@@ -499,9 +508,12 @@ def _round_config(cfg, k: int, reuse: bool):
         return rcfg
     rcfg = cfg.model_copy(deep=True)
     rcfg.chapter_continuity.enabled = False
-    rcfg.glossary.enabled = False
-    rcfg.storysheet.enabled = False
-    rcfg.languagetool.enabled = False
+    rcfg.normalize.quotes = False
+    rcfg.normalize.spaces = False
+    if reuse:
+        rcfg.glossary.enabled = False
+        rcfg.storysheet.enabled = False
+        rcfg.languagetool.enabled = False
     return rcfg
 
 

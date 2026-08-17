@@ -84,6 +84,33 @@ def test_two_rounds_apply_edits_from_both_rounds(tmp_path, cfg):
     assert review.calls and len(review.calls) == 2        # one detector call per round
 
 
+def test_edit_introducing_a_collapsible_space_stays_in_step(tmp_path, cfg):
+    """A round-1 edit that leaves a normalization-visible artifact (here a double
+    space, from deleting a word) must not desync the working copy from the edit
+    layer. Round 1's working document is normalized once (W0); later rounds read
+    a copy rebuilt from the layers and must NOT be re-normalized, or the collapse
+    would drift the re-ingested text from the layer's render and abort the run
+    ("the working document is out of step"). Regression for that abort."""
+    _minimal(cfg)
+    cfg.rounds.count = 2
+    src = _docx(tmp_path, "the big cat sat", "plain line")
+    review = FakeProvider([
+        # round 1: deleting "big" leaves "the  cat sat" (two spaces).
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the big cat sat", corrected="the  cat sat"),
+        # round 2: a fresh edit on the SAME paragraph, anchored in the working
+        # text as round 1 left it — this is what runs the fold-time invariant.
+        finding_result(para_id="body-0000", error_type="comma_splice",
+                       original="the  cat sat", corrected="the  cat sat."),
+    ])
+    out = run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
+                          review_provider=review, judge_provider=_ApproveJudge())
+    reject, accept = _views(out.reviewed_path)
+    assert reject["body-0000"] == "the big cat sat"       # reject-all → original
+    assert accept["body-0000"] == "the  cat sat."         # both rounds composed
+    assert len(review.calls) == 2
+
+
 def test_a_judge_rejection_keeps_the_original(tmp_path, cfg):
     _minimal(cfg)
     cfg.rounds.count = 2
