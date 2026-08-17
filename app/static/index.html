@@ -1126,6 +1126,78 @@
       <button id="promo-settings-save" class="primary">Save promo settings</button>
       <p id="promo-settings-status" class="muted" hidden></p>
     </details>
+
+    <details class="card" id="plan-auto">
+      <summary>Automatic marketing plans from the watched folder</summary>
+      <p class="muted">When a book's HubSpot "Marketing Plan" property reaches the
+        needed value, DocProof reads the author's folder — the manuscript, the
+        blurbs, and the publicity-questionnaire answers — writes the marketing
+        plan, delivers it to the folder, and moves the property on. Needs
+        DocWatch's HubSpot connection switched on. Runs on a flat watched folder;
+        under per-author subfolders it stands aside for now.</p>
+      <p id="plan-auto-needs-hubspot" class="muted" hidden>HubSpot is off in
+        DocWatch, so the automatic pipeline cannot run yet. Turn it on there
+        first.</p>
+      <label class="checkbox">
+        <input type="checkbox" id="plan-enabled">
+        Write marketing plans automatically
+      </label>
+      <label class="field">
+        <span>HubSpot "Marketing Plan" property (internal name)</span>
+        <input type="text" id="plan-property" placeholder="marketing_plan">
+      </label>
+      <label class="field">
+        <span>Property value that means "write the plan now"</span>
+        <input type="text" id="plan-needed" placeholder="Needed">
+      </label>
+      <label class="field">
+        <span>Value to set once the plan is delivered</span>
+        <input type="text" id="plan-done" placeholder="Uploaded">
+      </label>
+      <label class="field">
+        <span>HubSpot property holding the author's pen name
+          <small class="muted">— optional; blank heads the plan with the title
+            alone</small></span>
+        <input type="text" id="plan-pen" placeholder="author_name">
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" id="plan-auto-upload">
+        Deliver to Drive without waiting for approval
+        <small class="muted">— off holds each plan for a person to approve
+          first</small>
+      </label>
+      <label class="field">
+        <span>Model for automatic runs
+          <small class="muted" id="plan-model-fallback"></small></span>
+        <select id="plan-auto-model"></select>
+      </label>
+      <label class="field">
+        <span>Reasoning effort</span>
+        <select id="plan-auto-effort">
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="xhigh">Extra high</option>
+          <option value="max">Max</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Blurb file name pattern
+          <small class="muted">— which sibling file holds the back-cover
+            synopsis and blurbs</small></span>
+        <input type="text" id="plan-blurb-pattern"
+               placeholder="blurb|back.?cover|endorsement">
+      </label>
+      <label class="field">
+        <span>Questionnaire file name pattern
+          <small class="muted">— which sibling file holds the publicity
+            questionnaire answers</small></span>
+        <input type="text" id="plan-form-pattern"
+               placeholder="questionnaire|pnq|publicity">
+      </label>
+      <button id="plan-settings-save" class="primary">Save plan settings</button>
+      <p id="plan-settings-status" class="muted" hidden></p>
+    </details>
   </section>
 
   <!-- ── Spending ─────────────────────────────────────────────────────── -->

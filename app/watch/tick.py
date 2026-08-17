@@ -23,13 +23,14 @@ from pathlib import Path
 from app.jobs import Job, JobRunner, JobStore
 from app.settings import Paths, get_api_key, resource_root
 
-from . import drive, folders, hubspot, naming, notify, prep, promo
+from . import drive, folders, hubspot, naming, notify, plan, prep, promo
 from .drive import DriveError, DriveFile
 from .hubspot import HubSpotAuthError, HubSpotError
 from .keys import key_from_name
 from .settings import GOOGLE_KEY, HUBSPOT_KEY, WatchSettings
-from .stages import (JOB_PROP, OUTPUT_PROP, PROMO_DONE, PROMO_FAILED,
-                     PROMO_PENDING, SOURCE_PROP, Stage, classify,
+from .stages import (JOB_PROP, OUTPUT_PROP, PLAN_DONE, PLAN_FAILED,
+                     PLAN_PENDING, PROMO_DONE, PROMO_FAILED, PROMO_PENDING,
+                     SOURCE_PROP, Stage, classify, is_plan_candidate,
                      is_promo_candidate)
 from .state import WatchState, note_tick
 
@@ -66,6 +67,11 @@ class TickReport:
     # Books promo wrote copy for this pass, kept apart from `prepped` (which is
     # formatting) so a pass can say which stage did what.
     promoted: list[str] = field(default_factory=list)
+    # Books the marketing-plan stage wrote a plan for this pass. Its own list
+    # again, so a pass reports the three stages separately. (Not to be confused
+    # with `plan` below, which is the file-by-file classification a dry run
+    # returns.)
+    planned: list[str] = field(default_factory=list)
     uploaded: list[str] = field(default_factory=list)
     failed: list[tuple[str, str]] = field(default_factory=list)
     # Manuscripts a person must sort out before DocProof can act — chiefly a file
@@ -174,20 +180,25 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
 
 def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
                   state: WatchState, *, ready_value: str, id_get, id_set,
-                  opener, report: TickReport) -> list[DriveFile]:
+                  opener, report: TickReport, status_property: str | None = None,
+                  want_extra: tuple[str, ...] = (),
+                  on_match=None) -> list[DriveFile]:
     """Keep only the manuscripts HubSpot says to work on, for one stage.
 
-    An editor flags one Project at the status property's "ready" value. Among
+    An editor flags one Project at the gate property's "ready" value. Among
     thousands of Projects only a handful are ever ready at once, so the gate
     fetches that short list once and matches each new manuscript to it by author
     key — which is what makes a shared surname safe: eleven "Smith" Projects in
     the CRM, but only the one an editor flagged is ever a candidate.
 
-    The stage is what `ready_value` and the `id_get`/`id_set` pair select:
-    formatting reads its ready value and stores the matched record on the state
-    record's `hubspot_id`; promo reads its own value and uses `promo_hubspot_id`.
-    The status property and the key property are the same dropdown either way —
-    one book, one row in the CRM, two values it moves through.
+    The stage is what `ready_value`, the `id_get`/`id_set` pair, and the gate
+    property select: formatting and promo read the shared status dropdown
+    (`hubspot_status_property`, the default) at their own value and store the
+    match on `hubspot_id` / `promo_hubspot_id`; the marketing plan passes
+    `status_property=hubspot_plan_property` — a *separate* property — and uses
+    `plan_hubspot_id`. `want_extra` names any further properties to fetch on the
+    matched record (the plan asks for the pen name here). The key property is the
+    same across stages: one book, one row in the CRM.
 
     A book DocProof already started — recognised by a record id it wrote on an
     earlier tick — is carried straight through to completion without asking
@@ -201,15 +212,15 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
     thing that dooms the whole pass, so `HubSpotAuthError` propagates. And a file
     whose key matches *two* ready Projects is nobody's to guess: it waits, the
     pass goes on, and it is recorded in `needs_human` for a person to untangle."""
-    want = [p for p in (ws.hubspot_status_property, ws.hubspot_key_property)
-            if p]
+    prop = status_property or ws.hubspot_status_property
+    want = [p for p in (prop, ws.hubspot_key_property, *want_extra) if p]
     # The ready list is fetched once, and only if some file still needs it: a
     # pass that is all books we already started asks HubSpot nothing here.
     ready: list | None = None             # None: not fetched, or unreachable
     if any(not id_get(state.get(f.id)) for f in todo):
         try:
             ready = hubspot.find_by_value(
-                hs_token, ws.hubspot_object, ws.hubspot_status_property,
+                hs_token, ws.hubspot_object, prop,
                 ready_value, want_properties=want, opener=opener)
         except HubSpotAuthError:
             raise                         # the token is bad — stop the pass
@@ -250,6 +261,11 @@ def _gate_hubspot(hs_token: str, ws: WatchSettings, todo: list[DriveFile],
             report.waiting += 1
             continue
         id_set(rec, matches[0].id)        # written before work, never after
+        if on_match is not None:
+            # A hook for a stage that needs a field off the matched record the
+            # others do not — the plan captures the pen name here, so it is
+            # persisted with the id and no second HubSpot call is needed.
+            on_match(rec, matches[0])
         rec.name = file.name
         state.record(rec)
         eligible.append(file)
@@ -465,6 +481,224 @@ def _finish_hubspot_promo(hs_token: str | None, ws: WatchSettings,
                            props, allow={ws.hubspot_status_property},
                            opener=opener)
     rec.promo_hubspot_done = True
+    state.record(rec)
+
+
+# --- marketing plan -----------------------------------------------------------
+
+def run_plans(token: str, home: Path, ws: WatchSettings,
+              listing: list[DriveFile], state: WatchState, runner: JobRunner,
+              store: JobStore, *, mock: bool, opener, hs_token: str | None,
+              report: TickReport) -> None:
+    """Write a marketing plan for every book HubSpot flagged for it, and deliver
+    any a person has since approved.
+
+    The plan twin of `run_promo`, on its own HubSpot property (the "Marketing
+    Plan" field the press flips Needed -> Uploaded) and its own Drive marker, so
+    it neither reads nor writes anything the format or copy stages own. A book
+    can be at any stage of formatting or promo and still get a plan — they gate
+    on different values. Flat-folder only for now, standing aside in subfolder
+    mode the same way promo does."""
+    if not ws.plan_enabled:
+        return
+    if ws.subfolders_enabled:
+        log.info("Marketing plans are on but so is subfolder mode; the plan "
+                 "stage is flat-folder only for now and stands aside this pass.")
+        return
+
+    _deliver_approved_plan(token, ws, listing, state, store, hs_token,
+                           opener=opener, report=report)
+
+    todo = [f for f in listing if is_plan_candidate(f)]
+    todo.sort(key=lambda f: (f.modified_time, f.name))
+
+    def _capture_pen(rec, record) -> None:
+        if ws.hubspot_pen_property:
+            rec.plan_pen = (record.properties.get(ws.hubspot_pen_property)
+                            or "").strip()
+
+    todo = _gate_hubspot(hs_token, ws, todo, state,
+                         ready_value=ws.hubspot_plan_needed_value,
+                         id_get=lambda r: r.plan_hubspot_id,
+                         id_set=lambda r, v: setattr(r, "plan_hubspot_id", v),
+                         opener=opener, report=report,
+                         status_property=ws.hubspot_plan_property,
+                         want_extra=(ws.hubspot_pen_property,),
+                         on_match=_capture_pen)
+    if len(todo) > ws.max_files_per_tick:
+        report.deferred += len(todo) - ws.max_files_per_tick
+        log.info("%d books are waiting for a marketing plan; writing %d this "
+                 "run and leaving the rest.", len(todo), ws.max_files_per_tick)
+        todo = todo[:ws.max_files_per_tick]
+
+    for file in todo:
+        try:
+            _one_plan(token, home, ws, file, listing, state, runner, store,
+                      mock=mock, opener=opener, hs_token=hs_token,
+                      dest_folder_id=ws.folder_id, report=report)
+        except Exception as e:            # noqa: BLE001 - one book, not the run
+            log.exception("Could not write a marketing plan for %s", file.name)
+            report.failed.append((file.name, str(e)))
+            rec = state.get(file.id)
+            rec.name = file.name
+            rec.plan_attempts += 1
+            state.record(rec)
+
+
+def _one_plan(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+              listing: list[DriveFile], state: WatchState, runner: JobRunner,
+              store: JobStore, *, mock: bool, opener, hs_token: str | None,
+              dest_folder_id: str, report: TickReport) -> None:
+    rec = state.get(file.id)
+    rec.name = file.name
+    rec.modified_time = file.modified_time
+
+    job = store.get(rec.plan_job_id) if rec.plan_job_id else None
+    paid_for = (job is not None and job.state == "done" and job.results_dir
+                and Path(job.results_dir).is_dir())
+
+    if rec.plan_attempts >= ws.max_attempts and not paid_for:
+        # The same three-strikes rule the other stages keep. A generated job is
+        # exempt — the plan exists, only delivery failed, which is free to retry.
+        reason = f"Gave up after {rec.plan_attempts} attempts."
+        log.error("%s: %s", file.name, reason)
+        plan.mark_source(token, file, rec, state, status=PLAN_FAILED,
+                         reason=reason, opener=opener)
+        report.failed.append((file.name, reason))
+        return
+
+    job = _prepare_plan(token, home, ws, file, listing, rec, state, runner,
+                        store, mock=mock, opener=opener)
+
+    if job.state == "failed" and job.error_kind == "oversize":
+        # Too big for one pass; retrying will not change the size and the model
+        # was never called. Email a person and mark it so the next tick leaves it.
+        notify.plan_too_large(token, ws, file, job, opener=opener)
+        plan.mark_source(token, file, rec, state, status=PLAN_FAILED,
+                         reason="Too big for a one-pass plan; run it by hand.",
+                         opener=opener)
+        log.info("Marketing plan skipped for %s: over the single-pass limit; "
+                 "emailed a person to run it by hand.", file.name)
+        return
+
+    if job.state != "done":
+        # Something transient — a model that would not answer, a disk that
+        # filled. Raised so the caller counts an attempt against it.
+        raise PrepFailed(job.error or "Writing the marketing plan did not finish.")
+
+    report.planned.append(file.name)
+
+    if ws.plan_auto_upload:
+        _deliver_plan(token, ws, file, job, rec, state, listing, hs_token,
+                      dest_folder_id=dest_folder_id, opener=opener,
+                      report=report)
+    else:
+        # Hold: the plan is written and waiting. Mark the book `pending` so the
+        # next tick doesn't rewrite it, and leave the .docx for a person to
+        # approve in the panel; delivery happens once approval lands.
+        plan.mark_source(token, file, rec, state, status=PLAN_PENDING,
+                         opener=opener)
+        log.info("Marketing plan for %s is written and waiting for approval.",
+                 file.name)
+
+
+def _prepare_plan(token: str, home: Path, ws: WatchSettings, file: DriveFile,
+                  listing: list[DriveFile], rec, state: WatchState,
+                  runner: JobRunner, store: JobStore, *, mock: bool,
+                  opener) -> Job:
+    """The manuscript's plan job, run or resumed. Like promo's, the shortcut is
+    the point of the state file — a job that already wrote its plan is not run
+    again. The folder inputs (blurbs, questionnaire) and the pen name are read
+    only when the job is first created; a resume reuses what was baked in, so a
+    crash mid-flight never re-reads the folder or re-pays the model."""
+    existing = store.get(rec.plan_job_id) if rec.plan_job_id else None
+    if existing is not None:
+        finished = (existing.state == "done" and existing.results_dir
+                    and Path(existing.results_dir).is_dir())
+        if finished:
+            log.info("%s already has a marketing plan; picking up from there.",
+                     file.name)
+            return existing
+        existing.state = "queued"
+        existing.error = None
+        return plan.run_job(runner, store, existing, mock=mock)
+
+    dest = home / DOWNLOADS / file.id
+    local = plan.fetch(token, file, dest, opener=opener)
+    inputs = plan.gather_inputs(token, file, listing, ws, dest, opener=opener)
+    job = plan.make_job(local, ws, pen_name=rec.plan_pen, blurbs=inputs.blurbs,
+                        questionnaire=inputs.questionnaire)
+    rec.plan_job_id = job.id
+    state.record(rec)              # before the model is called, never after
+    return plan.run_job(runner, store, job, mock=mock)
+
+
+def _deliver_plan(token: str, ws: WatchSettings, file: DriveFile, job: Job,
+                  rec, state: WatchState, listing: list[DriveFile],
+                  hs_token: str | None, *, dest_folder_id: str, opener,
+                  report: TickReport) -> None:
+    """Ship a generated plan: the .docx to the folder, the Marketing Plan
+    property to its Uploaded value, and the `done` marker last. Safe to repeat,
+    exactly like promo's delivery — every upload is recorded, a writeback of a
+    value already set is a no-op, and the marker is written after both."""
+    uploaded = plan.upload_outputs(token, file, job, ws, rec, state, listing,
+                                   dest_folder_id=dest_folder_id, opener=opener)
+    report.uploaded.extend(uploaded)
+    _finish_hubspot_plan(hs_token, ws, file, rec, state, opener=opener)
+    plan.mark_source(token, file, rec, state, status=PLAN_DONE, opener=opener)
+
+
+def _deliver_approved_plan(token: str, ws: WatchSettings,
+                           listing: list[DriveFile], state: WatchState,
+                           store: JobStore, hs_token: str | None, *, opener,
+                           report: TickReport) -> None:
+    """Ship any plan a hold-mode run generated earlier and a person has since
+    approved. Idempotent, the promo twin: a plan already delivered reads `done`
+    in Drive, is out of `is_plan_candidate`, and its record is no longer
+    `pending` here."""
+    by_id = {f.id: f for f in listing}
+    for rec in list(state.files.values()):
+        if rec.plan_marked != "pending" or not rec.plan_job_id:
+            continue
+        job = store.get(rec.plan_job_id)
+        if job is None or job.approval != "approved" or job.state != "done":
+            continue
+        file = by_id.get(rec.file_id)
+        if file is None:
+            continue                      # the manuscript left the folder
+        try:
+            _deliver_plan(token, ws, file, job, rec, state, listing, hs_token,
+                          dest_folder_id=ws.folder_id, opener=opener,
+                          report=report)
+        except Exception as e:            # noqa: BLE001 - one book, not the run
+            log.exception("Delivering approved plan for %s failed", file.name)
+            report.failed.append((file.name, str(e)))
+
+
+def _finish_hubspot_plan(hs_token: str | None, ws: WatchSettings,
+                         file: DriveFile, rec, state: WatchState, *,
+                         opener) -> None:
+    """Move the Marketing Plan property to its Uploaded value on the book just
+    shipped. The plan twin of `_finish_hubspot_promo`, on the plan's own property
+    and value, with the same guards: read-only mode leaves the CRM untouched, and
+    a blank done value is refused rather than blanking the property. Writing a
+    value already set is harmless, which is what makes delivery safe to repeat."""
+    if not (ws.hubspot_enabled and rec.plan_hubspot_id
+            and not rec.plan_hubspot_done):
+        return
+    if not ws.hubspot_write_back:
+        log.info("HubSpot is read-only: leaving %s at its current plan status.",
+                 file.name)
+        return
+    if not ws.hubspot_plan_done_value:
+        log.warning("HubSpot plan done-value is empty: leaving %s at its current "
+                    "plan status rather than blanking it.", file.name)
+        return
+    props = {ws.hubspot_plan_property: ws.hubspot_plan_done_value}
+    hubspot.set_properties(hs_token, ws.hubspot_object, rec.plan_hubspot_id,
+                           props, allow={ws.hubspot_plan_property},
+                           opener=opener)
+    rec.plan_hubspot_done = True
     state.record(rec)
 
 
@@ -883,6 +1117,25 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
                 "Promo is switched on but " + ", ".join(blanks)
                 + " is not set. Run `docproof-watch init` to fill it in.")
 
+    if ws.plan_enabled:
+        # The marketing plan is driven by its own HubSpot property, so HubSpot
+        # must be on and the plan's property and its value pair set —
+        # half-configured would either plan everything or never move a book on.
+        if not ws.hubspot_enabled:
+            raise NotConfigured(
+                "Marketing plans are switched on but HubSpot is not. The plan is "
+                "triggered by a HubSpot property, so HubSpot has to be on. Run "
+                "`docproof-watch init`, or turn marketing plans off.")
+        blanks = [name for name, value in (
+            ("hubspot_plan_property", ws.hubspot_plan_property),
+            ("hubspot_plan_needed_value", ws.hubspot_plan_needed_value),
+            ("hubspot_plan_done_value", ws.hubspot_plan_done_value),
+        ) if not value]
+        if blanks:
+            raise NotConfigured(
+                "Marketing plans are switched on but " + ", ".join(blanks)
+                + " is not set. Run `docproof-watch init` to fill it in.")
+
     if ws.subfolders_enabled:
         # Routing into per-author subfolders needs a name to route by, and that
         # name comes from HubSpot — so subfolder mode without HubSpot, or
@@ -968,6 +1221,11 @@ def tick(home: str | Path, ws: WatchSettings, *, dry_run: bool = False,
     # one value at a time — and it never touches the format stage's markers.
     run_promo(token, root, ws, listing, state, runner, store, mock=mock,
               opener=opener, hs_token=hs_token, report=report)
+    # The marketing plan runs after copy, on its own HubSpot property and marker,
+    # so a book can be formatted, promo'd, and planned in any combination without
+    # the three stages touching each other. Flat mode only, like promo.
+    run_plans(token, root, ws, listing, state, runner, store, mock=mock,
+              opener=opener, hs_token=hs_token, report=report)
 
     # Last, and on the same Google token the folder was read with: a pass that
     # left something for a person says so, once, by email. Best-effort — see
@@ -995,6 +1253,9 @@ def _drain(runner: JobRunner, state: WatchState,
     # would be finished at cost with nowhere to deliver it.
     owner.update({rec.promo_job_id: fid for fid, rec in state.files.items()
                   if rec.promo_job_id})
+    # Plan jobs the same, on their own field.
+    owner.update({rec.plan_job_id: fid for fid, rec in state.files.items()
+                  if rec.plan_job_id})
     runner.resume_interrupted()
     while True:
         try:

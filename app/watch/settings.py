@@ -236,6 +236,44 @@ class WatchSettings:
     # one); set it to run promo on a stronger model without changing formatting.
     promo_model: str = ""
 
+    # -- Marketing plan --------------------------------------------------------
+    # Promo's third deliverable as its own automated stage: a per-author
+    # marketing plan, written from the finished book plus what the author told
+    # the press, and delivered to the author's Drive folder. Off by default and
+    # independent of formatting and promo copy — its own HubSpot property, its
+    # own Drive marker, its own state — so an install that never turns it on
+    # behaves exactly as before. Requires `hubspot_enabled`. See app/watch/plan.py
+    # and docs/promo.md.
+    plan_enabled: bool = False
+    # The Marketing Plan property on the CRM record — a *separate* property from
+    # the status dropdown the format and promo stages gate on, because the press
+    # tracks the plan on its own field: the manual workflow flips it from
+    # "Needed" to "Uploaded". Store the property's internal name and its two
+    # internal option values.
+    hubspot_plan_property: str = ""
+    hubspot_plan_needed_value: str = ""
+    hubspot_plan_done_value: str = ""
+    # The display / pen name property, printed verbatim on the plan. Empty heads
+    # the plan with the title alone. Kept apart from first/last, which only
+    # resolve which Drive folder is the author's.
+    hubspot_pen_property: str = ""
+    # Which model writes the plan, and at what reasoning effort. Empty model
+    # falls back to `model`, like `promo_model`.
+    plan_model: str = ""
+    plan_effort: str = "low"
+    # Whether the plan ships to Drive with no human in the loop. On by default:
+    # the plan is author-facing but not public copy, and the point of the stage
+    # is no human involvement. Off holds the draft for approval in the panel the
+    # way promo's hold mode does, then a later tick delivers it.
+    plan_auto_upload: bool = True
+    # Which sibling file in the author's folder is the blurb doc (back-cover
+    # synopsis + endorsement blurbs) and which is the publicity-questionnaire
+    # export. Case-insensitive regex matched against the filename; an empty
+    # pattern disables that input, so the plan degrades to book-only. Both are
+    # read only when `plan_enabled`, so they change nothing on a stock install.
+    plan_blurb_pattern: str = "blurb|back.?cover|endorsement"
+    plan_form_pattern: str = "questionnaire|pnq|publicity"
+
     @classmethod
     def load(cls, home: str | Path) -> "WatchSettings":
         path = Path(home) / WATCH_SETTINGS
@@ -261,6 +299,13 @@ class WatchSettings:
         """The model promo runs on: its own if set, otherwise the formatting
         model, so an install that never touches `promo_model` still works."""
         return self.promo_model or self.model
+
+    @property
+    def plan_model_or_default(self) -> str:
+        """The model the marketing plan runs on: its own if set, otherwise the
+        formatting model — the promo twin, so a plan install that never touches
+        `plan_model` still works."""
+        return self.plan_model or self.model
 
     # -- what the rest of DocProof needs ---------------------------------------
 

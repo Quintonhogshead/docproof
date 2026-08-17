@@ -562,6 +562,43 @@ def promo_too_large(token: str, ws, file, job, *,
         return False
 
 
+def plan_too_large(token: str, ws, file, job, *,
+                   opener=drive._open_url) -> bool:
+    """Tell a person a watched book was too big for an automatic marketing plan,
+    with the numbers and how to run it by hand.
+
+    The plan twin of `promo_too_large`: the marketing plan reads the whole book
+    in one call too, so a book past the single-pass limit can't be planned
+    automatically, but a person can still run it from the app with the override.
+    Best-effort and gated on an address, exactly like the rest of the mail here."""
+    if not ws.notify_email:
+        return False
+    words = _int(job.words)
+    tokens = _int(job.input_tokens)
+    subject = f"Marketing plan needs a hand: {file.name} is too big for one pass"
+    body = (
+        f"DocProof could not write a marketing plan for “{file.name}” "
+        f"automatically.\n\n"
+        f"The book is about {words} words (~{tokens} tokens), over the "
+        f"single-pass limit. The watched folder writes the plan in one call over "
+        f"the whole book, and this manuscript is too large for that.\n\n"
+        f"Nothing about the manuscript was changed, and it will not be tried "
+        f"again automatically.\n\n"
+        f"To run it by hand: open DocProof and go to the Promo tab, choose "
+        f"“Write a marketing plan”, drop the book, then tick “Write it anyway” "
+        f"to send the whole book in one call.\n")
+    try:
+        send(token, ws.notify_email, subject, body, opener=opener)
+        log.info("Emailed %s that %s is too big for an automatic plan.",
+                 ws.notify_email, file.name)
+        return True
+    except DriveError as e:
+        log.warning("Could not email %s about an oversize plan book (%s). If "
+                    "Gmail refused the scope, run `docproof-watch auth` again to "
+                    "add send permission.", ws.notify_email, e)
+        return False
+
+
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
            "maybe_complete", "completion_for_job", "send_job_completion",
-           "promo_too_large"]
+           "promo_too_large", "plan_too_large"]

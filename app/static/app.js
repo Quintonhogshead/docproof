@@ -3749,10 +3749,12 @@ async function loadPromo() {
   fillPromoModels($('promo-model'));
   fillPromoModels($('plan-model'));
   fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
+  fillPromoModels($('plan-auto-model'), 'Use the DocWatch model');
   renderPromoPanelCost();
   renderPlanCost();
   await refreshPromoJobs();
   loadPromoSettings().catch(() => {});
+  loadPlanSettings().catch(() => {});
 }
 
 function fillPromoModels(select, blank) {
@@ -4120,6 +4122,48 @@ async function savePromoSettings() {
   } catch (e) { status.textContent = e.message; }
 }
 
+async function loadPlanSettings() {
+  const s = await api('/api/promo/plan-settings');
+  $('plan-enabled').checked = s.plan_enabled;
+  $('plan-property').value = s.hubspot_plan_property || '';
+  $('plan-needed').value = s.hubspot_plan_needed_value || '';
+  $('plan-done').value = s.hubspot_plan_done_value || '';
+  $('plan-pen').value = s.hubspot_pen_property || '';
+  $('plan-auto-upload').checked = s.plan_auto_upload;
+  $('plan-blurb-pattern').value = s.plan_blurb_pattern || '';
+  $('plan-form-pattern').value = s.plan_form_pattern || '';
+  $('plan-auto-effort').value = s.plan_effort || 'low';
+  $('plan-auto-needs-hubspot').hidden = s.hubspot_enabled;
+  $('plan-model-fallback').textContent = s.plan_model
+    ? '' : `— using the DocWatch model, ${s.fallback_model}`;
+  fillPromoModels($('plan-auto-model'), 'Use the DocWatch model');
+  $('plan-auto-model').value = s.plan_model || '';
+}
+
+async function savePlanSettings() {
+  const status = $('plan-settings-status');
+  status.hidden = false; status.textContent = 'Saving…';
+  try {
+    await api('/api/promo/plan-settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        plan_enabled: $('plan-enabled').checked,
+        hubspot_plan_property: $('plan-property').value.trim(),
+        hubspot_plan_needed_value: $('plan-needed').value.trim(),
+        hubspot_plan_done_value: $('plan-done').value.trim(),
+        hubspot_pen_property: $('plan-pen').value.trim(),
+        plan_auto_upload: $('plan-auto-upload').checked,
+        plan_model: $('plan-auto-model').value,
+        plan_effort: $('plan-auto-effort').value,
+        plan_blurb_pattern: $('plan-blurb-pattern').value.trim(),
+        plan_form_pattern: $('plan-form-pattern').value.trim(),
+      }),
+    });
+    status.textContent = 'Saved.';
+    await loadPlanSettings();
+  } catch (e) { status.textContent = e.message; }
+}
+
 // ── marketing plan ───────────────────────────────────────────────────────────
 //
 // The plan card on the Promo tab: the same stage-then-price-then-run shape as
@@ -4265,6 +4309,7 @@ $('pp-effort').addEventListener('change', renderPromoPanelCost);
 $('pp-oversize-ok').addEventListener('change', renderPromoPanelCost);
 $('promo-run').addEventListener('click', runPromo);
 $('promo-settings-save').addEventListener('click', savePromoSettings);
+$('plan-settings-save').addEventListener('click', savePlanSettings);
 
 $('plan-file').addEventListener('change', stagePlanFile);
 $('plan-model').addEventListener('change', renderPlanCost);
