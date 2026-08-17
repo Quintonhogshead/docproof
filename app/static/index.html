@@ -331,12 +331,15 @@
             </details>
 
             <details class="field review-only" id="category-knobs-field">
-              <summary>Per-category tuning<span class="muted"> — extra reads &amp;
+              <summary>Per-category tuning<span class="muted"> — reads &amp;
                 chunk size</span></summary>
-              <p class="muted small">Read a category more than once to catch
-                stragglers, or shrink its chunk so the model weighs fewer
-                paragraphs at a time — tighter attention, higher cost. Leave a
-                field blank to keep the shipped default.</p>
+              <p class="muted small"><strong>Reads</strong> is how many times a
+                category sweeps the book — more reads catch stragglers a single
+                pass glides over. <strong>Chunk size</strong> is how much text
+                the model weighs at once: shrink it for tighter attention on
+                fewer paragraphs. Both raise the cost, and the estimate updates
+                as you change them. Leave a field blank to keep the shipped
+                default — the grey number shown.</p>
               <div id="category-knobs" class="category-knobs"></div>
             </details>
 

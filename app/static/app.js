@@ -1425,16 +1425,21 @@ function renderCategoryKnobs() {
     label.textContent = (c.names || c.keys).join(', ');
     row.append(
       label,
-      knobInput('reads', 'knob-passes', c.passes, `Reads for ${label.textContent}`),
-      knobInput('chunk', 'knob-budget', c.token_budget || c.default_token_budget,
-                `Chunk size for ${label.textContent}`));
+      knobInput('reads', 'knob-passes', c.passes,
+                `Reads for ${label.textContent}`),
+      knobInput('chunk size', 'knob-budget',
+                c.token_budget || c.default_token_budget,
+                `Chunk size for ${label.textContent}`, 'tokens'));
     host.append(row);
   });
 }
 
 // One captioned number input for a knob row. Its placeholder carries the shipped
-// default, so a field left blank sends nothing and keeps that default.
-function knobInput(caption, cls, placeholder, aria) {
+// default, so a field left blank sends nothing and keeps that default — the grey
+// number the user sees is exactly what they'd get. `unit`, when given, prints a
+// small suffix beside the field so a bare "2500" reads as tokens, not a count.
+// Repricing on `input` (not `change`) so the estimate moves as the user types.
+function knobInput(caption, cls, placeholder, aria, unit) {
   const wrap = document.createElement('label');
   wrap.className = 'knob-input';
   const tag = document.createElement('small');
@@ -1446,8 +1451,19 @@ function knobInput(caption, cls, placeholder, aria) {
   input.className = cls;
   input.placeholder = String(placeholder);
   input.setAttribute('aria-label', aria);
-  input.addEventListener('change', renderCost);
-  wrap.append(tag, input);
+  input.addEventListener('input', renderCost);
+  wrap.append(tag);
+  if (unit) {
+    const box = document.createElement('span');
+    box.className = 'knob-field';
+    const u = document.createElement('small');
+    u.className = 'muted knob-unit';
+    u.textContent = unit;
+    box.append(input, u);
+    wrap.append(box);
+  } else {
+    wrap.append(input);
+  }
   return wrap;
 }
 
@@ -1578,6 +1594,41 @@ function bookTokensFor(f) {
   return (f.chunks || []).reduce((n, c) => n + c.est_tokens, 0);
 }
 
+// The extra batched cost the per-category knobs add to one file, over the flat
+// per-pass base priceReview already charged. For each category the user tuned,
+// its (reads, chunk size) is compared against the shipped default and only the
+// difference is billed: extra reads resend `keptTok` input and `keptCount`
+// requests; a smaller chunk multiplies that category's requests by
+// default÷chunk (the same text, split finer). A category left at its defaults —
+// and an untouched panel ({} or undefined) — contributes 0, so the base is
+// unchanged until a knob is actually moved. `knobs` is collectCategoryKnobs()'s
+// {category_id: {passes?, token_budget?}} map.
+function categoryKnobCost(knobs, keptTok, keptCount, m, effort, outFactor) {
+  if (!knobs || !keptCount) return 0;
+  const byId = {};
+  (state.categories || []).forEach((c) => { byId[c.id] = c; });
+  let extraIn = 0, extraReq = 0;
+  Object.keys(knobs).forEach((id) => {
+    const c = byId[id];
+    if (!c) return;                                   // stale id: ignore
+    const knob = knobs[id];
+    const glob = c.default_token_budget || 1;         // the global chunk budget
+    const defBudget = c.token_budget || glob;         // this category's default
+    const defReads = c.passes || 1;
+    const newBudget = knob.token_budget || defBudget;
+    const newReads = knob.passes || defReads;
+    // Requests scale inversely with chunk size (smaller chunk → more requests);
+    // input tokens (the text itself) do not, so only extra reads add input.
+    const oldReq = defReads * keptCount * (glob / defBudget);
+    const newReq = newReads * keptCount * (glob / newBudget);
+    extraIn += keptTok * (newReads - defReads);
+    extraReq += newReq - oldReq;
+  });
+  return (extraIn * m.input_per_mtok
+    + extraReq * state.outputGuess * m.output_per_mtok
+      * effortFactor(m, effort) * outFactor) / 1e6;
+}
+
 // The review estimate. Pure over an explicit settings bundle plus the staged
 // files, so the same arithmetic prices the live controls (via bundleFromControls)
 // and each effort-tier chip (via priceBundle) — one code path, no drift. The
@@ -1630,17 +1681,28 @@ function priceReview(bundle, files) {
     const kept = f.kept;
     const passes = f.passes || 1;
     const chunks = f.chunks || [];
-    let inTok = 0, reqs = 0;
+    let keptTok = 0, keptCount = 0;
     chunks.forEach((c) => {
       if (!kept.has(c.chunk_id)) return;
-      inTok += c.est_tokens * passes;
-      reqs += passes;
+      keptTok += c.est_tokens;
+      keptCount += 1;
     });
+    // The flat base: every default category reads the kept text once, so the
+    // whole review is `passes` reads of it (passes = the file's category count).
+    const inTok = keptTok * passes;
+    const reqs = keptCount * passes;
     if (reqs) any = true;
     batched += (inTok * m.input_per_mtok
       + reqs * state.outputGuess * m.output_per_mtok
         * effortFactor(m, bundle.effort) * outFactor) / 1e6;
-    reviewedIn += inTok / (passes || 1);
+    // Per-category tuning rides on top of that base as a delta: an extra read
+    // resends the kept text and its requests, a tighter chunk splits the same
+    // text into more requests (more output). Priced against each category's
+    // shipped default, so an untouched category — and the whole default panel —
+    // adds exactly nothing.
+    batched += categoryKnobCost(bundle.category_knobs, keptTok, keptCount,
+                                m, bundle.effort, outFactor);
+    reviewedIn += keptTok;   // one read's worth — the judge base, knobs aside
 
     // The meaning/fix gates are priced before the whole-document guard below,
     // because unlike those passes they read whatever changes a run produces —
@@ -1735,6 +1797,7 @@ function bundleFromControls() {
     meaning_model: ($('meaning-model') || {}).value || null,
     fix_model: ($('fix-model') || {}).value || null,
     features: collectFeatures(),
+    category_knobs: collectCategoryKnobs(),
     continuity_only: !!(($('continuity-only') || {}).checked),
     min_confidence: ($('confidence') || {}).value,
     mode: mode(),
