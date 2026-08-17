@@ -1,0 +1,26 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded error: a complete independent clause introducing a run-in numbered
+# list, closed with a period where a colon belongs. Traps: an incomplete lead-in
+# the list completes (no colon after a verb), a colon already present, and a
+# stray parenthetical numeral that is not a list. No paragraph reuses a
+# calibration example.
+error_type: list_intro_colon
+
+cases:
+  - id: lic-001
+    text: "Everything I needed fit on one short list. 1) a roof 2) steady work 3) a way to get home."
+    expect: { span: "list. 1)", correction: "list: 1)", confidence: high }
+  - id: lic-002
+    text: "The doctor gave me three rules to live by. 1) sleep 2) walk 3) call if it got worse."
+    expect: { span: "by. 1)", correction: "by: 1)", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: lic-101
+    text: "My reasons for staying were 1) fear 2) money 3) nowhere else to go."
+    expect: clean          # "were" governs the list; no colon after the verb
+  - id: lic-102
+    text: "The plan was simple: 1) pack the car 2) drop the key 3) drive."
+    expect: clean          # a colon is already there
+  - id: lic-103
+    text: "The footnote (1) covered the earlier ruling in full, so she moved on."
+    expect: clean          # a parenthetical numeral, not a run-in list

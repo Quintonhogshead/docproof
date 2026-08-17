@@ -1,0 +1,67 @@
+key: list_intro_colon
+name: Colon before a run-in list
+version: 1
+# The detector gap this fills: a complete clause that introduces a numbered or
+# lettered run-in list, but ends in a period (or comma) where a colon belongs —
+# "all I was hoping for in life. 1) A house 2) A car 3) A phone." No pass owned
+# the introducing mark, so it survived every stage. terminal_mark is a query
+# about period-vs-question-mark and never edits; this type makes the edit.
+
+detection_prompt: |
+  A grammatically complete independent clause that introduces a run-in
+  enumerated list — "1) ... 2) ...", "1. ... 2. ...", "(a) ... (b) ..." — takes
+  a colon before the list, not a period or a comma: "Everything I wanted came
+  down to three things. 1) A house 2) A car 3) A phone." -> "...three things:
+  1) A house..."
+
+  FLAG:
+  - A complete independent clause immediately followed, in the same paragraph,
+    by a run-in numbered or lettered list, where the mark closing the clause is
+    a period or a comma that should be a colon. The clause must be able to
+    stand on its own as a sentence ("Here is what I hoped for", "These were my
+    goals", "all I was hoping for in life").
+
+  Do NOT flag — this list is where the false positives die, so weigh it before
+  every finding:
+  - A lead-in that is NOT a complete clause, where the list items finish the
+    sentence grammatically. Do not put a colon after a verb or preposition that
+    directly governs the list: "My three goals were 1) a house 2) a car" — no
+    colon after "were"; "I wanted 1) a house 2) a car" — no colon after
+    "wanted". Leave these alone; a colon there would be an error, not a fix.
+  - A colon (or a dash, or an em dash) already sitting before the list. Finished.
+  - A displayed or vertical list whose items are separate paragraphs. This type
+    only ever touches a run-in list inside one paragraph; a list set as its own
+    paragraphs is out of scope.
+  - Prose that merely contains numbers or parenthetical numerals but is not a
+    list: "He scored 1) early and it stood up.", a citation "(1)", a footnote
+    marker.
+  - A heading or a title.
+  - Quoted matter the author is reproducing verbatim.
+
+fix_guidance: |
+  corrected_text must repeat the entire paragraph with the single mark that
+  closes the introducing clause — the period or comma right before the first
+  list item — changed to a colon, and nothing else touched. Do not re-letter
+  the items, change their capitalization, or reflow the list.
+
+confidence_guidance: |
+  high   — a plainly complete independent clause, then a run-in numbered or
+           lettered list, closed by a period where a colon belongs.
+  medium — the lead-in is arguably complete but could be read as running
+           straight into the list.
+  low    — the boundary between an introducing clause and a list-completing
+           phrase is genuinely unclear; prefer silence over a wrong colon.
+
+examples:
+  - text: "By then, all I was hoping for in life came down to three things. 1) A house of my own 2) A steady job 3) A car that started."
+    finding:
+      original_text: "By then, all I was hoping for in life came down to three things. 1) A house of my own 2) A steady job 3) A car that started."
+      corrected_text: "By then, all I was hoping for in life came down to three things: 1) A house of my own 2) A steady job 3) A car that started."
+      explanation: "A complete clause introducing a run-in numbered list takes a colon, not a period."
+      confidence: high
+  - text: "My three goals that year were 1) a house 2) a job 3) a car, in that order."
+    finding: null
+  - text: "The plan was already in motion: 1) secure the loan 2) sign the lease 3) move in by June."
+    finding: null
+  - text: "He finished 1) tired, 2) broke, and 3) somehow still smiling."
+    finding: null

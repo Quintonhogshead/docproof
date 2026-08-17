@@ -1,0 +1,74 @@
+key: try_and
+name: "\"try and\" for \"try to\""
+version: 1
+# The detector gap this fills: nothing owned the colloquial "try and <verb>"
+# where "try to <verb>" is meant ("I'll try and finish it tonight"). It is a
+# mechanical, rule-friendly swap the house guide makes in edited prose, and no
+# model pass or sweep claimed it, so every instance passed through untouched.
+
+detection_prompt: |
+  The house guide replaces the colloquial "try and <verb>" with "try to
+  <verb>" in narration: "I wanted to try and escape" -> "I wanted to try to
+  escape." Here "and" is not joining two separate actions — the writer means a
+  single attempt, and standard edited English writes that with the infinitive
+  "to."
+
+  FLAG:
+  - "try and" immediately followed by a bare verb, where the two describe one
+    attempt, not two things done in sequence: "Let me try and fix it.", "It is
+    up to you to try and get yourself back on track.", "We should try and
+    understand why."
+  - The same after "to try": "I wanted to try and escape." -> "to try to
+    escape."
+
+  Do NOT flag — this list is where the false positives die, so weigh it before
+  every finding:
+  - "and" genuinely coordinating two separate actions, where "try" is one of
+    them: "I'll try, and if that fails, we call someone.", "Give it a try and
+    see what happens." A comma before "and", or a shift of subject or tense
+    across it, is the signal that two actions are meant — leave it.
+  - "try" used as a noun, not the verb: "It was worth a try and then some.",
+    "one more try and I'm done."
+  - The set phrases "tried and true" and "tried and tested" — never touch them.
+  - Inflected forms where the idiom does not apply: "trying and failing"
+    ("and" joins two gerunds), "he tried and tried" (repetition). The idiom is
+    the base form "try and <verb>"; other forms are usually genuine
+    coordination, so flag them only when the single-attempt reading is
+    unmistakable.
+  - Direct address or an imperative split by a pause: "Try, and you'll see."
+  - Quoted matter the author is reproducing — an epigraph, a letter, a
+    transcript.
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the one word "and"
+  changed to "to" and nothing else touched. Do not reword the verb, add
+  commas, or change anything before "try".
+
+confidence_guidance: |
+  high   — "try and <verb>" in narration, plainly one attempt, no comma or
+           subject change across "and".
+  medium — the single-attempt reading is likely but "and" could be read as
+           coordinating two actions.
+  low    — dialogue or close first-person voice, where the colloquialism may be
+           deliberate; min_confidence can then hold it back as a query rather
+           than a silent change.
+
+examples:
+  - text: "I knew I had to try and escape before the tide came in."
+    finding:
+      original_text: "I knew I had to try and escape before the tide came in."
+      corrected_text: "I knew I had to try to escape before the tide came in."
+      explanation: "\"try and <verb>\" describing a single attempt takes the infinitive \"to\" in edited prose."
+      confidence: high
+  - text: "It is up to you to try and get yourself back on track."
+    finding:
+      original_text: "It is up to you to try and get yourself back on track."
+      corrected_text: "It is up to you to try to get yourself back on track."
+      explanation: "One attempt, not two actions — house style writes \"try to.\""
+      confidence: high
+  - text: "Give it a try and see whether it holds."
+    finding: null
+  - text: "I'll try, and if the door is locked, we go around the back."
+    finding: null
+  - text: "The recipe was tried and true, handed down for three generations."
+    finding: null

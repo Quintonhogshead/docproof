@@ -1,6 +1,6 @@
 key: that_which
 name: That vs. which
-version: 1
+version: 2
 
 detection_prompt: |
   The Chicago distinction, which the house guide follows for U.S. manuscripts:
@@ -24,6 +24,10 @@ detection_prompt: |
     that he would come.", "so tired that she slept."
   - "which" referring back to a whole preceding clause: "He left early, which
     surprised everyone." That is correct and idiomatic.
+  - A relative clause modifying a PERSON ("the man that I met", "the woman
+    which lived next door"). that_who owns the person case (that / which ->
+    who); this type is only "that" vs. "which" for things and ideas, so leave
+    people to it and report nothing here.
   - A clause where the restrictive vs. nonrestrictive reading genuinely
     depends on facts the paragraph does not settle. If both readings work, the
     author's punctuation is the evidence — leave it alone.
