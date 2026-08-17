@@ -201,6 +201,52 @@ def test_the_clock_looks_again_once_enough_time_has_passed(runner, tmp_path):
     runner.wait_idle()
 
 
+def test_the_clock_looks_at_a_set_time_of_day(runner, tmp_path):
+    """The server's clock: fixed times, not an interval. A time a few minutes
+    past, with the last look before it, is due."""
+    now = datetime.now(timezone.utc)
+    a_moment_ago = (now - timedelta(minutes=5)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[a_moment_ago],
+               tick_timezone="UTC")
+    # Two days back so the most-recent occurrence is always ahead of the floor,
+    # even for the once-a-day minute when "five minutes ago" was yesterday.
+    (tmp_path / "last_tick").write_text(
+        (now - timedelta(days=2)).isoformat(), encoding="utf-8")
+
+    assert runner.consider() is True
+    runner.wait_idle()
+
+
+def test_the_clock_waits_until_a_set_time_arrives(runner, tmp_path):
+    now = datetime.now(timezone.utc)
+    still_ahead = (now + timedelta(minutes=5)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[still_ahead],
+               tick_timezone="UTC")
+    (tmp_path / "last_tick").write_text(
+        (now - timedelta(hours=1)).isoformat(), encoding="utf-8")
+
+    assert runner.consider() is False
+
+
+def test_turning_a_set_time_on_does_not_fire_for_one_already_past(runner,
+                                                                  tmp_path):
+    """No last look yet: the clock arms to now, so a time earlier today sits
+    behind the floor and nothing runs until it next comes round."""
+    now = datetime.now(timezone.utc)
+    earlier = (now - timedelta(hours=1)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[earlier],
+               tick_timezone="UTC")
+
+    assert runner.consider() is False
+
+
+def test_an_unusable_set_time_is_ignored_not_looped_on(runner, tmp_path):
+    configured(tmp_path, auto_ticks=True, tick_at_times=["not a time"],
+               tick_timezone="UTC")
+
+    assert runner.consider() is False       # left for a person, not fired
+
+
 def test_the_clock_does_not_start_a_second_pass_over_a_running_one(runner,
                                                                    tmp_path):
     configured(tmp_path, auto_ticks=True)

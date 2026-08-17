@@ -21,6 +21,7 @@ from app.settings import get_api_key, set_api_key
 from docproof.providers.catalog import BY_ID, MODELS
 
 from . import auth as authlib
+from . import daily as dailylib
 from . import schedule as schedulelib
 from . import status as statuslib
 from . import tick as ticklib
@@ -64,6 +65,24 @@ def main(argv=None) -> int:
     ini.add_argument("--output",
                      choices=["book", "indesign", "tracked", "both", "all"],
                      help="which file(s) to put back in the folder")
+    # The in-app clock — the one that runs while DocProof (or the server) is up,
+    # as opposed to the launchd `schedule` command that runs while a Mac is
+    # closed. On the always-on server this is the whole schedule.
+    ini.add_argument("--auto", dest="auto_ticks", action="store_true",
+                     default=None,
+                     help="look on a schedule while DocProof is running")
+    ini.add_argument("--no-auto", dest="auto_ticks", action="store_false",
+                     default=None, help="stop looking on that schedule")
+    ini.add_argument("--at-times",
+                     help="fixed times of day for that clock, as HH:MM,HH:MM "
+                          "(e.g. 09:00,17:00); empty (--at-times '') clears "
+                          "them and goes back to --every")
+    ini.add_argument("--timezone",
+                     help="the zone --at-times is read in, an IANA name like "
+                          "America/New_York; blank means this machine's own")
+    ini.add_argument("--every", type=int,
+                     help="how often that clock looks when no fixed times are "
+                          "set, in minutes (5–1440)")
     ini.add_argument("--notify-email",
                      help="email this address when a pass needs a person "
                           "(sent via Gmail as the signed-in Google account)")
@@ -263,6 +282,32 @@ def cmd_init(args, home: Path) -> int:
         ws.model = args.model
     if args.output:
         ws.prep_output = args.output
+    if args.auto_ticks is not None:
+        ws.auto_ticks = args.auto_ticks
+    if args.at_times is not None:
+        # A blank value clears the fixed times and hands --every its job back;
+        # anything else is parsed and normalised so the panel and the CLI agree.
+        try:
+            times = schedulelib.parse_times(args.at_times) if args.at_times.strip() else []
+        except schedulelib.ScheduleError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return UNUSABLE
+        ws.tick_at_times = [f"{h:02d}:{m:02d}" for h, m in times]
+    if args.timezone is not None:
+        tz = args.timezone.strip()
+        if tz:
+            try:
+                dailylib.zone(tz)
+            except schedulelib.ScheduleError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return UNUSABLE
+        ws.tick_timezone = tz
+    if args.every is not None:
+        if not (5 <= args.every <= 1440):
+            print("error: --every is minutes, between 5 and 1440.",
+                  file=sys.stderr)
+            return UNUSABLE
+        ws.tick_every_minutes = args.every
     if args.notify_email is not None:
         ws.notify_email = args.notify_email
     if args.notify_on_complete is not None:
@@ -273,6 +318,12 @@ def cmd_init(args, home: Path) -> int:
 
     print(f"Watching folder {ws.folder_id or '— not set yet'}")
     print(f"Preparing with {ws.model}, handing back: {ws.prep_output}")
+    if ws.auto_ticks:
+        if ws.tick_at_times:
+            where = f" ({ws.tick_timezone})" if ws.tick_timezone else ""
+            print(f"Looking while open at {', '.join(ws.tick_at_times)}{where}")
+        else:
+            print(f"Looking while open every {ws.tick_every_minutes} minutes")
     if ws.notify_email:
         on_complete = (" (and a full log on every finished job)"
                        if ws.notify_on_complete else "")
@@ -521,7 +572,23 @@ def cmd_status(args, home: Path) -> int:
     print(f"Model:   {s['model']}")
     print(f"Home:    {s['home']}")
     print(f"Signed in: {'yes' if s['signed_in'] else 'no'}")
-    print(f"Runs at: {', '.join(s['times']) or '— only when you say so'}")
+    # Two clocks: the launchd agent (runs while a Mac is closed) and the in-app
+    # one (runs while DocProof or the server is up). The second is the only one
+    # on the server, so it is said even when the first is unset.
+    print(f"Runs at (while closed): "
+          f"{', '.join(s['times']) or '— only when you say so'}")
+    if s["auto_ticks"]:
+        if s["tick_at_times"]:
+            where = f" ({s['tick_timezone']})" if s["tick_timezone"] else ""
+            nxt = s.get("next_tick_at")
+            after = f", next {nxt}" if nxt else ""
+            print(f"Runs at (while open):   "
+                  f"{', '.join(s['tick_at_times'])}{where}{after}")
+        else:
+            print(f"Runs at (while open):   "
+                  f"every {s['tick_every_minutes']} minutes")
+    else:
+        print("Runs at (while open):   — off")
     if s["missing"]:
         print(f"\nStill needed: {_NEEDS[s['missing']]}")
 

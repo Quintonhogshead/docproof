@@ -931,6 +931,37 @@
           carries on where it left off.</small>
       </label>
 
+      <div id="watch-inapp-schedule" class="sub" hidden>
+        <div class="segmented" id="watch-mode" role="radiogroup"
+             aria-label="How the in-app clock decides when to look">
+          <label><input type="radio" name="watch-mode" value="times">
+            At set times</label>
+          <label><input type="radio" name="watch-mode" value="interval">
+            Every so often</label>
+        </div>
+
+        <div id="watch-times-editor">
+          <ul id="watch-time-list" class="time-list"></ul>
+          <button type="button" id="watch-time-add" class="link">+ Add a
+            time</button>
+          <label class="field">
+            <span>Time zone</span>
+            <select id="watch-tz"></select>
+          </label>
+        </div>
+
+        <label id="watch-interval-editor" class="field" hidden>
+          <span>Look every</span>
+          <span class="inline"><input type="number" id="watch-every" min="5"
+            max="1440" step="5" value="60"> minutes</span>
+        </label>
+
+        <div class="row watch-schedule-actions">
+          <button type="button" id="watch-schedule-save">Save schedule</button>
+          <span id="watch-next-run" class="muted"></span>
+        </div>
+      </div>
+
       <p id="watch-schedule-note" class="action-note" hidden></p>
     </div>
 

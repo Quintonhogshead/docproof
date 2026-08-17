@@ -377,14 +377,63 @@ docproof-watch once
 
 ## Letting it run itself
 
+There are **two clocks**, and they cannot collide: whichever starts first
+claims the folder and the other stands aside. Which one you want depends on
+where DocProof runs.
+
+### While DocProof (or the server) is open — the one to use on the server
+
+The clock inside the running app looks on a schedule of its own for as long as
+DocProof is up. On the hosted web app, which never closes, this is the *whole*
+schedule — the launch agent below is macOS-only and has nowhere to run on a
+Linux server. It comes in two moods:
+
+- **At set times.** Fixed times of day — "look at 09:00 and 17:00" — read in a
+  time zone you choose. This is the answer to "run it at specific times"
+  everywhere, the server included.
+- **Every so often.** A plain interval — "look every 60 minutes" — for when a
+  time of day does not matter.
+
+In the app it is the **Look while DocProof is open** switch (called **Look
+automatically** on the web build). Turning it on reveals the editor: pick *At
+set times*, add a row per time with the **+ Add a time** button, choose the
+**time zone**, and **Save schedule**. The panel then shows when it will next
+look. *Every so often* swaps the times for a single "look every N minutes"
+box.
+
+From a terminal the same thing is `docproof-watch init`:
+
+```bash
+# Look at 9am and 5pm, New York time, while DocProof is running.
+docproof-watch init --auto --at-times 09:00,17:00 --timezone America/New_York
+
+# Or an interval instead. Clearing the times (--at-times '') hands it back.
+docproof-watch init --auto --at-times '' --every 60
+```
+
+**Why the time zone matters.** Leave it blank and the times are read in the
+machine's own clock — right on a Mac, but a server runs in UTC, so "09:00"
+would fire at nine in Greenwich. Naming a zone (`America/New_York`) is how nine
+in the morning means nine where the people are. The app fills this in from your
+browser's zone by default, so it is usually right without a thought.
+
+**Enabling a schedule never fires for a time already past today.** Turn on
+"09:00, 17:00" at two in the afternoon and the next look is 17:00, not an
+instant catch-up on the morning — the same restraint the launch agent has, so
+switching it on does not spend money by surprise.
+
+### While the Mac is closed — the launch agent (macOS only)
+
 ```bash
 docproof-watch schedule
 ```
 
-Installs a launch agent that runs a pass at 06:00, 11:00, 16:00 and 21:00.
+Installs a launch agent that runs a pass at 00:00 and 12:00 by default.
 `--times 07:30,19:00` chooses your own. `docproof-watch unschedule` removes
 it, and `docproof-watch status` says what is currently set. In the app it is
 the **Look even when DocProof is closed** switch, which writes the same agent.
+It exists for the caveat below: it is what runs a pass on a Mac nobody has
+opened DocProof on.
 
 What gets scheduled depends on which DocProof you are running. From a checkout
 it is the `docproof-watch` command; from the packaged app there is no such
@@ -392,17 +441,13 @@ command anywhere on the machine, so the agent runs **the app's own binary with
 `--watch-once`** — one pass, no window, no server. Either way the plist is the
 same shape, and `docproof-watch status` reads it back.
 
-There is a second clock in the app: **Look while DocProof is open**, off by
-default. It exists because of the caveat below — it is what picks up a time the
-Mac slept through. The two cannot collide; whichever starts first claims the
-folder and the other stands aside.
-
 **A sleeping Mac runs nothing.** macOS does not start a calendar job while the
 machine is asleep, and does not go back for the one it missed — it runs at the
 next scheduled time the Mac is awake for. That is survivable here, because a
 manuscript waits and nothing is lost, but a closed laptop is a quiet
-afternoon. If that becomes the annoying part, see
-[somewhere other than a Mac](#somewhere-other-than-a-mac).
+afternoon. It is the reason the in-app clock above exists: opened once, it
+picks up a time the Mac slept through. If a sleeping Mac is the annoying part,
+see [somewhere other than a Mac](#somewhere-other-than-a-mac).
 
 If a pass is still working when the next one is due — a long novel can outlast
 a five-hour gap — the second one sees the folder is taken and stops. That is
@@ -419,7 +464,8 @@ Folder:  1AbCdEfGhIjKlMnOp
 Model:   claude-sonnet-5
 Home:    /Users/you/Library/Application Support/DocProof/watch
 Signed in: yes
-Runs at: 06:00, 11:00, 16:00, 21:00
+Runs at (while closed): 00:00, 12:00
+Runs at (while open):   09:00, 17:00 (America/New_York), next 2026-08-17T21:00:00+00:00
 
 3 manuscript(s) seen:
 
