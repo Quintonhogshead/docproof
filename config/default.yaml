@@ -533,6 +533,10 @@ error_types:
      subject_verb_agreement, that_which]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+  # terminal-mark queries — precision-unproven, activated for live measurement.
+  # Its own pass so the judgment stays isolated and easy to toggle off. Query
+  # channel: asks whether a period should be a question mark, never edits.
+  - terminal_mark
 # House-style conventions the sweeps enforce where the right answer is the
 # press's choice, not a rule. Not in config/variants/ because none of it flips
 # on US/UK — a house sets it once for every manuscript.
