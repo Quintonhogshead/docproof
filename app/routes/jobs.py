@@ -83,6 +83,9 @@ class JobRequest(BaseModel):
     # chapter-scoped read below.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The whole-book continuity model. None means the config default (the house
+    # reviewer); a pick opts into a frontier whole-book read, like the glossary's.
+    continuity_model: str | None = None
     # The chapter-continuity reader's editable system prompt; empty means the
     # built-in default. Its on/off rides the `features` map like every other pass.
     chapter_continuity_prompt: str = ""
@@ -342,6 +345,23 @@ def register(app: FastAPI) -> None:
                 raise HTTPException(
                     400, f"No API key saved for {ccinfo.display} (the "
                          f"chapter-continuity model). Add one in Settings first.")
+        # The whole-book continuity model, same rule: reject an unknown id, and
+        # demand a key only when the read will run (its switch, or continuity-only,
+        # or a house config that ships it on).
+        if req.continuity_model:
+            cinfo = lookup(req.continuity_model)
+            if cinfo is None:
+                raise HTTPException(
+                    400, f"Unknown continuity model {req.continuity_model!r}")
+            c_on = (req.features or {}).get("continuity")
+            if c_on is None:
+                _house = _house or load_config(CONFIG_PATH)
+                c_on = _house.continuity.enabled
+            if (bool(c_on) or req.continuity_only) and \
+                    not settingslib.get_api_key(cinfo.provider):
+                raise HTTPException(
+                    400, f"No API key saved for {cinfo.display} (the "
+                         f"continuity model). Add one in Settings first.")
 
         # Every id is resolved before any job is enqueued: a 404 halfway
         # through used to leave the earlier files already running — the page
@@ -401,6 +421,7 @@ def register(app: FastAPI) -> None:
                 judge_model=req.judge_model or "",
                 continuity_prompt=req.continuity_prompt,
                 continuity_only=req.continuity_only,
+                continuity_model=req.continuity_model or "",
                 chapter_continuity_prompt=req.chapter_continuity_prompt,
                 chapter_continuity_model=req.chapter_continuity_model or "",
                 chapter_continuity_sensitivity=req.chapter_continuity_sensitivity,

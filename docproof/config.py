@@ -407,11 +407,12 @@ class ContinuityConfig(BaseModel):
     own model since a frontier reader earns its cost here. See
     docproof/continuity.py."""
     enabled: bool = False
-    # The whole-book reader. Cross-book contradiction-finding is frontier work;
-    # claude-opus-5 is the half-price alternative and claude-sonnet-5 cheaper
-    # still — the app's submission panel offers the pick per book, like the
-    # glossary's. Cacheable per draft via cache_dir.
-    model: str = "claude-fable-5"
+    # The whole-book reader. Defaults to the house reviewer so the pass needs no
+    # key beyond the detector's; cross-book contradiction-finding is frontier
+    # work, so the app's submission panel offers a stronger pick per book
+    # (claude-opus-5, claude-sonnet-5) like the glossary's. Cacheable per draft
+    # via cache_dir.
+    model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
     # The ceiling covers the reader's THINKING as well as its findings, and a
     # frontier model at effort high reasoning over a whole book spends most of
@@ -487,10 +488,11 @@ class ChapterContinuityConfig(BaseModel):
     # spends most of this ceiling thinking; sized so a dense chapter's findings
     # are not truncated.
     max_output_tokens: int = Field(default=8000, ge=1)
-    # The skeptical judge — the precision gate. A strong model on its own line,
-    # like the smoothing judge: telling a real in-scene break from a device the
-    # reader is meant to hold open is the hard part of this pass.
-    judge_model: str = "claude-fable-5"
+    # The skeptical judge — the precision gate. Defaults to the house reviewer so
+    # the pass stays on one key; a stronger judge (telling a real in-scene break
+    # from a device the reader is meant to hold open is the hard part) is a per-
+    # run pick, one model setting driving both this reader and the judge.
+    judge_model: str = "gpt-5.6-luna"
     judge_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
     # The judge's visible output is tiny (a verdict is three fields) but on a
     # reasoning model the thinking counts against this; sized from the propose
@@ -746,12 +748,12 @@ class SmoothingConfig(BaseModel):
     # judge below is the one that decides what survives.
     model: str | None = None
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
-    # The taste judge. Deliberately a strong model on its own line: telling a
-    # genuine smoothing from a merely-conventional rephrasing is the hard part
-    # of this pass, and the judge is what stands between the proposer's
-    # enthusiasm and the author's margin. Its prompts are short, so a frontier
-    # model here is cheap relative to the read.
-    judge_model: str = "claude-fable-5"
+    # The taste judge. Defaults to the house reviewer so the pass needs no key
+    # beyond the detector's; it is the one that stands between the proposer's
+    # enthusiasm and the author's margin, and telling a genuine smoothing from a
+    # merely-conventional rephrasing is the hard part — so a stronger judge is a
+    # per-run pick, cheap relative to the read since its prompts are short.
+    judge_model: str = "gpt-5.6-luna"
     judge_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
     # Whether to smooth inside quoted speech. Off by default: voice risk
     # concentrates in dialogue, where "awkward" is frequently the point.
@@ -1094,10 +1096,11 @@ class JudgeGateConfig(BaseModel):
     judge_key: ClassVar[str] = ""
 
     enabled: bool = False
-    # The judge. A frontier model is the point of these passes: they are the last
-    # reader before the author, and each sees a few hundred short prompts, not
-    # the whole manuscript.
-    model: str = "claude-fable-5"
+    # The judge. Defaults to the house reviewer so the gate needs no key beyond
+    # the detector's; a frontier model can be the point of these passes — they
+    # are the last reader before the author, and each sees a few hundred short
+    # prompts, not the whole manuscript — so a stronger judge is a per-run pick.
+    model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # Which changes are read. "model_sources" is every change proposed by a
     # model or an outside checker — the detector passes, rewrite, adjudicate,

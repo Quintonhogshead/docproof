@@ -203,6 +203,12 @@ class Job:
     # see docproof.pipeline.Outputs, which counts them.
     queried: int = 0
     judge_held: int = 0
+    # Non-fatal warnings from a finished review — chiefly paid passes that fell
+    # open and produced nothing (a dead or unkeyed judge/continuity/glossary
+    # model). Empty on a clean run and on older records; the card shows them so a
+    # "done" review that quietly skipped a pass does not read as a clean one. The
+    # full accounting is in summary.md's Coverage section.
+    warnings: list[str] = field(default_factory=list)
     results_dir: str | None = None
     min_confidence: str = "medium"
     # Which English this manuscript is written in: "us" | "uk" | "ca" | "au".
@@ -238,6 +244,10 @@ class Job:
     # docproof/continuity.py and JobStore.config_for.
     continuity_prompt: str = ""
     continuity_only: bool = False
+    # The whole-book continuity reader's model. Empty (older records, or a run that
+    # left it alone) means the config default — now the house reviewer, so a
+    # frontier whole-book read is an opt-in per-run pick, like the glossary's.
+    continuity_model: str = ""
     # The chapter-continuity reader's editable system prompt, edited on the panel;
     # empty (older records, or a run that left it alone) means the built-in
     # default. Its on/off rides the `features` map. See docproof/continuity.py.
@@ -475,7 +485,11 @@ def _tallies(outputs) -> dict:
     depending on how the document was produced. Collected here so that a run
     counts a new thing in one place rather than six."""
     return {"applied": outputs.applied, "queried": outputs.queried,
-            "judge_held": outputs.judge_held}
+            "judge_held": outputs.judge_held,
+            # Non-fatal degradation (a paid pass that fell open and produced
+            # nothing — e.g. a dead judge/continuity key) so a "done" card can
+            # say so instead of reading as a clean run. Empty on a clean one.
+            "warnings": list(getattr(outputs, "warnings", []) or [])}
 
 
 def read_usage(results_dir: Path | str) -> tuple[dict, float | None] | None:
@@ -786,6 +800,10 @@ class JobRunner:
         # The continuity read's editable prompt (empty = built-in default),
         # applied like the round judge's — the sentinel passes through verbatim.
         cfg.continuity.prompt = job.continuity_prompt
+        # The whole-book continuity model. Empty keeps the config default; a panel
+        # pick overrides it. Vetted at submit (routes/jobs.py), like the glossary's.
+        if job.continuity_model:
+            cfg.continuity.model = job.continuity_model
         # The chapter-continuity reader's editable prompt, applied the same way.
         cfg.chapter_continuity.prompt = job.chapter_continuity_prompt
         # One model pick drives both the reader and its judge; the 1–5 sensitivity

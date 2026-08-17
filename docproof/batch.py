@@ -499,7 +499,9 @@ def collect_findings(job: Job, provider: Provider,
             model=cfg.glossary.model,
             max_tokens=cfg.glossary.max_output_tokens, usage=usage,
             effort=cfg.glossary.effort,
-            cache_dir=cache_dir_for(cfg.glossary.cache_dir))
+            cache_dir=cache_dir_for(cfg.glossary.cache_dir),
+            on_degraded=lambda reason: coverage.record_degraded(
+                "glossary read", reason))
         glossary_cands = suspects_to_candidates(glossary, prepared.doc.paragraphs)
         if cfg.glossary.case_drift:
             findings += case_drift_findings(
@@ -644,7 +646,7 @@ def collect_findings(job: Job, provider: Provider,
     # said it had. Same helper the synchronous path uses, so they stay in step.
     from .providers import build_provider
     findings += continuity_findings(cfg, prepared, ids, usage, build_provider,
-                                    on_phase=on_phase)
+                                    on_phase=on_phase, coverage=coverage)
 
     coverage.record_windows(window_losses)
 

@@ -125,7 +125,8 @@ def _cache_key(doc_text: str, model: str, system: str,
 def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                      model: str, max_tokens: int, usage: Usage,
                      prompt: str = "", effort: str | None = None,
-                     cache_dir: str | None = None
+                     cache_dir: str | None = None,
+                     on_degraded: Callable[[str], None] | None = None
                      ) -> ContinuityReport:
     """One whole-manuscript read. Additive and best-effort: on any failure
     (context overflow, refusal, malformed output) it logs and returns an empty
@@ -177,13 +178,17 @@ def build_continuity(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                     "retrying once at %d", max_tokens, max_tokens * 2)
         result = read(max_tokens * 2)
     if result.stop_reason != "ok" or result.parsed is None:
-        log.error("continuity pass: %s — proceeding without one",
-                  result.error or result.stop_reason)
+        reason = result.error or result.stop_reason
+        log.error("continuity pass: %s — proceeding without one", reason)
+        if on_degraded is not None:
+            on_degraded(str(reason))
         return ContinuityReport()
     try:
         r = ContinuityReport.model_validate(result.parsed)
     except Exception as e:                               # malformed structured output
         log.error("continuity pass: bad response (%s); proceeding without one", e)
+        if on_degraded is not None:
+            on_degraded(f"bad response ({e})")
         return ContinuityReport()
     if cache_path is not None:
         try:

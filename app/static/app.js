@@ -29,6 +29,7 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 catalogDefaultModel: null, defaultGlossaryModel: null,
                 defaultJudgeModel: null, defaultMeaningModel: null,
                 defaultFixModel: null, defaultChapterContinuityModel: null,
+                defaultContinuityModel: null,
                 // The effort tiers served by /api/presets (id → {controls,
                 // features, sapling policy}), the currently selected tier id
                 // ('light'|'standard'|'hard'|'hammer'|'custom'|null before the
@@ -1058,6 +1059,8 @@ async function loadModels() {
   state.defaultFixModel = body.default_fix_model || state.defaultFixModel;
   state.defaultChapterContinuityModel = body.default_chapter_continuity_model
     || state.defaultChapterContinuityModel;
+  state.defaultContinuityModel = body.default_continuity_model
+    || state.defaultContinuityModel;
 
   const select = $('model');
   const previous = select.value;
@@ -1182,6 +1185,27 @@ async function loadModels() {
       || '';
     chapterCont.value = usable(cprev) ? cprev : cdefault;
   }
+
+  // The whole-book continuity reader: the same catalog, defaulting to the house
+  // continuity model (now the reviewer). A pick opts into a frontier whole-book
+  // read without needing a key for any other pass.
+  const wholeCont = $('continuity-model');
+  if (wholeCont) {
+    const wprev = wholeCont.value;
+    wholeCont.innerHTML = '';
+    models.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.available ? m.display : `${m.display} — add a key first`;
+      opt.disabled = !m.available;
+      wholeCont.append(opt);
+    });
+    const wdefault = (usable(state.defaultContinuityModel)
+                      && state.defaultContinuityModel)
+      || (models.find((m) => m.available) || models[0] || {}).id
+      || '';
+    wholeCont.value = usable(wprev) ? wprev : wdefault;
+  }
   renderCost();
 }
 
@@ -1194,6 +1218,8 @@ if ($('meaning-model')) $('meaning-model').addEventListener('change', renderCost
 if ($('fix-model')) $('fix-model').addEventListener('change', renderCost);
 if ($('chapter-continuity-model'))
   $('chapter-continuity-model').addEventListener('change', renderCost);
+if ($('continuity-model'))
+  $('continuity-model').addEventListener('change', renderCost);
 // The sensitivity dial is not a tier control and does not move the price; it only
 // names the level it is on. 1 Cautious … 5 Exhaustive, matching the datalist.
 if ($('chapter-continuity-sensitivity')) {
@@ -1724,7 +1750,8 @@ function resolveTier(tierId) {
 
 // A resolved tier as a priceReview bundle: model is a catalog object; the gate
 // models fall back to the house defaults so the chip prices what the server
-// would actually run (the tier leaves them null => claude-fable-5).
+// would actually run. The house default is now the reviewer (gpt-5.6-luna);
+// Hard/Hammer pin a frontier judge (claude-fable-5) explicitly instead.
 function priceBundle(resolved) {
   return {
     model: modelById(resolved.model),
@@ -2217,6 +2244,7 @@ $('start').addEventListener('click', async () => {
           judge_model: ($('judge-model') || {}).value || null,
           continuity_prompt: ($('continuity-prompt') || {}).value || '',
           continuity_only: !!(($('continuity-only') || {}).checked),
+          continuity_model: ($('continuity-model') || {}).value || null,
           chapter_continuity_prompt:
             ($('chapter-continuity-prompt') || {}).value || '',
           chapter_continuity_model:
@@ -2804,6 +2832,18 @@ function renderJobs(jobs) {
         where.className = 'where';
         where.textContent = job.format.where_to_look;
         li.append(where);
+      }
+      // A "done" run that quietly skipped a paid pass (a dead or unkeyed
+      // judge/continuity/glossary model) must not read as a clean one: the
+      // findings are absent, not empty. summary.md has the full accounting.
+      if (Array.isArray(job.warnings) && job.warnings.length) {
+        const warn = document.createElement('div');
+        warn.className = 'job-warning';
+        const lead = job.warnings.length === 1 ? '1 pass did not run'
+          : `${job.warnings.length} passes did not run`;
+        warn.textContent = `⚠ ${lead} — ${job.warnings.join('; ')}. `
+          + 'Check the model’s API key; see summary.md.';
+        li.append(warn);
       }
     }
 

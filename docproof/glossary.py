@@ -27,7 +27,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -100,7 +100,8 @@ def _cache_key(doc_text: str, model: str, effort: str | None) -> str:
 def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                    model: str, max_tokens: int, usage: Usage,
                    effort: str | None = None,
-                   cache_dir: str | None = None) -> Glossary:
+                   cache_dir: str | None = None,
+                   on_degraded: Callable[[str], None] | None = None) -> Glossary:
     """One whole-manuscript read. Additive and best-effort: on any failure
     (context overflow, refusal, malformed output) it logs and returns an empty
     glossary, so the review proceeds exactly as it would without the pass.
@@ -130,13 +131,17 @@ def build_glossary(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
         max_tokens=max_tokens)
     usage.add(result.usage, model=model)
     if result.stop_reason != "ok" or result.parsed is None:
-        log.error("glossary pass: %s — proceeding without a glossary",
-                  result.error or result.stop_reason)
+        reason = result.error or result.stop_reason
+        log.error("glossary pass: %s — proceeding without a glossary", reason)
+        if on_degraded is not None:
+            on_degraded(str(reason))
         return Glossary()
     try:
         g = Glossary.model_validate(result.parsed)
     except Exception as e:                               # malformed structured output
         log.error("glossary pass: bad response (%s); proceeding without one", e)
+        if on_degraded is not None:
+            on_degraded(f"bad response ({e})")
         return Glossary()
     if cache_path is not None:
         try:

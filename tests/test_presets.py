@@ -88,9 +88,10 @@ def test_hard_bundle():
     assert p["features"]["storysheet"] and p["features"]["continuity"]
     assert p["features"]["languagetool"] and p["features"]["meaning_check"]
     assert p["features"]["rewrite"] is False and p["features"]["fix_check"] is False
-    # meaning gate model left to the server default
-    assert p["meaning_model"] is None
-    assert load_config(CONFIG_PATH).meaning_check.model == "claude-fable-5"
+    # meaning gate pinned to a frontier judge explicitly; the server default is
+    # now the house reviewer, so a frontier tier must name its own judge.
+    assert p["meaning_model"] == "claude-fable-5"
+    assert load_config(CONFIG_PATH).meaning_check.model == "gpt-5.6-luna"
 
 
 def test_hammer_bundle():
@@ -99,7 +100,10 @@ def test_hammer_bundle():
     assert p["glossary_model"] == "claude-opus-5"
     assert p["judge_model"] == "claude-opus-5"
     assert all(p["features"][f] for f in LADDER_FEATURE_IDS)   # every toggle on
-    assert load_config(CONFIG_PATH).fix_check.model == "claude-fable-5"
+    # both gates pinned to a frontier judge explicitly; server default is now Luna
+    assert p["meaning_model"] == "claude-fable-5"
+    assert p["fix_model"] == "claude-fable-5"
+    assert load_config(CONFIG_PATH).fix_check.model == "gpt-5.6-luna"
 
 
 def test_sapling_policy_resolution():
