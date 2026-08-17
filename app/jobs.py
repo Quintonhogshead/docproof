@@ -331,6 +331,11 @@ class Job:
     plan_blurbs: str = ""              # back-cover synopsis + endorsement blurbs
     plan_city: str = ""                # for the local-opportunities section
     plan_keywords: str = ""            # the press's positioning keywords
+    # The author's own answers to the press's publicity questionnaire (the PNQ):
+    # free-text Q&A grounding the plan the way blurbs do. On a manual run the
+    # operator may paste it; on the watched-folder run the automated stage reads
+    # it from the author's Drive folder. Empty degrades the prompt cleanly.
+    plan_questionnaire: str = ""
     # Why a job failed, as a machine-readable tag when the reason needs handling
     # beyond the message string. Currently "oversize" for a promo book past the
     # single-pass limit, so the watcher can email a person about that case
@@ -1665,7 +1670,8 @@ class JobRunner:
         cfg = self.config_for(job)
         meta = promolib.PlanMeta(
             title="", author_name=job.plan_author, keywords=job.plan_keywords,
-            back_cover=job.plan_blurbs, author_city=job.plan_city)
+            back_cover=job.plan_blurbs, author_city=job.plan_city,
+            questionnaire=job.plan_questionnaire)
         try:
             provider = self._provider(cfg)
             prepared = promolib.prepare_plan(

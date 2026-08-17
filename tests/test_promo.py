@@ -247,6 +247,25 @@ def test_prepare_plan_blank_optionals_become_dashes_not_the_name(tmp_path, cfg):
     assert "Keywords: —" in prepared.user
     assert "Author's city: —" in prepared.user
     assert "printed as-is): —" not in prepared.user
+    # A blank questionnaire reads as "none given" too, never the manuscript.
+    assert "publicity questionnaire:\n—" in prepared.user
+
+
+def test_prepare_plan_threads_the_questionnaire(tmp_path, cfg):
+    src = tmp_path / "Rowan - book 1.docx"
+    _make_novel(src)
+    answers = ("Q: Where do you live? A: Missoula, Montana.\n"
+               "Q: Communities? A: I run a river-guides newsletter.")
+    prepared = promo.prepare_plan(
+        cfg, src, PlanMeta(title="Book", questionnaire=answers),
+        config_dir=CONFIG_DIR)
+    # The author's own answers reach the model, verbatim, as grounding.
+    assert "Missoula, Montana" in prepared.user
+    assert "river-guides newsletter" in prepared.user
+    # Substituted before the book, so a manuscript containing the literal
+    # "{questionnaire}" would never be rewritten — only the metadata can carry a
+    # placeholder. (The book here has none; this guards the ordering.)
+    assert "{questionnaire}" not in prepared.user
 
 
 def test_run_plan_validates_and_finish_writes_docx(tmp_path, cfg):

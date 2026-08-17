@@ -63,6 +63,7 @@ class PlanRunRequest(BaseModel):
     blurbs: str = ""                   # back-cover synopsis + endorsement blurbs
     city: str = ""                     # for the local-opportunities section
     keywords: str = ""                 # the press's positioning keywords
+    questionnaire: str = ""            # the author's publicity-questionnaire answers
 
 
 class PromoDraft(BaseModel):
@@ -225,6 +226,7 @@ def register(app: FastAPI) -> None:
                 plan_only=True, plan_author=req.author.strip(),
                 plan_blurbs=req.blurbs.strip(), plan_city=req.city.strip(),
                 plan_keywords=req.keywords.strip(),
+                plan_questionnaire=req.questionnaire.strip(),
                 created_at=datetime.now(timezone.utc).isoformat(),
                 owner_id=owner)
             created.append(runner.enqueue(job).to_api())
