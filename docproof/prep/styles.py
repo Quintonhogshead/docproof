@@ -8,6 +8,7 @@ style set is editing YAML.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import re
 from dataclasses import dataclass
@@ -352,13 +353,21 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
     root = pkg.tree(STYLES_PART)
     pkg.mark_modified(STYLES_PART)
     if replace:
+        # Tables are left exactly as the author built them, and a table's
+        # borders and shading often live in a `w:type="table"` style the table
+        # references by id — replacing the sheet without carrying those over
+        # would strip every styled table bare.
+        kept = _document_table_styles(root, sheet)
         root.clear()
         for key, value in built.attrib.items():
             root.set(key, value)
         for child in built:
             root.append(child)
-        log.info("Installed the '%s' style sheet: %d paragraph styles.",
-                 sheet.name, len(sheet.styles))
+        for style_el in kept:
+            root.append(style_el)
+        log.info("Installed the '%s' style sheet: %d paragraph styles%s.",
+                 sheet.name, len(sheet.styles),
+                 f", keeping {len(kept)} table style(s)" if kept else "")
         return
 
     ours_ids = {s.id for s in sheet.styles} | {s.id for s in sheet.character_styles}
@@ -375,6 +384,30 @@ def install_style_sheet(pkg, sheet: StyleSheet, *, replace: bool = True,
         root.append(style_el)
     log.info("Added %d house style(s) alongside the document's own.",
              len(sheet.styles) + len(sheet.character_styles))
+
+
+def _document_table_styles(root: etree._Element,
+                           sheet: StyleSheet) -> list[etree._Element]:
+    """The document's own table styles, copied out before the sheet replaces
+    everything. Only `w:type="table"` entries qualify — that set includes
+    Word's TableNormal default and covers every `w:tblStyle` a table can
+    reference. A collision with a house id or name is skipped rather than
+    carried: the house sheet defines no table styles, so one can only mean a
+    malformed document, and the house definition wins."""
+    ours_ids = {s.id for s in sheet.styles} | {s.id
+                                              for s in sheet.character_styles}
+    ours_names = {s.name for s in sheet.styles} | {s.name
+                                                   for s in sheet.character_styles}
+    kept: list[etree._Element] = []
+    for existing in root.findall(qn("w:style")):
+        if existing.get(qn("w:type")) != "table":
+            continue
+        name_el = existing.find(qn("w:name"))
+        name = name_el.get(qn("w:val")) if name_el is not None else None
+        if existing.get(qn("w:styleId")) in ours_ids or name in ours_names:
+            continue
+        kept.append(copy.deepcopy(existing))
+    return kept
 
 
 def _register_part(pkg) -> None:
