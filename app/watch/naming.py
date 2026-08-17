@@ -44,6 +44,24 @@ def format_base(stem: str) -> str:
     return f"{author} - {OUTPUT_STAGE}"
 
 
+def is_source_name(name: str, last: str) -> bool:
+    """Whether a filename is the intake manuscript for a given surname:
+    "<surname> - Book Original".
+
+    The mirror of `is_output_name` for the other end of the series. Used to hold
+    the watcher to the house convention — only "<surname> - Book Original" is the
+    book to prepare, so a draft or a developmental copy dropped in the same
+    folder is left alone. Compared case- and whitespace-insensitively, so
+    "johnson  -  book original" and "Johnson - Book Original" are one name; a
+    blank surname matches nothing, because it would otherwise match every stem
+    that merely ends in the stage token."""
+    if not last.strip():
+        return False
+    stem = " ".join(Path(name).stem.split()).casefold()
+    wanted = " ".join(f"{last} - {SOURCE_STAGE}".split()).casefold()
+    return stem == wanted
+
+
 def is_output_name(name: str) -> bool:
     """Whether a filename is one the formatting stage wrote.
 
@@ -56,4 +74,4 @@ def is_output_name(name: str) -> bool:
 
 
 __all__ = ["SOURCE_STAGE", "OUTPUT_STAGE", "TRACKED_SUFFIX", "NOTES_SUFFIX",
-           "format_base", "is_output_name"]
+           "format_base", "is_output_name", "is_source_name"]

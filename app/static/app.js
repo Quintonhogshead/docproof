@@ -4500,6 +4500,11 @@ function renderWatch(body, quiet) {
   $('watch-output').value = w.prep_output || 'indesign';
   $('watch-notes').checked = w.upload_notes;
   $('watch-failure-note').checked = w.upload_failure_note;
+  // Only meaningful in per-author subfolder mode (set up from the CLI), so it
+  // is shown only when that mode is on — hidden, it would be a switch that does
+  // nothing.
+  $('watch-require-label-field').hidden = !w.subfolders_enabled;
+  $('watch-require-label').checked = w.require_source_label;
   $('watch-archive-enabled').checked = w.archive_enabled;
   $('watch-archive-folder').value = w.archive_folder_id || '';
   $('watch-archive-source').checked = w.archive_include_source;
@@ -4789,6 +4794,7 @@ $('watch-save').addEventListener('click', async () => {
         prep_output: $('watch-output').value,
         upload_notes: $('watch-notes').checked,
         upload_failure_note: $('watch-failure-note').checked,
+        require_source_label: $('watch-require-label').checked,
       }),
     });
     renderWatch(body);

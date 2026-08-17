@@ -80,6 +80,15 @@ def main(argv=None) -> int:
                           "subfolder (needs HubSpot on)")
     ini.add_argument("--disable-subfolders", action="store_true",
                      help="read the watched folder flat again")
+    ini.add_argument("--require-source-label", dest="require_source_label",
+                     action="store_true", default=None,
+                     help="prepare only the manuscript named "
+                          "'<surname> - Book Original' (surname from the "
+                          "author's HubSpot last-name property); subfolder mode")
+    ini.add_argument("--no-require-source-label", dest="require_source_label",
+                     action="store_false", default=None,
+                     help="prepare any new manuscript in the author's folder "
+                          "(the default)")
     ini.add_argument("--hubspot-first-property",
                      help="the property holding the author's first name "
                           "(subfolder mode)")
@@ -273,6 +282,8 @@ def cmd_init(args, home: Path) -> int:
         print(f"Routing into per-author subfolders of {ws.folder_id}, named "
               f"from {ws.hubspot_first_property or '— first not set'} / "
               f"{ws.hubspot_last_property or '— last not set'}")
+        if ws.require_source_label:
+            print("Preparing only '<surname> - Book Original' in each folder")
     if ws.hubspot_enabled:
         print(f"HubSpot gate on: {ws.hubspot_object}, "
               f"{ws.hubspot_status_property or '— property not set'}: "
@@ -348,6 +359,8 @@ def _apply_subfolders(args, ws: WatchSettings) -> None:
         ws.subfolders_enabled = False
     if getattr(args, "enable_subfolders", False):
         ws.subfolders_enabled = True
+    if getattr(args, "require_source_label", None) is not None:
+        ws.require_source_label = args.require_source_label
     if not ws.subfolders_enabled:
         return
     if not ws.hubspot_enabled:

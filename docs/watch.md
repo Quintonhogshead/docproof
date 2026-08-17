@@ -245,6 +245,28 @@ with how many books are ready, not with how many authors exist.
 Turn it back off with `docproof-watch init --disable-subfolders`; the folder is
 read flat again.
 
+### Prepare only the "Book Original" (optional)
+
+By default DocProof prepares whatever single new manuscript sits in the author's
+subfolder, whatever it is called (two of them is the doubt it refuses). If your
+authors follow the house convention — the intake file is named
+`<surname> - Book Original` — you can hold DocProof to it, so a draft or a
+developmental copy left in the same folder is ignored rather than prepared or
+treated as ambiguity:
+
+```bash
+docproof-watch init --require-source-label
+```
+
+Now the only file a pass will prepare is the one named `<surname> - Book
+Original`, where the surname is the author's own last name from HubSpot (the
+`--hubspot-last-property` above). `Johnson - Book Original.docx` is prepared for
+the Johnson record; `Johnson - Draft Two.docx` beside it is left alone. Case and
+stray spaces are forgiven; a wrong surname is not. If the labelled file is not
+there yet the author simply waits — it is not treated as a problem for a person.
+
+Turn it back off with `docproof-watch init --no-require-source-label`.
+
 ## Getting told when a pass needs a person (optional)
 
 Most of what a pass decides is "wait" — nobody need do anything, and the next

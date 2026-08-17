@@ -164,6 +164,13 @@ class WatchSettings:
     # thing the filename is matched against.
     hubspot_first_property: str = ""
     hubspot_last_property: str = ""
+    # Off by default, so an install that does not name files to the house
+    # convention is unchanged. On (subfolder mode only), the watcher prepares
+    # only the manuscript named "<surname> - Book Original", the surname taken
+    # from `hubspot_last_property` on the ready record — a draft or a
+    # developmental copy left in the same folder is ignored rather than guessed
+    # at. See `naming.is_source_name` and `tick._discover_ready`.
+    require_source_label: bool = False
     # How to pull that key out of the filename. Empty means the whole stem;
     # otherwise a regex, and the first capture group (or the whole match).
     hubspot_key_pattern: str = ""
