@@ -1,0 +1,48 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# This type ASKS, never edits (channel: query), so seeded cases carry a span but
+# no correction — the expected output is a margin comment, not a change. The
+# span covers the questionable sentence (or a distinctive stretch of it), so a
+# query anchored anywhere in that sentence overlaps it. Seeded: a direct
+# question — subject-auxiliary inversion or a main-clause wh-question — set with
+# a period instead of a question mark. Traps: an embedded/indirect question, a
+# declarative headed by a wh-word, a wh-exclamation, an exclamatory inversion,
+# and a polite command softened with a period. No paragraph is a calibration
+# example (none is reused from terminal_mark.yaml).
+error_type: terminal_mark
+
+cases:
+  - id: tm-001
+    text: "“And where exactly do you think you're going.” Her father filled the doorway, arms crossed."
+    expect: { span: "where exactly do you think you're going", confidence: high }
+  - id: tm-002
+    text: "He set the phone down and stared at it. Did she really think he would never find out. The thought kept turning over."
+    expect: { span: "Did she really think he would never find out", confidence: high }
+  - id: tm-003
+    text: "“Are you coming with us or not.” He stood by the open car door, jangling the keys."
+    expect: { span: "Are you coming with us or not", confidence: high }
+  - id: tm-004
+    text: "She stood in the wreck of the kitchen. How was she supposed to put any of this right. Nobody was coming to help her."
+    expect: { span: "How was she supposed to put any of this right", confidence: medium }
+  - id: tm-005
+    text: "“What do you want from me.” His voice cracked on the last word."
+    expect: { span: "What do you want from me", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: tm-101
+    text: "She asked where he had gone, and nobody in the room could tell her."
+    expect: clean          # an indirect question — the subordinate clause takes a period
+  - id: tm-102
+    text: "What he needed just then was a clear head and an hour alone."
+    expect: clean          # a declarative headed by "what", not a question
+  - id: tm-103
+    text: "“Would you look at the size of that thing,” he breathed."
+    expect: clean          # an exclamatory inversion, not a request for an answer
+  - id: tm-104
+    text: "I wonder how she ever talked him into it."
+    expect: clean          # an embedded question under "wonder" — the period is right
+  - id: tm-105
+    text: "How that old dog had loved to run."
+    expect: clean          # a wh-exclamation; a period (or an exclamation point) is correct
+  - id: tm-106
+    text: "“Would you please keep your voice down.” She glanced at the sleeping child."
+    expect: clean          # a command softened with a period on purpose, not a question
