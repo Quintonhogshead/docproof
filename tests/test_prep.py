@@ -402,6 +402,26 @@ def test_a_tagged_contents_survives_verification(cfg, tmp_path):
     assert styles_in(outputs.documents["indesign"])[TOC_STYLED] == "toc entry"
 
 
+def test_a_manuscript_with_a_textbox_survives_verification(cfg, tmp_path):
+    """A pull quote or a cover title floats in the body as a textbox — layout
+    the author placed by hand, which ingest sets aside as untouched and prep
+    never restyles. The verifier has to set the same paragraphs aside on the
+    written file: reading a box on the output side while the source stream drops
+    it counted its words on one side only, and failed every manuscript with one
+    for as many words as the box held."""
+    prepared = preplib.prepare(cfg, FIXTURES / "textbox.docx",
+                               config_dir=CONFIG_DIR)
+    tags, usage = preplib.run_mock(prepared, {})
+    # Clean (book/indesign) and accept+reject (tracked) — every view reads the
+    # written file back, so every one has to agree the box is not running text.
+    outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                             source_path=FIXTURES / "textbox.docx",
+                             outputs=["indesign", "tracked"])
+    assert {c.view for c in outputs.verifications} == {"clean", "accept",
+                                                       "reject"}
+    assert all(check.ok for check in outputs.verifications)
+
+
 # --- the InDesign-ready file --------------------------------------------------
 
 def test_the_clean_file_is_tagged_end_to_end(cfg, prepared, tmp_path):

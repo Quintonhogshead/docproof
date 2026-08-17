@@ -202,14 +202,20 @@ def test_the_clock_looks_again_once_enough_time_has_passed(runner, tmp_path):
 
 
 def test_the_clock_looks_at_a_set_time_of_day(runner, tmp_path):
-    """The server's clock: fixed times, not an interval. A time a few minutes
-    past, with the last look before it, is due."""
+    """The server's clock: fixed times, not an interval. A clock that has been
+    watching since before a set time, with its last look before that time too,
+    is due when the time falls."""
     now = datetime.now(timezone.utc)
     a_moment_ago = (now - timedelta(minutes=5)).strftime("%H:%M")
     configured(tmp_path, auto_ticks=True, tick_at_times=[a_moment_ago],
                tick_timezone="UTC")
-    # Two days back so the most-recent occurrence is always ahead of the floor,
-    # even for the once-a-day minute when "five minutes ago" was yesterday.
+    # Armed and last looked two days back — both before the slot five minutes
+    # ago, so its most recent occurrence is newer than the floor and due. (Two
+    # days keeps that true even at the once-a-day minute when "five minutes ago"
+    # was itself yesterday.) Arming earlier is the point: a slot that fell while
+    # the clock was already running is caught up; one already past when the
+    # clock first armed is not — that is the next test.
+    runner._armed_at = now - timedelta(days=2)
     (tmp_path / "last_tick").write_text(
         (now - timedelta(days=2)).isoformat(), encoding="utf-8")
 
@@ -238,6 +244,67 @@ def test_turning_a_set_time_on_does_not_fire_for_one_already_past(runner,
                tick_timezone="UTC")
 
     assert runner.consider() is False
+
+
+def test_turning_a_set_time_on_does_not_fire_for_one_past_despite_an_old_look(
+        runner, tmp_path):
+    """The same protection, but with a stale `last_tick` on disk — the state a
+    machine that has run DocProof before is always in. Arming to now must still
+    hold the floor forward: a time earlier today sits behind it, so enabling a
+    schedule cannot fire for this morning's slot just because the last pass was
+    older than it."""
+    now = datetime.now(timezone.utc)
+    earlier = (now - timedelta(hours=1)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[earlier],
+               tick_timezone="UTC")
+    # A pass three hours ago: older than the 09:00-style slot an hour back, so a
+    # floor of the stamp alone would call that slot due and fire immediately.
+    (tmp_path / "last_tick").write_text(
+        (now - timedelta(hours=3)).isoformat(), encoding="utf-8")
+
+    assert runner.consider() is False
+
+
+def test_switching_from_the_interval_clock_re_arms_the_set_time(runner,
+                                                                tmp_path):
+    """The panel's two modes share one runner. A stint on the interval clock
+    must not leave a stale arm that fires the moment set times are chosen for a
+    slot earlier today — the arm has to be dropped and taken again fresh."""
+    now = datetime.now(timezone.utc)
+    # A stint on "every so often" arms nothing and drops any earlier arm.
+    configured(tmp_path, auto_ticks=True, tick_every_minutes=60)
+    (tmp_path / "last_tick").write_text(
+        (now - timedelta(hours=3)).isoformat(), encoding="utf-8")
+    runner.consider()
+    assert runner._armed_at is None
+
+    # Now the person picks a set time already past today. It arms to now, so it
+    # waits for the next occurrence instead of firing for this morning's.
+    earlier = (now - timedelta(hours=1)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[earlier],
+               tick_timezone="UTC")
+
+    assert runner.consider() is False
+
+
+def test_pausing_the_clock_re_arms_the_set_time_on_resume(runner, tmp_path):
+    """Turning automatic passes off then on is the other way back to a stale
+    arm. Pausing forgets it, so resuming onto a set time earlier today waits
+    rather than fires."""
+    now = datetime.now(timezone.utc)
+    earlier = (now - timedelta(hours=1)).strftime("%H:%M")
+    configured(tmp_path, auto_ticks=True, tick_at_times=[earlier],
+               tick_timezone="UTC")
+    runner._armed_at = now - timedelta(days=2)   # armed long ago, from before
+
+    configured(tmp_path, auto_ticks=False, tick_at_times=[earlier],
+               tick_timezone="UTC")
+    assert runner.consider() is False
+    assert runner._armed_at is None              # pausing forgot the old arm
+
+    configured(tmp_path, auto_ticks=True, tick_at_times=[earlier],
+               tick_timezone="UTC")
+    assert runner.consider() is False            # re-armed to now, so it waits
 
 
 def test_an_unusable_set_time_is_ignored_not_looped_on(runner, tmp_path):
