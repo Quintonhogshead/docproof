@@ -194,6 +194,86 @@ def test_a_missing_meta_defaults_to_the_file_name(cfg, prepared, tmp_path):
     assert "googledoc" in odd
 
 
+# --- the plain DocWatch manuscript design -------------------------------------
+
+@pytest.fixture
+def plain_cfg(cfg):
+    """The config as DocWatch runs it: the plain manuscript design in place of
+    the app's paperback sketch."""
+    cfg.prep.book_design = cfg.prep.watch_book_design
+    return cfg
+
+
+@pytest.fixture
+def plain_prepared(plain_cfg):
+    return preplib.prepare(plain_cfg, FIXTURES / "googledoc.docx",
+                           config_dir=CONFIG_DIR)
+
+
+def test_the_manuscript_design_is_plain_letter_times_new_roman(cfg):
+    design = load_book_design(CONFIG_DIR / cfg.prep.watch_book_design)
+    assert (design.page.width, design.page.height) == (8.5, 11)
+    assert not design.page.mirror
+    assert not design.running_heads.enabled       # no author/title band
+    assert design.folio                            # but a page number at the foot
+    assert design.display_styles == ()
+    assert design.drop_caps.lines == 0
+    assert design.fonts["body"].family == "Times New Roman"
+    # Nothing to embed — Times New Roman is on every machine — and no subject,
+    # title or author to read off the manuscript (the folio needs none).
+    assert design.embed_files(None) == ()
+    assert not design.needs_meta
+
+
+def test_the_manuscript_output_is_plain_with_a_page_number(plain_cfg,
+                                                           plain_prepared,
+                                                           tmp_path):
+    tags, usage = preplib.run_mock(plain_prepared, REALISTIC)
+    outputs = preplib.finish(plain_prepared, tags, usage, plain_cfg,
+                             out_dir=tmp_path,
+                             source_path=FIXTURES / "googledoc.docx",
+                             outputs=["book"], meta=None)
+    path = outputs.documents["book"]
+    assert all(c.ok for c in outputs.verifications)
+
+    pkg = DocxPackage(path)
+    first = next(pkg.tree(BODY_PART).iter(qn("w:sectPr")))
+    for sect in pkg.tree(BODY_PART).iter(qn("w:sectPr")):
+        size = sect.find(qn("w:pgSz"))
+        assert size.get(qn("w:w")) == "12240"     # 8.5in
+        assert size.get(qn("w:h")) == "15840"     # 11in
+        assert sect.find(qn("w:headerReference")) is None
+    # A folio but no head: a footer reference, no even/odd (one number, every
+    # page), and a title page so the first page carries none.
+    assert first.find(qn("w:footerReference")) is not None
+    assert first.find(qn("w:titlePg")) is not None
+    settings = pkg.tree("word/settings.xml")
+    assert settings.find(qn("w:evenAndOddHeaders")) is None
+    assert settings.find(qn("w:mirrorMargins")) is None
+
+    # The folio part is written and holds a PAGE field; no running-head parts,
+    # and no fonts embedded.
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        footer = z.read("word/footer_book.xml").decode("utf-8")
+    assert not any("header_book" in n for n in names)
+    assert not any(n.endswith(".odttf") for n in names)
+    assert "PAGE" in footer
+
+    # Every styled face is the one body face, and chapter titles are 14-point.
+    styles = pkg.tree("word/styles.xml")
+    families, chapter_sz = set(), None
+    for style in styles.findall(qn("w:style")):
+        rf = style.find(f"{qn('w:rPr')}/{qn('w:rFonts')}")
+        if rf is not None:
+            families.add(rf.get(qn("w:ascii")))
+        name = style.find(qn("w:name"))
+        if name is not None and name.get(qn("w:val")) == "chapter # / title":
+            chapter_sz = style.find(f"{qn('w:rPr')}/{qn('w:sz')}").get(qn("w:val"))
+    assert families == {"Times New Roman"}
+    assert chapter_sz == "28"                      # 14pt, in half-points
+
+
 # --- detection ----------------------------------------------------------------
 
 def test_detect_meta_reads_the_three_facts(cfg, prepared):

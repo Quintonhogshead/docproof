@@ -24,6 +24,17 @@ tracked-changes copy (`… - book 0 - tracked changes.docx`) and the notes besid
 it. A file that does not carry the `- Book Original` token keeps its whole name
 and has `- book 0` appended, so there is always one predictable deliverable.
 
+**The interior is plain by design.** What DocWatch hands back is the manuscript
+in the plainest possible dress — Times New Roman, 12 point, US Letter, one-inch
+margins, a centered page number at the foot, no running heads, no drop caps —
+rather than the Atmosphere paperback sketch the app's manual
+[prep](prep.md#the-book-output) produces. It is the same `book_<name>.docx` output, dressed by a different
+interior file: **`config/prep/book_manuscript.yaml`** (the config key is
+`prep.watch_book_design`). To change what the watched folder hands back, edit
+that file, or drop a replacement into the prep override directory — it wins
+wholesale, exactly like the app's own book design. The app's paperback output is
+untouched.
+
 Then it marks the original as done and exits. There is no daemon and nothing
 running in the background: `launchd` starts it, it does what it finds, and it
 stops.

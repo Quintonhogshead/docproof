@@ -862,6 +862,12 @@ class JobRunner:
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:
             cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["book"])
+            # The watched folder hands back a plain reading copy — Times New
+            # Roman, US Letter, no ornaments — where the app's manual book
+            # output keeps the Atmosphere paperback sketch. Same "book" writer,
+            # a different interior design, swapped in for DocWatch runs only.
+            if job.source == "watch":
+                cfg.prep.book_design = cfg.prep.watch_book_design
         return cfg
 
     def _checkpoint(self, job: Job, cfg: Config, prepared) -> "Checkpoint":
@@ -1511,7 +1517,11 @@ class JobRunner:
         # a retry (or a re-considered manuscript) replays it instead of
         # paying for it again.
         meta = None
-        if "book" in cfg.prep.outputs:
+        # A plain design (DocWatch's) reads no subject face and hangs no
+        # running heads, so it needs none of the three facts — skip the call
+        # and its cost. The app's paperback design needs all three.
+        if ("book" in cfg.prep.outputs and prepared.design is not None
+                and prepared.design.needs_meta):
             from docproof.checkpoint import add_usage, snapshot, usage_delta
 
             detected = preplib.BookMeta()
