@@ -89,7 +89,7 @@ def write_indesign_idml(pkg, structure: Structure, plan: PrepPlan,
     elements = element_map(pkg)
     stats = write_clean(pkg, structure, plan, sheet,
                         strip_formatting=strip_formatting)
-    paras = _read_cleaned_body(elements, plan, sheet)
+    paras = _read_cleaned_body(elements, structure, plan, sheet)
     _emit_idml(paras, sheet, Path(template_path), Path(out_path))
     return stats
 
@@ -144,25 +144,34 @@ def discover_body_story(template_path: str | Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_cleaned_body(elements: dict, plan: PrepPlan,
+def _read_cleaned_body(elements: dict, structure: Structure, plan: PrepPlan,
                        sheet: StyleSheet) -> list[_Para]:
-    """One _Para per surviving plan paragraph, in document order: its house
-    style name (mapped from the Word styleId the clean writer set) and its runs
-    with italic preserved.
+    """One _Para per surviving paragraph, in document order: its house style
+    name (mapped from the Word styleId the clean writer set) and its runs with
+    italic preserved.
 
-    Iterating the plan — not every body paragraph — is what keeps hand-placed
-    layout the ingest set aside (textboxes, headers) out of the flowed book,
-    exactly as the clean writer does. Dropped paragraphs are skipped; glyph and
-    styled paragraphs were mutated in place, so their element carries the final
-    content."""
+    Iterating the structure — not every body paragraph of the file — is what
+    keeps hand-placed layout the ingest set aside (textboxes, headers) out of
+    the flowed book, exactly as the clean writer does. Dropped paragraphs are
+    skipped; glyph and styled paragraphs were mutated in place, so their
+    element carries the final content. A preserved paragraph (a table's cells,
+    an image on its own line) has no plan item and was never touched: its
+    words still flow — the word-for-word check answers for them — but in the
+    template's default style, because IDML text carries no table and no image;
+    rebuilding those in InDesign stays the designer's job."""
     id_to_name = {s.id: s.name for s in sheet.styles}
     body_role = sheet.roles.get("body", "")
+    items = plan.by_id()
     out: list[_Para] = []
-    for item in plan.plans:
-        if item.drop:
+    for sp in structure.paragraphs:
+        item = items.get(sp.para_id)
+        if item is not None and item.drop:
             continue
-        p = elements.get(item.para_id)
+        p = elements.get(sp.para_id)
         if p is None:
+            continue
+        if item is None:                     # preserved: left as it arrived
+            out.append(_Para(style="", runs=_runs_of(p)))
             continue
         style_id = _paragraph_style_id(p)
         name = id_to_name.get(style_id, body_role)

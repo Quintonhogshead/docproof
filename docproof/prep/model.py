@@ -37,6 +37,17 @@ class StructureParagraph:
     def words(self) -> int:
         return len(self.text.split())
 
+    @property
+    def preserved(self) -> bool:
+        """Left exactly as it arrived: everything inside a table, and an image
+        sitting on its own line. A table's layout and an image's placement are
+        the author's, not running text to restyle — so these paragraphs are
+        never tagged, never restripped, never dropped as blank. (A prose
+        paragraph that happens to hold an inline image is still prose; the
+        image element itself is untouched by every writer.)"""
+        return self.location == "table" or (
+            self.has_image and not self.text.strip())
+
 
 @dataclass(frozen=True)
 class Structure:
@@ -50,7 +61,12 @@ class Structure:
 
     @property
     def taggable(self) -> tuple[StructureParagraph, ...]:
-        return self.paragraphs
+        """What the model is asked about — and, downstream, the only
+        paragraphs the plan and the writers will touch. Preserved paragraphs
+        (tables, image lines) stay in `paragraphs`, so the word-for-word check
+        still answers for their text, but no label is ever bought for them and
+        no writer restyles them."""
+        return tuple(p for p in self.paragraphs if not p.preserved)
 
     @property
     def word_count(self) -> int:

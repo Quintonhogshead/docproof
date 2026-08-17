@@ -97,6 +97,12 @@ def _payload(*, structure, plan, sheet, stats, checks, usage, cfg, written,
                                    if p.has_link),
             "unanswered": len(unanswered),
             "untouched_outside_body": len(structure.untouched),
+            # Preserved in place, never tagged: everything inside a table, and
+            # images sitting on their own line.
+            "table_paragraphs": sum(1 for p in structure.paragraphs
+                                    if p.location == "table"),
+            "image_lines": sum(1 for p in structure.paragraphs
+                               if p.preserved and p.location != "table"),
         },
         "styles": plan.style_counts,
         "book": (dataclasses.asdict(meta) if meta is not None else None),
@@ -187,6 +193,14 @@ def _markdown(d: dict) -> str:
     L.append(f"- Inline italics, exactly where they were: "
              f"{counts['italic_paragraphs']} paragraph(s) carry them.")
     L.append(f"- {counts['link_paragraphs']} paragraph(s) contain a link.")
+    tables = counts.get("table_paragraphs", 0)
+    images = counts.get("image_lines", 0)
+    if tables or images:
+        kept = " and ".join(
+            ([f"{tables} paragraph(s) inside tables"] if tables else [])
+            + ([f"{images} image(s) on their own line"] if images else []))
+        L.append(f"- Tables and images, exactly as they arrived: {kept} — "
+                 f"not restyled, reformatted or removed.")
     if counts["untouched_outside_body"]:
         L.append(f"- {counts['untouched_outside_body']} paragraph(s) in "
                  f"headers, footers or notes were left exactly as they were; "

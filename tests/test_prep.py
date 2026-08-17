@@ -162,17 +162,21 @@ _IMAGE_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </w:document>"""
 
 
-def _write_docx(path, document_xml: str):
+def _write_docx(path, document_xml: str, styles_xml: str | None = None):
     """A minimal well-formed .docx around a document.xml, the way the raw-XML
-    fixtures are built."""
+    fixtures are built. `styles_xml` adds a registered word/styles.xml."""
     import zipfile
+    styles_override = (
+        '\n  <Override PartName="/word/styles.xml" ContentType="application/'
+        'vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+        if styles_xml else "")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("[Content_Types].xml",
-                   """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                   f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>{styles_override}
 </Types>""")
         z.writestr("_rels/.rels",
                    """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -180,6 +184,13 @@ def _write_docx(path, document_xml: str):
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 </Relationships>""")
         z.writestr("word/document.xml", document_xml)
+        if styles_xml:
+            z.writestr("word/_rels/document.xml.rels",
+                       """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>""")
+            z.writestr("word/styles.xml", styles_xml)
     return path
 
 
@@ -214,6 +225,135 @@ def test_an_image_on_its_own_line_survives_the_clean_file(cfg, tmp_path):
     body = DocxPackage(outputs.documents["book"]).tree("word/document.xml")
     for tag in ("w:drawing", "w:pict", "w:object"):
         assert body.find(f".//{qn(tag)}") is not None, f"{tag} was dropped"
+
+
+# Prose around a table and an image: the table references its own table style,
+# its first cell is centered Courier New 9pt, its second cell holds only an
+# empty paragraph (which every w:tc must keep — dropping it corrupts the file),
+# and the image sits centered on its own line.
+_TABLE_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Prose before the table, long enough to be body text.</w:t></w:r></w:p>
+    <w:tbl>
+      <w:tblPr><w:tblStyle w:val="FancyGrid"/></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid>
+      <w:tr>
+        <w:tc><w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="18"/></w:rPr><w:t>Cell one text</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p/></w:tc>
+      </w:tr>
+    </w:tbl>
+    <w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"/></w:drawing></w:r></w:p>
+    <w:p><w:r><w:t>Prose after the table, also body text.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+_TABLE_STYLES = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="table" w:styleId="FancyGrid">
+    <w:name w:val="Fancy Grid"/>
+    <w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8"/></w:tblBorders></w:tblPr>
+  </w:style>
+</w:styles>"""
+
+
+def _prepared_table_doc(cfg, tmp_path):
+    path = _write_docx(tmp_path / "tbl.docx", _TABLE_DOC,
+                       styles_xml=_TABLE_STYLES)
+    return path, preplib.prepare(cfg, path, config_dir=CONFIG_DIR)
+
+
+def test_table_and_image_line_paragraphs_are_preserved(cfg, tmp_path):
+    """Everything inside a table, and an image on its own line, is the
+    author's layout: read — their words still count in the word-for-word
+    check — but never sent to the model and never in the plan, so no writer
+    can restyle, strip or drop them."""
+    _, prepared = _prepared_table_doc(cfg, tmp_path)
+    by_id = {p.para_id: p for p in prepared.structure.paragraphs}
+
+    cell = by_id["table-0-r0-c0-p0"]
+    empty_cell = by_id["table-0-r0-c1-p0"]
+    assert cell.location == "table" and cell.preserved
+    assert empty_cell.preserved and empty_cell.is_blank
+    image = next(p for p in prepared.structure.paragraphs if p.has_image)
+    assert image.preserved and image.location == "body"
+
+    prose_ids = [p.para_id for p in prepared.structure.paragraphs
+                 if not p.preserved]
+    assert [p.para_id for p in prepared.structure.taggable] == prose_ids
+
+    tags, _ = preplib.run_mock(prepared)
+    plan = rules.build_plan(prepared.structure, tags, prepared.sheet)
+    assert {item.para_id for item in plan.plans} == set(prose_ids)
+
+
+def test_the_book_output_leaves_tables_and_images_alone(cfg, tmp_path):
+    """Formatting the manuscript as the book (Times New Roman 12 by default)
+    must not reach inside a table or move an image: cell alignment and the
+    author's own cell face survive, the empty cell keeps its paragraph, the
+    table's own style survives the sheet replacement, and the centered image
+    stays centered — while the prose around them is restyled."""
+    path, prepared = _prepared_table_doc(cfg, tmp_path)
+    tags, usage = preplib.run_mock(prepared)
+    outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                             source_path=path, outputs=["book"])
+    assert all(c.ok for c in outputs.verifications)
+
+    pkg = DocxPackage(outputs.documents["book"])
+    body = pkg.tree(BODY_PART)
+    cells = body.findall(f".//{qn('w:tc')}")
+    assert len(cells) == 2
+
+    cell_p = cells[0].find(qn("w:p"))
+    assert cell_p.find(f"{qn('w:pPr')}/{qn('w:jc')}").get(qn("w:val")) == "center"
+    fonts = cell_p.find(f".//{qn('w:rFonts')}")
+    assert fonts.get(qn("w:ascii")) == "Courier New"
+    assert cell_p.find(f".//{qn('w:sz')}").get(qn("w:val")) == "18"
+    assert cell_p.find(f"{qn('w:pPr')}/{qn('w:pStyle')}") is None
+
+    # The empty cell keeps its blank paragraph: it is not a blank line to
+    # remove, it is what makes the cell a valid cell.
+    assert cells[1].find(qn("w:p")) is not None
+
+    image_p = next(wp.element for wp in walk_package(pkg)
+                   if wp.part == BODY_PART
+                   and wp.element.find(f".//{qn('w:drawing')}") is not None)
+    assert image_p.find(f"{qn('w:pPr')}/{qn('w:jc')}").get(qn("w:val")) == "center"
+    assert image_p.find(f"{qn('w:pPr')}/{qn('w:pStyle')}") is None
+
+    styles = pkg.tree("word/styles.xml")
+    fancy = [s for s in styles.findall(qn("w:style"))
+             if s.get(qn("w:styleId")) == "FancyGrid"]
+    assert fancy and fancy[0].get(qn("w:type")) == "table"
+
+    # And the formatting still happened around them: every prose paragraph
+    # carries a house style.
+    prose = [wp.element for wp in walk_package(pkg)
+             if wp.part == BODY_PART and wp.location == "body"
+             and wp.element.find(f".//{qn('w:t')}") is not None]
+    assert prose
+    assert all(p.find(f"{qn('w:pPr')}/{qn('w:pStyle')}") is not None
+               for p in prose)
+
+
+def test_table_words_still_flow_into_the_idml(cfg, tmp_path):
+    """The IDML output is text-only, so a table cannot travel as a table — but
+    its words must: the word-for-word check reads the IDML back against every
+    paragraph of the manuscript, tables included."""
+    path, prepared = _prepared_table_doc(cfg, tmp_path)
+    tags, usage = preplib.run_mock(prepared)
+    outputs = preplib.finish(prepared, tags, usage, cfg, out_dir=tmp_path,
+                             source_path=path, outputs=["indesign"])
+    assert all(c.ok for c in outputs.verifications)
+
+    import zipfile
+    from docproof.prep.writers.indesign_idml import discover_body_story
+    idml = outputs.documents["indesign"]
+    with zipfile.ZipFile(idml) as z:
+        story = z.read(
+            f"Stories/Story_{discover_body_story(idml)}.xml").decode("utf-8")
+    assert "Cell one text" in story
 
 
 def test_tracked_changes_are_refused_outright():

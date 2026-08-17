@@ -28,7 +28,6 @@ def build_plan(structure: Structure, tags: list[Tag],
     body_first = sheet.role("body_first").name
     body_para = sheet.role("body").name
     scene_break = sheet.role("scene_break").name
-    table_style = sheet.role("table").name
 
     # Optional: a sheet that names no toc style sends contents lines to body,
     # which is wrong-looking but harmless. Being a chapter opener is not.
@@ -47,6 +46,9 @@ def build_plan(structure: Structure, tags: list[Tag],
     last_was_break = False
     in_toc = False
 
+    # `taggable` has already set aside what prep must not touch — everything
+    # inside a table, and images on their own line — so a plan only ever
+    # describes running text, and no writer will visit a preserved paragraph.
     for p in structure.taggable:
         tag = by_id.get(p.para_id) or Tag(p.para_id,
                                           SPACING if p.is_blank else BODY)
@@ -100,8 +102,7 @@ def build_plan(structure: Structure, tags: list[Tag],
                               "it was for you to decide.", _preview(p.text)))
 
         if role == BODY:
-            style = table_style if p.location == "table" else (
-                body_first if opens else body_para)
+            style = body_first if opens else body_para
             opens = False
         elif role == scene_break:
             style = scene_break                 # the author typed the glyph
