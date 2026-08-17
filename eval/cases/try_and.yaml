@@ -1,0 +1,27 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded error: colloquial "try and <verb>" for "try to <verb>". Traps: "and"
+# coordinating two real actions, "try" as a noun, and the set phrase "tried and
+# true". No paragraph reuses a calibration example.
+error_type: try_and
+
+cases:
+  - id: tya-001
+    text: "She told herself she would try and finish the letter before dawn."
+    expect: { span: "try and", correction: "try to", confidence: high }
+  - id: tya-002
+    text: "You have to try and see it from her side for once."
+    expect: { span: "try and", correction: "try to", confidence: high }
+  - id: tya-003
+    text: "He said he'd try and call the moment the plane landed."
+    expect: { span: "try and", correction: "try to", confidence: medium }
+
+  # Traps ---------------------------------------------------------------
+  - id: tya-101
+    text: "Give the old lock a try and see whether it still turns."
+    expect: clean          # "try" is a noun; "and" coordinates two actions
+  - id: tya-102
+    text: "I'll try, and if the bridge is out, we double back."
+    expect: clean          # comma before "and"; two separate actions
+  - id: tya-103
+    text: "The method was tried and true, and nobody wanted to change it."
+    expect: clean          # set phrase "tried and true"

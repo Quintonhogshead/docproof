@@ -1,0 +1,85 @@
+key: that_who
+name: Who for people
+version: 1
+# The detector gap this fills: that_which owns "that" vs. "which" for things,
+# but nothing owned the relative pronoun for a PERSON — "the two young children
+# that lived below us", where the house guide wants "who". This type owns that
+# one case and cedes everything else to that_which, so a combined pass reports
+# each site once.
+
+detection_prompt: |
+  When a relative clause modifies a person or people, the house guide uses
+  "who", not "that" or "which": "the two young children that lived below us"
+  -> "the two young children who lived below us"; "the only person that can be
+  trusted" -> "the only person who can be trusted." The clause stays
+  restrictive — no comma is added.
+
+  FLAG:
+  - Relative "that" whose antecedent is a human being, named or described by a
+    person-noun (person, child, man, woman, boy, girl, friend, mother, teacher,
+    stranger, the two children, the officer, and so on): "a man that I met",
+    "the nurse that took care of him", "the people that raised me". Swap "that"
+    -> "who".
+  - Restrictive relative "which" with a human antecedent, the same way:
+    "the woman which lived next door" -> "who".
+
+  This type owns ONLY the person case. Leave "that" vs. "which" for a thing or
+  an idea to that_which; if the antecedent is not a person, say nothing here.
+
+  Do NOT flag — this list is where the false positives die, so weigh it before
+  every finding:
+  - "that" that is not a relative pronoun at all: a conjunction ("She said that
+    he left.", "so cold that we stayed in."), or a demonstrative ("that person
+    left", "after that"). No swap.
+  - A non-person antecedent — a thing, an animal, an idea, a place: "the book
+    that fell", "the dog that barked", "the plan that failed". That is
+    that_which's ground, and "that" is correct.
+  - A collective or institutional noun standing for a group rather than named
+    individuals, where "that" is standard: "the team that won", "the family
+    that moved in", "the company that hired her", "the committee that voted".
+    Leave these.
+  - "anyone", "anybody", "someone", "no one", "those", "all", "everyone" as the
+    antecedent — "who" is often preferred but "that" is widely accepted and
+    frequently idiomatic ("all that glitters", "those that remain"). Flag one
+    of these only when the reference is plainly to individual people and "who"
+    reads clearly better; otherwise leave it.
+  - An antecedent that could be a person or a thing, where the text does not
+    settle it.
+  - A manuscript that uses relative "that" for people consistently throughout —
+    an authorial habit, not a run of errors. Report at low confidence if at all.
+  - Verbatim quoted matter — an epigraph, a letter, a lyric, a title ("The Man
+    That Got Away").
+
+fix_guidance: |
+  corrected_text must repeat the entire sentence with the relative pronoun
+  ("that", or restrictive "which") changed to "who" and nothing else touched.
+  Never add a comma — the clause stays restrictive; converting it to a
+  nonrestrictive clause is a meaning change the author owns.
+
+confidence_guidance: |
+  high   — a clear person-noun antecedent with relative "that" in a restrictive
+           clause, in narration.
+  medium — the antecedent is an indefinite pronoun (anyone, someone, those) but
+           plainly refers to people.
+  low    — dialogue or close first person, a mixed or ambiguous antecedent, or a
+           manuscript-wide habit of relative "that" for people.
+
+examples:
+  - text: "The two young children that lived below us were always at our door."
+    finding:
+      original_text: "The two young children that lived below us were always at our door."
+      corrected_text: "The two young children who lived below us were always at our door."
+      explanation: "A relative clause modifying people takes \"who\" under house style."
+      confidence: high
+  - text: "She was the only person that could be expected to remember."
+    finding:
+      original_text: "She was the only person that could be expected to remember."
+      corrected_text: "She was the only person who could be expected to remember."
+      explanation: "\"person\" is a human antecedent, so the relative pronoun is \"who.\""
+      confidence: high
+  - text: "It was the last bus that left before the storm closed the roads."
+    finding: null
+  - text: "The team that finished first got to choose the music."
+    finding: null
+  - text: "He told her that he would be late again."
+    finding: null

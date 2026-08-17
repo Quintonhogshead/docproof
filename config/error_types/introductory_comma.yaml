@@ -1,6 +1,6 @@
 key: introductory_comma
 name: Comma after an introductory element
-version: 1
+version: 2
 
 detection_prompt: |
   The Atmosphere house guide calls for a comma after an introductory phrase or
@@ -10,26 +10,39 @@ detection_prompt: |
   - A subordinate clause opening the sentence: "Because it was late we went
     home.", "If you leave now you'll make it.", "When the bell rang she stood."
   - A participial phrase: "Walking to the station he realized he was early."
-  - A longer prepositional phrase (roughly four words or more): "In the last
-    week of August the rain finally stopped."
+  - An introductory prepositional phrase, including a short one that sets the
+    time or place of what follows: "During the day I would hear the trains.",
+    "In the morning the fog burned off.", "After school we walked home.", "In
+    the last week of August the rain finally stopped." The house guide takes the
+    comma after a scene-setting opener even when it is only two or three words —
+    this is the recall gap the rule most often leaves open, so do not withhold
+    the comma merely because the phrase is short.
   - A transitional word or phrase followed directly by the main clause:
     "However he never called.", "On the other hand she had a point."
+  - An introductory sentence adverb that comments on the whole clause:
+    "Truthfully, I never expected it.", "Honestly, we could not afford it.",
+    "Ultimately, none of it mattered." This holds even when a coordinating
+    conjunction leads the sentence: in "And truthfully how would we ever afford
+    it", the comma belongs after "truthfully" — never after "And".
   - An introductory element whose omitted comma creates a misreading: "Before
     eating the children washed their hands."
 
   Do NOT flag — over-flagging this rule is how a manuscript gets buried in
   commas it does not need:
-  - A short introductory adverb, where a comma would be intrusive and CMOS does
-    not require one: "Then she left.", "Now he understood.", "Suddenly the door
-    opened.", "Yesterday I called."
-  - A short prepositional phrase of about three words or fewer where no
-    misreading is possible: "In the morning he left." is correct as written.
+  - A single bare introductory adverb, where a comma would be intrusive and
+    CMOS does not require one: "Then she left.", "Now he understood.",
+    "Suddenly the door opened.", "Yesterday I called." (A multi-word
+    scene-setting phrase is different — "During the day," "After school," take
+    the comma; see FLAG.)
   - Inverted sentences, which take no comma: "Down the hill ran the boy.",
     "Out of the fog came a voice."
   - A phrase that is the subject of the sentence, not an introduction:
     "Running down the hill was exhausting.", "To finish the book took a year."
-  - Sentences opening with a coordinating conjunction: "And then he left.",
-    "But nobody answered."
+  - The coordinating conjunction itself, when a sentence opens with one: put no
+    comma after "And", "But", or "So" ("And then he left.", "But nobody
+    answered."). This bars only a comma after the conjunction — if an
+    introductory adverb or phrase follows it, that element still takes its comma
+    ("And truthfully, we had no idea how we would manage.").
   - Dialogue tags, and the resumption of interrupted speech.
   - Elements already followed by a comma.
 
@@ -39,13 +52,15 @@ fix_guidance: |
   clause begins. Add nothing else and reword nothing.
 
 confidence_guidance: |
-  high   — an introductory subordinate clause or participial phrase, in
-           narration, where the missing comma is unambiguous.
-  medium — an introductory prepositional phrase near the short/long boundary,
-           where CMOS would permit either.
-  low    — the element is short, the passage is dialogue or first-person voice
-           where the unbroken rhythm may be deliberate, or the phrase might be
-           the subject rather than an introduction.
+  high   — an introductory subordinate clause, participial phrase, transitional
+           word, sentence adverb, or scene-setting time/place phrase, in
+           narration, where the house comma is unambiguous.
+  medium — an introductory prepositional phrase the house takes a comma after,
+           in a passage where either reading is defensible.
+  low    — dialogue or first-person voice where the unbroken rhythm may be
+           deliberate, or the phrase might be the subject rather than an
+           introduction. The confirm valve gives a low call a second look
+           rather than dropping it silently.
 
 examples:
   - text: "After the meeting we walked back along the river."
@@ -61,6 +76,18 @@ examples:
       original_text: "Because it was already dark they took the long way home."
       corrected_text: "Because it was already dark, they took the long way home."
       explanation: "An introductory subordinate clause is followed by a comma."
+      confidence: high
+  - text: "During the day I would constantly hear the neighbors arguing through the wall."
+    finding:
+      original_text: "During the day I would constantly hear the neighbors arguing through the wall."
+      corrected_text: "During the day, I would constantly hear the neighbors arguing through the wall."
+      explanation: "A scene-setting introductory phrase takes a comma under house style, even a short one."
+      confidence: high
+  - text: "And truthfully we had no idea how we would ever manage the rent."
+    finding:
+      original_text: "And truthfully we had no idea how we would ever manage the rent."
+      corrected_text: "And truthfully, we had no idea how we would ever manage the rent."
+      explanation: "The introductory sentence adverb takes a comma; the leading \"And\" does not."
       confidence: high
   - text: "Down the hill ran the boy who had started it all."
     finding: null

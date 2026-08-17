@@ -1,0 +1,32 @@
+# UNVERIFIED LLM-drafted held-out cases — pending human review before use.
+# Seeded error: relative "that" (or restrictive "which") with a human
+# antecedent, where the house guide wants "who". Traps: a collective noun ("the
+# team that"), a non-person antecedent (that_which's ground), "that" as a
+# conjunction, and "that" as a demonstrative. No paragraph reuses a calibration
+# example.
+error_type: that_who
+
+cases:
+  - id: who-001
+    text: "The neighbor that watered our plants left the key under the mat."
+    expect: { span: "that watered", correction: "who watered", confidence: high }
+  - id: who-002
+    text: "He was the kind of teacher that remembered every name."
+    expect: { span: "that remembered", correction: "who remembered", confidence: high }
+  - id: who-003
+    text: "The woman which ran the shop always saved us the day-old bread."
+    expect: { span: "which ran", correction: "who ran", confidence: high }
+
+  # Traps ---------------------------------------------------------------
+  - id: who-101
+    text: "The committee that approved the budget met only twice a year."
+    expect: clean          # collective noun; "that" is standard
+  - id: who-102
+    text: "The train that left at noon was the last one that day."
+    expect: clean          # non-person antecedent; that_which's ground
+  - id: who-103
+    text: "She whispered that he had already gone home for the night."
+    expect: clean          # "that" is a conjunction, not a relative pronoun
+  - id: who-104
+    text: "That was the coldest winter anyone on the coast could recall."
+    expect: clean          # "that" is a demonstrative

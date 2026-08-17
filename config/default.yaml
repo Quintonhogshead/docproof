@@ -510,7 +510,16 @@ fix_check:
 error_types:
   # mechanical — objective, verifiable, low false-positive rate
   - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]
-  # house commas — one Atmosphere house-guide rule each
+  # house commas — one Atmosphere house-guide rule each. The introductory /
+  # scene-setting comma is the largest single recall gap in the miss set; the
+  # primary lever for it is introductory_comma's own loosened prompt (short
+  # time-and-place openers and sentence adverbs the guards used to suppress).
+  # For an extra recall push on a hard manuscript, dial this category to
+  # {passes: 2, token_budget: 1800} on the review panel — a second read over
+  # tighter chunks, deduped one-edit-per-span by the validator. It is a per-run
+  # knob rather than a shipped default on purpose: a shipped passes>1 would
+  # roughly double this pass's cost on every run, and the drop-time estimate
+  # prices per-category tuning as a panel delta, not in the flat base.
   - [serial_comma, complex_list_semicolon, introductory_comma,
      direct_address_comma, tag_question_comma]
   # dialogue mechanics — the highest-volume error class in fiction, and the
@@ -528,11 +537,18 @@ error_types:
   # a comma with NO conjunction wants that comma REPLACED (comma_splice). Seeing
   # the boundary defined keeps it from firing the wrong one — or one for the
   # other. The type's own guards decline the common false positive, a compound
-  # predicate (one subject, two verbs).
+  # predicate (one subject, two verbs). that_who rides beside that_which so the
+  # two relative-pronoun rules are read together: that_which owns "that" vs.
+  # "which" for things, that_who owns that/which -> "who" for people, and each
+  # cedes the other's case, so a site is reported once.
   - [comma_splice, run_on_sentence, compound_sentence_comma,
-     subject_verb_agreement, that_which]
+     subject_verb_agreement, that_which, that_who]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+  # usage fixes and run-in list punctuation — cheap, rule-friendly swaps no
+  # other pass owned: colloquial "try and <verb>" -> "try to <verb>", and a
+  # colon before a numbered run-in list that a complete clause introduces.
+  - [try_and, list_intro_colon]
   # terminal-mark queries — precision-unproven, activated for live measurement.
   # Its own pass so the judgment stays isolated and easy to toggle off. Query
   # channel: asks whether a period should be a question mark, never edits.
