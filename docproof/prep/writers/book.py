@@ -109,8 +109,14 @@ def write_book(pkg, structure: Structure, plan: PrepPlan, sheet: StyleSheet,
     _suppress_repeated_openers(elements, plan, designed)
     header_refs, footer_refs = _running_head_parts(pkg, design, meta)
     _apply_geometry(pkg, design, header_refs, footer_refs)
-    _ensure_settings(pkg, ["evenAndOddHeaders", "embedTrueTypeFonts"]
-                     + (["mirrorMargins"] if design.page.mirror else []))
+    # even/odd headers only matter when there is a head band to differ between
+    # the two sides; a plain design has none, so the switch stays off.
+    settings = ["embedTrueTypeFonts"]
+    if design.running_heads.enabled:
+        settings.append("evenAndOddHeaders")
+    if design.page.mirror:
+        settings.append("mirrorMargins")
+    _ensure_settings(pkg, settings)
     fonts = embed_fonts(pkg, _fonts_to_embed(design, subject.key))
     drops = _drop_caps(elements, plan, sheet, design)
 
@@ -206,8 +212,11 @@ def _apply_geometry(pkg, design: BookDesign, header_refs: dict[str, str],
             for kind, rel_id in footer_refs.items():
                 etree.SubElement(sect, qn("w:footerReference"),
                                  {qn("w:type"): kind, f"{{{DR_NS}}}id": rel_id})
-            # No head or folio on the very first page — the title page.
-            etree.SubElement(sect, qn("w:titlePg"))
+            # No head or folio on the very first page — the title page. Only
+            # worth saying when there is a head or folio to suppress; a plain
+            # design has neither, so the first page is like the rest.
+            if header_refs or footer_refs:
+                etree.SubElement(sect, qn("w:titlePg"))
         _order_children(sect, _SECTPR_ORDER)
 
 
@@ -226,38 +235,48 @@ def _order_children(el: etree._Element, order: tuple[str, ...]) -> None:
 
 def _running_head_parts(pkg, design: BookDesign,
                         meta: BookMeta) -> tuple[dict[str, str], dict[str, str]]:
-    """The two header parts and the footer part, registered and related.
-    Returns ({header type -> rel id}, {footer type -> rel id})."""
-    title = (meta.title or "").strip()
-    author = (meta.author or "").strip()
-    texts = {"title": title or author, "author": author or title}
-    heads = design.running_heads
-
-    def head_part(text: str) -> etree._Element:
-        root = etree.Element(qn("w:hdr"), nsmap={"w": W_NS})
-        root.append(_centered_line(
-            text, family=design.fonts["heading"].family, size=heads.size,
-            caps=heads.caps, letterspace=heads.letterspace))
-        return root
-
-    even = head_part(texts.get(heads.verso, title))
-    odd = head_part(texts.get(heads.recto, title))
-    footer = etree.Element(qn("w:ftr"), nsmap={"w": W_NS})
-    footer.append(_folio_paragraph(design))
-
+    """The header parts and the footer part the design asks for, registered and
+    related. Either apparatus can be switched off: a plain design hangs no
+    author/title band (`running_heads: false`) and prints no folio
+    (`folio: false`), so those parts are never written and their references
+    never added. Returns ({header type -> rel id}, {footer type -> rel id})."""
     header_refs: dict[str, str] = {}
     footer_refs: dict[str, str] = {}
-    for name, root, content_type, rel_type, refs, kind in (
-            (_HEADER_EVEN, even, _CT_HEADER, _REL_HEADER, header_refs, "even"),
-            (_HEADER_ODD, odd, _CT_HEADER, _REL_HEADER, header_refs, "default"),
-            (_FOOTER, footer, _CT_FOOTER, _REL_FOOTER, footer_refs, "default")):
-        _set_part(pkg, name, root)
-        _override_content_type(pkg, name, content_type)
-        refs[kind] = _document_relationship(pkg, rel_type,
-                                            name.removeprefix("word/"))
-    # With evenAndOddHeaders on, even pages read the "even" reference — the
-    # same centered folio belongs on both sides.
-    footer_refs["even"] = footer_refs["default"]
+    heads = design.running_heads
+
+    if heads.enabled:
+        title = (meta.title or "").strip()
+        author = (meta.author or "").strip()
+        texts = {"title": title or author, "author": author or title}
+
+        def head_part(text: str) -> etree._Element:
+            root = etree.Element(qn("w:hdr"), nsmap={"w": W_NS})
+            root.append(_centered_line(
+                text, family=design.fonts["heading"].family, size=heads.size,
+                caps=heads.caps, letterspace=heads.letterspace))
+            return root
+
+        for name, root, kind in ((_HEADER_EVEN, head_part(
+                texts.get(heads.verso, title)), "even"),
+                (_HEADER_ODD, head_part(texts.get(heads.recto, title)),
+                 "default")):
+            _set_part(pkg, name, root)
+            _override_content_type(pkg, name, _CT_HEADER)
+            header_refs[kind] = _document_relationship(
+                pkg, _REL_HEADER, name.removeprefix("word/"))
+
+    if design.folio:
+        footer = etree.Element(qn("w:ftr"), nsmap={"w": W_NS})
+        footer.append(_folio_paragraph(design))
+        _set_part(pkg, _FOOTER, footer)
+        _override_content_type(pkg, _FOOTER, _CT_FOOTER)
+        footer_refs["default"] = _document_relationship(
+            pkg, _REL_FOOTER, _FOOTER.removeprefix("word/"))
+        # With evenAndOddHeaders on (only when there are heads), even pages read
+        # the "even" reference — the same centered folio belongs on both sides.
+        # With it off, the single "default" reference already covers every page.
+        if heads.enabled:
+            footer_refs["even"] = footer_refs["default"]
     return header_refs, footer_refs
 
 

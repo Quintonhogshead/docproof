@@ -125,6 +125,13 @@ class PrepConfig(BaseModel):
     # paragraph styles themselves are written in from the style sheet, so a bare
     # template needs only the geometry.
     indesign_template: str = "prep/house_template.idml"
+    # DocWatch's own interior. The watched folder hands back a plain reading
+    # copy — Times New Roman, 12pt, US Letter, no running heads, no drop caps,
+    # no display faces — rather than the paperback sketch the app's manual book
+    # output uses. Swapped in for `book_design` on watched-folder prep only (see
+    # JobRunner.config_for); the app's `book` output is untouched. Another
+    # basic-but-different look is a different YAML.
+    watch_book_design: str = "prep/book_manuscript.yaml"
     # A window is one request. The paragraph cap is what keeps the model from
     # skipping entries in a long list; the token budget is what keeps a window
     # of dense prose from being far bigger than a window of dialogue.
