@@ -307,6 +307,21 @@ def test_a_contents_list_is_read_from_the_file_not_the_words(toc_structure):
     assert REAL_CHAPTER not in toc       # the heading, not the pointer
 
 
+def test_textbox_prose_is_left_untouched_by_prep():
+    """Prep reflows the manuscript body — it restyles paragraphs and drops blank
+    lines. A text box is layout the author placed by hand, not running text, so
+    prep sets its paragraphs aside as untouched (as it does a header or a
+    footnote) rather than restyling them, even though they live in the body
+    part. The running text around the boxes is still read as normal body."""
+    structure = build_structure(preflight(FIXTURES / "textbox.docx"))
+    ids = {p.para_id for p in structure.paragraphs}
+    untouched = {pid for pid, _loc in structure.untouched}
+
+    assert {"body-0001-tb0-p0", "body-0002-tb0-p0"} <= untouched
+    assert not {"body-0001-tb0-p0", "body-0002-tb0-p0"} & ids
+    assert {"body-0000", "body-0003"} <= ids
+
+
 def test_contents_entries_are_not_chapter_headings(toc_structure, sheet):
     """The bug this exists for: the model reads "Chapter One" in the contents
     and answers "chapter # / title", which carries a forced page break — so a

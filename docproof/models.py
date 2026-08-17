@@ -29,9 +29,9 @@ STATUSES = (
 
 @dataclass(frozen=True)
 class ParagraphRef:
-    para_id: str      # "body-0042", "table-0-r2-c1-p0", "footnote-2-p0"
+    para_id: str      # "body-0042", "table-0-r2-c1-p0", "body-0007-tb0-p1"
     part: str         # which XML part it lives in, e.g. "word/document.xml"
-    location: str     # "body" | "table" | "header" | "footer" | "footnote" | "endnote"
+    location: str     # body | table | header | footer | footnote | endnote | textbox
     text: str         # canonical text — THE text Claude sees and anchors quote from
     style: str        # Word style ID, e.g. "Heading1", "Normal"
     # Whether this paragraph is worth spending a model pass on. Headings are

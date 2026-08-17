@@ -41,6 +41,40 @@ def test_reject_view_ignores_textbox_and_fallback_like_the_baseline():
     assert paragraph_view_text(p, "reject") == ""      # was the doubled title
     assert paragraph_view_text(p, "accept") == ""
 
+
+_BOX = "Beware the dog, it bites without warning."
+
+
+def test_edit_inside_a_textbox_roundtrips_without_a_shape_comment(tmp_path, cfg):
+    """A comma splice inside a floating text box is corrected like any other:
+    the fix lands as a tracked change, reject restores the original exactly (the
+    audit's parity), and — because a comment anchored inside a shape is
+    unreliable in Word — no margin note is written even with comments on, so no
+    comments part is created at all."""
+    cfg = cfg.model_copy(update={"comments": True})
+    pkg = preflight(FIXTURES / "textbox.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+
+    pid = "body-0001-tb0-p0"
+    ref = next(p for p in doc.paragraphs if p.para_id == pid)
+    assert ref.location == "textbox" and ref.reviewable and ref.text == _BOX
+
+    assert _BOX[14:18] == ", it"                    # the splice, to ". It"
+    f = Finding("f-1", "chunk-000", pid, "comma_splice", _BOX, 1,
+                "A comma splice; a period separates the clauses.", "test",
+                "high", status="validated", anchor=Anchor(14, 18, ", it", ". It"))
+    stats = apply_tracked_changes(pkg, doc, [f], cfg)
+    assert stats.applied == ("f-1",) and not stats.skipped
+
+    out = tmp_path / "textbox_reviewed.docx"
+    pkg.save(out)
+    reloaded = DocxPackage(out)
+    p = _para(reloaded, pid)
+    assert paragraph_view_text(p, "accept") == "Beware the dog. It bites without warning."
+    assert paragraph_view_text(p, "reject") == _BOX
+    assert not reloaded.has("word/comments.xml")     # no comment inside the shape
+
+
 ORIG = "It was late, we were tired, the road went on."
 
 

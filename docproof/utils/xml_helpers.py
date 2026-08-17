@@ -54,7 +54,21 @@ XML_SPACE    = f"{{{XML_NS}}}space"
 # mc:Choice beside it. Both the forward extractor (iter_text_elements) and the
 # accept/reject views (paragraph_view_text) must honour this, or the two
 # disagree and the reject-all audit fails on a paragraph nothing touched.
-TEXT_SKIP_ANCESTORS = {qn("w:txbxContent"), f"{{{MC_NS}}}Fallback"}
+#
+# A textbox's story is not this paragraph's text, but it IS text the author
+# wrote — a pull quote, a sidebar, a cover title — and the walker below reads it
+# as its own paragraphs (location "textbox"). What stays excluded here is only
+# the anchoring paragraph absorbing the story into its own canonical text; the
+# story is walked separately, once, from its mc:Choice side.
+TXBXCONTENT_TAG = qn("w:txbxContent")
+MC_FALLBACK_TAG = f"{{{MC_NS}}}Fallback"
+TEXT_SKIP_ANCESTORS = {TXBXCONTENT_TAG, MC_FALLBACK_TAG}
+
+# The location stamped on paragraphs read from inside a textbox, whatever part
+# hosts the box. Review reads them; prep leaves them untouched (layout, not
+# manuscript flow); continuity skips them (not narrative). Kept distinct so each
+# stage can tell a floating box from the running text around it.
+TEXTBOX_LOCATION = "textbox"
 
 
 # --- The canonical text contract --------------------------------------------
@@ -124,17 +138,45 @@ def set_text(t: etree._Element, s: str) -> None:
 
 class WalkedParagraph(NamedTuple):
     part: str        # e.g. "word/document.xml"
-    para_id: str     # e.g. "body-0042", "table-0-r2-c1-p0", "footnote-2-p0"
-    location: str    # "body" | "table" | "header" | "footer" | "footnote" | "endnote"
+    para_id: str     # e.g. "body-0042", "table-0-r2-c1-p0", "body-0007-tb0-p1"
+    location: str    # body | table | header | footer | footnote | endnote | textbox
     element: etree._Element
+
+
+def _owned_textbox_stories(p: etree._Element) -> Iterator[etree._Element]:
+    """The textbox stories (w:txbxContent) anchored directly in paragraph `p`.
+
+    A textbox is a run-anchored drawing (DrawingML) or shape (legacy VML) whose
+    w:txbxContent holds its own paragraphs — a separate story Word floats in a
+    frame. We yield each so those paragraphs get read, subject to two rules that
+    keep the read exact:
+
+      * Only the mc:Choice rendering, never the mc:Fallback duplicate beside it
+        (the same duplicate TEXT_SKIP_ANCESTORS drops from canonical text) — or
+        every box would be read, edited and counted twice.
+      * Only stories this paragraph owns. One nested inside a deeper paragraph
+        or a deeper story belongs to that inner paragraph; the walk reaches it
+        by recursing there, so yielding it here would double it.
+
+    p.iter is document order, so the stories come out in a stable order."""
+    for tx in p.iter(TXBXCONTENT_TAG):
+        node, owned = tx.getparent(), True
+        while node is not None and node is not p:
+            if node.tag in (P_TAG, TXBXCONTENT_TAG, MC_FALLBACK_TAG):
+                owned = False
+                break
+            node = node.getparent()
+        if owned:
+            yield tx
 
 
 def _walk_container(container, part, location, p_prefix, tbl_prefix,
                     pad_p=False, counters=None) -> Iterator[WalkedParagraph]:
     """Walk direct block children of a container: paragraphs, tables
-    (recursing into cells), and content controls (transparent). Deliberately
-    NOT a .//w:p search — that would catch textbox paragraphs and wreck
-    determinism."""
+    (recursing into cells), content controls (transparent), and the textbox
+    stories a paragraph anchors. Deliberately NOT a .//w:p search — that would
+    flatten tables and textboxes into the body and wreck determinism; textbox
+    recursion is explicit, and skips the mc:Fallback duplicate."""
     if counters is None:
         counters = {"p": 0, "tbl": 0}
     for child in container:
@@ -143,6 +185,12 @@ def _walk_container(container, part, location, p_prefix, tbl_prefix,
             i = counters["p"]; counters["p"] += 1
             pid = f"{p_prefix}{i:04d}" if pad_p else f"{p_prefix}{i}"
             yield WalkedParagraph(part, pid, location, child)
+            # A box anchored in this paragraph is read right after it, as its
+            # own story with its own paragraph numbering, whatever part hosts it.
+            for tb_i, story in enumerate(_owned_textbox_stories(child)):
+                base = f"{pid}-tb{tb_i}"
+                yield from _walk_container(story, part, TEXTBOX_LOCATION,
+                                           f"{base}-p", f"{base}-tbl")
         elif tag == TBL_TAG:
             k = counters["tbl"]; counters["tbl"] += 1
             base = f"{tbl_prefix}{k}"

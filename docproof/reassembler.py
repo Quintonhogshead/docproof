@@ -16,7 +16,8 @@ from .queries import query_span, query_text, shows_margin_comment
 from .utils.xml_helpers import (BR_TAG, CR_TAG, CT_NS, DELTEXT_TAG, DEL_TAG,
                                 DR_NS, DocxPackage, INS_TAG, P_TAG, PR_NS,
                                 RPR_TAG, R_TAG, TAB_TAG, T_TAG,
-                                TEXT_SKIP_ANCESTORS, VIRTUAL_CHARS,
+                                TEXT_SKIP_ANCESTORS, TEXTBOX_LOCATION,
+                                VIRTUAL_CHARS,
                                 W_NS, merge_adjacent_runs, paragraph_text, qn,
                                 set_text, walk_package)
 
@@ -647,13 +648,22 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 skipped += [f.finding_id for f in plist]
                 continue
 
+            # A textbox paragraph lives in the main document part, but a comment
+            # anchored inside a floating shape is unreliable across Word
+            # versions and viewers. So a textbox follows the same path as a
+            # header or footer: the correction still lands as a tracked change,
+            # its explanation still reaches summary.md, and only the in-document
+            # margin note is skipped rather than risk a shape Word can't render.
+            in_body_flow = (part == "word/document.xml"
+                            and paras[para_id].location != TEXTBOX_LOCATION)
+
             # Queries go on first. They insert range markers rather than text,
             # so the offsets the edits below rely on are unchanged — whereas
             # applying a deletion first would move text out of w:t and leave
             # every later offset pointing at the wrong place.
             for f in sorted((x for x in plist if x.status != "validated"),
                             key=lambda x: x.anchor.start):
-                if part != "word/document.xml":
+                if not in_body_flow:
                     unplaced.append(f.finding_id)
                     continue
                 if comments is None:
@@ -690,7 +700,7 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                     first, last = apply_replacement(p, a, cfg.revision_author,
                                                     date, ids)
                 applied.append(f.finding_id)
-                if cfg.comments and not f.silent and part == "word/document.xml":
+                if cfg.comments and not f.silent and in_body_flow:
                     if comments is None:
                         comments = _Comments(pkg, cfg.revision_author, date)
                     comments.attach(p, first, last,
