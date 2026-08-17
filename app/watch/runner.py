@@ -268,7 +268,13 @@ class WatchRunner:
         or off in the panel takes effect at the next question rather than at
         the next restart."""
         ws = WatchSettings.load(self.home)
-        if not ws.auto_ticks or missing(ws) is not None or self.busy:
+        if not ws.auto_ticks or missing(ws) is not None:
+            # Paused or half-configured. Forget any fixed-times arm so turning
+            # the clock back on arms afresh, rather than treating a slot that
+            # fell while it was off as still due.
+            self._armed_at = None
+            return False
+        if self.busy:
             return False
         now = datetime.now(timezone.utc)
         stamp = last_tick(self.home)
@@ -279,7 +285,14 @@ class WatchRunner:
             # the last real pass, so neither clock repeats the other's work.
             if self._armed_at is None:
                 self._armed_at = now
-            floor = stamp or self._armed_at
+            # The later of the two, not whichever exists: the arm time is what
+            # keeps enabling a schedule from firing for a time already past
+            # today, and it must win over a `last_tick` left by an earlier pass
+            # that is older than that time. `stamp or self._armed_at` used the
+            # stamp whenever there was one, which on any machine that had run
+            # before dropped the arm floor and fired immediately.
+            floor = (self._armed_at if stamp is None
+                     else max(stamp, self._armed_at))
             try:
                 if not daily.due(ws.tick_at_times, ws.tick_timezone,
                                  floor=floor, now=now):
@@ -290,12 +303,18 @@ class WatchRunner:
                 log.warning("Ignoring an unusable watch schedule (%r in %r)",
                             ws.tick_at_times, ws.tick_timezone)
                 return False
-        elif stamp is not None:
-            due = stamp + timedelta(minutes=ws.tick_every_minutes)
-            if now < due:
-                # Something looked recently — quite possibly the scheduled
-                # agent, a minute before the app was opened.
-                return False
+        else:
+            # The interval clock ("every N minutes"), or nothing scheduled yet.
+            # Either way the fixed-times arm is stale, so drop it: switching back
+            # to set times should arm to that moment, never fire for a slot that
+            # fell while the interval clock was the one running.
+            self._armed_at = None
+            if stamp is not None:
+                due = stamp + timedelta(minutes=ws.tick_every_minutes)
+                if now < due:
+                    # Something looked recently — quite possibly the scheduled
+                    # agent, a minute before the app was opened.
+                    return False
         return self.run_now()
 
     # -- what the panel reads -------------------------------------------------
