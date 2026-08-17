@@ -521,8 +521,16 @@ error_types:
   # house mechanics — numbers, money, hyphenation, and the one rule that
   # changes how text is set rather than what it says
   - [number_style, currency_style, ly_adverb_hyphen, title_italics]
-  # sentence grammar — needs parsing, still decidable
-  - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
+  # sentence grammar — needs parsing, still decidable. compound_sentence_comma
+  # rides beside comma_splice so the model reads the two clause-comma rules
+  # together: a coordinating conjunction joining two independent clauses wants a
+  # comma ADDED before it (compound_sentence_comma), while two clauses joined by
+  # a comma with NO conjunction wants that comma REPLACED (comma_splice). Seeing
+  # the boundary defined keeps it from firing the wrong one — or one for the
+  # other. The type's own guards decline the common false positive, a compound
+  # predicate (one subject, two verbs).
+  - [comma_splice, run_on_sentence, compound_sentence_comma,
+     subject_verb_agreement, that_which]
   # judgment calls — style-sensitive, most likely to fire on deliberate prose
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 # House-style conventions the sweeps enforce where the right answer is the

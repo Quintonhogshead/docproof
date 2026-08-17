@@ -1,6 +1,6 @@
 key: compound_sentence_comma
 name: Comma before a coordinating conjunction (compound sentence)
-version: 2
+version: 3
 
 detection_prompt: |
   When a coordinating conjunction (and, but, or, nor, for, yet, so) joins two
@@ -33,8 +33,18 @@ detection_prompt: |
     BOTH sides are independent, not only the half after the conjunction.
   - Two very short independent clauses, where CMOS lets the comma go: "He ran
     and she followed." Report at most at low confidence.
+  - PURPOSE "so" — "so" meaning "so that / in order that" is SUBORDINATING, not
+    coordinating, and takes NO comma even though a real new subject follows it:
+    "She gave us money so we could get ice cream." / "I left early so I would
+    not miss the train." The tell is that you can read "so that" in its place
+    without changing the meaning. Only "so" meaning "and therefore / as a
+    result" is the coordinating conjunction that wants a comma ("The council
+    would not move, so the envoy went alone."). When "so" could be read either
+    way, prefer the purpose reading and do not flag, or report low confidence.
   - The conjunction joining words, phrases, or list items rather than clauses:
-    "cold and tired", "over the wall and through the gate".
+    "cold and tired", "over the wall and through the gate". A run of items —
+    "boost moods, promote emotional health, and fight depression" — is a serial
+    list (serial_comma's business), not a compound sentence.
   - A conjunction starting a sentence: "But he never came.", "And then it
     rained."
   - Anything inside quoted dialogue, where the breathless unbroken rhythm may be
@@ -75,6 +85,8 @@ examples:
       corrected_text: "The council would not move, so the envoy went alone."
       explanation: "Independent clauses joined by 'so' take a comma before it."
       confidence: high
+  - text: "She gave us money so we could get ice cream after school."
+    finding: null
   - text: "Cameron and I are on the way to the meeting."
     finding: null
   - text: "My family and I were grateful for everything they had done."
