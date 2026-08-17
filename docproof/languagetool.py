@@ -115,6 +115,7 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
             disabled_rules: frozenset[str] = DEFAULT_DISABLED_RULES,
             disabled_issue_types: frozenset[str] = DEFAULT_DISABLED_ISSUE_TYPES,
             workers: int = 0,
+            coverage=None,
             progress: Callable[[int, int], None] | None = None,
             ) -> list[RewriteCandidate]:
     """Run LanguageTool over each paragraph and return the surviving matches as
@@ -133,6 +134,11 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
     below walks the paragraphs in order, not in completion order."""
     if not AVAILABLE:
         log.warning("LanguageTool not installed; propose() returns nothing.")
+        if coverage is not None:
+            coverage.note("LanguageTool", "the pass is enabled but LanguageTool "
+                          "is not installed, so the mechanical-floor scan "
+                          "(commas, missing words, hyphenation) did not run",
+                          "skipped")
         return []
     lex = {w.strip("'’\".,").lower() for w in lexicon}
     tool = _get_tool(dictionary)
@@ -147,6 +153,7 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
     # walk afterwards is unaffected by which check finished first.
     matches_by_idx: dict[int, list] = {}
     done = 0
+    failed = 0
     with ThreadPoolExecutor(max_workers=pool) as ex:
         futs = {ex.submit(tool.check, p.text): i
                 for i, p in enumerate(reviewable)}
@@ -158,9 +165,17 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
                 log.warning("LanguageTool: check failed on %s: %s",
                             reviewable[i].para_id, e)
                 matches_by_idx[i] = []
+                failed += 1
             done += 1
             if progress:
                 progress(done, total)
+    # A handful of paragraphs the scanner choked on read downstream as fewer
+    # mechanical findings, indistinguishable from clean paragraphs — say how
+    # many went unscanned rather than let the thinner result pass for a full one.
+    if failed and coverage is not None:
+        coverage.note("LanguageTool", f"{failed} of {total} paragraph(s) could "
+                      f"not be scanned and were left unchecked for mechanical "
+                      f"errors", "partial")
 
     cands: list[RewriteCandidate] = []
     seen: set[tuple[str, int, int]] = set()

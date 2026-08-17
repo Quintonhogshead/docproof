@@ -164,6 +164,63 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
     log.info("Wrote %s", path)
 
 
+def run_health(coverage=None, audit=None, smoothing=None,
+               chapter_continuity=None, judges=None) -> list[str]:
+    """Every way this run came up short, as plain one-line sentences, gathered
+    into one leading list so a degraded run announces itself at the top of the
+    report instead of hiding the shortfall in a section a reader has to know to
+    open. Ordered worst first: whole passes that failed, then were skipped, then
+    ran partially, then coverage holes, then the per-pass incompletions.
+
+    Each line stands alone. This drives the summary.md banner; the job card and
+    email read coverage.degraded directly (via Outputs.warnings), which is the
+    subset of this that is a whole failed/skipped pass."""
+    lines: list[str] = []
+    if coverage is not None:
+        order = {"failed": 0, "skipped": 1, "partial": 2}
+        for w in sorted(coverage.degraded,
+                        key=lambda w: order.get(getattr(w, "kind", "failed"), 3)):
+            lines.append(w.line())
+        if coverage.gaps:
+            lines.append(
+                f"{len(coverage.gaps)} of {coverage.total} pass×section unit(s) "
+                f"could not be reviewed even after a retry — those paragraphs "
+                f"are unchecked, not clean (see Coverage).")
+        if coverage.unruled:
+            lines.append(
+                f"{coverage.unruled_total} candidate(s) were sent to the model "
+                f"and paid for but never got a verdict (see Coverage).")
+    if audit is not None and audit.ran and not audit.passed:
+        lines.append(f"the reject-all audit FAILED — {audit.summary()}.")
+    if smoothing is not None:
+        if smoothing.windows_failed:
+            lines.append(
+                f"language smoothing: {smoothing.windows_failed} of "
+                f"{smoothing.windows} reading pass(es) did not complete, so "
+                f"those parts were never read for smoothing.")
+        if smoothing.unjudged:
+            lines.append(
+                f"language smoothing: {smoothing.unjudged} suggestion(s) were "
+                f"never ruled on (a truncated or unreadable reply).")
+    cc = chapter_continuity
+    if cc is not None:
+        if cc.read_failed:
+            lines.append(
+                f"chapter continuity: {cc.read_failed} chapter(s) could not be "
+                f"read, so any break in them was missed entirely.")
+        if cc.unjudged:
+            lines.append(
+                f"chapter continuity: {cc.unjudged} question(s) were never "
+                f"ruled on (a truncated or unreadable reply).")
+    for report in (judges or []):
+        if report.checked and report.unread:
+            lines.append(
+                f"{report.spec.label}: {report.unread} change(s) were applied "
+                f"WITHOUT being read — the judge refused, timed out, or replied "
+                f"unusably.")
+    return lines
+
+
 def _gap_preview(gap, paras) -> str:
     """A human handle for an unreviewed section: the paragraph span and a
     snippet of where it starts, so an editor can find it in the manuscript."""
@@ -280,21 +337,30 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
              f". Paragraphs reviewed: {len(doc.paragraphs)}; "
              f"skipped: {len(doc.skipped)}.\n")
 
+    # Run health leads the report: a pass that failed or was skipped makes the
+    # whole review less complete than it looks, and that has to be the first
+    # thing a reader sees — not a detail buried under a section they have to know
+    # to open. This gathers the whole-pass failures (coverage.degraded) with the
+    # finer shortfalls (gaps, unruled, a failed audit, an incomplete smoothing or
+    # chapter read, an unread judge gate) into one leading list.
+    health = run_health(coverage, audit, smoothing, chapter_continuity, judges)
+    if health:
+        L.append("## ⚠️ Run health — this review is degraded\n")
+        L.append("One or more passes did not run in full, so parts of the "
+                 "manuscript are **less reviewed than a clean run** — treat the "
+                 "items below as unchecked, not as clean:\n")
+        for line in health:
+            L.append(f"- {line}")
+        L.append("")
+    elif coverage is not None:
+        L.append("## Run health\n")
+        L.append("All enabled passes ran to completion — none was skipped or "
+                 "failed, and no section was left partly unreviewed.\n")
+
     L += _settings_section(cfg, batch)
 
     if coverage is not None:
         L.append("## Coverage\n")
-        # Whole passes that fell open and produced nothing — the most severe hole,
-        # because unlike a gap the pass did not run at all. A dead or unkeyed
-        # judge/continuity/glossary model lands here, and a "done" run that
-        # skipped a paid pass otherwise reads exactly like one that ran it clean.
-        if coverage.degraded:
-            L.append(f"**{len(coverage.degraded)} pass(es) did not run** and were "
-                     f"skipped — their findings are entirely absent, not clean. "
-                     f"Check the model's API key:\n")
-            for d in coverage.degraded:
-                L.append(f"- **{d.label}** — {d.reason}")
-            L.append("")
         if coverage.complete:
             L.append(f"All {coverage.total} pass×section unit(s) were reviewed "
                      f"— no section was lost to a provider refusal, a truncated "

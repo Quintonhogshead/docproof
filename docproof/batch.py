@@ -528,7 +528,8 @@ def collect_findings(job: Job, provider: Provider,
         from .factcheck import factcheck_findings
         from .providers import build_provider
         findings += factcheck_findings(
-            cfg, prepared.doc.paragraphs, usage, build_provider)
+            cfg, prepared.doc.paragraphs, usage, build_provider,
+            coverage=coverage)
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         if on_phase:
@@ -742,4 +743,9 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
     if unknown:
         log.warning("Batch returned %d result(s) for unknown requests: %s",
                     len(unknown), sorted(unknown)[:5])
+        if coverage is not None:
+            coverage.note("batch", f"{len(unknown)} batch result(s) came back "
+                          f"for requests that map to no known (pass, section) "
+                          f"and were discarded — their verdicts were paid for "
+                          f"but not applied", "partial")
     return findings, usage

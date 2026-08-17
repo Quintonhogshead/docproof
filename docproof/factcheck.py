@@ -96,7 +96,7 @@ def _cache_key(doc_text: str, model: str, effort: str | None) -> str:
 def build_factcheck(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
                     model: str, max_tokens: int, usage: Usage,
                     effort: str | None = None,
-                    cache_dir: str | None = None) -> FactReport:
+                    cache_dir: str | None = None, coverage=None) -> FactReport:
     """One whole-manuscript read. Additive and best-effort like the glossary:
     any failure logs and returns an empty report, and the review proceeds as
     it would without the pass. With `cache_dir`, pinned per draft so a re-run
@@ -125,11 +125,21 @@ def build_factcheck(paragraphs: Sequence[ParagraphRef], provider: Provider, *,
     if result.stop_reason != "ok" or result.parsed is None:
         log.error("fact check: %s — proceeding without it",
                   result.error or result.stop_reason)
+        if coverage is not None:
+            coverage.note("fact check", f"the whole-book fact-check read failed "
+                          f"({result.error or result.stop_reason}) — the "
+                          f"manuscript was not checked for real-world factual "
+                          f"errors", "failed")
         return FactReport()
     try:
         r = FactReport.model_validate(result.parsed)
     except Exception as e:                       # malformed structured output
         log.error("fact check: bad response (%s); proceeding without it", e)
+        if coverage is not None:
+            coverage.note("fact check", f"the whole-book fact-check read "
+                          f"returned an unreadable response ({e}) and produced "
+                          f"nothing — the manuscript was not fact-checked",
+                          "failed")
         return FactReport()
     if cache_path is not None:
         try:
@@ -193,7 +203,8 @@ def suspect_queries(report: FactReport,
 
 
 def factcheck_findings(cfg, paragraphs: Sequence[ParagraphRef],
-                       usage: Usage, provider_factory) -> list[Finding]:
+                       usage: Usage, provider_factory,
+                       coverage=None) -> list[Finding]:
     """The whole pass behind its own config gate, callable identically from
     the synchronous path and batch collection — the two places every other
     whole-book pass has to be wired twice."""
@@ -208,6 +219,7 @@ def factcheck_findings(cfg, paragraphs: Sequence[ParagraphRef],
         model=cfg.factcheck.model,
         max_tokens=cfg.factcheck.max_output_tokens, usage=usage,
         effort=cfg.factcheck.effort,
-        cache_dir=cache_dir_for(cfg.factcheck.cache_dir))
+        cache_dir=cache_dir_for(cfg.factcheck.cache_dir),
+        coverage=coverage)
     return suspect_queries(report, paragraphs,
                            max_queries=cfg.factcheck.max_queries)
