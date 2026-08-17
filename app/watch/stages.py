@@ -60,12 +60,20 @@ SOURCE_PROP = "docproof.src"
 # must not share one "done" flag. "pending" is written when a hold-mode run has
 # generated copy that is waiting for a person; "done" once it is delivered.
 PROMO_PROP = "docproof.promo"
+# The marketing plan's own marker, separate again for the same reason: a book
+# can be formatted, promo'd, and planned in any combination, so each lifecycle
+# owns its own "done". "pending" waits for panel approval in hold mode; "done"
+# once the plan is in the folder and HubSpot has moved on.
+PLAN_PROP = "docproof.plan"
 
 FORMATTED = "formatted"
 FAILED = "failed"
 PROMO_PENDING = "pending"
 PROMO_DONE = "done"
 PROMO_FAILED = "failed"
+PLAN_PENDING = "pending"
+PLAN_DONE = "done"
+PLAN_FAILED = "failed"
 
 
 class Stage(Enum):
@@ -113,6 +121,27 @@ def is_promo_candidate(file: DriveFile) -> bool:
         return False
     props = file.app_properties
     if props.get(OUTPUT_PROP) or props.get(PROMO_PROP):
+        return False
+    if _looks_like_output(file.name):
+        return False
+    return file.is_google_doc or _is_manuscript(file.name)
+
+
+def is_plan_candidate(file: DriveFile) -> bool:
+    """Whether the marketing-plan stage should consider this file — a manuscript
+    it has not already written a plan for.
+
+    The promo twin of `is_promo_candidate`, and blind to the formatting and promo
+    markers for the same reason: a book that has been formatted or promo'd is
+    still a book a marketing plan can be written from, and the three stages gate
+    on different HubSpot values. It excludes only what the plan stage itself
+    already touched (`PLAN_PROP`, whatever its value), anything DocProof wrote,
+    and anything that is not a manuscript. The HubSpot gate is the real control
+    over which of these actually runs."""
+    if file.is_folder:
+        return False
+    props = file.app_properties
+    if props.get(OUTPUT_PROP) or props.get(PLAN_PROP):
         return False
     if _looks_like_output(file.name):
         return False

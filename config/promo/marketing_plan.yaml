@@ -21,13 +21,16 @@
 #   {keywords}     press keyword list    (may be blank)
 #   {back_cover}   synopsis + blurbs     (may be blank)
 #   {author_city}  where the author lives (may be blank)
+#   {questionnaire} the author's own answers to the press's publicity
+#                   questionnaire — free-text Q&A: location, platform,
+#                   communities, who they think their readers are (may be blank)
 #   {manuscript}   the whole book, one paragraph per line
 #
 # Substitution is literal, not str.format, so a manuscript full of braces is
 # text, not a template. Author FIRST and LAST name also come from HubSpot, but
 # they are not prompt inputs — they only resolve which Drive folder is the
 # author's. The pen name above is the only name that reaches the model.
-version: 1
+version: 2
 name: Marketing plan generation
 
 system_prompt: |
@@ -50,6 +53,14 @@ system_prompt: |
   about the author. If the metadata gives no author bio, build the plan from
   the book alone. The keywords are a signal of how the press positions the
   book; let them inform your emphasis, but do not stuff them in as a list.
+
+  The author's questionnaire answers, when given, are author-provided fact —
+  treat them the way you treat blurbs. They are the author telling you where
+  they live, what platform and communities they already have, and who they
+  believe their readers are. Use them to make the strategy concrete and
+  personal: a tactic that hooks into a community the author actually belongs to
+  beats a generic one. Never extrapolate a claim the answers do not make, and
+  never quote the questionnaire back to the author as if it were your finding.
 
   FORMAT. Return the plan as Markdown, using only these marks so it renders
   cleanly to a Word document: `#` for the one title line, `##` for each section
@@ -86,12 +97,13 @@ system_prompt: |
   6. `## Key Message` — a single sentence that distills the book's emotional
      arc and promise without giving away the ending.
 
-  If the author's city is provided, add one more bullet to Marketing Strategy,
+  If the author's city is provided — in the city field, or named plainly in
+  their questionnaire answers — add one more bullet to Marketing Strategy,
   "**Local & Regional Opportunities:**", naming the kinds of venues, media, and
   events in that city or region suited to this book — bookstores, radio,
   festivals, community spaces matched to the book's themes. Name real, plausible
-  categories for that place; invent no specific contacts. If no city is given,
-  add nothing.
+  categories for that place; invent no specific contacts. If no city is given in
+  either place, add nothing.
 
   Return only the plan. No preamble, no closing note, no code fences.
 
@@ -103,6 +115,9 @@ user_template: |
 
   Back-cover synopsis and blurbs:
   {back_cover}
+
+  Author's answers to the publicity questionnaire:
+  {questionnaire}
 
   Write the marketing plan for this novel. The full manuscript follows.
 

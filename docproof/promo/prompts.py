@@ -49,14 +49,22 @@ class PlanMeta:
 
     On a manual panel run the operator types these; on the watched-folder run
     they come from HubSpot (the pen name) and the Drive folder (blurbs, city,
-    keywords). Every field but the title may be blank — the prompt degrades to
-    a thinner but valid plan — so a bare manuscript still produces one."""
+    keywords, and the author's publicity-questionnaire answers). Every field but
+    the title may be blank — the prompt degrades to a thinner but valid plan — so
+    a bare manuscript still produces one.
+
+    `questionnaire` is the author's own answers to the press's publicity
+    questionnaire (the PNQ): free-text Q&A the author filled out — where they
+    live, their platform and communities, who they think their readers are. It is
+    author-provided fact, grounded the same way blurbs are, and it may itself name
+    the city the Local & Regional Opportunities section keys off."""
 
     title: str
     author_name: str = ""
     keywords: str = ""
     back_cover: str = ""
     author_city: str = ""
+    questionnaire: str = ""
 
 
 @dataclass(frozen=True)
@@ -87,7 +95,8 @@ class PlanPrompt:
         out = out.replace("{author_name}", meta.author_name)
         for key, value in (("keywords", meta.keywords),
                            ("back_cover", meta.back_cover),
-                           ("author_city", meta.author_city)):
+                           ("author_city", meta.author_city),
+                           ("questionnaire", meta.questionnaire)):
             out = out.replace("{" + key + "}", value or "—")
         out = out.replace("{manuscript}", manuscript)
         return out.strip()

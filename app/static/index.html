@@ -50,7 +50,7 @@
     <button class="tab" data-screen="jobs">Results <span id="jobs-badge" hidden></span></button>
     <button class="tab" data-screen="compare">Compare</button>
     <button class="tab" data-screen="sapling">Sapling</button>
-    <button class="tab" data-screen="watch">DocWatch</button>
+    <button class="tab" data-screen="watch">Automations</button>
     <button class="tab" data-screen="promo">Promo</button>
     <button class="tab" data-screen="spending">Spending</button>
     <button class="tab" data-screen="prompts">What it looks for</button>
@@ -769,13 +769,208 @@
 
   <!-- ── DocWatch ─────────────────────────────────────────────────────── -->
   <section id="screen-watch" class="screen" hidden>
-    <h2>DocWatch</h2>
-    <p class="muted">One folder in Google Drive, looked at a few times a day.
-      Anything in it that looks like a manuscript and hasn't been prepared yet
-      is prepared, and the results go back beside the original — so a book that
-      arrives overnight is ready for a designer by morning. The author's own
-      file is never moved, renamed or changed.</p>
+    <h2>Automations</h2>
+    <p class="muted">Every "this happens → DocProof does that" rule in one place.
+      Each row below is one workflow — a trigger and the effect it fires. Turn one
+      on, open it to configure it, and DocProof runs it on every pass. The
+      connection to Google Drive and HubSpot, and when passes run, live under
+      Connection.</p>
 
+    <nav class="subtabs" id="auto-tabs" role="tablist" aria-label="Automations">
+      <button class="subtab" id="autotab-workflows" data-tab="workflows"
+              role="tab" aria-selected="true" tabindex="0">Workflows</button>
+      <button class="subtab" id="autotab-connection" data-tab="connection"
+              role="tab" aria-selected="false" tabindex="-1">Connection</button>
+      <button class="subtab" id="autotab-history" data-tab="history"
+              role="tab" aria-selected="false" tabindex="-1">History</button>
+    </nav>
+
+    <div id="auto-panels">
+      <!-- ── Workflows ─────────────────────────────────────────────── -->
+      <div class="tabpanel is-active" id="auto-panel-workflows" data-tab="workflows"
+           role="tabpanel" aria-labelledby="autotab-workflows">
+        <div class="card">
+          <div class="wf-toolbar">
+            <input type="search" id="wf-search" placeholder="Search workflows, triggers, effects…">
+            <div class="wf-filters" id="wf-filters" role="group" aria-label="Filter workflows">
+              <button data-filter="all" class="active">All</button>
+              <button data-filter="on">On</button>
+              <button data-filter="off">Off</button>
+              <button data-filter="setup">Needs setup</button>
+            </div>
+            <label class="field sub" style="margin:0">
+              <select id="wf-sort" aria-label="Sort workflows">
+                <option value="status">Sort: Status</option>
+                <option value="name">Sort: Name</option>
+                <option value="effect">Sort: Effect</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="wf-layout" id="wf-layout">
+            <div class="wf-tablewrap">
+              <table class="table" id="wf-registry">
+                <thead>
+                  <tr>
+                    <th scope="col"><span class="sr-only">Enabled</span></th>
+                    <th scope="col">Workflow</th>
+                    <th scope="col">Trigger</th>
+                    <th scope="col">Effect</th>
+                    <th scope="col">Last look</th>
+                    <th scope="col">Next</th>
+                    <th scope="col">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="wf-rows"></tbody>
+              </table>
+              <p id="wf-empty" class="muted" hidden>No workflows match.</p>
+            </div>
+
+            <aside class="wf-drawer" id="wf-drawer" hidden aria-live="polite">
+              <div class="wf-drawer-head">
+                <div>
+                  <strong id="wf-drawer-title">Workflow</strong>
+                  <small id="wf-drawer-sub"></small>
+                </div>
+                <button class="wf-drawer-close" id="wf-drawer-close"
+                        aria-label="Close">×</button>
+              </div>
+
+              <!-- Format on arrival -->
+              <div class="wf-config" id="wf-config-prep" hidden>
+                <p class="wf-hint">New manuscripts in the watched folder are
+                  prepared automatically. This runs whenever the folder is
+                  connected; the model, output and notes are set under
+                  Connection.</p>
+                <label class="checkbox" id="watch-require-label-field" hidden>
+                  <input type="checkbox" id="watch-require-label">
+                  Only prepare the file named “Surname - Book Original”
+                  <small class="muted">Per-author subfolders only. The surname is
+                    the author's last name from HubSpot. A draft or a
+                    developmental copy left in the same folder is ignored rather
+                    than prepared.</small>
+                </label>
+                <div class="job-actions">
+                  <button id="wf-prep-save" class="primary">Save</button>
+                  <button id="wf-prep-connection" class="quiet" type="button">Prep
+                    settings in Connection →</button>
+                </div>
+                <p id="wf-prep-note" class="action-note" hidden></p>
+              </div>
+
+              <!-- Promo copy -->
+              <div class="wf-config" id="wf-config-promo" hidden>
+                <p class="wf-hint">When a book's HubSpot status reaches the ready
+                  value, DocProof writes its copy and — depending on the setting
+                  below — either delivers the two documents to the Drive folder or
+                  holds them for approval.</p>
+                <p id="promo-auto-needs-hubspot" class="muted" hidden>HubSpot is
+                  off in Connection, so this cannot run yet. Turn it on there
+                  first.</p>
+                <label class="checkbox">
+                  <input type="checkbox" id="promo-enabled">
+                  Write promo copy automatically
+                </label>
+                <label class="field">
+                  <span>HubSpot status value that means "write promo now"</span>
+                  <input type="text" id="promo-ready" placeholder="Ready for Promo text">
+                </label>
+                <label class="field">
+                  <span>Status value to set once the copy is delivered</span>
+                  <input type="text" id="promo-done" placeholder="Promo text finished">
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" id="promo-auto-upload">
+                  Deliver to Drive without waiting for approval
+                  <small class="muted">— off holds each book's copy for a person to
+                    approve first</small>
+                </label>
+                <label class="field">
+                  <span>Model for automatic runs
+                    <small class="muted" id="promo-model-fallback"></small></span>
+                  <select id="promo-auto-model"></select>
+                </label>
+                <button id="promo-settings-save" class="primary">Save promo settings</button>
+                <p id="promo-settings-status" class="muted" hidden></p>
+              </div>
+
+              <!-- Marketing plan -->
+              <div class="wf-config" id="wf-config-plan" hidden>
+                <p class="wf-hint">When a book's HubSpot "Marketing Plan" property
+                  reaches the needed value, DocProof reads the author's folder — the
+                  manuscript, the blurbs, and the publicity-questionnaire answers —
+                  writes the plan, delivers it to the folder, and moves the
+                  property on. Flat watched folder only for now.</p>
+                <p id="plan-auto-needs-hubspot" class="muted" hidden>HubSpot is off
+                  in Connection, so this cannot run yet. Turn it on there first.</p>
+                <label class="checkbox">
+                  <input type="checkbox" id="plan-enabled">
+                  Write marketing plans automatically
+                </label>
+                <label class="field">
+                  <span>HubSpot "Marketing Plan" property (internal name)</span>
+                  <input type="text" id="plan-property" placeholder="marketing_plan">
+                </label>
+                <label class="field">
+                  <span>Property value that means "write the plan now"</span>
+                  <input type="text" id="plan-needed" placeholder="Needed">
+                </label>
+                <label class="field">
+                  <span>Value to set once the plan is delivered</span>
+                  <input type="text" id="plan-done" placeholder="Uploaded">
+                </label>
+                <label class="field">
+                  <span>HubSpot property holding the author's pen name
+                    <small class="muted">— optional; blank heads the plan with the
+                      title alone</small></span>
+                  <input type="text" id="plan-pen" placeholder="author_name">
+                </label>
+                <label class="checkbox">
+                  <input type="checkbox" id="plan-auto-upload">
+                  Deliver to Drive without waiting for approval
+                  <small class="muted">— off holds each plan for a person to approve
+                    first</small>
+                </label>
+                <label class="field">
+                  <span>Model for automatic runs
+                    <small class="muted" id="plan-model-fallback"></small></span>
+                  <select id="plan-auto-model"></select>
+                </label>
+                <label class="field">
+                  <span>Reasoning effort</span>
+                  <select id="plan-auto-effort">
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="xhigh">Extra high</option>
+                    <option value="max">Max</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Blurb file name pattern
+                    <small class="muted">— which sibling file holds the back-cover
+                      synopsis and blurbs</small></span>
+                  <input type="text" id="plan-blurb-pattern"
+                         placeholder="blurb|back.?cover|endorsement">
+                </label>
+                <label class="field">
+                  <span>Questionnaire file name pattern
+                    <small class="muted">— which sibling file holds the publicity
+                      questionnaire answers</small></span>
+                  <input type="text" id="plan-form-pattern"
+                         placeholder="questionnaire|pnq|publicity">
+                </label>
+                <button id="plan-settings-save" class="primary">Save plan settings</button>
+                <p id="plan-settings-status" class="muted" hidden></p>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Connection ────────────────────────────────────────────── -->
+      <div class="tabpanel" id="auto-panel-connection" data-tab="connection"
+           role="tabpanel" aria-labelledby="autotab-connection">
     <div class="card">
       <h3>Google Drive</h3>
       <p id="watch-signin" class="muted">Checking…</p>
@@ -841,14 +1036,6 @@
         Leave a note when a manuscript can't be prepared
         <small class="muted">Off by default: the folder authors and designers
           share should hold manuscripts, not apologies.</small>
-      </label>
-
-      <label class="checkbox" id="watch-require-label-field" hidden>
-        <input type="checkbox" id="watch-require-label">
-        Only prepare the file named “Surname - Book Original”
-        <small class="muted">Per-author subfolders only. The surname is the
-          author's last name from HubSpot. A draft or a developmental copy left
-          in the same folder is ignored rather than prepared.</small>
       </label>
 
       <div class="job-actions">
@@ -965,10 +1152,23 @@
       <p id="watch-schedule-note" class="action-note" hidden></p>
     </div>
 
-    <div class="card">
-      <h3>What it has prepared</h3>
-      <p id="watch-files-empty" class="muted" hidden>Nothing yet.</p>
-      <table class="table" id="watch-files"></table>
+      </div>
+
+      <!-- ── History ───────────────────────────────────────────────── -->
+      <div class="tabpanel" id="auto-panel-history" data-tab="history"
+           role="tabpanel" aria-labelledby="autotab-history">
+        <div class="card">
+          <h3>What it has done</h3>
+          <p class="muted small">Every finished run, newest first — filter to find
+            one among many.</p>
+          <label class="field" style="margin:0 0 0.6rem">
+            <input type="search" id="watch-files-filter"
+                   placeholder="Filter by book name or status…">
+          </label>
+          <p id="watch-files-empty" class="muted" hidden>Nothing yet.</p>
+          <table class="table" id="watch-files"></table>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -978,7 +1178,7 @@
     <p class="muted">A teaser and twelve social posts, written from a finished
       manuscript. Drop a book to write copy for it now, read it back and edit
       it, then download the two documents. The automatic pipeline — books
-      flagged in HubSpot — is set up at the bottom.</p>
+      flagged in HubSpot — lives under <strong>Automations</strong>.</p>
 
     <div class="card">
       <h3>Write copy for a manuscript</h3>
@@ -1091,41 +1291,6 @@
       <div id="promo-jobs"></div>
     </div>
 
-    <details class="card" id="promo-auto">
-      <summary>Automatic promo from the watched folder</summary>
-      <p class="muted">When a book's HubSpot status reaches the ready value,
-        DocProof writes its copy and — depending on the setting below — either
-        delivers the two documents to the Drive folder or holds them for
-        approval. Needs DocWatch's HubSpot connection switched on.</p>
-      <p id="promo-auto-needs-hubspot" class="muted" hidden>HubSpot is off in
-        DocWatch, so the automatic pipeline cannot run yet. Turn it on there
-        first.</p>
-      <label class="checkbox">
-        <input type="checkbox" id="promo-enabled">
-        Write promo copy automatically
-      </label>
-      <label class="field">
-        <span>HubSpot status value that means "write promo now"</span>
-        <input type="text" id="promo-ready" placeholder="Ready for Promo text">
-      </label>
-      <label class="field">
-        <span>Status value to set once the copy is delivered</span>
-        <input type="text" id="promo-done" placeholder="Promo text finished">
-      </label>
-      <label class="checkbox">
-        <input type="checkbox" id="promo-auto-upload">
-        Deliver to Drive without waiting for approval
-        <small class="muted">— off holds each book's copy for a person to
-          approve first</small>
-      </label>
-      <label class="field">
-        <span>Model for automatic runs
-          <small class="muted" id="promo-model-fallback"></small></span>
-        <select id="promo-auto-model"></select>
-      </label>
-      <button id="promo-settings-save" class="primary">Save promo settings</button>
-      <p id="promo-settings-status" class="muted" hidden></p>
-    </details>
   </section>
 
   <!-- ── Spending ─────────────────────────────────────────────────────── -->

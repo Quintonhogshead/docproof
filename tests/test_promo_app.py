@@ -164,13 +164,15 @@ def test_a_plan_run_generates_and_lists_as_a_plan(client):
 
 def test_plan_metadata_reaches_the_job(client):
     job_id = run_plan(client, author="A. Writer", blurbs="A brave book.",
-                      city="Austin, TX", keywords="rivers, journey")
+                      city="Austin, TX", keywords="rivers, journey",
+                      questionnaire="Q: Where do you live? A: Austin, TX.")
     job = client.app_state.store.get(job_id)
     assert job.plan_only is True
     assert job.plan_author == "A. Writer"
     assert job.plan_blurbs == "A brave book."
     assert job.plan_city == "Austin, TX"
     assert job.plan_keywords == "rivers, journey"
+    assert job.plan_questionnaire == "Q: Where do you live? A: Austin, TX."
 
 
 def test_the_plan_reads_back_and_edits_rewrite_the_docx(client):

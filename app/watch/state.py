@@ -73,6 +73,22 @@ class FileRecord:
     promo_marked: str = ""             # "" | "pending" | "delivered" | "failed"
     promo_attempts: int = 0
     promo_uploaded: dict[str, str] = field(default_factory=dict)
+    # The marketing plan lives on the same file id but its own lifecycle again —
+    # the promo twin — so it keeps its own fields rather than sharing promo's or
+    # formatting's. All empty on a record written before the plan stage existed.
+    # The Drive `docproof.plan` marker is the durable record; these are the local
+    # shortcut that stops a crash mid-flight from re-paying for the plan.
+    plan_job_id: str = ""
+    plan_hubspot_id: str = ""           # the record flagged "Needed" it matched
+    # The author's display / pen name, captured from that record when it matched
+    # so the plan can be headed with it without a second HubSpot round-trip — and
+    # persisted before the job is created, so a crash between the two does not
+    # lose it. Empty heads the plan with the title alone.
+    plan_pen: str = ""
+    plan_hubspot_done: bool = False     # the "Uploaded" value has been written
+    plan_marked: str = ""              # "" | "pending" | "delivered" | "failed"
+    plan_attempts: int = 0
+    plan_uploaded: dict[str, str] = field(default_factory=dict)
     modified_time: str = ""
     updated_at: str = ""
 

@@ -63,6 +63,7 @@ class PlanRunRequest(BaseModel):
     blurbs: str = ""                   # back-cover synopsis + endorsement blurbs
     city: str = ""                     # for the local-opportunities section
     keywords: str = ""                 # the press's positioning keywords
+    questionnaire: str = ""            # the author's publicity-questionnaire answers
 
 
 class PromoDraft(BaseModel):
@@ -85,6 +86,21 @@ class PromoSettings(BaseModel):
     hubspot_promo_done_value: str | None = None
     promo_auto_upload: bool | None = None
     promo_model: str | None = None
+
+
+class PlanSettings(BaseModel):
+    """The automated marketing-plan pipeline's settings — the plan twin of
+    PromoSettings. Partial, like the rest: the panel sends what changed."""
+    plan_enabled: bool | None = None
+    hubspot_plan_property: str | None = None
+    hubspot_plan_needed_value: str | None = None
+    hubspot_plan_done_value: str | None = None
+    hubspot_pen_property: str | None = None
+    plan_model: str | None = None
+    plan_effort: str | None = None
+    plan_auto_upload: bool | None = None
+    plan_blurb_pattern: str | None = None
+    plan_form_pattern: str | None = None
 
 
 def _draft_name(job: Job, which: str) -> str | None:
@@ -225,6 +241,7 @@ def register(app: FastAPI) -> None:
                 plan_only=True, plan_author=req.author.strip(),
                 plan_blurbs=req.blurbs.strip(), plan_city=req.city.strip(),
                 plan_keywords=req.keywords.strip(),
+                plan_questionnaire=req.questionnaire.strip(),
                 created_at=datetime.now(timezone.utc).isoformat(),
                 owner_id=owner)
             created.append(runner.enqueue(job).to_api())
@@ -353,5 +370,52 @@ def register(app: FastAPI) -> None:
                 "promo_model": ws.promo_model,
                 # Read-only context, so the form can say what promo inherits
                 # when its own model is blank and that it needs HubSpot on.
+                "fallback_model": ws.model,
+                "hubspot_enabled": ws.hubspot_enabled}
+
+    # --- automated marketing-plan settings ------------------------------------
+
+    _EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+    @app.get("/api/promo/plan-settings")
+    def read_plan_settings() -> dict:
+        ws = WatchSettings.load(app.state.watch.home)
+        return _plan_settings_payload(ws)
+
+    @app.put("/api/promo/plan-settings", dependencies=[Depends(settings_gate)])
+    def write_plan_settings(update: PlanSettings) -> dict:
+        ws = WatchSettings.load(app.state.watch.home)
+        if update.plan_model:
+            if lookup(update.plan_model) is None:
+                raise HTTPException(400, f"{update.plan_model} is not a model "
+                                         f"DocProof knows.")
+        if update.plan_effort is not None and update.plan_effort not in _EFFORTS:
+            raise HTTPException(400, "plan_effort must be one of "
+                                     + ", ".join(_EFFORTS) + ".")
+        for name in ("plan_enabled", "hubspot_plan_property",
+                     "hubspot_plan_needed_value", "hubspot_plan_done_value",
+                     "hubspot_pen_property", "plan_model", "plan_effort",
+                     "plan_auto_upload", "plan_blurb_pattern",
+                     "plan_form_pattern"):
+            value = getattr(update, name)
+            if value is not None:
+                setattr(ws, name, value)
+        ws.save(app.state.watch.home)
+        return _plan_settings_payload(ws)
+
+    def _plan_settings_payload(ws: WatchSettings) -> dict:
+        return {"plan_enabled": ws.plan_enabled,
+                "hubspot_plan_property": ws.hubspot_plan_property,
+                "hubspot_plan_needed_value": ws.hubspot_plan_needed_value,
+                "hubspot_plan_done_value": ws.hubspot_plan_done_value,
+                "hubspot_pen_property": ws.hubspot_pen_property,
+                "plan_model": ws.plan_model,
+                "plan_effort": ws.plan_effort,
+                "plan_auto_upload": ws.plan_auto_upload,
+                "plan_blurb_pattern": ws.plan_blurb_pattern,
+                "plan_form_pattern": ws.plan_form_pattern,
+                # Read-only context, the same as promo: the form says what the
+                # plan inherits when its own model is blank, and that it needs
+                # HubSpot on.
                 "fallback_model": ws.model,
                 "hubspot_enabled": ws.hubspot_enabled}
