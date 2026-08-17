@@ -75,7 +75,7 @@ def test_the_catalog_prices_it_off_its_own_model():
     assert entry["heavy"] is True
     assert entry["group"] == "pass"
     assert entry["default"] is False
-    assert entry["cost"] == {"kind": "judge", "model": "claude-fable-5"}
+    assert entry["cost"] == {"kind": "judge", "model": "gpt-5.6-luna"}
 
 
 def test_the_run_config_reaches_the_gate_through_the_feature_map(runner):
@@ -96,7 +96,7 @@ def test_a_picked_model_overrides_the_house_default(runner):
 def test_an_untouched_picker_keeps_the_house_default(runner):
     store, r = runner
     cfg = r.config_for(_job(store, features={"meaning_check": True}))
-    assert cfg.meaning_check.model == "claude-fable-5"
+    assert cfg.meaning_check.model == "gpt-5.6-luna"
 
 
 def test_edited_instructions_reach_the_run_config(runner):
@@ -118,7 +118,7 @@ def test_a_record_from_before_the_feature_still_runs(runner):
     store, r = runner
     cfg = r.config_for(_job(store))                    # no meaning fields at all
     assert cfg.meaning_check.enabled is False
-    assert cfg.meaning_check.model == "claude-fable-5"
+    assert cfg.meaning_check.model == "gpt-5.6-luna"
 
 
 def test_continuity_only_strips_the_gate_with_the_other_passes(runner):
@@ -259,8 +259,7 @@ def test_both_gates_are_switches_in_the_catalog():
         spec.write(cfg, True)
         assert getattr(cfg, path).enabled is True
     entries = {f["id"]: f for f in feature_catalog(Config())}
-    assert entries["fix_check"]["cost"] == {"kind": "judge",
-                                            "model": "claude-fable-5"}
+    assert entries["fix_check"]["cost"] == {"kind": "judge", "model": "gpt-5.6-luna"}
     assert entries["fix_check"]["heavy"] is True
 
 
@@ -274,7 +273,7 @@ def test_the_fix_gate_pick_and_prompt_reach_the_run_config(runner):
     assert cfg.fix_check.prompt == "Only ask whether the fix is right."
     # ...and the meaning gate is untouched by it.
     assert cfg.meaning_check.enabled is False
-    assert cfg.meaning_check.model == "claude-fable-5"
+    assert cfg.meaning_check.model == "gpt-5.6-luna"
 
 
 def test_the_gates_are_independently_switchable(runner):
@@ -288,7 +287,7 @@ def test_a_record_from_before_the_fix_gate_still_runs(runner):
     store, r = runner
     cfg = r.config_for(_job(store))            # no fix fields at all
     assert cfg.fix_check.enabled is False
-    assert cfg.fix_check.model == "claude-fable-5"
+    assert cfg.fix_check.model == "gpt-5.6-luna"
     assert cfg.fix_check.prompt == ""
 
 
@@ -303,8 +302,8 @@ def test_the_panel_offers_both_prompt_defaults(client):
 
 def test_the_models_route_offers_both_defaults(client):
     body = client.get("/api/models?file_ids=").json()
-    assert body["default_meaning_model"] == "claude-fable-5"
-    assert body["default_fix_model"] == "claude-fable-5"
+    assert body["default_meaning_model"] == "gpt-5.6-luna"
+    assert body["default_fix_model"] == "gpt-5.6-luna"
 
 
 def test_an_unknown_fix_model_is_refused(client, uploaded):
@@ -333,6 +332,71 @@ def test_continuity_only_strips_both_gates(runner):
                                       "fix_check": True}))
     assert cfg.meaning_check.enabled is False
     assert cfg.fix_check.enabled is False
+
+
+# --- the whole-book continuity model picker ----------------------------------
+
+def test_the_continuity_pick_reaches_the_run_config(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, features={"continuity": True},
+                           continuity_model="claude-opus-5"))
+    assert cfg.continuity.model == "claude-opus-5"
+
+
+def test_an_untouched_continuity_picker_keeps_the_house_default(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store, features={"continuity": True}))
+    assert cfg.continuity.model == "gpt-5.6-luna"
+
+
+def test_a_record_from_before_the_continuity_picker_still_runs(runner):
+    store, r = runner
+    cfg = r.config_for(_job(store))                  # no continuity fields at all
+    assert cfg.continuity.model == "gpt-5.6-luna"
+
+
+def test_the_models_route_offers_the_continuity_default(client):
+    body = client.get("/api/models?file_ids=").json()
+    assert body["default_continuity_model"] == "gpt-5.6-luna"
+
+
+def test_an_unknown_continuity_model_is_refused(client, uploaded):
+    r = client.post("/api/jobs", json={
+        "file_ids": [uploaded], "model": "claude-sonnet-5",
+        "features": {"continuity": True}, "continuity_model": "not-a-model"})
+    assert r.status_code == 400
+    assert "continuity" in r.json()["detail"].lower()
+
+
+def test_a_keyless_continuity_model_only_blocks_when_the_read_will_run(
+        client, uploaded, monkeypatch):
+    """The picker always sends its value, so a keyless vendor must not block a run
+    that never switches continuity on — but must block one that does, and one
+    that runs it as continuity-only."""
+    monkeypatch.setattr("app.settings.get_api_key",
+                        lambda p: "" if p == "openai" else "test-key")
+    body = {"file_ids": [uploaded], "model": "claude-sonnet-5",
+            "continuity_model": "gpt-5.6-sol"}
+    off = client.post("/api/jobs", json={**body,
+                                         "features": {"continuity": False}})
+    assert off.status_code == 200
+    on = client.post("/api/jobs", json={**body,
+                                        "features": {"continuity": True}})
+    assert on.status_code == 400
+    assert "key" in on.json()["detail"].lower()
+    only = client.post("/api/jobs", json={**body, "continuity_only": True,
+                                          "features": {"continuity": False}})
+    assert only.status_code == 400
+
+
+def test_the_continuity_pick_is_recorded_on_the_job(client, uploaded):
+    r = client.post("/api/jobs", json={
+        "file_ids": [uploaded], "model": "claude-sonnet-5",
+        "features": {"continuity": True},
+        "continuity_model": "claude-opus-5"})
+    assert r.status_code == 200
+    saved = client.get(f"/api/jobs/{r.json()['jobs'][0]['id']}").json()
+    assert saved["continuity_model"] == "claude-opus-5"
 
 
 # --- re-judging a finished review --------------------------------------------

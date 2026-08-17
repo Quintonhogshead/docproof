@@ -165,11 +165,15 @@ HARD = TierPreset(
     glossary_model="gpt-5.6-luna",
     rounds=2,
     judge_model="claude-opus-5",      # explicit override of the gpt-5.6-sol default
+    meaning_model="claude-fable-5",   # explicit frontier gate: the server default is
+                                      # now the house reviewer (gpt-5.6-luna), so a tier
+                                      # that wants a frontier judge must pin it here
     min_confidence="medium",
     storysheet=True,
-    continuity=True,
+    continuity=True,                  # NB: whole-book continuity has no per-run picker,
+                                      # so it follows the Luna default even here
     languagetool=True,
-    meaning_check=True,               # meaning_model left None => claude-fable-5 (server default)
+    meaning_check=True,
     rewrite=False,
     fix_check=False,
     sapling="if_keyed",               # only when a Sapling key is configured
@@ -185,12 +189,14 @@ THE_HAMMER = TierPreset(
     glossary_model="claude-opus-5",   # the one tier that pays for a frontier glossary
     rounds=3,
     judge_model="claude-opus-5",
+    meaning_model="claude-fable-5",   # both gates pinned to a frontier judge explicitly;
+    fix_model="claude-fable-5",       # the server default is now gpt-5.6-luna
     min_confidence="medium",
     storysheet=True,
     continuity=True,
     rewrite=True,
     languagetool=True,
-    meaning_check=True,               # meaning_model / fix_model left None => claude-fable-5
+    meaning_check=True,
     fix_check=True,
     sapling="always",                 # unconditional; keyless run skips it gracefully
 )

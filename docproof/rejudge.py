@@ -37,7 +37,7 @@ from pathlib import Path
 
 from .checkpoint import finding_from_dict
 from .config import Config
-from .models import Finding, Usage
+from .models import CoverageLedger, Finding, Usage
 from .pipeline import Outputs, finish, prepare
 
 log = logging.getLogger("docproof.rejudge")
@@ -224,5 +224,8 @@ def rejudge(cfg: Config, results_dir: str | Path, *, out_dir: str | Path,
     prepared = replace(prepared, sweep_findings=[], consistency_findings=[])
     log.info("Re-judging %d recorded finding(s) from %s", len(findings),
              results_dir)
+    # A ledger so a gate that falls open here (a dead judge key) reaches the job
+    # card from the re-judge path too, not only a fresh review's.
     return finish(prepared, findings, usage if usage is not None else Usage(),
-                  cfg, out_dir=out_dir, source_path=src)
+                  cfg, out_dir=out_dir, source_path=src,
+                  coverage=CoverageLedger())

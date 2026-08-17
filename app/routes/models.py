@@ -63,6 +63,10 @@ def register(app: FastAPI) -> None:
                 "default_meaning_model":
                     load_config(CONFIG_PATH).meaning_check.model,
                 "default_fix_model": load_config(CONFIG_PATH).fix_check.model,
+                # The whole-book continuity reader's default, so its picker opens
+                # on the house choice (now the reviewer) without hardcoding it.
+                "default_continuity_model":
+                    load_config(CONFIG_PATH).continuity.model,
                 # The chapter-continuity reader's default: its own model, else the
                 # whole-book continuity read's — the picker sets both reader and
                 # judge, so it opens on the house continuity model.

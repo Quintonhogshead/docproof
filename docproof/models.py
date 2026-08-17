@@ -173,6 +173,16 @@ class CoverageGap:
     para_ids: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DegradedPass:
+    """A whole pass that fell open and produced nothing — a provider call that
+    errored (a dead key, a refusal, a total truncation). Named for a human and
+    carried up to both the report and the job card, because a 'done' run that
+    quietly skipped a paid pass looks exactly like one that ran it clean."""
+    label: str                         # the pass, e.g. "continuity read"
+    reason: str                        # short cause, e.g. "provider error 401"
+
+
 @dataclass
 class CoverageLedger:
     """Which (pass, chunk) units a run actually reviewed. `total` counts every
@@ -190,6 +200,15 @@ class CoverageLedger:
     # findings, which reads exactly like one that ruled on everything and
     # affirmed nothing. See docproof/windowing.py.
     unruled: list = field(default_factory=list)
+    # Passes that could not run at all — a provider call that errored out (a dead
+    # or rate-limited key, a refusal, a truncation that lost everything) — and so
+    # fell open and produced nothing. Distinct from gaps/unruled, which are units
+    # a running pass could not cover: this is a pass that never got off the ground,
+    # the exact failure a re-pinned-but-unkeyed judge or continuity read hits. A
+    # run with these under-reports invisibly unless the report says so, and unlike
+    # gaps they also want to reach the job card, since a "done" run that quietly
+    # skipped a paid pass reads identically to one that ran it clean.
+    degraded: list["DegradedPass"] = field(default_factory=list)
 
     def record(self, pass_label: str, chunk, ok: bool) -> None:
         self.total += 1
@@ -197,6 +216,12 @@ class CoverageLedger:
             self.gaps.append(CoverageGap(
                 pass_label, chunk.chunk_id,
                 tuple(p.para_id for p in chunk.paragraphs)))
+
+    def record_degraded(self, label: str, reason: str) -> None:
+        """A pass that fell open and produced nothing. `label` names the pass for
+        a human ("continuity read", "meaning gate"); `reason` is the short cause
+        ("provider error 401", "12 changes applied unread")."""
+        self.degraded.append(DegradedPass(label, reason))
 
     def record_windows(self, reports) -> None:
         """Keep the batched passes that lost something. A clean report is not

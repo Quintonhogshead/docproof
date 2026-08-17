@@ -230,3 +230,24 @@ def test_summary_confirms_full_coverage(tmp_path):
     text = out.summary_md.read_text()
     assert "## Coverage" in text
     assert "were reviewed" in text
+
+
+def test_a_degraded_pass_is_named_everywhere(tmp_path):
+    """A paid pass that fell open and produced nothing reaches all three
+    surfaces — summary.md, findings.json, and Outputs.warnings (the job card) —
+    so a 'done' run that quietly skipped it never reads as a clean one."""
+    cfg, prepared = _prepared(tmp_path,
+                              ["A paragraph with teh typo to review here."])
+    cfg.glossary.enabled = False       # isolate the injected degradation below
+    coverage = CoverageLedger()
+    findings, usage = run_sync(cfg, prepared, _AlwaysAnswer(), coverage=coverage)
+    coverage.record_degraded("continuity read", "provider error 401")
+    out = finish(prepared, findings, usage, cfg, out_dir=tmp_path / "out",
+                 source_path=tmp_path / "m.docx", coverage=coverage)
+    text = out.summary_md.read_text()
+    assert "did not run" in text and "continuity read" in text
+    import json as jsonlib
+    cov = jsonlib.loads(out.findings_json.read_text())["coverage"]
+    assert cov["degraded"] == [{"pass": "continuity read",
+                                "reason": "provider error 401"}]
+    assert out.warnings == ["continuity read: provider error 401"]
