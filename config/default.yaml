@@ -489,6 +489,20 @@ fix_check:
 # defining comma_splice and run_on_sentence side by side sharpens the boundary
 # between them. Precision order matters: the validator keeps the first edit to
 # claim a span, so the most objective types run first.
+#
+# An entry may also be a mapping, to tune ONE category without touching the
+# global chunking budget or re-reading the whole book:
+#   - group: [serial_comma, introductory_comma, direct_address_comma]
+#     passes: 2            # run this category's read this many times (default 1);
+#                          #   repeats catch stragglers the first pass missed and
+#                          #   the validator keeps one edit per span, so overlap
+#                          #   is deduped, not doubled.
+#     token_budget: 1800   # chunk size for THIS category only (default: the
+#                          #   global chunking.token_budget). Smaller = fewer
+#                          #   paragraphs per call = tighter attention = better
+#                          #   recall on hard categories, at higher cost.
+# Both keys are optional; omit the mapping form entirely and a plain key or list
+# behaves exactly as before.
 error_types:
   # mechanical — objective, verifiable, low false-positive rate
   - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]

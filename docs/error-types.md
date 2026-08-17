@@ -21,8 +21,33 @@ error_types:
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 ```
 
-A bare string runs alone; a list runs as one combined pass. The six groups
-above cover 22 types in 6 passes.
+A bare string runs alone; a list runs as one combined pass.
+
+### Tuning one category: repeats and chunk size
+
+An entry can also be a mapping, to tune a single category without touching the
+global budget or the other categories:
+
+```yaml
+error_types:
+  - group: [serial_comma, introductory_comma, direct_address_comma]
+    passes: 2            # read this category twice (default 1)
+    token_budget: 1800   # chunk this category smaller (default: chunking.token_budget)
+```
+
+- **`passes`** reads the category N times. The validator keeps one edit per span
+  (`rejected_duplicate`), so a second read surfaces stragglers the first missed
+  without doubling the applied edits — a recall lever for a hard category, at N×
+  its cost.
+- **`token_budget`** chunks *this* category at its own size. Fewer paragraphs
+  per call means tighter attention and better recall on dense categories like
+  commas; the trade is more requests. The default-budget categories are
+  unaffected, and their chunking — and every cache and batch id built from it —
+  is byte-for-byte unchanged.
+
+Both keys are optional, and a bare key or list is exactly a category with
+`passes: 1` and the global budget. `docproof inventory <file>` prints the
+expanded plan (each read, each budget) and the resulting request count.
 
 This exists because cost is dominated by re-sending the document. One pass per
 type means N copies of the manuscript in input tokens; grouping collapses that
@@ -55,8 +80,10 @@ Two constraints on ordering:
 1. **Pass order is precision order.** The validator keeps the first edit to
    claim a span in a paragraph and rejects later overlapping ones
    (`rejected_overlap`). Objective types run first so they win collisions.
-2. **A key may appear in only one pass.** Config validation rejects duplicates —
-   two passes for one type would review the document twice for it.
+2. **A key may appear in only one category.** Config validation rejects
+   duplicates. To read a category more than once, use its `passes:` (above), not
+   the same key in two groups — duplicated keys would double every finding
+   rather than dedupe the overlap.
 
 Grouping costs something real: a model juggling ten definitions is less precise
 than one hunting a single error class, and truncation now loses every type in
