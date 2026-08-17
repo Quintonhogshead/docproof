@@ -56,13 +56,19 @@ def make_tracked_docx(path: Path, paragraphs: list[list[tuple[str, str]]]) -> Pa
 
 
 def make_commented_pdf(path: Path, lines: list[tuple[float, float, str]],
-                       annots: list[dict]) -> Path:
+                       annots: list[dict],
+                       font_widths: tuple[int, list[float]] | None = None) -> Path:
     """Write a one-page PDF with text at given positions and comment/highlight
     annotations, so the PDF reader can be tested without a real proof. Each line
-    is (x, y, text); each annot is {subtype, rect, contents, quad?}."""
+    is (x, y, text); each annot is {subtype, rect, contents, quad?}.
+
+    `font_widths` is an optional (first_char, widths) pair that embeds a `/Widths`
+    table, so a test can pin exactly how wide each glyph is and thus where a word
+    on a multi-word line renders — the geometry the highlight reader walks."""
     from pypdf import PdfWriter
     from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject,
-                               FloatObject, NameObject, TextStringObject)
+                               FloatObject, NameObject, NumberObject,
+                               TextStringObject)
     w = PdfWriter()
     page = w.add_blank_page(width=612, height=792)
     ops = [f"BT /F1 12 Tf {x} {y} Td ({t}) Tj ET" for x, y, t in lines]
@@ -72,6 +78,12 @@ def make_commented_pdf(path: Path, lines: list[tuple[float, float, str]],
     font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
                              NameObject("/Subtype"): NameObject("/Type1"),
                              NameObject("/BaseFont"): NameObject("/Helvetica")})
+    if font_widths is not None:
+        first, widths = font_widths
+        font[NameObject("/FirstChar")] = NumberObject(first)
+        font[NameObject("/LastChar")] = NumberObject(first + len(widths) - 1)
+        font[NameObject("/Widths")] = ArrayObject(
+            [NumberObject(v) for v in widths])
     page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"):
         DictionaryObject({NameObject("/F1"): w._add_object(font)})})
     arr = ArrayObject()
@@ -260,6 +272,32 @@ def test_a_highlight_is_read_with_its_span_and_line(tmp_path):
     assert hl[0].instruction == "Slick with petroleum jelly"
     assert "fish oil" in hl[0].anchor                 # the highlighted span
     assert "slick with fish oil" in hl[0].context     # the whole line for context
+
+
+def test_a_highlight_on_a_word_inside_a_run_reads_that_word(tmp_path):
+    """pypdf hands back a whole run of words at a single position, so a highlight
+    over a word that is not first in its run once read back empty (its start x sat
+    left of the mark). The reader now walks each glyph's width out from the run's
+    start, so an interior word is found — and snapped whole, not clipped.
+
+    Glyphs are a uniform 500/1000 em here and a second, two-piece line fixes the
+    scale at 5pt/glyph, so "charlie" occupies x 132–167 exactly; the mark covers
+    its middle and must come back as the whole word."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(
+        tmp_path / "run.pdf",
+        lines=[(72, 700, "alpha bravo charlie delta echo"),
+               (72, 680, "cal"), (87, 680, "ibrate")],   # 2 chunks -> scale 0.01
+        annots=[{"subtype": "/Highlight",
+                 "rect": [134, 698, 165, 712],
+                 "quad": [134, 712, 165, 712, 134, 698, 165, 698],
+                 "contents": "swap this word"}],
+        font_widths=(32, [500] * 96))                     # codes 32..127
+    hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
+    assert len(hl) == 1
+    assert hl[0].anchor == "charlie"                      # whole interior word
+    assert "alpha" not in hl[0].anchor                    # not the whole run
+    assert "alpha bravo charlie delta echo" in hl[0].context
 
 
 def test_a_note_is_anchored_to_the_line_it_sits_on(tmp_path):
