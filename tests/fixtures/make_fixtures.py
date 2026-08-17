@@ -168,6 +168,56 @@ def toc() -> None:
         z.writestr("word/document.xml", _TOC_DOC)
 
 
+# A manuscript with text boxes — the floating frames Word anchors in a run.
+# Two shapes, the two ways they arrive:
+#   * a modern DrawingML box wrapped in mc:AlternateContent, whose mc:Choice
+#     holds the real story and whose mc:Fallback repeats it verbatim as legacy
+#     VML — the reader must take the Choice once and never the Fallback, or the
+#     line is read, edited and counted twice;
+#   * a plain legacy VML box with no AlternateContent around it, read once.
+# Each box carries a comma splice, so the review pipeline has a real error to
+# find inside it, and the anchoring paragraphs carry their own separate text
+# that must stay clear of the box's.
+_TEXTBOX_DOC = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml">
+  <w:body>
+    <w:p><w:r><w:t>An introductory paragraph long enough to be reviewed on its own.</w:t></w:r></w:p>
+    <w:p>
+      <w:r><w:t xml:space="preserve">The sign by the road read as follows.</w:t></w:r>
+      <w:r>
+        <mc:AlternateContent>
+          <mc:Choice Requires="wps">
+            <w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx><w:txbxContent>
+              <w:p><w:r><w:t>Beware the dog, it bites without warning.</w:t></w:r></w:p>
+            </w:txbxContent></wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing>
+          </mc:Choice>
+          <mc:Fallback>
+            <w:pict><v:shape><v:textbox><w:txbxContent>
+              <w:p><w:r><w:t>Beware the dog, it bites without warning.</w:t></w:r></w:p>
+            </w:txbxContent></v:textbox></v:shape></w:pict>
+          </mc:Fallback>
+        </mc:AlternateContent>
+      </w:r>
+    </w:p>
+    <w:p>
+      <w:r><w:pict><v:shape><v:textbox><w:txbxContent>
+        <w:p><w:r><w:t>The gate stood open, the yard was empty.</w:t></w:r></w:p>
+      </w:txbxContent></v:textbox></v:shape></w:pict></w:r>
+    </w:p>
+    <w:p><w:r><w:t>A closing paragraph, also comfortably long enough to review.</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+
+
+def textbox() -> None:
+    """A manuscript whose prose lives partly inside floating text boxes —
+    modern (mc:Choice + mc:Fallback duplicate) and legacy VML."""
+    with zipfile.ZipFile(HERE / "textbox.docx", "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", _GOOGLE_CONTENT_TYPES)
+        z.writestr("_rels/.rels", _ROOT_RELS)
+        z.writestr("word/document.xml", _TEXTBOX_DOC)
+
+
 def tracked() -> None:
     """A manuscript that still has an unresolved edit in it. Prep refuses this
     outright — it restyles every paragraph, and doing that around somebody
@@ -189,4 +239,5 @@ def tracked() -> None:
 
 if __name__ == "__main__":
     simple(); styled(); table(); footnotes(); googledoc(); toc(); tracked()
+    textbox()
     print("fixtures written to", HERE)

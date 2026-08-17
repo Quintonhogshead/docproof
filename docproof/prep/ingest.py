@@ -14,8 +14,9 @@ from pathlib import Path
 from lxml import etree
 
 from ..ingest import IngestError, OLE_MAGIC, REVISION_TAGS, ZIP_MAGIC
-from ..utils.xml_helpers import (DocxPackage, RPR_TAG, iter_text_elements,
-                                 paragraph_text, qn, walk_package)
+from ..utils.xml_helpers import (DocxPackage, RPR_TAG, TEXTBOX_LOCATION,
+                                 iter_text_elements, paragraph_text, qn,
+                                 walk_package)
 from .model import Structure, StructureParagraph
 
 log = logging.getLogger("docproof.prep.ingest")
@@ -115,10 +116,12 @@ def build_structure(pkg: DocxPackage) -> Structure:
     style_path = f"{qn('w:pPr')}/{qn('w:pStyle')}"
 
     for wp in walk_package(pkg):
-        if wp.part != BODY_PART:
-            # Headers, footers, footnotes and endnotes are not manuscript body.
-            # A house template supplies its own running heads, so prep reports
-            # them rather than tagging them into a style that doesn't fit.
+        if wp.part != BODY_PART or wp.location == TEXTBOX_LOCATION:
+            # Headers, footers, footnotes and endnotes are not manuscript body,
+            # and a textbox (a pull quote, a cover title, a floating caption) is
+            # layout the author placed by hand, not running text to reflow. A
+            # house template supplies its own furniture, so prep reports these
+            # rather than restyling them or dropping them as blank lines.
             untouched.append((wp.para_id, wp.location))
             continue
 
