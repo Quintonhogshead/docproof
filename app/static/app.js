@@ -105,6 +105,55 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   if (corr) corr.addEventListener('input', renderCost);
 })();
 
+// Reading an author's redlined Word file or a plain list into the corrections
+// textarea. Both produce a draft edit list a person reviews before applying —
+// the model (list path only) proposes; nothing is applied here.
+(() => {
+  const note = $('corrections-extract-note');
+  if (!note) return;
+  const say = (msg) => { note.textContent = msg; note.hidden = false; };
+  const fill = (body) => {
+    const ta = $('corrections-input');
+    ta.value = body.json;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));   // re-gate Start
+    const bits = [`${body.count} correction${body.count === 1 ? '' : 's'} read`];
+    if (body.issues && body.issues.length) {
+      bits.push(`${body.issues.length} couldn’t be read (`
+        + body.issues.map((i) => i.reason).slice(0, 2).join('; ') + ')');
+    }
+    bits.push('review below, then Apply corrections');
+    say(bits.join(' · '));
+  };
+
+  const docxBtn = $('extract-docx');
+  if (docxBtn) docxBtn.addEventListener('click', async () => {
+    const file = (($('corrections-docx') || {}).files || [])[0];
+    if (!file) { say('Choose a Word file first.'); return; }
+    docxBtn.disabled = true;
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      fill(await api('/api/corrections/extract-docx', { method: 'POST', body }));
+    } catch (e) { say(e.message); } finally { docxBtn.disabled = false; }
+  });
+
+  const listBtn = $('extract-list');
+  if (listBtn) listBtn.addEventListener('click', async () => {
+    const text = (($('corrections-list-text') || {}).value || '').trim();
+    if (!text) { say('Paste a list of corrections first.'); return; }
+    const label = listBtn.textContent;
+    listBtn.disabled = true;
+    listBtn.textContent = 'Reading…';
+    try {
+      fill(await api('/api/corrections/extract-list', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }));
+    } catch (e) { say(e.message); }
+    finally { listBtn.disabled = false; listBtn.textContent = label; }
+  });
+})();
+
 // The subject/title/author boxes only matter when a book-styled copy is
 // among the outputs.
 function renderBookOptions() {

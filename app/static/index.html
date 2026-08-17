@@ -587,6 +587,33 @@
             corrections list is specific to the book it was written for. The
             file, the corrections, and the check are all deterministic: no model
             reads them, and it costs nothing.</p>
+
+          <details class="field" id="corrections-extract">
+            <summary class="muted small">Have a Word file or a plain list
+              instead?</summary>
+            <div class="options">
+              <label class="field">
+                <span>A redlined Word file (tracked changes)</span>
+                <input type="file" id="corrections-docx" accept=".docx">
+                <button type="button" id="extract-docx">Read the Word file</button>
+                <small class="muted">Deterministic — the tracked changes are the
+                  corrections, read straight off the markup. No model, no
+                  cost.</small>
+              </label>
+              <label class="field">
+                <span>A plain list of corrections</span>
+                <textarea id="corrections-list-text" rows="5"
+                  placeholder="e.g. Change 'harbor' to 'harbour' throughout.
+Delete the stray comma after 'however'.
+The name on the Acknowledgments page is Ellen, not Elen."></textarea>
+                <button type="button" id="extract-list">Read the list</button>
+                <small class="muted">Read by the house model into a draft edit
+                  list. Review it below before applying — the model only
+                  proposes; nothing is applied without your say-so.</small>
+              </label>
+              <p class="muted small" id="corrections-extract-note" hidden></p>
+            </div>
+          </details>
         </fieldset>
 
         <fieldset class="field review-only">

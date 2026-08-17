@@ -15,8 +15,11 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from docproof.corrections.idml import parse_story
+from docproof.providers import NormalizedUsage, ProviderResult
 
 from .conftest import FIXTURES
+from .fakes import FakeProvider
+from .test_corrections_extract import make_tracked_docx
 
 LAYOUT = FIXTURES / "layout.idml"
 
@@ -193,3 +196,64 @@ def test_corrections_never_asks_for_a_model_or_a_key(client, monkeypatch):
                           [{"find": "Their were", "replace": "There were"}])
     assert job["state"] == "done", job.get("error")
     assert job["applied"] == 1
+
+
+# --- extracting a list from a Word file or prose ------------------------------
+
+def test_extract_from_a_redlined_word_file(client, tmp_path):
+    doc = make_tracked_docx(tmp_path / "corr.docx", [
+        [("del", "Their"), ("ins", "There"),
+         ("", " were several mistakes here to find.")]])
+    with doc.open("rb") as fh:
+        r = client.post("/api/corrections/extract-docx",
+                        files={"file": ("corr.docx", fh.read())})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    # The returned JSON is exactly what the corrections textarea takes — so it
+    # round-trips straight into a corrections run.
+    parsed = json.loads(body["json"])
+    assert "There" in parsed[0]["replace"]
+    job = run_corrections(client, upload(client, "layout.idml")["id"], body["json"])
+    assert job["state"] == "done" and job["applied"] == 1
+
+
+def test_a_word_file_with_no_tracked_changes_says_so(client, tmp_path):
+    doc = make_tracked_docx(tmp_path / "plain.docx",
+                            [[("", "Nothing tracked in here.")]])
+    with doc.open("rb") as fh:
+        r = client.post("/api/corrections/extract-docx",
+                        files={"file": ("plain.docx", fh.read())})
+    assert r.status_code == 400 and "No tracked changes" in r.json()["detail"]
+
+
+def test_a_non_docx_upload_to_extract_is_refused(client):
+    r = client.post("/api/corrections/extract-docx",
+                    files={"file": ("notes.txt", b"change x to y")})
+    assert r.status_code == 400 and "Word" in r.json()["detail"]
+
+
+def test_extract_from_a_prose_list_uses_the_model(client, monkeypatch):
+    provider = FakeProvider([ProviderResult(
+        parsed={"edits": [
+            {"find": "Their were", "replace": "There were", "instruction": "",
+             "kind": "mechanical", "occurrence": 0}]},
+        usage=NormalizedUsage(input_tokens=300, output_tokens=50))])
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda cfg, api_key=None: provider)
+    r = client.post("/api/corrections/extract-list",
+                    json={"text": "change 'Their were' to 'There were'"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1 and provider.calls
+    parsed = json.loads(body["json"])
+    assert parsed[0]["find"] == "Their were"
+    # The (small) extraction spend is recorded to the dashboard under corrections.
+    usage = client.get("/api/usage").json()
+    assert usage["totals"]["output_tokens"] >= 50
+
+
+def test_extract_from_a_list_without_a_key_is_refused(client, monkeypatch):
+    monkeypatch.setattr("app.settings.get_api_key", lambda p: "")
+    r = client.post("/api/corrections/extract-list", json={"text": "change x to y"})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]

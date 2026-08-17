@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -15,7 +17,8 @@ from typing import get_args
 from docproof import batch as batchlib
 from docproof.config import SmoothingConfig, load_config
 from docproof.formats import get_format
-from docproof.providers import estimate_cost, lookup
+from docproof.models import Usage
+from docproof.providers import build_provider, cost_of_usage, estimate_cost, lookup
 from docproof.variants import VARIANT_KEYS
 
 from . import common
@@ -26,7 +29,10 @@ from ..jobs import Job, JobRunner, JobStore, read_usage
 from ..prompts import list_prompts
 from ..report import build_report
 from ..settings import CONFIG_PATH, ERROR_DIR, Paths
+from ..spending import LedgerEntry
 from ..usage import build_usage
+
+log = logging.getLogger("docproof.app.routes.jobs")
 
 # The smoothing dials' valid values, read straight off SmoothingConfig's Literals
 # so the API's accepted set can never drift from what the config will accept.
@@ -119,6 +125,11 @@ class JobRequest(BaseModel):
     # surfaces; judge_harshness = how hard the taste judge culls it.
     proposer_restraint: str | None = None    # "restrained" | "open"
     judge_harshness: str | None = None       # lenient|balanced|strict|severe
+
+
+class ExtractListRequest(BaseModel):
+    """A free-form corrections list to read into a draft edit list."""
+    text: str
 
 
 class RejudgeRequest(BaseModel):
@@ -247,6 +258,53 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         owner_id=owner,
     )
     return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
+
+
+def _edits_to_corrections_json(edits) -> str:
+    """Serialize an extracted `Edit` list back into the corrections JSON the
+    textarea holds, so a person reviews and edits it before anything is applied.
+    Fields at their default are left out so the result reads clean."""
+    rows = []
+    for e in edits:
+        row = {"find": e.find, "replace": e.replace}
+        if e.instruction:
+            row["instruction"] = e.instruction
+        if e.kind != "mechanical":         # model.MECHANICAL
+            row["kind"] = e.kind
+        if e.occurrence:
+            row["occurrence"] = e.occurrence
+        rows.append(row)
+    return json.dumps(rows, indent=2, ensure_ascii=False)
+
+
+def _extract_response(result) -> dict:
+    """A parsed corrections source, shaped for the panel: the JSON to drop into
+    the textarea, the edit count, and any entries that could not be read."""
+    return {
+        "json": _edits_to_corrections_json(result.edits),
+        "count": len(result.edits),
+        "issues": [{"index": i.index, "reason": i.reason} for i in result.issues],
+    }
+
+
+def _record_extract_spend(app, owner: str, model: str, usage: Usage) -> None:
+    """Snapshot a corrections extraction's (small) model spend to the ledger, so
+    it shows in the dashboard rather than being invisible. Filed under the
+    corrections kind; best-effort, never fails the request."""
+    try:
+        cost = cost_of_usage(usage, fallback_model=model, batch=False)
+        stamp = datetime.now(timezone.utc)
+        app.state.runner.ledger.record(LedgerEntry(
+            id=f"cx-{stamp.strftime('%Y%m%d%H%M%S%f')}",
+            filename="corrections list", kind="corrections", model=model,
+            mode="now", source="app", owner_id=owner,
+            created_at=stamp.isoformat(), words=0,
+            input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_input_tokens,
+            cache_write_tokens=usage.cache_creation_input_tokens,
+            api_calls=usage.api_calls, cost=cost or 0.0))
+    except Exception:                      # noqa: BLE001 - spend logging is not the job
+        log.warning("Could not record corrections-extraction spend", exc_info=True)
 
 
 def register(app: FastAPI) -> None:
@@ -937,6 +995,63 @@ def register(app: FastAPI) -> None:
         if path is None:
             raise HTTPException(404, "This job has no corrections report")
         return json.loads(path.read_text("utf-8"))
+
+    @app.post("/api/corrections/extract-docx")
+    async def extract_corrections_docx(
+            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+        """Read an author's redlined Word file into a draft edit list.
+
+        Deterministic — the tracked changes ARE the before/after, so no model
+        and no cost. The result fills the corrections textarea for a person to
+        review; nothing is applied here."""
+        from docproof.corrections.from_word import edits_from_docx
+        name = Path(file.filename or "corrections.docx").name
+        if not name.lower().endswith(".docx"):
+            raise HTTPException(
+                400, "Upload a Word (.docx) file with tracked changes.")
+        data = await file.read()
+        tmp = Path(tempfile.mkstemp(suffix=".docx")[1])
+        try:
+            tmp.write_bytes(data)
+            try:
+                result = edits_from_docx(tmp)
+            except Exception as e:         # noqa: BLE001 - a bad/again unreadable upload
+                raise HTTPException(400, f"Could not read {name}: {e}")
+        finally:
+            tmp.unlink(missing_ok=True)
+        if not result.edits and not result.issues:
+            raise HTTPException(
+                400, f"No tracked changes found in {name} — turn on Track "
+                     "Changes in Word, mark the corrections, and upload it again.")
+        return _extract_response(result)
+
+    @app.post("/api/corrections/extract-list")
+    def extract_corrections_list(
+            req: ExtractListRequest, owner: str = Depends(owner_for)) -> dict:
+        """Read a free-form corrections list (prose, a pasted table) into a draft
+        edit list with the house model. The corrections job itself stays free and
+        deterministic — this is the one place a model touches the flow, and its
+        output is reviewed by a person before anything is applied."""
+        from docproof.corrections.extract import ExtractionError, extract_edits
+        if not req.text.strip():
+            raise HTTPException(400, "Paste the corrections list to read.")
+        cfg = load_config(CONFIG_PATH)
+        model = cfg.api.model
+        info = lookup(model)
+        key = settingslib.get_api_key(info.provider) if info else None
+        if not key:
+            raise HTTPException(
+                400, "No API key is set for the extraction model. Paste the "
+                     "corrections as JSON, or upload a redlined Word file "
+                     "instead.")
+        provider = build_provider(cfg, api_key=key)
+        usage = Usage()
+        try:
+            result = extract_edits(req.text, provider, model=model, usage=usage)
+        except ExtractionError as e:
+            raise HTTPException(502, f"The model could not read that list: {e}")
+        _record_extract_spend(app, owner, model, usage)
+        return _extract_response(result)
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:
