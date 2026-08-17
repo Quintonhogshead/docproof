@@ -1366,6 +1366,54 @@ class Config(BaseModel):
         many times its category is read)."""
         return tuple(k for group in self.error_type_groups for k in group)
 
+    def category_states(self) -> list[dict]:
+        """Each defined error-type category as a per-run knob the review panel
+        can render and pre-fill. The `id` is content-based (its keys joined) so
+        a knob keyed by it still matches when a batch is collected days later
+        and the config is re-read; the group's ORDER in error_types is not a
+        stable handle, its keys are. `token_budget` is the category's own chunk
+        budget (None = it uses the global one, surfaced as `default_token_budget`
+        so the panel shows the real size it would fall back to)."""
+        default_budget = self.chunking.token_budget
+        return [{"id": "+".join(spec.keys),
+                 "keys": list(spec.keys),
+                 "passes": spec.passes,
+                 "token_budget": spec.token_budget,
+                 "default_token_budget": default_budget}
+                for spec in self.error_type_specs]
+
+    def apply_category_knobs(self, knobs: dict | None) -> None:
+        """Layer per-run per-category knobs onto error_types. `knobs` maps a
+        category id (see category_states) to a mapping with an optional 'passes'
+        and/or 'token_budget'; an id matching no category is ignored. Only the
+        touched categories are rewritten to the mapping form — the rest keep the
+        form they were written in — and a knob that resolves to the defaults
+        (passes 1, no budget) collapses back to the plain key/list form so the
+        pass plan is byte-for-byte unchanged. Reassigns error_types so the field
+        validator re-checks the result."""
+        if not knobs:
+            return
+        rewritten: list = []
+        for entry in self.error_types:
+            spec = _normalize_error_entry(entry)
+            knob = knobs.get("+".join(spec.keys))
+            if not knob:
+                rewritten.append(entry)
+                continue
+            passes = knob.get("passes", spec.passes)
+            budget = knob.get("token_budget", spec.token_budget)
+            mapping: dict = {"group": list(spec.keys)}
+            if passes and passes != 1:
+                mapping["passes"] = passes
+            if budget is not None:
+                mapping["token_budget"] = budget
+            if len(mapping) == 1:                     # resolved to defaults
+                rewritten.append(list(spec.keys) if len(spec.keys) > 1
+                                 else spec.keys[0])
+            else:
+                rewritten.append(mapping)
+        self.error_types = rewritten
+
     def concurrency_for(self, model: str | None = None) -> int:
         """How many calls a pass on `model` may keep in flight.
 

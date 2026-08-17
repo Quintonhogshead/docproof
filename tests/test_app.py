@@ -102,6 +102,42 @@ def test_rounds_out_of_range_is_refused(client):
     assert "rounds" in resp.text
 
 
+def test_features_endpoint_lists_the_category_knobs(client):
+    cats = client.get("/api/features").json()["categories"]
+    assert cats, "expected at least one tunable category"
+    one = cats[0]
+    assert set(one) >= {"id", "keys", "names", "passes",
+                        "token_budget", "default_token_budget"}
+    assert one["passes"] == 1 and one["token_budget"] is None   # shipped baseline
+    assert one["default_token_budget"] > 0                       # the global fallback
+    assert len(one["names"]) == len(one["keys"])                 # a label per key
+
+
+def test_category_knobs_reach_the_job(client):
+    fid = _upload(client)["id"]
+    cid = client.get("/api/features").json()["categories"][0]["id"]
+    knob = {cid: {"passes": 2, "token_budget": 1800}}
+    job = _run(client, fid, category_knobs=knob)
+    assert job["category_knobs"] == knob
+
+
+def test_category_knobs_reject_an_unknown_category(client):
+    fid = _upload(client)["id"]
+    resp = client.post("/api/jobs", json={
+        "file_ids": [fid], "model": "claude-sonnet-5", "mode": "now",
+        "category_knobs": {"no_such_category": {"passes": 2}}})
+    assert resp.status_code == 400 and "category" in resp.text.lower()
+
+
+def test_category_knobs_reject_a_sub_one_value(client):
+    fid = _upload(client)["id"]
+    cid = client.get("/api/features").json()["categories"][0]["id"]
+    resp = client.post("/api/jobs", json={
+        "file_ids": [fid], "model": "claude-sonnet-5", "mode": "now",
+        "category_knobs": {cid: {"passes": 0}}})
+    assert resp.status_code == 400 and "passes" in resp.text
+
+
 def test_a_review_runs_multiple_rounds(client, provider):
     provider.results = [finding_result(
         para_id="body-0000", error_type="comma_splice", original=SPLICE,

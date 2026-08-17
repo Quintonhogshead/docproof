@@ -69,6 +69,10 @@ class JobRequest(BaseModel):
     # Per-run pass toggles, {feature_id: on}. Omitted or empty leaves the config
     # defaults. Unknown ids are refused, not ignored — see create_jobs.
     features: dict[str, bool] | None = None
+    # Per-run per-category tuning: {category_id: {passes?, token_budget?}}, each
+    # an int >= 1. Unknown ids and bad values are refused in create_jobs, not
+    # ignored. Omitted/empty leaves the config's per-category defaults.
+    category_knobs: dict[str, dict] | None = None
     # Multi-round review: review the manuscript this many times, each round
     # reading the previous round's corrections. None falls back to the saved
     # default; 1 is the ordinary single review. judge_prompt is the panel-edited
@@ -277,6 +281,29 @@ def register(app: FastAPI) -> None:
             raise HTTPException(
                 400, f"judge_harshness must be one of "
                      f"{', '.join(_HARSHNESS_LEVELS)}")
+        # Per-category knobs — vetted here (like the smoothing dials and variant)
+        # rather than left to Config's validator, which would raise mid-run,
+        # after the upload and on the batch path days after submit. Each id must
+        # be a real category (content-based, so it survives a later collect); each
+        # passes/token_budget an int >= 1.
+        if req.category_knobs:
+            valid_ids = {c["id"]
+                         for c in load_config(CONFIG_PATH).category_states()}
+            for cid, knob in req.category_knobs.items():
+                if cid not in valid_ids:
+                    raise HTTPException(400, f"Unknown category {cid!r}")
+                if not isinstance(knob, dict) or (
+                        set(knob) - {"passes", "token_budget"}):
+                    raise HTTPException(
+                        400, f"category {cid!r}: only 'passes' and "
+                             f"'token_budget' may be set")
+                for name in ("passes", "token_budget"):
+                    val = knob.get(name)
+                    if val is not None and (not isinstance(val, int)
+                                            or isinstance(val, bool) or val < 1):
+                        raise HTTPException(
+                            400, f"category {cid!r}: {name} must be an "
+                                 f"integer >= 1")
         effort = req.effort or app.state.settings.effort
         # Multi-round review is a review-only knob; prep is always a single pass.
         rounds = req.rounds if req.rounds is not None else app.state.settings.rounds
@@ -416,6 +443,7 @@ def register(app: FastAPI) -> None:
                 effort=effort,
                 glossary_model=req.glossary_model or app.state.settings.glossary_model,
                 features=req.features or {},
+                category_knobs=req.category_knobs or {},
                 rounds=rounds,
                 judge_prompt=req.judge_prompt,
                 judge_model=req.judge_model or "",
@@ -467,7 +495,17 @@ def register(app: FastAPI) -> None:
         # carries an editable prompt, so those defaults ride alongside the same
         # way the round judge's does.
         from docproof.judges import default_prompt
+        # Per-category knob rows: each defined category's stable id, its member
+        # types' human names, and the passes / chunk size it would use if left
+        # untouched, so the panel renders a row pre-filled with the real baseline
+        # (the way rounds rides alongside the feature catalog rather than in it).
+        knob_names = {r["key"]: r["name"] for r in list_prompts(
+            ERROR_DIR, app.state.paths.prompts, list(cfg.error_type_keys))}
+        categories = cfg.category_states()
+        for cat in categories:
+            cat["names"] = [knob_names.get(k, k) for k in cat["keys"]]
         return {"features": featureslib.feature_catalog(cfg),
+                "categories": categories,
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
                            "judge_prompt_default": default_judge_prompt()},
                 "continuity": {"prompt_default": default_continuity_prompt()},

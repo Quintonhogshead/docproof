@@ -227,6 +227,11 @@ class Job:
     # Per-run pass toggles: {feature_id: on}. Empty (older records, or a run that
     # touched nothing) means "use the config defaults". See app/features.py.
     features: dict[str, bool] = field(default_factory=dict)
+    # Per-run per-category tuning: {category_id: {passes?, token_budget?}}. The
+    # id is content-based (its error-type keys joined). Empty (older records, or
+    # a run that touched nothing) leaves the config's per-category defaults. See
+    # Config.category_states / Config.apply_category_knobs.
+    category_knobs: dict = field(default_factory=dict)
     # Multi-round review: review the manuscript this many times, each round
     # reading the previous round's corrections, with a strong judge between
     # rounds. 1 (older records, or the ordinary run) is a single review. The
@@ -797,6 +802,10 @@ class JobRunner:
         # submission panel wins over both the shipped config and the two
         # settings-backed defaults above (comments, explanations).
         features.apply_features(cfg, job.features)
+        # Per-run per-category knobs (passes / chunk size), layered after the
+        # feature toggles and before the continuity-only reset below, so a
+        # continuity-only run (which clears error_types) still discards them.
+        cfg.apply_category_knobs(job.category_knobs)
         # The continuity read's editable prompt (empty = built-in default),
         # applied like the round judge's — the sentinel passes through verbatim.
         cfg.continuity.prompt = job.continuity_prompt
