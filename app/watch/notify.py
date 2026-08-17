@@ -362,6 +362,14 @@ def _result_group(job) -> tuple[str, list]:
     held = getattr(job, "judge_held", 0) or 0
     if held:
         rows.append(("Held back by judge", f"{_int(held)} of those", None))
+    # A review that still finished but had a pass fail or skip is degraded, and
+    # the log is the one place a scheduled run is ever seen — so it has to say
+    # so here, not only in a summary.md nobody opens on a green run.
+    warnings = getattr(job, "warnings", None) or []
+    if warnings:
+        rows.append(("Run health",
+                     f"DEGRADED — {len(warnings)} pass(es) fell short: "
+                     + "; ".join(warnings), None))
     rows.append(("Reject-all check",
                  "failed — see the results card" if job.audit_failed
                  else "passed", None))

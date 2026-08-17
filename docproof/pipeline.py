@@ -921,7 +921,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             on_phase("factcheck")
         from .factcheck import factcheck_findings
         findings.extend(factcheck_findings(
-            cfg, prepared.doc.paragraphs, usage, provider_factory))
+            cfg, prepared.doc.paragraphs, usage, provider_factory,
+            coverage=coverage))
 
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         if on_phase:
@@ -987,7 +988,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
                 dictionary=cfg.languagetool.dictionary,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
-                workers=cfg.languagetool.workers, progress=progress)
+                workers=cfg.languagetool.workers, progress=progress,
+                coverage=coverage)
             lt_provider, lt_model = provider, cfg.api.model
             if cfg.languagetool.confirm_model:
                 lcfg = cfg.model_copy(deep=True)
@@ -1055,6 +1057,15 @@ def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
                     "skipping the read to avoid a truncated (silently "
                     "incomplete) one; the calendar check still runs",
                     doc_tokens, cfg.continuity.max_input_tokens)
+        # #132 records a continuity read that FAILED; a read that never ran
+        # because the book is over the token ceiling is the same hole to the
+        # reader — no whole-book continuity check — so it is loud too.
+        if coverage is not None:
+            coverage.note("continuity read", f"skipped — the manuscript "
+                          f"(~{doc_tokens:,} tokens) is over the "
+                          f"{cfg.continuity.max_input_tokens:,}-token limit, so "
+                          f"the whole-book continuity read did not run; only the "
+                          f"calendar check did", "skipped")
     else:
         ccfg = cfg.model_copy(deep=True)
         ccfg.api.model = cfg.continuity.model
@@ -1081,7 +1092,8 @@ def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
 def _sapling_findings(cfg: Config, prepared: Prepared,
                       usage: Usage | None = None, *,
                       out_dir: str | Path | None = None,
-                      loss_sink: list | None = None) -> list[Finding]:
+                      loss_sink: list | None = None,
+                      coverage=None) -> list[Finding]:
     """Sapling's suggestions as findings, or [] when the pass is off, has no key,
     or the service can't be reached.
 
@@ -1114,16 +1126,34 @@ def _sapling_findings(cfg: Config, prepared: Prepared,
     if not key:
         log.warning("Sapling pass is on but SAPLING_API_KEY is not set — "
                     "skipping it.")
+        if coverage is not None:
+            coverage.note("Sapling", "the pass is enabled but SAPLING_API_KEY "
+                          "is not set, so its grammar/style scan did not run",
+                          "skipped")
         return []
+    sap_stats: dict[str, int] = {}
     try:
         edits = check_paragraphs(
             [(p.para_id, p.text) for p in doc.paragraphs], key,
-            variety=cfg.sapling.variety or None)
+            variety=cfg.sapling.variety or None, stats=sap_stats)
     except SaplingError as e:
         # A pass that never returned bills nothing here — the cost stays 0 rather
         # than charging a person for a book Sapling couldn't read.
         log.warning("Sapling pass failed (%s); continuing without it.", e)
+        if coverage is not None:
+            coverage.note("Sapling", f"the grammar/style pass failed ({e}) and "
+                          f"did not run — the manuscript was not scanned for the "
+                          f"mechanical errors it catches", "failed")
         return []
+    # Edits Sapling returned but that could not be trusted onto the page — a
+    # malformed span, or one straddling a paragraph break — are dropped for cause
+    # but counted, so a pass that quietly shed catches says so.
+    dropped = sap_stats.get("dropped_malformed", 0) + sap_stats.get(
+        "dropped_straddle", 0)
+    if dropped and coverage is not None:
+        coverage.note("Sapling", f"{dropped} suggestion(s) were discarded as "
+                      f"malformed or unplaceable and were not reviewed",
+                      "partial")
 
     # Bill for what was sent — the non-blank paragraph text, exactly what
     # check_paragraphs submits — so the reported cost is the whole bill, not just
@@ -1833,7 +1863,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     if on_phase and cfg.sapling.enabled:
         on_phase("sapling")
     sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out,
-                                         loss_sink=window_losses)
+                                         loss_sink=window_losses,
+                                         coverage=coverage)
     # Below-gate model edits get one more chance to become a tracked change: the
     # confirm valve re-rules each in literary context, so a real dialogue-
     # mechanics catch the type prompts marked "low" is promoted rather than left

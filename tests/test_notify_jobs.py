@@ -74,6 +74,28 @@ def test_the_review_email_reports_both_channels():
         assert f">{label}</td><td>{value}</td>" in html
 
 
+def test_a_degraded_review_says_so_in_the_email():
+    """A review that finished but had a pass fail or skip is degraded. The log
+    is the one place a scheduled run is ever seen, so it must say so here — not
+    only in a summary.md nobody opens on an otherwise-clean green run."""
+    _, body, html = notify.completion_for_job(_job(
+        kind="review", applied=42,
+        warnings=["Sapling: the grammar/style pass failed (network) and did "
+                  "not run",
+                  "continuity: over the token limit, so the read was skipped"]))
+    assert "Run health" in body
+    assert "DEGRADED — 2 pass(es) fell short" in body
+    assert "Sapling: the grammar/style pass failed" in body
+    assert "Run health" in html
+
+
+def test_a_clean_review_says_nothing_about_run_health():
+    _, body, html = notify.completion_for_job(_job(kind="review", applied=42))
+    for text in (body, html):
+        assert "Run health" not in text
+        assert "DEGRADED" not in text
+
+
 def test_a_review_with_nothing_to_ask_says_nothing_about_queries():
     """Zero rows are left out rather than printed: a clean run should read like
     a clean run, not like a column of noughts."""

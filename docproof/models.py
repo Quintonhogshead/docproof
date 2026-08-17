@@ -174,13 +174,33 @@ class CoverageGap:
 
 
 @dataclass(frozen=True)
-class DegradedPass:
-    """A whole pass that fell open and produced nothing — a provider call that
-    errored (a dead key, a refusal, a total truncation). Named for a human and
-    carried up to both the report and the job card, because a 'done' run that
-    quietly skipped a paid pass looks exactly like one that ran it clean."""
+class StageWarning:
+    """A whole pass that came up short — it failed outright, was skipped, or ran
+    only partially — so it produced less than a clean run and the deliverable
+    looks more complete than it is. Named for a human and carried up to the
+    report, the job card, and the completion email, because a 'done' run that
+    quietly skipped a paid pass looks exactly like one that ran it clean.
+
+    `kind` grades the shortfall, worst first: "failed" (a provider call errored —
+    a dead key, a refusal, a total truncation), "skipped" (enabled but never ran
+    — no key, not installed, input over a ceiling), "partial" (ran but shed some
+    of its work). `label`/`reason` are kept under those names, not renamed, so
+    the findings.json and job-card surfaces #132 already build keep working."""
     label: str                         # the pass, e.g. "continuity read"
     reason: str                        # short cause, e.g. "provider error 401"
+    kind: str = "failed"               # one of STAGE_WARNING_KINDS
+
+    def line(self) -> str:
+        """The one-liner the report banner, job card, and email all print."""
+        return f"{self.label}: {self.reason}"
+
+
+STAGE_WARNING_KINDS = ("failed", "skipped", "partial")
+
+# The pre-#132 name for a failed pass, before the skipped/partial grades existed.
+# Kept as an alias so any external reference (or an older manifest reader) still
+# resolves; every producer now records a StageWarning.
+DegradedPass = StageWarning
 
 
 @dataclass
@@ -208,7 +228,7 @@ class CoverageLedger:
     # run with these under-reports invisibly unless the report says so, and unlike
     # gaps they also want to reach the job card, since a "done" run that quietly
     # skipped a paid pass reads identically to one that ran it clean.
-    degraded: list["DegradedPass"] = field(default_factory=list)
+    degraded: list["StageWarning"] = field(default_factory=list)
 
     def record(self, pass_label: str, chunk, ok: bool) -> None:
         self.total += 1
@@ -217,11 +237,23 @@ class CoverageLedger:
                 pass_label, chunk.chunk_id,
                 tuple(p.para_id for p in chunk.paragraphs)))
 
+    def note(self, label: str, reason: str, kind: str = "failed") -> None:
+        """Record that a whole pass came up short, at the point the failure is
+        caught so `reason` is the real one, not a guess from an absence. `kind`
+        grades it (failed/skipped/partial); see StageWarning."""
+        self.degraded.append(StageWarning(label, reason, kind))
+
     def record_degraded(self, label: str, reason: str) -> None:
-        """A pass that fell open and produced nothing. `label` names the pass for
-        a human ("continuity read", "meaning gate"); `reason` is the short cause
+        """A pass that fell open and produced nothing — a `note` of kind
+        "failed", kept under its #132 name so existing callers (continuity,
+        glossary, the judge gates) need no change. `label` names the pass for a
+        human ("continuity read", "meaning gate"); `reason` is the short cause
         ("provider error 401", "12 changes applied unread")."""
-        self.degraded.append(DegradedPass(label, reason))
+        self.note(label, reason, "failed")
+
+    @property
+    def any_degraded(self) -> bool:
+        return bool(self.degraded)
 
     def record_windows(self, reports) -> None:
         """Keep the batched passes that lost something. A clean report is not

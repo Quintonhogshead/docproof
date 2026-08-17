@@ -152,13 +152,17 @@ def _error_message(resp: httpx.Response) -> str:
 
 
 def check(text: str, api_key: str, *, variety: str | None = None,
-          session_id: str = "docproof", timeout: float = TIMEOUT) -> list[Edit]:
+          session_id: str = "docproof", timeout: float = TIMEOUT,
+          stats: dict | None = None) -> list[Edit]:
     """Send `text` to Sapling and return its edits, offsets resolved.
 
     `variety` is Sapling's regional spelling variant (e.g. "us-variety") or None
     for no preference. Raises SaplingError on a missing/rejected key or any
     transport or shape problem; empty or blank text is answered locally with an
-    empty list rather than a wasted round-trip."""
+    empty list rather than a wasted round-trip. `stats`, if given, is a counter
+    dict the caller reads afterwards: `dropped_malformed` counts edits Sapling
+    returned that we could not parse — a silent shed of real catches unless it
+    is surfaced."""
     if not api_key:
         raise SaplingError("No Sapling API key is set.")
     if not text.strip():
@@ -185,6 +189,8 @@ def check(text: str, api_key: str, *, variety: str | None = None,
             end = base + int(item["end"])
         except (KeyError, TypeError, ValueError):
             log.warning("Skipping a malformed Sapling edit: %r", item)
+            if stats is not None:
+                stats["dropped_malformed"] = stats.get("dropped_malformed", 0) + 1
             continue
         edits.append(Edit(
             start=start, end=end, original=text[start:end],
@@ -244,13 +250,18 @@ def _place(edit: Edit, spans: list[tuple[str, str, int]]) -> ParaEdit | None:
 
 def check_paragraphs(paragraphs: Iterable[tuple[str, str]], api_key: str, *,
                      variety: str | None = None, budget: int = CHAR_BUDGET,
-                     timeout: float = TIMEOUT) -> list[ParaEdit]:
+                     timeout: float = TIMEOUT,
+                     stats: dict | None = None) -> list[ParaEdit]:
     """Run each paragraph's text through Sapling and return per-paragraph edits.
 
     `paragraphs` is a sequence of (para_id, text). Paragraphs are batched into
     single requests (see PARA_SEP / CHAR_BUDGET) and every edit is mapped back to
     the exact paragraph and offset it belongs to, so the result drops straight
-    into a tracked-changes writer. Raises SaplingError like `check`."""
+    into a tracked-changes writer. Raises SaplingError like `check`. `stats`, if
+    given, is a counter dict filled with `dropped_malformed` (from `check`) and
+    `dropped_straddle` — edits that landed across a paragraph boundary and could
+    not be placed. Both are catches shed silently unless the caller reports
+    them."""
     pairs = [(pid, text) for pid, text in paragraphs if text.strip()]
     out: list[ParaEdit] = []
     for batch in _batches(pairs, budget):
@@ -260,10 +271,13 @@ def check_paragraphs(paragraphs: Iterable[tuple[str, str]], api_key: str, *,
             spans.append((pid, text, at))
             at += len(text) + len(PARA_SEP)
         chunk_text = PARA_SEP.join(text for _, text in batch)
-        for edit in check(chunk_text, api_key, variety=variety, timeout=timeout):
+        for edit in check(chunk_text, api_key, variety=variety, timeout=timeout,
+                          stats=stats):
             placed = _place(edit, spans)
             if placed is not None:
                 out.append(placed)
+            elif stats is not None:
+                stats["dropped_straddle"] = stats.get("dropped_straddle", 0) + 1
     return out
 
 
