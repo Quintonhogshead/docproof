@@ -19,7 +19,7 @@ from docproof.providers import NormalizedUsage, ProviderResult
 
 from .conftest import FIXTURES
 from .fakes import FakeProvider
-from .test_corrections_extract import make_tracked_docx
+from .test_corrections_extract import _proof, make_tracked_docx
 
 LAYOUT = FIXTURES / "layout.idml"
 
@@ -257,3 +257,46 @@ def test_extract_from_a_list_without_a_key_is_refused(client, monkeypatch):
     monkeypatch.setattr("app.settings.get_api_key", lambda p: "")
     r = client.post("/api/corrections/extract-list", json={"text": "change x to y"})
     assert r.status_code == 400 and "API key" in r.json()["detail"]
+
+
+def test_extract_from_a_commented_pdf(client, monkeypatch, tmp_path):
+    """A PDF proof's comments are read deterministically, then the (fake) model
+    turns them into a draft edit list."""
+    provider = FakeProvider([ProviderResult(
+        parsed={"edits": [
+            {"find": "fish oil", "replace": "petroleum jelly", "instruction": "",
+             "kind": "mechanical", "occurrence": 0},
+            {"find": "tobacco", "replace": "candlestick", "instruction": "",
+             "kind": "mechanical", "occurrence": 0}]},
+        usage=NormalizedUsage(input_tokens=400, output_tokens=80))])
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda cfg, api_key=None: provider)
+    pdf = _proof(tmp_path / "proof.pdf")
+    with pdf.open("rb") as fh:
+        r = client.post("/api/corrections/extract-pdf",
+                        files={"file": ("proof.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+    # The reader really pulled the two comments out and handed them to the model.
+    assert "petroleum jelly" in provider.calls[0]["user"]
+    assert "tobacco" in provider.calls[0]["user"]
+
+
+def test_a_pdf_with_no_comments_is_refused(client, tmp_path):
+    from .test_corrections_extract import make_commented_pdf
+    plain = make_commented_pdf(tmp_path / "plain.pdf",
+                               lines=[(72, 700, "No comments in this proof.")],
+                               annots=[])
+    with plain.open("rb") as fh:
+        r = client.post("/api/corrections/extract-pdf",
+                        files={"file": ("plain.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 400 and "No comments" in r.json()["detail"]
+
+
+def test_a_non_pdf_upload_to_extract_pdf_is_refused(client):
+    r = client.post("/api/corrections/extract-pdf",
+                    files={"file": ("notes.txt", b"not a pdf")})
+    assert r.status_code == 400 and "PDF" in r.json()["detail"]

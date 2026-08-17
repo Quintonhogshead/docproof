@@ -1,6 +1,7 @@
 """The house style guide: reading it, replacing it, adjusting it."""
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from typing import Literal
 
@@ -17,6 +18,9 @@ from ..settings import CONFIG_PATH, Paths
 
 # A style sheet is a page of YAML. Anything this size is the wrong file.
 MAX_SHEET_BYTES = 1_000_000
+# A house template is an exported IDML — a few MB with fonts and spreads. Well
+# past that is the wrong file (a packaged .indd, an image).
+MAX_TEMPLATE_BYTES = 50_000_000
 
 
 class StyleFormatUpdate(BaseModel):
@@ -120,6 +124,78 @@ def _install_sheet(paths: Paths, body: bytes, override: Path) -> dict:
         staging.unlink(missing_ok=True)
 
 
+def _shipped_template() -> Path:
+    cfg = load_config(CONFIG_PATH)
+    return preplib.pipeline.resolve(CONFIG_PATH.parent, cfg.prep.indesign_template)
+
+
+def _template_override_path(paths: Paths) -> Path:
+    """Where a replacement template lives — under the name the config asks for,
+    because that is what `_resolve_template` looks for."""
+    return paths.prep / _shipped_template().name
+
+
+def _template_payload(paths: Paths) -> dict:
+    """The house template in force, as the Settings screen reads it: shipped or
+    uploaded, and enough of its shape to show it is a real template — how many
+    stories and spreads, and which story the manuscript would flow into."""
+    from docproof.prep.writers.indesign_idml import (body_style_names,
+                                                     discover_body_story)
+    shipped = _shipped_template()
+    override = paths.prep / shipped.name
+    active = override if override.is_file() else shipped
+    info: dict = {"shipped_path": str(shipped), "override_path": str(override),
+                  "using_override": override.is_file(), "name": active.name}
+    try:
+        with zipfile.ZipFile(active) as z:
+            names = z.namelist()
+        sheet = preplib.load_style_sheet(_shipped_sheet(), override_dir=paths.prep)
+        info.update(
+            ok=True,
+            stories=sum(1 for n in names if n.startswith("Stories/Story_")),
+            spreads=sum(1 for n in names if n.startswith("Spreads/Spread_")),
+            body_story=discover_body_story(active, body_style_names(sheet)))
+    except Exception as e:                    # noqa: BLE001 - a bad/absent template
+        info.update(ok=False, error=str(e))
+    return info
+
+
+def _install_template(paths: Paths, body: bytes, override: Path) -> dict:
+    """Put a template in force, but only once it reads as an IDML whose body
+    story can be found — so a wrong file (a packaged .indd, a PDF) is refused
+    here, in front of the person choosing it, not hours later at a run. Staged
+    beside its destination and moved on, so prep never reads a half-written one."""
+    from docproof.prep.writers.indesign_idml import (body_style_names,
+                                                     discover_body_story)
+    override.parent.mkdir(parents=True, exist_ok=True)
+    staging = override.with_name(override.name + ".uploading")
+    staging.write_bytes(body)
+    try:
+        try:
+            with zipfile.ZipFile(staging) as z:
+                has_stories = any(n.startswith("Stories/Story_")
+                                  for n in z.namelist())
+        except zipfile.BadZipFile:
+            raise HTTPException(
+                400, "That is not an IDML file. In InDesign, File → Export and "
+                     "choose InDesign Markup (IDML).")
+        if not has_stories:
+            raise HTTPException(400, "That IDML has no stories — is it the right "
+                                     "file?")
+        sheet = preplib.load_style_sheet(_shipped_sheet(), override_dir=paths.prep)
+        try:
+            discover_body_story(staging, body_style_names(sheet))
+        except ValueError as e:
+            raise HTTPException(
+                400, f"That template can't be used — {e}. It needs a text frame "
+                     "the manuscript can flow into (a chapter frame styled with "
+                     "your body text).")
+        staging.replace(override)
+        return _template_payload(paths)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
 def register(app: FastAPI) -> None:
 
     may_edit = common.admin_gate(
@@ -198,3 +274,36 @@ def register(app: FastAPI) -> None:
         body = yaml.safe_dump(raw, sort_keys=False, allow_unicode=True,
                               width=88).encode("utf-8")
         return _install_sheet(paths, body, _override_path(paths))
+
+    # -- the house InDesign template ------------------------------------------
+
+    @app.get("/api/prep/template")
+    def prep_template() -> dict:
+        """The house template in force, and where a replacement goes. Like the
+        style guide, the template is data: this shows which file prep flows into
+        and its shape."""
+        return _template_payload(app.state.paths)
+
+    @app.post("/api/prep/template", dependencies=[Depends(may_edit)])
+    async def upload_template(file: UploadFile) -> dict:
+        """Take a house template from the Settings screen, exported as IDML.
+
+        Nothing is installed until it reads as an IDML with a findable body
+        story, so a wrong file is refused here rather than at the next run."""
+        if not (file.filename or "").lower().endswith(".idml"):
+            raise HTTPException(
+                400, "Upload an IDML file — in InDesign, File → Export and "
+                     "choose InDesign Markup (IDML).")
+        raw = await file.read()
+        if len(raw) > MAX_TEMPLATE_BYTES:
+            raise HTTPException(
+                400, f"{file.filename} is larger than a template should be. Is "
+                     f"it the right file (an IDML export, not a packaged .indd)?")
+        return _install_template(app.state.paths, raw,
+                                 _template_override_path(app.state.paths))
+
+    @app.delete("/api/prep/template", dependencies=[Depends(may_edit)])
+    def reset_template() -> dict:
+        """Go back to the template DocProof ships with."""
+        _template_override_path(app.state.paths).unlink(missing_ok=True)
+        return _template_payload(app.state.paths)

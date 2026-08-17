@@ -29,8 +29,8 @@ from .tagger import (Tagger, TaggingPrompt, load_tagging_prompt, render_window)
 from .verify import Verification, VerificationFailed, verify_output
 from .writers.book import write_book
 from .writers.clean import WriteStats
-from .writers.indesign_idml import (discover_body_story, verify_idml,
-                                    write_indesign_idml)
+from .writers.indesign_idml import (body_style_names, discover_body_story,
+                                    verify_idml, write_indesign_idml)
 from .writers.tracked import write_tracked
 
 log = logging.getLogger("docproof.prep.pipeline")
@@ -249,8 +249,10 @@ def finish(prepared: PreparedPrep, tags: list[Tag], usage: Usage, cfg: Config,
                 written[kind] = path
                 continue
             try:
-                checks.extend(verify_idml(prepared.structure, path, plan.glyph,
-                                          discover_body_story(template)))
+                checks.extend(verify_idml(
+                    prepared.structure, path, plan.glyph,
+                    discover_body_story(template,
+                                        body_style_names(prepared.sheet))))
                 written[kind] = path
             except VerificationFailed as e:
                 path.unlink(missing_ok=True)

@@ -26,6 +26,11 @@ dependencies = [
     # exist; this is the one thing docproof writes from nothing, and
     # hand-rolling OOXML for a report would be gratuitous.
     "python-docx>=1.1",
+    # Reading a commented PDF proof (corrections engine): pure-Python, BSD, and
+    # it reads the annotation layer — the comments and highlights the
+    # corrections live in — not just the page text. No OCR, so a scanned proof
+    # yields nothing and is reported as such rather than guessed at.
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]

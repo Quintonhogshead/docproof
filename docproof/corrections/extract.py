@@ -59,7 +59,11 @@ edit list. Each correction becomes one edit:
 - find: the exact text in the book to change, copied VERBATIM — same words, \
 same punctuation, same capitalization. This is how the edit is located, so it \
 must be text that actually appears in the book, not a paraphrase. Quote the \
-smallest phrase that uniquely identifies the spot.
+smallest phrase that uniquely identifies the spot. If the source text carries \
+obvious extraction artifacts — a stray space inside a word ("Y ou", "hil t", "b \
+efore"), a broken hyphenation — repair them so find reads as the clean text the \
+book actually contains; the edit is located against the real book, not the \
+artifact.
 - replace: the corrected text. Use an empty string for a pure deletion. For an \
 insertion, set find to the existing text around the insertion point and put that \
 same text plus the new words in replace.

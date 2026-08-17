@@ -55,6 +55,57 @@ def make_tracked_docx(path: Path, paragraphs: list[list[tuple[str, str]]]) -> Pa
     return path
 
 
+def make_commented_pdf(path: Path, lines: list[tuple[float, float, str]],
+                       annots: list[dict]) -> Path:
+    """Write a one-page PDF with text at given positions and comment/highlight
+    annotations, so the PDF reader can be tested without a real proof. Each line
+    is (x, y, text); each annot is {subtype, rect, contents, quad?}."""
+    from pypdf import PdfWriter
+    from pypdf.generic import (ArrayObject, DecodedStreamObject, DictionaryObject,
+                               FloatObject, NameObject, TextStringObject)
+    w = PdfWriter()
+    page = w.add_blank_page(width=612, height=792)
+    ops = [f"BT /F1 12 Tf {x} {y} Td ({t}) Tj ET" for x, y, t in lines]
+    stream = DecodedStreamObject()
+    stream.set_data("\n".join(ops).encode("latin-1"))
+    page[NameObject("/Contents")] = w._add_object(stream)
+    font = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                             NameObject("/Subtype"): NameObject("/Type1"),
+                             NameObject("/BaseFont"): NameObject("/Helvetica")})
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"):
+        DictionaryObject({NameObject("/F1"): w._add_object(font)})})
+    arr = ArrayObject()
+    for spec in annots:
+        d = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject(spec["subtype"]),
+            NameObject("/Rect"): ArrayObject(
+                [FloatObject(v) for v in spec["rect"]]),
+            NameObject("/Contents"): TextStringObject(spec["contents"])})
+        if "quad" in spec:
+            d[NameObject("/QuadPoints")] = ArrayObject(
+                [FloatObject(v) for v in spec["quad"]])
+        arr.append(w._add_object(d))
+    page[NameObject("/Annots")] = arr
+    with path.open("wb") as fh:
+        w.write(fh)
+    return path
+
+
+# A proof with a highlight (over "fish oil.") and a sticky note (on the tobacco
+# line, dropped just below its baseline as real notes are).
+def _proof(path: Path) -> Path:
+    return make_commented_pdf(path,
+        lines=[(72, 700, "were slick with "), (150, 700, "fish oil."),
+               (72, 680, "he carried a pouch of tobacco here")],
+        annots=[
+            {"subtype": "/Highlight", "rect": [150, 698, 195, 712],
+             "quad": [150, 712, 195, 712, 150, 698, 195, 698],
+             "contents": "Slick with petroleum jelly"},
+            {"subtype": "/Text", "rect": [72, 677, 90, 695],
+             "contents": "Replace tobacco with candlestick"}])
+
+
 def story_text(idml: Path, story_id: str = "ue0") -> list[str]:
     with zipfile.ZipFile(idml) as z:
         s = parse_story(z.read(f"Stories/Story_{story_id}.xml"), story_id)
@@ -181,3 +232,52 @@ def test_extracted_edits_apply_to_the_real_indesign_file(tmp_path):
     report = apply_edits(LAYOUT, out, list(result.edits))
     assert report.applied == 1
     assert story_text(out)[4] == "There were several mistakes here to find."
+
+
+# --- reading a commented PDF proof --------------------------------------------
+
+def test_a_highlight_is_read_with_its_span_and_line(tmp_path):
+    from docproof.corrections.from_pdf import read_pdf_comments
+    comments = read_pdf_comments(_proof(tmp_path / "p.pdf"))
+    hl = [c for c in comments if c.kind == "highlight"]
+    assert len(hl) == 1
+    assert hl[0].instruction == "Slick with petroleum jelly"
+    assert "fish oil" in hl[0].anchor                 # the highlighted span
+    assert "slick with fish oil" in hl[0].context     # the whole line for context
+
+
+def test_a_note_is_anchored_to_the_line_it_sits_on(tmp_path):
+    """The note is dropped just below the tobacco line's baseline; it must map to
+    that line, not the (empty) space below it."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    comments = read_pdf_comments(_proof(tmp_path / "p.pdf"))
+    note = [c for c in comments if c.kind == "note"]
+    assert len(note) == 1
+    assert note[0].instruction == "Replace tobacco with candlestick"
+    assert "tobacco" in note[0].anchor
+
+
+def test_a_pdf_with_no_comments_yields_nothing(tmp_path):
+    from docproof.corrections.from_pdf import (pdf_corrections_source,
+                                               read_pdf_comments)
+    plain = make_commented_pdf(tmp_path / "plain.pdf",
+                               lines=[(72, 700, "Just some text, no comments.")],
+                               annots=[])
+    assert read_pdf_comments(plain) == []
+    source, comments = pdf_corrections_source(plain)
+    assert source == "" and comments == []
+
+
+def test_the_pdf_source_feeds_the_extractor_end_to_end(tmp_path):
+    """The reader's output is exactly what the model extractor consumes: read a
+    proof, hand its source to a (fake) model, get edits back."""
+    from docproof.corrections.from_pdf import pdf_corrections_source
+    source, comments = pdf_corrections_source(_proof(tmp_path / "p.pdf"))
+    assert len(comments) == 2 and "petroleum jelly" in source
+    provider = _canned([
+        {"find": "fish oil", "replace": "petroleum jelly", "instruction": "",
+         "kind": "mechanical", "occurrence": 0},
+        {"find": "tobacco", "replace": "candlestick", "instruction": "",
+         "kind": "mechanical", "occurrence": 0}])
+    result = extract_edits(source, provider, model="m", usage=Usage())
+    assert result.ok and len(result.edits) == 2

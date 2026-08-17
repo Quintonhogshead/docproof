@@ -127,6 +127,14 @@ class JobRequest(BaseModel):
     judge_harshness: str | None = None       # lenient|balanced|strict|severe
 
 
+# The model that reads a free-form corrections list into an exact edit list.
+# Luna, the stronger house reader — not the config's bare api.model default
+# (Haiku): turning vague prose into anchored find/replace is the hard part, and a
+# person reviews the draft before anything is applied, so the quality is worth
+# the small cost. The redlined-Word path is deterministic and uses no model at all.
+CORRECTIONS_EXTRACT_MODEL = "gpt-5.6-luna"
+
+
 class ExtractListRequest(BaseModel):
     """A free-form corrections list to read into a draft edit list."""
     text: str
@@ -305,6 +313,31 @@ def _record_extract_spend(app, owner: str, model: str, usage: Usage) -> None:
             api_calls=usage.api_calls, cost=cost or 0.0))
     except Exception:                      # noqa: BLE001 - spend logging is not the job
         log.warning("Could not record corrections-extraction spend", exc_info=True)
+
+
+def _extract_with_model(app, owner: str, source_text: str) -> dict:
+    """Read a corrections source (a prose list, or the text pulled from a PDF's
+    comments) into a draft edit list with Luna, recording the small spend. The
+    shared body of the list and PDF extract endpoints."""
+    from docproof.corrections.extract import ExtractionError, extract_edits
+    cfg = load_config(CONFIG_PATH)
+    model = CORRECTIONS_EXTRACT_MODEL
+    cfg.api.model = model                     # so build_provider builds the OpenAI client
+    info = lookup(model)
+    key = settingslib.get_api_key(info.provider) if info else None
+    if not key:
+        raise HTTPException(
+            400, "No API key is set for the extraction model "
+                 f"({info.display if info else model}). Paste the corrections as "
+                 "JSON, or upload a redlined Word file instead.")
+    provider = build_provider(cfg, api_key=key)
+    usage = Usage()
+    try:
+        result = extract_edits(source_text, provider, model=model, usage=usage)
+    except ExtractionError as e:
+        raise HTTPException(502, f"The model could not read that: {e}")
+    _record_extract_spend(app, owner, model, usage)
+    return _extract_response(result)
 
 
 def register(app: FastAPI) -> None:
@@ -1032,26 +1065,39 @@ def register(app: FastAPI) -> None:
         edit list with the house model. The corrections job itself stays free and
         deterministic — this is the one place a model touches the flow, and its
         output is reviewed by a person before anything is applied."""
-        from docproof.corrections.extract import ExtractionError, extract_edits
         if not req.text.strip():
             raise HTTPException(400, "Paste the corrections list to read.")
-        cfg = load_config(CONFIG_PATH)
-        model = cfg.api.model
-        info = lookup(model)
-        key = settingslib.get_api_key(info.provider) if info else None
-        if not key:
-            raise HTTPException(
-                400, "No API key is set for the extraction model. Paste the "
-                     "corrections as JSON, or upload a redlined Word file "
-                     "instead.")
-        provider = build_provider(cfg, api_key=key)
-        usage = Usage()
+        return _extract_with_model(app, owner, req.text)
+
+    @app.post("/api/corrections/extract-pdf")
+    async def extract_corrections_pdf(
+            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+        """Read a commented PDF proof into a draft edit list.
+
+        Deterministic reading (pypdf pulls each comment and the manuscript text
+        it points at); Luna then turns each pair into an exact edit, reviewed by
+        a person before it is applied. A flattened or scanned proof carries no
+        comment layer and is turned away rather than guessed at."""
+        from docproof.corrections.from_pdf import pdf_corrections_source
+        name = Path(file.filename or "proof.pdf").name
+        if not name.lower().endswith(".pdf"):
+            raise HTTPException(400, "Upload a PDF proof with comments.")
+        data = await file.read()
+        tmp = Path(tempfile.mkstemp(suffix=".pdf")[1])
         try:
-            result = extract_edits(req.text, provider, model=model, usage=usage)
-        except ExtractionError as e:
-            raise HTTPException(502, f"The model could not read that list: {e}")
-        _record_extract_spend(app, owner, model, usage)
-        return _extract_response(result)
+            tmp.write_bytes(data)
+            try:
+                source, comments = pdf_corrections_source(tmp)
+            except Exception as e:         # noqa: BLE001 - an unreadable upload
+                raise HTTPException(400, f"Could not read {name}: {e}")
+        finally:
+            tmp.unlink(missing_ok=True)
+        if not comments:
+            raise HTTPException(
+                400, f"No comments found in {name}. The corrections have to be "
+                     "PDF comments or highlights — a flattened or scanned proof "
+                     "has no comment layer to read.")
+        return _extract_with_model(app, owner, source)
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:

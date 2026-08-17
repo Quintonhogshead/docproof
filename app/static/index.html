@@ -565,11 +565,29 @@
         </fieldset>
 
         <fieldset class="field" id="corrections-options" hidden>
-          <legend>The corrections to apply</legend>
+          <legend>The corrections</legend>
+          <p class="field muted small">Two files: the book you dropped above —
+            the finished <strong>InDesign file, exported as IDML</strong> — and
+            the corrections. Drop the corrections as a <strong>marked-up
+            PDF</strong>; DocProof reads its comments and highlights into an edit
+            list you review before it is applied. One book at a time.</p>
+
+          <label class="field" id="corrections-pdf-field">
+            <span>Marked-up PDF proof</span>
+            <input type="file" id="corrections-pdf" accept=".pdf">
+            <button type="button" id="extract-pdf">Read the PDF</button>
+            <small class="muted">Each comment and highlight is read together with
+              the line it points at and turned into a draft edit by the house
+              model — you review it below before anything is applied.</small>
+          </label>
+          <p class="muted small" id="corrections-extract-note" hidden></p>
+
           <label class="field">
-            <span>Corrections list</span>
+            <span>The corrections to apply
+              <small class="muted">— review these, then Apply</small></span>
             <textarea id="corrections-input" rows="10"
-              placeholder='[
+              placeholder='Read a PDF above to fill this in — or type it yourself:
+[
   {"find": "Their were", "replace": "There were"},
   {"find": "teh", "replace": "the", "occurrence": 2},
   {"find": "Chapter One", "replace": "", "kind": "design",
@@ -581,16 +599,13 @@
               <code>"occurrence": 2</code> to pick the 2nd match when the text
               appears more than once, or <code>"kind": "design"</code> for a
               layout request that is flagged, not applied. Terse
-              <code>["find", "replace"]</code> pairs work too.</small>
+              <code>["find", "replace"]</code> pairs work too. Applying is
+              deterministic — no model, no cost.</small>
           </label>
-          <p class="field muted small">One InDesign file at a time — a
-            corrections list is specific to the book it was written for. The
-            file, the corrections, and the check are all deterministic: no model
-            reads them, and it costs nothing.</p>
 
           <details class="field" id="corrections-extract">
-            <summary class="muted small">Have a Word file or a plain list
-              instead?</summary>
+            <summary class="muted small">Other sources — a Word file or a plain
+              list</summary>
             <div class="options">
               <label class="field">
                 <span>A redlined Word file (tracked changes)</span>
@@ -608,10 +623,9 @@ Delete the stray comma after 'however'.
 The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 <button type="button" id="extract-list">Read the list</button>
                 <small class="muted">Read by the house model into a draft edit
-                  list. Review it below before applying — the model only
+                  list. Review it above before applying — the model only
                   proposes; nothing is applied without your say-so.</small>
               </label>
-              <p class="muted small" id="corrections-extract-note" hidden></p>
             </div>
           </details>
         </fieldset>
@@ -1651,6 +1665,25 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
         <input type="file" id="admin-sheet-file" accept=".yaml,.yml" hidden>
       </div>
       <p id="admin-sheet-note" class="action-note" hidden></p>
+    </div>
+
+    <div class="card">
+      <h3>House InDesign template</h3>
+      <p class="muted">The InDesign template <strong>Prepare for layout</strong>
+        flows manuscripts into, exported as <code>.idml</code>
+        (File → Export → InDesign Markup). Upload yours and prep builds on it for
+        everyone from the next document on — the manuscript flows into the story
+        styled with your body text, and every house paragraph style is reused by
+        name.</p>
+      <p id="admin-template-summary" class="muted">Checking…</p>
+      <div class="job-actions">
+        <button type="button" id="admin-template-pick">Upload an IDML
+          template…</button>
+        <button type="button" id="admin-template-reset" class="quiet" hidden>Reset
+          to the shipped default</button>
+        <input type="file" id="admin-template-file" accept=".idml" hidden>
+      </div>
+      <p id="admin-template-note" class="action-note" hidden></p>
     </div>
   </section>
 </main>

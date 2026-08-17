@@ -125,17 +125,29 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
     say(bits.join(' · '));
   };
 
-  const docxBtn = $('extract-docx');
-  if (docxBtn) docxBtn.addEventListener('click', async () => {
-    const file = (($('corrections-docx') || {}).files || [])[0];
-    if (!file) { say('Choose a Word file first.'); return; }
-    docxBtn.disabled = true;
-    try {
-      const body = new FormData();
-      body.append('file', file);
-      fill(await api('/api/corrections/extract-docx', { method: 'POST', body }));
-    } catch (e) { say(e.message); } finally { docxBtn.disabled = false; }
-  });
+  // A file-upload extractor (PDF proof or redlined Word file): both POST the
+  // file and drop the resulting edit list into the textarea.
+  const fileExtract = (btnId, inputId, endpoint, chooseMsg) => {
+    const btn = $(btnId);
+    if (!btn) return;
+    btn.addEventListener('click', async () => {
+      const file = (($(inputId) || {}).files || [])[0];
+      if (!file) { say(chooseMsg); return; }
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Reading…';
+      try {
+        const body = new FormData();
+        body.append('file', file);
+        fill(await api(endpoint, { method: 'POST', body }));
+      } catch (e) { say(e.message); }
+      finally { btn.disabled = false; btn.textContent = label; }
+    });
+  };
+  fileExtract('extract-pdf', 'corrections-pdf',
+    '/api/corrections/extract-pdf', 'Choose a PDF proof first.');
+  fileExtract('extract-docx', 'corrections-docx',
+    '/api/corrections/extract-docx', 'Choose a Word file first.');
 
   const listBtn = $('extract-list');
   if (listBtn) listBtn.addEventListener('click', async () => {
@@ -6325,6 +6337,69 @@ $('admin-sheet-reset').addEventListener('click', async () => {
   }
 });
 
+// -- house InDesign template (prep flows manuscripts into it) -----------------
+
+async function loadHouseTemplate() {
+  if (!WEB || !ME || !ME.is_admin) return;
+  let data;
+  try { data = await api('/api/prep/template'); } catch (_) { return; }
+  const summary = $('admin-template-summary');
+  const reset = $('admin-template-reset');
+  reset.hidden = !data.using_override;
+  if (!data.ok) {
+    summary.className = 'error';
+    summary.textContent = data.error
+      || 'The current template could not be read.';
+    return;
+  }
+  summary.className = 'muted';
+  const shape = `${data.stories} stories, ${data.spreads} spreads`;
+  summary.textContent = data.using_override
+    ? `Using your uploaded template “${data.name}” — ${shape}.`
+    : `Using the shipped placeholder — ${shape}. Upload your house IDML to `
+      + 'replace it for everyone.';
+}
+
+$('admin-template-pick').addEventListener('click',
+  () => $('admin-template-file').click());
+
+$('admin-template-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const note = $('admin-template-note');
+  note.className = 'action-note muted';
+  note.textContent = 'Checking the template…';
+  note.hidden = false;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    await api('/api/prep/template', { method: 'POST', body: fd });
+    note.className = 'action-note ok';
+    note.textContent = 'Installed. Prep flows into it from the next document on.';
+    loadHouseTemplate();
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+  } finally {
+    e.target.value = '';
+  }
+});
+
+$('admin-template-reset').addEventListener('click', async () => {
+  const note = $('admin-template-note');
+  try {
+    await api('/api/prep/template', { method: 'DELETE' });
+    note.className = 'action-note ok';
+    note.textContent = 'Back to the shipped template.';
+    note.hidden = false;
+    loadHouseTemplate();
+  } catch (err) {
+    note.className = 'action-note error';
+    note.textContent = err.message;
+    note.hidden = false;
+  }
+});
+
 async function loadAdmin() {
   if (!WEB || !ME || !ME.is_admin) return;
   addReveal($('admin-new-password'));
@@ -6379,6 +6454,7 @@ async function loadAdmin() {
   loadKeys();
   loadReviewDefaults();
   loadHouseStyle();
+  loadHouseTemplate();
 }
 
 // ═══ Automations: the workflow registry ═══════════════════════════════════

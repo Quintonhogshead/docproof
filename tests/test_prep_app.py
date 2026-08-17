@@ -277,6 +277,48 @@ def test_the_reflow_script_is_downloadable(client):
     assert "nextTextFrame" in resp.text and "Reflow" in resp.text
 
 
+def _idml_bytes() -> bytes:
+    return (FIXTURES / "layout.idml").read_bytes()
+
+
+def test_the_house_template_can_be_uploaded_and_reverted(client):
+    """The house InDesign template is data, like the style guide: replace it in
+    the app and prep flows into it from the next document on."""
+    body = client.get("/api/prep/template").json()
+    assert body["ok"] and body["using_override"] is False
+
+    r = client.post("/api/prep/template",
+                    files={"file": ("House.idml", _idml_bytes())})
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] and r.json()["using_override"] is True
+    assert (client.app_state.paths.prep / "house_template.idml").is_file()
+
+    reverted = client.delete("/api/prep/template").json()
+    assert reverted["using_override"] is False
+    assert not (client.app_state.paths.prep / "house_template.idml").exists()
+
+
+def test_a_file_that_is_not_an_idml_is_refused_as_a_template(client):
+    wrong_ext = client.post("/api/prep/template",
+                            files={"file": ("notes.txt", b"not an idml")})
+    assert wrong_ext.status_code == 400
+    not_a_zip = client.post("/api/prep/template",
+                            files={"file": ("x.idml", b"still not a zip")})
+    assert not_a_zip.status_code == 400 and "IDML" in not_a_zip.json()["detail"]
+    # A refused upload leaves nothing half-written under the name prep reads.
+    assert not list(client.app_state.paths.prep.glob("*.uploading"))
+    assert client.get("/api/prep/template").json()["using_override"] is False
+
+
+def test_an_uploaded_template_is_what_prep_flows_into(client):
+    client.post("/api/prep/template",
+                files={"file": ("House.idml", _idml_bytes())})
+    job = start_prep(client, upload(client)["id"], output="indesign")
+    assert job["state"] == "done", job.get("error")
+    assert job["verified"] is True
+    assert (Path(job["results_dir"]) / "tagged_googledoc.idml").is_file()
+
+
 def test_the_template_is_remembered_between_launches(client, tmp_path):
     template = tmp_path / "House prose.indd"
     template.write_bytes(b"template")

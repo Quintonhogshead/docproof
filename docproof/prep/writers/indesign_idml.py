@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import shutil
 import zipfile
 from dataclasses import dataclass
@@ -114,15 +115,37 @@ def verify_idml(structure: Structure, idml_path: str | Path, glyph: str,
     return [check]
 
 
-def discover_body_story(template_path: str | Path) -> str:
-    """The Self id of the story the book flows into: the story bound to a text
-    frame on a document spread (the primary text frame on page one), not one on
-    a master. Falls back to the single non-backing story if the template has
-    exactly one."""
+def body_style_names(sheet: StyleSheet) -> tuple[str, ...]:
+    """The house body-paragraph style names, most-specific first: the
+    chapter-opening 'body first' before the running 'body para'. These name the
+    story the manuscript flows into — the chapter frame — in a real template."""
+    return tuple(dict.fromkeys(
+        n for n in (sheet.roles.get("body_first"), sheet.roles.get("body")) if n))
+
+
+def discover_body_story(template_path: str | Path,
+                        body_styles: tuple[str, ...] = ()) -> str:
+    """The Self id of the story the book flows into.
+
+    A real house template holds a dozen stories — title page, copyright,
+    dedication, the chapter frame, back matter — so 'the first text frame on a
+    spread' lands on the title page, not the manuscript. When the house body
+    style names are given, prefer the story that uses them (the chapter frame is
+    the one styled 'body first'); the running-text style breaks a tie by count.
+    Fall back to the first spread-bound frame, then a lone story, so a
+    single-story template (the old placeholder) still resolves."""
     with zipfile.ZipFile(Path(template_path)) as z:
         names = z.namelist()
         story_ids = {n[len("Stories/Story_"):-len(".xml")]
                      for n in names if n.startswith("Stories/Story_")}
+        for style in body_styles:             # body_first first, then body
+            best, best_n = None, 0
+            for sid in story_ids:
+                n = _applied_style_count(z.read(f"Stories/Story_{sid}.xml"), style)
+                if n > best_n:
+                    best, best_n = sid, n
+            if best is not None:
+                return best
         for name in names:
             if not name.startswith("Spreads/"):
                 continue
@@ -135,8 +158,18 @@ def discover_body_story(template_path: str | Path) -> str:
         if len(story_ids) == 1:
             return next(iter(story_ids))
     raise ValueError(
-        f"Could not find the body story in {template_path}: no text frame on a "
-        f"spread is bound to a story part.")
+        f"Could not find the body story in {template_path}: no story uses a body "
+        f"style and no text frame on a spread is bound to a story part.")
+
+
+def _applied_style_count(story_xml: bytes, style_name: str) -> int:
+    """How many paragraphs in a story apply the named style. Matches a paragraph
+    style by its leaf name whether it sits in a group ("Body Text%3abody first")
+    or at the root ("body first")."""
+    xml = story_xml.decode("utf-8", "ignore")
+    pat = (r'AppliedParagraphStyle="[^"]*(?:/|%3a)'
+           + re.escape(style_name) + r'"')
+    return len(re.findall(pat, xml))
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +269,7 @@ def _is_italic(r) -> bool:
 
 def _emit_idml(paras: list[_Para], sheet: StyleSheet, template: Path,
                out: Path) -> None:
-    body_story = discover_body_story(template)
+    body_story = discover_body_story(template, body_style_names(sheet))
     tmp = out.with_suffix(".build")
     if tmp.exists():
         shutil.rmtree(tmp)
@@ -269,8 +302,21 @@ def _ensure_styles(root: Path, sheet: StyleSheet,
     if pgroup is None:
         pgroup = ET.SubElement(rt, "RootParagraphStyleGroup", {"Self": "upsg"})
 
-    style_self: dict[str, str] = {e.get("Name"): e.get("Self")
-                                  for e in rt.iter("ParagraphStyle")}
+    # Index the template's styles by name so the house set reuses them rather
+    # than minting duplicates. A style inside a group carries a group-qualified
+    # Name ("Body Text:body first") but the house sheet names the leaf ("body
+    # first"), so index by both — leaf as a fallback, without letting it shadow
+    # an exact full-name match. Without the leaf alias, every grouped house style
+    # would be re-minted and the template's real design (fonts, spacing) lost.
+    style_self: dict[str, str] = {}
+    for e in rt.iter("ParagraphStyle"):
+        name, self_id = e.get("Name"), e.get("Self")
+        if not name:
+            continue
+        style_self[name] = self_id
+        leaf = name.split(":")[-1].strip()
+        if leaf and leaf != name:
+            style_self.setdefault(leaf, self_id)
     fmt_by_name = {s.name: s.format for s in sheet.styles}
     used = {p.style for p in paras if p.style}
     for i, name in enumerate(sorted(used)):
