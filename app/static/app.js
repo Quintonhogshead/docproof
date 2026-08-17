@@ -3748,13 +3748,9 @@ async function loadPromo() {
   }
   fillPromoModels($('promo-model'));
   fillPromoModels($('plan-model'));
-  fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
-  fillPromoModels($('plan-auto-model'), 'Use the DocWatch model');
   renderPromoPanelCost();
   renderPlanCost();
   await refreshPromoJobs();
-  loadPromoSettings().catch(() => {});
-  loadPlanSettings().catch(() => {});
 }
 
 function fillPromoModels(select, blank) {
@@ -4092,6 +4088,7 @@ function promoDownload(job, which, label) {
 
 async function loadPromoSettings() {
   const s = await api('/api/promo/settings');
+  state.promoSettings = s;
   $('promo-enabled').checked = s.promo_enabled;
   $('promo-ready').value = s.hubspot_promo_ready_value || '';
   $('promo-done').value = s.hubspot_promo_done_value || '';
@@ -4101,6 +4098,7 @@ async function loadPromoSettings() {
     ? '' : `— using the DocWatch model, ${s.fallback_model}`;
   fillPromoModels($('promo-auto-model'), 'Use the DocWatch model');
   $('promo-auto-model').value = s.promo_model || '';
+  if ($('wf-rows')) renderRegistry();
 }
 
 async function savePromoSettings() {
@@ -4124,6 +4122,7 @@ async function savePromoSettings() {
 
 async function loadPlanSettings() {
   const s = await api('/api/promo/plan-settings');
+  state.planSettings = s;
   $('plan-enabled').checked = s.plan_enabled;
   $('plan-property').value = s.hubspot_plan_property || '';
   $('plan-needed').value = s.hubspot_plan_needed_value || '';
@@ -4138,6 +4137,7 @@ async function loadPlanSettings() {
     ? '' : `— using the DocWatch model, ${s.fallback_model}`;
   fillPromoModels($('plan-auto-model'), 'Use the DocWatch model');
   $('plan-auto-model').value = s.plan_model || '';
+  if ($('wf-rows')) renderRegistry();
 }
 
 async function savePlanSettings() {
@@ -4527,6 +4527,19 @@ async function loadWatch({ quiet = false } = {}) {
     } catch (_) { state.watchModels = state.watchModels || []; }
   }
   renderWatch(body, quiet);
+  if (!quiet) {
+    // The workflow settings live behind their own endpoints; load them when the
+    // tab is opened so the registry rows and the drawers reflect what's saved.
+    if (!state.promoModels) {
+      try { state.promoModels = (await api('/api/models')).models; }
+      catch (_) { state.promoModels = state.promoModels || []; }
+    }
+    await Promise.all([
+      loadPromoSettings().catch(() => {}),
+      loadPlanSettings().catch(() => {}),
+    ]);
+  }
+  renderRegistry();
 }
 
 // The inputs are filled only on a deliberate load — opening the tab, or
@@ -4534,6 +4547,7 @@ async function loadWatch({ quiet = false } = {}) {
 // that rewrote the folder field would eat a paste mid-keystroke.
 function renderWatch(body, quiet) {
   const w = body.watch;
+  state.watchStatus = w;
   renderWatchSignIn(body);
   renderWatchRun(body);
   renderWatchBanner(body);
@@ -4798,6 +4812,7 @@ function renderWatchFiles(files) {
     table.append(bodyRow([f.name, f.plain_state,
                           f.uploaded.join(', ') || '—', money(f.cost)]));
   });
+  applyWatchFilesFilter();
 }
 
 function renderWatchPlan(rows) {
@@ -4845,7 +4860,6 @@ $('watch-save').addEventListener('click', async () => {
         prep_output: $('watch-output').value,
         upload_notes: $('watch-notes').checked,
         upload_failure_note: $('watch-failure-note').checked,
-        require_source_label: $('watch-require-label').checked,
       }),
     });
     renderWatch(body);
@@ -6139,5 +6153,307 @@ async function loadAdmin() {
   loadReviewDefaults();
   loadHouseStyle();
 }
+
+// ═══ Automations: the workflow registry ═══════════════════════════════════
+//
+// The Automations tab is a scalable list of "trigger → effect" workflows, not a
+// wall of cards: one row per workflow, a click opens its config drawer, and the
+// list stays scannable as the count grows toward dozens. Today's rows are seeded
+// from a small descriptor model built off the watch status and the promo/plan
+// settings; a new workflow becomes a new descriptor, not new markup.
+
+const wfUI = { search: '', filter: 'all', sort: 'status', selected: null };
+
+function automationWorkflows() {
+  const w = state.watchStatus || {};
+  const ps = state.promoSettings || {};
+  const pl = state.planSettings || {};
+  const folderReady = !!(w.folder_id && w.signed_in);
+  const promoReady = !!(ps.hubspot_enabled && ps.hubspot_promo_ready_value
+                        && ps.hubspot_promo_done_value);
+  const planReady = !!(pl.hubspot_enabled && pl.hubspot_plan_property
+                       && pl.hubspot_plan_needed_value
+                       && pl.hubspot_plan_done_value);
+  return [
+    {
+      id: 'prep', name: 'Format on arrival', sub: 'Prepare new manuscripts',
+      trigger: { text: 'Folder arrival', hs: false }, effect: 'Prep / format',
+      config: 'wf-config-prep', enabled: folderReady, toggleable: false,
+      status: folderReady ? 'on' : 'setup',
+    },
+    {
+      id: 'promo', name: 'Promo copy', sub: 'Teaser + 12 social posts',
+      trigger: {
+        text: ps.hubspot_promo_ready_value
+          ? 'HubSpot: ' + ps.hubspot_promo_ready_value : 'HubSpot status',
+        hs: true,
+      },
+      effect: 'Teaser + posts', config: 'wf-config-promo',
+      enabled: !!ps.promo_enabled, toggleable: true,
+      status: !ps.promo_enabled ? 'off' : (promoReady ? 'on' : 'setup'),
+    },
+    {
+      id: 'plan', name: 'Marketing plan', sub: 'Author-facing plan document',
+      trigger: {
+        text: pl.hubspot_plan_property
+          ? 'HubSpot: ' + pl.hubspot_plan_property + ' = '
+            + (pl.hubspot_plan_needed_value || 'Needed')
+          : 'HubSpot property',
+        hs: true,
+      },
+      effect: 'Plan .docx', config: 'wf-config-plan',
+      enabled: !!pl.plan_enabled, toggleable: true,
+      status: !pl.plan_enabled ? 'off' : (planReady ? 'on' : 'setup'),
+    },
+  ];
+}
+
+const WF_STATUS_LABEL = { on: 'On', setup: 'Needs setup', off: 'Off' };
+const WF_STATUS_ORDER = { setup: 0, on: 1, off: 2 };
+
+function wfLastLook() {
+  const w = state.watchStatus || {};
+  if (!w.last_tick_at) return 'Never';
+  const t = new Date(w.last_tick_at);
+  if (isNaN(t)) return '—';
+  return t.toLocaleString([], { month: 'short', day: 'numeric',
+                                hour: '2-digit', minute: '2-digit' });
+}
+
+function wfNextLook() {
+  const w = state.watchStatus || {};
+  if (w.times && w.times.length) return w.times[0];
+  return w.auto_ticks ? 'On the timer' : 'Manual';
+}
+
+function renderRegistry() {
+  const rowsEl = $('wf-rows');
+  if (!rowsEl) return;
+  let items = automationWorkflows();
+  const q = wfUI.search.trim().toLowerCase();
+  if (q) {
+    items = items.filter((x) =>
+      (x.name + ' ' + x.sub + ' ' + x.trigger.text + ' ' + x.effect)
+        .toLowerCase().includes(q));
+  }
+  if (wfUI.filter !== 'all') items = items.filter((x) => x.status === wfUI.filter);
+  items.sort((a, b) => {
+    if (wfUI.sort === 'name') return a.name.localeCompare(b.name);
+    if (wfUI.sort === 'effect') return a.effect.localeCompare(b.effect);
+    return WF_STATUS_ORDER[a.status] - WF_STATUS_ORDER[b.status]
+      || a.name.localeCompare(b.name);
+  });
+
+  const last = wfLastLook();
+  const next = wfNextLook();
+  rowsEl.innerHTML = '';
+  items.forEach((x) => rowsEl.append(registryRow(x, last, next)));
+  $('wf-empty').hidden = items.length > 0;
+  applyDrawer();
+}
+
+function registryRow(x, last, next) {
+  const tr = document.createElement('tr');
+  tr.dataset.wf = x.id;
+  if (wfUI.selected === x.id) tr.classList.add('selected');
+
+  const tdToggle = document.createElement('td');
+  const tog = document.createElement('button');
+  tog.type = 'button';
+  tog.className = 'wf-toggle' + (x.enabled ? ' on' : '');
+  tog.setAttribute('role', 'switch');
+  tog.setAttribute('aria-checked', x.enabled ? 'true' : 'false');
+  tog.setAttribute('aria-label', (x.enabled ? 'Disable ' : 'Enable ') + x.name);
+  if (x.toggleable) {
+    tog.addEventListener('click', (e) => { e.stopPropagation(); toggleWorkflow(x); });
+  } else {
+    tog.disabled = true;
+    tog.title = 'Runs whenever the folder is connected';
+  }
+  tdToggle.append(tog);
+  tr.append(tdToggle);
+
+  const tdName = document.createElement('td');
+  tdName.className = 'wf-row-name';
+  const b = document.createElement('b'); b.textContent = x.name;
+  const small = document.createElement('small'); small.textContent = x.sub;
+  tdName.append(b, small);
+  tr.append(tdName);
+
+  tr.append(chipCell(x.trigger.text, x.trigger.hs));
+  tr.append(chipCell(x.effect, false));
+
+  const tdLast = document.createElement('td');
+  tdLast.className = 'wf-when'; tdLast.textContent = x.enabled ? last : '—';
+  tr.append(tdLast);
+  const tdNext = document.createElement('td');
+  tdNext.className = 'wf-when'; tdNext.textContent = x.enabled ? next : '—';
+  tr.append(tdNext);
+
+  const tdStatus = document.createElement('td');
+  const pill = document.createElement('span');
+  pill.className = 'pill ' + x.status;
+  pill.textContent = WF_STATUS_LABEL[x.status];
+  tdStatus.append(pill);
+  tr.append(tdStatus);
+
+  tr.addEventListener('click', () => openDrawer(x.id));
+  return tr;
+}
+
+function chipCell(text, hs) {
+  const td = document.createElement('td');
+  const chip = document.createElement('span');
+  chip.className = 'wf-chip' + (hs ? ' hs' : '');
+  chip.textContent = text;
+  td.append(chip);
+  return td;
+}
+
+function openDrawer(id) {
+  wfUI.selected = id;
+  const rows = $('wf-rows');
+  if (rows) {
+    rows.querySelectorAll('tr').forEach((tr) =>
+      tr.classList.toggle('selected', tr.dataset.wf === id));
+  }
+  applyDrawer();
+}
+
+function applyDrawer() {
+  const drawer = $('wf-drawer');
+  const layout = $('wf-layout');
+  if (!drawer || !layout) return;
+  const x = automationWorkflows().find((w) => w.id === wfUI.selected);
+  ['wf-config-prep', 'wf-config-promo', 'wf-config-plan'].forEach((cid) => {
+    const el = $(cid); if (el) el.hidden = !(x && cid === x.config);
+  });
+  drawer.hidden = !x;
+  layout.classList.toggle('with-drawer', !!x);
+  if (x) {
+    $('wf-drawer-title').textContent = x.name;
+    $('wf-drawer-sub').textContent = x.trigger.text + ' → ' + x.effect;
+  }
+}
+
+async function toggleWorkflow(x) {
+  try {
+    if (x.id === 'promo') {
+      await api('/api/promo/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ promo_enabled: !x.enabled }),
+      });
+      await loadPromoSettings();
+    } else if (x.id === 'plan') {
+      await api('/api/promo/plan-settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_enabled: !x.enabled }),
+      });
+      await loadPlanSettings();
+    }
+  } catch (e) {
+    const note = $(x.id === 'promo' ? 'promo-settings-status'
+                                    : 'plan-settings-status');
+    if (note) { note.hidden = false; note.textContent = e.message; }
+  }
+}
+
+// The Automations sub-tabs (Workflows / Connection / History), the same
+// roving-tabindex pattern the Settings screen uses.
+(function initAutoTabs() {
+  const tabs = $('auto-tabs');
+  const panels = $('auto-panels');
+  if (!tabs || !panels) return;
+  const btns = () => [...tabs.querySelectorAll('.subtab')];
+  function activate(btn, focus) {
+    btns().forEach((b) => {
+      const on = b === btn;
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+    panels.querySelectorAll('.tabpanel').forEach((p) =>
+      p.classList.toggle('is-active', p.dataset.tab === btn.dataset.tab));
+    if (focus) btn.focus();
+  }
+  tabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.subtab');
+    if (btn) activate(btn, false);
+  });
+  tabs.addEventListener('keydown', (e) => {
+    const list = btns();
+    const i = list.indexOf(document.activeElement);
+    if (i < 0) return;
+    let j = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') j = (i + 1) % list.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') j = (i - 1 + list.length) % list.length;
+    else if (e.key === 'Home') j = 0;
+    else if (e.key === 'End') j = list.length - 1;
+    if (j < 0) return;
+    e.preventDefault();
+    activate(list[j], true);
+  });
+  window.__activateAutoTab = (name) => {
+    const btn = tabs.querySelector(`[data-tab="${name}"]`);
+    if (btn) activate(btn, false);
+  };
+})();
+
+// The registry's search / filter / sort, and the drawer close.
+$('wf-search').addEventListener('input', () => {
+  wfUI.search = $('wf-search').value; renderRegistry();
+});
+$('wf-sort').addEventListener('change', () => {
+  wfUI.sort = $('wf-sort').value; renderRegistry();
+});
+$('wf-filters').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  wfUI.filter = btn.dataset.filter;
+  $('wf-filters').querySelectorAll('button').forEach((b) =>
+    b.classList.toggle('active', b === btn));
+  renderRegistry();
+});
+$('wf-drawer-close').addEventListener('click', () => {
+  wfUI.selected = null;
+  const rows = $('wf-rows');
+  if (rows) rows.querySelectorAll('tr').forEach((tr) => tr.classList.remove('selected'));
+  applyDrawer();
+});
+
+// The Format-on-arrival drawer: the prep filter saves its own slice, and a
+// shortcut jumps to the rest of prep's settings under Connection.
+$('wf-prep-save').addEventListener('click', async () => {
+  const button = $('wf-prep-save');
+  const note = $('wf-prep-note');
+  note.hidden = true; button.disabled = true;
+  try {
+    const body = await api('/api/watch', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ require_source_label: $('watch-require-label').checked }),
+    });
+    renderWatch(body);
+    watchNote(note, 'Saved.', 'ok');
+  } catch (err) {
+    watchNote(note, err.message, 'error');
+  } finally { button.disabled = false; }
+});
+$('wf-prep-connection').addEventListener('click', () => {
+  if (window.__activateAutoTab) window.__activateAutoTab('connection');
+});
+
+// History: filter the runs table by book name or status, so it stays usable as
+// the list grows.
+function applyWatchFilesFilter() {
+  const input = $('watch-files-filter');
+  const table = $('watch-files');
+  if (!input || !table) return;
+  const q = input.value.trim().toLowerCase();
+  const rows = [...table.querySelectorAll('tr')];
+  rows.forEach((tr, idx) => {
+    if (idx === 0) return;               // the header row always stays
+    tr.hidden = !!q && !tr.textContent.toLowerCase().includes(q);
+  });
+}
+$('watch-files-filter').addEventListener('input', applyWatchFilesFilter);
 
 boot();
