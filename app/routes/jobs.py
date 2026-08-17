@@ -275,6 +275,8 @@ def _edits_to_corrections_json(edits) -> str:
     rows = []
     for e in edits:
         row = {"find": e.find, "replace": e.replace}
+        if e.context:
+            row["context"] = e.context     # keeps the anchor across review→apply
         if e.instruction:
             row["instruction"] = e.instruction
         if e.kind != "mechanical":         # model.MECHANICAL

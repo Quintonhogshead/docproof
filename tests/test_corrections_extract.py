@@ -196,6 +196,22 @@ def test_a_prose_list_is_extracted_into_edits():
     assert usage.output_tokens == 40
 
 
+def test_an_extracted_context_scopes_the_edit(tmp_path):
+    """The model can return a context anchor for a repeated word; it flows
+    through to the edit and lands it on the one place the anchor names."""
+    provider = _canned([
+        {"find": "runs on", "replace": "rambles on", "context": "it also runs on",
+         "instruction": "", "kind": "mechanical", "occurrence": 0}])
+    result = extract_edits("a comment on the footnote line", provider,
+                           model="m", usage=Usage())
+    assert result.edits[0].context == "it also runs on"
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, list(result.edits))
+    assert report.applied == 1
+    assert "rambles on" in story_text(out)[5]                 # footnote, not table
+    assert story_text(out, "uff")[0].endswith("it runs on.")
+
+
 def test_the_extractor_reuses_the_parse_contract_for_bad_entries():
     """A model that returns an unanchorable entry has it flagged, not dropped —
     the same 'flag, never guess' contract a typed list gets."""

@@ -47,6 +47,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "kind": ("kind", "type", "category"),
     "occurrence": ("occurrence", "occ", "nth", "instance"),
     "id": ("id", "ref", "identifier"),
+    "context": ("context", "near", "within", "around"),
 }
 
 
@@ -163,6 +164,7 @@ def _parse_entry(entry: Any, index: int):
     find = _field(entry, "find")
     replace = _field(entry, "replace")
     instruction = _field(entry, "instruction")
+    context = _field(entry, "context")
     raw_kind = _field(entry, "kind")
     raw_occ = _field(entry, "occurrence")
     raw_id = _field(entry, "id")
@@ -177,7 +179,8 @@ def _parse_entry(entry: Any, index: int):
         return ParseIssue(index, f"occurrence {raw_occ!r} is not a whole number "
                           "≥ 0", entry)
 
-    fields = _assemble(find, replace, instruction, kind, occ, index, entry)
+    fields = _assemble(find, replace, instruction, kind, occ, index, entry,
+                       context=context)
     if isinstance(fields, ParseIssue):
         return fields
     explicit_id = str(raw_id).strip() if raw_id not in (None, "") else None
@@ -201,15 +204,18 @@ def _parse_sequence(entry, index: int):
     return fields, None
 
 
-def _assemble(find, replace, instruction, kind, occ, index, raw):
+def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None):
     """Validate the text fields common to both entry shapes and build the kwargs
     for `Edit` (no id). Returns a dict or a `ParseIssue`."""
     if find is not None and not isinstance(find, str):
         return ParseIssue(index, "find is not text", raw)
     if replace is not None and not isinstance(replace, str):
         return ParseIssue(index, "replace is not text", raw)
+    if context is not None and not isinstance(context, str):
+        return ParseIssue(index, "context is not text", raw)
     find = find or ""
     replace = replace or ""
+    context = context or ""
     instruction = "" if instruction is None else str(instruction)
 
     if kind == DESIGN:
@@ -228,7 +234,7 @@ def _assemble(find, replace, instruction, kind, occ, index, raw):
                               "the surrounding text)", raw)
 
     return {"find": find, "replace": replace, "instruction": instruction,
-            "kind": kind, "occurrence": occ}
+            "kind": kind, "occurrence": occ, "context": context}
 
 
 def _field(entry: dict, canonical: str):

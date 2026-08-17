@@ -41,34 +41,79 @@ def _find_all(haystack: str, needle: str) -> list[int]:
     return out
 
 
+def _candidates(edit: Edit, stories: list[Story]) -> list:
+    """Every (story, paragraph, offset) where this edit's `find` lands.
+
+    With a context anchor, `find` is located *inside* each occurrence of the
+    context — so a common word is pinned to the instance whose surrounding text
+    the correction named, not to all of them. Without one, `find` is located
+    directly, as before. A context that does not itself contain `find` yields no
+    candidate there; the caller diagnoses that."""
+    out = []
+    if edit.context:
+        clen = len(edit.context)
+        for s in stories:
+            for p in s.paragraphs:
+                for c_off in all_occurrences(p.text, edit.context):
+                    within = all_occurrences(p.text[c_off:c_off + clen], edit.find)
+                    if within:
+                        out.append((s, p, c_off + within[0]))
+    else:
+        for s in stories:
+            for p in s.paragraphs:
+                for off in all_occurrences(p.text, edit.find):
+                    out.append((s, p, off))
+    return out
+
+
 def _match(edit: Edit, stories: list[Story]):
     """Locate the edit across all stories. Returns (story, paragraph, offset) to
     apply, or an EditOutcome describing why it could not be applied."""
-    matches = [(s, p, off)
-               for s in stories
-               for p in s.paragraphs
-               for off in all_occurrences(p.text, edit.find)]
+    matches = _candidates(edit, stories)
     n = len(matches)
     if n == 0:
-        # Distinguish "not there at all" from "there, but across a paragraph
-        # break" — the latter is the specific thing corrections must refuse. A
-        # human writes such a find with a space where the break is, so the story
-        # is flattened with a space between paragraphs to catch it.
-        for s in stories:
-            flat = " ".join(p.text for p in s.paragraphs)
-            if all_occurrences(flat, edit.find):
-                return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
-                                   detail="the text spans a paragraph break")
-        return EditOutcome(edit, NOT_FOUND, occurrences=0)
+        return _diagnose_miss(edit, stories)
     if edit.occurrence == 0:
         if n > 1:
+            anchor = "context" if edit.context else "text"
             return EditOutcome(edit, AMBIGUOUS, occurrences=n,
-                               detail=f"appears {n} times; no occurrence given")
+                               detail=f"the {anchor} appears {n} times; no "
+                                      f"occurrence given")
         return matches[0]
     if edit.occurrence > n:
         return EditOutcome(edit, NOT_FOUND, occurrences=n,
                            detail=f"asked for #{edit.occurrence} of {n}")
     return matches[edit.occurrence - 1]
+
+
+def _diagnose_miss(edit: Edit, stories: list[Story]):
+    """Why an edit found nowhere to land — told apart so the flag is useful. A
+    span that straddles a paragraph break is the specific thing corrections must
+    refuse; a story is flattened with a space between paragraphs to catch it."""
+    if edit.context:
+        # The context was the anchor, so diagnose it. If the context is present
+        # but did not contain `find`, that is the mismatch to name; otherwise the
+        # context itself is missing or spans a break.
+        for s in stories:
+            for p in s.paragraphs:
+                if all_occurrences(p.text, edit.context):
+                    return EditOutcome(
+                        edit, NOT_FOUND, story_id=s.story_id,
+                        detail="the context was found but the text to change was "
+                               "not inside it")
+        for s in stories:
+            flat = " ".join(p.text for p in s.paragraphs)
+            if all_occurrences(flat, edit.context):
+                return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
+                                   detail="the context spans a paragraph break")
+        return EditOutcome(edit, NOT_FOUND, occurrences=0,
+                           detail="the context was not found")
+    for s in stories:
+        flat = " ".join(p.text for p in s.paragraphs)
+        if all_occurrences(flat, edit.find):
+            return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
+                               detail="the text spans a paragraph break")
+    return EditOutcome(edit, NOT_FOUND, occurrences=0)
 
 
 def apply_to_stories(stories: list[Story],

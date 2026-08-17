@@ -43,6 +43,7 @@ class ExtractionError(RuntimeError):
 class _ExtractedEdit(BaseModel):
     find: str
     replace: str
+    context: str = ""
     instruction: str = ""
     kind: Literal["mechanical", "judgment", "design"] = "mechanical"
     occurrence: int = 0
@@ -67,6 +68,13 @@ artifact.
 - replace: the corrected text. Use an empty string for a pure deletion. For an \
 insertion, set find to the existing text around the insertion point and put that \
 same text plus the new words in replace.
+- context: when find is a short or common phrase that may appear more than once \
+in the book, set context to a longer VERBATIM run of the surrounding text (the \
+sentence or line the correction is attached to) that contains find exactly once. \
+The edit is then located inside this context, so it lands on the intended spot — \
+the one the mark was on — not another copy elsewhere. Leave context empty when \
+find is already unique. Copy it verbatim from the same line as find, repairing \
+only obvious extraction artifacts.
 - instruction: the human note the correction came from, verbatim, for the report.
 - kind: "mechanical" for a clear text change with one right answer; "judgment" \
 when a person should decide (a vague or stylistic note, or one you cannot turn \

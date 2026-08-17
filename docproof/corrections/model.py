@@ -31,6 +31,14 @@ class Edit:
     instruction: str = ""              # the human note, for the report
     kind: str = MECHANICAL
     occurrence: int = 0                # 0 = require uniqueness; N = the Nth
+    # An optional verbatim anchor that must contain `find`. When given, `find` is
+    # located *inside* the context rather than across the whole book, so a common
+    # word ("harbor") lands on the intended instance — the one whose surrounding
+    # line the correction was attached to. This is how a page-anchored correction
+    # is scoped: an IDML has no pages, but the line the mark sat on is text, and
+    # text is what the book has. `occurrence` then disambiguates the context, not
+    # the find.
+    context: str = ""
 
     @property
     def is_deletion(self) -> bool:

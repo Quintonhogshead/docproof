@@ -112,6 +112,52 @@ def test_an_occurrence_number_picks_one_of_several(tmp_path):
     assert story_text(out, "uff")[0].endswith("it runs on.")  # table left alone
 
 
+def test_a_context_anchor_pins_a_repeated_find_to_one_place(tmp_path):
+    """"runs on" is in the footnote and in the table. A context anchor — the
+    line the correction sat on — lands it on the footnote and leaves the table
+    alone, without needing to count occurrences."""
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="runs on", replace="rambles on",
+             context="it also runs on")])
+    assert report.applied == 1
+    assert "rambles on" in story_text(out)[5]                 # footnote changed
+    assert story_text(out, "uff")[0].endswith("it runs on.")  # table untouched
+
+
+def test_a_context_that_does_not_contain_the_find_is_flagged(tmp_path):
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="zebra", replace="x", context="it also runs on")])
+    assert report.applied == 0
+    assert report.outcomes[0].status == NOT_FOUND
+    assert "not inside" in report.outcomes[0].detail
+
+
+def test_a_context_that_is_not_in_the_document_is_flagged(tmp_path):
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="runs on", replace="x",
+             context="nowhere near this book at all")])
+    assert report.outcomes[0].status == NOT_FOUND
+
+
+def test_a_context_across_a_paragraph_break_is_refused(tmp_path):
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="forever", replace="x",
+             context="forever. She opened")])
+    assert report.outcomes[0].status == CROSSES_PARAGRAPH
+
+
+def test_a_clean_apply_with_a_context_verifies_clean(tmp_path):
+    edits = [Edit(id="e1", find="runs on", replace="rambles on",
+                  context="it also runs on")]
+    out = tmp_path / "out.idml"
+    apply_edits(LAYOUT, out, edits)
+    assert verify(LAYOUT, out, edits).clean
+
+
 def test_a_span_across_a_paragraph_break_is_refused(tmp_path):
     """"forever. She" reaches from one paragraph into the next. Allowing it
     would let a replacement swallow the paragraph mark — the exact merge failure
@@ -255,6 +301,15 @@ def test_field_aliases_are_understood():
     assert (result.edits[0].find, result.edits[0].replace) == ("colour", "color")
     assert (result.edits[1].find, result.edits[1].replace) == ("grey", "gray")
     assert result.edits[1].instruction == "US spelling"
+
+
+def test_a_context_anchor_is_parsed_and_aliased():
+    result = parse_edits([
+        {"find": "harbor", "replace": "harbour", "context": "the harbor lights"},
+        {"find": "grey", "replace": "gray", "near": "the grey sky"}])
+    assert result.ok
+    assert result.edits[0].context == "the harbor lights"
+    assert result.edits[1].context == "the grey sky"      # alias "near"
 
 
 def test_a_json_string_is_parsed():
