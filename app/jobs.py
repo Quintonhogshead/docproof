@@ -862,10 +862,11 @@ class JobRunner:
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:
             cfg.prep.outputs = PREP_OUTPUTS.get(job.prep_output, ["book"])
-            # The watched folder hands back a plain reading copy — Times New
-            # Roman, US Letter, no ornaments — where the app's manual book
-            # output keeps the Atmosphere paperback sketch. Same "book" writer,
-            # a different interior design, swapped in for DocWatch runs only.
+            # The book output is a plain reading copy by default — Times New
+            # Roman, 12pt, US Letter, no ornaments — for manual runs and the
+            # watched folder alike. The watched folder keeps its own design
+            # field so it stays plain even if the app's default is later pointed
+            # at the Atmosphere paperback sketch; same "book" writer either way.
             if job.source == "watch":
                 cfg.prep.book_design = cfg.prep.watch_book_design
         return cfg

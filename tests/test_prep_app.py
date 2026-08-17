@@ -116,19 +116,18 @@ def test_the_output_toggle_decides_which_files_are_written(client):
 
 
 def test_the_book_output_writes_the_reading_copy(client):
-    """The book-styled sketch: written, verified, downloadable, and the job
-    record carries the operator's answers the file was built with."""
-    job = start_prep(client, upload(client)["id"], output="book",
-                     prep_subject="fantasy", prep_title="Witch in the Wall",
-                     prep_author="Quinn Hogshead")
+    """The book output is a plain reading copy — written, verified, downloadable.
+    It is the plain manuscript by default (Times New Roman 12pt), which reads no
+    subject or title, so none is detected; the subject-driven paperback design is
+    exercised in test_prep_book."""
+    job = start_prep(client, upload(client)["id"], output="book")
     assert job["state"] == "done", job.get("error")
     assert job["verified"] is True
     results = Path(job["results_dir"])
     assert (results / "book_googledoc.docx").is_file()
     assert not (results / "tagged_googledoc.idml").exists()
-    # The merged answers the sketch was built with, for the panel.
-    assert job["prep_book"]["subject"] == "fantasy"
-    assert job["prep_book"]["title"] == "Witch in the Wall"
+    # The plain design needs no subject/title/author, so none is detected.
+    assert job["prep_book"] == {}
 
     r = client.get(f"/api/jobs/{job['id']}/file/book")
     assert r.status_code == 200
@@ -138,7 +137,6 @@ def test_the_book_output_writes_the_reading_copy(client):
     # And the notes screen reports the book deliverable present.
     notes = client.get(f"/api/jobs/{job['id']}/prep").json()
     assert notes["files"]["book"] is True
-    assert notes["book"]["subject"] == "fantasy"
 
 
 def test_an_unknown_prep_output_is_refused(client):
@@ -506,9 +504,10 @@ def test_a_job_record_from_before_prep_existed_still_loads(client):
 
 # --- which interior a prep run uses -------------------------------------------
 
-def test_watch_prep_swaps_in_the_plain_manuscript_design(tmp_path):
-    """A watched-folder prep hands back the plain manuscript; the app's own
-    prep keeps the paperback sketch. Same 'book' output, different interior."""
+def test_prep_book_output_defaults_to_the_plain_manuscript(tmp_path):
+    """The book output is the plain manuscript by default — a manual run and the
+    watched folder alike. The watched folder keeps its own design field so it
+    stays plain even if the app's default is later pointed at the paperback."""
     store = JobStore(Paths(tmp_path).ensure())
     runner = JobRunner(store, Settings(), config_path=CONFIG)
     base = dict(filename="simple.docx",
@@ -519,4 +518,5 @@ def test_watch_prep_swaps_in_the_plain_manuscript_design(tmp_path):
     manual = store.save(Job(id="a1", source="app", **base))
     assert (runner.config_for(watched).prep.book_design
             == "prep/book_manuscript.yaml")
-    assert runner.config_for(manual).prep.book_design == "prep/book_design.yaml"
+    assert (runner.config_for(manual).prep.book_design
+            == "prep/book_manuscript.yaml")

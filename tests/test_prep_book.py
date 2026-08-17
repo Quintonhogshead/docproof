@@ -40,7 +40,11 @@ META = BookMeta(subject="fantasy", title="Witch in the Wall",
 
 @pytest.fixture
 def cfg():
-    return load_config(CONFIG)
+    # The shipped default book design is the plain manuscript now; this file's
+    # ornament tests are about the Atmosphere paperback sketch, so point at it.
+    c = load_config(CONFIG)
+    c.prep.book_design = "prep/book_design.yaml"
+    return c
 
 
 @pytest.fixture
@@ -58,7 +62,19 @@ def run_book(cfg, prepared, tmp_path, meta=META):
 
 # --- the design file ----------------------------------------------------------
 
-def test_the_shipped_design_loads_and_knows_its_subjects(cfg):
+def test_the_default_book_design_is_the_plain_manuscript():
+    """A manual run hands back a plain Times New Roman 12pt manuscript by
+    default — no ornaments, no display faces. The paperback sketch is the
+    opt-in alternate."""
+    default = load_config(CONFIG)                 # untouched by the cfg fixture
+    design = load_book_design(CONFIG_DIR / default.prep.book_design)
+    assert design.fonts["body"].family == "Times New Roman"
+    assert design.display_styles == ()
+    assert design.drop_caps.lines == 0
+    assert not design.running_heads.enabled
+
+
+def test_the_paperback_design_loads_and_knows_its_subjects(cfg):
     design = load_book_design(CONFIG_DIR / cfg.prep.book_design)
     assert "fantasy" in design.subject_choices
     assert design.subject("fantasy").family == "IM FELL English"
@@ -198,9 +214,10 @@ def test_a_missing_meta_defaults_to_the_file_name(cfg, prepared, tmp_path):
 
 @pytest.fixture
 def plain_cfg(cfg):
-    """The config as DocWatch runs it: the plain manuscript design in place of
-    the app's paperback sketch."""
-    cfg.prep.book_design = cfg.prep.watch_book_design
+    """The plain manuscript design — the shipped default, and what both a manual
+    run and the watched folder hand back. (The `cfg` fixture forced the paperback
+    design for the ornament tests, so put the plain one back.)"""
+    cfg.prep.book_design = "prep/book_manuscript.yaml"
     return cfg
 
 
@@ -211,7 +228,7 @@ def plain_prepared(plain_cfg):
 
 
 def test_the_manuscript_design_is_plain_letter_times_new_roman(cfg):
-    design = load_book_design(CONFIG_DIR / cfg.prep.watch_book_design)
+    design = load_book_design(CONFIG_DIR / "prep" / "book_manuscript.yaml")
     assert (design.page.width, design.page.height) == (8.5, 11)
     assert not design.page.mirror
     assert not design.running_heads.enabled       # no author/title band

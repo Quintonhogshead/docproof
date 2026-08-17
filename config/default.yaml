@@ -33,9 +33,9 @@ skip:
 prep:
   style_sheet: prep/house_styles.yaml
   tagging_prompt: prep/tagging.yaml
-  book_design: prep/book_design.yaml  # the interior look of the book output
+  book_design: prep/book_manuscript.yaml  # book output default: plain manuscript, TNR 12, US Letter (prep/book_design.yaml is the paperback alternate)
   indesign_template: prep/house_template.idml  # the IDML the "indesign" output fills
-  watch_book_design: prep/book_manuscript.yaml  # DocWatch's plain reading copy: TNR 12, US Letter, no ornaments
+  watch_book_design: prep/book_manuscript.yaml  # DocWatch's reading copy, kept plain independently of book_design
   max_paragraphs_per_window: 120   # one request per window
   token_budget: 6000               # ...whichever limit comes first
   context_paragraphs: 8            # already-labelled paragraphs sent for continuity

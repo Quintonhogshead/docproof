@@ -117,20 +117,23 @@ class PrepConfig(BaseModel):
     tagging_prompt: str = "prep/tagging.yaml"
     # The interior design for the book output: page geometry, faces, running
     # heads, drop caps, and the subject-matter display fonts. Like the style
-    # sheet, a file — a different look is a different YAML.
-    book_design: str = "prep/book_design.yaml"
+    # sheet, a file — a different look is a different YAML. The default is the
+    # plain manuscript — Times New Roman, 12pt, US Letter, no ornaments — so a
+    # manual run hands back a clean reading copy; the Atmosphere paperback sketch
+    # (prep/book_design.yaml) is the richer alternate, chosen by pointing this
+    # at it.
+    book_design: str = "prep/book_manuscript.yaml"
     # The house InDesign template the "indesign" output flows the book into,
     # as IDML — trim, margins, master pages and the primary text frame. Like the
     # style sheet, a file: a different house look is a different template. The
     # paragraph styles themselves are written in from the style sheet, so a bare
     # template needs only the geometry.
     indesign_template: str = "prep/house_template.idml"
-    # DocWatch's own interior. The watched folder hands back a plain reading
-    # copy — Times New Roman, 12pt, US Letter, no running heads, no drop caps,
-    # no display faces — rather than the paperback sketch the app's manual book
-    # output uses. Swapped in for `book_design` on watched-folder prep only (see
-    # JobRunner.config_for); the app's `book` output is untouched. Another
-    # basic-but-different look is a different YAML.
+    # DocWatch's own interior, kept separate so the watched folder always hands
+    # back the plain reading copy even if `book_design` above is later pointed at
+    # a richer look. It happens to be the same plain manuscript that is now the
+    # default; swapped in for `book_design` on watched-folder prep (see
+    # JobRunner.config_for). Another basic-but-different look is a different YAML.
     watch_book_design: str = "prep/book_manuscript.yaml"
     # A window is one request. The paragraph cap is what keeps the model from
     # skipping entries in a long list; the token budget is what keeps a window

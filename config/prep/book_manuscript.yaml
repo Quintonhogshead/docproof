@@ -1,24 +1,24 @@
-# DocWatch's plain reading copy — "as basic as can be."
+# The plain reading copy — "as basic as can be."
 #
-# This is the interior DocWatch hands back to the watched folder: a manuscript
-# in the plainest possible dress. Times New Roman, 12 point, US Letter, one-inch
-# margins, a centered page number at the foot, no running heads, no drop caps,
-# no subject-matter display faces. Nearly everything on the page is the same
+# The default interior for the book output: a manuscript in the plainest
+# possible dress. Times New Roman, 12 point, US Letter, one-inch margins, a
+# centered page number at the foot, no running heads, no drop caps, no
+# subject-matter display faces. Nearly everything on the page is the same
 # 12-point body face; chapter titles are 14-point, and the only other
 # distinctions are bold, italic, centering and a page break before a chapter.
 #
-# It is the same shape of file as book_design.yaml (the app's Atmosphere
-# paperback sketch) and is read by the same code — it simply switches every
-# ornament off. The app's manual "book" output is unaffected: this file is
-# swapped in for watched-folder prep only (config.py `watch_book_design`,
-# JobRunner.config_for). To change what DocWatch hands back, edit this file (or
-# drop a replacement into the prep override directory) — no code changes.
+# It is the same shape of file as book_design.yaml (the Atmosphere paperback
+# sketch) and is read by the same code — it simply switches every ornament off.
+# A manual run and the watched folder both hand this back by default; point
+# `book_design` (config.py / default.yaml) at book_design.yaml for the richer
+# paperback look. To change what this hands back, edit this file (or drop a
+# replacement into the prep override directory) — no code changes.
 #
 # Measurements: page/margins in inches, everything else in points.
 # `line` is a line-spacing multiple (1.0 = single).
 
 version: 1
-name: DocWatch plain manuscript
+name: Plain manuscript
 
 page:
   width: 8.5

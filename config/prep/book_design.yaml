@@ -1,4 +1,6 @@
-# The book look for the "book" prep output.
+# The Atmosphere paperback look for the "book" prep output — the richer
+# alternate to the plain-manuscript default (prep/book_manuscript.yaml). Point
+# `book_design` (config.py / default.yaml) here to hand back this look instead.
 #
 # THIS FILE IS THE INTERIOR DESIGN. The book output is a reading copy for the
 # author and the developmental editors — a sketch of the finished Atmosphere
