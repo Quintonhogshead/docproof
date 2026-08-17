@@ -564,6 +564,21 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
                  author)
         report.waiting += 1
         return
+
+    # When the house convention is enforced, only "<surname> - Book Original" is
+    # the book to prepare — the surname the author's own HubSpot record carries.
+    # A draft or a developmental copy in the same folder is left alone, not
+    # guessed at, so the label is what says "this is the one".
+    if ws.require_source_label:
+        labelled = [f for f in manuscripts if naming.is_source_name(f.name, last)]
+        if not labelled:
+            log.info("Waiting: %s is flagged ready but no manuscript is named "
+                     "'%s - %s' yet (%d other manuscript(s) in the folder).",
+                     author, last, naming.SOURCE_STAGE, len(manuscripts))
+            report.waiting += 1
+            return
+        manuscripts = labelled
+
     if len(manuscripts) > 1:
         reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
                   f"folder, so DocProof cannot tell which is the book to do.")
@@ -582,7 +597,14 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         rec.subfolder_id = subfolder_id
         rec.subfolder_name = author
         state.record(rec)
-    listing.extend(contents)              # manuscript and its outputs
+    # run_prep preps every new manuscript in the listing without gating again in
+    # subfolder mode, so only the chosen book may ride along — a rival manuscript
+    # the label filter set aside must not. Everything that is not a new
+    # manuscript (the book's outputs) stays, so orphan and OUTPUT logic still
+    # works. With the filter off a single manuscript reached here anyway, so this
+    # keeps the same contents it always did.
+    listing.extend(f for f in contents if f.id == book.id
+                   or classify(f) is not Stage.NEW_MANUSCRIPT)
     routes[book.id] = subfolder_id
 
 

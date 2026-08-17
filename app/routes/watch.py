@@ -42,6 +42,9 @@ class WatchUpdate(BaseModel):
     prep_output: str | None = None       # indesign | tracked | both
     upload_notes: bool | None = None
     upload_failure_note: bool | None = None
+    # Subfolder mode's one book-to-book knob (the mode itself is CLI-set):
+    # prepare only "<surname> - Book Original" in each author's folder.
+    require_source_label: bool | None = None
     # Bounds so a slip in the UI cannot spend a morning's worth of manuscripts
     # in one pass, or set a clock that never stops going off.
     max_files_per_tick: int | None = Field(default=None, ge=1, le=50)
@@ -155,6 +158,7 @@ def register(app: FastAPI) -> None:
             except ValueError as e:
                 raise HTTPException(400, str(e)) from None
         for name in ("upload_notes", "upload_failure_note",
+                     "require_source_label",
                      "max_files_per_tick", "auto_ticks", "tick_every_minutes",
                      "archive_enabled", "archive_include_source"):
             value = getattr(update, name)

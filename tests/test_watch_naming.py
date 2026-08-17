@@ -40,3 +40,21 @@ def test_only_the_stage_token_is_replaced_not_a_surname_that_echoes_it():
 ])
 def test_is_output_name_knows_the_stage_token(name, want):
     assert naming.is_output_name(name) is want
+
+
+# --- is_source_name -----------------------------------------------------------
+
+@pytest.mark.parametrize("name,last,want", [
+    ("Grest - Book Original.docx", "Grest", True),        # the intake file
+    ("grest  -  book original.docx", "Grest", True),      # case & spacing drift
+    ("Grest - Book Original.docx", "GREST", True),        # surname case drift
+    ("St Denis - Book Original.docx", "St Denis", True),  # a spaced surname
+    ("Grest - book 0.docx", "Grest", False),              # the deliverable, not it
+    ("Grest - Draft.docx", "Grest", False),              # a draft, not it
+    ("Grest - Book Original.docx", "Smith", False),       # wrong surname
+    ("Book Original.docx", "Grest", False),               # no surname in the name
+    ("Grest - Book Original.docx", "", False),            # no surname to match
+    ("Grest - Book Original.docx", "   ", False),         # blank surname
+])
+def test_is_source_name_matches_only_the_authors_intake_file(name, last, want):
+    assert naming.is_source_name(name, last) is want

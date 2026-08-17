@@ -163,6 +163,14 @@ def test_a_pass_that_would_do_too_much_at_once_is_refused(client):
                       json={"max_files_per_tick": 500}).status_code == 422
 
 
+def test_require_source_label_can_be_set_from_the_panel(client):
+    body = client.put("/api/watch", json={"require_source_label": True}).json()
+
+    assert WatchSettings.load(client.home).require_source_label is True
+    # And it comes back in the payload the panel reads, so the box reflects it.
+    assert body["watch"]["require_source_label"] is True
+
+
 def test_both_clocks_can_be_set_from_the_panel(client):
     client.put("/api/watch", json={"auto_ticks": True,
                                    "tick_every_minutes": 30})

@@ -1115,6 +1115,38 @@ def test_two_manuscripts_in_a_subfolder_is_left_for_a_person(tmp_path, provider)
     assert report.needs_human
 
 
+def test_require_source_label_prepares_only_the_book_original(tmp_path, provider):
+    """With the label required, "<surname> - Book Original" is the book and a
+    draft beside it is ignored — so a folder that would otherwise be too
+    ambiguous to touch is prepared cleanly."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Book Original.docx"),
+                         "m-2": in_sub("Johnson - Draft Two.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson - Book Original.docx"]
+    assert not report.needs_human
+
+
+def test_require_source_label_waits_when_only_a_draft_is_present(tmp_path, provider):
+    """The labelled intake file is not there yet, so the ready author waits —
+    it is not a person's problem, and no draft is prepared by mistake."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson - Draft Two.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert report.waiting >= 1 and not report.needs_human
+
+
 def test_a_dry_run_in_subfolder_mode_writes_no_state(tmp_path, provider):
     ws = sub_ws()
     opener = fake_drive({SUB: author_folder("Quinton Johnson"),

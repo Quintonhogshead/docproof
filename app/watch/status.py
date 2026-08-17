@@ -68,6 +68,12 @@ def status(home: str | Path, *, get_key=None,
         "prep_output": ws.prep_output,
         "upload_notes": ws.upload_notes,
         "upload_failure_note": ws.upload_failure_note,
+        # Subfolder mode is set up from the CLI, but the web panel surfaces the
+        # one knob inside it that a person changes book to book — whether to
+        # prepare only "<surname> - Book Original" — so it also needs to know the
+        # mode is on to decide whether to show it.
+        "subfolders_enabled": ws.subfolders_enabled,
+        "require_source_label": ws.require_source_label,
         "max_files_per_tick": ws.max_files_per_tick,
         "auto_ticks": ws.auto_ticks,
         "tick_every_minutes": ws.tick_every_minutes,
