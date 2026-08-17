@@ -578,9 +578,17 @@
             <button type="button" id="extract-pdf">Read the PDF</button>
             <small class="muted">Each comment and highlight is read together with
               the line it points at and turned into a draft edit by the house
-              model — you review it below before anything is applied.</small>
+              model — you review it below before anything is applied. A proof with
+              hundreds of marks is read in batches, so the edits fill in as they
+              come.</small>
           </label>
-          <p class="muted small" id="corrections-extract-note" hidden></p>
+          <div class="extract-status" id="corrections-extract-status" hidden
+               aria-live="polite">
+            <p class="extract-note" id="corrections-extract-note"></p>
+            <div class="extract-progress" id="corrections-extract-progress" hidden>
+              <div class="extract-progress-bar" id="corrections-extract-bar"></div>
+            </div>
+          </div>
 
           <label class="field">
             <span>The corrections to apply

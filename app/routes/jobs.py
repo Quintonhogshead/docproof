@@ -134,6 +134,14 @@ class JobRequest(BaseModel):
 # the small cost. The redlined-Word path is deterministic and uses no model at all.
 CORRECTIONS_EXTRACT_MODEL = "gpt-5.6-luna"
 
+# How many marked-up comments to read in one model call. A proof can carry
+# hundreds; reading them all at once overruns the model's output ceiling and
+# truncates, silently losing every edit. A bounded batch keeps each call small,
+# fast and safe — and gives the panel something to show progress against. The
+# panel reads the batches back and extracts them one at a time so the reviewer
+# watches the count climb instead of a single long, silent wait.
+CORRECTIONS_PDF_BATCH_SIZE = 40
+
 
 class ExtractListRequest(BaseModel):
     """A free-form corrections list to read into a draft edit list."""
@@ -317,11 +325,9 @@ def _record_extract_spend(app, owner: str, model: str, usage: Usage) -> None:
         log.warning("Could not record corrections-extraction spend", exc_info=True)
 
 
-def _extract_with_model(app, owner: str, source_text: str) -> dict:
-    """Read a corrections source (a prose list, or the text pulled from a PDF's
-    comments) into a draft edit list with Luna, recording the small spend. The
-    shared body of the list and PDF extract endpoints."""
-    from docproof.corrections.extract import ExtractionError, extract_edits
+def _build_extract_provider():
+    """The Luna provider the corrections extractor runs on, or a 400 the caller
+    surfaces when no key is set. Shared by the single-source and batched paths."""
     cfg = load_config(CONFIG_PATH)
     model = CORRECTIONS_EXTRACT_MODEL
     cfg.api.model = model                     # so build_provider builds the OpenAI client
@@ -332,10 +338,35 @@ def _extract_with_model(app, owner: str, source_text: str) -> dict:
             400, "No API key is set for the extraction model "
                  f"({info.display if info else model}). Paste the corrections as "
                  "JSON, or upload a redlined Word file instead.")
-    provider = build_provider(cfg, api_key=key)
+    return build_provider(cfg, api_key=key), model
+
+
+def _extract_with_model(app, owner: str, source_text: str) -> dict:
+    """Read a corrections source (a prose list, or the text pulled from a PDF's
+    comments) into a draft edit list with Luna, recording the small spend. The
+    shared body of the list and PDF extract endpoints."""
+    from docproof.corrections.extract import ExtractionError, extract_edits
+    provider, model = _build_extract_provider()
     usage = Usage()
     try:
         result = extract_edits(source_text, provider, model=model, usage=usage)
+    except ExtractionError as e:
+        raise HTTPException(502, f"The model could not read that: {e}")
+    _record_extract_spend(app, owner, model, usage)
+    return _extract_response(result)
+
+
+def _extract_batches_with_model(app, owner: str, sources: list[str]) -> dict:
+    """Read a set of bounded corrections sources (the batches of a marked-up PDF)
+    into one draft edit list, one model call per batch so no call can truncate.
+    Every batch's spend is rolled into one ledger entry. Used by the server-side
+    `extract-pdf` fallback; the panel drives the same batches itself (via
+    `read-pdf` + `extract-list`) so the reviewer sees the count climb live."""
+    from docproof.corrections.extract import ExtractionError, extract_edits_batched
+    provider, model = _build_extract_provider()
+    usage = Usage()
+    try:
+        result = extract_edits_batched(sources, provider, model=model, usage=usage)
     except ExtractionError as e:
         raise HTTPException(502, f"The model could not read that: {e}")
     _record_extract_spend(app, owner, model, usage)
@@ -1071,16 +1102,13 @@ def register(app: FastAPI) -> None:
             raise HTTPException(400, "Paste the corrections list to read.")
         return _extract_with_model(app, owner, req.text)
 
-    @app.post("/api/corrections/extract-pdf")
-    async def extract_corrections_pdf(
-            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
-        """Read a commented PDF proof into a draft edit list.
-
-        Deterministic reading (pypdf pulls each comment and the manuscript text
-        it points at); Luna then turns each pair into an exact edit, reviewed by
-        a person before it is applied. A flattened or scanned proof carries no
-        comment layer and is turned away rather than guessed at."""
-        from docproof.corrections.from_pdf import pdf_corrections_source
+    async def _read_pdf_comments_or_400(file: UploadFile) -> list:
+        """The comments read off an uploaded PDF proof, or a 400 the caller
+        surfaces: a wrong file type, an unreadable file, or a proof with no
+        comment layer at all (flattened or scanned). Deterministic — pypdf only,
+        no model and no cost. Shared by the batched panel read and the
+        server-side extract fallback."""
+        from docproof.corrections.from_pdf import read_pdf_comments
         name = Path(file.filename or "proof.pdf").name
         if not name.lower().endswith(".pdf"):
             raise HTTPException(400, "Upload a PDF proof with comments.")
@@ -1089,7 +1117,7 @@ def register(app: FastAPI) -> None:
         try:
             tmp.write_bytes(data)
             try:
-                source, comments = pdf_corrections_source(tmp)
+                comments = read_pdf_comments(tmp)
             except Exception as e:         # noqa: BLE001 - an unreadable upload
                 raise HTTPException(400, f"Could not read {name}: {e}")
         finally:
@@ -1099,7 +1127,43 @@ def register(app: FastAPI) -> None:
                 400, f"No comments found in {name}. The corrections have to be "
                      "PDF comments or highlights — a flattened or scanned proof "
                      "has no comment layer to read.")
-        return _extract_with_model(app, owner, source)
+        return comments
+
+    @app.post("/api/corrections/read-pdf")
+    async def read_corrections_pdf(
+            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+        """Read a marked-up PDF proof's comments and hand back the batches to
+        turn into edits — deterministic, instant, no model and no cost.
+
+        This is the first half of the panel's read: pypdf pulls every comment and
+        the manuscript line it points at, and the comments are split into bounded
+        batches. The panel then reads each batch into edits (via `extract-list`),
+        showing the count climb as it goes, so a proof with hundreds of marks
+        fills in steadily instead of hanging on one long, silent — and, past the
+        model's output ceiling, truncating — call."""
+        from docproof.corrections.from_pdf import comments_source_batches
+        comments = await _read_pdf_comments_or_400(file)
+        batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
+        return {"count": len(comments), "batches": batches}
+
+    @app.post("/api/corrections/extract-pdf")
+    async def extract_corrections_pdf(
+            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+        """Read a commented PDF proof into a draft edit list, in one request.
+
+        Deterministic reading (pypdf pulls each comment and the manuscript text
+        it points at); Luna then turns each pair into an exact edit, reviewed by
+        a person before it is applied. A flattened or scanned proof carries no
+        comment layer and is turned away rather than guessed at.
+
+        The comments are read in bounded batches — one model call each — so a
+        proof with hundreds of marks cannot overrun the output ceiling and
+        truncate. The panel prefers `read-pdf` + `extract-list` for live progress;
+        this stays as the single-request path for other callers."""
+        from docproof.corrections.from_pdf import comments_source_batches
+        comments = await _read_pdf_comments_or_400(file)
+        batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
+        return _extract_batches_with_model(app, owner, batches)
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:
