@@ -91,6 +91,45 @@ def test_per_run_features_reach_the_run_config(runner):
     assert cfg.rewrite.enabled is True
 
 
+def test_per_run_category_knobs_reach_the_run_config(runner):
+    """A per-category passes / chunk-size dialed on the panel reaches the run's
+    error_type_specs, the way the smoothing dials reach cfg.smoothing."""
+    store, r = runner
+    cid = next(c["id"] for c in load_config(CONFIG).category_states()
+               if "compound_sentence_comma" in c["keys"])
+    cfg = r.config_for(_job(store, category_knobs={
+        cid: {"passes": 2, "token_budget": 1800}}))
+    spec = next(s for s in cfg.error_type_specs
+                if "compound_sentence_comma" in s.keys)
+    assert spec.passes == 2 and spec.token_budget == 1800
+    # only the dialed category moves; the rest keep the shipped plan
+    assert all(s.passes == 1 and s.token_budget is None
+               for s in cfg.error_type_specs
+               if "compound_sentence_comma" not in s.keys)
+
+
+def test_a_record_without_category_knobs_keeps_the_shipped_plan(runner):
+    """No knobs (older records, the watcher, an untouched panel) leaves the
+    per-category plan exactly as shipped: every category read once at the global
+    chunk size."""
+    store, r = runner
+    job = _job(store)
+    assert job.category_knobs == {}
+    cfg = r.config_for(job)
+    assert all(s.passes == 1 and s.token_budget is None
+               for s in cfg.error_type_specs)
+
+
+def test_continuity_only_discards_category_knobs(runner):
+    """Knobs land before the continuity-only reset, so "only" still means only:
+    the run strips error_types even when a knob was set."""
+    store, r = runner
+    cid = load_config(CONFIG).category_states()[0]["id"]
+    cfg = r.config_for(_job(store, continuity_only=True,
+                            category_knobs={cid: {"passes": 3}}))
+    assert cfg.error_types == []
+
+
 def test_a_feature_toggle_can_turn_a_pass_or_safety_net_off(runner):
     store, r = runner
     cfg = r.config_for(_job(store, features={"adjudicate": False, "audit": False}))

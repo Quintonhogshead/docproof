@@ -1257,6 +1257,7 @@ async function loadFeatures() {
   try {
     const body = await api('/api/features');
     state.features = body.features || [];
+    state.categories = body.categories || [];
     if (body.rounds) {
       // Prefill the rounds default and the judge-prompt placeholder. The
       // placeholder (not the value) carries the built-in default, so an
@@ -1287,8 +1288,10 @@ async function loadFeatures() {
     }
   } catch (_) {
     state.features = [];               // panel stays empty; the review still runs
+    state.categories = [];
   }
   renderFeatures();
+  renderCategoryKnobs();
 }
 
 function syncRounds() {
@@ -1399,6 +1402,68 @@ function collectFeatures() {
   const out = {};
   document.querySelectorAll('.features input[data-feature]')
     .forEach((el) => { out[el.dataset.feature] = el.checked; });
+  return out;
+}
+
+// The per-category tuning rows: each defined category gets a "reads" and a
+// "chunk" number input, pre-filled by placeholder with the shipped default so a
+// blank field means "leave it". collectCategoryKnobs() reads only the fields the
+// user actually filled, so an untouched panel sends {}.
+function renderCategoryKnobs() {
+  const host = $('category-knobs');
+  if (!host) return;
+  host.innerHTML = '';
+  const cats = state.categories || [];
+  const field = $('category-knobs-field');
+  if (field) field.hidden = !cats.length;
+  cats.forEach((c) => {
+    const row = document.createElement('div');
+    row.className = 'knob-row';
+    row.dataset.categoryId = c.id;
+    const label = document.createElement('span');
+    label.className = 'knob-label';
+    label.textContent = (c.names || c.keys).join(', ');
+    row.append(
+      label,
+      knobInput('reads', 'knob-passes', c.passes, `Reads for ${label.textContent}`),
+      knobInput('chunk', 'knob-budget', c.token_budget || c.default_token_budget,
+                `Chunk size for ${label.textContent}`));
+    host.append(row);
+  });
+}
+
+// One captioned number input for a knob row. Its placeholder carries the shipped
+// default, so a field left blank sends nothing and keeps that default.
+function knobInput(caption, cls, placeholder, aria) {
+  const wrap = document.createElement('label');
+  wrap.className = 'knob-input';
+  const tag = document.createElement('small');
+  tag.className = 'muted';
+  tag.textContent = caption;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.className = cls;
+  input.placeholder = String(placeholder);
+  input.setAttribute('aria-label', aria);
+  input.addEventListener('change', renderCost);
+  wrap.append(tag, input);
+  return wrap;
+}
+
+// The {category_id: {passes?, token_budget?}} map the run sends. Reads only the
+// fields the user filled (a blank keeps the shipped default), so an untouched
+// panel sends {} — a no-op the server leaves alone.
+function collectCategoryKnobs() {
+  const out = {};
+  document.querySelectorAll('#category-knobs .knob-row').forEach((row) => {
+    const knob = {};
+    const passes = row.querySelector('.knob-passes').value.trim();
+    const budget = row.querySelector('.knob-budget').value.trim();
+    if (passes !== '') knob.passes = Number(passes);
+    if (budget !== '') knob.token_budget = Number(budget);
+    if (Object.keys(knob).length) out[row.dataset.categoryId] = knob;
+  });
   return out;
 }
 
@@ -2239,6 +2304,7 @@ $('start').addEventListener('click', async () => {
           effort: effortValue(),
           glossary_model: $('glossary-model').value,
           features: collectFeatures(),
+          category_knobs: collectCategoryKnobs(),
           rounds: Number($('rounds').value),
           judge_prompt: $('judge-prompt').value,
           judge_model: ($('judge-model') || {}).value || null,
