@@ -159,6 +159,28 @@ def test_a_pass_with_only_a_stuck_ready_still_emails():
     assert notify.summary(report) is not None
 
 
+def test_the_summary_counts_the_successful_jobs_across_stages():
+    report = TickReport()
+    report.needs_human.append(("Smith.docx", "two Projects are ready"))
+    report.prepped += ["Alpha.docx", "Bravo.docx"]   # formatting
+    report.promoted += ["Charlie.docx"]              # promo copy
+    report.planned += ["Delta.docx"]                 # marketing plan
+
+    _, body = notify.summary(report)
+
+    # 2 + 1 + 1 = 4, and uploaded outputs must not inflate it.
+    assert "4 job(s) completed successfully" in body
+
+
+def test_the_success_tally_reads_zero_when_only_a_flag_fired():
+    report = TickReport()
+    report.missing_source.append(("Quinton Johnson", "no Book Original yet."))
+
+    _, body = notify.summary(report)
+
+    assert "0 job(s) completed successfully" in body
+
+
 # --- maybe_notify -------------------------------------------------------------
 
 def test_maybe_notify_sends_when_configured_and_a_person_is_needed():

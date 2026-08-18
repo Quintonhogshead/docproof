@@ -82,7 +82,13 @@ def summary(report) -> tuple[str, str] | None:
     flagged ready with no Book Original in the folder — rides along too, so a
     file that needs uploading or renaming is seen the same morning; and a
     `stuck_ready` — a book already formatted whose HubSpot status never moved —
-    so a stalled record is caught rather than sitting ready forever."""
+    so a stalled record is caught rather than sitting ready forever.
+
+    The body closes with the pass's success tally — how many jobs finished
+    cleanly (formatting, promo and plan together) — so an alert about a handful
+    of stragglers is read against the scale of the pass rather than in a vacuum:
+    "two need a look" lands differently beside twelve that went through than
+    beside none."""
     if not (report.needs_human or report.failed or report.missing_source
             or report.stuck_ready):
         return None
@@ -111,10 +117,17 @@ def summary(report) -> tuple[str, str] | None:
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
              + len(report.stuck_ready) + len(report.failed))
+    # Successful jobs across all three stages. Each list is appended to only once
+    # the job reached "done" (see tick.run_prep / run_promo / run_plans), and a
+    # book is never in two stages in one pass, so the sum is a true job count with
+    # no double-counting. `uploaded` is deliberately left out: it is one entry per
+    # delivered output, not per job.
+    succeeded = len(report.prepped) + len(report.promoted) + len(report.planned)
     subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
-            "\n\nThe rest of the pass went on as usual.")
+            f"\n\nThe rest of the pass went on as usual — {succeeded} "
+            f"job(s) completed successfully.")
     return subject, body
 
 
