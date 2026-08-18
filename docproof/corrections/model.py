@@ -14,6 +14,18 @@ MECHANICAL = "mechanical"     # a text swap with one right answer
 JUDGMENT = "judgment"         # needs a human eye even if it anchors
 DESIGN = "design"             # a layout request — not a text edit at all
 
+# Character formatting an edit can ask for, and the IDML attributes that express it.
+# "Italicize this" is not a layout request: it is a property of a run of text, which
+# an IDML carries on the CharacterStyleRange around it — so it is appliable, and
+# routing it to a designer was leaving real work undone on every proof. "roman"
+# clears a local italic rather than writing a second override over it.
+FORMAT_ITALIC = "italic"
+FORMAT_ROMAN = "roman"
+FORMATS: dict[str, dict[str, str | None]] = {
+    FORMAT_ITALIC: {"FontStyle": "Italic"},
+    FORMAT_ROMAN: {"FontStyle": None},
+}
+
 
 @dataclass(frozen=True)
 class Edit:
@@ -44,10 +56,25 @@ class Edit:
     # — applied, flagged, or nothing at all. Empty for a typed list with no
     # comment behind it, or an edit a reviewer added by hand during review.
     source: str = ""
+    # The 1-based page of the proof the correction was marked on; 0 when unknown
+    # (a typed list). An IDML has no pages, so this is not a location on its own —
+    # a page map (see `pagemap`) turns it into the run of book text that page set,
+    # and `apply` then narrows a repeated `find` to that run. This is what stops a
+    # mark on "," having six thousand places in the book to land.
+    page: int = 0
+    # Character formatting to apply to `find` instead of rewriting it — one of
+    # `FORMATS`. The text is untouched, so `replace` equals `find` on such an edit
+    # and the usual "find == replace, nothing to do" shortcut must not swallow it.
+    format: str = ""
 
     @property
     def is_deletion(self) -> bool:
         return self.replace == "" and self.find != ""
+
+    @property
+    def is_format(self) -> bool:
+        """Whether this edit styles its span rather than rewriting it."""
+        return bool(self.format)
 
 
 # Outcome statuses for a single edit.
@@ -59,6 +86,7 @@ NO_CHANGE = "no_change"            # find == replace, nothing to do
 ROUTED_TO_DESIGN = "routed_to_design"     # a design request, not a text edit
 OVERLAPS = "overlaps"              # its span collides with an edit already applied
 WITHHELD = "withheld"             # the sanity gate held it back for a human
+UNSTYLEABLE = "unstyleable"       # the span's text is not held by a character range
 
 
 @dataclass(frozen=True)
@@ -80,7 +108,8 @@ class EditOutcome:
     def needs_human(self) -> bool:
         """The edit did not land cleanly and someone has to look."""
         return self.status in (NOT_FOUND, AMBIGUOUS, CROSSES_PARAGRAPH,
-                               ROUTED_TO_DESIGN, OVERLAPS, WITHHELD)
+                               ROUTED_TO_DESIGN, OVERLAPS, WITHHELD,
+                               UNSTYLEABLE)
 
 
 @dataclass(frozen=True)
@@ -178,6 +207,12 @@ class ReviewChange:
     after: str
     edit_ids: tuple[str, ...] = ()
     instruction: str = ""              # the reviewer note(s), when the edits had any
+    # The character formatting applied here, when that is what changed. A formatting
+    # edit rewrites no text, so the before and after lines read identically — and
+    # without this the row would look like a change that did not happen, or be
+    # dropped as one. It is still the row a designer needs: the italics have to be
+    # confirmed to have landed on the right words.
+    formatting: str = ""
 
 
 @dataclass(frozen=True)

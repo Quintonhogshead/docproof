@@ -31,6 +31,12 @@ dependencies = [
     # corrections live in — not just the page text. No OCR, so a scanned proof
     # yields nothing and is reported as such rather than guessed at.
     "pypdf>=5.0",
+    # The page geometry for the same proof: exact per-word bounding boxes, so a
+    # highlight resolves to the words under it by intersecting rectangles instead
+    # of estimating glyph advances from a font's /Widths (which drifts across
+    # justified text and silently anchors a mark to the wrong words). MIT, and
+    # pure-Python on top of pdfminer.six — no AGPL, unlike PyMuPDF.
+    "pdfplumber>=0.11",
 ]
 
 [project.optional-dependencies]

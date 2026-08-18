@@ -27,6 +27,9 @@ FLAG_TITLES = {
     "ambiguous": "The text appears more than once",
     "crosses_paragraph": "The change would span a paragraph break",
     "routed_to_design": "A layout request, not a text edit",
+    "overlaps": "Two corrections land on the same words",
+    "withheld": "Held back by the sanity check",
+    "unstyleable": "The formatting could not be applied here",
 }
 
 VERIFY_TITLES = {
@@ -47,13 +50,16 @@ DISP_TITLES = {
 def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  apply: ApplyReport | None, verify: VerifyReport,
                  comments: tuple[CommentDisposition, ...] = (),
-                 deterministic: bool = True) -> tuple[Path, Path]:
+                 deterministic: bool = True,
+                 pages: tuple[int, int] = (0, 0)) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
     return their paths. `deterministic` is False when the opt-in sanity gate ran —
-    a model call — so the report does not over-claim being model-free."""
+    a model call — so the report does not over-claim being model-free. `pages` is
+    `(placed, total)` from the page map, reported so a run whose page narrowing
+    silently did not happen says so."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
-                       deterministic=deterministic)
+                       deterministic=deterministic, pages=pages)
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -64,8 +70,9 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
-             deterministic=True) -> dict:
+             deterministic=True, pages=(0, 0)) -> dict:
     needs_human = [c for c in comments if c.needs_human]
+    placed, total = pages
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -108,7 +115,8 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         "changes": [
             {"story_id": c.story_id, "paragraph": c.paragraph,
              "before": c.before, "after": c.after,
-             "edit_ids": list(c.edit_ids), "instruction": c.instruction}
+             "edit_ids": list(c.edit_ids), "instruction": c.instruction,
+             "formatting": c.formatting}
             for c in verify.changes],
         # One row per reviewer comment — the ledger that makes sure none is lost.
         # `total` and `unresolved` are the honest headline: how many marks came in,
@@ -118,14 +126,24 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             "unresolved": len(needs_human),
             "items": [_comment(c) for c in comments],
         },
+        # How much of the proof the page map placed in the book. A page it could
+        # not place is one whose marks had the whole book to land in, which is the
+        # difference between an edit that applies and one that is flagged — so it
+        # is reported rather than left to be inferred from a flag count.
+        "pages": {"placed": placed, "total": total},
     }
 
 
 def _outcome(o) -> dict:
-    return {"id": o.edit.id, "status": o.status, "find": o.edit.find,
-            "replace": o.edit.replace, "instruction": o.edit.instruction,
-            "story_id": o.story_id, "paragraph": o.paragraph,
-            "occurrences": o.occurrences, "detail": o.detail}
+    row = {"id": o.edit.id, "status": o.status, "find": o.edit.find,
+           "replace": o.edit.replace, "instruction": o.edit.instruction,
+           "story_id": o.story_id, "paragraph": o.paragraph,
+           "occurrences": o.occurrences, "detail": o.detail}
+    # A formatting edit leaves the text alone, so find and replace read as
+    # identical; saying which formatting it applied is what makes the row legible.
+    if o.edit.format:
+        row["format"] = o.edit.format
+    return row
 
 
 def _comment(c: CommentDisposition) -> dict:
@@ -177,6 +195,20 @@ def _markdown(d: dict) -> str:
         if verify["structure_changed"]:
             headline.append("paragraph count changed")
         L.append("**" + ", ".join(headline) + ".** See below.\n")
+
+    pages = d.get("pages") or {"placed": 0, "total": 0}
+    if pages["total"]:
+        if pages["placed"] == pages["total"]:
+            L.append(f"Every one of the {pages['total']} proof pages was located "
+                     f"in the book, so each mark was matched against the text its "
+                     f"own page set.\n")
+        else:
+            missed = pages["total"] - pages["placed"]
+            L.append(f"**{pages['placed']} of {pages['total']} proof pages** were "
+                     f"located in the book. Marks on the other {missed} had the "
+                     f"whole book to match against, so a repeated word or a bare "
+                     f"comma among them will have been flagged rather than "
+                     f"applied.\n")
 
     issues = d["parse"]["issues"]
     if issues:
@@ -243,10 +275,21 @@ def _markdown(d: dict) -> str:
                      + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
                         else ""))
             L.append(f"- {where}:")
+            if c.get("formatting") and c["before"] == c["after"]:
+                # Formatting rewrites no text, so a before/after pair would read as
+                # a change that did not happen. Say what changed instead, and show
+                # the line so the words it landed on can be confirmed.
+                L.append(f"  - set {c['formatting']}: "
+                         f"“{_preview(c['after'], 300)}”"
+                         + (f" — reviewer: “{_preview(c['instruction'])}”"
+                            if c.get("instruction") else ""))
+                continue
             L.append(f"  - was: “{_preview(c['before'], 300)}”")
             L.append(f"  - now: “{_preview(c['after'], 300)}”"
                      + (f" — reviewer: “{_preview(c['instruction'])}”"
-                        if c.get("instruction") else ""))
+                        if c.get("instruction") else "")
+                     + (f" — also set {c['formatting']}"
+                        if c.get("formatting") else ""))
         L.append("")
 
     L.append("## Verification\n")

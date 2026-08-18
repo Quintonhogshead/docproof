@@ -17,8 +17,9 @@ from pathlib import Path
 from ..validator import fold_punct
 from .idml import Paragraph, Story, read_stories, rewrite_stories
 from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
-                    Edit, EditOutcome, NO_CHANGE, NOT_FOUND, OVERLAPS,
-                    ROUTED_TO_DESIGN, WITHHELD)
+                    Edit, EditOutcome, FORMATS, NO_CHANGE, NOT_FOUND, OVERLAPS,
+                    ROUTED_TO_DESIGN, UNSTYLEABLE, WITHHELD)
+from .textmatch import IndexCache, NormIndex, normalize
 
 # Consonant-lettered words that take "an" because they open on a vowel sound (a
 # silent h). Kept short and high-confidence; anything not here follows its first
@@ -32,17 +33,69 @@ _AN_H_WORDS = ("hour", "honest", "honor", "honour", "heir", "heirloom", "homage"
 _A_VOWEL_WORDS = ("one", "once", "oneself", "onetime")
 
 
-def all_occurrences(haystack: str, needle: str) -> list[int]:
-    """Every start offset of `needle` in `haystack`. Exact first; if that finds
-    nothing, a punctuation-folded retry whose offsets still index `haystack`
-    (the fold never changes a string's length)."""
+def all_spans(haystack: str, needle: str, *, cache: IndexCache | None = None,
+              partial_words: bool = False) -> list[tuple[int, int]]:
+    """Every real `(start, end)` span of `haystack` that carries `needle`.
+
+    Three tiers, each tried only when the one before it found nothing, so an
+    anchor that already matches is located exactly as it always was:
+
+      1. exact;
+      2. the length-preserving punctuation fold (curly quotes, dashes, nbsp);
+      3. the normalized view — whitespace and hyphens dropped as well — which is
+         what bridges the differences between the typeset PDF an anchor was
+         quoted from and the IDML it has to land in (`. ’` for `.’`, a word
+         broken over a line end, a spaced em dash).
+
+    The span is returned rather than a start offset because tier 3 can match a
+    run of a different length than the needle, and it is the *real* characters
+    that get overwritten. `partial_words` allows a tier-3 match to clip a word in
+    half; it is off for the text an edit replaces (`conces-`, a word truncated at
+    a line break, must not overwrite the first six letters of "concession") and
+    on for a context anchor, which only ever narrows and never overwrites."""
     if not needle:
         return []
     hits = _find_all(haystack, needle)
     if hits:
-        return hits
+        return [(s, s + len(needle)) for s in hits]
     folded = _find_all(fold_punct(haystack), fold_punct(needle))
-    return folded
+    if folded:
+        return [(s, s + len(needle)) for s in folded]
+    idx = cache.get(haystack) if cache is not None else NormIndex(haystack)
+    spans = idx.spans(needle)
+    if partial_words:
+        return spans
+    probe = normalize(needle)
+    return [sp for sp in spans if _whole_words(haystack, sp, probe)]
+
+
+# Characters that continue a word for the tier-3 boundary check. The apostrophes
+# are here because "wouldn’t" is one word, so a match ending at "wouldn" has cut
+# one in half exactly as a match ending mid-"concession" would.
+_WORDISH = "'’"
+
+
+def _whole_words(text: str, span: tuple[int, int], probe: str) -> bool:
+    """Whether a normalized match sits on word boundaries — i.e. it did not clip
+    a longer word down to a prefix or suffix of itself. Only the ends that are
+    themselves word characters are checked; an anchor that starts on punctuation
+    is free to begin mid-word."""
+    start, end = span
+
+    def wordish(ch: str) -> bool:
+        return ch.isalnum() or ch in _WORDISH
+
+    if probe[:1].isalnum() and start > 0 and wordish(text[start - 1]):
+        return False
+    if probe[-1:].isalnum() and end < len(text) and wordish(text[end]):
+        return False
+    return True
+
+
+def all_occurrences(haystack: str, needle: str) -> list[int]:
+    """Every start offset of `needle` in `haystack` — `all_spans` read as start
+    offsets, for callers that only need to know whether and where it is."""
+    return [s for s, _ in all_spans(haystack, needle)]
 
 
 def _find_all(haystack: str, needle: str) -> list[int]:
@@ -53,80 +106,110 @@ def _find_all(haystack: str, needle: str) -> list[int]:
     return out
 
 
-def _direct_candidates(edit: Edit, stories: list[Story]) -> list:
-    """Every (story, paragraph, offset) where `find` occurs directly, ignoring any
-    context anchor. This is the set a bare find matches against — and the fallback
-    a context narrows, or that recovers an edit when the context fails to land."""
+def _direct_candidates(edit: Edit, stories: list[Story],
+                       cache: IndexCache) -> list:
+    """Every (story, paragraph, start, end) where `find` occurs directly, ignoring
+    any context anchor. This is the set a bare find matches against — and the
+    fallback a context narrows, or that recovers an edit when the context fails to
+    land."""
     out = []
     for s in stories:
         for p in s.paragraphs:
-            for off in all_occurrences(p.text, edit.find):
-                out.append((s, p, off))
+            for start, end in all_spans(p.text, edit.find, cache=cache):
+                out.append((s, p, start, end))
     return out
 
 
-def _scoped_candidates(edit: Edit, stories: list[Story]) -> list:
-    """Every place `find` lands *inside* an occurrence of the context anchor, so a
+def _narrow_to_context(edit: Edit, candidates: list, cache: IndexCache) -> list:
+    """The candidates that fall inside an occurrence of the context anchor, so a
     common word is pinned to the instance whose surrounding line the correction
-    named, not to all of them. Empty when the context is not present verbatim — the
-    longer run caught an extraction artifact or a re-wrap the fold cannot bridge —
-    or when it does not itself contain `find`; the caller then falls back to `find`
-    alone or diagnoses the miss."""
-    out = []
-    clen = len(edit.context)
-    for s in stories:
-        for p in s.paragraphs:
-            for c_off in all_occurrences(p.text, edit.context):
-                within = all_occurrences(p.text[c_off:c_off + clen], edit.find)
-                if within:
-                    out.append((s, p, c_off + within[0]))
-    return out
+    named. At most one per occurrence of the context — the first copy inside the
+    marked run — since that run is what the reviewer's mark covered.
+
+    Empty when the context is nowhere to be found (even normalized) or when no
+    copy of `find` lies inside it; the caller then keeps the wider set."""
+    kept, seen = [], set()
+    for story, para, start, end in candidates:
+        for c0, c1 in all_spans(para.text, edit.context, cache=cache,
+                                partial_words=True):
+            if c0 <= start and end <= c1:
+                key = (story.story_id, para.index, c0)
+                if key not in seen:
+                    seen.add(key)
+                    kept.append((story, para, start, end))
+                break
+    return kept
 
 
-def _match(edit: Edit, stories: list[Story]):
-    """Locate the edit across all stories. Returns (story, paragraph, offset) to
-    apply, or an EditOutcome describing why it could not be applied.
+def _narrow_to_page(edit: Edit, candidates: list, scope) -> list:
+    """The candidates that lie on the page the correction was marked on.
 
-    A context anchor only ever *chooses* among repeated copies of `find`; it is
-    never a second thing that must independently be present. So when a context is
-    given but does not resolve — its verbatim line is not in the book because the
-    longer run caught an extraction artifact or a re-wrap — the edit falls back to
-    `find` alone rather than being lost to "the context was not found": a `find`
-    that is unique needs no disambiguation and still lands, an `occurrence` the
-    correction named still picks among the copies, and only a genuinely repeated
-    `find` with neither is left for a human — because then the very anchor that
-    would have chosen is the part that failed, a choice to surface, not to guess."""
+    This is the narrowing an IDML could not do before — a book file has no pages,
+    so a mark on page 49 had the whole book to land in, and a `find` of "," had
+    six thousand places to be. `scope` maps a proof's page back to the run of book
+    text it set, so the same mark now chooses among the handful of commas on that
+    one page."""
+    if scope is None or not edit.page or not scope.knows(edit.page):
+        return []
+    return [c for c in candidates
+            if scope.contains(edit.page, c[0].story_id, c[1].index, c[2], c[3])]
+
+
+def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None):
+    """Locate the edit across all stories. Returns (story, paragraph, start, end)
+    to apply, or an EditOutcome describing why it could not be applied.
+
+    Every copy of `find` in the book is the starting set, and each anchor the
+    correction carries — the page it was marked on, the line it was marked in —
+    only ever *narrows* that set. Neither is a second thing that must
+    independently be present: an anchor that fails to resolve is dropped and the
+    wider set is kept, so a correction is never lost to a page map that could not
+    place a page or a context line that caught an extraction artifact. Only a
+    `find` still repeated after every anchor it carries has been applied is left
+    for a human, and the flag then says which anchor failed to choose — a choice
+    to surface, not to guess."""
+    candidates = _direct_candidates(edit, stories, cache)
+    if not candidates:
+        return _diagnose_miss(edit, stories, cache)
+    failed: list[str] = []
+
+    where = ""
+    on_page = _narrow_to_page(edit, candidates, scope)
+    if on_page:
+        candidates = on_page
+        where = f" on page {edit.page}"
+    elif edit.page and scope is not None:
+        failed.append(f"the page {edit.page} it was marked on"
+                      if scope.knows(edit.page)
+                      else f"the page {edit.page} it was marked on "
+                           f"(which could not be placed in the book)")
+
     if edit.context:
-        matches = _scoped_candidates(edit, stories)
-        if not matches:
-            direct = _direct_candidates(edit, stories)
-            if not direct:
-                return _diagnose_miss(edit, stories)
-            if edit.occurrence == 0 and len(direct) > 1:
-                return EditOutcome(
-                    edit, AMBIGUOUS, occurrences=len(direct),
-                    detail=f"the text appears {len(direct)} times and the marked "
-                           f"context that would choose between them was not found")
-            matches = direct        # a unique find, or an occurrence to honour
-    else:
-        matches = _direct_candidates(edit, stories)
-    n = len(matches)
-    if n == 0:
-        return _diagnose_miss(edit, stories)
+        in_context = _narrow_to_context(edit, candidates, cache)
+        if in_context:
+            candidates = in_context
+        else:
+            failed.append("the marked context")
+
+    n = len(candidates)
     if edit.occurrence == 0:
         if n > 1:
-            anchor = "context" if edit.context else "text"
-            return EditOutcome(edit, AMBIGUOUS, occurrences=n,
-                               detail=f"the {anchor} appears {n} times; no "
-                                      f"occurrence given")
-        return matches[0]
+            if failed:
+                detail = (f"the text appears {n} times{where} and "
+                          + " and ".join(failed)
+                          + " could not choose between them")
+            else:
+                detail = (f"the text appears {n} times{where}; nothing in the "
+                          f"correction chooses between them")
+            return EditOutcome(edit, AMBIGUOUS, occurrences=n, detail=detail)
+        return candidates[0]
     if edit.occurrence > n:
         return EditOutcome(edit, NOT_FOUND, occurrences=n,
                            detail=f"asked for #{edit.occurrence} of {n}")
-    return matches[edit.occurrence - 1]
+    return candidates[edit.occurrence - 1]
 
 
-def _diagnose_miss(edit: Edit, stories: list[Story]):
+def _diagnose_miss(edit: Edit, stories: list[Story], cache: IndexCache):
     """Why an edit found nowhere to land — told apart so the flag is useful. A
     span that straddles a paragraph break is the specific thing corrections must
     refuse; a story is flattened with a space between paragraphs to catch it."""
@@ -136,14 +219,15 @@ def _diagnose_miss(edit: Edit, stories: list[Story]):
         # context itself is missing or spans a break.
         for s in stories:
             for p in s.paragraphs:
-                if all_occurrences(p.text, edit.context):
+                if all_spans(p.text, edit.context, cache=cache,
+                             partial_words=True):
                     return EditOutcome(
                         edit, NOT_FOUND, story_id=s.story_id,
                         detail="the context was found but the text to change was "
                                "not inside it")
         for s in stories:
             flat = " ".join(p.text for p in s.paragraphs)
-            if all_occurrences(flat, edit.context):
+            if all_spans(flat, edit.context, cache=cache, partial_words=True):
                 return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
                                    detail="the context spans a paragraph break")
         # Reached only once the fallback to `find` alone has also come up empty,
@@ -153,7 +237,7 @@ def _diagnose_miss(edit: Edit, stories: list[Story]):
                                   "was found in the book")
     for s in stories:
         flat = " ".join(p.text for p in s.paragraphs)
-        if all_occurrences(flat, edit.find):
+        if all_spans(flat, edit.find, cache=cache):
             return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
                                detail="the text spans a paragraph break")
     return EditOutcome(edit, NOT_FOUND, occurrences=0)
@@ -246,7 +330,7 @@ class _Touched:
 
 
 def apply_to_stories(stories: list[Story], edits: list[Edit], *,
-                     withheld: dict[str, str] | None = None
+                     withheld: dict[str, str] | None = None, scope=None
                      ) -> tuple[list[EditOutcome], set[str]]:
     """Apply edits to already-parsed stories, mutating them in place. Returns
     the per-edit outcomes and the set of changed story ids. The in-memory core
@@ -254,14 +338,27 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
 
     `withheld` maps an edit id to the reason a pre-apply sanity gate held it back;
     such an edit is never applied and comes back as a `WITHHELD` outcome for a
-    human, so the gate's decision is surfaced, not silent."""
+    human, so the gate's decision is surfaced, not silent. `scope` is an optional
+    page map (see `pagemap`) that narrows each edit to the run of book text the
+    page it was marked on set."""
     outcomes: list[EditOutcome] = []
     changed: set[str] = set()
     touched = _Touched()
+    cache = IndexCache()
     withheld = withheld or {}
     for edit in edits:
         if edit.id in withheld:
             outcomes.append(EditOutcome(edit, WITHHELD, detail=withheld[edit.id]))
+            continue
+        # A formatting edit is checked before the design branch and before the
+        # no-op one: it changes no text, so both would otherwise swallow it — the
+        # first as a layout request to hand to a designer, the second as nothing to
+        # do. It is neither; the italics of a film title are as much a correction as
+        # its spelling, and an IDML can carry them.
+        if edit.is_format:
+            outcomes.append(_apply_format(edit, stories, cache, scope, touched))
+            if outcomes[-1].applied:
+                changed.add(outcomes[-1].story_id)
             continue
         if edit.kind == DESIGN:
             outcomes.append(EditOutcome(edit, ROUTED_TO_DESIGN,
@@ -270,13 +367,12 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
         if edit.find == edit.replace:
             outcomes.append(EditOutcome(edit, NO_CHANGE))
             continue
-        found = _match(edit, stories)
+        found = _match(edit, stories, cache, scope)
         if isinstance(found, EditOutcome):
             outcomes.append(found)
             continue
-        story, para, offset = found
+        story, para, start, end = found
         key = (story.story_id, para.index)
-        start, end = offset, offset + len(edit.find)
         if touched.collides(key, start, end):
             outcomes.append(EditOutcome(
                 edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
@@ -291,17 +387,52 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
     return outcomes, changed
 
 
+def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
+                  touched: "_Touched") -> EditOutcome:
+    """Style the span an edit names, leaving its text alone.
+
+    Located exactly as a text edit is — the page it was marked on, the line, the
+    same three matching tiers — so "italicize this" is as anchored as "change this",
+    and as refusable. A span whose text is not held directly by a character range
+    cannot be styled without rewriting more of the story than a correction should,
+    so it is flagged rather than forced."""
+    found = _match(edit, stories, cache, scope)
+    if isinstance(found, EditOutcome):
+        return found
+    story, para, start, end = found
+    key = (story.story_id, para.index)
+    if touched.collides(key, start, end):
+        return EditOutcome(
+            edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
+            detail="its span overlaps a correction already applied here")
+    if not para.restyle(start, end, FORMATS[edit.format]):
+        return EditOutcome(
+            edit, UNSTYLEABLE, story_id=story.story_id, paragraph=para.index,
+            detail="the text here is not held by a character range this engine can "
+                   "split, so the formatting would mean rewriting more of the story "
+                   "than a correction should")
+    # Recorded like a text write, at its own length, so a later correction on the
+    # same words is flagged instead of landing inside the run just restyled.
+    touched.record(key, start, end, end - start)
+    return EditOutcome(edit, APPLIED, story_id=story.story_id,
+                       paragraph=para.index, occurrences=1)
+
+
 def apply_edits(src_idml: str | Path, dest_idml: str | Path,
                 edits: list[Edit], *,
-                withheld: dict[str, str] | None = None) -> ApplyReport:
+                withheld: dict[str, str] | None = None,
+                scope=None) -> ApplyReport:
     """Apply every edit to a copy of `src_idml`, writing `dest_idml`.
 
     The source is never touched. Only stories that actually changed are
     rewritten; the rest of the package is copied byte for byte. `withheld` is the
-    optional sanity-gate verdict — edit ids held back for a human, with a reason."""
+    optional sanity-gate verdict — edit ids held back for a human, with a reason.
+    `scope` is the optional page map that pins each edit to the page it was
+    marked on."""
     stories = read_stories(src_idml)
     by_id = {s.story_id: s for s in stories}
-    outcomes, changed = apply_to_stories(stories, edits, withheld=withheld)
+    outcomes, changed = apply_to_stories(stories, edits, withheld=withheld,
+                                         scope=scope)
     payload = {sid: by_id[sid].serialize() for sid in changed}
     rewrite_stories(src_idml, dest_idml, payload)
     return ApplyReport(outcomes=tuple(outcomes),

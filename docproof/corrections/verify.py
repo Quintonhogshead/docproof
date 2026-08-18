@@ -25,14 +25,18 @@ from .model import (APPLIED_EXACTLY, DEVIATES, Discrepancy, Edit, MISSING,
 
 def verify(before_idml: str | Path, after_idml: str | Path,
            edits: list[Edit], *,
-           withheld: dict[str, str] | None = None) -> VerifyReport:
+           withheld: dict[str, str] | None = None,
+           scope=None) -> VerifyReport:
     """Reconcile the after file against the before file and the edit list.
 
     `withheld` must match what `apply` used: an edit a sanity gate held back was
     never written, so the expectation has to withhold it too, or the self-check
-    would read its absence as an unaccounted change."""
+    would read its absence as an unaccounted change. `scope` must match for the
+    same reason — a page map narrows where an edit lands, so an expectation
+    computed without it would disagree with the file that was written."""
     expected = read_stories(before_idml)         # a fresh copy to mutate
-    outcomes, _ = apply_to_stories(expected, edits, withheld=withheld)
+    outcomes, _ = apply_to_stories(expected, edits, withheld=withheld,
+                                   scope=scope)
     actual = read_stories(after_idml)
 
     expected_by_id = {s.story_id: s for s in expected}
@@ -93,7 +97,9 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
     read each correction in context. Grouped by paragraph in document order, so a
     line two edits touched is shown once, fully corrected, carrying both ids and
     notes. A paragraph whose net text did not change (an edit that cancelled out)
-    is dropped: there is nothing to look at."""
+    is dropped: there is nothing to look at — unless what changed was the
+    *formatting*, which rewrites no text and would otherwise disappear from the one
+    section a designer uses to confirm the corrections read right."""
     order: list[tuple[str, int]] = []
     acc: dict[tuple[str, int], dict] = {}
     for o in outcomes:
@@ -110,20 +116,23 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
                 "after": (act.paragraphs[o.paragraph].text
                           if act and 0 <= o.paragraph < len(act.paragraphs)
                           else ""),
-                "ids": [], "notes": []}
+                "ids": [], "notes": [], "formats": []}
             order.append(key)
         acc[key]["ids"].append(o.edit.id)
+        if o.edit.format and o.edit.format not in acc[key]["formats"]:
+            acc[key]["formats"].append(o.edit.format)
         note = (o.edit.instruction or "").strip()
         if note and note not in acc[key]["notes"]:
             acc[key]["notes"].append(note)
     changes: list[ReviewChange] = []
     for sid, para in order:
         d = acc[(sid, para)]
-        if d["before"] == d["after"]:
+        if d["before"] == d["after"] and not d["formats"]:
             continue
         changes.append(ReviewChange(
             story_id=sid, paragraph=para, before=d["before"], after=d["after"],
-            edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"])))
+            edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"]),
+            formatting=", ".join(d["formats"])))
     return changes
 
 

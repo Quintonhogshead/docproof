@@ -454,30 +454,30 @@ def test_a_context_anchor_is_parsed_and_aliased():
 
 
 def test_a_json_string_is_parsed():
-    result = parse_edits('[{"find": "a", "replace": "b"}]')
+    result = parse_edits('[{"find": "alpha", "replace": "bravo"}]')
     assert result.ok
-    assert result.edits[0].find == "a"
+    assert result.edits[0].find == "alpha"
 
 
 def test_json_bytes_are_parsed():
-    result = parse_edits(b'[{"find": "a", "replace": "b"}]')
-    assert result.ok and result.edits[0].replace == "b"
+    result = parse_edits(b'[{"find": "alpha", "replace": "bravo"}]')
+    assert result.ok and result.edits[0].replace == "bravo"
 
 
 def test_a_json_file_is_parsed(tmp_path):
     p = tmp_path / "corrections.json"
-    p.write_text('[{"find": "a", "replace": "b"}]', encoding="utf-8")
+    p.write_text('[{"find": "alpha", "replace": "bravo"}]', encoding="utf-8")
     result = parse_edits(p)
-    assert result.ok and result.edits[0].find == "a"
+    assert result.ok and result.edits[0].find == "alpha"
 
 
 def test_a_wrapper_object_with_an_edits_key_is_unwrapped():
-    result = parse_edits({"edits": [{"find": "a", "replace": "b"}]})
+    result = parse_edits({"edits": [{"find": "alpha", "replace": "bravo"}]})
     assert result.ok and len(result.edits) == 1
 
 
 def test_a_lone_dict_is_one_entry():
-    result = parse_edits({"find": "a", "replace": "b"})
+    result = parse_edits({"find": "alpha", "replace": "bravo"})
     assert result.ok and len(result.edits) == 1
 
 
@@ -492,9 +492,9 @@ def test_a_terse_pair_becomes_an_edit():
 
 def test_an_explicit_id_is_kept_and_generated_ids_avoid_it():
     result = parse_edits([
-        {"find": "a", "replace": "b"},
-        {"id": "c2", "find": "c", "replace": "d"},   # collides with the default
-        {"find": "e", "replace": "f"},
+        {"find": "alpha", "replace": "bravo"},
+        {"id": "c2", "find": "charlie", "replace": "delta"},  # collides w/ default
+        {"find": "echo", "replace": "foxtrot"},
     ])
     ids = [e.id for e in result.edits]
     assert ids[1] == "c2"                 # the explicit one is honoured
@@ -503,8 +503,8 @@ def test_an_explicit_id_is_kept_and_generated_ids_avoid_it():
 
 def test_a_duplicate_explicit_id_is_flagged():
     result = parse_edits([
-        {"id": "x", "find": "a", "replace": "b"},
-        {"id": "x", "find": "c", "replace": "d"},
+        {"id": "x", "find": "alpha", "replace": "bravo"},
+        {"id": "x", "find": "charlie", "replace": "delta"},
     ])
     assert len(result.edits) == 1
     assert result.issues and "duplicate id" in result.issues[0].reason
@@ -515,7 +515,7 @@ def test_kind_is_normalized_and_an_unknown_kind_is_flagged():
         {"find": "Chapter One", "replace": "", "kind": "Design",
          "instruction": "move to a right-hand page"},
         {"find": "maybe", "replace": "perhaps", "type": "JUDGMENT"},
-        {"find": "x", "replace": "y", "kind": "guesswork"},
+        {"find": "xray", "replace": "yankee", "kind": "guesswork"},
     ])
     assert result.edits[0].kind == DESIGN
     assert result.edits[1].kind == JUDGMENT
@@ -525,9 +525,9 @@ def test_kind_is_normalized_and_an_unknown_kind_is_flagged():
 
 
 def test_occurrence_is_coerced_and_bad_values_flagged():
-    ok = parse_edits([{"find": "a", "replace": "b", "occurrence": "3"}])
+    ok = parse_edits([{"find": "alpha", "replace": "bravo", "occurrence": "3"}])
     assert ok.edits[0].occurrence == 3
-    bad = parse_edits([{"find": "a", "replace": "b", "occurrence": -1},
+    bad = parse_edits([{"find": "alpha", "replace": "bravo", "occurrence": -1},
                        {"find": "c", "replace": "d", "occurrence": "later"}])
     assert not bad.edits
     assert len(bad.issues) == 2
@@ -553,7 +553,7 @@ def test_a_pure_deletion_is_kept():
 
 
 def test_a_non_object_entry_is_flagged_not_dropped():
-    result = parse_edits([{"find": "a", "replace": "b"}, "just a string", 42])
+    result = parse_edits([{"find": "alpha", "replace": "bravo"}, "just a string", 42])
     assert len(result.edits) == 1
     assert len(result.issues) == 2
     assert all(isinstance(i, ParseIssue) for i in result.issues)
@@ -562,7 +562,7 @@ def test_a_non_object_entry_is_flagged_not_dropped():
 
 def test_non_text_find_or_replace_is_flagged():
     result = parse_edits([{"find": 7, "replace": "x"},
-                          {"find": "a", "replace": ["b"]}])
+                          {"find": "a", "replace": ["bravo"]}])
     assert not result.edits
     assert len(result.issues) == 2
 
@@ -751,7 +751,7 @@ def test_the_written_idml_is_a_valid_package(tmp_path):
 def test_source_round_trips_through_parse():
     """An edit that cites the comment it came from keeps that link through parse,
     so the run can reconcile it back to the comment."""
-    parsed = parse_edits([{"find": "a", "replace": "b", "source": "p3-2"}])
+    parsed = parse_edits([{"find": "alpha", "replace": "bravo", "source": "p3-2"}])
     assert parsed.edits[0].source == "p3-2"
 
 

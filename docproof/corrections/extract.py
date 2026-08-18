@@ -48,6 +48,7 @@ class _ExtractedEdit(BaseModel):
     kind: Literal["mechanical", "judgment", "design"] = "mechanical"
     occurrence: int = 0
     source: str = ""
+    format: Literal["", "italic", "roman"] = ""
 
 
 class _Extracted(BaseModel):
@@ -60,17 +61,25 @@ edit list. Each correction becomes one edit:
 
 - find: the exact text in the book to change, copied VERBATIM — same words, \
 same punctuation, same capitalization. This is how the edit is located, so it \
-must be text that actually appears in the book, not a paraphrase. Quote the \
-smallest phrase that uniquely identifies the spot, and — this matters — for a \
-word swap the find is ONLY the word(s) that change, never the words around them. \
-"change quickly to swiftly" is find "quickly", replace "swiftly"; it is NOT find \
-"moved quickly", replace "moved swiftly", and NEVER find "quickly through" or \
-"slowly eased" when only one of those words is being changed — carrying an \
-unchanged neighbour into find is how a verb or object gets dropped. If the source \
-text carries obvious extraction artifacts — a stray space inside a word ("Y ou", \
-"hil t", "b efore"), a broken hyphenation — repair them so find reads as the \
-clean text the book actually contains; the edit is located against the real book, \
-not the artifact.
+must be text that actually appears in the book, not a paraphrase. WHERE THE \
+SOURCE GIVES YOU THE BOOK'S OWN TEXT for a page, copy the find out of that and \
+nowhere else: it is the text the edit is applied to, and an anchor that is not in \
+it character for character cannot be located at all. The highlighted text quoted \
+with a comment is the PDF's rendering of the same words, so it may be hyphenated \
+at a line end, carry a space the typesetting introduced, or stop mid-word — read \
+it to see WHICH words the comment is about, then quote those words from the book \
+text. Where no book text is given, repair obvious extraction artifacts yourself (a \
+stray space inside a word — "Y ou", "hil t", "b efore" — a broken hyphenation) so \
+the find reads as the clean text the book contains.
+  Quote enough to identify the spot and no more. For a word swap the find is ONLY \
+the word(s) that change, never the words around them: "change quickly to swiftly" \
+is find "quickly", replace "swiftly"; it is NOT find "moved quickly", replace \
+"moved swiftly", and NEVER find "quickly through" or "slowly eased" when only one \
+of those words is being changed — carrying an unchanged neighbour into find is how \
+a verb or object gets dropped. But a find of one or two characters is not an \
+anchor: NEVER emit a find that is a bare "," or "." or a single quote mark. A \
+punctuation change takes the few words around the mark, so the find can be found — \
+find "he said, and then", replace "he said. And then", not find ",".
 - replace: the corrected text. Use an empty string for a pure deletion. For an \
 insertion, set find to the existing text around the insertion point and put that \
 same text plus the new words in replace.
@@ -79,13 +88,18 @@ in the book, set context to a longer VERBATIM run of the surrounding text (the \
 sentence or line the correction is attached to) that contains find exactly once. \
 The edit is then located inside this context, so it lands on the intended spot — \
 the one the mark was on — not another copy elsewhere. Leave context empty when \
-find is already unique. Copy it verbatim from the same line as find, repairing \
-only obvious extraction artifacts.
+find is already unique. Copy it from the book text for the page, the same as find.
 - instruction: the human note the correction came from, verbatim, for the report.
+- format: "italic" or "roman" when the correction is about how the text is SET \
+rather than what it says — "italicize this film title", "de-italicize". Put the \
+words to style in find, copy them unchanged into replace, and leave kind \
+"mechanical": this is an appliable edit, not a design request. Use "" for every \
+ordinary correction.
 - kind: "mechanical" for a clear text change with one right answer; "judgment" \
 when a person should decide (a vague or stylistic note, or one you cannot turn \
 into an exact find/replace); "design" for a layout request that is not a text \
-edit at all (move a chapter, change spacing).
+edit at all (move a chapter, change spacing, fix a bad line break). Italics are \
+NOT design — they are a "format" edit, above.
 - occurrence: 0 when the text should be unique, or the 1-based Nth when the \
 correction names a specific instance among several.
 - source: when the item carries an id (e.g. "id p3-2"), copy that id here so the \
