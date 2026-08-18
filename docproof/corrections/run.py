@@ -28,9 +28,10 @@ from ..models import Usage
 from ..providers import Provider
 from .apply import apply_edits
 from .idml import read_stories
-from .model import (APPLIED_EXACTLY, ApplyReport, CommentDisposition,
+from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
-                    Edit, JUDGMENT, VerifyReport)
+                    Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
+                    VerifyReport)
 from .pagemap import build_page_map
 from .parse import ParseResult, parse_edits
 from .report import write_report
@@ -62,6 +63,9 @@ class CorrectionsOutputs:
     # narrowing degrading silently.
     pages_placed: int = 0
     pages_total: int = 0
+    # What a person still has to look at in InDesign, because composing the page is
+    # the one thing this engine cannot do and so cannot check.
+    checks: tuple[CheckItem, ...] = ()
 
     @property
     def applied(self) -> int:
@@ -92,11 +96,74 @@ class CorrectionsOutputs:
         return sum(1 for c in self.comments if c.needs_human)
 
     @property
+    def to_check(self) -> int:
+        """Rows on the designer's check list. Not a failure — a bounded, located
+        handover of the part that needs InDesign open."""
+        return len(self.checks)
+
+    @property
     def clean(self) -> bool:
         """Every correction landed exactly and nothing else changed — and every
         entry in the source parsed, and no comment was left unresolved."""
         return (self.verify.clean and self.parse.ok and self.flagged == 0
                 and self.unresolved == 0)
+
+
+# What to look at, per paragraph operation. Each of these changes where text falls
+# on the page, and where text falls is InDesign's answer, not ours — so the engine
+# says what it did and what that should have caused, and a person confirms it.
+CHECK_AFTER: dict[str, str] = {
+    "recto": "this now starts on a right-hand page — check the page before it does "
+             "not run short",
+    "verso": "this now starts on a left-hand page — check the page before it does "
+             "not run short",
+    "page-break": "this now starts a page — check the page before it does not run "
+                  "short",
+    "column-break": "this now starts a column",
+    "frame-break": "this now starts a new frame",
+    "no-page-break": "the forced break here is gone — check the text runs on as it "
+                     "should",
+    "keep-with-next": "this should now sit with the text that follows it, not at "
+                      "the foot of a page",
+    "keep-together": "this should no longer split across a page",
+    "allow-break": "this may now split across a page",
+    "delete-paragraph": "a paragraph was removed — the pages after it have reflowed",
+    "insert-after": "a paragraph was added — the pages after it have reflowed",
+    "insert-before": "a paragraph was added — the pages after it have reflowed",
+}
+
+
+def _checks(apply_report: ApplyReport | None) -> tuple[CheckItem, ...]:
+    """Everything a person has to look at in InDesign once this run is done.
+
+    Two sources, and they are the two halves of the same limit. A reviewer's note
+    about how the page composed — a widow, a bad rag, a line that broke badly —
+    cannot be applied, because the thing it describes only exists once InDesign sets
+    the text. And a paragraph operation this engine *did* apply cannot be confirmed
+    by any comparison it can make, for the same reason: the file now says "start on
+    a right-hand page", and whether that left the previous page half empty is a
+    question about the composed book.
+
+    So neither is claimed. Both are handed over located — the proof page the mark was
+    on, the paragraph it landed in, what to look at and why."""
+    if apply_report is None:
+        return ()
+    out: list[CheckItem] = []
+    for o in apply_report.outcomes:
+        if o.status == ROUTED_TO_DESIGN:
+            out.append(CheckItem(
+                page=o.edit.page, story_id=o.story_id, paragraph=o.paragraph,
+                what="the reviewer marked something about how this page composed, "
+                     "which no file comparison can settle",
+                why=o.edit.instruction or "(no note)", edit_ids=(o.edit.id,)))
+        elif o.applied and o.edit.paragraph:
+            out.append(CheckItem(
+                page=o.edit.page, story_id=o.story_id, paragraph=o.paragraph,
+                what=CHECK_AFTER.get(o.edit.paragraph,
+                                     "a paragraph setting changed here"),
+                why=o.edit.instruction or o.edit.paragraph,
+                edit_ids=(o.edit.id,)))
+    return tuple(out)
 
 
 def corrected_name(src_idml: str | Path) -> str:
@@ -239,10 +306,12 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
 
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
+    checks = _checks(apply_report)
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
-        deterministic=(sanity is None), pages=(pages_placed, pages_total))
+        deterministic=(sanity is None), pages=(pages_placed, pages_total),
+        checks=checks)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "%d/%d page(s) placed; verify %s",
              Path(src_idml).name, apply_report.summary(), len(dispositions),
@@ -253,7 +322,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=corrected, apply=apply_report,
         comments=dispositions, usage=usage, pages_placed=pages_placed,
-        pages_total=pages_total)
+        pages_total=pages_total, checks=checks)
 
 
 def _verify_status_of(verify_report: VerifyReport):

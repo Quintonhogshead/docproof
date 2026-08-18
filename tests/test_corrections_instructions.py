@@ -178,11 +178,21 @@ def test_an_italic_request_becomes_a_formatting_edit():
     assert roman is not None and roman.format == "roman"
 
 
-def test_a_layout_request_is_still_not_a_formatting_edit():
-    """Italics are a property of the text. Where a chapter starts is not."""
-    assert r("Move this chapter to start on a recto", "Chapter Twelve") is None
-    assert r('Designer: bad break -- hyphenate after "Lime"',
-             "ire downloads") is None
+def test_a_layout_request_is_a_paragraph_edit_not_a_character_one():
+    """Italics are a property of a run of text; where a chapter starts is a property
+    of the paragraph. Both are appliable, and they are not the same edit."""
+    got = r("Move this chapter to start on a recto", "Chapter Twelve")
+    assert got is not None
+    assert got.paragraph == "recto" and not got.format
+    assert got.find == got.replace          # the words are untouched
+
+
+def test_a_destructive_operation_is_never_read_out_of_a_question():
+    """"Should we cut this paragraph?" names the operation and asks for it in the
+    same breath. Reading that as an instruction is worst here of all."""
+    assert r("Should we cut this paragraph?", "a line of prose") is None
+    assert r("Delete this paragraph?", "a line of prose") is None
+    assert r("Should this start on a recto?", "Chapter Twelve") is None
 
 
 def test_a_note_that_changes_nothing_is_not_an_edit():

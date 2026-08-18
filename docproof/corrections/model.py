@@ -26,6 +26,33 @@ FORMATS: dict[str, dict[str, str | None]] = {
     FORMAT_ROMAN: {"FontStyle": None},
 }
 
+# What a reviewer can ask of a whole paragraph, and the IDML range attributes that
+# say it. These are the requests that read as layout and are not: where a chapter
+# starts, whether a heading may be left stranded at the foot of a page, and how much
+# air sits above a paragraph are all properties of the paragraph, carried in the
+# story — not geometry in a spread. An attribute set to None is removed, so a forced
+# break can be cleared as well as set.
+PARA_ATTRS: dict[str, dict[str, str | None]] = {
+    "page-break":     {"StartParagraph": "NextPage"},
+    "recto":          {"StartParagraph": "NextOddPage"},
+    "verso":          {"StartParagraph": "NextEvenPage"},
+    "column-break":   {"StartParagraph": "NextColumn"},
+    "frame-break":    {"StartParagraph": "NextFrame"},
+    "no-page-break":  {"StartParagraph": None},
+    "keep-with-next": {"KeepWithNext": "1"},
+    "keep-together":  {"KeepAllLinesTogether": "true"},
+    "allow-break":    {"KeepAllLinesTogether": "false"},
+}
+# Operations that change how many paragraphs the story has. They are applied after
+# every other edit, because they move the paragraph indices under anything that has
+# not run yet — and each re-locates its own anchor by text, so running last costs
+# them nothing.
+PARA_DELETE = "delete-paragraph"
+PARA_INSERT_AFTER = "insert-after"
+PARA_INSERT_BEFORE = "insert-before"
+PARA_STRUCTURAL = (PARA_DELETE, PARA_INSERT_AFTER, PARA_INSERT_BEFORE)
+PARA_OPS = tuple(PARA_ATTRS) + PARA_STRUCTURAL
+
 
 @dataclass(frozen=True)
 class Edit:
@@ -66,6 +93,26 @@ class Edit:
     # `FORMATS`. The text is untouched, so `replace` equals `find` on such an edit
     # and the usual "find == replace, nothing to do" shortcut must not swallow it.
     format: str = ""
+    # A whole-paragraph operation from `PARA_OPS` — a forced break, a keep, or a
+    # paragraph inserted or removed. `find` still anchors it: the paragraph acted on
+    # is the one the anchor lands in, so a layout request is located exactly as a
+    # word swap is, and refused the same way when it cannot be.
+    paragraph: str = ""
+    # The paragraph style to apply to that paragraph, e.g.
+    # "ParagraphStyle/Block Quote". Named in full because the style has to exist in
+    # the book already — this reassigns a paragraph to a design, it does not invent
+    # one.
+    paragraph_style: str = ""
+
+    @property
+    def is_structural(self) -> bool:
+        """Whether this edit changes how many paragraphs the story has."""
+        return self.paragraph in PARA_STRUCTURAL
+
+    @property
+    def is_layout(self) -> bool:
+        """Whether this edit is about the paragraph rather than its words."""
+        return bool(self.paragraph or self.paragraph_style)
 
     @property
     def is_deletion(self) -> bool:
@@ -87,6 +134,7 @@ ROUTED_TO_DESIGN = "routed_to_design"     # a design request, not a text edit
 OVERLAPS = "overlaps"              # its span collides with an edit already applied
 WITHHELD = "withheld"             # the sanity gate held it back for a human
 UNSTYLEABLE = "unstyleable"       # the span's text is not held by a character range
+UNPLACEABLE = "unplaceable"       # the paragraph could not be given a range of its own
 
 
 @dataclass(frozen=True)
@@ -109,7 +157,7 @@ class EditOutcome:
         """The edit did not land cleanly and someone has to look."""
         return self.status in (NOT_FOUND, AMBIGUOUS, CROSSES_PARAGRAPH,
                                ROUTED_TO_DESIGN, OVERLAPS, WITHHELD,
-                               UNSTYLEABLE)
+                               UNSTYLEABLE, UNPLACEABLE)
 
 
 @dataclass(frozen=True)
@@ -167,6 +215,29 @@ class CommentDisposition:
         return self.disposition in DISP_NEEDS_HUMAN
 
 
+@dataclass(frozen=True)
+class CheckItem:
+    """One thing a person has to look at in InDesign, because no file comparison can
+    settle it.
+
+    Whether a line breaks well, whether a heading is stranded, whether a page runs
+    long — each is a result of *composition*, and composing is InDesign's job. This
+    engine can make the change and can prove the text is what the list asked for; it
+    cannot see the page. So instead of claiming an outcome it cannot check, it hands
+    over a located list: the page the mark was on, the paragraph it landed in, what
+    to look at and why.
+
+    `edit_ids` names the corrections that caused it, when the check follows work
+    this run did; a check can also stand alone, for a reviewer note that was never a
+    text edit at all."""
+    page: int                          # the proof page, 0 when unknown
+    story_id: str
+    paragraph: int
+    what: str                          # what to look at
+    why: str                           # the reviewer's note, or what was applied
+    edit_ids: tuple[str, ...] = ()
+
+
 # --- verification -------------------------------------------------------------
 
 APPLIED_EXACTLY = "applied_exactly"
@@ -222,6 +293,14 @@ class VerifyReport:
     discrepancies: tuple[Discrepancy, ...]
     paragraphs_before: int = 0
     paragraphs_after: int = 0
+    # What a clean apply of the list *should* leave. Usually the same as `before` —
+    # a correction rewrites words, it does not add or remove paragraphs. But some
+    # corrections do exactly that on purpose (a deleted Acknowledgments page put
+    # back, a stray blank line taken out), and the alarm has to be able to tell an
+    # asked-for change from the paragraph merge a hand-run script produces. So the
+    # comparison that matters is expected against actual; before against after is
+    # reported alongside, as information.
+    paragraphs_expected: int = 0
     # One entry per paragraph an applied edit changed, before and after, for a
     # human to read down and confirm. Empty in the rare run that applied nothing.
     changes: tuple[ReviewChange, ...] = ()
@@ -231,8 +310,16 @@ class VerifyReport:
         """Every edit landed exactly and nothing else changed."""
         return (not self.discrepancies
                 and all(r.status == APPLIED_EXACTLY for r in self.reconciliations)
-                and self.paragraphs_before == self.paragraphs_after)
+                and not self.structure_changed)
 
     @property
     def structure_changed(self) -> bool:
-        return self.paragraphs_before != self.paragraphs_after
+        """The file has a different number of paragraphs than the corrections asked
+        for — a merge, a split, a line lost. An intended insertion or deletion is
+        not this: it is in the expectation too, so the two agree."""
+        return self.paragraphs_expected != self.paragraphs_after
+
+    @property
+    def structure_intended(self) -> bool:
+        """The corrections deliberately changed how many paragraphs there are."""
+        return self.paragraphs_expected != self.paragraphs_before

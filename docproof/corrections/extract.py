@@ -49,6 +49,10 @@ class _ExtractedEdit(BaseModel):
     occurrence: int = 0
     source: str = ""
     format: Literal["", "italic", "roman"] = ""
+    paragraph: Literal["", "recto", "verso", "page-break", "column-break",
+                       "keep-with-next", "keep-together", "allow-break",
+                       "no-page-break", "delete-paragraph", "insert-after",
+                       "insert-before"] = ""
 
 
 class _Extracted(BaseModel):
@@ -95,11 +99,24 @@ rather than what it says — "italicize this film title", "de-italicize". Put th
 words to style in find, copy them unchanged into replace, and leave kind \
 "mechanical": this is an appliable edit, not a design request. Use "" for every \
 ordinary correction.
+- paragraph: a whole-paragraph request, when the note is about the paragraph \
+rather than its words. "recto"/"verso" to start it on a right/left-hand page, \
+"page-break" to start it on a new page, "keep-with-next" so a heading is not left \
+at the foot of a page, "keep-together" so it does not split, "delete-paragraph" to \
+remove it, "insert-after"/"insert-before" to add one (put the new text in replace). \
+Put the words that identify the paragraph in find, copy them unchanged into \
+replace, and leave kind "mechanical" — these are appliable. NEVER read one of these \
+out of a question ("should we cut this?"): that is a "judgment".
+- paragraph_style: the full style name to apply to that paragraph, e.g. \
+"ParagraphStyle/Block Quote". Only when the note names a style that the book \
+already uses; do not invent one.
 - kind: "mechanical" for a clear text change with one right answer; "judgment" \
 when a person should decide (a vague or stylistic note, or one you cannot turn \
-into an exact find/replace); "design" for a layout request that is not a text \
-edit at all (move a chapter, change spacing, fix a bad line break). Italics are \
-NOT design — they are a "format" edit, above.
+into an exact find/replace); "design" ONLY for something about how the page \
+composed — a bad line break, a widow, a loose rag, a page that runs long. Those \
+cannot be applied by anyone but InDesign, so anchor the note to the line it was \
+marked on and it becomes a located check for the designer. Italics are NOT design \
+(use "format"), and neither is where a chapter starts (use "paragraph").
 - occurrence: 0 when the text should be unique, or the 1-based Nth when the \
 correction names a specific instance among several.
 - source: when the item carries an id (e.g. "id p3-2"), copy that id here so the \

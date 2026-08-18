@@ -4081,6 +4081,24 @@ function correctionsReportHTML(d) {
       }).join('')
     : '';
 
+  const checks = d.checks || [];
+  const checkHTML = checks.length
+    ? `<h2>To check in InDesign — ${num(checks.length)}</h2>`
+      + '<p class="blurb">Whether a line breaks well, a heading is stranded or a '
+      + 'page runs long is decided when InDesign sets the text, so no comparison of '
+      + 'files can settle it. Each of these is located; none was guessed at.</p>'
+      + '<table><thead><tr><th>Where</th><th>What to look at</th><th>Why</th>'
+      + '</tr></thead><tbody>'
+      + checks.map((c) => {
+        const where = (c.page ? `page ${num(c.page)}` : '—')
+          + (c.paragraph >= 0 ? `<br><span class="loc">${esc(c.story_id)}, `
+            + `¶ ${num(c.paragraph)}</span>` : '');
+        return `<tr><td>${where}</td><td>${esc(c.what)}</td>`
+          + `<td>“${esc(c.why)}”</td></tr>`;
+      }).join('')
+      + '</tbody></table>'
+    : '';
+
   const discHTML = disc.length
     ? `<h2>Unaccounted changes — ${num(disc.length)}</h2>`
       + '<p class="blurb">Present in the file, asked for by no correction.</p>'
@@ -4099,6 +4117,9 @@ function correctionsReportHTML(d) {
     + 'has nowhere to hide.</p>'
     + `<p>Paragraphs: ${num(v.paragraphs_before)} before, `
     + `${num(v.paragraphs_after)} after`
+    + (v.structure_intended
+      ? ` (${num(v.paragraphs_expected)} expected — the corrections asked for `
+        + 'the difference)' : '')
     + (v.structure_changed
       ? ' — <b>a paragraph was added, removed or merged</b>' : '') + '.</p>'
     + (disc.length ? '' : '<p>No unaccounted changes.</p>');
@@ -4123,7 +4144,7 @@ function correctionsReportHTML(d) {
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
     + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
-    + changesHTML + discHTML + verifyHTML + commentsAllHTML
+    + changesHTML + checkHTML + discHTML + verifyHTML + commentsAllHTML
     + '</div></body></html>';
 }
 
