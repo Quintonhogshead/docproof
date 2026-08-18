@@ -21,7 +21,8 @@ from docproof.corrections.model import (AMBIGUOUS, APPLIED, APPLIED_EXACTLY,
                                         CROSSES_PARAGRAPH, DESIGN, DEVIATES,
                                         DISP_APPLIED, DISP_NOT_EXTRACTED, Edit,
                                         JUDGMENT, MECHANICAL, MISSING, NOT_FOUND,
-                                        OVERLAPS, ROUTED_TO_DESIGN, WITHHELD)
+                                        OVERLAPS, ReviewChange, ROUTED_TO_DESIGN,
+                                        WITHHELD)
 from docproof.corrections.parse import ParseIssue, parse_edits
 from docproof.corrections.run import (apply_corrections, corrected_name,
                                       verify_corrections)
@@ -370,6 +371,50 @@ def test_verification_flags_a_paragraph_that_was_merged(tmp_path):
     assert not report.clean
 
 
+# --- changes to review (the designer's before/after) --------------------------
+
+def test_verify_lists_each_applied_change_in_context(tmp_path):
+    """The designer's quick-check data: an applied edit comes back as the whole
+    line before and after — so it can be read in context, not as a bare
+    find→replace divorced from its sentence."""
+    edits = [Edit(id="e1", find="Their were", replace="There were")]
+    out = tmp_path / "out.idml"
+    apply_edits(LAYOUT, out, edits)
+    report = verify(LAYOUT, out, edits)
+    assert len(report.changes) == 1
+    c = report.changes[0]
+    assert isinstance(c, ReviewChange)
+    assert c.before == "Their were several mistakes here to find."
+    assert c.after == "There were several mistakes here to find."
+    assert c.edit_ids == ("e1",)
+
+
+def test_two_edits_in_one_paragraph_are_one_review_change(tmp_path):
+    """A line two corrections touched is shown once, fully corrected, carrying both
+    edit ids — not the same sentence listed twice."""
+    edits = [Edit(id="e1", find="Their", replace="There"),
+             Edit(id="e2", find="mistakes here", replace="errors here")]
+    out = tmp_path / "out.idml"
+    apply_edits(LAYOUT, out, edits)
+    report = verify(LAYOUT, out, edits)
+    assert len(report.changes) == 1
+    c = report.changes[0]
+    assert c.before == "Their were several mistakes here to find."
+    assert c.after == "There were several errors here to find."
+    assert set(c.edit_ids) == {"e1", "e2"}
+
+
+def test_a_review_change_carries_the_reviewer_note(tmp_path):
+    """The reviewer's own words ride along, so the person confirming the change
+    sees why it was asked for, not just what it became."""
+    edits = [Edit(id="e1", find="Their were", replace="There were",
+                  instruction="subject-verb agreement")]
+    out = tmp_path / "out.idml"
+    apply_edits(LAYOUT, out, edits)
+    report = verify(LAYOUT, out, edits)
+    assert report.changes[0].instruction == "subject-verb agreement"
+
+
 # --- parsing a structured list ------------------------------------------------
 
 def test_a_list_of_dicts_becomes_edits():
@@ -590,6 +635,54 @@ def test_the_json_report_is_machine_readable(tmp_path):
     # The unanchored edit is not clean, and the flag count reflects it.
     assert result.flagged == 1
     assert not result.clean
+
+
+def test_the_report_carries_the_changes_to_review(tmp_path):
+    """The applied changes reach both report artifacts: corrections.json (for the
+    results screen's redline) and the notes .md (for a reader), each in context."""
+    out = tmp_path / "job"
+    result = apply_corrections(LAYOUT, [
+        {"find": "Their were", "replace": "There were"},
+    ], out)
+    payload = _json.loads(result.report_json.read_text(encoding="utf-8"))
+    assert len(payload["changes"]) == 1
+    ch = payload["changes"][0]
+    assert ch["before"] == "Their were several mistakes here to find."
+    assert ch["after"] == "There were several mistakes here to find."
+    md = result.report_md.read_text(encoding="utf-8")
+    assert "Changes to review" in md
+    assert "There were several mistakes here to find." in md
+
+
+def test_a_flagged_proof_comment_is_not_listed_twice(tmp_path):
+    """A flagged edit read from a proof is the same problem as its reviewer
+    comment. The report shows it once — in the comment ledger — not again as a
+    separate 'For a human' edits section, which read as two duplicate lists."""
+    out = tmp_path / "job"
+    result = apply_corrections(
+        LAYOUT,
+        [{"find": "not in the book at all", "replace": "x", "source": "p1-1"}],
+        out,
+        comments=[{"id": "p1-1", "page": 1, "kind": "note",
+                   "instruction": "fix this", "anchor": "somewhere"}])
+    md = result.report_md.read_text(encoding="utf-8")
+    assert "Reviewer comments needing a human" in md
+    assert "## For a human" not in md               # the edit is not listed again
+    assert "Other edits needing a human" not in md  # nothing uncovered remains
+    payload = _json.loads(result.report_json.read_text(encoding="utf-8"))
+    c = payload["comments"]["items"][0]
+    assert c["disposition"] == "flagged"
+    assert c["edit_ids"]                             # the link that dedups them
+
+
+def test_flagged_edits_without_comments_keep_the_plain_heading(tmp_path):
+    """With no reviewer comments there is nothing to double up with, so a flagged
+    edit still gets the plain 'For a human' heading."""
+    out = tmp_path / "job"
+    result = apply_corrections(
+        LAYOUT, [{"find": "nowhere to be found", "replace": "x"}], out)
+    md = result.report_md.read_text(encoding="utf-8")
+    assert "## For a human" in md
 
 
 def test_a_parse_issue_is_carried_into_the_run(tmp_path):
