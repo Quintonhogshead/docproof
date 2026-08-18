@@ -43,6 +43,11 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // Which kind of document the user said they were starting
                 // with: a format suffix, or "all" for both.
                 formatChoice: 'all', formats: [], extraSuffixes: [],
+                // A corrections job's proof — the marked-up PDF or redlined Word
+                // file dropped alongside the InDesign book. Held here (not staged
+                // as a job file: the manuscript preflight rejects it) until the
+                // one-button "read and apply" reads it into the edit list.
+                correctionsSource: null,
                 // The Promo tab stages its file on selection (not at run time)
                 // so it can price it before the run; this holds that staged
                 // entry, with its preflight token counts, until the run uses it.
@@ -106,9 +111,12 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
 })();
 
 // Reading a marked-up PDF proof, an author's redlined Word file, or a plain
-// list into the corrections textarea. Each produces a draft edit list a person
-// reviews before applying — the model (PDF and list paths) proposes; nothing is
-// applied here. The status card reports the read as it happens, prominently.
+// list into the corrections textarea. Each produces a draft edit list; the model
+// (PDF and list paths) proposes, and nothing is applied here — the applied result
+// is reviewed in the corrections report. The status card reports the read as it
+// happens, prominently. `readCorrectionsSource` is lifted to module scope so the
+// one-button "read the proof and apply" flow drives the same read as the panel.
+let readCorrectionsSource = null;
 (() => {
   const statusEl = $('corrections-extract-status');
   const note = $('corrections-extract-note');
@@ -145,7 +153,7 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
       bits.push(`${issues.length} couldn’t be read (`
         + issues.map((i) => i.reason).slice(0, 2).join('; ') + ')');
     }
-    bits.push('review below, then Apply corrections');
+    bits.push('review below or in the report, then Apply');
     show(bits.join(' · '), 'done');
     hideProgress();
   };
@@ -164,14 +172,9 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   // edits in turn, filling the textarea and climbing the bar as they land. A big
   // proof that once hung on one silent call — and, past the model's output
   // ceiling, truncated and lost every edit — now fills in steadily and cannot
-  // truncate. A batch that fails leaves the edits read so far in place.
-  const readPdf = async () => {
-    const btn = $('extract-pdf');
-    const file = (($('corrections-pdf') || {}).files || [])[0];
-    if (!file) { show('Choose a PDF proof first.', 'error'); return; }
-    const label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Reading…';
+  // truncate. A batch that fails leaves the edits read so far in place and
+  // re-raises, so a one-button apply stops rather than applying a partial read.
+  const readPdfFile = async (file) => {
     const edits = [];
     const issues = [];
     try {
@@ -204,54 +207,74 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
       summarise(edits.length, issues, `from ${count} comment${plural(count)}`);
     } catch (e) {
       const kept = edits.length
-        ? ` ${edits.length} edit${plural(edits.length)} read so far are below — `
-          + 'try Read the PDF again to finish.'
-        : '';
+        ? ` ${edits.length} edit${plural(edits.length)} read so far are below.` : '';
       show(`${e.message}${kept}`, 'error');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = label;
+      throw e;
     }
   };
-  const pdfBtn = $('extract-pdf');
-  if (pdfBtn) pdfBtn.addEventListener('click', readPdf);
 
   // A redlined Word file: deterministic, one call, no cost.
-  const docxBtn = $('extract-docx');
-  if (docxBtn) docxBtn.addEventListener('click', async () => {
-    const file = (($('corrections-docx') || {}).files || [])[0];
-    if (!file) { show('Choose a Word file first.', 'error'); return; }
-    const label = docxBtn.textContent;
-    docxBtn.disabled = true;
-    docxBtn.textContent = 'Reading…';
+  const readDocxFile = async (file) => {
     try {
       show('Reading the Word file…');
       const form = new FormData();
       form.append('file', file);
       fillFromBody(await api('/api/corrections/extract-docx',
         { method: 'POST', body: form }));
-    } catch (e) { show(e.message, 'error'); }
-    finally { docxBtn.disabled = false; docxBtn.textContent = label; }
-  });
+    } catch (e) { show(e.message, 'error'); throw e; }
+  };
 
-  // A plain, free-form list read by the house model.
+  // The one read both the panel button and the one-button apply drive: pick the
+  // reader by the file's suffix. Throws on failure so a caller that means to
+  // apply next can stop instead of applying a half-read list.
+  readCorrectionsSource = (file) =>
+    (file.name || '').toLowerCase().endsWith('.pdf')
+      ? readPdfFile(file) : readDocxFile(file);
+
+  // The panel's own PDF button previews the list into the textarea (does not
+  // apply), so a designer who wants to eyeball it first still can. It reads the
+  // dropped source when there is one, else the file chosen in the field.
+  const pdfBtn = $('extract-pdf');
+  if (pdfBtn) pdfBtn.addEventListener('click', () => withBusy(pdfBtn, 'Reading…',
+    async () => {
+      const file = state.correctionsSource
+        || (($('corrections-pdf') || {}).files || [])[0];
+      if (!file) { show('Choose a PDF proof first.', 'error'); return; }
+      await readCorrectionsSource(file).catch(() => {});   // already surfaced
+    }));
+
+  const docxBtn = $('extract-docx');
+  if (docxBtn) docxBtn.addEventListener('click', () => withBusy(docxBtn, 'Reading…',
+    async () => {
+      const file = (($('corrections-docx') || {}).files || [])[0];
+      if (!file) { show('Choose a Word file first.', 'error'); return; }
+      await readDocxFile(file).catch(() => {});
+    }));
+
   const listBtn = $('extract-list');
-  if (listBtn) listBtn.addEventListener('click', async () => {
-    const text = (($('corrections-list-text') || {}).value || '').trim();
-    if (!text) { show('Paste a list of corrections first.', 'error'); return; }
-    const label = listBtn.textContent;
-    listBtn.disabled = true;
-    listBtn.textContent = 'Reading…';
-    try {
-      show('Reading the list…');
-      fillFromBody(await api('/api/corrections/extract-list', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
-      }));
-    } catch (e) { show(e.message, 'error'); }
-    finally { listBtn.disabled = false; listBtn.textContent = label; }
-  });
+  if (listBtn) listBtn.addEventListener('click', () => withBusy(listBtn, 'Reading…',
+    async () => {
+      const text = (($('corrections-list-text') || {}).value || '').trim();
+      if (!text) { show('Paste a list of corrections first.', 'error'); return; }
+      try {
+        show('Reading the list…');
+        fillFromBody(await api('/api/corrections/extract-list', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text }),
+        }));
+      } catch (e) { show(e.message, 'error'); }
+    }));
 })();
+
+// Disable a button, swap its label, run an async task, then restore it — the
+// small busy dance the corrections read buttons share.
+async function withBusy(btn, busyLabel, task) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyLabel;
+  try { await task(); }
+  finally { btn.disabled = false; btn.textContent = label; }
+}
 
 // The subject/title/author boxes only matter when a book-styled copy is
 // among the outputs.
@@ -285,9 +308,14 @@ function renderKind() {
   $('promo-cost').hidden = !promo;
   $('model-label').textContent = promo ? 'Which model should write it?'
     : prep ? 'Which model should read it?' : 'Which reviewer?';
+  // With a proof attached but not yet read into the list, the button does both —
+  // read it, then apply; once a list is present (previewed or pasted), it applies.
+  const corrNeedsRead = corrections && state.correctionsSource
+    && !(($('corrections-input') || {}).value || '').trim();
   $('start').textContent = promo ? 'Write promo copy'
     : prep ? 'Format the manuscript'
-    : corrections ? 'Apply corrections' : 'Start review';
+    : corrections ? (corrNeedsRead ? 'Read corrections & apply' : 'Apply corrections')
+    : 'Start review';
   $('staged-title').textContent = promo ? 'Ready to write copy'
     : prep ? 'Ready to prepare'
     : corrections ? 'Ready to correct' : 'Ready to review';
@@ -352,14 +380,107 @@ input.addEventListener('change', () => upload([...input.files]));
   zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove('hot'); }));
 zone.addEventListener('drop', (e) => upload([...e.dataTransfer.files]));
 
+// ── corrections: the proof rides in the same drop ──────────────────────────
+// A corrections job is an InDesign book plus a proof — a marked-up PDF or a
+// redlined Word file. The proof is not a job file (the manuscript preflight
+// refuses tracked changes and does not read PDFs at all), so a corrections drop
+// is split here: the proof is held on state.correctionsSource for the one-button
+// read-and-apply, and the book goes on to stage the normal way.
+function routeCorrectionsDrop(files) {
+  const suffix = (f) => f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
+  const pdfs = files.filter((f) => suffix(f) === '.pdf');
+  const docxs = files.filter((f) => suffix(f) === '.docx');
+  const idmls = files.filter((f) => suffix(f) === '.idml');
+  const bookPresent = idmls.length > 0
+    || usableFiles().some((f) => f.can_correct);
+  // A PDF is unambiguous — nothing else uses one. A Word file counts as a proof
+  // only alongside a book, or once corrections is the chosen job; otherwise a
+  // .docx is a manuscript for review or prep and must not be hijacked.
+  const intent = pdfs.length > 0 || isCorrections()
+    || (idmls.length > 0 && docxs.length > 0);
+  if (!intent) return files;
+  const source = pdfs[0]
+    || ((bookPresent || isCorrections()) ? docxs[0] : null);
+  if (!source) return files;
+  if (pdfs.length > 1) {
+    fail(`One proof at a time — reading ${source.name}, ignoring the other PDF(s).`);
+  }
+  setCorrectionsKind();
+  attachCorrectionsSource(source);
+  // Keep the book and anything else for normal staging; take out the proof and
+  // any stray PDFs, which cannot stage anyway.
+  return files.filter((f) => f !== source && suffix(f) !== '.pdf');
+}
+
+function setCorrectionsKind() {
+  const radio = document.querySelector('input[name="kind"][value="corrections"]');
+  if (radio && !radio.checked) { radio.checked = true; renderKind(); }
+}
+
+function attachCorrectionsSource(file) {
+  state.correctionsSource = file;
+  // A fresh proof supersedes any earlier draft in the box, so it is read anew.
+  const ta = $('corrections-input');
+  if (ta && ta.value.trim()) { ta.value = ''; ta.dataset.comments = ''; }
+  renderCorrectionsSource();
+  renderKind();          // relabel Start → "Read corrections & apply"
+  renderCost();          // re-gate Start
+}
+
+function clearCorrectionsSource() {
+  state.correctionsSource = null;
+  renderCorrectionsSource();
+}
+
+// The always-visible line under the drop zone, and the summary inside the
+// corrections panel: which proof is attached and — until the book lands — a nudge
+// to drop it. Text only; the Start button's label and gate are set elsewhere
+// (renderKind / renderCost), so this can be called freely without a re-render loop.
+function renderCorrectionsSource() {
+  const src = state.correctionsSource;
+  const bookStaged = usableFiles().some((f) => f.can_correct);
+  const note = $('corrections-source-note');
+  if (note) {
+    note.hidden = !src;
+    if (src) {
+      note.textContent = bookStaged
+        ? `Proof attached: ${src.name}. Click “Read corrections & apply” below.`
+        : `Proof attached: ${src.name}. Now drop the InDesign file (.idml) to correct.`;
+    }
+  }
+  const summary = $('corrections-source');
+  if (summary) {
+    summary.hidden = !src;
+    if (src) summary.textContent = `Proof to read: ${src.name}`;
+  }
+}
+
+// Choosing a proof in the panel's own file field attaches it the same as a drop,
+// so the one-button read-and-apply picks it up.
+(() => {
+  const pdfField = $('corrections-pdf');
+  if (pdfField) pdfField.addEventListener('change', () => {
+    const f = (pdfField.files || [])[0];
+    if (f) attachCorrectionsSource(f);
+  });
+})();
+
 async function upload(files) {
   if (!files.length) return;
   $('drop-error').hidden = true;
 
+  // A marked-up PDF or a redlined Word file is a corrections *source*, not a job
+  // file, so pull it out of the drop here (held for the read-and-apply) and let
+  // the InDesign book and anything else stage normally below.
+  files = routeCorrectionsDrop(files);
+  if (!files.length) { renderCorrectionsSource(); return; }
+
   // A drop ignores the picker's filter, so the choice above the drop zone is
   // applied here as well. Only what the user asked for; the server still
-  // preflights whatever gets through.
-  const allowed = allowedSuffixes();
+  // preflights whatever gets through. A corrections book is always an IDML, even
+  // when the picker is set to Word, so it is never filtered out of that drop.
+  const allowed = isCorrections()
+    ? [...allowedSuffixes(), '.idml'] : allowedSuffixes();
   const suffix = (f) => f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
   const skipped = files.filter((f) => !allowed.includes(suffix(f)));
   files = files.filter((f) => allowed.includes(suffix(f)));
@@ -393,6 +514,10 @@ async function upload(files) {
     if (state.tier === null) maybeInitTier();
     else reEvaluateTier();
   }
+  // The book just landed — refresh the proof note (its wording depends on whether
+  // a correctable file is staged) and re-sync the corrections panel/button.
+  renderCorrectionsSource();
+  if (isCorrections()) renderKind();
 }
 
 // The spinner that fills the gap between a drop and the list below it. The
@@ -2382,10 +2507,12 @@ function renderCost() {
   }
 
   if (isCorrections()) {
-    // Deterministic and free — no model, no price. The button waits on one
-    // correctable file and a non-empty corrections list.
+    // Deterministic and free — no model, no price (a PDF read is a small model
+    // cost, taken on the button). The button waits on one correctable file plus
+    // either a list to apply or an attached proof to read into one.
     const hasList = (($('corrections-input') || {}).value || '').trim().length > 0;
-    $('start').disabled = !(filesToRun().length > 0 && hasList);
+    const hasSource = !!state.correctionsSource;
+    $('start').disabled = !(filesToRun().length > 0 && (hasList || hasSource));
     setStartPrice(null);
     return;
   }
@@ -2513,6 +2640,16 @@ $('start').addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Starting…';
   try {
+    // One-button corrections: read the attached proof (a marked-up PDF or redlined
+    // Word file) into the edit list first, unless it was already previewed, then
+    // apply below. The reader surfaces its own failure and re-raises, so a bad read
+    // aborts here — nothing half-read is ever applied.
+    if (isCorrections() && state.correctionsSource
+        && !(($('corrections-input') || {}).value || '').trim()) {
+      button.textContent = 'Reading corrections…';
+      await readCorrectionsSource(state.correctionsSource);
+      button.textContent = 'Applying…';
+    }
     // Promo is its own pipeline with its own page: the same dropped files, sent
     // to /api/promo/run, and the Promo tab shows them being written.
     const promoRun = isPromo();
@@ -2589,6 +2726,7 @@ $('start').addEventListener('click', async () => {
     }
     state.files = [];
     state.selected.clear();
+    clearCorrectionsSource();
     renderFiles();
     show(promoRun ? 'promo' : 'jobs');
   } catch (err) {
@@ -3686,10 +3824,12 @@ function correctionsActions(job) {
   where.className = 'where';
   where.textContent = job.verified
     ? 'Every correction landed exactly, and nothing else in the file changed — '
-      + 'checked word for word, not assumed. Open the corrected .idml in '
+      + 'checked word for word, not assumed. Read the corrections report to see '
+      + 'each applied change in its sentence, then open the corrected .idml in '
       + 'InDesign; it reflows on open.'
     : 'Heads up: some corrections were refused, or the file changed in ways the '
-      + 'list did not ask for. Read the report before passing it on.';
+      + 'list did not ask for. Read the report — it shows every applied change in '
+      + 'context and every unaccounted one — before passing it on.';
   wrap.append(where);
   return wrap;
 }
@@ -3715,9 +3855,53 @@ async function openCorrectionsReport(job) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-// A self-contained printable report from corrections.json — the same three
-// stages the notes .md carries (parse, apply, verify), in the shared report
-// styling. Every value came from a document, so all of it is escaped.
+// A word-level redline between two versions of one line: shared runs are plain,
+// removed words struck, added words underlined. Whitespace is tokenised too, so
+// the spacing survives. This is what turns a bare find→replace into a change a
+// designer can read in context. LCS over tokens; lines are a sentence or two, so
+// the n·m table is tiny — with a block fallback if a paragraph is unusually long.
+function wordDiff(before, after) {
+  const tok = (s) => (s || '').match(/\s+|\S+/g) || [];
+  const a = tok(before);
+  const b = tok(after);
+  const n = a.length;
+  const m = b.length;
+  if (n > 600 || m > 600) {
+    return `<del>${esc(before)}</del> <ins>${esc(after)}</ins>`;
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const ops = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { ops.push(['eq', a[i]]); i++; j++; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push(['del', a[i]]); i++; }
+    else { ops.push(['ins', b[j]]); j++; }
+  }
+  while (i < n) { ops.push(['del', a[i]]); i++; }
+  while (j < m) { ops.push(['ins', b[j]]); j++; }
+  let html = '';
+  let k = 0;
+  while (k < ops.length) {
+    const t = ops[k][0];
+    let s = '';
+    while (k < ops.length && ops[k][0] === t) { s += ops[k][1]; k++; }
+    html += t === 'eq' ? esc(s)
+      : t === 'del' ? `<del>${esc(s)}</del>` : `<ins>${esc(s)}</ins>`;
+  }
+  return html;
+}
+
+// A self-contained printable report from corrections.json — the same stages the
+// notes .md carries (parse, apply, changes to review, verify), in the shared
+// report styling. Every value came from a document, so all of it is escaped.
 function correctionsReportHTML(d) {
   const num = (n) => Number(n || 0).toLocaleString();
   const ap = d.apply || {};
@@ -3762,12 +3946,16 @@ function correctionsReportHTML(d) {
       + `<div class="card"><span class="n">${num(com.unresolved)}</span>`
       + '<span class="l">need a human</span></div>'
     : '';
+  // The flagged-edits count only earns its own card when there are no reviewer
+  // comments; with comments, "need a human" above already counts the same items.
+  const flaggedCard = com.total ? ''
+    : `<div class="card"><span class="n">${num(flagged.length)}</span>`
+      + '<span class="l">for a human</span></div>';
   const cards = '<div class="cards">'
     + commentCards
     + `<div class="card"><span class="n">${num(ap.applied)}</span>`
     + '<span class="l">applied</span></div>'
-    + `<div class="card"><span class="n">${num(flagged.length)}</span>`
-    + '<span class="l">edits for a human</span></div>'
+    + flaggedCard
     + `<div class="card"><span class="n">${num(disc.length)}</span>`
     + '<span class="l">unaccounted changes</span></div>'
     + `<div class="card"><span class="n">${clean ? '✓' : '—'}</span>`
@@ -3823,11 +4011,41 @@ function correctionsReportHTML(d) {
       }).join('') + '</tbody></table></details>'
     : '';
 
-  const flaggedHTML = flagged.length
-    ? `<h2>For a human — ${num(flagged.length)}</h2>`
+  // A flagged edit read from a proof is the same problem as its reviewer comment,
+  // already listed above with the note and page — so when comments are present,
+  // this section shows only the flagged edits no comment covers (a hand-added or
+  // typed edit), and is retitled, so the two never read as the same list twice.
+  const covered = new Set();
+  needHuman.forEach((c) => (c.edit_ids || []).forEach((id) => covered.add(id)));
+  const flaggedShown = com.total
+    ? flagged.filter((o) => !covered.has(o.id)) : flagged;
+  const flaggedHTML = flaggedShown.length
+    ? `<h2>${com.total ? 'Other edits needing a human' : 'For a human'} — `
+      + `${num(flaggedShown.length)}</h2>`
       + '<p class="blurb">Each of these was refused rather than guessed at.</p>'
-      + flagged.map((o) => `<div class="flag"><code>${esc(o.id)}</code> `
+      + flaggedShown.map((o) => `<div class="flag"><code>${esc(o.id)}</code> `
         + `${change(o)}${o.detail ? ' — ' + esc(o.detail) : ''}</div>`).join('')
+    : '';
+
+  // The applied changes, each in the line it changed, as a redline — the
+  // designer's quick check that the corrections read right, not just that they
+  // anchored. The unaccounted-changes table below is the complement: this is what
+  // did change; that is proof nothing else did.
+  const changes = d.changes || [];
+  const changesHTML = changes.length
+    ? `<h2>Changes to review — ${num(changes.length)}</h2>`
+      + '<p class="blurb">Every applied correction in the line it changed — read '
+      + 'down and confirm each reads right. <del>struck</del> was removed, '
+      + '<ins>added</ins> is underlined.</p>'
+      + changes.map((c) => {
+        const where = `story ${esc(c.story_id)}`
+          + (c.paragraph >= 0 ? `, ¶ ${num(c.paragraph)}` : '');
+        return '<div class="chg"><div class="loc">' + where + '</div>'
+          + `<p class="rl">${wordDiff(c.before, c.after)}</p>`
+          + (c.instruction
+            ? `<div class="caveat">reviewer: “${esc(c.instruction)}”</div>` : '')
+          + '</div>';
+      }).join('')
     : '';
 
   const discHTML = disc.length
@@ -3855,7 +4073,15 @@ function correctionsReportHTML(d) {
   return '<!doctype html><html><head><meta charset="utf-8">'
     + `<title>${esc(title)}</title><style>${REPORT_CSS}`
     + '.flag{border-left:3px solid var(--accent-soft);padding:.2em .8em;'
-    + 'margin:.4em 0}.flag code{color:var(--accent)}</style></head><body>'
+    + 'margin:.4em 0}.flag code{color:var(--accent)}'
+    + '.chg{border-left:3px solid var(--accent-soft);padding:.25em .8em;'
+    + 'margin:.55em 0}.chg .loc{font-size:11px;letter-spacing:.04em;'
+    + 'text-transform:uppercase;color:var(--muted,#8a7f77);margin-bottom:.1em}'
+    + '.rl{margin:.1em 0;line-height:1.55}'
+    + '.rl del{color:#c0392b;text-decoration:line-through;'
+    + 'text-decoration-thickness:1px}'
+    + '.rl ins{color:#1e7d34;text-decoration:none;background:#e6f4ea;'
+    + 'border-radius:2px;padding:0 .1em}</style></head><body>'
     + '<div class="wrap"><header class="rep"><span class="brand">DocProof</span>'
     + `<h1>${esc(title)}</h1>`
     + '<p class="sub">'
@@ -3864,7 +4090,7 @@ function correctionsReportHTML(d) {
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
     + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
-    + discHTML + verifyHTML + commentsAllHTML
+    + changesHTML + discHTML + verifyHTML + commentsAllHTML
     + '</div></body></html>';
 }
 
@@ -6079,7 +6305,10 @@ function allowedSuffixes() {
 
 function applyFormatChoice(choice) {
   state.formatChoice = choice;
-  input.accept = allowedSuffixes().join(',');
+  // Corrections proofs ride in the same drop, so the picker offers PDFs too — a
+  // chosen PDF is sorted to the corrections source by routeCorrectionsDrop, never
+  // staged as a manuscript.
+  input.accept = [...allowedSuffixes(), '.pdf'].join(',');
 
   const format = state.formats.find((f) => f.suffix === choice);
   const converts = ` — plus ${state.extraSuffixes.slice(0, -1).join(', ')} and `

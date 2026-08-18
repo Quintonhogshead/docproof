@@ -96,12 +96,17 @@
         files</button> — one at a time or a whole stack</p>
       <p class="muted small" id="drop-formats">Word manuscripts and InDesign
         layouts</p>
-      <input type="file" id="file-input" accept=".docx,.idml" multiple hidden>
+      <input type="file" id="file-input" accept=".docx,.idml,.pdf" multiple hidden>
     </div>
 
     <!-- Outside #staged: a failed first drop must be visible even though the
          staged list never appeared. -->
     <p id="drop-error" class="error" hidden></p>
+
+    <!-- A corrections proof (marked-up PDF / redlined Word) rides in the same drop
+         but is not a staged job file, so its status shows here — above the staged
+         list — whether or not the InDesign book has landed yet. -->
+    <p id="corrections-source-note" class="muted small" hidden></p>
 
     <!-- Shown while the server stages and preflights a drop, which can take a
          few seconds — longer if a manuscript needs converting first. Bridges
@@ -137,8 +142,8 @@
         <label class="radio">
           <input type="radio" name="kind" value="corrections">
           <span><strong>Apply corrections</strong> — take a finished InDesign
-            file (exported as IDML) and a list of corrections, apply them
-            exactly, and check nothing else moved</span>
+            file (IDML) and a marked-up proof (PDF or redlined Word), apply the
+            corrections exactly, and check nothing else moved</span>
         </label>
         <p id="kind-warning" class="muted small" hidden></p>
       </fieldset>
@@ -566,21 +571,25 @@
 
         <fieldset class="field" id="corrections-options" hidden>
           <legend>The corrections</legend>
-          <p class="field muted small">Two files: the book you dropped above —
-            the finished <strong>InDesign file, exported as IDML</strong> — and
-            the corrections. Drop the corrections as a <strong>marked-up
-            PDF</strong>; DocProof reads its comments and highlights into an edit
-            list you review before it is applied. One book at a time.</p>
+          <p class="field muted small">Drop <strong>both files together</strong>
+            at the top: the finished <strong>InDesign file (IDML)</strong> and the
+            <strong>marked-up PDF proof</strong> (or a redlined Word file). Then
+            click <strong>Read corrections &amp; apply</strong> — DocProof reads the
+            proof’s comments and highlights, applies them exactly, and hands back
+            the corrected IDML with a report showing every change to review. One
+            book at a time.</p>
+          <p class="field" id="corrections-source" hidden></p>
 
           <label class="field" id="corrections-pdf-field">
-            <span>Marked-up PDF proof</span>
+            <span>Proof not dropped above? Choose it here</span>
             <input type="file" id="corrections-pdf" accept=".pdf">
-            <button type="button" id="extract-pdf">Read the PDF</button>
-            <small class="muted">Each comment and highlight is read together with
-              the line it points at and turned into a draft edit by the house
-              model — you review it below before anything is applied. A proof with
-              hundreds of marks is read in batches, so the edits fill in as they
-              come.</small>
+            <button type="button" id="extract-pdf">Preview the edit list</button>
+            <small class="muted">Optional. The book’s marked-up PDF — chosen here or
+              dropped above — is read into the corrections by the house model, each
+              comment together with the line it points at. “Preview the edit list”
+              fills the box below so you can eyeball it first; otherwise
+              <strong>Read corrections &amp; apply</strong> reads and applies it in
+              one step. A proof with hundreds of marks is read in batches.</small>
           </label>
           <div class="extract-status" id="corrections-extract-status" hidden
                aria-live="polite">
