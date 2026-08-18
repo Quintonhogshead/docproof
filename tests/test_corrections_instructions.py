@@ -39,13 +39,15 @@ def r(note, anchor, *, context="", highlighted=True):
     ("Capitalize", "solo", "solo", "Solo"),
     ("Capital T", "a tournament", "a tournament", "a Tournament"),
     # the note states the answer
-    ("Add abbreviating apostrophe: callin'", "calling", "calling", "callin'"),
-    ("Possessive: Shanklins'.", "the Shanklins house", "Shanklins", "Shanklins'"),
+    # The reviewer types a straight apostrophe into the comment box; the book is
+    # set in curly ones, and the correction is written in the book's.
+    ("Add abbreviating apostrophe: callin'", "calling", "calling", "callin’"),
+    ("Possessive: Shanklins'.", "the Shanklins house", "Shanklins", "Shanklins’"),
     ("Replace with drop apostrophe: ’Sides", "‘Sides, I’m hoping",
      "‘Sides", "’Sides"),
     # the note *is* the corrected text
     ("all right", "alright. ” There was", "alright", "all right"),
-    ("wouldn't", "wouldnt", "wouldnt", "wouldn't"),
+    ("wouldn't", "wouldnt", "wouldnt", "wouldn’t"),
     ("switched", "switch", "switch", "switched"),
     ("’til", "till", "till", "’til"),
     # other shapes
@@ -271,3 +273,58 @@ def test_no_other_rule_reaches_outside_the_mark():
     assert r("Lowercase", "Hungry", context=line).find == "Hungry"
     assert r("Remove comma", "sure", context=line) is None
     assert r("Add comma after", "hungry", context=line).find == "hungry"
+
+
+# --- quotation marks, and the apostrophe that is the same character -------------
+
+def test_removing_single_quotes_keeps_the_possessive_inside_them():
+    """The bug this pins shipped a wrong change without anyone seeing it. A closing
+    single quote and an apostrophe are one character, so removing "the single
+    quotes" around a marked span removed the possessive too — and the edit is
+    mechanical, so it applied. Only the outermost pair is the reviewer's."""
+    got = resolve("Remove single quotes", "‘For fuck’s sake,’")
+    assert got.replace == "For fuck’s sake,"
+
+
+def test_a_quotation_holding_a_contraction_converts_to_doubles():
+    """Most quoted dialogue holds a contraction, so a rule that could only handle
+    a span with exactly one closing mark declined nearly all of them."""
+    assert resolve("Replace single quotes with doubles",
+                   "‘LET’S GO’").replace == "“LET’S GO”"
+    assert resolve("Replace single quotes with doubles",
+                   "‘y’all.’").replace == "“y’all.”"
+    # `_focus` narrows to the run that changed, so the trailing words drop off.
+    got = resolve("Replace single quote with double",
+                  "‘Oh, son, don’t overexert yourself.’ The latter")
+    assert got.find == "‘Oh, son, don’t overexert yourself.’"
+    assert got.replace == "“Oh, son, don’t overexert yourself.”"
+
+
+def test_a_quotation_that_never_closes_in_the_mark_is_left_for_a_person():
+    """A quotation running on to the next line is marked one line at a time, so
+    the span opens and does not close. The last apostrophe in it must not pass for
+    the closing mark — that would write "aren”t"."""
+    assert resolve("Replace single quote with double",
+                   "on his part. ‘If you aren’t going to speak to") is None
+
+
+def test_two_quoted_runs_in_one_mark_are_left_for_a_person():
+    assert resolve("Replace single quotes with doubles",
+                   "‘towel head,’ ‘terrorist,’") is None
+
+
+def test_a_rule_writes_the_book_s_apostrophe_not_the_reviewer_s():
+    """A note is typed into a comment box, where "didn't" gets a straight quote,
+    and the book is set in curly ones. Correcting the word and introducing a
+    typographic inconsistency in the same stroke is not a correction."""
+    assert resolve("didn't", "doesn’t").replace == "didn’t"
+    assert resolve("Add abbreviating apostrophe: callin'", "callin").replace \
+        == "callin’"
+    assert resolve("Possessive: Shanklins'.", "Shanklins").replace == "Shanklins’"
+
+
+def test_a_leading_straight_quote_is_left_as_typed():
+    """An elision and an opening quotation are indistinguishable there, so the
+    direction is not guessed."""
+    assert resolve("Add drop apostrophe: 'bout", "How bout a drive").replace \
+        == "'bout"

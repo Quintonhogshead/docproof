@@ -22,7 +22,7 @@ as before. A rule that is unsure is worth nothing, so it declines.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
 from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
@@ -133,11 +133,45 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
         if got is None and rule is _replace_punctuation and context:
             got = _replace_punctuation_over_line(low, note, anchor, context)
         if got is not None and got.find and got.find in (anchor + "\n" + context):
+            got = _house_apostrophe(got)
             if (got.find == got.replace and not got.format and not got.paragraph
                     and not got.paragraph_style and got.kind != DESIGN):
                 return None            # a rule that changes nothing is no rule
             return got
     return None
+
+
+# A straight apostrophe inside a word, which is what a reviewer types into a
+# comment box and never what the book contains.
+_STRAIGHT_APOSTROPHE = re.compile(r"(?<=\w)'(?=\w)")
+
+
+def _house_apostrophe(got: "Resolved") -> "Resolved":
+    """The same edit with its replacement set in the book's own apostrophe.
+
+    Half these rules take their answer from the reviewer's note verbatim — that is
+    the whole point of them, and it is right. But a note is typed into a comment
+    box, where "didn't" gets a straight quote, and the book is set in curly ones.
+    Applying it as typed corrects the word and introduces a typographic
+    inconsistency in the same stroke, which is precisely what the review pass
+    downstream exists to catch. Twenty-seven of them on one proof.
+
+    Two shapes are converted, both unambiguous: one *inside* a word ("didn't"),
+    and a single one *ending* a word when it is the only straight mark left
+    ("callin'", "Shanklins'") — an elided g or a plural possessive, which cannot be
+    the closing half of a pair because there is no opening half. A leading one
+    ("'til") is left alone: an elision and an opening quotation look identical
+    there, and guessing the direction is not a thing to do silently."""
+    if "'" not in got.replace:
+        return got
+    fixed = _STRAIGHT_APOSTROPHE.sub("’", got.replace)
+    if fixed.count("'") == 1:
+        at = fixed.index("'")
+        if at > 0 and (fixed[at - 1].isalnum() or fixed[at - 1] == "’"):
+            fixed = fixed[:at] + "’" + fixed[at + 1:]
+    if fixed == got.replace:
+        return got
+    return replace(got, replace=fixed)
 
 
 def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | None:
@@ -521,16 +555,47 @@ def _remove_punctuation(low, note, anchor, highlighted) -> Resolved | None:
     mark = PUNCTUATION.get(name)
     if mark is None:
         return None
-    pair = name.endswith("s") and mark in _OPENERS
-    marks = [mark, _OPENERS[mark]] if pair else [mark]
-    if sum(anchor.count(c) for c in marks) < 1:
+    if name.endswith("s") and mark in _OPENERS:
+        span = _outer_pair(anchor, mark)
+        if span is None:
+            return None
+        start, end = span
+        return _focus(anchor, anchor[:start] + anchor[start + 1:end]
+                      + anchor[end + 1:], "remove-punctuation")
+    if anchor.count(mark) != 1:
         return None
-    if not pair and anchor.count(mark) != 1:
-        return None
-    replace = anchor
-    for c in marks:
-        replace = replace.replace(c, "")
-    return _focus(anchor, replace, "remove-punctuation")
+    return _focus(anchor, anchor.replace(mark, ""), "remove-punctuation")
+
+
+def _outer_pair(anchor: str, closer: str) -> tuple[int, int] | None:
+    """The offsets of the quotation marks that open and close `anchor`, or None
+    when it does not hold exactly one unambiguous pair.
+
+    Only the outermost two are the reviewer's quotation marks. Everything between
+    them is the quoted text, and in this book — in any book — that text is full of
+    the *same character*: a closing single quote and an apostrophe are one and the
+    same, so "remove the single quotes" around “For fuck’s sake” had been removing
+    the possessive too and shipping "For fucks sake" as a mechanical edit no one
+    was asked to look at. Taking the first opener and the last closer, and nothing
+    in between, is what tells the reviewer's marks from the author's."""
+    opener = _OPENERS[closer]
+    if anchor.count(opener) != 1:
+        return None                    # no pair, or two quoted runs — ambiguous
+    start = anchor.find(opener)
+    # The closing mark, told from an apostrophe by what follows it: a quotation
+    # closes before a space or a stop, an apostrophe before a letter ("aren’t",
+    # "y’all"). Without this the last apostrophe in an unclosed span passes for the
+    # close — and a quotation running on to the next line is marked one line at a
+    # time, so "‘If you aren’t going to speak to" would have been read as a pair
+    # and written back as "“If you aren”t".
+    end = -1
+    for i in range(len(anchor) - 1, start, -1):
+        if anchor[i] == closer and not anchor[i + 1:i + 2].isalnum():
+            end = i
+            break
+    if end <= start:
+        return None                    # opens but never closes inside the mark
+    return start, end
 
 
 def _add_punctuation(low, note, anchor, highlighted) -> Resolved | None:
@@ -629,19 +694,24 @@ def _enclose_in_quotes(low, note, anchor, highlighted) -> Resolved | None:
 
 
 def _quote_style(low, note, anchor, highlighted) -> Resolved | None:
-    """`Replace single quotes with doubles` — the pair the reviewer marked."""
+    """`Replace single quotes with doubles` — the pair the reviewer marked.
+
+    The singular phrasing is the same request: a reviewer marking a quotation one
+    mark at a time writes "replace single quote with double" twice, once on the
+    opener and once on the closer, and both mean the pair around them."""
     if not re.match(r"^(?:replace|change)\s+single\s+quotes?\s+with\s+"
                     r"double(?:s|\s+quotes?)?\s*$", low):
         return None
-    opens, closes = anchor.count("‘"), anchor.count("’")
-    if opens + closes == 0:
+    # The outermost pair, and only it. A closing single quote and an apostrophe are
+    # the same character, so a span holding "‘LET’S GO’" has three of them and only
+    # two are the reviewer's; converting all three would write "“LET”S GO”". This
+    # used to decline such a span altogether, which is most quoted dialogue there
+    # is — the contraction is the rule, not the exception.
+    span = _outer_pair(anchor, "’")
+    if span is None:
         return None
-    # An apostrophe is the same character as a closing single quote, so a span with
-    # closers but no opener cannot be told from one holding contractions. Only a
-    # matched pair is unambiguous.
-    if opens != 1 or closes != 1:
-        return None
-    replace = anchor.replace("‘", "“").replace("’", "”")
+    start, end = span
+    replace = anchor[:start] + "“" + anchor[start + 1:end] + "”" + anchor[end + 1:]
     return _focus(anchor, replace, "quote-style")
 
 
