@@ -228,6 +228,13 @@ def read_pdf(path: str | Path) -> PdfProof:
                 log.warning("Could not read the text of page %d", page_no,
                             exc_info=True)
                 layout = None
+            finally:
+                # pdfplumber caches every object it parsed on the page, and holds it
+                # for as long as the document is open. Over a 400-page proof that
+                # accumulates into hundreds of megabytes on a box with two gigabytes
+                # to share with a JVM; the words are already copied out by here, so
+                # the cache has nothing left to give.
+                plumber_page.close()
             page_texts.append(layout.text if layout is not None else "")
             if pi >= len(reader.pages):
                 continue
