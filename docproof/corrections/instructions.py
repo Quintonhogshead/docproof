@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
+from .apply import all_spans
 from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
                     FORMAT_SWASH, JUDGMENT, MECHANICAL, PARA_DELETE,
                     PARA_MERGE_NEXT, PARA_SPLIT_AT)
@@ -209,7 +210,7 @@ def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | Non
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
-def edits_from_comments(comments) -> tuple[list[dict], list]:
+def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
     """Split a proof's comments into the ones the rules can resolve and the ones
     the model still has to read.
 
@@ -221,9 +222,23 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
 
     The page is not carried here: an edit cites its comment's id in `source`, and
     that id already names the page (`parse.page_from_source`), so it arrives on the
-    edit without anyone having to retype it."""
+    edit without anyone having to retype it.
+
+    `pages` maps a proof page to THE BOOK'S OWN TEXT for that page (what
+    `pagemap.page_book_text` returns), and it settles what two marks on the same
+    words mean. The book's text and not the proof's: an ordinal is read back after
+    `apply` has narrowed to the page's run of the book, so counting it anywhere
+    else answers a different question. Counted over the PDF's rendering it was
+    measurably worse than not counting it at all — a running head and a word
+    hyphenated across a line end are copies the book does not have. A reviewer marking a quotation puts a note on the opening mark and
+    another on the closing one — one request, recorded twice — while a reviewer
+    marking both copies of "‘Baba’" in a paragraph means two. Those look identical
+    in the edit list and are told apart by where the marks sit: the same position
+    is one request, and different positions are different copies of the text, whose
+    ordinal on the page is what lets both land."""
     rows: list[dict] = []
     unresolved: list = []
+    made: list[tuple] = []                 # (comment, Resolved) in reading order
     for c in comments:
         instruction = getattr(c, "instruction", "") or ""
         anchor = getattr(c, "anchor", "") or ""
@@ -233,6 +248,24 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
                       highlighted=highlighted)
         if got is None:
             unresolved.append(c)
+        else:
+            made.append((c, got))
+
+    seen: dict[tuple, dict] = {}
+    for c, got in made:
+        instruction = getattr(c, "instruction", "") or ""
+        anchor = getattr(c, "anchor", "") or ""
+        context = getattr(c, "context", "") or ""
+        page = getattr(c, "page", 0) or 0
+        offset = getattr(c, "offset", -1)
+        key = (page, offset, instruction, got.find, got.replace)
+        if key in seen:
+            # The same mark, noted twice. One edit, and both comments cite it, so
+            # the change log still accounts for each of them and neither is left
+            # looking like a mark nobody acted on.
+            cid = getattr(c, "id", "")
+            if cid:
+                seen[key]["source"] = f"{seen[key].get('source', '')} {cid}".strip()
             continue
         row = {"find": got.find, "replace": got.replace,
                "instruction": instruction}
@@ -248,8 +281,40 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
             row["context"] = context
         if getattr(c, "id", ""):
             row["source"] = c.id
+        nth = _ordinal(pages, page, offset, anchor, got.find)
+        if nth:
+            row["occurrence"] = nth
+        seen[key] = row
         rows.append(row)
     return rows, unresolved
+
+
+def _ordinal(pages, page: int, offset: int, anchor: str, find: str) -> int:
+    """Which copy of `find` on the proof page this mark sits on, 1-based — or 0
+    when the question does not arise or cannot be answered.
+
+    0 for text that occurs once on the page, which is the ordinary case: an edit
+    with no ordinal is the one that insists its anchor be unique, and that is a
+    stronger check than any number. An ordinal is only worth carrying when the page
+    holds several copies and the mark says which was meant.
+
+    It is deliberately counted over the *page*, not the book — a page is what the
+    reviewer was looking at — so it is only ever read after the page map has
+    narrowed to that page. `apply` refuses an ordinal it cannot scope that way."""
+    if not pages or offset < 0 or not find:
+        return 0
+    text = (pages.get(page) if hasattr(pages, "get")
+            else (pages[page - 1] if 1 <= page <= len(pages) else ""))
+    if not text:
+        return 0
+    spans = all_spans(text, find)
+    if len(spans) <= 1:
+        return 0
+    at = offset + (anchor.find(find) if find and find in anchor else 0)
+    for i, (start, end) in enumerate(spans, 1):
+        if start <= at < end or abs(start - at) <= 2:
+            return i
+    return 0
 
 
 # --- the rules ----------------------------------------------------------------

@@ -1227,11 +1227,16 @@ def register(app: FastAPI) -> None:
         # resolved here, exactly, for nothing: the model is only asked about the
         # notes no rule is certain of, so it neither invents a `find` for the easy
         # ones nor gets billed for them.
-        resolved, unresolved = edits_from_comments(comments)
-        # The book's own words for the pages the remaining comments sit on, so the
-        # model quotes the file it is editing instead of a rendering of it.
+        # The book's own words for every page a comment sits on. The model quotes
+        # the file it is editing instead of a rendering of it — and the rules need
+        # the same text to say WHICH copy of a repeated word a mark is on, because
+        # that ordinal is read back after `apply` has narrowed to the page's run of
+        # the book, so counting it over the PDF's rendering answers the wrong
+        # question (a running head and a hyphenated word are copies the book does
+        # not have).
         book = _book_pages_for(file_id, owner, list(proof.page_texts),
-                              {c.page for c in unresolved})
+                              {c.page for c in comments})
+        resolved, unresolved = edits_from_comments(comments, pages=book)
         batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
                                           pages=book)
         # The comments themselves ride back too, so the panel can carry them into
@@ -1267,9 +1272,9 @@ def register(app: FastAPI) -> None:
         from docproof.corrections.instructions import edits_from_comments
         proof = await _read_proof_or_400(file)
         comments = list(proof.comments)
-        resolved, unresolved = edits_from_comments(comments)
         book = _book_pages_for(file_id, owner, list(proof.page_texts),
-                              {c.page for c in unresolved})
+                              {c.page for c in comments})
+        resolved, unresolved = edits_from_comments(comments, pages=book)
         batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
                                           pages=book)
         response = _extract_batches_with_model(app, owner, batches)

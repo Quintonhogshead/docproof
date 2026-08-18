@@ -328,3 +328,64 @@ def test_a_leading_straight_quote_is_left_as_typed():
     direction is not guessed."""
     assert resolve("Add drop apostrophe: 'bout", "How bout a drive").replace \
         == "'bout"
+
+
+# --- two marks on the same words -----------------------------------------------
+
+def _c(cid, page, anchor, instruction, offset, kind="highlight", context=""):
+    return PdfComment(id=cid, page=page, anchor=anchor, instruction=instruction,
+                      offset=offset, kind=kind, context=context)
+
+
+def test_one_request_marked_twice_becomes_one_edit_citing_both_comments():
+    """A reviewer converting a quotation puts a note on the opening mark and
+    another on the closing one. That is one request recorded twice: two edits
+    would mean the second looking for text the first had already changed, and
+    coming back as a correction that could not be found."""
+    rows, unresolved = edits_from_comments([
+        _c("p386-550", 386, "saying ‘KY Kingdom or BUST’ were",
+           "Replace single quote with double", 184),
+        _c("p386-551", 386, "saying ‘KY Kingdom or BUST’ were",
+           "Replace single quote with double", 184)])
+    assert not unresolved and len(rows) == 1
+    # Both comments cite the one edit, so the change log still answers for each.
+    assert rows[0]["source"] == "p386-550 p386-551"
+    assert rows[0]["replace"] == "“KY Kingdom or BUST”"
+
+
+def test_the_same_words_marked_in_two_places_stay_two_edits():
+    """Two copies of "‘Baba’" in one paragraph, both marked, are two requests —
+    and collapsing them would leave one of them uncorrected. The marks sit at
+    different positions, which is what tells this from the case above."""
+    page = "I switch between ‘Baba’ and ‘Dad’ effortlessly. I used ‘Dad’ to " \
+           "make a point and ‘Baba’ to be playful."
+    rows, _ = edits_from_comments(
+        [_c("p111-128", 111, "‘Baba’", "Replace single quotes with doubles", 17),
+         _c("p111-131", 111, "‘Baba’", "Replace single quotes with doubles", 84)],
+        pages={111: page})
+    assert len(rows) == 2
+    assert [r["occurrence"] for r in rows] == [1, 2]
+
+
+def test_no_ordinal_is_carried_for_text_that_occurs_once():
+    """An edit with no ordinal is the one that insists its anchor be unique, which
+    is a stronger check than any number — so the number is only added where the
+    page really does hold several copies."""
+    rows, _ = edits_from_comments(
+        [_c("p9-1", 9, "harbor", "harbour", 10)],
+        pages={9: "we sailed into the harbor at dawn"})
+    assert "occurrence" not in rows[0]
+
+
+def test_the_ledger_reaches_both_comments_of_a_merged_edit():
+    """The point of merging into one edit rather than dropping a comment: every
+    mark still gets told what became of it."""
+    from docproof.corrections.model import DISP_APPLIED, Edit
+    from docproof.corrections.run import _reconcile_comments
+    edit = Edit("e1", "‘x’", "“x”", source="p1-1 p1-2")
+    dispositions = _reconcile_comments(
+        [_c("p1-1", 1, "‘x’", "Replace single quotes with doubles", 0),
+         _c("p1-2", 1, "‘x’", "Replace single quotes with doubles", 0)],
+        [edit], lambda _id: (DISP_APPLIED, ""))
+    assert [d.disposition for d in dispositions] == [DISP_APPLIED, DISP_APPLIED]
+    assert all(d.edit_ids == ("e1",) for d in dispositions)

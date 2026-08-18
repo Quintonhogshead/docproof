@@ -322,6 +322,17 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None):
                       else f"the page {edit.page} it was marked on "
                            f"(which could not be placed in the book)")
 
+    # An ordinal counted on a proof page says nothing about a book the page could
+    # not be placed in — "the second copy on page 111" is not "the second copy in
+    # the novel", and reading it as one would apply a correction to whichever copy
+    # happened to come second. So it is refused rather than reinterpreted.
+    if edit.occurrence and edit.page and not on_page and len(candidates) > 1:
+        return EditOutcome(
+            edit, AMBIGUOUS, occurrences=len(candidates),
+            detail=f"the correction names the copy on page {edit.page}, and that "
+                   "page could not be placed in the book, so which copy it means "
+                   "cannot be told")
+
     if edit.context:
         # In one paragraph first, then across breaks. The order matters: a context
         # that resolves inside a single paragraph is the tighter answer, and the
@@ -334,6 +345,14 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None):
             failed.append("the marked context")
 
     n = len(candidates)
+    # One candidate left is the answer, whatever ordinal the correction carries.
+    # The ordinal counts copies on the page; the anchors that ran before it — the
+    # page, then the line the mark sat on — have already chosen among those, and
+    # having chosen, "the second copy" indexes a set of one and overshoots it. The
+    # narrowing is the better evidence, so the ordinal yields to it rather than
+    # contradicting it.
+    if n == 1:
+        return candidates[0]
     if edit.occurrence == 0:
         if n > 1:
             if failed:

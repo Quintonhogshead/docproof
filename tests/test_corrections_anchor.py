@@ -286,3 +286,30 @@ def test_a_mixed_case_run_is_not_recased():
         [story], [Edit("e1", "the harbor at dawn and dusk", "the harbour at dawn")])
     assert outcomes[0].status == APPLIED
     assert [p.text for p in story.paragraphs] == ["the harbour at dawn"]
+
+
+def test_a_narrowing_that_leaves_one_candidate_beats_the_ordinal():
+    """An ordinal counts copies on the proof page; the page map and the marked
+    line run before it and have already chosen among those. Having chosen, "the
+    second copy" indexes a set of one and overshoots it — which turned twenty-five
+    corrections that had landed into "asked for #2 of 1" when ordinals were first
+    carried. The narrowing is the better evidence and wins."""
+    story = _story("She said the word once here.", "And the word again there.")
+    edit = Edit("e1", "the word", "the phrase", occurrence=2,
+                context="And the word again there.")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert [p.text for p in story.paragraphs] == ["She said the word once here.",
+                                                  "And the phrase again there."]
+
+
+def test_an_ordinal_counted_on_a_page_that_cannot_be_placed_is_refused():
+    """"The second copy on page 111" is not "the second copy in the novel", and
+    reading it as one would correct whichever copy happened to come second."""
+    story = _story("the word here.", "the word there.")
+    edit = Edit("e1", "the word", "the phrase", occurrence=2, page=111)
+    outcomes, _ = apply_to_stories([story], [edit])          # no page map
+    assert outcomes[0].status == AMBIGUOUS
+    assert "could not be placed" in outcomes[0].detail
+    assert [p.text for p in story.paragraphs] == ["the word here.",
+                                                  "the word there."]
