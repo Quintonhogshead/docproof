@@ -366,12 +366,31 @@ SOURCE_LABEL = {"app": "Dropped in the app", "watch": "Watched folder"}
 def _result_group(job) -> tuple[str, list]:
     """The one group that differs by pipeline: what this job produced."""
     if job.kind == "corrections":
-        return ("Corrections", [
-            ("Applied", _int(job.applied), None),
-            ("Refused for a human", _int(job.flags), None),
-            ("Unaccounted changes", _int(job.discrepancies), None),
-            ("Clean", "yes" if job.verified else "no", None),
-        ])
+        # Count in one unit so the rows sum to the whole, matching the report. From
+        # a proof that unit is the comments — reviewer comments = applied + no change
+        # needed + need a human — with the edit tally shown beneath as the mechanism.
+        # `applied`/`flags` are edit counts and cannot sum with a comment total, so a
+        # typed list (no comments) is the only place they lead. See the report for
+        # why the two units differ.
+        total = job.total_comments or 0
+        if total:
+            human = job.unresolved or 0
+            rows = [("Reviewer comments", _int(total), None)]
+            if isinstance(job.applied_comments, int):
+                no_change = max(0, total - job.applied_comments - human)
+                rows.append(("Applied", _int(job.applied_comments), None))
+                if no_change:
+                    rows.append(("No change needed", _int(no_change), None))
+            rows.append(("Need a human", _int(human), None))
+            rows.append(("Edits applied", _int(job.applied), None))
+        else:
+            rows = [
+                ("Applied", _int(job.applied), None),
+                ("Refused for a human", _int(job.flags), None),
+            ]
+        rows.append(("Unaccounted changes", _int(job.discrepancies), None))
+        rows.append(("Clean", "yes" if job.verified else "no", None))
+        return ("Corrections", rows)
     if job.kind == "promo":
         return ("Promo copy", [
             ("Words read", _int(job.words), None),

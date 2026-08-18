@@ -65,6 +65,23 @@ def test_completion_for_job_speaks_each_pipeline():
     assert "deterministic — no model, no cost" in corr
 
 
+def test_a_corrections_email_from_a_proof_reconciles_in_comments():
+    """A proof-driven corrections run reports in comments, the way the report does:
+    reviewer comments = applied + no change needed + need a human, summing to the
+    total the reviewer marked — with the edit tally shown beneath, never added to
+    the comment total. An edit count (535) beside a comment count (560) is exactly
+    what stopped the old summary reconciling."""
+    _, corr, _ = notify.completion_for_job(_job(
+        kind="corrections", filename="Shams - a thousand touches.idml",
+        applied=535, flags=15, discrepancies=0, verified=False,
+        total_comments=560, applied_comments=534, unresolved=21))
+    assert "Reviewer comments: 560" in corr
+    assert "Applied: 534" in corr
+    assert "No change needed: 5" in corr             # 560 − 534 − 21, reconciles
+    assert "Need a human: 21" in corr
+    assert "Edits applied: 535" in corr              # the mechanism, labelled edits
+
+
 def test_the_review_email_reports_both_channels():
     """A proofread hands back corrections AND questions. The log said only the
     first, so the queries waiting for the author were invisible to the person

@@ -90,9 +90,32 @@ class CorrectionsOutputs:
         return len(self.comments)
 
     @property
+    def applied_comments(self) -> int:
+        """Reviewer comments whose edit(s) landed — the comment-level 'applied'.
+
+        This is the count that reconciles with `total_comments`; `applied` is an
+        *edit* count and cannot, because one comment may become several edits or
+        none, and a typed edit may carry no comment at all. Headlines read off a
+        proof (comments present) count in this unit so the buckets sum to the
+        total the reviewer actually marked."""
+        return sum(1 for c in self.comments if c.disposition == DISP_APPLIED)
+
+    @property
+    def no_change_comments(self) -> int:
+        """Reviewer comments whose edit was a true no-op — the text already read
+        the way the mark asked. Neither applied nor a human's to own, so it is its
+        own bucket; dropping it is what left the old headline short of the total."""
+        return sum(1 for c in self.comments if c.disposition == DISP_NO_OP)
+
+    @property
     def unresolved(self) -> int:
         """Reviewer comments a person still owns — flagged, or never turned into
-        an edit at all. The count that used to be invisible."""
+        an edit at all. The count that used to be invisible.
+
+        `applied_comments + no_change_comments + unresolved == total_comments`, by
+        construction: every comment reaches exactly one of the four dispositions,
+        and these three buckets name all of them (unresolved folds the two
+        needs-a-human ones)."""
         return sum(1 for c in self.comments if c.needs_human)
 
     @property

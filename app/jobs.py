@@ -387,11 +387,15 @@ class Job:
     # count that landed and `flags` the count refused for a human, reusing the
     # same fields prep does; this one has no prep analogue. None on other kinds.
     discrepancies: int | None = None
-    # Corrections from a PDF: how many reviewer comments came in, and how many a
-    # person still owns (flagged, or never turned into an edit). `unresolved` is
-    # the count that used to vanish silently. None on other kinds and on a
-    # corrections run with no comment ledger (a typed list).
+    # Corrections from a PDF: how many reviewer comments came in, how many landed,
+    # and how many a person still owns (flagged, or never turned into an edit).
+    # These three reconcile — applied + no-change + unresolved == total, where
+    # no-change is the remainder — so the card can add up to the total the reviewer
+    # marked. `applied` above is an *edit* count and deliberately does not: a
+    # comment can make several edits or none. `unresolved` is the count that used
+    # to vanish silently. None on other kinds and on a typed list (no ledger).
     total_comments: int | None = None
+    applied_comments: int | None = None
     unresolved: int | None = None
     # Promo only: how many capitalised terms in the copy appear nowhere in the
     # manuscript — the grounding check's count, surfaced so a card can flag it.
@@ -1744,7 +1748,9 @@ class JobRunner:
             job_id, state="done", results_dir=str(out), error=None,
             applied=outputs.applied, flags=outputs.flagged,
             discrepancies=outputs.discrepancies,
-            total_comments=outputs.total_comments, unresolved=outputs.unresolved,
+            total_comments=outputs.total_comments,
+            applied_comments=outputs.applied_comments,
+            unresolved=outputs.unresolved,
             verified=outputs.clean, cost=cost)
         self._finish(job_id)
 

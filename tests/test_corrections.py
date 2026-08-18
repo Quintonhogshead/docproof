@@ -19,7 +19,8 @@ from docproof.corrections.apply import (all_occurrences, apply_edits,
 from docproof.corrections.idml import parse_story, read_stories
 from docproof.corrections.model import (AMBIGUOUS, APPLIED, APPLIED_EXACTLY,
                                         CROSSES_PARAGRAPH, DESIGN, DEVIATES,
-                                        DISP_APPLIED, DISP_NOT_EXTRACTED, Edit,
+                                        DISP_APPLIED, DISP_NO_OP,
+                                        DISP_NOT_EXTRACTED, Edit,
                                         JUDGMENT, MECHANICAL, MISSING, NOT_FOUND,
                                         OVERLAPS, ReviewChange, ROUTED_TO_DESIGN,
                                         WITHHELD)
@@ -777,6 +778,50 @@ def test_every_comment_gets_a_disposition_and_none_is_swallowed(tmp_path):
                if c["disposition"] == "not_extracted"]
     assert dropped and dropped[0]["instruction"] == "cut this scene?"
     assert payload["comments"]["unresolved"] == 1
+
+
+def test_the_comment_buckets_reconcile_to_the_total(tmp_path):
+    """The headline's fix: applied + no-change + need-a-human counts one comment
+    each, so the three sum to the total the reviewer marked — unlike `applied`, an
+    edit count that cannot (one comment may make several edits, or none). Every
+    disposition is represented, and the markdown headline reads them back in the
+    comment unit with the edit tally demoted to a parenthetical."""
+    import json
+    edits = [
+        {"find": "Their were", "replace": "There were", "source": "c-ok"},
+        {"find": "keep me", "replace": "keep me", "source": "c-noop"},  # a no-op
+        {"find": "nowhere in the whole book", "replace": "x", "source": "c-flag"},
+    ]
+    comments = [
+        {"id": "c-ok", "page": 1, "instruction": "subject-verb"},
+        {"id": "c-noop", "page": 2, "instruction": "already fine"},
+        {"id": "c-flag", "page": 3, "instruction": "cannot be placed"},
+        {"id": "c-none", "page": 4, "instruction": "a mark no edit was made for"},
+    ]
+    result = apply_corrections(LAYOUT, edits, tmp_path, comments=comments)
+
+    assert result.total_comments == 4
+    assert result.applied_comments == 1        # c-ok
+    assert result.no_change_comments == 1      # c-noop
+    assert result.unresolved == 2              # c-flag (flagged) + c-none (not_extracted)
+    # The identity the whole fix rests on.
+    assert (result.applied_comments + result.no_change_comments
+            + result.unresolved == result.total_comments)
+
+    by_id = {c.id: c.disposition for c in result.comments}
+    assert by_id == {"c-ok": DISP_APPLIED, "c-noop": DISP_NO_OP,
+                     "c-flag": "flagged", "c-none": DISP_NOT_EXTRACTED}
+
+    # The headline counts in comments and reconciles; the edit count is a demoted
+    # parenthetical, not a fourth addend beside the comment total.
+    md = result.report_md.read_text(encoding="utf-8")
+    assert "4 reviewer comment(s), 1 applied, 1 no change needed, 2 need a human" in md
+    assert "1 edit(s) applied, across" in md    # the mechanism, said once
+
+    payload = json.loads((tmp_path / "corrections.json").read_text("utf-8"))
+    items = payload["comments"]["items"]
+    assert sum(1 for c in items if c["disposition"] == "applied") == 1
+    assert sum(1 for c in items if c["disposition"] == "no_op") == 1
 
 
 def test_a_flagged_edits_comment_is_unresolved_not_applied(tmp_path):
