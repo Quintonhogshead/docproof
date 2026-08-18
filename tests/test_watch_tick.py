@@ -1169,12 +1169,11 @@ def test_a_ready_author_with_an_empty_folder_is_flagged_missing(tmp_path,
     assert not report.needs_human
 
 
-def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
-                                                                 provider):
+def test_a_ready_author_already_formatted_is_flagged_stuck(tmp_path, provider):
     """The intake file "<surname> - Book Original" is present but marked done,
-    and its outputs are beside it. That is not a missing Book Original — the
-    folder holds the real deliverable — so it must not nag, even though HubSpot
-    still reads ready."""
+    and its outputs are beside it, yet HubSpot still reads ready — a write-back
+    that never landed. Not a missing Book Original (the deliverable is there), so
+    it lands in its own `stuck_ready` list, not `missing_source`."""
     ws = sub_ws(require_source_label=True)
     opener = fake_drive(
         {SUB: author_folder("Quinton Johnson"),
@@ -1187,6 +1186,8 @@ def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
     report = run(tmp_path, ws, opener)
 
     assert report.prepped == [] and report.missing_source == []
+    assert [a for a, _ in report.stuck_ready] == ["Quinton Johnson"]
+    assert "already formatted" in report.stuck_ready[0][1]
 
 
 def test_a_placed_book_0_without_a_book_original_is_flagged_missing(tmp_path,

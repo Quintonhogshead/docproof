@@ -78,10 +78,13 @@ def send(token: str, to: str, subject: str, body: str, *,
 def summary(report) -> tuple[str, str] | None:
     """The subject and body for a pass that needs a person, or `None` if it does
     not. `needs_human` is why this exists; a hard `failed` earns the same email,
-    so a quiet morning is never a silent one; and a `missing_source` — an author
+    so a quiet morning is never a silent one; a `missing_source` — an author
     flagged ready with no Book Original in the folder — rides along too, so a
-    file that needs uploading or renaming is seen the same morning."""
-    if not (report.needs_human or report.failed or report.missing_source):
+    file that needs uploading or renaming is seen the same morning; and a
+    `stuck_ready` — a book already formatted whose HubSpot status never moved —
+    so a stalled record is caught rather than sitting ready forever."""
+    if not (report.needs_human or report.failed or report.missing_source
+            or report.stuck_ready):
         return None
     lines: list[str] = []
     if report.needs_human:
@@ -94,13 +97,20 @@ def summary(report) -> tuple[str, str] | None:
         lines.append("Authors flagged ready with no Book Original in the folder:")
         lines += [f"  - {name}: {reason}"
                   for name, reason in report.missing_source]
+    if report.stuck_ready:
+        if lines:
+            lines.append("")
+        lines.append("Authors flagged ready whose book is already formatted "
+                     "(move the status on):")
+        lines += [f"  - {name}: {reason}"
+                  for name, reason in report.stuck_ready]
     if report.failed:
         if lines:
             lines.append("")
         lines.append("Manuscripts that failed to prepare:")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
-             + len(report.failed))
+             + len(report.stuck_ready) + len(report.failed))
     subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
@@ -540,7 +550,7 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
         log.info("Emailed %s about %d item(s) needing a look.",
                  ws.notify_email,
                  len(report.needs_human) + len(report.missing_source)
-                 + len(report.failed))
+                 + len(report.stuck_ready) + len(report.failed))
     except DriveError as e:
         log.warning("Could not email %s about a pass that needs a person (%s). "
                     "If Gmail refused the scope, run `docproof-watch auth` again "

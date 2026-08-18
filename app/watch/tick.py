@@ -88,6 +88,12 @@ class TickReport:
     # a ready author DocProof cannot act on is a gap a person wants told about.
     # Each is (author, reason).
     missing_source: list[tuple[str, str]] = field(default_factory=list)
+    # Authors HubSpot flagged ready whose book is already formatted (the intake
+    # file is present and marked done) but whose status never moved off ready — a
+    # write-back that did not land, or a read-only run. Its own list: nothing is
+    # missing and nothing failed, but a person may want to move the CRM on, so it
+    # rides the same alert email. Each is (author, reason).
+    stuck_ready: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
     dry_run: bool = False
 
@@ -825,21 +831,42 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     # that still counts as missing its Book Original and is reported. Asking
     # instead whether *any* output was present was the bug — it silently skipped
     # exactly that author.
-    intake_present = any(naming.is_source_name(f.name, last) for f in contents)
-    if not manuscripts:
-        if intake_present:
-            # The intake is there but already formatted; the book is done, not
-            # missing. Quiet — a stuck HubSpot status is a different concern.
+    # Is the author's intake file in the folder at all — by name, not marker? A
+    # "- book 0" a human placed is an output, not the intake, so a folder holding
+    # only that still counts as missing its Book Original. And which state it is
+    # in matters: a "<surname> - Book Original" marked done is a finished book
+    # whose HubSpot status simply never moved, not a missing one.
+    intake_files = [f for f in contents if naming.is_source_name(f.name, last)]
+    intake_done = any(classify(f) is Stage.DONE for f in intake_files)
+
+    def _unprepared(missing_detail: str) -> None:
+        """Account for a ready author with no book to prepare — none dropped
+        silently. A finished book whose status stuck gets its own alert (so a
+        person can move HubSpot on); a genuine absence is a missing Book
+        Original; an intake present but unfinished was already reported when the
+        run failed, so it is not raised again."""
+        ready = ws.hubspot_format_ready_value
+        if intake_done:
             log.info("Waiting: %s is flagged ready but its book is already "
                      "formatted; the status did not move off ready.", author)
+            report.stuck_ready.append(
+                (author, f"flagged '{ready}' but its "
+                         f"'{last} - {naming.SOURCE_STAGE}' is already formatted "
+                         f"— the status never moved on, so check the write-back."))
+        elif intake_files:
+            log.info("Waiting: %s is flagged ready; its intake file is present "
+                     "but not yet prepared (a prior run may have failed).",
+                     author)
         else:
-            where = ("its folder is empty" if not contents else
-                     f"its folder holds {len(contents)} file(s) but none is a "
-                     f"'{last} - {naming.SOURCE_STAGE}'")
-            log.info("Waiting: %s is flagged ready but %s.", author, where)
+            log.info("Waiting: %s is flagged ready but %s.", author,
+                     missing_detail)
             report.missing_source.append(
-                (author, f"flagged '{ws.hubspot_format_ready_value}' but "
-                         f"{where}."))
+                (author, f"flagged '{ready}' but {missing_detail}."))
+
+    if not manuscripts:
+        _unprepared("its folder is empty" if not contents else
+                    f"its folder holds {len(contents)} file(s) but none is a "
+                    f"'{last} - {naming.SOURCE_STAGE}'")
         report.waiting += 1
         return
 
@@ -850,15 +877,8 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     if ws.require_source_label:
         labelled = [f for f in manuscripts if naming.is_source_name(f.name, last)]
         if not labelled:
-            log.info("Waiting: %s is flagged ready but no manuscript is named "
-                     "'%s - %s' (%d other manuscript(s) in the folder).",
-                     author, last, naming.SOURCE_STAGE, len(manuscripts))
-            if not intake_present:
-                report.missing_source.append(
-                    (author, f"flagged '{ws.hubspot_format_ready_value}' but no "
-                             f"file is named '{last} - {naming.SOURCE_STAGE}' "
-                             f"({len(manuscripts)} other manuscript(s) in the "
-                             f"folder)."))
+            _unprepared(f"no file is named '{last} - {naming.SOURCE_STAGE}' "
+                        f"({len(manuscripts)} other manuscript(s) in the folder)")
             report.waiting += 1
             return
         manuscripts = labelled

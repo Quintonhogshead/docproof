@@ -97,6 +97,25 @@ def test_a_pass_with_only_a_missing_source_still_emails():
     assert notify.summary(report) is not None
 
 
+def test_the_summary_names_a_stuck_ready_author():
+    report = TickReport()
+    report.stuck_ready.append(
+        ("Quinton Johnson", "flagged 'Ready for Formatting' but its book is "
+                            "already formatted — check the write-back."))
+
+    subject, body = notify.summary(report)
+
+    assert "1" in subject
+    assert "Quinton Johnson" in body
+    assert "already formatted" in body
+
+
+def test_a_pass_with_only_a_stuck_ready_still_emails():
+    report = TickReport()
+    report.stuck_ready.append(("Quinton Johnson", "already formatted."))
+    assert notify.summary(report) is not None
+
+
 # --- maybe_notify -------------------------------------------------------------
 
 def test_maybe_notify_sends_when_configured_and_a_person_is_needed():
