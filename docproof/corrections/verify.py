@@ -24,10 +24,15 @@ from .model import (APPLIED_EXACTLY, DEVIATES, Discrepancy, Edit, MISSING,
 
 
 def verify(before_idml: str | Path, after_idml: str | Path,
-           edits: list[Edit]) -> VerifyReport:
-    """Reconcile the after file against the before file and the edit list."""
+           edits: list[Edit], *,
+           withheld: dict[str, str] | None = None) -> VerifyReport:
+    """Reconcile the after file against the before file and the edit list.
+
+    `withheld` must match what `apply` used: an edit a sanity gate held back was
+    never written, so the expectation has to withhold it too, or the self-check
+    would read its absence as an unaccounted change."""
     expected = read_stories(before_idml)         # a fresh copy to mutate
-    outcomes, _ = apply_to_stories(expected, edits)
+    outcomes, _ = apply_to_stories(expected, edits, withheld=withheld)
     actual = read_stories(after_idml)
 
     expected_by_id = {s.story_id: s for s in expected}

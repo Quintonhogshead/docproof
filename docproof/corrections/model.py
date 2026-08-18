@@ -39,6 +39,11 @@ class Edit:
     # text is what the book has. `occurrence` then disambiguates the context, not
     # the find.
     context: str = ""
+    # The id of the source comment this edit was read from (a PdfComment.id), so
+    # the finished change log can prove every reviewer comment reached an outcome
+    # — applied, flagged, or nothing at all. Empty for a typed list with no
+    # comment behind it, or an edit a reviewer added by hand during review.
+    source: str = ""
 
     @property
     def is_deletion(self) -> bool:
@@ -52,6 +57,8 @@ AMBIGUOUS = "ambiguous"            # it appears more than once and no occurrence
 CROSSES_PARAGRAPH = "crosses_paragraph"   # the span straddles a paragraph break
 NO_CHANGE = "no_change"            # find == replace, nothing to do
 ROUTED_TO_DESIGN = "routed_to_design"     # a design request, not a text edit
+OVERLAPS = "overlaps"              # its span collides with an edit already applied
+WITHHELD = "withheld"             # the sanity gate held it back for a human
 
 
 @dataclass(frozen=True)
@@ -73,7 +80,7 @@ class EditOutcome:
     def needs_human(self) -> bool:
         """The edit did not land cleanly and someone has to look."""
         return self.status in (NOT_FOUND, AMBIGUOUS, CROSSES_PARAGRAPH,
-                               ROUTED_TO_DESIGN)
+                               ROUTED_TO_DESIGN, OVERLAPS, WITHHELD)
 
 
 @dataclass(frozen=True)
@@ -94,6 +101,41 @@ class ApplyReport:
         n = len(self.outcomes)
         return (f"{self.applied}/{n} applied, {len(self.flagged)} for a human "
                 f"({n - self.applied - len(self.flagged)} no-op)")
+
+
+# --- the reviewer-comment ledger ---------------------------------------------
+# Every comment read off the proof ends at exactly one of these, so none is ever
+# swallowed: it either became an edit (applied / flagged / no-op) or the model
+# turned it into nothing (not_extracted) — and the last is the one that used to
+# vanish. A comment reaches `flagged` or `not_extracted` when a human still owns
+# it; `applied` and `no_op` are done.
+DISP_APPLIED = "applied"
+DISP_FLAGGED = "flagged"            # its edit could not land — a human owns it
+DISP_NO_OP = "no_op"               # its edit was a no-op (find == replace)
+DISP_NOT_EXTRACTED = "not_extracted"   # no edit was made for it at all
+
+# The dispositions that still need a person's eye — the change log's "needs a
+# human" bucket, and the count the card shows.
+DISP_NEEDS_HUMAN = (DISP_FLAGGED, DISP_NOT_EXTRACTED)
+
+
+@dataclass(frozen=True)
+class CommentDisposition:
+    """What became of one reviewer comment: its verbatim text and where it points
+    (so an editor can act on an un-appliable one straight from the change log),
+    the disposition it reached, and the ids of the edit(s) it produced."""
+    id: str
+    page: int
+    kind: str                          # "highlight" | "note" | "" (non-PDF source)
+    instruction: str                   # the reviewer's comment, verbatim
+    anchor: str                        # the text it was attached to
+    disposition: str                   # one of the DISP_* above
+    edit_ids: tuple[str, ...] = ()
+    detail: str = ""                   # why, when flagged (from the edit outcome)
+
+    @property
+    def needs_human(self) -> bool:
+        return self.disposition in DISP_NEEDS_HUMAN
 
 
 # --- verification -------------------------------------------------------------

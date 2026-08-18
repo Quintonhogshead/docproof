@@ -50,6 +50,11 @@ class PdfComment:
     anchor: str               # the highlighted span, or the words nearest a note
     context: str              # the whole line(s) around the anchor
     kind: str                 # "highlight" | "note"
+    # A stable id, unique across the read, carried to the model and echoed back on
+    # every edit it produces. It is what lets the finished change log account for
+    # this comment — applied, flagged, or turned into nothing — rather than have it
+    # vanish when no edit is made. `p{page}-{n}` reads for a human skimming a log.
+    id: str = ""
 
 
 def read_pdf_comments(path: str | Path) -> list[PdfComment]:
@@ -86,9 +91,13 @@ def read_pdf_comments(path: str | Path) -> list[PdfComment]:
                 anchor, context = _note_text(
                     lines, float(rect[0]), float(rect[1])) if rect else ("", "")
                 kind = "note"
-            out.append(PdfComment(page=pi + 1, instruction=instruction,
+            page = pi + 1
+            # A per-page running number keeps the id stable and legible; the read
+            # order within a page is the annotation order pypdf yields.
+            n = 1 + sum(1 for c in out if c.page == page)
+            out.append(PdfComment(page=page, instruction=instruction,
                                   anchor=anchor.strip(), context=context.strip(),
-                                  kind=kind))
+                                  kind=kind, id=f"p{page}-{n}"))
     log.info("Read %d comment(s) from %s", len(out), Path(path).name)
     return out
 
@@ -321,11 +330,14 @@ def comments_source(comments: list[PdfComment]) -> str:
         "Corrections marked on a PDF proof of a book. Each item is a reviewer's "
         "comment and the manuscript text it points at — a highlighted span, or "
         "the line a sticky note sits on. Turn each into one exact find/replace "
-        "edit; the find must be copied verbatim from the anchored line.",
+        "edit; the find must be copied verbatim from the anchored line. Each item "
+        "carries an id (e.g. p3-2); set the edit's `source` to that id so every "
+        "comment can be accounted for. One edit per item — never drop one.",
         "",
     ]
     for i, c in enumerate(comments, 1):
-        lines.append(f"{i}. [page {c.page}] comment: \"{c.instruction}\"")
+        cid = c.id or f"c{i}"
+        lines.append(f"{i}. (id {cid}) [page {c.page}] comment: \"{c.instruction}\"")
         if c.kind == "highlight" and c.anchor:
             lines.append(f"   highlighted text: \"{c.anchor}\"")
         if c.context and c.context != c.anchor:

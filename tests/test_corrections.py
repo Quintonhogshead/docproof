@@ -14,12 +14,14 @@ from pathlib import Path
 import lxml.etree as ET
 import pytest
 
-from docproof.corrections.apply import all_occurrences, apply_edits
+from docproof.corrections.apply import (all_occurrences, apply_edits,
+                                        apply_to_stories, indefinite_article)
 from docproof.corrections.idml import parse_story, read_stories
 from docproof.corrections.model import (AMBIGUOUS, APPLIED, APPLIED_EXACTLY,
                                         CROSSES_PARAGRAPH, DESIGN, DEVIATES,
-                                        Edit, JUDGMENT, MECHANICAL, MISSING,
-                                        NOT_FOUND, ROUTED_TO_DESIGN)
+                                        DISP_APPLIED, DISP_NOT_EXTRACTED, Edit,
+                                        JUDGMENT, MECHANICAL, MISSING, NOT_FOUND,
+                                        OVERLAPS, ROUTED_TO_DESIGN, WITHHELD)
 from docproof.corrections.parse import ParseIssue, parse_edits
 from docproof.corrections.run import (apply_corrections, corrected_name,
                                       verify_corrections)
@@ -28,6 +30,62 @@ from docproof.corrections.verify import verify
 from .conftest import FIXTURES
 
 LAYOUT = FIXTURES / "layout.idml"
+
+
+def _one_para_story(text: str, story_id: str = "s1"):
+    xml = ('<?xml version="1.0"?><Story><ParagraphStyleRange>'
+           '<CharacterStyleRange><Content>' + text
+           + '</Content></CharacterStyleRange></ParagraphStyleRange></Story>')
+    return parse_story(xml.encode("utf-8"), story_id)
+
+
+# --- grammar guards -----------------------------------------------------------
+
+@pytest.mark.parametrize("word, article", [
+    ("immense", "an"), ("enormous", "an"), ("old", "an"), ("apple", "an"),
+    ("hour", "an"), ("honest", "an"), ("house", "a"), ("dragon", "a"),
+    ("one", "a"), ("once", "a"), ("onion", "an"),
+    ("university", None), ("umbrella", None), ("euphoric", None),
+])
+def test_indefinite_article_decides_or_declines(word, article):
+    assert indefinite_article(word) == article
+
+
+def test_a_word_swap_fixes_the_indefinite_article():
+    """Changing the word after "a"/"an" fixes the article to agree with the new
+    word's sound — the "a immense" a blind find/replace would leave behind."""
+    s = _one_para_story("She saw a huge banner and an ancient gate.")
+    outs, _ = apply_to_stories([s], [
+        Edit(id="e1", find="huge", replace="immense"),
+        Edit(id="e2", find="ancient", replace="rusted")])
+    assert [o.status for o in outs] == [APPLIED, APPLIED]
+    assert s.text == "She saw an immense banner and a rusted gate."
+
+
+def test_a_sentence_initial_article_keeps_its_capital():
+    s = _one_para_story("A huge mistake was made.")
+    apply_to_stories([s], [Edit(id="e1", find="huge", replace="obvious")])
+    assert s.text == "An obvious mistake was made."
+
+
+def test_an_ambiguous_following_word_leaves_the_article_alone():
+    """"a university" must not become "an university" — a "u" word is undecidable
+    from spelling, so the article is left as the reviewer had it."""
+    s = _one_para_story("It was a good university.")
+    apply_to_stories([s], [Edit(id="e1", find="good", replace="")])
+    assert s.text == "It was a  university."       # article untouched
+
+
+def test_two_edits_on_overlapping_spans_flag_the_second():
+    """A second correction whose span collides with one already applied to the
+    paragraph is flagged, not applied blindly on top of it."""
+    s = _one_para_story("abcabc def")
+    outs, _ = apply_to_stories([s], [
+        Edit(id="e1", find="abc", occurrence=1, replace="Z"),
+        Edit(id="e2", find="Zab", replace="Q")])
+    assert [o.status for o in outs] == [APPLIED, OVERLAPS]
+    assert s.text == "Zabc def"                    # the second never landed
+    assert any(o.needs_human for o in outs)
 
 
 def story_text(idml: Path, story_id: str = "ue0") -> list[str]:
@@ -555,3 +613,73 @@ def test_the_written_idml_is_a_valid_package(tmp_path):
         for n in names:
             if n.endswith(".xml"):
                 ET.fromstring(z.read(n))              # every part still parses
+
+
+# --- the reviewer-comment ledger ----------------------------------------------
+
+def test_source_round_trips_through_parse():
+    """An edit that cites the comment it came from keeps that link through parse,
+    so the run can reconcile it back to the comment."""
+    parsed = parse_edits([{"find": "a", "replace": "b", "source": "p3-2"}])
+    assert parsed.edits[0].source == "p3-2"
+
+
+def test_every_comment_gets_a_disposition_and_none_is_swallowed(tmp_path):
+    """A comment whose edit lands is `applied`; a comment no edit was made for is
+    `not_extracted` and carries its original note — never dropped silently."""
+    edits = [{"find": "Their were", "replace": "There were", "source": "p1-1"}]
+    comments = [
+        {"id": "p1-1", "page": 1, "kind": "highlight",
+         "instruction": "subject-verb", "anchor": "Their were"},
+        {"id": "p9-9", "page": 9, "kind": "note",
+         "instruction": "cut this scene?", "anchor": "the room was empty"},
+    ]
+    result = apply_corrections(LAYOUT, edits, tmp_path, comments=comments)
+    assert result.total_comments == 2 and result.unresolved == 1
+    by_id = {c.id: c for c in result.comments}
+    assert by_id["p1-1"].disposition == DISP_APPLIED
+    assert by_id["p9-9"].disposition == DISP_NOT_EXTRACTED
+    # The un-appliable comment reaches the report with the reviewer's own words.
+    import json
+    payload = json.loads((tmp_path / "corrections.json").read_text("utf-8"))
+    dropped = [c for c in payload["comments"]["items"]
+               if c["disposition"] == "not_extracted"]
+    assert dropped and dropped[0]["instruction"] == "cut this scene?"
+    assert payload["comments"]["unresolved"] == 1
+
+
+def test_a_flagged_edits_comment_is_unresolved_not_applied(tmp_path):
+    """A comment whose only edit could not be anchored is `flagged` — a human
+    still owns it, so it counts as unresolved."""
+    edits = [{"find": "nowhere in the book", "replace": "x", "source": "p2-1"}]
+    comments = [{"id": "p2-1", "page": 2, "kind": "note",
+                 "instruction": "fix this", "anchor": "nowhere in the book"}]
+    result = apply_corrections(LAYOUT, edits, tmp_path, comments=comments)
+    assert result.unresolved == 1
+    assert result.comments[0].disposition == "flagged"
+    assert not result.clean
+
+
+def test_the_sanity_gate_withholds_a_doubtful_edit(tmp_path):
+    """With the opt-in gate on, an edit the model judges an over-grab is held back
+    as WITHHELD (a human owns it) and never written — the deterministic default,
+    with no gate, still applies it."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    edits = [{"find": "Their were", "replace": "There were", "source": "p1-1"}]
+    # Deterministic default: the edit lands.
+    free = apply_corrections(LAYOUT, edits, tmp_path / "free")
+    assert free.applied == 1
+
+    # Gate on, and the model calls this one an over-grab: it is withheld.
+    provider = FakeProvider([ProviderResult(
+        parsed={"verdicts": [{"id": "c1", "verdict": "over_grab",
+                              "reason": "drops a word"}]},
+        usage=NormalizedUsage(input_tokens=50, output_tokens=10))])
+    gated = apply_corrections(LAYOUT, edits, tmp_path / "gated",
+                              sanity=(provider, "m"))
+    assert gated.applied == 0
+    assert gated.apply.outcomes[0].status == WITHHELD
+    assert story_text(gated.corrected_idml)[4] == \
+        "Their were several mistakes here to find."   # unchanged, held for a human

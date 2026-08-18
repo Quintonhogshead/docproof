@@ -38,7 +38,7 @@ from docproof.prep.styles import StyleSheetError
 from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
 from docproof.providers import ProviderError, build_provider, cost_of_usage, \
-    provider_for
+    lookup, provider_for
 from docproof.utils.files import write_atomic
 
 from . import features
@@ -313,6 +313,14 @@ class Job:
     # replays it and the completion log can say how many it carried. Empty on
     # every other kind.
     corrections: str = ""
+    # Corrections from a marked-up PDF: the reviewer comments the edits were read
+    # from, as JSON [{id, page, kind, instruction, anchor}, …]. Threaded into the
+    # run so every comment is accounted for in the change log — including any the
+    # model turned into no edit. Empty for a typed/pasted list.
+    corrections_comments: str = ""
+    # Corrections only: run the opt-in model sanity gate before applying, holding
+    # a doubtful edit back for a human. Off keeps the run deterministic and free.
+    corrections_sanity: bool = False
     # Prep, book output only: the operator's per-job answers for the sketch —
     # subject matter (picks the title-page face), running-head title and
     # author. Empty means "use what the detector reads off the opening pages",
@@ -373,6 +381,12 @@ class Job:
     # count that landed and `flags` the count refused for a human, reusing the
     # same fields prep does; this one has no prep analogue. None on other kinds.
     discrepancies: int | None = None
+    # Corrections from a PDF: how many reviewer comments came in, and how many a
+    # person still owns (flagged, or never turned into an edit). `unresolved` is
+    # the count that used to vanish silently. None on other kinds and on a
+    # corrections run with no comment ledger (a typed list).
+    total_comments: int | None = None
+    unresolved: int | None = None
     # Promo only: how many capitalised terms in the copy appear nowhere in the
     # manuscript — the grounding check's count, surfaced so a card can flag it.
     unverified: int | None = None
@@ -479,6 +493,9 @@ class Job:
         d["is_promo"] = self.is_promo
         d["is_plan"] = self.is_plan
         d["is_corrections"] = self.is_corrections
+        # The stored reviewer-comment list is backend input for the run, not card
+        # data, and on a big proof it is large — keep it off every job payload.
+        d.pop("corrections_comments", None)
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -1624,9 +1641,10 @@ class JobRunner:
         job = self.store.get(job_id)
         if job is None or job.state not in ("queued", "running"):
             return
-        # Nothing paid-for happens below, but keep the compare-and-swap the other
-        # runners use: a cancel that landed while the job sat in the queue is
-        # honoured, and the card reads "applying" instead of a stale "waiting".
+        # Nothing paid-for happens below (unless the sanity gate is on), but keep
+        # the compare-and-swap the other runners use: a cancel that landed while
+        # the job sat in the queue is honoured, and the card reads "applying"
+        # instead of a stale "waiting".
         if self.store.update_if(job_id, expect=job.state, state="running",
                                 done=0, total=0) is None:
             return
@@ -1634,9 +1652,26 @@ class JobRunner:
             self._abort(job_id)
             return
 
+        # The reviewer comments (from a marked-up PDF), so every one is accounted
+        # for in the change log. Absent for a typed list; a bad blob degrades to
+        # the edit-only ledger rather than failing the run.
+        comments = None
+        if job.corrections_comments:
+            try:
+                loaded = json.loads(job.corrections_comments)
+                comments = loaded if isinstance(loaded, list) else None
+            except (json.JSONDecodeError, ValueError):
+                comments = None
+
+        # The opt-in sanity gate. Building a provider is the only place this run
+        # touches a model; when it is off (the default) the run stays free and
+        # deterministic. A missing key turns the gate off rather than failing.
+        sanity = self._corrections_sanity(job) if job.corrections_sanity else None
+
         out = self._claim_results_dir(job)
         try:
-            outputs = apply_corrections(job.source_path, job.corrections, out)
+            outputs = apply_corrections(job.source_path, job.corrections, out,
+                                        comments=comments, sanity=sanity)
         except (ValueError, OSError) as e:
             # A corrections list the parser refuses whole (malformed JSON), or a
             # source that will not read — fail with the sentence, and give the
@@ -1649,16 +1684,49 @@ class JobRunner:
             self._release_results_dir(job_id)
             raise
 
+        # The sanity gate's small model spend, when it ran, recorded like any
+        # other so the dashboard is honest; the deterministic path stays 0.0.
+        cost = 0.0
+        if outputs.usage is not None:
+            try:
+                cost = cost_of_usage(outputs.usage,
+                                     fallback_model=(sanity[1] if sanity else ""),
+                                     batch=False) or 0.0
+            except Exception:                 # noqa: BLE001 - spend logging is not the job
+                log.warning("Could not price the corrections sanity gate",
+                            exc_info=True)
+
         # `applied`/`flags` reuse the fields prep and review already fill so the
-        # dashboard and card counters need no new plumbing; `discrepancies` is
-        # the one figure corrections adds, and `verified` carries the clean flag.
-        # cost is a hard 0.0 — the deliverable is honest about being free.
+        # dashboard and card counters need no new plumbing; `discrepancies`,
+        # `total_comments` and `unresolved` are the figures corrections adds, and
+        # `verified` carries the clean flag.
         self.store.update(
             job_id, state="done", results_dir=str(out), error=None,
             applied=outputs.applied, flags=outputs.flagged,
-            discrepancies=outputs.discrepancies, verified=outputs.clean,
-            cost=0.0)
+            discrepancies=outputs.discrepancies,
+            total_comments=outputs.total_comments, unresolved=outputs.unresolved,
+            verified=outputs.clean, cost=cost)
         self._finish(job_id)
+
+    def _corrections_sanity(self, job):
+        """The `(provider, model)` for the opt-in edit-sanity gate, or None when no
+        key is set — in which case the gate is quietly skipped rather than failing
+        an otherwise-deterministic run. Reuses the corrections extraction model."""
+        from app.routes.jobs import CORRECTIONS_EXTRACT_MODEL
+        try:
+            cfg = self.config_for(job)
+            cfg.api.model = CORRECTIONS_EXTRACT_MODEL
+            info = lookup(CORRECTIONS_EXTRACT_MODEL)
+            key = get_api_key(info.provider) if info else None
+            if not key:
+                log.warning("Corrections sanity gate requested but no key for %s; "
+                            "skipping the gate", CORRECTIONS_EXTRACT_MODEL)
+                return None
+            return self._provider(cfg), CORRECTIONS_EXTRACT_MODEL
+        except Exception:                     # noqa: BLE001 - a missing gate must not sink the run
+            log.warning("Could not build the corrections sanity gate; skipping",
+                        exc_info=True)
+            return None
 
     # -- promo ----------------------------------------------------------------
 

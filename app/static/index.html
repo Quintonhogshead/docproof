@@ -611,6 +611,16 @@
               deterministic — no model, no cost.</small>
           </label>
 
+          <label class="field checkbox">
+            <input type="checkbox" id="corrections-sanity">
+            <span>Sanity-check the edits first
+              <small class="muted">— an optional model pass reads each edit
+                against the line it changes and holds a doubtful one (a dropped
+                word, an anachronism, nonsense) back for a human instead of
+                applying it. Adds a small model cost; off keeps the run
+                free.</small></span>
+          </label>
+
           <details class="field" id="corrections-extract">
             <summary class="muted small">Other sources — a Word file or a plain
               list</summary>

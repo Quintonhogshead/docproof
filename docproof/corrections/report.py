@@ -14,8 +14,9 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .model import (APPLIED_EXACTLY, ApplyReport, DEVIATES, MISSING,
-                    VerifyReport)
+from .model import (APPLIED_EXACTLY, ApplyReport, CommentDisposition,
+                    DEVIATES, DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP,
+                    DISP_NOT_EXTRACTED, MISSING, VerifyReport)
 from .parse import ParseResult
 
 log = logging.getLogger("docproof.corrections.report")
@@ -34,14 +35,25 @@ VERIFY_TITLES = {
     MISSING: "not in the document",
 }
 
+# The reviewer-comment dispositions, mapped to a plain phrase for the report.
+DISP_TITLES = {
+    DISP_APPLIED: "applied",
+    DISP_FLAGGED: "flagged for a human",
+    DISP_NO_OP: "no change needed",
+    DISP_NOT_EXTRACTED: "not turned into an edit",
+}
+
 
 def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
-                 apply: ApplyReport | None, verify: VerifyReport
-                 ) -> tuple[Path, Path]:
+                 apply: ApplyReport | None, verify: VerifyReport,
+                 comments: tuple[CommentDisposition, ...] = (),
+                 deterministic: bool = True) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
-    return their paths."""
+    return their paths. `deterministic` is False when the opt-in sanity gate ran —
+    a model call — so the report does not over-claim being model-free."""
     payload = _payload(source_path=source_path, after_path=after_path,
-                       parse=parse, apply=apply, verify=verify)
+                       parse=parse, apply=apply, verify=verify, comments=comments,
+                       deterministic=deterministic)
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -51,9 +63,11 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
     return md_path, json_path
 
 
-def _payload(*, source_path, after_path, parse, apply, verify) -> dict:
+def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
+             deterministic=True) -> dict:
+    needs_human = [c for c in comments if c.needs_human]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": str(source_path),
         "source_name": Path(source_path).name,
@@ -61,7 +75,8 @@ def _payload(*, source_path, after_path, parse, apply, verify) -> dict:
         "mode": "apply" if apply is not None else "verify",
         # Applying corrections is deterministic — no model call, no cost. Said
         # plainly because it is a selling point of the engine, not an omission.
-        "deterministic": True,
+        # False only when the opt-in sanity gate ran, so the report stays honest.
+        "deterministic": deterministic,
         "parse": {
             "edits": len(parse.edits),
             "issues": [dataclasses.asdict(i) for i in parse.issues],
@@ -85,6 +100,14 @@ def _payload(*, source_path, after_path, parse, apply, verify) -> dict:
                 for r in verify.reconciliations],
             "discrepancies": [dataclasses.asdict(d) for d in verify.discrepancies],
         },
+        # One row per reviewer comment — the ledger that makes sure none is lost.
+        # `total` and `unresolved` are the honest headline: how many marks came in,
+        # and how many a person still owns (flagged, or never turned into an edit).
+        "comments": {
+            "total": len(comments),
+            "unresolved": len(needs_human),
+            "items": [_comment(c) for c in comments],
+        },
     }
 
 
@@ -95,24 +118,39 @@ def _outcome(o) -> dict:
             "occurrences": o.occurrences, "detail": o.detail}
 
 
+def _comment(c: CommentDisposition) -> dict:
+    return {"id": c.id, "page": c.page, "kind": c.kind,
+            "instruction": c.instruction, "anchor": c.anchor,
+            "disposition": c.disposition, "edit_ids": list(c.edit_ids),
+            "detail": c.detail}
+
+
 def _markdown(d: dict) -> str:
     L: list[str] = [f"# Corrections — {d['source_name']}\n"]
     when = d["generated_at"][:16].replace("T", " ")
     mode = ("applied to the InDesign file" if d["mode"] == "apply"
             else "checked against a file corrected elsewhere")
-    L.append(f"*{when} UTC · {mode} · deterministic, no model calls*\n")
+    how = ("deterministic, no model calls" if d.get("deterministic", True)
+           else "deterministic apply, with a model sanity check over the edits")
+    L.append(f"*{when} UTC · {mode} · {how}*\n")
 
     verify = d["verify"]
     ap = d["apply"]
-    if verify["clean"] and (ap is None or not ap["flagged"]):
-        L.append("**Clean.** Every correction landed exactly, and nothing else "
-                 "in the file changed.\n")
+    com = d.get("comments") or {"total": 0, "unresolved": 0, "items": []}
+    if (verify["clean"] and (ap is None or not ap["flagged"])
+            and not com["unresolved"]):
+        L.append("**Clean.** Every correction landed exactly, nothing else in the "
+                 "file changed, and every reviewer comment was accounted for.\n")
     else:
         headline = []
         if ap is not None:
             headline.append(f"{ap['applied']} applied")
             if ap["flagged"]:
                 headline.append(f"{len(ap['flagged'])} need a human")
+        if com["total"]:
+            headline.append(f"{com['total']} comment(s)")
+            if com["unresolved"]:
+                headline.append(f"{com['unresolved']} unresolved")
         if verify["discrepancies"]:
             headline.append(f"{len(verify['discrepancies'])} unaccounted change(s)")
         if verify["structure_changed"]:
@@ -126,6 +164,25 @@ def _markdown(d: dict) -> str:
                  "was guessed.\n")
         for i in issues:
             L.append(f"- entry {i['index'] + 1}: {i['reason']}")
+        L.append("")
+
+    # The reviewer comments a person still owns, with the reviewer's own words and
+    # the page — so an editor can act on each straight from here, whether it was
+    # flagged during apply or never turned into an edit at all. This is the section
+    # that keeps a comment from being swallowed.
+    unresolved = [c for c in com["items"]
+                  if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)]
+    if unresolved:
+        L.append(f"## Reviewer comments needing a human — {len(unresolved)}\n")
+        L.append("Every one carries the reviewer's original note and the page it "
+                 "was marked on, so it can be handled by hand.\n")
+        for c in unresolved:
+            where = f"page {c['page']}" if c["page"] else "—"
+            why = DISP_TITLES.get(c["disposition"], c["disposition"])
+            note = c["instruction"] or "(no note)"
+            L.append(f"- **{where}** ({why}): “{_preview(note)}”"
+                     + (f" — on “{_preview(c['anchor'])}”" if c["anchor"] else "")
+                     + (f" — {c['detail']}" if c["detail"] else ""))
         L.append("")
 
     if ap is not None:
@@ -196,14 +253,21 @@ def _markdown(d: dict) -> str:
 
 def _change(o: dict) -> str:
     """A one-line 'find → replace' for the report, deletions and insertions read
-    naturally."""
+    naturally. The reviewer's own note is appended when there is one, so a flagged
+    row an editor has to act on still carries the words the mark was made with —
+    not just the find/replace the model inferred from them."""
     find, replace = _preview(o.get("find", "")), _preview(o.get("replace", ""))
+    note = o.get("instruction", "").strip()
     if find and not replace:
-        return f"delete “{find}”"
-    if not find:
-        return f"“{replace}”" + (f" — {o['instruction']}"
-                                 if o.get("instruction") else "")
-    return f"“{find}” → “{replace}”"
+        core = f"delete “{find}”"
+    elif not find:
+        core = f"“{replace}”" if replace else ""
+    else:
+        core = f"“{find}” → “{replace}”"
+    if note and note != o.get("replace", ""):
+        return f"{core} — reviewer: “{_preview(note)}”" if core \
+            else f"reviewer: “{_preview(note)}”"
+    return core
 
 
 def _preview(s: str, n: int = 90) -> str:

@@ -151,7 +151,10 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   };
 
   // A single-call read (Word file or plain list): drop the list in and summarise.
+  // These sources carry no PDF comments, so clear any left from an earlier read.
   const fillFromBody = (body) => {
+    const ta = $('corrections-input');
+    if (ta) ta.dataset.comments = '';
     setEdits(JSON.parse(body.json));
     summarise(body.count, body.issues, '');
   };
@@ -176,8 +179,13 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
       setProgress(0, 1);
       const form = new FormData();
       form.append('file', file);
-      const { count, batches } = await api('/api/corrections/read-pdf',
+      const { count, batches, comments } = await api('/api/corrections/read-pdf',
         { method: 'POST', body: form });
+      // Keep the reviewer comments beside the edit list they produced, so the
+      // finished change log can account for every one — including any the model
+      // turns into no edit. Cleared by the Word/list paths, which have none.
+      const ta0 = $('corrections-input');
+      if (ta0) ta0.dataset.comments = JSON.stringify(comments || []);
       for (let i = 0; i < batches.length; i += 1) {
         setProgress(i, batches.length);
         show(`Reading ${count} comment${plural(count)}… batch ${i + 1} of `
@@ -2532,6 +2540,13 @@ $('start').addEventListener('click', async () => {
           kind: kind(),
           corrections: isCorrections()
             ? (($('corrections-input') || {}).value || '') : '',
+          // The reviewer comments the edits were read from (a marked-up PDF), so
+          // the change log accounts for every one; empty for a typed/Word list.
+          corrections_comments: isCorrections()
+            ? ((($('corrections-input') || {}).dataset || {}).comments || '') : '',
+          // The opt-in model gate that holds a doubtful edit back for a human.
+          corrections_sanity: isCorrections()
+            && !!(($('corrections-sanity') || {}).checked),
           prep_output: prepOutput(),
           prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
           prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
@@ -3645,8 +3660,14 @@ function correctionsActions(job) {
   }
 
   const bits = [];
+  if (typeof job.total_comments === 'number' && job.total_comments) {
+    bits.push(`${job.total_comments} comment`
+      + `${job.total_comments === 1 ? '' : 's'}`);
+  }
   if (typeof job.applied === 'number') bits.push(`${job.applied} applied`);
   if (job.flags) bits.push(`${job.flags} for a human`);
+  if (job.unresolved) bits.push(`${job.unresolved} comment`
+    + `${job.unresolved === 1 ? '' : 's'} unresolved`);
   if (job.discrepancies) {
     bits.push(`${job.discrepancies} unaccounted change`
       + `${job.discrepancies === 1 ? '' : 's'}`);
@@ -3704,23 +3725,49 @@ function correctionsReportHTML(d) {
   const issues = (d.parse || {}).issues || [];
   const flagged = ap.flagged || [];
   const disc = v.discrepancies || [];
+  const com = d.comments || { total: 0, unresolved: 0, items: [] };
+  const comItems = com.items || [];
   const rightNum = ' style="text-align:right;font-variant-numeric:tabular-nums"';
+  // The reviewer's own words are appended even when a find→replace is shown, so a
+  // row an editor has to act on carries the note the mark was made with — not just
+  // the edit the model inferred from it.
   const change = (o) => {
     const f = esc(o.find || ''); const r = esc(o.replace || '');
-    if (f && !r) return `delete “${f}”`;
-    if (!f) return r ? `“${r}”` : esc(o.instruction || '');
-    return `“${f}” → “${r}”`;
+    const note = (o.instruction || '').trim();
+    let core;
+    if (f && !r) core = `delete “${f}”`;
+    else if (!f) core = r ? `“${r}”` : '';
+    else core = `“${f}” → “${r}”`;
+    if (note && note !== (o.replace || '')) {
+      return core ? `${core} <span class="caveat">— reviewer: “${esc(note)}”`
+        + '</span>' : `<span class="caveat">reviewer: “${esc(note)}”</span>`;
+    }
+    return core;
+  };
+  const DISP = {
+    applied: 'applied', flagged: 'flagged for a human',
+    no_op: 'no change needed', not_extracted: 'not turned into an edit',
   };
 
   const title = `Corrections — ${d.source_name || 'file'}`;
   const gen = d.generated_at ? new Date(d.generated_at).toLocaleString() : '';
-  const clean = v.clean && !flagged.length && issues.length === 0;
+  const clean = v.clean && !flagged.length && issues.length === 0
+    && !com.unresolved;
 
+  // The comment ledger leads when the list came from a proof: how many marks came
+  // in, and how many a person still owns — the count that used to be invisible.
+  const commentCards = com.total
+    ? `<div class="card"><span class="n">${num(com.total)}</span>`
+      + '<span class="l">reviewer comments</span></div>'
+      + `<div class="card"><span class="n">${num(com.unresolved)}</span>`
+      + '<span class="l">need a human</span></div>'
+    : '';
   const cards = '<div class="cards">'
+    + commentCards
     + `<div class="card"><span class="n">${num(ap.applied)}</span>`
     + '<span class="l">applied</span></div>'
     + `<div class="card"><span class="n">${num(flagged.length)}</span>`
-    + '<span class="l">for a human</span></div>'
+    + '<span class="l">edits for a human</span></div>'
     + `<div class="card"><span class="n">${num(disc.length)}</span>`
     + '<span class="l">unaccounted changes</span></div>'
     + `<div class="card"><span class="n">${clean ? '✓' : '—'}</span>`
@@ -3739,6 +3786,41 @@ function correctionsReportHTML(d) {
       + issues.map((i) =>
         `<p><b>Entry ${num((i.index || 0) + 1)}</b> <span class="caveat">`
         + `${esc(i.reason)}</span></p>`).join('')
+    : '';
+
+  // The reviewer comments a person still owns — flagged during apply, or never
+  // turned into an edit at all — each with the reviewer's original note and the
+  // page it was marked on, so an editor can act on it straight from here. This is
+  // the section that keeps a comment from being swallowed.
+  const needHuman = comItems.filter((c) =>
+    c.disposition === 'flagged' || c.disposition === 'not_extracted');
+  const commentsHumanHTML = needHuman.length
+    ? `<h2>Reviewer comments needing a human — ${num(needHuman.length)}</h2>`
+      + '<p class="blurb">Every one carries the reviewer’s original note and its '
+      + 'page, so it can be handled by hand.</p>'
+      + needHuman.map((c) =>
+        '<div class="flag"><b>'
+        + (c.page ? `page ${num(c.page)}` : '—') + '</b> '
+        + `<span class="caveat">(${esc(DISP[c.disposition] || c.disposition)})`
+        + '</span><br>“' + esc(c.instruction || '(no note)') + '”'
+        + (c.anchor ? ` <span class="caveat">— on “${esc(c.anchor)}”</span>` : '')
+        + (c.detail ? ` <span class="caveat">— ${esc(c.detail)}</span>` : '')
+        + '</div>').join('')
+    : '';
+
+  // And the full ledger: one row per comment, so none is missing from the log.
+  const commentsAllHTML = com.total
+    ? `<details><summary>All ${num(com.total)} reviewer comments</summary>`
+      + '<table><thead><tr><th>Page</th><th>Comment</th><th>Outcome</th>'
+      + '</tr></thead><tbody>'
+      + comItems.map((c) => {
+        const bad = c.disposition === 'flagged'
+          || c.disposition === 'not_extracted';
+        return `<tr${bad ? ' style="background:#fbeae2"' : ''}>`
+          + `<td${rightNum}>${c.page ? num(c.page) : '—'}</td>`
+          + `<td>${esc(c.instruction || '(no note)')}</td>`
+          + `<td>${esc(DISP[c.disposition] || c.disposition)}</td></tr>`;
+      }).join('') + '</tbody></table></details>'
     : '';
 
   const flaggedHTML = flagged.length
@@ -3776,9 +3858,13 @@ function correctionsReportHTML(d) {
     + 'margin:.4em 0}.flag code{color:var(--accent)}</style></head><body>'
     + '<div class="wrap"><header class="rep"><span class="brand">DocProof</span>'
     + `<h1>${esc(title)}</h1>`
-    + '<p class="sub">Deterministic — no model, no cost'
+    + '<p class="sub">'
+    + (d.deterministic === false
+      ? 'Deterministic apply, with a model sanity check over the edits'
+      : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
-    + cards + headline + issuesHTML + flaggedHTML + discHTML + verifyHTML
+    + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
+    + discHTML + verifyHTML + commentsAllHTML
     + '</div></body></html>';
 }
 
