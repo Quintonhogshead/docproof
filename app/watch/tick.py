@@ -80,6 +80,14 @@ class TickReport:
     # from plain `waiting` (nobody need do anything) because these are the events
     # worth a notification. Each is (filename, reason).
     needs_human: list[tuple[str, str]] = field(default_factory=list)
+    # Authors HubSpot flagged ready whose folder holds no Book Original to
+    # prepare — the folder is empty, or the files in it are drafts and reviews,
+    # never "<surname> - Book Original". Its own list, kept apart from
+    # `needs_human` (nothing is ambiguous, a file simply needs uploading or
+    # renaming) and from plain `waiting` (this one is worth an email, by request):
+    # a ready author DocProof cannot act on is a gap a person wants told about.
+    # Each is (author, reason).
+    missing_source: list[tuple[str, str]] = field(default_factory=list)
     plan: list[tuple[str, str]] = field(default_factory=list)
     dry_run: bool = False
 
@@ -137,6 +145,22 @@ def run_prep(token: str, home: Path, ws: WatchSettings,
     """Prepare every manuscript nobody has prepared yet."""
     routes = routes or {}
     todo = [f for f in listing if classify(f) is Stage.NEW_MANUSCRIPT]
+
+    # The house convention as a hard rule: with the label required, only
+    # "<surname> - Book Original" is the book to prepare. Subfolder mode already
+    # applied this in `_discover_ready`, where the surname is known from the
+    # ready record; here in the flat path the surname is not known yet, so the
+    # gate is the surname-free token — enough to leave a developmental review or
+    # a questionnaire dropped in the folder alone rather than format it. Without
+    # this, the switch silently did nothing outside subfolder mode.
+    if ws.require_source_label and not ws.subfolders_enabled:
+        labelled = [f for f in todo if naming.has_source_label(f.name)]
+        left = len(todo) - len(labelled)
+        if left:
+            log.info("require_source_label: %d file(s) not named "
+                     "'<surname> - Book Original' left alone this pass.", left)
+        todo = labelled
+
     todo.sort(key=lambda f: (f.modified_time, f.name))
     report.new = len(todo)
 
@@ -793,9 +817,20 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
 
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+    # A book DocProof already produced — its outputs, or its now-marked source,
+    # are in the folder — is not a missing manuscript, even when HubSpot still
+    # reads ready (a write-back that never landed, or read-only mode). Told apart
+    # so the "no Book Original" alert below is a real gap, not a nag about a
+    # finished book whose status simply did not move.
+    already_done = any(classify(f) in (Stage.OUTPUT, Stage.DONE)
+                       for f in contents)
     if not manuscripts:
         log.info("Waiting: %s is flagged ready but has no new manuscript yet.",
                  author)
+        if not already_done:
+            report.missing_source.append(
+                (author, f"flagged '{ws.hubspot_format_ready_value}' but the "
+                         f"folder has no manuscript in it yet."))
         report.waiting += 1
         return
 
@@ -809,6 +844,12 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
             log.info("Waiting: %s is flagged ready but no manuscript is named "
                      "'%s - %s' yet (%d other manuscript(s) in the folder).",
                      author, last, naming.SOURCE_STAGE, len(manuscripts))
+            if not already_done:
+                report.missing_source.append(
+                    (author, f"flagged '{ws.hubspot_format_ready_value}' but no "
+                             f"file is named '{last} - {naming.SOURCE_STAGE}' "
+                             f"({len(manuscripts)} other manuscript(s) in the "
+                             f"folder)."))
             report.waiting += 1
             return
         manuscripts = labelled

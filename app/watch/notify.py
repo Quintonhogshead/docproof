@@ -78,21 +78,30 @@ def send(token: str, to: str, subject: str, body: str, *,
 def summary(report) -> tuple[str, str] | None:
     """The subject and body for a pass that needs a person, or `None` if it does
     not. `needs_human` is why this exists; a hard `failed` earns the same email,
-    so a quiet morning is never a silent one."""
-    if not report.needs_human and not report.failed:
+    so a quiet morning is never a silent one; and a `missing_source` — an author
+    flagged ready with no Book Original in the folder — rides along too, so a
+    file that needs uploading or renaming is seen the same morning."""
+    if not (report.needs_human or report.failed or report.missing_source):
         return None
     lines: list[str] = []
     if report.needs_human:
         lines.append("Manuscripts DocProof could not place:")
         lines += [f"  - {name}: {reason}"
                   for name, reason in report.needs_human]
+    if report.missing_source:
+        if lines:
+            lines.append("")
+        lines.append("Authors flagged ready with no Book Original in the folder:")
+        lines += [f"  - {name}: {reason}"
+                  for name, reason in report.missing_source]
     if report.failed:
         if lines:
             lines.append("")
         lines.append("Manuscripts that failed to prepare:")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
-    count = len(report.needs_human) + len(report.failed)
-    subject = f"{ALERT_TAGS} {count} manuscript(s) need a look"
+    count = (len(report.needs_human) + len(report.missing_source)
+             + len(report.failed))
+    subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
             "\n\nThe rest of the pass went on as usual.")
@@ -528,9 +537,10 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
     subject, body = made
     try:
         send(token, ws.notify_email, subject, body, opener=opener)
-        log.info("Emailed %s about %d manuscript(s) needing a person.",
+        log.info("Emailed %s about %d item(s) needing a look.",
                  ws.notify_email,
-                 len(report.needs_human) + len(report.failed))
+                 len(report.needs_human) + len(report.missing_source)
+                 + len(report.failed))
     except DriveError as e:
         log.warning("Could not email %s about a pass that needs a person (%s). "
                     "If Gmail refused the scope, run `docproof-watch auth` again "

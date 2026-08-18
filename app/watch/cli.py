@@ -102,8 +102,9 @@ def main(argv=None) -> int:
     ini.add_argument("--require-source-label", dest="require_source_label",
                      action="store_true", default=None,
                      help="prepare only the manuscript named "
-                          "'<surname> - Book Original' (surname from the "
-                          "author's HubSpot last-name property); subfolder mode")
+                          "'<surname> - Book Original', leaving drafts and "
+                          "developmental copies alone; works flat or in "
+                          "per-author subfolders")
     ini.add_argument("--no-require-source-label", dest="require_source_label",
                      action="store_false", default=None,
                      help="prepare any new manuscript in the author's folder "
@@ -333,8 +334,8 @@ def cmd_init(args, home: Path) -> int:
         print(f"Routing into per-author subfolders of {ws.folder_id}, named "
               f"from {ws.hubspot_first_property or '— first not set'} / "
               f"{ws.hubspot_last_property or '— last not set'}")
-        if ws.require_source_label:
-            print("Preparing only '<surname> - Book Original' in each folder")
+    if ws.require_source_label:
+        print("Preparing only '<surname> - Book Original'")
     if ws.hubspot_enabled:
         print(f"HubSpot gate on: {ws.hubspot_object}, "
               f"{ws.hubspot_status_property or '— property not set'}: "
@@ -516,7 +517,10 @@ def _report(report: ticklib.TickReport) -> int:
         print(f"Could not prepare {name}: {reason}", file=sys.stderr)
     for name, reason in report.needs_human:
         print(f"Needs a person — {name}: {reason}", file=sys.stderr)
-    if not report.prepped and not report.failed and not report.needs_human:
+    for name, reason in report.missing_source:
+        print(f"No Book Original — {name}: {reason}", file=sys.stderr)
+    if not (report.prepped or report.failed or report.needs_human
+            or report.missing_source):
         print(f"Nothing new in the folder ({report.listed} file(s) looked at).")
     return OK if report.ok else PARTIAL
 

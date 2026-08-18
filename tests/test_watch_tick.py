@@ -1137,8 +1137,9 @@ def test_require_source_label_prepares_only_the_book_original(tmp_path, provider
 
 
 def test_require_source_label_waits_when_only_a_draft_is_present(tmp_path, provider):
-    """The labelled intake file is not there yet, so the ready author waits —
-    it is not a person's problem, and no draft is prepared by mistake."""
+    """The labelled intake file is not there yet, so no draft is prepared by
+    mistake — but the ready author is now reported as missing its Book Original,
+    so a person is emailed to upload or rename it."""
     ws = sub_ws(require_source_label=True)
     opener = fake_drive({SUB: author_folder("Quinton Johnson"),
                          "m-1": in_sub("Johnson - Draft Two.docx")},
@@ -1149,6 +1150,95 @@ def test_require_source_label_waits_when_only_a_draft_is_present(tmp_path, provi
 
     assert report.prepped == [] and not uploads_in(opener)
     assert report.waiting >= 1 and not report.needs_human
+    assert [a for a, _ in report.missing_source] == ["Quinton Johnson"]
+
+
+def test_a_ready_author_with_an_empty_folder_is_flagged_missing(tmp_path,
+                                                                provider):
+    """Flagged ready with the folder still empty: nothing is prepared, and the
+    author is reported so a person knows the Book Original never arrived."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({SUB: author_folder("Quinton Johnson")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == []
+    assert [a for a, _ in report.missing_source] == ["Quinton Johnson"]
+    assert not report.needs_human
+
+
+def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
+                                                                 provider):
+    """The book is done and its source is marked formatted, but HubSpot still
+    reads ready (a write-back that never landed). That is not a missing Book
+    Original, so it must not nag — the folder already holds the deliverable."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive(
+        {SUB: author_folder("Quinton Johnson"),
+         "m-1": in_sub("Johnson - Book Original.docx",
+                       props={STATE_PROP: FORMATTED}),
+         "o-1": in_sub("Johnson - book 0.docx", props={OUTPUT_PROP: "1"})},
+        docx=MANUSCRIPT,
+        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and report.missing_source == []
+
+
+def test_require_source_label_matches_an_em_dashed_original(tmp_path, provider):
+    """The intake file's " - " came back from Word as an em dash; it is still
+    the book. The old exact-string gate missed it and the ready author waited
+    forever — the regression this recognizer closes."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({SUB: author_folder("Quinton Johnson"),
+                         "m-1": in_sub("Johnson — Book Original.docx")},
+                        docx=MANUSCRIPT,
+                        hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson — Book Original.docx"]
+    assert not report.needs_human
+
+
+def test_require_source_label_bites_in_flat_mode_too(tmp_path, provider):
+    """The switch now holds outside subfolder mode. A developmental-review
+    Google Doc dropped in a flat watched folder is left alone rather than
+    formatted into a "- book 0" — the exact miss the production state file
+    showed, where the switch was set but silently did nothing here."""
+    ws = WatchSettings(folder_id=FOLDER, model="claude-haiku-4-5",
+                       client_id="client-1", client_secret="secret-1",
+                       require_source_label=True)
+    opener = fake_drive(folder(
+        f_1=drive_entry("Johnson - Book Original.docx"),
+        f_2=drive_entry("Developmental Editorial Review 1 Johnson",
+                        mime=GOOGLE_DOC_MIME),
+    ), docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Johnson - Book Original.docx"]
+    placed = uploads_in(opener)
+    assert placed and not any("Developmental" in name for name in placed)
+
+
+def test_flat_mode_without_the_label_switch_is_unchanged(tmp_path, provider):
+    """With the switch off, the flat folder behaves exactly as before: every
+    manuscript is prepared, whatever it is called."""
+    ws = WatchSettings(folder_id=FOLDER, model="claude-haiku-4-5",
+                       client_id="client-1", client_secret="secret-1")
+    opener = fake_drive(folder(
+        f_1=drive_entry("Johnson - Book Original.docx"),
+        f_2=drive_entry("Some Other Draft.docx"),
+    ), docx=MANUSCRIPT)
+
+    report = run(tmp_path, ws, opener)
+
+    assert sorted(report.prepped) == ["Johnson - Book Original.docx",
+                                      "Some Other Draft.docx"]
 
 
 def test_a_dry_run_in_subfolder_mode_writes_no_state(tmp_path, provider):
