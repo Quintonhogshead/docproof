@@ -5319,6 +5319,23 @@ $('watch-run').addEventListener('click', async () => {
   }
 });
 
+$('watch-test-email').addEventListener('click', async () => {
+  const button = $('watch-test-email');
+  const note = $('watch-run-note');
+  note.hidden = true;
+  button.disabled = true;
+  button.textContent = 'Sending…';
+  try {
+    const body = await api('/api/watch/test-email', { method: 'POST' });
+    watchNote(note, `Sent a test email to ${body.to}.`, 'ok');
+  } catch (err) {
+    watchNoteWithFix(note, err.message);
+  } finally {
+    button.textContent = 'Send a test email';
+    button.disabled = false;
+  }
+});
+
 $('watch-preview').addEventListener('click', async () => {
   const button = $('watch-preview');
   const note = $('watch-run-note');

@@ -532,6 +532,41 @@ def send_job_completion(watch_home, job, *, get_key=None,
         return False
 
 
+def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:
+    """Send a sample alert to the configured notify address, to prove the pipe
+    end to end — no pass, no formatting, no cost.
+
+    Returns the address it went to. Raises `ValueError` for a setup gap the caller
+    should show plainly (no address, no Google sign-in) and `DriveError` for a
+    send Gmail refused — most often the missing `gmail.send` scope, fixed by
+    signing in again. Uses the watcher's own Google account, the same one a real
+    alert would."""
+    from app.settings import get_api_key
+
+    from .settings import GOOGLE_KEY, WatchSettings
+
+    ws = WatchSettings.load(watch_home)
+    if not ws.notify_email:
+        raise ValueError("No notify address is set. Add one with "
+                         "`docproof-watch init --notify-email you@example.com`, "
+                         "then try again.")
+    if not (ws.client_id and ws.client_secret):
+        raise ValueError("Google sign-in is not set up yet.")
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
+    if not refresh:
+        raise ValueError("DocProof is not signed in to Google.")
+    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+                                       opener=opener)
+    subject = f"{ALERT_TAGS} Test — DocWatch notifications are working"
+    body = ("This is a test from DocWatch, sent because someone asked for one.\n\n"
+            "If it reached you, the alerts a pass raises when it needs a person — "
+            "a ready author with no Book Original, a book whose status is stuck, "
+            "a manuscript that failed to prepare — will reach this inbox too.\n\n"
+            "Nothing was prepared, changed or charged for.")
+    send(token, ws.notify_email, subject, body, opener=opener)
+    return ws.notify_email
+
+
 def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
     """Email the watcher's owner when a pass needs a person and an address is set.
 
@@ -633,4 +668,4 @@ def plan_too_large(token: str, ws, file, job, *,
 
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
            "maybe_complete", "completion_for_job", "send_job_completion",
-           "promo_too_large", "plan_too_large"]
+           "send_test", "promo_too_large", "plan_too_large"]

@@ -26,6 +26,7 @@ from .. import settings as settingslib
 from ..settings import ENV_VARS
 from ..watch import auth as authlib
 from ..watch import daily as dailylib
+from ..watch import notify as notifylib
 from ..watch import schedule as schedulelib
 from ..watch import status as watchlib
 from ..watch.drive import DriveError
@@ -288,6 +289,21 @@ def register(app: FastAPI) -> None:
         # pass runs, so this is only ever a double click, and answering "it is
         # already doing what you asked" in red would be the wrong noise.
         return {"started": started, **watch_payload()}
+
+    @app.post("/api/watch/test-email", dependencies=[Depends(may_manage)])
+    def test_watch_email() -> dict:
+        """Send a sample alert to the configured notify address, to prove
+        notifications reach the inbox — no pass, no formatting, no cost."""
+        watch: WatchRunner = app.state.watch
+        try:
+            to = notifylib.send_test(watch.home)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        except DriveError as e:
+            raise HTTPException(
+                502, f"Could not send the test email: {e} If Gmail refused the "
+                     f"scope, run the DocWatch Google sign-in again.") from None
+        return {"sent": True, "to": to}
 
     @app.post("/api/watch/preview", dependencies=[Depends(may_manage)])
     def preview_watch() -> dict:
