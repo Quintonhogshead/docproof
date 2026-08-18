@@ -89,7 +89,6 @@ class WatchSettings:
     # tracked-changes one, "both" (indesign+tracked) or "all". Same vocabulary
     # as the app's own setting.
     prep_output: str = "book"
-    upload_notes: bool = True
     # Off by default: the folder authors and editors look at should hold
     # manuscripts, not apologies. A failure is loud in `status` and the log.
     upload_failure_note: bool = False

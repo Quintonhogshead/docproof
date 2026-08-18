@@ -4966,7 +4966,6 @@ function renderWatch(body, quiet) {
 
   $('watch-folder').value = w.folder_id || '';
   $('watch-output').value = w.prep_output || 'indesign';
-  $('watch-notes').checked = w.upload_notes;
   $('watch-failure-note').checked = w.upload_failure_note;
   // Meaningful in both modes: in a flat folder it prepares only files named
   // "<surname> - Book Original"; in subfolder mode the surname comes from the
@@ -5263,7 +5262,6 @@ $('watch-save').addEventListener('click', async () => {
         folder: $('watch-folder').value.trim() || null,
         model: $('watch-model').value,
         prep_output: $('watch-output').value,
-        upload_notes: $('watch-notes').checked,
         upload_failure_note: $('watch-failure-note').checked,
       }),
     });

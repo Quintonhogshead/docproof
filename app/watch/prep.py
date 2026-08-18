@@ -163,7 +163,7 @@ def _run_mock(runner: JobRunner, store: JobStore, job: Job) -> None:
 # --- putting it back ----------------------------------------------------------
 
 def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
-    """What of this run belongs in the folder, and what to call it there.
+    """What of this run belongs in the author's folder, and what to call it there.
 
     Prep writes internal names (`book_*.docx`, `tagged_*.idml`,
     `tracked_*.docx`, `prep_notes.md`); the folder belongs to people, so each is
@@ -174,7 +174,12 @@ def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     The deliverable takes the bare base name, by priority: the book-styled
     reading copy, then the InDesign-ready IDML, then the redline — and it keeps
     its own extension (`.docx` for the reading copy, `.idml` for the InDesign
-    file). Whatever is not the bare deliverable sits beside it under a suffix."""
+    file). Whatever is not the bare deliverable sits beside it under a suffix.
+
+    The prep log (`prep_notes.md`) is deliberately *not* here: the author's
+    folder holds the deliverable, and DocProof's own record of what it decided
+    and flagged belongs in the DocProof storage folder (the archive), which keeps
+    it on its own. See `archive._artifact_paths`."""
     out = Path(job.results_dir or "")
     if not out.is_dir():
         return []
@@ -202,10 +207,6 @@ def artifacts(job: Job, ws: WatchSettings) -> list[Artifact]:
     if tracked and (primary is None or primary[0] != "tracked"):
         found.append(Artifact(tracked[0],
                               f"{base}{naming.TRACKED_SUFFIX}.docx", DOCX_MIME))
-    notes = out / "prep_notes.md"
-    if ws.upload_notes and notes.is_file():
-        found.append(Artifact(notes, f"{base}{naming.NOTES_SUFFIX}.md",
-                              MARKDOWN_MIME))
     return found
 
 
