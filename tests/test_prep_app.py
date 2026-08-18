@@ -43,7 +43,9 @@ def client(tmp_path, provider, monkeypatch):
     with TestClient(app) as c:
         c.app_state = app.state
         yield c
-    app.state.runner.stop()
+    # Join the worker rather than only signalling it, so no job outlives the
+    # stubs this fixture installed (see tests/test_app.py).
+    app.state.runner.stop(join=30)
 
 
 def upload(client, name="googledoc.docx"):

@@ -52,8 +52,8 @@ def no_whole_book_cache(monkeypatch):
     monkeypatch.setenv("DOCPROOF_CACHE_DIR", "")
 
 
-@pytest.fixture(autouse=True)
-def no_internet(monkeypatch):
+@pytest.fixture(autouse=True, scope="session")
+def no_internet():
     """Nothing in this suite may leave the machine.
 
     Every network seam is injected — a fake provider, a fake opener — so this
@@ -61,7 +61,12 @@ def no_internet(monkeypatch):
     those seams was missed is a default argument that bound the real function
     at import, a test that looks like it passes, and a vendor invoice. The
     loopback address stays open: the sign-in listener genuinely needs one, and
-    127.0.0.1 goes nowhere."""
+    127.0.0.1 goes nowhere.
+
+    Held for the whole session rather than per test, because the calls this is
+    meant to catch are exactly the ones a per-test guard misses: a worker
+    thread that outlives the test that started it makes its vendor call after
+    teardown has put the real socket back."""
     real = socket.socket.connect
 
     def guard(self, address, *args, **kwargs):
@@ -72,7 +77,11 @@ def no_internet(monkeypatch):
                 f"DocProof takes an injected opener or provider; pass one")
         return real(self, address, *args, **kwargs)
 
-    monkeypatch.setattr(socket.socket, "connect", guard)
+    socket.socket.connect = guard
+    try:
+        yield
+    finally:
+        socket.socket.connect = real
 
 
 @pytest.fixture

@@ -67,7 +67,13 @@ def client(tmp_path, provider, monkeypatch):
     with TestClient(app) as c:
         c.app_state = app.state
         yield c
-    app.state.runner.stop()
+    # Join the worker, don't just signal it: a test that starts a job without
+    # waiting for it would otherwise leave that job running into the next test,
+    # where the stubs installed here have already been undone. Such a thread
+    # reaches the real vendor, and — worse — runs the *next* test's patched
+    # code, which is how a job that should fail once quietly used up its one
+    # scripted failure.
+    app.state.runner.stop(join=30)
 
 
 def _upload(client, name="simple.docx"):

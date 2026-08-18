@@ -709,8 +709,27 @@ class JobRunner:
             t.start()
         self.resume_interrupted()
 
-    def stop(self) -> None:
+    def stop(self, join: float | None = None) -> None:
+        """Ask both threads to finish. Setting the flag is all a shutting-down
+        app needs: the threads are daemons, and a review already in flight is
+        left to end on its own rather than holding the process open.
+
+        `join` waits that many seconds for them to actually exit — a job the
+        worker had already picked up runs to completion first. Tests pass it so
+        that no worker thread survives the fixture that set its stubs up; a
+        leaked one goes on calling whatever the stubs were restored to, which
+        means the live vendor."""
         self._stop.set()
+        if join is None:
+            return
+        deadline = time.monotonic() + join
+        for t in self._threads:
+            if t is threading.current_thread():
+                continue
+            t.join(max(0.0, deadline - time.monotonic()))
+            if t.is_alive():
+                raise TimeoutError(f"{t.name} did not stop within {join}s")
+        self._threads = []
 
     def resume_interrupted(self) -> None:
         """A sync job that was mid-flight when the app closed is re-queued.
