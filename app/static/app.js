@@ -151,10 +151,12 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   };
 
   // A single-call read (Word file or plain list): drop the list in and summarise.
-  // These sources carry no PDF comments, so clear any left from an earlier read.
+  // These sources carry no PDF comments and no pages, so clear anything left from
+  // an earlier read — stale pages would narrow the new edits to the wrong book.
   const fillFromBody = (body) => {
     const ta = $('corrections-input');
     if (ta) ta.dataset.comments = '';
+    if (ta) ta.dataset.pages = '';
     setEdits(JSON.parse(body.json));
     summarise(body.count, body.issues, '');
   };
@@ -179,17 +181,35 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
       setProgress(0, 1);
       const form = new FormData();
       form.append('file', file);
-      const { count, batches, comments } = await api('/api/corrections/read-pdf',
-        { method: 'POST', body: form });
+      // The staged IDML, so the server can show the model the book's own words for
+      // each marked page instead of the PDF's rendering of them. Optional: without
+      // it the read still works, the anchors are just quoted from the proof.
+      const staged = filesToRun()[0];
+      if (staged) form.append('file_id', staged.id);
+      const {
+        count, batches, comments, pages, resolved,
+      } = await api('/api/corrections/read-pdf', { method: 'POST', body: form });
       // Keep the reviewer comments beside the edit list they produced, so the
       // finished change log can account for every one — including any the model
       // turns into no edit. Cleared by the Word/list paths, which have none.
       const ta0 = $('corrections-input');
       if (ta0) ta0.dataset.comments = JSON.stringify(comments || []);
+      // And the text of every proof page, which is what lets a mark on page 49 be
+      // narrowed to the text page 49 set. An InDesign file has no pages, so
+      // without this a correction to a bare comma has every comma in the book to
+      // choose between and can only be flagged.
+      if (ta0) ta0.dataset.pages = JSON.stringify(pages || []);
+      // Marks that are a function of the text they sit on are already resolved,
+      // exactly and for nothing, so the list starts filled and only the notes that
+      // genuinely need reading go to the model.
+      edits.push(...(resolved || []));
+      if (edits.length) setEdits(edits);
+      const done = edits.length;
       for (let i = 0; i < batches.length; i += 1) {
         setProgress(i, batches.length);
-        show(`Reading ${count} comment${plural(count)}… batch ${i + 1} of `
-          + `${batches.length} · ${edits.length} edit${plural(edits.length)} so far`);
+        show(`${count} comment${plural(count)} · ${done} read exactly · `
+          + `batch ${i + 1} of ${batches.length} · `
+          + `${edits.length} edit${plural(edits.length)} so far`);
         // Sequential on purpose: the bar climbs a batch at a time, and each
         // small call is safe on its own. eslint-disable-next-line no-await-in-loop
         const part = await api('/api/corrections/extract-list', {
@@ -200,7 +220,7 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
         if (part.issues) issues.push(...part.issues);
         setEdits(edits);                      // fill live so the count is seen to grow
       }
-      setProgress(batches.length, batches.length);
+      setProgress(batches.length || 1, batches.length || 1);
       summarise(edits.length, issues, `from ${count} comment${plural(count)}`);
     } catch (e) {
       const kept = edits.length
@@ -2544,6 +2564,10 @@ $('start').addEventListener('click', async () => {
           // the change log accounts for every one; empty for a typed/Word list.
           corrections_comments: isCorrections()
             ? ((($('corrections-input') || {}).dataset || {}).comments || '') : '',
+          // The proof's page texts, so each mark is matched against the run of
+          // book text its own page set.
+          corrections_pages: isCorrections()
+            ? ((($('corrections-input') || {}).dataset || {}).pages || '') : '',
           // The opt-in model gate that holds a doubtful edit back for a human.
           corrections_sanity: isCorrections()
             && !!(($('corrections-sanity') || {}).checked),

@@ -275,14 +275,13 @@ def test_a_highlight_is_read_with_its_span_and_line(tmp_path):
 
 
 def test_a_highlight_on_a_word_inside_a_run_reads_that_word(tmp_path):
-    """pypdf hands back a whole run of words at a single position, so a highlight
-    over a word that is not first in its run once read back empty (its start x sat
-    left of the mark). The reader now walks each glyph's width out from the run's
-    start, so an interior word is found — and snapped whole, not clipped.
+    """A highlight over a word that is not first in its text run. pypdf hands back
+    a whole run at a single position, so this once read back empty — the run's
+    start x sat left of the mark. The reader works from pdfplumber's exact
+    per-word boxes now, so an interior word is found and comes back whole.
 
-    Glyphs are a uniform 500/1000 em here and a second, two-piece line fixes the
-    scale at 5pt/glyph, so "charlie" occupies x 132–167 exactly; the mark covers
-    its middle and must come back as the whole word."""
+    At Helvetica 12pt "charlie" occupies x 138–173; the mark covers its middle and
+    must come back as the whole word."""
     from docproof.corrections.from_pdf import read_pdf_comments
     pdf = make_commented_pdf(
         tmp_path / "run.pdf",
@@ -335,3 +334,97 @@ def test_the_pdf_source_feeds_the_extractor_end_to_end(tmp_path):
          "kind": "mechanical", "occurrence": 0}])
     result = extract_edits(source, provider, model="m", usage=Usage())
     assert result.ok and len(result.edits) == 2
+
+
+def test_a_highlight_on_a_single_chunk_line_is_read_exactly(tmp_path):
+    """The failure that cost a real proof half its anchors.
+
+    A line of typeset body text is drawn as one run. The old reader estimated a
+    page's points-per-em from the gaps *between* runs, so a single-run line offered
+    it nothing to measure and it fell back to a constant — roughly half the truth
+    here. Every glyph was then placed at half its real advance, packed into the
+    left of the measure, and a highlight over a word late in the line covered no
+    glyph at all: the comment arrived with an empty anchor and the model had
+    nothing to work from.
+
+    At Helvetica 12pt the last word of this line, "juliet", renders at x 353–377.
+    The mark is drawn exactly there; the old reader placed that glyph run around
+    x 72–258 and so covered none of it.
+    """
+    from docproof.corrections.from_pdf import read_pdf_comments
+    line = "alpha bravo charlie delta echo foxtrot golf hotel india juliet"
+    pdf = make_commented_pdf(
+        tmp_path / "single.pdf",
+        lines=[(72, 700, line)],                          # ONE run, no gap to measure
+        annots=[{"subtype": "/Highlight",
+                 "rect": [353, 698, 377, 712],
+                 "quad": [353, 712, 377, 712, 353, 698, 377, 698],
+                 "contents": "Previously capitalized"}])
+    hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
+    assert len(hl) == 1
+    assert hl[0].anchor == "juliet"
+    assert hl[0].context == line
+
+
+def test_a_highlight_across_a_line_break_reads_as_one_span(tmp_path):
+    """A mark that runs over the end of one line and onto the next comes back whole,
+    with both lines as its context."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(
+        tmp_path / "wrap.pdf",
+        lines=[(72, 700, "he won the player of the"), (72, 680, "tournament that year")],
+        annots=[{"subtype": "/Highlight",
+                 "rect": [72, 678, 201, 710],
+                 # one rectangle per line, as a real wrapped highlight is drawn:
+                 # "the" at x 183–200 on the upper line, "tournament" at x 72–133
+                 # on the lower one
+                 "quad": [183, 710, 201, 710, 183, 697, 201, 697,
+                          72, 690, 133, 690, 72, 677, 133, 677],
+                 "contents": "Previously capitalized"}])
+    hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
+    assert len(hl) == 1
+    # The line break collapses to a space: the book sets these words as one run,
+    # so that is the quotation an edit has to carry.
+    assert hl[0].anchor == "the tournament"
+    assert "player of the" in hl[0].context
+    assert "that year" in hl[0].context
+
+
+def test_the_proof_hands_back_the_text_of_every_page(tmp_path):
+    """The page texts are what the page map aligns against the book, so they come
+    back from the same read — including for a page that carries no comment."""
+    from docproof.corrections.from_pdf import read_pdf
+    proof = read_pdf(_proof(tmp_path / "p.pdf"))
+    assert len(proof.page_texts) == 1
+    assert proof.page_texts[0] == ("were slick with fish oil.\n"
+                                   "he carried a pouch of tobacco here")
+    assert len(proof.comments) == 2
+
+
+def test_a_comment_records_where_it_sat_on_its_page(tmp_path):
+    """The offset into the page text is the closest thing a page-anchored mark has
+    to an exact address, so it is carried rather than recomputed later."""
+    from docproof.corrections.from_pdf import read_pdf
+    proof = read_pdf(_proof(tmp_path / "p.pdf"))
+    hl = [c for c in proof.comments if c.kind == "highlight"][0]
+    page = proof.page_texts[0]
+    assert hl.offset >= 0
+    assert page[hl.offset:].startswith(hl.anchor)
+
+
+def test_a_highlight_over_no_words_falls_back_to_its_line(tmp_path):
+    """A mark dragged over blank space (or an image) resolves to no word. It still
+    has to arrive anchored to something real, or the comment reaches the model with
+    nothing at all — which is how a mark used to become an unusable edit."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(
+        tmp_path / "blank.pdf",
+        lines=[(72, 700, "the line that carries the mark")],
+        annots=[{"subtype": "/Highlight",
+                 # to the right of where the text ends, on the same line
+                 "rect": [400, 698, 460, 712],
+                 "quad": [400, 712, 460, 712, 400, 698, 460, 698],
+                 "contents": "Remove blank line break?"}])
+    hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
+    assert len(hl) == 1
+    assert hl[0].anchor == "the line that carries the mark"

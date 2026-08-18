@@ -352,3 +352,106 @@ def test_extract_pdf_reads_a_big_proof_in_bounded_batches(client, monkeypatch,
     assert body["count"] == 2                       # accumulated across two calls
     non_batch_calls = [c for c in provider.calls if not c.get("batch")]
     assert len(non_batch_calls) == 2                # one model call per batch
+
+
+# --- reading a proof against the book it will be applied to -------------------
+
+def test_read_pdf_resolves_the_mechanical_marks_without_a_model(client,
+                                                                monkeypatch,
+                                                                tmp_path):
+    """A note that is a function of the span it sits on never reaches the model.
+    The proof fixture's highlight says "Slick with petroleum jelly" (prose, for the
+    model); a "Lowercase" mark on the same word is resolved here and for nothing."""
+    from tests.test_corrections_extract import make_commented_pdf
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda *a, **k: pytest.fail("read-pdf must not call a model"))
+    pdf = make_commented_pdf(
+        tmp_path / "marks.pdf",
+        lines=[(72, 700, "were slick with Fish oil.")],
+        annots=[{"subtype": "/Highlight",
+                 # over "Fish" — Helvetica 12pt puts it at x 150-176
+                 "rect": [150, 698, 176, 712],
+                 "quad": [150, 712, 176, 712, 150, 698, 176, 698],
+                 "contents": "Lowercase"}])
+    with pdf.open("rb") as fh:
+        r = client.post("/api/corrections/read-pdf",
+                        files={"file": ("marks.pdf", fh.read(), "application/pdf")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1
+    assert body["resolved_count"] == 1
+    assert body["resolved"][0]["find"] == "Fish"
+    assert body["resolved"][0]["replace"] == "fish"
+    assert body["resolved"][0]["source"] == "p1-1"
+    assert body["batches"] == []              # nothing left for the model to read
+
+
+def test_read_pdf_hands_back_the_page_texts_for_the_page_map(client, tmp_path):
+    """The page texts are what turn "marked on page 49" into a run of book text, so
+    they ride back with the comments and into the job."""
+    with _proof(tmp_path / "proof.pdf").open("rb") as fh:
+        r = client.post("/api/corrections/read-pdf",
+                        files={"file": ("proof.pdf", fh.read(), "application/pdf")})
+    body = r.json()
+    assert len(body["pages"]) == 1
+    assert "fish oil" in body["pages"][0]
+
+
+def test_read_pdf_shows_the_model_the_book_when_the_idml_is_staged(client,
+                                                                  monkeypatch,
+                                                                  tmp_path):
+    """The fix for the anchors that could never match: given the staged IDML, the
+    batch the model reads carries the *book's* text for each marked page, not just
+    the PDF's rendering of it. The model then copies its anchor instead of recalling
+    one for a document it has never seen."""
+    from tests.test_corrections_extract import make_commented_pdf
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda *a, **k: pytest.fail("read-pdf must not call a model"))
+    staged = upload(client, "layout.idml")
+    # A page of "proof" whose text is the book's own opening paragraph, so the map
+    # can place it; the comment is prose, so it goes to the model and carries the
+    # book text with it.
+    book = story_text(LAYOUT, "ue0")
+    page = " ".join(book[:3])
+    pdf = make_commented_pdf(
+        tmp_path / "aligned.pdf",
+        lines=[(72, 700 - 14 * i, chunk) for i, chunk in enumerate(
+            [page[i:i + 90] for i in range(0, min(len(page), 540), 90)])],
+        annots=[{"subtype": "/Text", "rect": [72, 697, 90, 712],
+                 "contents": "Make this read better somehow, your call"}])
+    with pdf.open("rb") as fh:
+        r = client.post("/api/corrections/read-pdf",
+                        data={"file_id": staged["id"]},
+                        files={"file": ("aligned.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["batches"]) == 1
+    assert "THE BOOK'S OWN TEXT" in body["batches"][0]
+    assert "[book text, page 1]" in body["batches"][0]
+
+
+def test_read_pdf_without_the_idml_still_reads_the_proof(client, tmp_path):
+    """The book text is a nicety. No staged file (or an unreadable one) means the
+    anchors are quoted from the proof, exactly as before — never a failed read."""
+    with _proof(tmp_path / "proof.pdf").open("rb") as fh:
+        r = client.post("/api/corrections/read-pdf",
+                        data={"file_id": "not-a-real-file"},
+                        files={"file": ("proof.pdf", fh.read(),
+                                        "application/pdf")})
+    assert r.status_code == 200, r.text
+    assert r.json()["count"] == 2
+
+
+def test_a_corrections_job_carries_the_page_texts_into_the_run(client):
+    """End to end: the pages sent with the job reach the page map, and the report
+    says how many of them were placed."""
+    src = upload(client, "layout.idml")
+    book = story_text(LAYOUT, "ue0")
+    job = run_corrections(
+        client, src["id"],
+        json.dumps([{"find": "several", "replace": "many", "source": "p1-1"}]),
+        corrections_pages=json.dumps([book[4]]))
+    assert job["state"] == "done", job.get("error")
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    assert report["pages"] == {"placed": 1, "total": 1}

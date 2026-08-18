@@ -27,9 +27,11 @@ from typing import Sequence
 from ..models import Usage
 from ..providers import Provider
 from .apply import apply_edits
+from .idml import read_stories
 from .model import (APPLIED_EXACTLY, ApplyReport, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, VerifyReport)
+from .pagemap import build_page_map
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
@@ -54,6 +56,12 @@ class CorrectionsOutputs:
     comments: tuple[CommentDisposition, ...] = ()
     # The sanity gate's model spend, when it ran; None on the free path.
     usage: Usage | None = None
+    # How much of the proof the page map could place in the book. A page it could
+    # not place is a page whose marks fall back to searching the whole book, so a
+    # low number here explains a run with more flags than expected — and stops the
+    # narrowing degrading silently.
+    pages_placed: int = 0
+    pages_total: int = 0
 
     @property
     def applied(self) -> int:
@@ -175,7 +183,8 @@ def _apply_status_of(apply_report: ApplyReport):
 def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       id_prefix: str = "c", dest_name: str | None = None,
                       comments: Sequence | None = None,
-                      sanity: tuple[Provider, str] | None = None
+                      sanity: tuple[Provider, str] | None = None,
+                      page_texts: Sequence[str] | None = None
                       ) -> CorrectionsOutputs:
     """Apply a corrections source to `src_idml`, writing the corrected IDML and
     the report into `out_dir`.
@@ -189,7 +198,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     in the report — applied, flagged, a no-op, or never extracted — so none is
     lost. `sanity` is an optional `(provider, model)` gate that reads each proposed
     edit and holds a doubtful one back for a human instead of applying it; it adds
-    a small model spend (returned on the outputs) and is off by default."""
+    a small model spend (returned on the outputs) and is off by default.
+
+    `page_texts` is the text of each page of the proof, in order, as the PDF reader
+    read it. Given it, each page is aligned against the book's own text once, and a
+    correction then narrows to the run of text the page it was marked on actually
+    set — which is what lets a mark on a comma land at all, instead of finding
+    seven thousand of them. It is a narrower and nothing more: a page the alignment
+    cannot place costs precision on that page's marks, never a correction."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     parsed = parse_edits(corrections, id_prefix=id_prefix)
@@ -202,28 +218,42 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         usage = Usage()
         withheld = review_edits(edits, provider, model=model, usage=usage)
 
+    # The page map, built once and shared by the apply and the self-check so both
+    # place every edit identically.
+    scope = None
+    pages_placed = pages_total = 0
+    if page_texts:
+        pages_total = len(page_texts)
+        scope = build_page_map(read_stories(src_idml), list(page_texts))
+        pages_placed = scope.placed
+
     corrected = out / (dest_name or corrected_name(src_idml))
-    apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld)
+    apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld,
+                               scope=scope)
     # Self-check: our own output, verified against the same list (withholding the
     # same edits, so a held-back one is not read as an unaccounted change). Clean
     # by construction unless `apply` has a bug — then the report says so instead
     # of the file going out unflagged.
-    verify_report = verify(src_idml, corrected, edits, withheld=withheld)
+    verify_report = verify(src_idml, corrected, edits, withheld=withheld,
+                           scope=scope)
 
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
-        deterministic=(sanity is None))
-    log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; verify %s",
+        deterministic=(sanity is None), pages=(pages_placed, pages_total))
+    log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
+             "%d/%d page(s) placed; verify %s",
              Path(src_idml).name, apply_report.summary(), len(dispositions),
              sum(1 for d in dispositions if d.needs_human),
+             pages_placed, pages_total,
              "clean" if verify_report.clean else "has discrepancies")
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=corrected, apply=apply_report,
-        comments=dispositions, usage=usage)
+        comments=dispositions, usage=usage, pages_placed=pages_placed,
+        pages_total=pages_total)
 
 
 def _verify_status_of(verify_report: VerifyReport):

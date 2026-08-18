@@ -31,6 +31,14 @@ PSR = "ParagraphStyleRange"
 NESTED = {PSR, "Table", "Footnote", "Cell", "Note", "XmlStory"}
 STORY_GLOB = "Stories/Story_"
 BACKING_STORY = "XML/BackingStory.xml"
+CSR = "CharacterStyleRange"
+# Children of a CharacterStyleRange that occupy a position in the text flow. When a
+# range is split around a span these are sliced by index and never duplicated —
+# duplicating one would clone a footnote or a paragraph break. Everything else a
+# range holds (`Properties`, and the applied-font element inside it) describes the
+# range rather than sitting in it, and so is copied into every piece of the split;
+# without that copy each new range would silently lose its font.
+FLOW = {CONTENT, BR} | {"Table", "Footnote", "Note", "XmlStory", "Cell"}
 
 
 @dataclass
@@ -45,6 +53,95 @@ class Paragraph:
     @property
     def text(self) -> str:
         return "".join((n.text or "") for n in self.nodes)
+
+    def restyle(self, start: int, end: int, attrs: dict[str, str]) -> bool:
+        """Apply character attributes (`{"FontStyle": "Italic"}`) to the
+        `[start, end)` span of this paragraph, changing no text.
+
+        This is how "italicize this" becomes a real edit rather than a note passed
+        to a designer. InDesign carries local character formatting on the
+        `CharacterStyleRange` that encloses the text, so styling part of a run means
+        splitting that range into up to three — before, the span, after — with the
+        attribute on the middle one. The pieces keep the original range's own
+        attributes and properties, and its flow children stay in their original
+        order, so a range that spans several paragraphs (one `CharacterStyleRange`
+        commonly holds `Content Br Content Br …`) comes apart without disturbing a
+        single break.
+
+        Returns False, changing nothing, when the span cannot be styled cleanly —
+        its text is not held directly by a character range, for instance. The
+        caller flags that rather than writing something half-done."""
+        if start < 0 or end > len(self.text) or start >= end:
+            raise ValueError(f"span [{start}, {end}) outside paragraph "
+                             f"of length {len(self.text)}")
+        covered = self._split_out(start, end)
+        if covered is None:
+            return False
+        # Group the covered nodes by the range that holds them: a span can run over
+        # a range boundary (the reviewer marked across a word that was already
+        # styled), and each range is then split on its own.
+        groups: list[tuple[ET._Element, list[ET._Element]]] = []
+        for node in covered:
+            parent = node.getparent()
+            if parent is None or parent.tag != CSR:
+                return False
+            if groups and groups[-1][0] is parent:
+                groups[-1][1].append(node)
+            else:
+                groups.append((parent, [node]))
+        for parent, nodes in groups:
+            _style_range(parent, nodes, attrs)
+        return True
+
+    def _split_out(self, start: int, end: int) -> list[ET._Element] | None:
+        """The Content nodes covering `[start, end)`, split at both ends so the span
+        is exactly a whole run of them. None when the span cannot be isolated.
+
+        Three separate passes rather than one clever one: each recomputes the
+        paragraph offsets from the current node list, so a split made by an earlier
+        pass cannot leave a later one reading stale coordinates."""
+        if not self._split_at(start) or not self._split_at(end):
+            return None
+        covered: list[ET._Element] = []
+        offset = 0
+        for node in self.nodes:
+            text = node.text or ""
+            n0, n1 = offset, offset + len(text)
+            offset = n1
+            if text and n0 >= start and n1 <= end:
+                covered.append(node)
+        return covered or None
+
+    def _split_at(self, pos: int) -> bool:
+        """Ensure a Content-node boundary falls at paragraph offset `pos`, splitting
+        the node that straddles it. True when a boundary is there (or already was)."""
+        offset = 0
+        for i, node in enumerate(self.nodes):
+            text = node.text or ""
+            n0, n1 = offset, offset + len(text)
+            offset = n1
+            if n0 < pos < n1:
+                return self._split_node(i, pos - n0)
+        return True
+
+    def _split_node(self, index: int, at: int) -> bool:
+        """Split `self.nodes[index]` into two Content nodes at local offset `at`,
+        the tail following the head in the document. False if the node is not held
+        by an element that can take another child beside it."""
+        node = self.nodes[index]
+        text = node.text or ""
+        if at <= 0 or at >= len(text):
+            return True                         # already on a boundary
+        parent = node.getparent()
+        if parent is None:
+            return False
+        tail = ET.SubElement(parent, CONTENT)
+        parent.remove(tail)
+        tail.text = text[at:]
+        node.text = text[:at]
+        parent.insert(list(parent).index(node) + 1, tail)
+        self.nodes.insert(index + 1, tail)
+        return True
 
     def replace(self, start: int, end: int, new_text: str) -> None:
         """Replace the [start, end) span of this paragraph's text with
@@ -90,6 +187,57 @@ class Paragraph:
                 break
             if started:
                 node.text = ""
+
+
+def _style_range(parent: ET._Element, nodes: list[ET._Element],
+                 attrs: dict[str, str]) -> None:
+    """Give `nodes` — a contiguous run of `parent`'s flow children — the character
+    attributes in `attrs`, splitting `parent` around them if it holds anything else.
+
+    An attribute whose value is None is removed instead of set, which is how
+    "de-italicize" clears a local override rather than writing a second one over
+    it."""
+    flow = [c for c in parent if c.tag in FLOW]
+    props = [c for c in parent if c.tag not in FLOW]
+    first, last = flow.index(nodes[0]), flow.index(nodes[-1])
+    if first == 0 and last == len(flow) - 1:
+        _set_attrs(parent, attrs)               # the whole range is the span
+        return
+    grandparent = parent.getparent()
+    at = list(grandparent).index(parent)
+    pieces = [(flow[:first], False), (flow[first:last + 1], True),
+              (flow[last + 1:], False)]
+    made = []
+    for children, styled in pieces:
+        if not children:
+            continue
+        piece = ET.Element(CSR, dict(parent.attrib))
+        for prop in props:
+            piece.append(_copy(prop))
+        for child in children:
+            piece.append(child)                 # moves it out of `parent`
+        if styled:
+            _set_attrs(piece, attrs)
+        made.append(piece)
+    for offset, piece in enumerate(made):
+        grandparent.insert(at + offset, piece)
+    grandparent.remove(parent)
+
+
+def _set_attrs(el: ET._Element, attrs: dict[str, str]) -> None:
+    for name, value in attrs.items():
+        if value is None:
+            el.attrib.pop(name, None)
+        else:
+            el.set(name, value)
+
+
+def _copy(el: ET._Element) -> ET._Element:
+    clone = ET.Element(el.tag, dict(el.attrib))
+    clone.text, clone.tail = el.text, el.tail
+    for child in el:
+        clone.append(_copy(child))
+    return clone
 
 
 @dataclass

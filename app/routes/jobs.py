@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -77,6 +77,10 @@ class JobRequest(BaseModel):
     # log can account for every comment — including ones no edit was made for.
     # Empty when the list was typed or pasted, not read off a proof.
     corrections_comments: str = ""
+    # Corrections from a marked-up PDF: the text of each page of the proof, in
+    # order, as JSON. The page map aligns these against the book so a mark narrows
+    # to the text its own page set. Empty when the list was typed or pasted.
+    corrections_pages: str = ""
     # Corrections only: run the opt-in model sanity gate over the edits before
     # applying, holding a doubtful one (an over-grab, an anachronism, nonsense)
     # back for a human. Off keeps the job deterministic and free.
@@ -281,6 +285,17 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         except (json.JSONDecodeError, ValueError):
             comments = ""
 
+    # The proof's page texts, kept the same way and for the same reason: they only
+    # narrow where an edit may land, so a malformed blob costs precision, never a
+    # correction, and is dropped rather than failing the job.
+    pages = ""
+    if req.corrections_pages.strip():
+        try:
+            if isinstance(json.loads(req.corrections_pages), list):
+                pages = req.corrections_pages
+        except (json.JSONDecodeError, ValueError):
+            pages = ""
+
     group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
     job = Job(
         id=batchlib.new_job_id(source.name),
@@ -292,6 +307,7 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         kind="corrections",
         corrections=req.corrections,
         corrections_comments=comments,
+        corrections_pages=pages,
         corrections_sanity=bool(req.corrections_sanity),
         created_at=datetime.now(timezone.utc).isoformat(),
         owner_id=owner,
@@ -316,6 +332,8 @@ def _edits_to_corrections_json(edits) -> str:
             row["occurrence"] = e.occurrence
         if e.source:
             row["source"] = e.source       # ties the edit to its PDF comment id
+        if e.format:
+            row["format"] = e.format       # italics are an edit, not a design note
         rows.append(row)
     return json.dumps(rows, indent=2, ensure_ascii=False)
 
@@ -1127,13 +1145,13 @@ def register(app: FastAPI) -> None:
             raise HTTPException(400, "Paste the corrections list to read.")
         return _extract_with_model(app, owner, req.text)
 
-    async def _read_pdf_comments_or_400(file: UploadFile) -> list:
-        """The comments read off an uploaded PDF proof, or a 400 the caller
-        surfaces: a wrong file type, an unreadable file, or a proof with no
-        comment layer at all (flattened or scanned). Deterministic — pypdf only,
-        no model and no cost. Shared by the batched panel read and the
-        server-side extract fallback."""
-        from docproof.corrections.from_pdf import read_pdf_comments
+    async def _read_proof_or_400(file: UploadFile):
+        """The comments and page texts read off an uploaded PDF proof, or a 400 the
+        caller surfaces: a wrong file type, an unreadable file, or a proof with no
+        comment layer at all (flattened or scanned). Deterministic — no model and
+        no cost. Shared by the batched panel read and the server-side extract
+        fallback."""
+        from docproof.corrections.from_pdf import read_pdf
         name = Path(file.filename or "proof.pdf").name
         if not name.lower().endswith(".pdf"):
             raise HTTPException(400, "Upload a PDF proof with comments.")
@@ -1142,21 +1160,51 @@ def register(app: FastAPI) -> None:
         try:
             tmp.write_bytes(data)
             try:
-                comments = read_pdf_comments(tmp)
+                proof = read_pdf(tmp)
             except Exception as e:         # noqa: BLE001 - an unreadable upload
                 raise HTTPException(400, f"Could not read {name}: {e}")
         finally:
             tmp.unlink(missing_ok=True)
+        comments = list(proof.comments)
         if not comments:
             raise HTTPException(
                 400, f"No comments found in {name}. The corrections have to be "
                      "PDF comments or highlights — a flattened or scanned proof "
                      "has no comment layer to read.")
-        return comments
+        return proof
+
+    def _book_pages_for(file_id: str, owner: str, page_texts: list[str],
+                        wanted: set[int]) -> dict[int, str]:
+        """The book's own text for each page a comment sits on, read out of the
+        designer's staged IDML.
+
+        This is what the extractor should be quoting from. Without it the model is
+        shown only the PDF's rendering of a page and asked to produce an anchor that
+        matches the IDML exactly — a document it has never seen — which is where the
+        unmatchable anchors came from. Best-effort: no file id, an unreadable
+        export, or a page the map cannot place simply means that page's comments are
+        read the old way."""
+        if not file_id or not page_texts:
+            return {}
+        path = common.resolve_upload(app.state.paths, file_id, owner)
+        if path is None or path.suffix.lower() != ".idml":
+            return {}
+        try:
+            from docproof.corrections.idml import read_stories
+            from docproof.corrections.pagemap import build_page_map, page_book_text
+            stories = read_stories(path)
+            page_map = build_page_map(stories, page_texts)
+            return {p: page_book_text(stories, page_map, p) for p in sorted(wanted)
+                    if page_map.knows(p)}
+        except Exception:              # noqa: BLE001 - a nicety, never the job
+            log.warning("Could not read the book text for the corrections read",
+                        exc_info=True)
+            return {}
 
     @app.post("/api/corrections/read-pdf")
     async def read_corrections_pdf(
-            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+            file: UploadFile, file_id: str = Form(""),
+            owner: str = Depends(owner_for)) -> dict:
         """Read a marked-up PDF proof's comments and hand back the batches to
         turn into edits — deterministic, instant, no model and no cost.
 
@@ -1167,19 +1215,39 @@ def register(app: FastAPI) -> None:
         fills in steadily instead of hanging on one long, silent — and, past the
         model's output ceiling, truncating — call."""
         from docproof.corrections.from_pdf import comments_source_batches
-        comments = await _read_pdf_comments_or_400(file)
-        batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
+        from docproof.corrections.instructions import edits_from_comments
+        proof = await _read_proof_or_400(file)
+        comments = list(proof.comments)
+        # Most of a proof's marks are a function of the span they sit on —
+        # "Lowercase", "Replace comma with period", a bare "wouldn't". Those are
+        # resolved here, exactly, for nothing: the model is only asked about the
+        # notes no rule is certain of, so it neither invents a `find` for the easy
+        # ones nor gets billed for them.
+        resolved, unresolved = edits_from_comments(comments)
+        # The book's own words for the pages the remaining comments sit on, so the
+        # model quotes the file it is editing instead of a rendering of it.
+        book = _book_pages_for(file_id, owner, list(proof.page_texts),
+                              {c.page for c in unresolved})
+        batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
+                                          pages=book)
         # The comments themselves ride back too, so the panel can carry them into
         # the job and the finished change log can account for every one — including
-        # any the model turns into no edit.
+        # any the model turns into no edit. The page texts ride with them for the
+        # page map: they are what turn "marked on page 49" into a run of book text,
+        # which is the difference between an edit that lands and one that can only
+        # be flagged. A novel's worth is a few hundred kilobytes of JSON — large
+        # for a payload, small next to the PDF it was read from.
         items = [{"id": c.id, "page": c.page, "kind": c.kind,
                   "instruction": c.instruction, "anchor": c.anchor}
                  for c in comments]
-        return {"count": len(comments), "batches": batches, "comments": items}
+        return {"count": len(comments), "batches": batches, "comments": items,
+                "pages": list(proof.page_texts),
+                "resolved": resolved, "resolved_count": len(resolved)}
 
     @app.post("/api/corrections/extract-pdf")
     async def extract_corrections_pdf(
-            file: UploadFile, owner: str = Depends(owner_for)) -> dict:
+            file: UploadFile, file_id: str = Form(""),
+            owner: str = Depends(owner_for)) -> dict:
         """Read a commented PDF proof into a draft edit list, in one request.
 
         Deterministic reading (pypdf pulls each comment and the manuscript text
@@ -1192,12 +1260,25 @@ def register(app: FastAPI) -> None:
         truncate. The panel prefers `read-pdf` + `extract-list` for live progress;
         this stays as the single-request path for other callers."""
         from docproof.corrections.from_pdf import comments_source_batches
-        comments = await _read_pdf_comments_or_400(file)
-        batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
+        from docproof.corrections.instructions import edits_from_comments
+        proof = await _read_proof_or_400(file)
+        comments = list(proof.comments)
+        resolved, unresolved = edits_from_comments(comments)
+        book = _book_pages_for(file_id, owner, list(proof.page_texts),
+                              {c.page for c in unresolved})
+        batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
+                                          pages=book)
         response = _extract_batches_with_model(app, owner, batches)
+        # The rule-resolved edits lead the list; the model's follow. Both are the
+        # same shape, and a person reviews the whole list before it is applied.
+        if resolved:
+            merged = resolved + json.loads(response["json"])
+            response["json"] = json.dumps(merged, indent=2, ensure_ascii=False)
+            response["count"] = len(merged)
         response["comments"] = [
             {"id": c.id, "page": c.page, "kind": c.kind,
              "instruction": c.instruction, "anchor": c.anchor} for c in comments]
+        response["pages"] = list(proof.page_texts)
         return response
 
     @app.get("/api/usage")

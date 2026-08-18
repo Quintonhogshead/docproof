@@ -318,6 +318,12 @@ class Job:
     # run so every comment is accounted for in the change log — including any the
     # model turned into no edit. Empty for a typed/pasted list.
     corrections_comments: str = ""
+    # Corrections from a marked-up PDF: the text of every page of the proof, in
+    # order, as JSON ["page 1 text", …]. An IDML has no pages, so this is what
+    # lets a mark on page 49 be narrowed to the run of book text page 49 set —
+    # without it, a correction to a comma has every comma in the book to choose
+    # from and can only be flagged. Empty for a typed/pasted list.
+    corrections_pages: str = ""
     # Corrections only: run the opt-in model sanity gate before applying, holding
     # a doubtful edit back for a human. Off keeps the run deterministic and free.
     corrections_sanity: bool = False
@@ -493,9 +499,11 @@ class Job:
         d["is_promo"] = self.is_promo
         d["is_plan"] = self.is_plan
         d["is_corrections"] = self.is_corrections
-        # The stored reviewer-comment list is backend input for the run, not card
-        # data, and on a big proof it is large — keep it off every job payload.
+        # The stored reviewer-comment list and page texts are backend input for
+        # the run, not card data, and on a big proof they are large — keep them off
+        # every job payload.
         d.pop("corrections_comments", None)
+        d.pop("corrections_pages", None)
         # Which application the reviewed file opens in, so the results card can
         # say where the changes are instead of assuming Word.
         try:
@@ -1663,6 +1671,18 @@ class JobRunner:
             except (json.JSONDecodeError, ValueError):
                 comments = None
 
+        # The proof's page texts, so each mark narrows to the text its own page
+        # set. A bad blob degrades to no page narrowing — more flags, never a wrong
+        # edit — rather than failing the run.
+        page_texts = None
+        if job.corrections_pages:
+            try:
+                loaded = json.loads(job.corrections_pages)
+                if isinstance(loaded, list):
+                    page_texts = [str(t or "") for t in loaded]
+            except (json.JSONDecodeError, ValueError):
+                page_texts = None
+
         # The opt-in sanity gate. Building a provider is the only place this run
         # touches a model; when it is off (the default) the run stays free and
         # deterministic. A missing key turns the gate off rather than failing.
@@ -1671,7 +1691,8 @@ class JobRunner:
         out = self._claim_results_dir(job)
         try:
             outputs = apply_corrections(job.source_path, job.corrections, out,
-                                        comments=comments, sanity=sanity)
+                                        comments=comments, sanity=sanity,
+                                        page_texts=page_texts)
         except (ValueError, OSError) as e:
             # A corrections list the parser refuses whole (malformed JSON), or a
             # source that will not read — fail with the sentence, and give the

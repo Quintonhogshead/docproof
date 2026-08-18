@@ -27,13 +27,48 @@ instruction]`` for a terse typed list.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .model import DESIGN, JUDGMENT, MECHANICAL, Edit
+from .model import DESIGN, FORMATS, JUDGMENT, MECHANICAL, Edit
+from .textmatch import normalize
 
 KINDS = (MECHANICAL, JUDGMENT, DESIGN)
+
+# The shortest `find` that can stand as an address on its own, in normalized
+# characters. Below this a find is not a location but a character class: a bare ","
+# has about seven thousand homes in a novel and a bare "." rather more, and an edit
+# carrying one can only ever be counted and flagged.
+#
+# Such a find is an extraction failure, not a correction, and it is refused here so
+# it reads as one. The alternative — which is what used to happen — is that it
+# travels all the way to `apply`, matches thousands of places, and is reported as
+# "the text appears 6947 times": true, useless, and indistinguishable from a
+# genuinely ambiguous correction. An entry refused here still reaches a person: its
+# reviewer comment is accounted for in the change log as one no edit was made for.
+#
+# A short find WITH an anchor is fine and common — "Replace single quote with
+# double" is a one-character find, and its page or its marked line is what places
+# it — so the guard only fires when there is nothing to place it by.
+MIN_ANCHORABLE_FIND = 3
+
+# A PDF comment's id, `p{page}-{n}` (see `from_pdf.PdfComment`). An edit echoes
+# that id in `source`, so the page a correction was marked on is already on the
+# edit and does not have to be asked of the model — which is the point: a page read
+# off an id is deterministic, and one a model retypes is a thing it can get wrong.
+_SOURCE_PAGE = re.compile(r"^p(\d+)-\d+$")
+
+
+def page_from_source(source: str) -> int:
+    """The proof page a comment id names, or 0 if it names none.
+
+    >>> page_from_source("p49-2")
+    49
+    """
+    m = _SOURCE_PAGE.match((source or "").strip())
+    return int(m.group(1)) if m else 0
 
 # The canonical Edit field -> the spellings a person or a model naturally reaches
 # for. `find`/`replace` are the model's own names; the rest are what a corrections
@@ -49,6 +84,8 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "id": ("id", "ref", "identifier"),
     "context": ("context", "near", "within", "around"),
     "source": ("source", "comment_id", "src", "from_comment"),
+    "page": ("page", "page_number", "pageno", "p"),
+    "format": ("format", "formatting", "style", "character_style"),
 }
 
 
@@ -170,6 +207,8 @@ def _parse_entry(entry: Any, index: int):
     raw_kind = _field(entry, "kind")
     raw_occ = _field(entry, "occurrence")
     raw_id = _field(entry, "id")
+    raw_page = _field(entry, "page")
+    raw_format = _field(entry, "format")
 
     kind = _norm_kind(raw_kind)
     if kind is None:
@@ -181,8 +220,20 @@ def _parse_entry(entry: Any, index: int):
         return ParseIssue(index, f"occurrence {raw_occ!r} is not a whole number "
                           "≥ 0", entry)
 
+    page = _norm_occurrence(raw_page)
+    if page is None:
+        return ParseIssue(index, f"page {raw_page!r} is not a whole number ≥ 0",
+                          entry)
+    if not page and isinstance(source, str):
+        page = page_from_source(source)      # free, from the comment id it cites
+
+    fmt = _norm_format(raw_format)
+    if fmt is None:
+        return ParseIssue(index, f"unknown format {raw_format!r} (expected one of "
+                          f"{', '.join(FORMATS)})", entry)
+
     fields = _assemble(find, replace, instruction, kind, occ, index, entry,
-                       context=context, source=source)
+                       context=context, source=source, page=page, fmt=fmt)
     if isinstance(fields, ParseIssue):
         return fields
     explicit_id = str(raw_id).strip() if raw_id not in (None, "") else None
@@ -207,7 +258,7 @@ def _parse_sequence(entry, index: int):
 
 
 def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None,
-              source=None):
+              source=None, page=0, fmt=""):
     """Validate the text fields common to both entry shapes and build the kwargs
     for `Edit` (no id). Returns a dict or a `ParseIssue`."""
     if find is not None and not isinstance(find, str):
@@ -236,9 +287,18 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
             return ParseIssue(index, "no find text to anchor the edit "
                               "(an insertion must be expressed as a replace of "
                               "the surrounding text)", raw)
+        anchored = bool(context.strip()) or bool(page) or bool(occ)
+        if not anchored and len(normalize(find)) < MIN_ANCHORABLE_FIND:
+            return ParseIssue(
+                index,
+                f"{find!r} is too short to locate on its own — a find this small "
+                "matches thousands of places in a book. It needs the line it was "
+                "marked on (context), the page it was marked on, or an occurrence "
+                "number", raw)
 
     return {"find": find, "replace": replace, "instruction": instruction,
-            "kind": kind, "occurrence": occ, "context": context, "source": source}
+            "kind": kind, "occurrence": occ, "context": context, "source": source,
+            "page": page, "format": fmt}
 
 
 def _field(entry: dict, canonical: str):
@@ -248,6 +308,19 @@ def _field(entry: dict, canonical: str):
         if name in entry and entry[name] is not None:
             return entry[name]
     return None
+
+
+def _norm_format(raw):
+    """The canonical character format for a raw value, "" for absent, or None if it
+    names no format this engine can apply."""
+    if raw in (None, ""):
+        return ""
+    if not isinstance(raw, str):
+        return None
+    f = raw.strip().lower()
+    if f in ("", "regular", "roman", "de-italic", "unitalic"):
+        return "" if f == "" else "roman"
+    return f if f in FORMATS else None
 
 
 def _norm_kind(raw):
