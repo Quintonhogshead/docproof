@@ -25,8 +25,9 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from .model import (DESIGN, FORMAT_ITALIC, FORMAT_ROMAN, JUDGMENT, MECHANICAL,
-                    PARA_DELETE)
+from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
+                    FORMAT_SWASH, JUDGMENT, MECHANICAL, PARA_DELETE,
+                    PARA_MERGE_NEXT, PARA_SPLIT_AT)
 
 # How many words a marked span may hold and still be treated as naming its target.
 # A highlight over a word or a short phrase is pointing at it; a sticky note's
@@ -111,15 +112,23 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
     context = (context or "").strip()
     if not note or not anchor:
         return None
-    if len(anchor.split()) > MAX_ANCHOR_WORDS:
-        return None
     low = note.lower()
 
-    for rule in (_paragraph_op, _discretionary_hyphen,
-                 _italic, _literal_after_colon, _replace_punctuation,
-                 _remove_punctuation, _add_punctuation, _case_change,
-                 _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
-                 _quoted_proposal, _bare_replacement, _composition_check):
+    # A long mark points at nothing in particular, so the rules that have to pick a
+    # target inside it decline. `_line_break_op` is the exception, and only because
+    # it never picks: the note quotes the words either side of the break, and the
+    # mark is just the book text those are cut from. A note about a break has to
+    # carry a whole sentence to be about anything, so applying the guard to it
+    # would be refusing every one of them.
+    rules = (_paragraph_op, _line_break_op, _discretionary_hyphen,
+             _italic, _swash, _literal_after_colon, _replace_punctuation,
+             _remove_punctuation, _add_punctuation, _case_change,
+             _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
+             _quoted_proposal, _bare_replacement, _composition_check)
+    if len(anchor.split()) > MAX_ANCHOR_WORDS:
+        rules = (_line_break_op,)
+
+    for rule in rules:
         got = rule(low, note, anchor, highlighted)
         if got is None and rule is _replace_punctuation and context:
             got = _replace_punctuation_over_line(low, note, anchor, context)
@@ -287,6 +296,121 @@ def _paragraph_op(low, note, anchor, highlighted) -> Resolved | None:
     if not find:
         return None
     return Resolved(find, find, MECHANICAL, f"paragraph-{op}", paragraph=op)
+
+
+def _line_break_op(low, note, anchor, highlighted) -> Resolved | None:
+    """`Delete the line break between "stuff:" and "Rotting"`, `insert a paragraph
+    break before "The next hour"`.
+
+    The commonest note on a proof of verse, and one this engine used to refuse on
+    principle: the reviewer's sentence ran across a break, so the anchor did too.
+    But which break they mean is stated exactly — they quote the words on either
+    side of it — so there is nothing to interpret. The find is cut from the marked
+    text itself rather than assembled from the note's quotes, which keeps it
+    verbatim book text and lets the caller's "must be inside the mark" check do its
+    job.
+
+    Declines on a question, as `_paragraph_op` does: "should this run on?" is a
+    query for a person, not an instruction."""
+    if note.rstrip().endswith("?"):
+        return None
+    source = anchor
+    quoted = re.findall(r"[\"“‘']([^\"“”‘’']{2,60})[\"”’']", note)
+    if re.search(r"\b(?:delete|remove|close up|take out)\b[^.]*?\b"
+                 r"(?:line|paragraph)\s+breaks?\b", low):
+        # Two quoted sides name the break; one names the word the break sits before.
+        span = _span_between(source, quoted)
+        if span is None:
+            # "delete the line break before X" names one side. The break is the one
+            # in front of that word, so the anchor reaches back over the few words
+            # before it — enough to cross the break and no more.
+            span = _span_before(source, quoted)
+        if span is None:
+            return None
+        return Resolved(span, span, MECHANICAL, "merge-next",
+                        paragraph=PARA_MERGE_NEXT)
+    if re.search(r"\b(?:insert|add|put)\b[^.]*?\b(?:paragraph|line)\s+breaks?\b"
+                 r"|\bstart a new paragraph\b|\bbreak (?:this )?into "
+                 r"(?:two|separate) paragraphs\b", low):
+        for q in quoted:
+            at = source.find(q)
+            if at > 0:
+                return Resolved(source[at:at + len(q)], source[at:at + len(q)],
+                                MECHANICAL, "split-at", paragraph=PARA_SPLIT_AT)
+        return None
+    return None
+
+
+def _span_between(text: str, quoted: list[str]) -> str | None:
+    """The run of `text` from the first quoted word to the end of the second, when
+    both are there and in that order — the words either side of the break the note
+    names, cut out of the book's own text so the anchor stays verbatim."""
+    if len(quoted) < 2:
+        return None
+    first, second = quoted[0], quoted[1]
+    a = text.find(first)
+    if a == -1:
+        return None
+    b = text.find(second, a + len(first))
+    if b == -1:
+        return None
+    return text[a:b + len(second)]
+
+
+# How many words in front of a named word the anchor reaches back over, when the
+# note gives only the far side of the break ("delete the line break before dead").
+# Enough to be sure of crossing the break, few enough that the run stays inside the
+# sentence the reviewer marked.
+_BREAK_LOOKBACK = 4
+
+
+def _span_before(text: str, quoted: list[str]) -> str | None:
+    """The run of `text` ending at the first quoted word and reaching back over the
+    words in front of it — the anchor for a break named only by what follows it."""
+    if not quoted:
+        return None
+    word = quoted[0]
+    at = text.find(word)
+    if at <= 0:
+        return None
+    before = text[:at].split()
+    if not before:
+        return None
+    lead = " ".join(before[-_BREAK_LOOKBACK:])
+    start = text.find(lead)
+    if start == -1:
+        return None
+    return text[start:at + len(word)]
+
+
+def _swash(low, note, anchor, highlighted) -> Resolved | None:
+    """`Swoop the R`, `swash the S so it matches`, `remove the swash`.
+
+    A flourished capital is not a layout request and not a different font: it is an
+    alternate glyph the face already carries, switched on by an OpenType feature
+    that an IDML writes on the character range. So this is the same shape as
+    italics — the marked words are styled, the text is untouched.
+
+    The whole marked word is styled, never the single letter the note names. A find
+    of "R" is not an anchor (there are thousands), and it does not need to be: the
+    feature substitutes only where the font has a swash form, so the rest of the
+    word is left exactly as it was."""
+    if not highlighted:
+        return None
+    if re.search(r"\b(?:no|remove|take off|kill|drop)\b[^.]*\bswash", low):
+        want = FORMAT_NO_SWASH
+    elif re.search(r"\bswash(?:e[sd])?\b|\bswoop(?:s|ed|ing)?\b"
+                   r"|\bflourish(?:e[sd])?\b|\bcurl(?:s|ed)? the\b", low):
+        want = FORMAT_SWASH
+    else:
+        return None
+    # A note that quotes the word to style names its own target ("swoop the R in
+    # \u201cAuthor\u201d"); otherwise the marked span is it.
+    quoted = re.findall(r"[\"“‘']([^\"“”‘’']{2,60})[\"”’']", note)
+    find = next((q for q in quoted if q in anchor), anchor.strip(_EDGE + "“”‘’\"'"))
+    if not find or len(find.strip()) < 2:
+        return None
+    return Resolved(find, find, MECHANICAL, f"{want}-format", format=want)
 
 
 def _discretionary_hyphen(low, note, anchor, highlighted) -> Resolved | None:

@@ -21,9 +21,20 @@ DESIGN = "design"             # a layout request — not a text edit at all
 # clears a local italic rather than writing a second override over it.
 FORMAT_ITALIC = "italic"
 FORMAT_ROMAN = "roman"
+# A swash is the same kind of thing one step further out: not a different face but
+# an alternate glyph the face already carries, switched on by an OpenType feature.
+# InDesign writes that as `OTFSwash` on the character range, so "swoop the R" is a
+# character property exactly as italic is — appliable, not a note for a designer.
+# The feature only substitutes where the font has a swash form, so applying it to
+# the marked word is what a designer does by hand: the letters without one are
+# left alone.
+FORMAT_SWASH = "swash"
+FORMAT_NO_SWASH = "no-swash"
 FORMATS: dict[str, dict[str, str | None]] = {
     FORMAT_ITALIC: {"FontStyle": "Italic"},
     FORMAT_ROMAN: {"FontStyle": None},
+    FORMAT_SWASH: {"OTFSwash": "true"},
+    FORMAT_NO_SWASH: {"OTFSwash": None},
 }
 
 # What a reviewer can ask of a whole paragraph, and the IDML range attributes that
@@ -50,7 +61,17 @@ PARA_ATTRS: dict[str, dict[str, str | None]] = {
 PARA_DELETE = "delete-paragraph"
 PARA_INSERT_AFTER = "insert-after"
 PARA_INSERT_BEFORE = "insert-before"
-PARA_STRUCTURAL = (PARA_DELETE, PARA_INSERT_AFTER, PARA_INSERT_BEFORE)
+# The two that change where the breaks are rather than how many paragraphs carry
+# text. "Delete the line break between X and Y" and "start a new paragraph here"
+# are the commonest requests on a proof of verse, where every line is its own
+# paragraph and a reviewer's sentence runs across several of them. Both are
+# anchored by text like any other edit; `merge-next` joins the paragraph the anchor
+# lands in with the one after it, `split-at` breaks it immediately before the
+# anchor.
+PARA_MERGE_NEXT = "merge-next"
+PARA_SPLIT_AT = "split-at"
+PARA_STRUCTURAL = (PARA_DELETE, PARA_INSERT_AFTER, PARA_INSERT_BEFORE,
+                   PARA_MERGE_NEXT, PARA_SPLIT_AT)
 PARA_OPS = tuple(PARA_ATTRS) + PARA_STRUCTURAL
 
 

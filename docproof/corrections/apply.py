@@ -19,7 +19,8 @@ from .idml import Paragraph, Story, read_stories, rewrite_stories
 from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
                     Edit, EditOutcome, FORMATS, NO_CHANGE, NOT_FOUND, OVERLAPS,
                     PARA_ATTRS, PARA_DELETE, PARA_INSERT_BEFORE,
-                    ROUTED_TO_DESIGN, UNPLACEABLE, UNSTYLEABLE, WITHHELD)
+                    PARA_MERGE_NEXT, PARA_SPLIT_AT, ROUTED_TO_DESIGN,
+                    UNPLACEABLE, UNSTYLEABLE, WITHHELD)
 from .textmatch import IndexCache, NormIndex, normalize
 
 # Consonant-lettered words that take "an" because they open on a vowel sound (a
@@ -121,6 +122,123 @@ def _direct_candidates(edit: Edit, stories: list[Story],
     return out
 
 
+class _Flat:
+    """One story's paragraphs as a single string, with the map back to the
+    paragraph and offset each character came from.
+
+    A correction is quoted from a typeset page, where a sentence is just a
+    sentence. In the book it may be several paragraphs — every line of verse is
+    one, and a novel's dialogue turns are too — so a reviewer's quoted line
+    routinely straddles a break that means nothing to them. Flattening lets such a
+    quote be *found*; what is done with it then depends on the edit, and for a
+    context anchor the answer is only ever "narrow to here", which is why this is
+    safe to use for one.
+
+    Paragraphs are joined with a newline rather than a space so an exact or
+    punctuation-folded match can never run across the join by accident: a match
+    that crosses a break is always a tier-3 normalized one, where whitespace has
+    been dropped on both sides and the crossing is deliberate."""
+
+    __slots__ = ("text", "_bounds")
+
+    def __init__(self, story: Story) -> None:
+        bounds, at = [], 0
+        for para in story.paragraphs:
+            bounds.append((at, at + len(para.text), para))
+            at += len(para.text) + 1           # the "\n" join
+        self.text = "\n".join(p.text for p in story.paragraphs)
+        self._bounds = bounds
+
+    def flat_span(self, para: Paragraph, start: int, end: int):
+        """A paragraph-local span in flat coordinates, or None if that paragraph
+        is not this story's."""
+        for p0, _p1, p in self._bounds:
+            if p is para:
+                return p0 + start, p0 + end
+        return None
+
+    def covered(self, start: int, end: int) -> list[tuple[Paragraph, int, int]]:
+        """The paragraphs a flat span touches, each with the local span it covers,
+        in order."""
+        out = []
+        for p0, p1, para in self._bounds:
+            if p0 < end and start < p1 or (start == end == p0):
+                out.append((para, max(start, p0) - p0, min(end, p1) - p0))
+        return out
+
+
+def _flat(story: Story, flats: dict) -> _Flat:
+    """`story`'s flat view, built once per call that needs it. Keyed by story id
+    rather than cached globally: paragraph text changes under an edit, and a stale
+    flat view would locate the next edit in text that is no longer there."""
+    got = flats.get(story.story_id)
+    if got is None:
+        got = flats[story.story_id] = _Flat(story)
+    return got
+
+
+def _narrow_to_context_across(edit: Edit, candidates: list,
+                              cache: IndexCache) -> list:
+    """`_narrow_to_context`, allowing the context to span paragraph breaks.
+
+    The context never gets written to — it only chooses which copy of `find` the
+    correction meant — so there is nothing unsafe about matching it across a break
+    that the reviewer, reading a typeset page, had no way to see. The edit itself
+    still lands inside a single paragraph.
+
+    This is what a proof of verse needs to work at all: "And resist the pull of a
+    siren's locomotive" is one sentence to the reviewer and two paragraphs to the
+    book, and before this the context simply failed to match and the edit was
+    handed back as ambiguous."""
+    kept, seen, flats = [], set(), {}
+    for story, para, start, end in candidates:
+        flat = _flat(story, flats)
+        here = flat.flat_span(para, start, end)
+        if here is None:
+            continue
+        for c0, c1 in all_spans(flat.text, edit.context, cache=cache,
+                                partial_words=True):
+            if c0 <= here[0] and here[1] <= c1:
+                key = (story.story_id, c0)
+                if key not in seen:
+                    seen.add(key)
+                    kept.append((story, para, start, end))
+                break
+    return kept
+
+
+def _match_across(edit: Edit, stories: list[Story], cache: IndexCache):
+    """Locate an anchor that may run across paragraph breaks, as a list of
+    `(story, [(paragraph, start, end), ...])` — one entry per place it was found.
+
+    Only the operations that are *about* a break use this (merging two paragraphs,
+    splitting one), because for them a `find` that straddles the break is not a
+    mistake to refuse but the thing being pointed at."""
+    out, flats = [], {}
+    for story in stories:
+        flat = _flat(story, flats)
+        for start, end in all_spans(flat.text, edit.find, cache=cache):
+            covered = flat.covered(start, end)
+            if covered:
+                out.append((story, covered))
+    if edit.context:
+        narrowed = []
+        for story, covered in out:
+            flat = _flat(story, flats)
+            span = (flat.flat_span(covered[0][0], covered[0][1], covered[0][1]),
+                    flat.flat_span(covered[-1][0], covered[-1][2], covered[-1][2]))
+            if None in span:
+                continue
+            for c0, c1 in all_spans(flat.text, edit.context, cache=cache,
+                                    partial_words=True):
+                if c0 <= span[0][0] and span[1][1] <= c1:
+                    narrowed.append((story, covered))
+                    break
+        if narrowed:
+            out = narrowed
+    return out
+
+
 def _narrow_to_context(edit: Edit, candidates: list, cache: IndexCache) -> list:
     """The candidates that fall inside an occurrence of the context anchor, so a
     common word is pinned to the instance whose surrounding line the correction
@@ -186,7 +304,11 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None):
                            f"(which could not be placed in the book)")
 
     if edit.context:
-        in_context = _narrow_to_context(edit, candidates, cache)
+        # In one paragraph first, then across breaks. The order matters: a context
+        # that resolves inside a single paragraph is the tighter answer, and the
+        # wider view is only worth reaching for when that finds nothing.
+        in_context = (_narrow_to_context(edit, candidates, cache)
+                      or _narrow_to_context_across(edit, candidates, cache))
         if in_context:
             candidates = in_context
         else:
@@ -450,17 +572,59 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     book is flagged, not guessed at. Setting a property on one paragraph means first
     giving it a range of its own (`Story.isolate`); a story whose shape will not
     allow that is flagged rather than styled across its neighbours."""
+    breaks = edit.paragraph in (PARA_MERGE_NEXT, PARA_SPLIT_AT)
     found = _match(edit, stories, cache, scope)
     if isinstance(found, EditOutcome):
-        return found
-    story, para, start, end = found
-    key = (story.story_id, para.index)
-    if touched.collides(key, start, end):
-        return EditOutcome(
-            edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
-            detail="its span overlaps a correction already applied here")
+        # An anchor that straddles a break is a failure for every other edit and
+        # the normal case for these two: the reviewer quoted a sentence, and the
+        # break they are asking about is inside it. So retry across paragraphs,
+        # but only for the operations that are about the break itself.
+        if not (breaks and found.status == CROSSES_PARAGRAPH):
+            return found
+        spanned = _match_across(edit, stories, cache)
+        if len(spanned) != 1:
+            return EditOutcome(
+                edit, AMBIGUOUS if spanned else NOT_FOUND, occurrences=len(spanned),
+                detail=(f"the text appears {len(spanned)} times across the book "
+                        "and nothing in the correction chooses between them")
+                if spanned else "")
+        story, covered = spanned[0]
+        para, start, end = covered[0]
+        if edit.paragraph == PARA_SPLIT_AT:
+            return EditOutcome(
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=para.index,
+                detail="the text a new paragraph should start at spans a break "
+                       "already, so there is no one point to split")
+        if len(covered) != 2:
+            return EditOutcome(
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=para.index,
+                detail=f"the text spans {len(covered) - 1} paragraph breaks, and "
+                       "this joins two paragraphs at one")
+    else:
+        story, para, start, end = found
+        key = (story.story_id, para.index)
+        if touched.collides(key, start, end):
+            return EditOutcome(
+                edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
+                detail="its span overlaps a correction already applied here")
     index = para.index
-    if edit.paragraph == PARA_DELETE:
+    if edit.paragraph == PARA_MERGE_NEXT:
+        ok = story.merge_paragraph(index)
+        if not ok:
+            return EditOutcome(
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
+                detail="this paragraph and the one after it could not be joined — "
+                       "they are set in different paragraph styles, or it is the "
+                       "last paragraph of its story")
+    elif edit.paragraph == PARA_SPLIT_AT:
+        ok = story.split_paragraph(index, start)
+        if not ok:
+            return EditOutcome(
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
+                detail="the paragraph could not be broken here — the anchor is at "
+                       "its very start, so nothing would be left in front of the "
+                       "break")
+    elif edit.paragraph == PARA_DELETE:
         ok = story.delete_paragraph(index)
     elif edit.is_structural:
         ok = story.insert_paragraph(
