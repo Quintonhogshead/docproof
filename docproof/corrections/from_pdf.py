@@ -215,11 +215,28 @@ class _Page:
                    key=lambda i: abs(self.lines[i].centre - low))
 
 
+# How far outside a highlight's band a word's centre may sit and still be read as
+# inside it. Small on purpose: it forgives a box drawn a shade short of the glyphs,
+# and is far less than the ~16pt between one line's centre and the next, so it can
+# never reach a neighbouring line.
+_BOX_SLACK = 2.0
+
+
 def _overlaps(word: _Word, boxes) -> bool:
-    """Whether enough of `word`'s width lies inside any of the highlight boxes."""
+    """Whether enough of `word`'s width lies inside any of the highlight boxes.
+
+    The line test is on the word's *centre*, not on whether its band comes within
+    a couple of points of the box. A highlight drawn over one word reaches into
+    the leading above and below it, and the leading is only a few points wide, so
+    a tolerance big enough to forgive a thin box was also big enough to reach the
+    line above — where it caught the words sitting over the marked one. The
+    anchor then ran from there to the marked word, and the correction arrived
+    quoting the line before the one it was written about. A centre cannot be in
+    two lines at once, which is the property this needs."""
     width = max(word.x1 - word.x0, 0.01)
+    centre = (word.y0 + word.y1) / 2
     for x0, x1, y0, y1 in boxes:
-        if word.y1 < y0 - 2 or word.y0 > y1 + 2:
+        if not y0 - _BOX_SLACK <= centre <= y1 + _BOX_SLACK:
             continue                              # a different line
         covered = min(word.x1, x1) - max(word.x0, x0)
         if covered / width >= _WORD_OVERLAP:

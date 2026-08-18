@@ -470,3 +470,29 @@ def test_a_highlight_over_no_words_falls_back_to_its_line(tmp_path):
     hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
     assert len(hl) == 1
     assert hl[0].anchor == "the line that carries the mark"
+
+
+def test_a_highlight_does_not_reach_into_the_line_above_it(tmp_path):
+    """A highlight drawn over one word reaches into the leading above and below
+    it, and the leading is only a few points wide. The line test used to forgive a
+    couple of points on the word's *band*, which was enough to catch the words
+    sitting directly over the marked one — and since the anchor runs from the
+    first matching word to the last, it then began on the previous line. Every
+    such correction reached the model quoting the line before the one it was
+    written about.
+
+    The box here is a real one, measured off a proof: its top edge sits in the gap
+    between the lines and comes within a tenth of a point of the line above."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(
+        tmp_path / "h.pdf",
+        lines=[(72, 700, "Hopefully I can catch some of the"),
+               (72, 684, "girls too. I did want to.")],
+        annots=[{"subtype": "/Highlight",
+                 # over "did" on the lower line only
+                 "rect": [127, 682, 144, 696],
+                 "quad": [127, 696, 144, 696, 127, 682, 144, 682],
+                 "contents": "does"}])
+    anchor = read_pdf_comments(pdf)[0].anchor
+    assert anchor == "did"
+    assert "Hopefully" not in anchor and "\n" not in anchor
