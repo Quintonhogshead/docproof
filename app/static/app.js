@@ -4079,15 +4079,30 @@ function correctionsActions(job) {
       openButton(job, 'corrected', 'Show in Finder', note, { reveal: true }));
   }
 
+  // Count in one unit so the parts sum to the whole. From a proof that is the
+  // comments — reviewer comments = applied + no change needed + need a human — so
+  // the card no longer sets an edit count (535) beside a comment count (560) as if
+  // they should add up. The edit tally lives in the report's sub-line instead. A
+  // typed list has no comments, so there the unit is the edit.
   const bits = [];
   if (typeof job.total_comments === 'number' && job.total_comments) {
-    bits.push(`${job.total_comments} comment`
-      + `${job.total_comments === 1 ? '' : 's'}`);
+    const total = job.total_comments;
+    const human = job.unresolved || 0;
+    bits.push(`${total} comment${total === 1 ? '' : 's'}`);
+    if (typeof job.applied_comments === 'number') {
+      const noChange = Math.max(0, total - job.applied_comments - human);
+      bits.push(`${job.applied_comments} applied`);
+      if (noChange) bits.push(`${noChange} no change needed`);
+    } else if (typeof job.applied === 'number') {
+      // A job finished before comment-level counts were stored: show the edit
+      // count, labelled as edits so it is not misread as a comment tally.
+      bits.push(`${job.applied} edit${job.applied === 1 ? '' : 's'} applied`);
+    }
+    if (human) bits.push(`${human} need a human`);
+  } else {
+    if (typeof job.applied === 'number') bits.push(`${job.applied} applied`);
+    if (job.flags) bits.push(`${job.flags} for a human`);
   }
-  if (typeof job.applied === 'number') bits.push(`${job.applied} applied`);
-  if (job.flags) bits.push(`${job.flags} for a human`);
-  if (job.unresolved) bits.push(`${job.unresolved} comment`
-    + `${job.unresolved === 1 ? '' : 's'} unresolved`);
   if (job.discrepancies) {
     bits.push(`${job.discrepancies} unaccounted change`
       + `${job.discrepancies === 1 ? '' : 's'}`);
@@ -4193,6 +4208,18 @@ function correctionsReportHTML(d) {
   const disc = v.discrepancies || [];
   const com = d.comments || { total: 0, unresolved: 0, items: [] };
   const comItems = com.items || [];
+  const changes = d.changes || [];
+  const noOp = ap.no_op || [];
+  // The headline counts in one unit so its buckets sum to a total the reader can
+  // check. A proof's unit is its comments — what the reviewer marked, and what
+  // `com.total` names — so applied / no-change / need-a-human are counted per
+  // comment, never per edit; `com.unresolved` is the two needs-a-human buckets
+  // folded. The edit and line counts are the mechanism underneath and ride along
+  // as a sub-line, never as a fourth card that would break the sum. A typed list
+  // has no comments, so there the unit is the edit and the same three are read off
+  // the apply outcomes instead.
+  const appliedC = comItems.filter((c) => c.disposition === 'applied').length;
+  const noChangeC = comItems.filter((c) => c.disposition === 'no_op').length;
   const rightNum = ' style="text-align:right;font-variant-numeric:tabular-nums"';
   // The reviewer's own words are appended even when a find→replace is shown, so a
   // row an editor has to act on carries the note the mark was made with — not just
@@ -4220,28 +4247,35 @@ function correctionsReportHTML(d) {
   const clean = v.clean && !flagged.length && issues.length === 0
     && !com.unresolved;
 
-  // The comment ledger leads when the list came from a proof: how many marks came
-  // in, and how many a person still owns — the count that used to be invisible.
-  const commentCards = com.total
-    ? `<div class="card"><span class="n">${num(com.total)}</span>`
-      + '<span class="l">reviewer comments</span></div>'
-      + `<div class="card"><span class="n">${num(com.unresolved)}</span>`
-      + '<span class="l">need a human</span></div>'
-    : '';
-  // The flagged-edits count only earns its own card when there are no reviewer
-  // comments; with comments, "need a human" above already counts the same items.
-  const flaggedCard = com.total ? ''
-    : `<div class="card"><span class="n">${num(flagged.length)}</span>`
-      + '<span class="l">for a human</span></div>';
+  // The comment ledger leads when the list came from a proof, and it reconciles:
+  // reviewer comments = applied + no change needed + need a human. With no proof
+  // (a typed list) there are no comments to count, so the same three buckets are
+  // read off the edits instead. Either way the buckets sum to the first card, so
+  // the headline can no longer be short of its own total.
+  const cardOf = (n, label) => `<div class="card"><span class="n">${n}</span>`
+    + `<span class="l">${label}</span></div>`;
+  const ledgerCards = com.total
+    ? cardOf(num(com.total), 'reviewer comments')
+      + cardOf(num(appliedC), 'applied')
+      + (noChangeC ? cardOf(num(noChangeC), 'no change needed') : '')
+      + cardOf(num(com.unresolved), 'need a human')
+    : cardOf(num(ap.applied), 'applied')
+      + (noOp.length ? cardOf(num(noOp.length), 'no change needed') : '')
+      + cardOf(num(flagged.length), 'for a human');
   const cards = '<div class="cards">'
-    + commentCards
-    + `<div class="card"><span class="n">${num(ap.applied)}</span>`
-    + '<span class="l">applied</span></div>'
-    + flaggedCard
-    + `<div class="card"><span class="n">${num(disc.length)}</span>`
-    + '<span class="l">unaccounted changes</span></div>'
-    + `<div class="card"><span class="n">${clean ? '✓' : '—'}</span>`
-    + '<span class="l">clean</span></div></div>';
+    + ledgerCards
+    + cardOf(num(disc.length), 'unaccounted changes')
+    + cardOf(clean ? '✓' : '—', 'clean')
+    + '</div>'
+    // The edit/line mechanism behind the comment headline, said once so the cards
+    // above read as a clean sum — and so the "changes to review" count below, which
+    // is lines, is not misread as corrections gone missing.
+    + (com.total && ap.applied
+      ? `<p class="blurb" style="margin-top:.4em">${num(ap.applied)} edit`
+        + `${ap.applied === 1 ? '' : 's'} applied across ${num(changes.length)} `
+        + `line${changes.length === 1 ? '' : 's'} — the counts above are the `
+        + 'reviewer’s comments, one to a mark.</p>'
+      : '');
 
   const headline = clean
     ? '<p class="headline">✓ <b>Every correction landed exactly, and nothing '
@@ -4313,11 +4347,16 @@ function correctionsReportHTML(d) {
   // designer's quick check that the corrections read right, not just that they
   // anchored. The unaccounted-changes table below is the complement: this is what
   // did change; that is proof nothing else did.
-  const changes = d.changes || [];
   const changesHTML = changes.length
-    ? `<h2>Changes to review — ${num(changes.length)}</h2>`
-      + '<p class="blurb">Every applied correction in the line it changed — read '
-      + 'down and confirm each reads right. <del>struck</del> was removed, '
+    ? `<h2>Changes to review — ${num(changes.length)} `
+      + `line${changes.length === 1 ? '' : 's'}</h2>`
+      + '<p class="blurb">'
+      + (ap.applied
+        ? `All ${num(ap.applied)} applied corrections, shown in the `
+          + `${num(changes.length)} line${changes.length === 1 ? '' : 's'} they `
+          + 'changed — a line several corrections touched appears once. '
+        : 'Every applied correction in the line it changed. ')
+      + 'Read down and confirm each reads right. <del>struck</del> was removed, '
       + '<ins>added</ins> is underlined.</p>'
       + changes.map((c) => {
         const where = `story ${esc(c.story_id)}`

@@ -188,19 +188,44 @@ def _markdown(d: dict) -> str:
                  "file changed, and every reviewer comment was accounted for.\n")
     else:
         headline = []
-        if ap is not None:
+        # Count in one unit, so the buckets sum to a total the reader can check.
+        # A proof's unit is its comments — what the reviewer actually marked, and
+        # what `com['total']` already names — so applied / no-change / need-a-human
+        # are counted per comment, never per edit. The edit and line counts are the
+        # mechanism underneath; they ride along as a parenthetical below, never as a
+        # fourth addend that would break the sum (an edit count next to a comment
+        # count is exactly what stopped the old headline adding up). A typed list has
+        # no comments, so there the unit is the edit and the same three buckets are
+        # read off the apply outcomes instead.
+        if com["total"]:
+            items = com.get("items") or []
+            applied_c = sum(1 for c in items if c["disposition"] == DISP_APPLIED)
+            nochange_c = sum(1 for c in items if c["disposition"] == DISP_NO_OP)
+            headline.append(f"{com['total']} reviewer comment(s)")
+            headline.append(f"{applied_c} applied")
+            if nochange_c:
+                headline.append(f"{nochange_c} no change needed")
+            if com["unresolved"]:
+                headline.append(f"{com['unresolved']} need a human")
+        elif ap is not None:
             headline.append(f"{ap['applied']} applied")
+            if ap["no_op"]:
+                headline.append(f"{len(ap['no_op'])} no change needed")
             if flagged_uncovered:
                 headline.append(f"{len(flagged_uncovered)} need a human")
-        if com["total"]:
-            headline.append(f"{com['total']} comment(s)")
-            if com["unresolved"]:
-                headline.append(f"{com['unresolved']} unresolved")
         if verify["discrepancies"]:
             headline.append(f"{len(verify['discrepancies'])} unaccounted change(s)")
         if verify["structure_changed"]:
             headline.append("paragraph count changed")
         L.append("**" + ", ".join(headline) + ".** See below.\n")
+        # The edit/line mechanism behind a comment headline, said once so the
+        # comment buckets above read as a clean sum. Only when a proof drove the run
+        # and edits actually landed: a typed list is already counted in edits above,
+        # so repeating it here would just say the same number twice.
+        if com["total"] and ap is not None and ap["applied"]:
+            L.append(f"*{ap['applied']} edit(s) applied, across "
+                     f"{len(d.get('changes') or [])} line(s) — the comment counts "
+                     f"above are the reviewer's marks, one to a comment.*\n")
 
     pages = d.get("pages") or {"placed": 0, "total": 0}
     if pages["total"]:
@@ -245,7 +270,7 @@ def _markdown(d: dict) -> str:
         L.append("")
 
     if ap is not None:
-        L.append(f"## Applied — {ap['applied']}\n")
+        L.append(f"## Applied — {ap['applied']} edit(s)\n")
         if flagged_uncovered:
             title = ("Other edits needing a human" if com["total"]
                      else "For a human")
@@ -272,10 +297,14 @@ def _markdown(d: dict) -> str:
     # just that they anchored. The verification section below is the complement.
     changes = d.get("changes") or []
     if changes:
-        L.append(f"## Changes to review — {len(changes)}\n")
-        L.append("Every applied correction shown in the line it changed — read "
-                 "down and confirm each reads right. “was” is the original line, "
-                 "“now” the corrected one.\n")
+        L.append(f"## Changes to review — {len(changes)} line(s)\n")
+        lead = (f"All {ap['applied']} applied corrections, shown in the "
+                f"{len(changes)} line(s) they changed — a line several corrections "
+                f"touched appears once"
+                if ap is not None else
+                "Every applied correction, shown in the line it changed")
+        L.append(f"{lead}. Read down and confirm each reads right. “was” is the "
+                 f"original line, “now” the corrected one.\n")
         for c in changes:
             where = (f"story `{c['story_id']}`"
                      + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
