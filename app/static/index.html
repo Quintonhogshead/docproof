@@ -580,17 +580,37 @@
             book at a time.</p>
           <p class="field" id="corrections-source" hidden></p>
 
-          <label class="field" id="corrections-pdf-field">
-            <span>Proof not dropped above? Choose it here</span>
-            <input type="file" id="corrections-pdf" accept=".pdf">
-            <button type="button" id="extract-pdf">Preview the edit list</button>
-            <small class="muted">Optional. The book’s marked-up PDF — chosen here or
-              dropped above — is read into the corrections by the house model, each
-              comment together with the line it points at. “Preview the edit list”
-              fills the box below so you can eyeball it first; otherwise
-              <strong>Read corrections &amp; apply</strong> reads and applies it in
-              one step. A proof with hundreds of marks is read in batches.</small>
-          </label>
+          <div class="options">
+            <label class="field" id="corrections-pdf-field">
+              <span>A marked-up PDF proof</span>
+              <input type="file" id="corrections-pdf" accept=".pdf">
+              <button type="button" id="extract-pdf">Read the proof</button>
+              <small class="muted">Chosen here or dropped above. The house model
+                reads each comment together with the line it points at, and the
+                corrections appear below for review. A proof with hundreds of
+                marks is read in batches.</small>
+            </label>
+            <label class="field">
+              <span>A redlined Word file (tracked changes)</span>
+              <input type="file" id="corrections-docx" accept=".docx">
+              <button type="button" id="extract-docx">Read the Word file</button>
+              <small class="muted">Deterministic — the tracked changes are the
+                corrections, read straight off the markup. No model, no
+                cost.</small>
+            </label>
+            <label class="field">
+              <span>Or just type them</span>
+              <textarea id="corrections-list-text" rows="4"
+                placeholder="e.g. Change 'harbor' to 'harbour' throughout.
+Delete the stray comma after 'however'.
+The name on the Acknowledgments page is Ellen, not Elen."></textarea>
+              <button type="button" id="extract-list">Read the list</button>
+              <small class="muted">Plain English is fine — the house model turns
+                it into an edit list you review below. The model only proposes;
+                nothing is applied without your say-so.</small>
+            </label>
+          </div>
+
           <div class="extract-status" id="corrections-extract-status" hidden
                aria-live="polite">
             <p class="extract-note" id="corrections-extract-note"></p>
@@ -599,26 +619,15 @@
             </div>
           </div>
 
-          <label class="field">
-            <span>The corrections to apply
-              <small class="muted">— review these, then Apply</small></span>
-            <textarea id="corrections-input" rows="10"
-              placeholder='Read a PDF above to fill this in — or type it yourself:
-[
-  {"find": "Their were", "replace": "There were"},
-  {"find": "teh", "replace": "the", "occurrence": 2},
-  {"find": "Chapter One", "replace": "", "kind": "design",
-   "instruction": "move this chapter to a right-hand page"}
-]'></textarea>
-            <small class="muted">A JSON list. Each entry is the exact text to
-              <code>find</code> and what to <code>replace</code> it with; a
-              deletion has an empty <code>replace</code>. Add
-              <code>"occurrence": 2</code> to pick the 2nd match when the text
-              appears more than once, or <code>"kind": "design"</code> for a
-              layout request that is flagged, not applied. Terse
-              <code>["find", "replace"]</code> pairs work too. Applying is
-              deterministic — no model, no cost.</small>
-          </label>
+          <div class="field" id="corrections-review" hidden>
+            <span class="corr-review-head" id="corrections-review-head"></span>
+            <ol class="corr-list" id="corrections-review-list"></ol>
+            <small class="muted" id="corrections-review-foot">Read each one, and
+              strike any you don’t want with its ✕ — nothing touches the book
+              until you click <strong>Apply corrections</strong>. A correction
+              tagged <strong>InDesign</strong> is a layout request: it is not
+              applied, it comes back on a checklist for the designer.</small>
+          </div>
 
           <label class="field checkbox">
             <input type="checkbox" id="corrections-sanity">
@@ -630,30 +639,28 @@
                 free.</small></span>
           </label>
 
-          <details class="field" id="corrections-extract">
-            <summary class="muted small">Other sources — a Word file or a plain
-              list</summary>
-            <div class="options">
-              <label class="field">
-                <span>A redlined Word file (tracked changes)</span>
-                <input type="file" id="corrections-docx" accept=".docx">
-                <button type="button" id="extract-docx">Read the Word file</button>
-                <small class="muted">Deterministic — the tracked changes are the
-                  corrections, read straight off the markup. No model, no
-                  cost.</small>
-              </label>
-              <label class="field">
-                <span>A plain list of corrections</span>
-                <textarea id="corrections-list-text" rows="5"
-                  placeholder="e.g. Change 'harbor' to 'harbour' throughout.
-Delete the stray comma after 'however'.
-The name on the Acknowledgments page is Ellen, not Elen."></textarea>
-                <button type="button" id="extract-list">Read the list</button>
-                <small class="muted">Read by the house model into a draft edit
-                  list. Review it above before applying — the model only
-                  proposes; nothing is applied without your say-so.</small>
-              </label>
-            </div>
+          <details class="advanced" id="corrections-json">
+            <summary>Advanced
+              <span class="muted">— the edit list itself, as JSON</span></summary>
+            <label class="field">
+              <span>The corrections to apply</span>
+              <textarea id="corrections-input" rows="10"
+                placeholder='Filled in by the readers above — or write it by hand:
+[
+  {"find": "Their were", "replace": "There were"},
+  {"find": "teh", "replace": "the", "occurrence": 2},
+  {"find": "Chapter One", "replace": "", "kind": "design",
+   "instruction": "move this chapter to a right-hand page"}
+]'></textarea>
+              <small class="muted">A JSON list. Each entry is the exact text to
+                <code>find</code> and what to <code>replace</code> it with; a
+                deletion has an empty <code>replace</code>. Add
+                <code>"occurrence": 2</code> to pick the 2nd match when the text
+                appears more than once, or <code>"kind": "design"</code> for a
+                layout request that is flagged, not applied. Terse
+                <code>["find", "replace"]</code> pairs work too. Applying is
+                deterministic — no model, no cost.</small>
+            </label>
           </details>
         </fieldset>
 
@@ -872,14 +879,16 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
     <p class="muted">Every "this happens → DocProof does that" rule in one place.
       Each row below is one workflow — a trigger and the effect it fires. Turn one
       on, open it to configure it, and DocProof runs it on every pass. The
-      connection to Google Drive and HubSpot, and when passes run, live under
-      Connection.</p>
+      connection to Google Drive and HubSpot lives under <strong>Connection</strong>;
+      when passes run, under <strong>Schedule</strong>.</p>
 
     <nav class="subtabs" id="auto-tabs" role="tablist" aria-label="Automations">
       <button class="subtab" id="autotab-workflows" data-tab="workflows"
               role="tab" aria-selected="true" tabindex="0">Workflows</button>
       <button class="subtab" id="autotab-connection" data-tab="connection"
               role="tab" aria-selected="false" tabindex="-1">Connection</button>
+      <button class="subtab" id="autotab-schedule" data-tab="schedule"
+              role="tab" aria-selected="false" tabindex="-1">Schedule</button>
       <button class="subtab" id="autotab-history" data-tab="history"
               role="tab" aria-selected="false" tabindex="-1">History</button>
     </nav>
@@ -906,6 +915,8 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
             </label>
           </div>
 
+          <p class="wf-passes" id="wf-passes"></p>
+
           <div class="wf-layout" id="wf-layout">
             <div class="wf-tablewrap">
               <table class="table" id="wf-registry">
@@ -915,8 +926,6 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                     <th scope="col">Workflow</th>
                     <th scope="col">Trigger</th>
                     <th scope="col">Effect</th>
-                    <th scope="col">Last look</th>
-                    <th scope="col">Next</th>
                     <th scope="col">Status</th>
                   </tr>
                 </thead>
@@ -937,10 +946,28 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
 
               <!-- Format on arrival -->
               <div class="wf-config" id="wf-config-prep" hidden>
+                <div class="wf-setup" id="wf-prep-setup" hidden></div>
                 <p class="wf-hint">New manuscripts in the watched folder are
-                  prepared automatically. This runs whenever the folder is
-                  connected; the model, output and notes are set under
-                  Connection.</p>
+                  prepared automatically, on every pass. The folder itself is
+                  set under <button type="button" class="link wf-jump"
+                  data-tab="connection">Connection</button>.</p>
+
+                <label class="field">
+                  <span>Prepare manuscripts with</span>
+                  <select id="watch-model"></select>
+                </label>
+
+                <label class="field">
+                  <span>Put back</span>
+                  <select id="watch-output">
+                    <option value="book">A book-styled reading copy</option>
+                    <option value="indesign">A file ready for InDesign</option>
+                    <option value="tracked">A tracked-changes copy to review first</option>
+                    <option value="both">InDesign + tracked</option>
+                    <option value="all">All three</option>
+                  </select>
+                </label>
+
                 <label class="checkbox" id="watch-require-label-field" hidden>
                   <input type="checkbox" id="watch-require-label">
                   Only prepare the file named “Surname - Book Original”
@@ -950,10 +977,16 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                     from HubSpot; in a flat folder any file not carrying the
                     “- Book Original” token is left alone.</small>
                 </label>
+
+                <label class="checkbox">
+                  <input type="checkbox" id="watch-failure-note">
+                  Leave a note when a manuscript can't be prepared
+                  <small class="muted">Off by default: the folder authors and
+                    designers share should hold manuscripts, not apologies.</small>
+                </label>
+
                 <div class="job-actions">
                   <button id="wf-prep-save" class="primary">Save</button>
-                  <button id="wf-prep-connection" class="quiet" type="button">Prep
-                    settings in Connection →</button>
                 </div>
                 <p id="wf-prep-note" class="action-note" hidden></p>
               </div>
@@ -1100,35 +1133,16 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
     </div>
 
     <div class="card">
-      <h3>What to watch</h3>
+      <h3>The watched folder</h3>
+      <p class="muted small">The Drive folder DocProof watches for new
+        manuscripts. What it does with them — the model, the output, which files
+        to prepare — lives with the <button type="button" class="link wf-jump"
+        data-tab="workflows">Format on arrival</button> workflow.</p>
       <label class="field">
         <span>The folder <small class="muted">— open it in a browser and paste
           the whole address from the bar</small></span>
         <input type="text" id="watch-folder"
                placeholder="https://drive.google.com/drive/folders/…">
-      </label>
-
-      <label class="field">
-        <span>Prepare manuscripts with</span>
-        <select id="watch-model"></select>
-      </label>
-
-      <label class="field">
-        <span>Put back</span>
-        <select id="watch-output">
-          <option value="book">A book-styled reading copy</option>
-          <option value="indesign">A file ready for InDesign</option>
-          <option value="tracked">A tracked-changes copy to review first</option>
-          <option value="both">InDesign + tracked</option>
-          <option value="all">All three</option>
-        </select>
-      </label>
-
-      <label class="checkbox">
-        <input type="checkbox" id="watch-failure-note">
-        Leave a note when a manuscript can't be prepared
-        <small class="muted">Off by default: the folder authors and designers
-          share should hold manuscripts, not apologies.</small>
       </label>
 
       <div class="job-actions">
@@ -1171,8 +1185,15 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
       <p id="watch-archive-note" class="action-note" hidden></p>
     </div>
 
+      </div>
+
+      <!-- ── Schedule ──────────────────────────────────────────────── -->
+      <div class="tabpanel" id="auto-panel-schedule" data-tab="schedule"
+           role="tabpanel" aria-labelledby="autotab-schedule">
     <div class="card">
-      <h3>A pass</h3>
+      <h3>Run a pass now</h3>
+      <p class="muted small">A pass looks at the watched folder once and runs
+        every enabled workflow against what it finds.</p>
       <p id="watch-run-state" class="muted">—</p>
       <div class="bar" id="watch-progress" hidden><i></i></div>
       <div class="job-actions">
@@ -1245,7 +1266,6 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
 
       <p id="watch-schedule-note" class="action-note" hidden></p>
     </div>
-
       </div>
 
       <!-- ── History ───────────────────────────────────────────────── -->

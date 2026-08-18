@@ -104,19 +104,30 @@ document.querySelectorAll('input[name="kind"]').forEach((r) =>
 document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   r.addEventListener('change', () => { renderBookOptions(); renderCost(); }));
 // The corrections list gates its own Start button — enable it the moment there
-// is something to apply.
+// is something to apply — and every change to it redraws the readable review
+// list, which is what a person actually checks (the JSON itself lives under
+// Advanced).
 (() => {
   const corr = $('corrections-input');
-  if (corr) corr.addEventListener('input', renderCost);
+  if (corr) corr.addEventListener('input', () => {
+    renderCost();
+    renderCorrectionsReview();
+  });
+  // Typing a plain list arms the button too (it reads, then applies), so the
+  // gate and its label follow the box as it fills or empties.
+  const typed = $('corrections-list-text');
+  if (typed) typed.addEventListener('input', () => { renderKind(); renderCost(); });
 })();
 
 // Reading a marked-up PDF proof, an author's redlined Word file, or a plain
 // list into the corrections textarea. Each produces a draft edit list; the model
 // (PDF and list paths) proposes, and nothing is applied here — the applied result
 // is reviewed in the corrections report. The status card reports the read as it
-// happens, prominently. `readCorrectionsSource` is lifted to module scope so the
-// one-button "read the proof and apply" flow drives the same read as the panel.
+// happens, prominently. `readCorrectionsSource` and `readCorrectionsList` are
+// lifted to module scope so the one-button "read and apply" flow drives the
+// same reads as the panel buttons.
 let readCorrectionsSource = null;
+let readCorrectionsList = null;
 (() => {
   const statusEl = $('corrections-extract-status');
   const note = $('corrections-extract-note');
@@ -271,19 +282,26 @@ let readCorrectionsSource = null;
       await readDocxFile(file).catch(() => {});
     }));
 
+  // The typed plain-English list, read by the house model into an edit list.
+  // Throws on failure like the source readers, so the one-button apply stops.
+  readCorrectionsList = async () => {
+    const text = (($('corrections-list-text') || {}).value || '').trim();
+    if (!text) {
+      show('Type or paste a list of corrections first.', 'error');
+      throw new Error('no list to read');
+    }
+    try {
+      show('Reading the list…');
+      fillFromBody(await api('/api/corrections/extract-list', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      }));
+    } catch (e) { show(e.message, 'error'); throw e; }
+  };
+
   const listBtn = $('extract-list');
   if (listBtn) listBtn.addEventListener('click', () => withBusy(listBtn, 'Reading…',
-    async () => {
-      const text = (($('corrections-list-text') || {}).value || '').trim();
-      if (!text) { show('Paste a list of corrections first.', 'error'); return; }
-      try {
-        show('Reading the list…');
-        fillFromBody(await api('/api/corrections/extract-list', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ text }),
-        }));
-      } catch (e) { show(e.message, 'error'); }
-    }));
+    () => readCorrectionsList().catch(() => {})));   // already surfaced
 })();
 
 // Disable a button, swap its label, run an async task, then restore it — the
@@ -295,6 +313,227 @@ async function withBusy(btn, busyLabel, task) {
   try { await task(); }
   finally { btn.disabled = false; btn.textContent = label; }
 }
+
+// ── the corrections review list ─────────────────────────────────────────────
+// The edit list the run is submitted with is JSON in #corrections-input, but no
+// human reviews JSON: this renders the same list as readable rows — the text to
+// change struck through, its replacement beside it, a badge for anything that
+// isn't a plain swap — each with a ✕ to drop it before applying. The field
+// names mirror the server parser's aliases, so whatever a reader (or a hand in
+// the Advanced box) produced is shown the way it will be understood.
+const CORR_FIELDS = {
+  find: ['find', 'original', 'original_text', 'from', 'old', 'before', 'search',
+         'text'],
+  replace: ['replace', 'replacement', 'corrected', 'correction', 'to', 'new',
+            'after'],
+  instruction: ['instruction', 'note', 'comment', 'reason', 'message'],
+  kind: ['kind', 'type', 'category'],
+  occurrence: ['occurrence', 'occ', 'nth', 'instance'],
+  context: ['context', 'near', 'within', 'around'],
+  page: ['page', 'page_number', 'pageno', 'p'],
+  format: ['format', 'formatting', 'style', 'character_style'],
+  paragraph: ['paragraph', 'paragraph_op', 'layout', 'para'],
+  paragraph_style: ['paragraph_style', 'para_style', 'applied_style'],
+};
+
+function corrField(entry, name) {
+  const keys = CORR_FIELDS[name];
+  for (let i = 0; i < keys.length; i += 1) {
+    const v = entry[keys[i]];
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+}
+
+// Plain words for the op vocabularies (model.PARA_OPS / model.FORMATS). An op
+// these don't know renders as its raw name, so a new engine op is shown, just
+// not yet in prose.
+const CORR_PARA_LABELS = {
+  'page-break': 'start on a new page',
+  recto: 'start on a right-hand page',
+  verso: 'start on a left-hand page',
+  'column-break': 'start in the next column',
+  'frame-break': 'start in the next frame',
+  'no-page-break': 'clear the forced page break',
+  'keep-with-next': 'keep with the next paragraph',
+  'keep-together': 'keep the lines together',
+  'allow-break': 'let the paragraph break across pages',
+  'delete-paragraph': 'delete the paragraph',
+  'insert-after': 'insert a paragraph after',
+  'insert-before': 'insert a paragraph before',
+  'merge-next': 'join with the next paragraph',
+  'split-at': 'start a new paragraph here',
+};
+const CORR_FORMAT_LABELS = {
+  italic: 'set in italics',
+  roman: 'clear italics (roman)',
+  swash: 'set as a swash (flourished) letterform',
+  'no-swash': 'clear the swash letterform',
+};
+
+// One entry — an object with aliased fields, or a terse [find, replace] pair —
+// read into the handful of things the row shows. Anything unreadable is kept
+// and said so, never silently dropped.
+function corrView(entry) {
+  if (Array.isArray(entry)) {
+    return {
+      find: String(entry[0] ?? ''), replace: String(entry[1] ?? ''),
+      instruction: entry.length > 2 ? String(entry[2] ?? '') : '',
+      kind: 'mechanical', occurrence: 0, context: '', page: 0,
+      format: '', paragraph: '', paragraphStyle: '',
+    };
+  }
+  if (!entry || typeof entry !== 'object') return null;
+  const str = (name) => {
+    const v = corrField(entry, name);
+    return v === undefined ? '' : String(v);
+  };
+  const int = (name) => {
+    const v = Number(corrField(entry, name));
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+  };
+  const kind = (str('kind') || 'mechanical').trim().toLowerCase();
+  return {
+    find: str('find'), replace: str('replace'),
+    instruction: str('instruction'), kind,
+    occurrence: int('occurrence'), context: str('context'), page: int('page'),
+    format: str('format'),
+    paragraph: str('paragraph'),
+    paragraphStyle: str('paragraph_style'),
+  };
+}
+
+const ordinal = (n) => {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`;
+};
+
+function renderCorrectionsReview() {
+  const wrap = $('corrections-review');
+  const head = $('corrections-review-head');
+  const list = $('corrections-review-list');
+  const foot = $('corrections-review-foot');
+  if (!wrap || !head || !list) return;
+  const ta = $('corrections-input');
+  const raw = ((ta || {}).value || '').trim();
+  list.textContent = '';
+  wrap.classList.remove('is-error');
+  if (foot) foot.hidden = false;
+  if (!raw) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  let entries;
+  try {
+    entries = JSON.parse(raw);
+    if (!Array.isArray(entries)) throw new Error('not a list');
+  } catch {
+    wrap.classList.add('is-error');
+    head.textContent = 'This edit list isn’t readable as JSON — fix it under '
+      + 'Advanced below, or clear it and read the proof, Word file, or typed '
+      + 'list again.';
+    if (foot) foot.hidden = true;
+    const adv = $('corrections-json');
+    if (adv) adv.open = true;
+    return;
+  }
+
+  // Dropping a row rewrites the JSON minus that entry; the input event redraws
+  // this list and re-gates Start, exactly as a hand-edit would.
+  const removeAt = (i) => {
+    entries.splice(i, 1);
+    ta.value = entries.length ? JSON.stringify(entries, null, 2) : '';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  const tag = (text, cls = '') => {
+    const el = document.createElement('span');
+    el.className = `corr-tag${cls ? ` ${cls}` : ''}`;
+    el.textContent = text;
+    return el;
+  };
+  const span = (cls, text) => {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  };
+
+  let designs = 0;
+  let unread = 0;
+  entries.forEach((entry, i) => {
+    const v = corrView(entry);
+    const li = document.createElement('li');
+    li.className = 'corr-item';
+    const body = document.createElement('div');
+    body.className = 'corr-body';
+
+    if (!v) {
+      unread += 1;
+      body.append(tag('couldn’t read', 'warn'),
+                  span('corr-note', JSON.stringify(entry)));
+    } else {
+      const design = v.kind === 'design';
+      if (design) designs += 1;
+      const change = document.createElement('div');
+      change.className = 'corr-change';
+      if (design) change.append(tag('InDesign — flagged, not applied', 'accent'));
+      if (v.paragraph && !design) {
+        change.append(tag(CORR_PARA_LABELS[v.paragraph] || v.paragraph, 'accent'));
+      }
+      if (v.paragraphStyle && !design) {
+        change.append(tag(`paragraph style: ${v.paragraphStyle}`, 'accent'));
+      }
+      if (v.format) {
+        change.append(tag(CORR_FORMAT_LABELS[v.format] || v.format, 'accent'));
+      }
+      if (v.kind === 'judgment') change.append(tag('judgment call'));
+      if (v.find && v.replace && v.find !== v.replace) {
+        change.append(span('corr-del', v.find), span('corr-arrow', '→'),
+                      span('corr-ins', v.replace));
+      } else if (v.find && !v.replace && !design && !v.format && !v.paragraph
+                 && !v.paragraphStyle) {
+        change.append(tag('delete'), span('corr-del', v.find));
+      } else if (!v.find && v.replace) {
+        change.append(tag('insert'), span('corr-ins', v.replace));
+      } else if (v.find) {
+        change.append(span('corr-find', v.find));
+      }
+      body.append(change);
+      const hints = [];
+      if (v.occurrence) hints.push(`the ${ordinal(v.occurrence)} match`);
+      if (v.page) hints.push(`page ${v.page}`);
+      if (v.context) {
+        const c = v.context.length > 70 ? `${v.context.slice(0, 70)}…` : v.context;
+        hints.push(`near “${c}”`);
+      }
+      const note = [v.instruction, hints.join(' · ')].filter(Boolean).join(' · ');
+      if (note) body.append(span('corr-note', note));
+    }
+
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'corr-remove';
+    x.title = 'Drop this correction';
+    x.setAttribute('aria-label', `Drop correction ${i + 1}`);
+    x.textContent = '✕';
+    x.addEventListener('click', () => removeAt(i));
+    li.append(span('corr-num', String(i + 1)), body, x);
+    list.append(li);
+  });
+
+  const n = entries.length - designs - unread;
+  const plural = (c) => (c === 1 ? '' : 's');
+  const bits = [`${n} correction${plural(n)} ready to apply`];
+  if (designs) {
+    bits.push(`${designs} layout request${plural(designs)} for the InDesign `
+      + 'checklist');
+  }
+  if (unread) bits.push(`${unread} entr${unread === 1 ? 'y' : 'ies'} unreadable`);
+  head.textContent = bits.join(' · ');
+}
+// Some browsers restore the textarea across a reload; draw whatever's there.
+renderCorrectionsReview();
 
 // The subject/title/author boxes only matter when a book-styled copy is
 // among the outputs.
@@ -328,10 +567,13 @@ function renderKind() {
   $('promo-cost').hidden = !promo;
   $('model-label').textContent = promo ? 'Which model should write it?'
     : prep ? 'Which model should read it?' : 'Which reviewer?';
-  // With a proof attached but not yet read into the list, the button does both —
-  // read it, then apply; once a list is present (previewed or pasted), it applies.
-  const corrNeedsRead = corrections && state.correctionsSource
-    && !(($('corrections-input') || {}).value || '').trim();
+  // With a proof attached — or a plain list typed — but not yet read into the
+  // edit list, the button does both: read it, then apply. Once a list is
+  // present (previewed or hand-written), it applies.
+  const corrNeedsRead = corrections
+    && !(($('corrections-input') || {}).value || '').trim()
+    && (state.correctionsSource
+        || (($('corrections-list-text') || {}).value || '').trim());
   $('start').textContent = promo ? 'Write promo copy'
     : prep ? 'Format the manuscript'
     : corrections ? (corrNeedsRead ? 'Read corrections & apply' : 'Apply corrections')
@@ -441,7 +683,12 @@ function attachCorrectionsSource(file) {
   state.correctionsSource = file;
   // A fresh proof supersedes any earlier draft in the box, so it is read anew.
   const ta = $('corrections-input');
-  if (ta && ta.value.trim()) { ta.value = ''; ta.dataset.comments = ''; }
+  if (ta && ta.value.trim()) {
+    ta.value = '';
+    ta.dataset.comments = '';
+    ta.dataset.pages = '';
+    renderCorrectionsReview();
+  }
   renderCorrectionsSource();
   renderKind();          // relabel Start → "Read corrections & apply"
   renderCost();          // re-gate Start
@@ -2529,10 +2776,14 @@ function renderCost() {
   if (isCorrections()) {
     // Deterministic and free — no model, no price (a PDF read is a small model
     // cost, taken on the button). The button waits on one correctable file plus
-    // either a list to apply or an attached proof to read into one.
+    // something to apply: an edit list, an attached proof, or a typed list —
+    // the latter two read into a list on the button itself.
     const hasList = (($('corrections-input') || {}).value || '').trim().length > 0;
     const hasSource = !!state.correctionsSource;
-    $('start').disabled = !(filesToRun().length > 0 && (hasList || hasSource));
+    const hasTyped = (($('corrections-list-text') || {}).value || '')
+      .trim().length > 0;
+    $('start').disabled = !(filesToRun().length > 0
+                            && (hasList || hasSource || hasTyped));
     setStartPrice(null);
     return;
   }
@@ -2660,15 +2911,22 @@ $('start').addEventListener('click', async () => {
   button.disabled = true;
   button.textContent = 'Starting…';
   try {
-    // One-button corrections: read the attached proof (a marked-up PDF or redlined
-    // Word file) into the edit list first, unless it was already previewed, then
-    // apply below. The reader surfaces its own failure and re-raises, so a bad read
+    // One-button corrections: read the attached proof (a marked-up PDF or
+    // redlined Word file) — or, with no proof, the typed plain-English list —
+    // into the edit list first, unless it was already previewed, then apply
+    // below. The readers surface their own failure and re-raise, so a bad read
     // aborts here — nothing half-read is ever applied.
-    if (isCorrections() && state.correctionsSource
-        && !(($('corrections-input') || {}).value || '').trim()) {
-      button.textContent = 'Reading corrections…';
-      await readCorrectionsSource(state.correctionsSource);
-      button.textContent = 'Applying…';
+    if (isCorrections() && !(($('corrections-input') || {}).value || '').trim()) {
+      const typed = (($('corrections-list-text') || {}).value || '').trim();
+      if (state.correctionsSource || typed) {
+        button.textContent = 'Reading corrections…';
+        if (state.correctionsSource) {
+          await readCorrectionsSource(state.correctionsSource);
+        } else {
+          await readCorrectionsList();
+        }
+        button.textContent = 'Applying…';
+      }
     }
     // Promo is its own pipeline with its own page: the same dropped files, sent
     // to /api/promo/run, and the Promo tab shows them being written.
@@ -5539,10 +5797,8 @@ $('watch-save').addEventListener('click', async () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         // null, not '': an empty box is "no change", and the server agrees.
+        // Prep's model/output/notes moved to the Format-on-arrival drawer.
         folder: $('watch-folder').value.trim() || null,
-        model: $('watch-model').value,
-        prep_output: $('watch-output').value,
-        upload_failure_note: $('watch-failure-note').checked,
       }),
     });
     renderWatch(body);
@@ -6941,12 +7197,20 @@ function automationWorkflows() {
   const planReady = !!(pl.hubspot_enabled && pl.hubspot_plan_property
                        && pl.hubspot_plan_needed_value
                        && pl.hubspot_plan_done_value);
+  // When a workflow reads "Needs setup", `setup` names what's missing and where
+  // to fix it: a `target` tab jumps straight there, `self` opens the drawer
+  // whose own fields are the fix, and a null target means the blocker is a
+  // server credential no button here can set.
+  const hubspotMissing = { hint: 'HubSpot isn’t connected — set HUBSPOT_TOKEN '
+    + 'on the server to enable it', target: null };
   return [
     {
       id: 'prep', name: 'Format on arrival', sub: 'Prepare new manuscripts',
       trigger: { text: 'Folder arrival', hs: false }, effect: 'Prep / format',
       config: 'wf-config-prep', enabled: folderReady, toggleable: false,
       status: folderReady ? 'on' : 'setup',
+      setup: folderReady ? null : { hint: 'Connect a Google Drive folder to '
+        + 'switch this on.', target: 'connection' },
     },
     {
       id: 'promo', name: 'Promo copy', sub: 'Teaser + 12 social posts',
@@ -6958,6 +7222,10 @@ function automationWorkflows() {
       effect: 'Teaser + posts', config: 'wf-config-promo',
       enabled: !!ps.promo_enabled, toggleable: true,
       status: !ps.promo_enabled ? 'off' : (promoReady ? 'on' : 'setup'),
+      setup: (!ps.promo_enabled || promoReady) ? null
+        : (ps.hubspot_enabled
+            ? { hint: 'Fill in the HubSpot trigger values.', target: 'self' }
+            : hubspotMissing),
     },
     {
       id: 'plan', name: 'Marketing plan', sub: 'Author-facing plan document',
@@ -6971,8 +7239,23 @@ function automationWorkflows() {
       effect: 'Plan .docx', config: 'wf-config-plan',
       enabled: !!pl.plan_enabled, toggleable: true,
       status: !pl.plan_enabled ? 'off' : (planReady ? 'on' : 'setup'),
+      setup: (!pl.plan_enabled || planReady) ? null
+        : (pl.hubspot_enabled
+            ? { hint: 'Fill in the HubSpot property and values.', target: 'self' }
+            : hubspotMissing),
     },
   ];
+}
+
+// A text button that switches Automations sub-tabs when clicked (delegated in
+// initAutoTabs). Used inline in hints and the passes summary.
+function wfJump(text, tab) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'link wf-jump';
+  b.dataset.tab = tab;
+  b.textContent = text;
+  return b;
 }
 
 const WF_STATUS_LABEL = { on: 'On', setup: 'Needs setup', off: 'Off' };
@@ -6985,12 +7268,6 @@ function wfLastLook() {
   if (isNaN(t)) return '—';
   return t.toLocaleString([], { month: 'short', day: 'numeric',
                                 hour: '2-digit', minute: '2-digit' });
-}
-
-function wfNextLook() {
-  const w = state.watchStatus || {};
-  if (w.times && w.times.length) return w.times[0];
-  return w.auto_ticks ? 'On the timer' : 'Manual';
 }
 
 function renderRegistry() {
@@ -7011,15 +7288,40 @@ function renderRegistry() {
       || a.name.localeCompare(b.name);
   });
 
-  const last = wfLastLook();
-  const next = wfNextLook();
   rowsEl.innerHTML = '';
-  items.forEach((x) => rowsEl.append(registryRow(x, last, next)));
+  items.forEach((x) => rowsEl.append(registryRow(x)));
   $('wf-empty').hidden = items.length > 0;
+  renderPassesSummary();
   applyDrawer();
 }
 
-function registryRow(x, last, next) {
+// One shared line above the table. "Last look" and "Next" are properties of the
+// single pass clock, not of any one workflow — showing them per row implied each
+// ran on its own schedule. Here they belong to the clock, with a jump to set it.
+function renderPassesSummary() {
+  const el = $('wf-passes');
+  if (!el) return;
+  el.innerHTML = '';
+  const w = state.watchStatus || {};
+  const anyEnabled = automationWorkflows().some((x) => x.enabled);
+  if (!anyEnabled) {
+    el.append(document.createTextNode('Nothing runs yet. Turn a workflow on, '
+      + 'then choose when passes run under '));
+    el.append(wfJump('Schedule', 'schedule'), document.createTextNode('.'));
+    return;
+  }
+  let nextClause;
+  if (w.times && w.times.length) nextClause = `next at ${w.times.join(', ')}`;
+  else if (w.auto_ticks) nextClause = 'next on the in-app timer';
+  else nextClause = 'no automatic passes scheduled';
+  el.append(document.createTextNode(
+    `Passes run on one shared clock — last looked ${wfLastLook()}, `
+    + `${nextClause}. `));
+  el.append(wfJump('Change under Schedule', 'schedule'),
+            document.createTextNode('.'));
+}
+
+function registryRow(x) {
   const tr = document.createElement('tr');
   tr.dataset.wf = x.id;
   if (wfUI.selected === x.id) tr.classList.add('selected');
@@ -7040,31 +7342,54 @@ function registryRow(x, last, next) {
   tdToggle.append(tog);
   tr.append(tdToggle);
 
+  // The name is a real button — the row's keyboard-reachable "open this
+  // workflow" control (the bare <tr> click is a mouse convenience on top).
   const tdName = document.createElement('td');
   tdName.className = 'wf-row-name';
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'wf-open';
+  open.setAttribute('aria-expanded', wfUI.selected === x.id ? 'true' : 'false');
   const b = document.createElement('b'); b.textContent = x.name;
   const small = document.createElement('small'); small.textContent = x.sub;
-  tdName.append(b, small);
+  open.append(b, small);
+  open.addEventListener('click', (e) => { e.stopPropagation(); openDrawer(x.id); });
+  tdName.append(open);
   tr.append(tdName);
 
   tr.append(chipCell(x.trigger.text, x.trigger.hs));
   tr.append(chipCell(x.effect, false));
 
-  const tdLast = document.createElement('td');
-  tdLast.className = 'wf-when'; tdLast.textContent = x.enabled ? last : '—';
-  tr.append(tdLast);
-  const tdNext = document.createElement('td');
-  tdNext.className = 'wf-when'; tdNext.textContent = x.enabled ? next : '—';
-  tr.append(tdNext);
-
   const tdStatus = document.createElement('td');
-  const pill = document.createElement('span');
-  pill.className = 'pill ' + x.status;
-  pill.textContent = WF_STATUS_LABEL[x.status];
-  tdStatus.append(pill);
+  if (x.status === 'setup') {
+    // The pill is the call to action: it jumps to whatever needs finishing —
+    // another tab, or this workflow's own drawer.
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'pill setup actionable';
+    btn.textContent = 'Needs setup →';
+    if (x.setup && x.setup.hint) btn.title = x.setup.hint;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = x.setup && x.setup.target;
+      if (t && t !== 'self') window.__activateAutoTab(t);
+      else openDrawer(x.id);
+    });
+    tdStatus.append(btn);
+  } else {
+    const pill = document.createElement('span');
+    pill.className = 'pill ' + x.status;
+    pill.textContent = WF_STATUS_LABEL[x.status];
+    tdStatus.append(pill);
+  }
   tr.append(tdStatus);
 
-  tr.addEventListener('click', () => openDrawer(x.id));
+  // Mouse convenience only; keyboard uses the name/toggle/setup buttons. Ignore
+  // clicks that land on an inner control so they aren't double-handled.
+  tr.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input')) return;
+    openDrawer(x.id);
+  });
   return tr;
 }
 
@@ -7077,14 +7402,44 @@ function chipCell(text, hs) {
   return td;
 }
 
+function setRowSelected(id) {
+  const rows = $('wf-rows');
+  if (!rows) return;
+  rows.querySelectorAll('tr').forEach((tr) => {
+    const on = tr.dataset.wf === id;
+    tr.classList.toggle('selected', on);
+    const ob = tr.querySelector('.wf-open');
+    if (ob) ob.setAttribute('aria-expanded', on ? 'true' : 'false');
+  });
+}
+
 function openDrawer(id) {
   wfUI.selected = id;
-  const rows = $('wf-rows');
-  if (rows) {
-    rows.querySelectorAll('tr').forEach((tr) =>
-      tr.classList.toggle('selected', tr.dataset.wf === id));
-  }
+  setRowSelected(id);
   applyDrawer();
+  const drawer = $('wf-drawer');
+  if (drawer && !drawer.hidden) {
+    const close = $('wf-drawer-close');
+    if (close) close.focus({ preventScroll: true });
+    // Stacked under the table on a narrow screen, the drawer opens off-screen —
+    // bring it into view so a tap visibly does something.
+    if (window.matchMedia('(max-width: 60rem)').matches) {
+      drawer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+}
+
+function closeDrawer() {
+  const wasOpen = wfUI.selected;
+  wfUI.selected = null;
+  setRowSelected(null);
+  applyDrawer();
+  // Return focus to the row that was open, so keyboard doesn't jump to the top.
+  const rows = $('wf-rows');
+  if (wasOpen && rows) {
+    const ob = rows.querySelector(`tr[data-wf="${wasOpen}"] .wf-open`);
+    if (ob) ob.focus();
+  }
 }
 
 function applyDrawer() {
@@ -7097,10 +7452,24 @@ function applyDrawer() {
   });
   drawer.hidden = !x;
   layout.classList.toggle('with-drawer', !!x);
-  // Widen the whole Automations surface while a drawer is open, so the table
-  // keeps every column beside the drawer instead of shrinking under it.
+  // Widen the whole Automations surface only while the Workflows tab is showing
+  // a drawer — otherwise the wide class leaked onto Connection/Schedule/History
+  // and stretched their prose to unreadable line lengths.
   const screen = $('screen-watch');
-  if (screen) screen.classList.toggle('wf-wide', !!x);
+  const wfActive = ($('auto-panel-workflows') || {}).classList
+    && $('auto-panel-workflows').classList.contains('is-active');
+  if (screen) screen.classList.toggle('wf-wide', !!x && wfActive);
+  // The prep drawer's setup banner: what's missing, and a jump to fix it.
+  const banner = $('wf-prep-setup');
+  if (banner) {
+    const s = x && x.id === 'prep' ? x.setup : null;
+    banner.hidden = !s;
+    banner.innerHTML = '';
+    if (s) {
+      banner.append(document.createTextNode(s.hint + ' '));
+      if (s.target) banner.append(wfJump('Go to Connection →', s.target));
+    }
+  }
   if (x) {
     $('wf-drawer-title').textContent = x.name;
     $('wf-drawer-sub').textContent = x.trigger.text + ' → ' + x.effect;
@@ -7144,11 +7513,21 @@ async function toggleWorkflow(x) {
     });
     panels.querySelectorAll('.tabpanel').forEach((p) =>
       p.classList.toggle('is-active', p.dataset.tab === btn.dataset.tab));
+    // Recompute the wide class against the now-active panel, so a drawer left
+    // open on Workflows doesn't widen Connection/Schedule/History.
+    if (typeof applyDrawer === 'function') applyDrawer();
     if (focus) btn.focus();
   }
   tabs.addEventListener('click', (e) => {
     const btn = e.target.closest('.subtab');
     if (btn) activate(btn, false);
+  });
+  // Inline "go to <tab>" buttons anywhere in the Automations screen.
+  const screen = $('screen-watch');
+  if (screen) screen.addEventListener('click', (e) => {
+    const jump = e.target.closest('.wf-jump');
+    if (jump && jump.dataset.tab) { e.preventDefault(); activate(
+      tabs.querySelector(`[data-tab="${jump.dataset.tab}"]`), true); }
   });
   tabs.addEventListener('keydown', (e) => {
     const list = btns();
@@ -7184,15 +7563,14 @@ $('wf-filters').addEventListener('click', (e) => {
     b.classList.toggle('active', b === btn));
   renderRegistry();
 });
-$('wf-drawer-close').addEventListener('click', () => {
-  wfUI.selected = null;
-  const rows = $('wf-rows');
-  if (rows) rows.querySelectorAll('tr').forEach((tr) => tr.classList.remove('selected'));
-  applyDrawer();
+$('wf-drawer-close').addEventListener('click', closeDrawer);
+$('wf-drawer').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeDrawer(); }
 });
 
-// The Format-on-arrival drawer: the prep filter saves its own slice, and a
-// shortcut jumps to the rest of prep's settings under Connection.
+// The Format-on-arrival drawer now owns all of prep's settings — the model, the
+// output, the failure note, and the source-label filter — so its Save writes
+// them together. (The watched folder itself lives under Connection.)
 $('wf-prep-save').addEventListener('click', async () => {
   const button = $('wf-prep-save');
   const note = $('wf-prep-note');
@@ -7200,16 +7578,18 @@ $('wf-prep-save').addEventListener('click', async () => {
   try {
     const body = await api('/api/watch', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ require_source_label: $('watch-require-label').checked }),
+      body: JSON.stringify({
+        model: $('watch-model').value,
+        prep_output: $('watch-output').value,
+        upload_failure_note: $('watch-failure-note').checked,
+        require_source_label: $('watch-require-label').checked,
+      }),
     });
     renderWatch(body);
     watchNote(note, 'Saved.', 'ok');
   } catch (err) {
     watchNote(note, err.message, 'error');
   } finally { button.disabled = false; }
-});
-$('wf-prep-connection').addEventListener('click', () => {
-  if (window.__activateAutoTab) window.__activateAutoTab('connection');
 });
 
 // History: filter the runs table by book name or status, so it stays usable as

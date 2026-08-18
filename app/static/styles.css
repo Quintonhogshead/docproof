@@ -211,6 +211,9 @@ ul { list-style: none; margin: 0; padding: 0; }
 .options { margin: 1.5rem 0; display: grid; gap: 1.1rem; }
 
 .field { display: grid; gap: 0.35rem; }
+/* A paragraph is prose, not a control stack: grid display would break its
+   inline <strong>/<code> runs onto their own rows. */
+p.field { display: block; }
 .field > span:first-child { font-weight: 600; font-size: 0.92rem; }
 
 fieldset.field {
@@ -428,6 +431,66 @@ textarea {
 .extract-status.is-error .extract-note { color: var(--warn); }
 .extract-progress { height: 6px; background: var(--line); border-radius: 999px; margin: 0.55rem 0 0; overflow: hidden; }
 .extract-progress-bar { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+
+/* The corrections review list: the edit list rendered for a human — struck-out
+   text → replacement per row, a ✕ to drop one — while the JSON it stands for
+   stays in the Advanced drawer. See renderCorrectionsReview in app.js. */
+.corr-review-head { font-weight: 600; font-size: 0.92rem; }
+#corrections-review.is-error .corr-review-head { color: var(--warn); }
+.corr-list {
+  list-style: none;
+  margin: 0.35rem 0 0.2rem;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+  max-height: 26rem;
+  overflow-y: auto;
+}
+.corr-item {
+  display: flex;
+  gap: 0.65rem;
+  align-items: baseline;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  font-size: 0.92rem;
+}
+.corr-num { color: var(--muted); font-size: 0.8rem; min-width: 1.5rem; text-align: right; }
+.corr-body { flex: 1; min-width: 0; }
+.corr-change { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.corr-del { color: var(--warn); text-decoration: line-through; text-decoration-thickness: 1px; }
+.corr-ins { color: var(--ok); font-weight: 600; }
+.corr-find { font-weight: 500; }
+.corr-arrow { color: var(--muted); padding: 0 0.35rem; }
+.corr-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 0.55rem;
+  margin-right: 0.45rem;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+.corr-tag.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.corr-tag.warn { color: var(--warn); }
+.corr-note { display: block; color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; overflow-wrap: anywhere; }
+.corr-remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.corr-remove:hover { color: var(--warn); background: var(--accent-soft); }
 
 /* The step tracker: the whole pipeline a review walks, finished steps checked
    off, the current one lit with its quip. See stageTracker in app.js. */
@@ -1348,6 +1411,16 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 #wf-registry tbody tr.selected { background: var(--accent-soft); }
 .wf-row-name b { display: block; }
 .wf-row-name small { color: var(--muted); }
+/* The name cell is a real button — the row's keyboard-reachable open control —
+   but should read as plain text, not a chunky button. */
+.wf-open {
+  border: 0; background: none; padding: 0; margin: 0; font: inherit;
+  color: inherit; text-align: left; cursor: pointer; width: 100%; display: block;
+}
+.wf-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+/* The shared "passes run on one clock" line above the table (issue: last/next
+   are the clock's, not each workflow's). */
+.wf-passes { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.9rem; }
 .wf-chip {
   display: inline-block; font-size: 0.72rem; padding: 0.05rem 0.5rem;
   border-radius: 999px; background: var(--line); color: var(--muted); white-space: nowrap;
@@ -1357,6 +1430,16 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 .wf-when { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
 .pill.on { color: var(--ok); background: color-mix(in srgb, var(--ok) 16%, transparent); }
 .pill.setup { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+/* A "Needs setup" pill that is a real button: it jumps to whatever finishes the
+   setup, so the status is the call to action instead of a dead end. */
+button.pill.setup.actionable {
+  border: 0; cursor: pointer; font: inherit; font-size: 0.72rem;
+  white-space: nowrap;
+}
+button.pill.setup.actionable:hover {
+  background: color-mix(in srgb, var(--warn) 26%, transparent);
+}
+button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
 
 .wf-toggle {
   width: 2rem; height: 1.15rem; border-radius: 999px; background: var(--line);
@@ -1384,6 +1467,12 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 .wf-drawer-close { border: 0; background: none; color: var(--muted); font-size: 1.3rem; line-height: 1; cursor: pointer; }
 .wf-config { padding: 0.9rem 1rem; display: grid; gap: 0.8rem; }
 .wf-hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
+/* The in-drawer "what's still missing" banner for a workflow that needs setup. */
+.wf-setup {
+  padding: 0.6rem 0.75rem; border-radius: var(--radius); font-size: 0.85rem;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-left: 3px solid var(--warn);
+}
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
