@@ -1171,9 +1171,10 @@ def test_a_ready_author_with_an_empty_folder_is_flagged_missing(tmp_path,
 
 def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
                                                                  provider):
-    """The book is done and its source is marked formatted, but HubSpot still
-    reads ready (a write-back that never landed). That is not a missing Book
-    Original, so it must not nag — the folder already holds the deliverable."""
+    """The intake file "<surname> - Book Original" is present but marked done,
+    and its outputs are beside it. That is not a missing Book Original — the
+    folder holds the real deliverable — so it must not nag, even though HubSpot
+    still reads ready."""
     ws = sub_ws(require_source_label=True)
     opener = fake_drive(
         {SUB: author_folder("Quinton Johnson"),
@@ -1186,6 +1187,26 @@ def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
     report = run(tmp_path, ws, opener)
 
     assert report.prepped == [] and report.missing_source == []
+
+
+def test_a_placed_book_0_without_a_book_original_is_flagged_missing(tmp_path,
+                                                                    provider):
+    """A human placed a formatted "Oda - Book 0" in the folder, but there is no
+    "Oda - Book Original" for DocProof to work from. The output-looking name must
+    not silently mark the author as handled: with no intake file present, the
+    ready author is reported, not skipped. (The bug this fixes.)"""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive(
+        {SUB: author_folder("Ola Oda"),
+         "m-1": in_sub("Oda - Book 0.docx")},   # a human's output name, no marker
+        docx=MANUSCRIPT,
+        hubspot={"Oda": ready_author("Ola", "Oda")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == []
+    assert [a for a, _ in report.missing_source] == ["Ola Oda"]
+    assert "Book Original" in report.missing_source[0][1]
 
 
 def test_require_source_label_matches_an_em_dashed_original(tmp_path, provider):
