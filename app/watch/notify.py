@@ -78,10 +78,13 @@ def send(token: str, to: str, subject: str, body: str, *,
 def summary(report) -> tuple[str, str] | None:
     """The subject and body for a pass that needs a person, or `None` if it does
     not. `needs_human` is why this exists; a hard `failed` earns the same email,
-    so a quiet morning is never a silent one; and a `missing_source` — an author
+    so a quiet morning is never a silent one; a `missing_source` — an author
     flagged ready with no Book Original in the folder — rides along too, so a
-    file that needs uploading or renaming is seen the same morning."""
-    if not (report.needs_human or report.failed or report.missing_source):
+    file that needs uploading or renaming is seen the same morning; and a
+    `stuck_ready` — a book already formatted whose HubSpot status never moved —
+    so a stalled record is caught rather than sitting ready forever."""
+    if not (report.needs_human or report.failed or report.missing_source
+            or report.stuck_ready):
         return None
     lines: list[str] = []
     if report.needs_human:
@@ -94,13 +97,20 @@ def summary(report) -> tuple[str, str] | None:
         lines.append("Authors flagged ready with no Book Original in the folder:")
         lines += [f"  - {name}: {reason}"
                   for name, reason in report.missing_source]
+    if report.stuck_ready:
+        if lines:
+            lines.append("")
+        lines.append("Authors flagged ready whose book is already formatted "
+                     "(move the status on):")
+        lines += [f"  - {name}: {reason}"
+                  for name, reason in report.stuck_ready]
     if report.failed:
         if lines:
             lines.append("")
         lines.append("Manuscripts that failed to prepare:")
         lines += [f"  - {name}: {reason}" for name, reason in report.failed]
     count = (len(report.needs_human) + len(report.missing_source)
-             + len(report.failed))
+             + len(report.stuck_ready) + len(report.failed))
     subject = f"{ALERT_TAGS} {count} item(s) need a look"
     body = ("DocProof finished a pass over the Drive folder and left the "
             "following for a person:\n\n" + "\n".join(lines) +
@@ -522,6 +532,41 @@ def send_job_completion(watch_home, job, *, get_key=None,
         return False
 
 
+def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:
+    """Send a sample alert to the configured notify address, to prove the pipe
+    end to end — no pass, no formatting, no cost.
+
+    Returns the address it went to. Raises `ValueError` for a setup gap the caller
+    should show plainly (no address, no Google sign-in) and `DriveError` for a
+    send Gmail refused — most often the missing `gmail.send` scope, fixed by
+    signing in again. Uses the watcher's own Google account, the same one a real
+    alert would."""
+    from app.settings import get_api_key
+
+    from .settings import GOOGLE_KEY, WatchSettings
+
+    ws = WatchSettings.load(watch_home)
+    if not ws.notify_email:
+        raise ValueError("No notify address is set. Add one with "
+                         "`docproof-watch init --notify-email you@example.com`, "
+                         "then try again.")
+    if not (ws.client_id and ws.client_secret):
+        raise ValueError("Google sign-in is not set up yet.")
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
+    if not refresh:
+        raise ValueError("DocProof is not signed in to Google.")
+    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+                                       opener=opener)
+    subject = f"{ALERT_TAGS} Test — DocWatch notifications are working"
+    body = ("This is a test from DocWatch, sent because someone asked for one.\n\n"
+            "If it reached you, the alerts a pass raises when it needs a person — "
+            "a ready author with no Book Original, a book whose status is stuck, "
+            "a manuscript that failed to prepare — will reach this inbox too.\n\n"
+            "Nothing was prepared, changed or charged for.")
+    send(token, ws.notify_email, subject, body, opener=opener)
+    return ws.notify_email
+
+
 def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
     """Email the watcher's owner when a pass needs a person and an address is set.
 
@@ -540,7 +585,7 @@ def maybe_notify(token: str, ws, report, *, opener=drive._open_url) -> None:
         log.info("Emailed %s about %d item(s) needing a look.",
                  ws.notify_email,
                  len(report.needs_human) + len(report.missing_source)
-                 + len(report.failed))
+                 + len(report.stuck_ready) + len(report.failed))
     except DriveError as e:
         log.warning("Could not email %s about a pass that needs a person (%s). "
                     "If Gmail refused the scope, run `docproof-watch auth` again "
@@ -623,4 +668,4 @@ def plan_too_large(token: str, ws, file, job, *,
 
 __all__ = ["SEND_URL", "send", "summary", "maybe_notify", "completion",
            "maybe_complete", "completion_for_job", "send_job_completion",
-           "promo_too_large", "plan_too_large"]
+           "send_test", "promo_too_large", "plan_too_large"]

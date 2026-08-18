@@ -69,7 +69,6 @@ def status(home: str | Path, *, get_key=None,
         "folder_id": ws.folder_id,
         "model": ws.model,
         "prep_output": ws.prep_output,
-        "upload_notes": ws.upload_notes,
         "upload_failure_note": ws.upload_failure_note,
         # Subfolder mode is set up from the CLI, but the web panel surfaces the
         # one knob inside it that a person changes book to book — whether to

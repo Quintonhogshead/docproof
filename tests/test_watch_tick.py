@@ -81,7 +81,7 @@ def test_a_new_manuscript_is_prepared_uploaded_and_marked(tmp_path, ws,
 
     assert report.ok and report.prepped == ["Wolves.docx"]
     placed = uploads_in(opener)
-    assert set(placed) == {"Wolves - book 0.docx", "Wolves - book 0 - notes.md"}
+    assert set(placed) == {"Wolves - book 0.docx"}
     assert placed["Wolves - book 0.docx"]["parents"] == [FOLDER]
     assert placed["Wolves - book 0.docx"]["appProperties"][SOURCE_PROP] == "f-1"
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
@@ -126,14 +126,17 @@ def test_asking_for_both_files_uploads_both(tmp_path, ws, provider):
     assert "Wolves - book 0 - tracked changes.docx" in uploads_in(opener)
 
 
-def test_the_notes_can_be_left_out_of_the_folder(tmp_path, ws, provider):
-    ws.upload_notes = False
+def test_the_prep_log_is_not_put_in_the_author_folder(tmp_path, ws, provider):
+    """The prep log (prep_notes.md) is DocProof's own record: it goes to the
+    DocProof storage folder (the archive), never beside the deliverable in the
+    author's folder, which holds only the book."""
     opener = fake_drive(folder(f_1=drive_entry("Wolves.docx")),
                         docx=MANUSCRIPT)
 
     run(tmp_path, ws, opener)
 
     assert set(uploads_in(opener)) == {"Wolves - book 0.docx"}
+    assert not any("notes" in name for name in uploads_in(opener))
 
 
 def test_a_native_google_doc_is_exported_and_named_after_its_title(
@@ -241,8 +244,7 @@ def test_a_crash_before_the_upload_does_not_pay_for_the_book_again(
 
     assert second.ok and second.prepped == ["Wolves.docx"]
     assert len(provider.calls) == paid          # not one call more
-    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
-                                       "Wolves - book 0 - notes.md"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx"}
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 
@@ -269,8 +271,7 @@ def test_a_crash_between_two_uploads_only_sends_the_missing_ones(
 
     assert len(landed) == 1
     assert set(uploads_in(opener)) == {"Wolves - book 0.idml",
-                                       "Wolves - book 0 - tracked changes.docx",
-                                       "Wolves - book 0 - notes.md"}
+                                       "Wolves - book 0 - tracked changes.docx"}
 
 
 def test_an_upload_the_state_file_lost_is_adopted_not_repeated(tmp_path, ws,
@@ -289,7 +290,7 @@ def test_an_upload_the_state_file_lost_is_adopted_not_repeated(tmp_path, ws,
     tagged = [e for e in opener.files.values()
               if e["name"] == "Wolves - book 0.docx"]
     assert len(tagged) == 1                  # adopted, not uploaded beside
-    assert "Wolves - book 0 - notes.md" in uploads_in(opener)
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx"}   # nothing extra
 
 
 def test_a_crash_before_the_marker_only_writes_the_marker(tmp_path, ws,
@@ -551,8 +552,7 @@ def test_a_rehearsal_never_calls_a_model_but_still_fills_the_folder(
     report = run(tmp_path, ws, opener, mock=True)
 
     assert report.ok and report.prepped == ["Wolves.docx"]
-    assert set(uploads_in(opener)) == {"Wolves - book 0.docx",
-                                       "Wolves - book 0 - notes.md"}
+    assert set(uploads_in(opener)) == {"Wolves - book 0.docx"}
     assert opener.files["f-1"]["appProperties"][STATE_PROP] == FORMATTED
 
 
@@ -1169,12 +1169,11 @@ def test_a_ready_author_with_an_empty_folder_is_flagged_missing(tmp_path,
     assert not report.needs_human
 
 
-def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
-                                                                 provider):
+def test_a_ready_author_already_formatted_is_flagged_stuck(tmp_path, provider):
     """The intake file "<surname> - Book Original" is present but marked done,
-    and its outputs are beside it. That is not a missing Book Original — the
-    folder holds the real deliverable — so it must not nag, even though HubSpot
-    still reads ready."""
+    and its outputs are beside it, yet HubSpot still reads ready — a write-back
+    that never landed. Not a missing Book Original (the deliverable is there), so
+    it lands in its own `stuck_ready` list, not `missing_source`."""
     ws = sub_ws(require_source_label=True)
     opener = fake_drive(
         {SUB: author_folder("Quinton Johnson"),
@@ -1187,6 +1186,8 @@ def test_a_ready_author_already_formatted_is_not_flagged_missing(tmp_path,
     report = run(tmp_path, ws, opener)
 
     assert report.prepped == [] and report.missing_source == []
+    assert [a for a, _ in report.stuck_ready] == ["Quinton Johnson"]
+    assert "already formatted" in report.stuck_ready[0][1]
 
 
 def test_a_placed_book_0_without_a_book_original_is_flagged_missing(tmp_path,

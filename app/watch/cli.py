@@ -519,8 +519,10 @@ def _report(report: ticklib.TickReport) -> int:
         print(f"Needs a person — {name}: {reason}", file=sys.stderr)
     for name, reason in report.missing_source:
         print(f"No Book Original — {name}: {reason}", file=sys.stderr)
+    for name, reason in report.stuck_ready:
+        print(f"Ready but already formatted — {name}: {reason}", file=sys.stderr)
     if not (report.prepped or report.failed or report.needs_human
-            or report.missing_source):
+            or report.missing_source or report.stuck_ready):
         print(f"Nothing new in the folder ({report.listed} file(s) looked at).")
     return OK if report.ok else PARTIAL
 

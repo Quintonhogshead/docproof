@@ -15,14 +15,18 @@ that looks like a manuscript and has not been prepared yet gets
 ```
 Grest - Book Original.docx   ← the author's file, untouched
 Grest - book 0.docx          ← what a designer places
-Grest - book 0 - notes.md    ← what prep decided, and what it flagged
 ```
 
 The house convention is a stage series: an author manuscript named
 `<surname> - Book Original` comes back as `<surname> - book 0`, with the
-tracked-changes copy (`… - book 0 - tracked changes.docx`) and the notes beside
-it. A file that does not carry the `- Book Original` token keeps its whole name
-and has `- book 0` appended, so there is always one predictable deliverable.
+tracked-changes copy (`… - book 0 - tracked changes.docx`) beside it. A file that
+does not carry the `- Book Original` token keeps its whole name and has
+`- book 0` appended, so there is always one predictable deliverable.
+
+The prep **log** — what prep decided and flagged — is deliberately kept out of
+the author's folder, which holds only the deliverable. It goes to the DocProof
+storage folder (the [output archive](archive.md)) instead, alongside the rest of
+DocProof's record of the run.
 
 **The interior is plain by design.** What DocWatch hands back is the manuscript
 in the plainest possible dress — Times New Roman, 12 point, US Letter, one-inch
@@ -229,8 +233,8 @@ beside them all live in the one folder. Turn on **subfolders** and that folder
 becomes a parent **Author Folder** instead — one subfolder per author, named
 `First Last` (`Quinton Johnson`, `Jane Smith`), each holding that author's book
 and its outputs. A manuscript appears inside the author's own subfolder; the
-formatted file, the tracked-changes copy and the notes go back into the *same*
-subfolder.
+formatted file and the tracked-changes copy go back into the *same* subfolder
+(the prep log goes to the storage archive, not here).
 
 This needs HubSpot on, because the folder name comes from the record, never from
 a guess at the filename. Point DocProof at the two properties holding the

@@ -112,6 +112,25 @@ def test_a_preview_with_nothing_set_up_is_refused_the_same_way(client):
     assert client.post("/api/watch/preview").status_code == 400
 
 
+def test_the_test_email_button_sends_via_the_watchers_account(client,
+                                                              monkeypatch):
+    """The panel's "Send test email" posts here; the route sends through the
+    watcher's own Google account and answers with where it went."""
+    monkeypatch.setattr("app.watch.notify.send_test",
+                        lambda home, **kw: "quinton@atmospherepress.com")
+
+    body = client.post("/api/watch/test-email").json()
+
+    assert body == {"sent": True, "to": "quinton@atmospherepress.com"}
+
+
+def test_a_test_email_with_no_address_names_the_gap(client):
+    """No notify address set: a clear 400 that names the fix, and no network."""
+    answer = client.post("/api/watch/test-email")
+    assert answer.status_code == 400
+    assert "notify address" in answer.json()["detail"]
+
+
 # --- saying what to watch -----------------------------------------------------
 
 def test_the_folder_can_be_pasted_as_a_browser_address(client):

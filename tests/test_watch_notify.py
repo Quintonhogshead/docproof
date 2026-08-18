@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import json
 
+import pytest
+
 from app.watch import notify
 from app.watch.drive import DriveError
 from app.watch.settings import WatchSettings
@@ -59,6 +61,47 @@ def test_send_posts_the_message_as_the_signed_in_account():
     assert "The body." in decoded
 
 
+# --- send_test ----------------------------------------------------------------
+
+def _token_and_send_opener():
+    """Answers the token refresh with an access token, and records the Gmail
+    send: everything that is not the send URL is treated as the token call."""
+    sent: list = []
+
+    def opener(request, timeout=60):
+        if request.full_url == notify.SEND_URL:
+            sent.append(request)
+            return _Resp(json.dumps({"id": "msg-1"}).encode())
+        return _Resp(json.dumps({"access_token": "at-9"}).encode())
+
+    opener.sent = sent
+    return opener
+
+
+def test_send_test_sends_a_sample_to_the_configured_address(tmp_path):
+    WatchSettings(folder_id="F", client_id="c", client_secret="s",
+                  notify_email="quinton@atmospherepress.com").save(tmp_path)
+    opener = _token_and_send_opener()
+
+    to = notify.send_test(tmp_path, get_key=lambda name: "refresh-1",
+                          opener=opener)
+
+    assert to == "quinton@atmospherepress.com"
+    assert len(opener.sent) == 1 and opener.sent[0].full_url == notify.SEND_URL
+
+
+def test_send_test_without_an_address_raises_a_clear_error(tmp_path):
+    WatchSettings(folder_id="F", client_id="c", client_secret="s").save(tmp_path)
+    with pytest.raises(ValueError):
+        notify.send_test(tmp_path, get_key=lambda name: "refresh-1")
+
+
+def test_send_test_without_a_sign_in_raises(tmp_path):
+    WatchSettings(folder_id="F", notify_email="q@a.com").save(tmp_path)
+    with pytest.raises(ValueError):
+        notify.send_test(tmp_path, get_key=lambda name: "refresh-1")
+
+
 # --- summary ------------------------------------------------------------------
 
 def test_a_pass_with_nothing_to_report_is_no_email():
@@ -94,6 +137,25 @@ def test_the_summary_names_a_ready_author_missing_its_book_original():
 def test_a_pass_with_only_a_missing_source_still_emails():
     report = TickReport()
     report.missing_source.append(("Quinton Johnson", "no Book Original yet."))
+    assert notify.summary(report) is not None
+
+
+def test_the_summary_names_a_stuck_ready_author():
+    report = TickReport()
+    report.stuck_ready.append(
+        ("Quinton Johnson", "flagged 'Ready for Formatting' but its book is "
+                            "already formatted — check the write-back."))
+
+    subject, body = notify.summary(report)
+
+    assert "1" in subject
+    assert "Quinton Johnson" in body
+    assert "already formatted" in body
+
+
+def test_a_pass_with_only_a_stuck_ready_still_emails():
+    report = TickReport()
+    report.stuck_ready.append(("Quinton Johnson", "already formatted."))
     assert notify.summary(report) is not None
 
 
