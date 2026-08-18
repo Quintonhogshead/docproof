@@ -18,7 +18,8 @@ from ..validator import fold_punct
 from .idml import Paragraph, Story, read_stories, rewrite_stories
 from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
                     Edit, EditOutcome, FORMATS, NO_CHANGE, NOT_FOUND, OVERLAPS,
-                    ROUTED_TO_DESIGN, UNSTYLEABLE, WITHHELD)
+                    PARA_ATTRS, PARA_DELETE, PARA_INSERT_BEFORE,
+                    ROUTED_TO_DESIGN, UNPLACEABLE, UNSTYLEABLE, WITHHELD)
 from .textmatch import IndexCache, NormIndex, normalize
 
 # Consonant-lettered words that take "an" because they open on a vowel sound (a
@@ -346,7 +347,11 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
     touched = _Touched()
     cache = IndexCache()
     withheld = withheld or {}
-    for edit in edits:
+    # Structural edits last: inserting or deleting a paragraph renumbers every one
+    # after it, which would leave any edit that has not run yet holding an index
+    # that no longer means what it meant. Each re-locates its own anchor by text, so
+    # deferring them costs nothing and removes the whole class of drift.
+    for edit in sorted(edits, key=lambda e: e.is_structural):
         if edit.id in withheld:
             outcomes.append(EditOutcome(edit, WITHHELD, detail=withheld[edit.id]))
             continue
@@ -355,14 +360,31 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
         # first as a layout request to hand to a designer, the second as nothing to
         # do. It is neither; the italics of a film title are as much a correction as
         # its spelling, and an IDML can carry them.
+        if edit.is_layout:
+            outcomes.append(_apply_paragraph(edit, stories, cache, scope, touched))
+            if outcomes[-1].applied:
+                changed.add(outcomes[-1].story_id)
+            continue
         if edit.is_format:
             outcomes.append(_apply_format(edit, stories, cache, scope, touched))
             if outcomes[-1].applied:
                 changed.add(outcomes[-1].story_id)
             continue
         if edit.kind == DESIGN:
-            outcomes.append(EditOutcome(edit, ROUTED_TO_DESIGN,
-                                        detail="a design request, not a text edit"))
+            # Nothing is changed, but the note is *located* if it can be: a check a
+            # designer cannot find is barely a check, and "a design request" with no
+            # page was what these used to amount to.
+            placed = _match(edit, stories, cache, scope) if edit.find else None
+            if isinstance(placed, tuple):
+                story, para, _s, _e = placed
+                outcomes.append(EditOutcome(
+                    edit, ROUTED_TO_DESIGN, story_id=story.story_id,
+                    paragraph=para.index,
+                    detail="to check in InDesign — nothing in the file was changed"))
+            else:
+                outcomes.append(EditOutcome(
+                    edit, ROUTED_TO_DESIGN,
+                    detail="a design request, not a text edit"))
             continue
         if edit.find == edit.replace:
             outcomes.append(EditOutcome(edit, NO_CHANGE))
@@ -416,6 +438,51 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     touched.record(key, start, end, end - start)
     return EditOutcome(edit, APPLIED, story_id=story.story_id,
                        paragraph=para.index, occurrences=1)
+
+
+def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
+                     touched: "_Touched") -> EditOutcome:
+    """Carry out a whole-paragraph request: a forced break, a keep, a paragraph
+    style, a paragraph inserted or removed.
+
+    The paragraph acted on is the one the anchor lands in, so these are located and
+    refused exactly as a word swap is — a layout note that cannot be placed in the
+    book is flagged, not guessed at. Setting a property on one paragraph means first
+    giving it a range of its own (`Story.isolate`); a story whose shape will not
+    allow that is flagged rather than styled across its neighbours."""
+    found = _match(edit, stories, cache, scope)
+    if isinstance(found, EditOutcome):
+        return found
+    story, para, start, end = found
+    key = (story.story_id, para.index)
+    if touched.collides(key, start, end):
+        return EditOutcome(
+            edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
+            detail="its span overlaps a correction already applied here")
+    index = para.index
+    if edit.paragraph == PARA_DELETE:
+        ok = story.delete_paragraph(index)
+    elif edit.is_structural:
+        ok = story.insert_paragraph(
+            index, edit.replace, style=edit.paragraph_style,
+            after=(edit.paragraph != PARA_INSERT_BEFORE))
+    else:
+        attrs = dict(PARA_ATTRS.get(edit.paragraph, {}))
+        if edit.paragraph_style:
+            attrs["AppliedParagraphStyle"] = edit.paragraph_style
+        ok = story.set_paragraph_attrs(index, attrs)
+    if not ok:
+        return EditOutcome(
+            edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
+            detail="this paragraph could not be given a style range of its own, so "
+                   "the request would have applied to its neighbours too")
+    if not edit.is_structural:
+        # Structural edits shift every index after them, so their spans are not
+        # comparable with anything recorded before; they run last for that reason
+        # and re-find their own anchor by text.
+        touched.record(key, start, end, end - start)
+    return EditOutcome(edit, APPLIED, story_id=story.story_id, paragraph=index,
+                       occurrences=1)
 
 
 def apply_edits(src_idml: str | Path, dest_idml: str | Path,

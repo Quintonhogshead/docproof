@@ -334,6 +334,10 @@ def _edits_to_corrections_json(edits) -> str:
             row["source"] = e.source       # ties the edit to its PDF comment id
         if e.format:
             row["format"] = e.format       # italics are an edit, not a design note
+        if e.paragraph:
+            row["paragraph"] = e.paragraph  # a forced break, a keep, a para added
+        if e.paragraph_style:
+            row["paragraph_style"] = e.paragraph_style
         rows.append(row)
     return json.dumps(rows, indent=2, ensure_ascii=False)
 

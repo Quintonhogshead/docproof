@@ -224,6 +224,47 @@ def _style_range(parent: ET._Element, nodes: list[ET._Element],
     grandparent.remove(parent)
 
 
+def _ancestor(el: ET._Element, tag: str) -> ET._Element | None:
+    """The nearest enclosing element with that tag, or None."""
+    node = el.getparent()
+    while node is not None and node.tag != tag:
+        node = node.getparent()
+    return node
+
+
+def _paragraph_groups(psr: ET._Element) -> list[list[tuple]]:
+    """The range's flow children grouped into paragraphs, each group a list of
+    `(owning character range, element)` ending at the `Br` that closes it."""
+    groups: list[list[tuple]] = [[]]
+    for csr in psr:
+        if csr.tag != CSR:
+            continue                       # a property of the range, not its text
+        for child in csr:
+            if child.tag not in FLOW:
+                continue
+            groups[-1].append((csr, child))
+            if child.tag == BR:
+                groups.append([])
+    if groups and not groups[-1]:
+        groups.pop()
+    return groups
+
+
+def _rebuild_ranges(psr: ET._Element, flat: list[tuple]) -> None:
+    """Refill a fresh paragraph range with `(source range, element)` pairs, minting
+    a character range per contiguous run that shared one. Each new range is cloned
+    from the run's own source, so the applied style and font come with it."""
+    current = source = None
+    for src, el in flat:
+        if src is not source:
+            source = src
+            current = ET.Element(CSR, dict(src.attrib))
+            for prop in (c for c in src if c.tag not in FLOW):
+                current.append(_copy(prop))
+            psr.append(current)
+        current.append(el)                 # moves it out of the old range
+
+
 def _set_attrs(el: ET._Element, attrs: dict[str, str]) -> None:
     for name, value in attrs.items():
         if value is None:
@@ -258,6 +299,125 @@ class Story:
         return ET.tostring(self.root, xml_declaration=True, encoding="UTF-8",
                           standalone=True)
 
+    def reindex(self) -> None:
+        """Re-derive the paragraph list from the tree, after a structural change."""
+        self.paragraphs = walk_paragraphs(self.root)
+
+    def isolate(self, index: int) -> ET._Element | None:
+        """Give the paragraph at `index` a `ParagraphStyleRange` of its own, and
+        return it. None when the story's shape makes that impossible.
+
+        Anything a reviewer asks *of a paragraph* — start this chapter on a
+        right-hand page, make this a block quote, keep this heading with what
+        follows — is a property of the range that encloses it. But a range routinely
+        encloses several paragraphs (the test fixture's fourth holds four, separated
+        by `Br`), so setting the property directly would apply it to all of them.
+        This splits the range at the paragraph boundaries first, rebuilding each
+        piece's character ranges from the originals so every applied style, font and
+        property survives, and every break stays where it was.
+
+        The paragraph list is unchanged by this — the same paragraphs in the same
+        order — so an index taken before the call is still good after it."""
+        if not 0 <= index < len(self.paragraphs):
+            return None
+        para = self.paragraphs[index]
+        if not para.nodes:
+            return None
+        psr = _ancestor(para.nodes[0], PSR)
+        if psr is None or any(c.tag in FLOW for c in psr):
+            return None                    # flow text directly under the range
+        groups = _paragraph_groups(psr)
+        if len(groups) <= 1:
+            return psr                     # already a range of its own
+        target = next((i for i, g in enumerate(groups)
+                       if any(el is para.nodes[0] for _, el in g)), None)
+        if target is None:
+            return None
+        parent = psr.getparent()
+        if parent is None:
+            return None
+        at = list(parent).index(psr)
+        props = [c for c in psr if c.tag != CSR]
+        made, mine = [], None
+        for chunk in (groups[:target], groups[target:target + 1],
+                      groups[target + 1:]):
+            flat = [pair for g in chunk for pair in g]
+            if not flat:
+                continue
+            piece = ET.Element(PSR, dict(psr.attrib))
+            for prop in props:
+                piece.append(_copy(prop))
+            _rebuild_ranges(piece, flat)
+            if chunk and chunk[0] is groups[target]:
+                mine = piece
+            made.append(piece)
+        for offset, piece in enumerate(made):
+            parent.insert(at + offset, piece)
+        parent.remove(psr)
+        self.reindex()
+        return mine
+
+    def set_paragraph_attrs(self, index: int, attrs: dict[str, str]) -> bool:
+        """Set range attributes on one paragraph — `StartParagraph`,
+        `AppliedParagraphStyle`, spacing. An attribute whose value is None is
+        removed, which is how a forced break is cleared rather than overwritten."""
+        psr = self.isolate(index)
+        if psr is None:
+            return False
+        _set_attrs(psr, attrs)
+        return True
+
+    def delete_paragraph(self, index: int) -> bool:
+        """Remove a paragraph entirely — its text and the break that ends it.
+
+        Isolating first is what makes this safe: once the paragraph has a range to
+        itself, deleting it is deleting that range, and no neighbour can be caught
+        by the same cut. This is the operation the hand-written scripts got wrong in
+        the other direction, merging two paragraphs into one."""
+        psr = self.isolate(index)
+        if psr is None:
+            return False
+        parent = psr.getparent()
+        if parent is None:
+            return False
+        parent.remove(psr)
+        self.reindex()
+        return True
+
+    def insert_paragraph(self, index: int, text: str, *, style: str = "",
+                         after: bool = True) -> bool:
+        """Add a paragraph beside the one at `index`, taking its style unless one is
+        named. This is how deleted copy is put back — an Acknowledgments page that a
+        previous pass dropped is paragraphs and a page break, not layout."""
+        psr = self.isolate(index)
+        if psr is None:
+            return False
+        parent = psr.getparent()
+        if parent is None:
+            return False
+        template = next((c for c in psr if c.tag == CSR), None)
+        piece = ET.Element(PSR, {"AppliedParagraphStyle":
+                                 style or psr.get("AppliedParagraphStyle", "")})
+        csr = ET.Element(CSR, dict(template.attrib) if template is not None else {})
+        if template is not None:
+            for prop in (c for c in template if c.tag not in FLOW):
+                csr.append(_copy(prop))
+        content = ET.SubElement(csr, CONTENT)
+        content.text = text
+        ET.SubElement(csr, BR)
+        piece.append(csr)
+        # A story's last paragraph carries no closing break. Inserting after it means
+        # it needs one, or the two run together into a single paragraph.
+        if after and template is not None:
+            flow = [c for c in psr.iter() if c.tag in (CONTENT, BR)]
+            if flow and flow[-1].tag != BR:
+                last_csr = _ancestor(flow[-1], CSR)
+                if last_csr is not None:
+                    last_csr.append(ET.Element(BR))
+        parent.insert(list(parent).index(psr) + (1 if after else 0), piece)
+        self.reindex()
+        return True
+
 
 def parse_story(xml: bytes, story_id: str) -> Story:
     """Read a story part into paragraphs.
@@ -267,6 +427,17 @@ def parse_story(xml: bytes, story_id: str) -> Story:
     two ranges. Breaking on both is why an edit can never be told a span is
     within one paragraph when it is not."""
     root = ET.fromstring(xml)
+    return Story(story_id=story_id, root=root,
+                 paragraphs=walk_paragraphs(root))
+
+
+def walk_paragraphs(root: ET._Element) -> list[Paragraph]:
+    """The paragraphs of a parsed story tree, in document order.
+
+    Split out of `parse_story` so a structural edit — a paragraph inserted, one
+    removed, a range split so a single paragraph can be styled — can re-derive the
+    list from the tree it just changed, instead of the caller holding indices that
+    no longer mean anything."""
     paragraphs: list[Paragraph] = []
     current = Paragraph(index=0, style="")
 
@@ -289,10 +460,9 @@ def parse_story(xml: bytes, story_id: str) -> Story:
     # The story's final paragraph carries no trailing Br; keep it if it has text.
     if current.nodes:
         paragraphs.append(current)
-    # Renumber so indices are dense and in document order.
     for i, p in enumerate(paragraphs):
         p.index = i
-    return Story(story_id=story_id, root=root, paragraphs=paragraphs)
+    return paragraphs
 
 
 def _direct_content(psr: ET._Element) -> list[ET._Element]:

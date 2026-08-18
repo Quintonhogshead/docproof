@@ -48,6 +48,7 @@ def verify(before_idml: str | Path, after_idml: str | Path,
 
     p_before = sum(len(s.paragraphs) for s in before)
     p_after = sum(len(s.paragraphs) for s in actual)
+    p_expected = sum(len(s.paragraphs) for s in expected)
 
     for sid, exp in expected_by_id.items():
         act = actual_by_id.get(sid)
@@ -63,6 +64,7 @@ def verify(before_idml: str | Path, after_idml: str | Path,
     return VerifyReport(reconciliations=tuple(reconciliations),
                         discrepancies=tuple(discrepancies),
                         paragraphs_before=p_before, paragraphs_after=p_after,
+                        paragraphs_expected=p_expected,
                         changes=tuple(changes))
 
 
@@ -87,7 +89,7 @@ def _story_discrepancies(sid: str, before: Story | None, expected: Story,
             sid, n,
             f"({len(exp_paras)} paragraphs expected)",
             f"({len(act_paras)} in the after file — a paragraph was "
-            f"added, removed or merged)"))
+            f"added, removed or merged that no correction asked for)"))
     return out
 
 

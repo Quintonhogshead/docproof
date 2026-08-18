@@ -25,7 +25,8 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from .model import FORMAT_ITALIC, FORMAT_ROMAN, JUDGMENT, MECHANICAL
+from .model import (DESIGN, FORMAT_ITALIC, FORMAT_ROMAN, JUDGMENT, MECHANICAL,
+                    PARA_DELETE)
 
 # How many words a marked span may hold and still be treated as naming its target.
 # A highlight over a word or a short phrase is pointing at it; a sticky note's
@@ -84,6 +85,8 @@ class Resolved:
     kind: str = MECHANICAL
     rule: str = ""                     # which rule fired, for the report
     format: str = ""                   # character formatting, instead of a rewrite
+    paragraph: str = ""                # a whole-paragraph operation
+    paragraph_style: str = ""          # the paragraph style to apply
 
 
 def resolve(instruction: str, anchor: str, *, context: str = "",
@@ -112,15 +115,17 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
         return None
     low = note.lower()
 
-    for rule in (_italic, _literal_after_colon, _replace_punctuation,
+    for rule in (_paragraph_op, _discretionary_hyphen,
+                 _italic, _literal_after_colon, _replace_punctuation,
                  _remove_punctuation, _add_punctuation, _case_change,
                  _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
-                 _quoted_proposal, _bare_replacement):
+                 _quoted_proposal, _bare_replacement, _composition_check):
         got = rule(low, note, anchor, highlighted)
         if got is None and rule is _replace_punctuation and context:
             got = _replace_punctuation_over_line(low, note, anchor, context)
         if got is not None and got.find and got.find in (anchor + "\n" + context):
-            if got.find == got.replace and not got.format:
+            if (got.find == got.replace and not got.format and not got.paragraph
+                    and not got.paragraph_style and got.kind != DESIGN):
                 return None            # a rule that changes nothing is no rule
             return got
     return None
@@ -190,10 +195,14 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
                "instruction": instruction}
         if got.format:
             row["format"] = got.format
-        if context and context != got.find:
-            row["context"] = context
+        if got.paragraph:
+            row["paragraph"] = got.paragraph
+        if got.paragraph_style:
+            row["paragraph_style"] = got.paragraph_style
         if got.kind != MECHANICAL:
             row["kind"] = got.kind
+        if context and context != got.find:
+            row["context"] = context
         if getattr(c, "id", ""):
             row["source"] = c.id
         rows.append(row)
@@ -201,6 +210,106 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
 
 
 # --- the rules ----------------------------------------------------------------
+
+# Notes about how the page *composed* — where a line broke, whether a heading was
+# left stranded, whether the rag reads badly. Each is a result of InDesign setting
+# the text, so nothing this engine can compare will settle it. They are kept as
+# located checks for a person rather than turned into an edit or, as before, dropped
+# into "a design request" with no page and nothing to act on.
+# Matched on word boundaries, which is not fussiness: a bare "rag" is a substring of
+# "paragraph", and every note about a paragraph would have been swallowed as a note
+# about the rag.
+_COMPOSITION = re.compile(
+    r"\b(?:bad (?:line )?breaks?|breaks? (?:here|badly)|widows?|orphans?"
+    r"|loose lines?|tight lines?|(?:loose|bad) rags?|rags?"
+    r"|runs? (?:long|short)|short pages?|stacks?|ladders?|rivers?"
+    r"|line spacing|leading|too (?:much|little) space|tracking|kerning"
+    r"|hyphenation|bad hyphens?|reflow|recompose|designer)\b", re.IGNORECASE)
+
+# Whole-paragraph requests a reviewer states in prose, and the operation each means.
+# Ordered longest first so "start on a new page" is not read as "new page" applied
+# to something else.
+_PARA_PHRASES = (
+    ("recto", r"\brecto\b|\bright-?hand page\b"),
+    ("verso", r"\bverso\b|\bleft-?hand page\b"),
+    ("page-break", r"start(?:s)?\b[^.]*\bon a new page|\bpage break before\b"
+                   r"|\bbreak to a new page\b|\bnew page here\b"),
+    ("column-break", r"\bcolumn break\b|start(?:s)?\b[^.]*\ba new column\b"),
+    ("keep-with-next", r"\bkeep\b[^.]*\bwith (?:the )?"
+                       r"(?:next|text|following|para|line)\b"
+                       r"|(?:do not|don'?t) strand\b"),
+    ("keep-together", r"\bkeep\b[^.]*\btogether\b"
+                      r"|(?:do not|don'?t) break this paragraph\b"),
+    ("allow-break", r"\bmay break\b|\ballow this to break\b"),
+    (PARA_DELETE, r"(?:delete|remove|cut) this (?:paragraph|line)\b"),
+)
+_PARA_PATTERNS = tuple((op, re.compile(pat, re.IGNORECASE))
+                      for op, pat in _PARA_PHRASES)
+
+
+def _composition_check(low, note, anchor, highlighted) -> Resolved | None:
+    """A note about how the page came out, kept as a check rather than an edit.
+
+    Whether a break reads well or a heading is stranded is a fact about the composed
+    page, and composing is InDesign's job — so there is nothing here to apply and
+    nothing a file comparison could confirm. What this engine *can* do is say where
+    the note was: the edit anchors, changes nothing, and comes back as a located row
+    on the list a designer works through. That is strictly more than the "a design
+    request, not a text edit" it used to become, which carried no page at all.
+
+    Runs last, so a note that *is* appliable — "hyphenate after Lime", "start this
+    chapter on a recto" — is applied by the rule that can, and only what is left
+    becomes a check."""
+    if not _COMPOSITION.search(note):
+        return None
+    find = anchor.strip(_EDGE)
+    if not find:
+        return None
+    return Resolved(find, find, DESIGN, "composition-check")
+
+
+def _paragraph_op(low, note, anchor, highlighted) -> Resolved | None:
+    """`Start this chapter on a recto`, `keep this heading with the next paragraph`.
+
+    These read as layout and are not: where a paragraph starts and whether it may be
+    split are properties of the paragraph, carried in the story next to its text. The
+    marked words say which paragraph; the operation is applied to the whole of it."""
+    # "Should we cut this paragraph?" names the operation and asks for it at the
+    # same time. A question is a query for a person, and reading one as an
+    # instruction is worst here of all, where the instruction deletes copy.
+    if note.rstrip().endswith("?"):
+        return None
+    op = next((name for name, pattern in _PARA_PATTERNS
+               if pattern.search(note)), None)
+    if op is None:
+        return None
+    find = anchor.strip(_EDGE)
+    if not find:
+        return None
+    return Resolved(find, find, MECHANICAL, f"paragraph-{op}", paragraph=op)
+
+
+def _discretionary_hyphen(low, note, anchor, highlighted) -> Resolved | None:
+    """`Designer: bad break -- hyphenate after "Lime"`.
+
+    The typesetter's own fix for a word broken in the wrong place is a discretionary
+    hyphen: an invisible character that tells the composer where the word may divide.
+    It is text, so this engine can put it in — and it is the one compositional note
+    that does not have to wait for a person."""
+    m = re.search(r'hyphenate\s+after\s+["“\']?([A-Za-z]{2,})["”\']?', note,
+                  re.IGNORECASE)
+    if not m:
+        return None
+    stem = m.group(1)
+    word = next((w for w in re.findall(r"[\w’'-]+", anchor)
+                 if w.lower().startswith(stem.lower()) and len(w) > len(stem)),
+                None)
+    if word is None:
+        return None
+    at = len(stem)
+    return Resolved(word, word[:at] + "\u00ad" + word[at:], MECHANICAL,
+                    "discretionary-hyphen")
+
 
 def _italic(low, note, anchor, highlighted) -> Resolved | None:
     """`Italicize`, `Italicize movie title`, `De-italicize`.

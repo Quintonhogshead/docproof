@@ -51,7 +51,8 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  apply: ApplyReport | None, verify: VerifyReport,
                  comments: tuple[CommentDisposition, ...] = (),
                  deterministic: bool = True,
-                 pages: tuple[int, int] = (0, 0)) -> tuple[Path, Path]:
+                 pages: tuple[int, int] = (0, 0),
+                 checks: tuple = ()) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
     return their paths. `deterministic` is False when the opt-in sanity gate ran —
     a model call — so the report does not over-claim being model-free. `pages` is
@@ -59,7 +60,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
     silently did not happen says so."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
-                       deterministic=deterministic, pages=pages)
+                       deterministic=deterministic, pages=pages, checks=checks)
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -70,7 +71,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
-             deterministic=True, pages=(0, 0)) -> dict:
+             deterministic=True, pages=(0, 0), checks=()) -> dict:
     needs_human = [c for c in comments if c.needs_human]
     placed, total = pages
     return {
@@ -100,6 +101,8 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             "structure_changed": verify.structure_changed,
             "paragraphs_before": verify.paragraphs_before,
             "paragraphs_after": verify.paragraphs_after,
+            "paragraphs_expected": verify.paragraphs_expected,
+            "structure_intended": verify.structure_intended,
             "reconciliations": [
                 {"id": r.edit.id, "status": r.status,
                  "find": r.edit.find, "replace": r.edit.replace,
@@ -131,6 +134,9 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         # difference between an edit that applies and one that is flagged — so it
         # is reported rather than left to be inferred from a flag count.
         "pages": {"placed": placed, "total": total},
+        # The designer's list: what needs InDesign open, located. Composition is the
+        # one thing this engine cannot do, so it is the one thing it does not claim.
+        "checks": [dataclasses.asdict(c) for c in checks],
     }
 
 
@@ -292,6 +298,20 @@ def _markdown(d: dict) -> str:
                         if c.get("formatting") else ""))
         L.append("")
 
+    checks = d.get("checks") or []
+    if checks:
+        L.append(f"## To check in InDesign — {len(checks)}\n")
+        L.append("Whether a line breaks well, a heading is stranded or a page runs "
+                 "long is decided when InDesign sets the text, so no comparison of "
+                 "files can settle it. Each of these is located; none was guessed "
+                 "at.\n")
+        for c in checks:
+            where = (f"page {c['page']}" if c.get("page") else "—")
+            if c.get("paragraph", -1) >= 0:
+                where += f" (story `{c['story_id']}`, ¶ {c['paragraph']})"
+            L.append(f"- **{where}**: {c['what']} — “{_preview(c['why'])}”")
+        L.append("")
+
     L.append("## Verification\n")
     L.append("The file after correcting is compared word for word against what a "
              "clean apply of the list *should* produce. Anything that differs is "
@@ -299,6 +319,9 @@ def _markdown(d: dict) -> str:
              "to hide.\n")
     L.append(f"- Paragraphs: {verify['paragraphs_before']:,} before, "
              f"{verify['paragraphs_after']:,} after"
+             + (f" ({verify.get('paragraphs_expected', 0):,} expected — the "
+                f"corrections asked for the difference)"
+                if verify.get("structure_intended") else "")
              + ("" if not verify["structure_changed"]
                 else " — **a paragraph was added, removed or merged**") + ".")
     disc = verify["discrepancies"]

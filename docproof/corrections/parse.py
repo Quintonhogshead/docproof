@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .model import DESIGN, FORMATS, JUDGMENT, MECHANICAL, Edit
+from .model import DESIGN, FORMATS, JUDGMENT, MECHANICAL, PARA_OPS, Edit
 from .textmatch import normalize
 
 KINDS = (MECHANICAL, JUDGMENT, DESIGN)
@@ -86,6 +86,8 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "source": ("source", "comment_id", "src", "from_comment"),
     "page": ("page", "page_number", "pageno", "p"),
     "format": ("format", "formatting", "style", "character_style"),
+    "paragraph": ("paragraph", "paragraph_op", "layout", "para"),
+    "paragraph_style": ("paragraph_style", "para_style", "applied_style"),
 }
 
 
@@ -209,6 +211,8 @@ def _parse_entry(entry: Any, index: int):
     raw_id = _field(entry, "id")
     raw_page = _field(entry, "page")
     raw_format = _field(entry, "format")
+    raw_para = _field(entry, "paragraph")
+    raw_para_style = _field(entry, "paragraph_style")
 
     kind = _norm_kind(raw_kind)
     if kind is None:
@@ -232,8 +236,15 @@ def _parse_entry(entry: Any, index: int):
         return ParseIssue(index, f"unknown format {raw_format!r} (expected one of "
                           f"{', '.join(FORMATS)})", entry)
 
+    para_op = "" if raw_para in (None, "") else str(raw_para).strip().lower()
+    if para_op and para_op not in PARA_OPS:
+        return ParseIssue(index, f"unknown paragraph operation {raw_para!r} "
+                          f"(expected one of {', '.join(PARA_OPS)})", entry)
+    para_style = "" if raw_para_style in (None, "") else str(raw_para_style).strip()
+
     fields = _assemble(find, replace, instruction, kind, occ, index, entry,
-                       context=context, source=source, page=page, fmt=fmt)
+                       context=context, source=source, page=page, fmt=fmt,
+                       para_op=para_op, para_style=para_style)
     if isinstance(fields, ParseIssue):
         return fields
     explicit_id = str(raw_id).strip() if raw_id not in (None, "") else None
@@ -258,7 +269,7 @@ def _parse_sequence(entry, index: int):
 
 
 def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None,
-              source=None, page=0, fmt=""):
+              source=None, page=0, fmt="", para_op="", para_style=""):
     """Validate the text fields common to both entry shapes and build the kwargs
     for `Edit` (no id). Returns a dict or a `ParseIssue`."""
     if find is not None and not isinstance(find, str):
@@ -298,7 +309,8 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
 
     return {"find": find, "replace": replace, "instruction": instruction,
             "kind": kind, "occurrence": occ, "context": context, "source": source,
-            "page": page, "format": fmt}
+            "page": page, "format": fmt, "paragraph": para_op,
+            "paragraph_style": para_style}
 
 
 def _field(entry: dict, canonical: str):
