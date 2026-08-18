@@ -47,7 +47,13 @@ def all_spans(haystack: str, needle: str, *, cache: IndexCache | None = None,
       3. the normalized view — whitespace and hyphens dropped as well — which is
          what bridges the differences between the typeset PDF an anchor was
          quoted from and the IDML it has to land in (`. ’` for `.’`, a word
-         broken over a line end, a spaced em dash).
+         broken over a line end, a spaced em dash);
+      4. the same view with case folded, which bridges the difference a reviewer
+         cannot see. A title set in full capitals is a *design* — the story holds
+         "TO THE PILOT OF THE BICYCLE CARRIAGE", and a reviewer reading the page
+         writes it back the way anyone would write a title. So does one quoting a
+         line whose first word only starts a sentence because of where the line
+         broke. Neither is a mistake worth refusing a correction over.
 
     The span is returned rather than a start offset because tier 3 can match a
     run of a different length than the needle, and it is the *real* characters
@@ -65,6 +71,19 @@ def all_spans(haystack: str, needle: str, *, cache: IndexCache | None = None,
         return [(s, s + len(needle)) for s in folded]
     idx = cache.get(haystack) if cache is not None else NormIndex(haystack)
     spans = idx.spans(needle)
+    if not spans:
+        # Last, and only once every case-exact reading has come up empty, so an
+        # anchor that already matches somewhere can never be pulled onto a
+        # differently-cased twin. A fold that finds two candidates where one exact
+        # match would have done still reports them as ambiguous, which is the
+        # direction this engine is allowed to fail in.
+        cased = (cache.get(haystack, fold_case=True) if cache is not None
+                 else NormIndex(haystack, fold_case=True))
+        spans = cased.spans(needle)
+        if partial_words:
+            return spans
+        probe = normalize(needle, fold_case=True)
+        return [sp for sp in spans if _whole_words(haystack, sp, probe)]
     if partial_words:
         return spans
     probe = normalize(needle)
@@ -429,6 +448,33 @@ def _with_article_fix(para: Paragraph, start: int, end: int,
     return k, want + text[j:start] + replace
 
 
+def _keep_book_case(found: str, find: str, replace: str) -> str:
+    """The replacement to write, in the book's capitals rather than the
+    reviewer's, when those are the only thing the two disagree about.
+
+    Case folding is what lets a correction to a title set in full capitals land at
+    all — the reviewer writes the title, the story holds the design. But having
+    located it that way, writing the reviewer's capitals back would *apply* their
+    rendering to the book: shortening a running head would have quietly retyped
+    "TO THE PILOT OF THE BICYCLE CARRIAGE" as "To the Pilot of the Bicycle
+    Carriage" and taken the design out with the correction.
+
+    So an all-capital run keeps its capitals. Only that one pattern is honoured:
+    it is the one a design imposes, and it is unambiguous to restore. Anything
+    else — a reviewer correcting case on purpose, mixed case, a difference that is
+    not only case — is left exactly as the edit asked."""
+    if not replace or found == find:
+        return replace
+    if normalize(found, fold_case=True) != normalize(find, fold_case=True):
+        return replace                     # they differ by more than case
+    letters = [c for c in found if c.isalpha()]
+    if len(letters) < 2 or not all(c.isupper() for c in letters):
+        return replace
+    if all(c.isupper() for c in find if c.isalpha()):
+        return replace                     # the reviewer wrote capitals too
+    return replace.upper()
+
+
 class _Touched:
     """The character spans already edited in each paragraph, in current (live)
     coordinates, kept correct as later edits shift the text after them. Two
@@ -522,7 +568,8 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                 edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
                 detail="its span overlaps a correction already applied here"))
             continue
-        r_start, new_text = _with_article_fix(para, start, end, edit.replace)
+        replacement = _keep_book_case(para.text[start:end], edit.find, edit.replace)
+        r_start, new_text = _with_article_fix(para, start, end, replacement)
         para.replace(r_start, end, new_text)
         touched.record(key, r_start, end, len(new_text))
         changed.add(story.story_id)
@@ -617,13 +664,22 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
                        "they are set in different paragraph styles, or it is the "
                        "last paragraph of its story")
     elif edit.paragraph == PARA_SPLIT_AT:
+        if start == 0:
+            # Nothing in front of the anchor means the break the reviewer asked
+            # for is already there. That is the request met, not a failure to
+            # place it — reporting it as one puts a correction that needs no work
+            # on the list of the ones that do, which is where a real problem then
+            # hides. It happens whenever a proof is marked against an earlier
+            # revision than the file the corrections are applied to.
+            return EditOutcome(
+                edit, NO_CHANGE, story_id=story.story_id, paragraph=index,
+                detail="the paragraph already begins here, so the break the "
+                       "correction asks for is present")
         ok = story.split_paragraph(index, start)
         if not ok:
             return EditOutcome(
                 edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
-                detail="the paragraph could not be broken here — the anchor is at "
-                       "its very start, so nothing would be left in front of the "
-                       "break")
+                detail="the paragraph could not be broken here")
     elif edit.paragraph == PARA_DELETE:
         ok = story.delete_paragraph(index)
     elif edit.is_structural:

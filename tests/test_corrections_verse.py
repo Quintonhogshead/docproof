@@ -24,8 +24,8 @@ from __future__ import annotations
 from docproof.corrections.apply import apply_to_stories
 from docproof.corrections.idml import parse_story
 from docproof.corrections.instructions import resolve
-from docproof.corrections.model import (AMBIGUOUS, APPLIED, Edit, PARA_MERGE_NEXT,
-                                        PARA_SPLIT_AT, UNPLACEABLE)
+from docproof.corrections.model import (AMBIGUOUS, APPLIED, Edit, NO_CHANGE,
+                                        PARA_MERGE_NEXT, PARA_SPLIT_AT, UNPLACEABLE)
 from docproof.corrections.parse import parse_edits
 
 VERSE = "ParagraphStyle/Verse"
@@ -213,16 +213,6 @@ def test_a_split_keeps_the_paragraphs_around_it():
                             "Third."]
 
 
-def test_a_split_at_the_very_start_of_a_paragraph_is_refused():
-    """There is nothing in front of the anchor, so the break would make an empty
-    paragraph rather than divide anything."""
-    story = _story("The next hour does not go to plan.", "Later.")
-    edit = Edit("e1", "The next hour", "The next hour", paragraph=PARA_SPLIT_AT)
-    outcomes, _ = apply_to_stories([story], [edit])
-    assert outcomes[0].status == UNPLACEABLE
-    assert texts(story) == ["The next hour does not go to plan.", "Later."]
-
-
 # --- a swash capital ----------------------------------------------------------
 
 def test_a_swash_is_applied_as_a_character_feature_not_routed_to_design():
@@ -373,3 +363,18 @@ def test_a_merge_earlier_in_the_story_does_not_misquote_a_later_change():
     assert rows["m1"].after == "It went on forever. She opened the door."
     assert rows["s1"].before == src[3]
     assert rows["s1"].after == "A third paragraph with plain text ¶ for good measure."
+
+
+def test_a_break_that_is_already_there_is_no_change_not_a_flag():
+    """A proof is marked against one revision and applied to another, so a break a
+    reviewer asked for is sometimes already in the file. Reporting that as a
+    failure to place the request puts a correction needing no work onto the list
+    of the ones that do — which is where a real problem then hides."""
+    story = _story("so they remain perfectly still.",
+                   "The next hour does not go to plan.")
+    outcomes, _ = apply_to_stories(
+        [story], [Edit("e1", "The next hour", "The next hour",
+                       paragraph=PARA_SPLIT_AT)])
+    assert outcomes[0].status == NO_CHANGE
+    assert "already begins here" in outcomes[0].detail
+    assert not outcomes[0].needs_human
