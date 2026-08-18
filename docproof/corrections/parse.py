@@ -48,6 +48,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "occurrence": ("occurrence", "occ", "nth", "instance"),
     "id": ("id", "ref", "identifier"),
     "context": ("context", "near", "within", "around"),
+    "source": ("source", "comment_id", "src", "from_comment"),
 }
 
 
@@ -165,6 +166,7 @@ def _parse_entry(entry: Any, index: int):
     replace = _field(entry, "replace")
     instruction = _field(entry, "instruction")
     context = _field(entry, "context")
+    source = _field(entry, "source")
     raw_kind = _field(entry, "kind")
     raw_occ = _field(entry, "occurrence")
     raw_id = _field(entry, "id")
@@ -180,7 +182,7 @@ def _parse_entry(entry: Any, index: int):
                           "≥ 0", entry)
 
     fields = _assemble(find, replace, instruction, kind, occ, index, entry,
-                       context=context)
+                       context=context, source=source)
     if isinstance(fields, ParseIssue):
         return fields
     explicit_id = str(raw_id).strip() if raw_id not in (None, "") else None
@@ -204,7 +206,8 @@ def _parse_sequence(entry, index: int):
     return fields, None
 
 
-def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None):
+def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None,
+              source=None):
     """Validate the text fields common to both entry shapes and build the kwargs
     for `Edit` (no id). Returns a dict or a `ParseIssue`."""
     if find is not None and not isinstance(find, str):
@@ -216,6 +219,7 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
     find = find or ""
     replace = replace or ""
     context = context or ""
+    source = source if isinstance(source, str) else ""
     instruction = "" if instruction is None else str(instruction)
 
     if kind == DESIGN:
@@ -234,7 +238,7 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
                               "the surrounding text)", raw)
 
     return {"find": find, "replace": replace, "instruction": instruction,
-            "kind": kind, "occurrence": occ, "context": context}
+            "kind": kind, "occurrence": occ, "context": context, "source": source}
 
 
 def _field(entry: dict, canonical: str):

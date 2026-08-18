@@ -72,6 +72,15 @@ class JobRequest(BaseModel):
     # (a list of {find, replace, …}, or [find, replace] pairs). Empty on every
     # other kind. The IDML it edits is the single uploaded file.
     corrections: str = ""
+    # Corrections from a marked-up PDF: the reviewer comments the edits were read
+    # from, as JSON [{id, page, kind, instruction, anchor}, …]. Kept so the change
+    # log can account for every comment — including ones no edit was made for.
+    # Empty when the list was typed or pasted, not read off a proof.
+    corrections_comments: str = ""
+    # Corrections only: run the opt-in model sanity gate over the edits before
+    # applying, holding a doubtful one (an over-grab, an anachronism, nonsense)
+    # back for a human. Off keeps the job deterministic and free.
+    corrections_sanity: bool = False
     prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
     # Book output only: the operator's answers for the sketch. Empty means
     # "let the detector read them off the opening pages".
@@ -260,6 +269,18 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
                   else "the list held no corrections")
         raise HTTPException(400, f"No usable corrections were found — {detail}.")
 
+    # The reviewer comments, when the list came from a marked-up PDF, are kept as
+    # sent so the finished change log can account for every one. A malformed blob
+    # is dropped rather than failing the job — the edits still apply; the ledger
+    # just falls back to edit-only, as it does for a typed list.
+    comments = ""
+    if req.corrections_comments.strip():
+        try:
+            if isinstance(json.loads(req.corrections_comments), list):
+                comments = req.corrections_comments
+        except (json.JSONDecodeError, ValueError):
+            comments = ""
+
     group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
     job = Job(
         id=batchlib.new_job_id(source.name),
@@ -270,6 +291,8 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         group_id=group_id,
         kind="corrections",
         corrections=req.corrections,
+        corrections_comments=comments,
+        corrections_sanity=bool(req.corrections_sanity),
         created_at=datetime.now(timezone.utc).isoformat(),
         owner_id=owner,
     )
@@ -291,6 +314,8 @@ def _edits_to_corrections_json(edits) -> str:
             row["kind"] = e.kind
         if e.occurrence:
             row["occurrence"] = e.occurrence
+        if e.source:
+            row["source"] = e.source       # ties the edit to its PDF comment id
         rows.append(row)
     return json.dumps(rows, indent=2, ensure_ascii=False)
 
@@ -1144,7 +1169,13 @@ def register(app: FastAPI) -> None:
         from docproof.corrections.from_pdf import comments_source_batches
         comments = await _read_pdf_comments_or_400(file)
         batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
-        return {"count": len(comments), "batches": batches}
+        # The comments themselves ride back too, so the panel can carry them into
+        # the job and the finished change log can account for every one — including
+        # any the model turns into no edit.
+        items = [{"id": c.id, "page": c.page, "kind": c.kind,
+                  "instruction": c.instruction, "anchor": c.anchor}
+                 for c in comments]
+        return {"count": len(comments), "batches": batches, "comments": items}
 
     @app.post("/api/corrections/extract-pdf")
     async def extract_corrections_pdf(
@@ -1163,7 +1194,11 @@ def register(app: FastAPI) -> None:
         from docproof.corrections.from_pdf import comments_source_batches
         comments = await _read_pdf_comments_or_400(file)
         batches = comments_source_batches(comments, CORRECTIONS_PDF_BATCH_SIZE)
-        return _extract_batches_with_model(app, owner, batches)
+        response = _extract_batches_with_model(app, owner, batches)
+        response["comments"] = [
+            {"id": c.id, "page": c.page, "kind": c.kind,
+             "instruction": c.instruction, "anchor": c.anchor} for c in comments]
+        return response
 
     @app.get("/api/usage")
     def usage(owner: str = Depends(owner_for)) -> dict:

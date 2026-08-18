@@ -22,11 +22,17 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
+from ..models import Usage
+from ..providers import Provider
 from .apply import apply_edits
-from .model import ApplyReport, VerifyReport
+from .model import (APPLIED_EXACTLY, ApplyReport, CommentDisposition,
+                    DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
+                    Edit, JUDGMENT, VerifyReport)
 from .parse import ParseResult, parse_edits
 from .report import write_report
+from .sanity import review_edits
 from .verify import verify
 
 log = logging.getLogger("docproof.corrections.run")
@@ -42,6 +48,12 @@ class CorrectionsOutputs:
     verify: VerifyReport
     corrected_idml: Path | None = None      # None in verify-only mode
     apply: ApplyReport | None = None        # None in verify-only mode
+    # One row per reviewer comment, so the change log can account for every mark —
+    # applied, flagged, a no-op, or never turned into an edit. Empty when the
+    # source was a typed list with no comments behind it.
+    comments: tuple[CommentDisposition, ...] = ()
+    # The sanity gate's model spend, when it ran; None on the free path.
+    usage: Usage | None = None
 
     @property
     def applied(self) -> int:
@@ -54,7 +66,6 @@ class CorrectionsOutputs:
             return len(self.apply.flagged)
         # Verify-only: a correction the after file does not carry is the same
         # idea, read off the reconciliations.
-        from .model import APPLIED_EXACTLY
         return sum(1 for r in self.verify.reconciliations
                    if r.status != APPLIED_EXACTLY)
 
@@ -63,10 +74,21 @@ class CorrectionsOutputs:
         return len(self.verify.discrepancies)
 
     @property
+    def total_comments(self) -> int:
+        return len(self.comments)
+
+    @property
+    def unresolved(self) -> int:
+        """Reviewer comments a person still owns — flagged, or never turned into
+        an edit at all. The count that used to be invisible."""
+        return sum(1 for c in self.comments if c.needs_human)
+
+    @property
     def clean(self) -> bool:
         """Every correction landed exactly and nothing else changed — and every
-        entry in the source parsed."""
-        return self.verify.clean and self.parse.ok and self.flagged == 0
+        entry in the source parsed, and no comment was left unresolved."""
+        return (self.verify.clean and self.parse.ok and self.flagged == 0
+                and self.unresolved == 0)
 
 
 def corrected_name(src_idml: str | Path) -> str:
@@ -75,58 +97,180 @@ def corrected_name(src_idml: str | Path) -> str:
     return f"{Path(src_idml).stem}_corrected.idml"
 
 
+def _comment_fields(c) -> tuple[str, int, str, str, str]:
+    """(id, page, kind, instruction, anchor) from a `PdfComment` or a plain dict,
+    so the ledger reads the comment list however it arrived."""
+    if isinstance(c, dict):
+        return (str(c.get("id") or ""), int(c.get("page") or 0),
+                str(c.get("kind") or ""), str(c.get("instruction") or ""),
+                str(c.get("anchor") or c.get("context") or ""))
+    return (getattr(c, "id", "") or "", getattr(c, "page", 0) or 0,
+            getattr(c, "kind", "") or "", getattr(c, "instruction", "") or "",
+            getattr(c, "anchor", "") or getattr(c, "context", "") or "")
+
+
+def _reconcile_comments(comments, edits: Sequence[Edit],
+                        status_of) -> tuple[CommentDisposition, ...]:
+    """One `CommentDisposition` per reviewer comment: match every edit back to the
+    comment it names (`edit.source`), and read the edit's outcome to decide what
+    became of the comment. A comment no edit names is `not_extracted` — the mark
+    the model turned into nothing, which is the one this whole change exists to
+    stop losing. `status_of(edit_id) -> (disposition, detail)` classifies one
+    edit's fate, so apply and verify can share this reconciliation."""
+    if not comments:
+        return ()
+    by_source: dict[str, list[Edit]] = {}
+    for e in edits:
+        if e.source:
+            by_source.setdefault(e.source, []).append(e)
+    out: list[CommentDisposition] = []
+    for c in comments:
+        cid, page, kind, instruction, anchor = _comment_fields(c)
+        made = by_source.get(cid, [])
+        if not made:
+            out.append(CommentDisposition(
+                id=cid, page=page, kind=kind, instruction=instruction,
+                anchor=anchor, disposition=DISP_NOT_EXTRACTED))
+            continue
+        classified = [status_of(e.id) for e in made]
+        # The comment inherits its most attention-needing edit: a flag beats an
+        # applied beats a no-op, so a comment is never quietly "applied" while one
+        # of its edits still needs a human.
+        flagged = [d for d in classified if d[0] == DISP_FLAGGED]
+        if flagged:
+            disp, detail = DISP_FLAGGED, flagged[0][1]
+        elif any(d[0] == DISP_APPLIED for d in classified):
+            disp, detail = DISP_APPLIED, ""
+        else:
+            disp, detail = DISP_NO_OP, ""
+        out.append(CommentDisposition(
+            id=cid, page=page, kind=kind, instruction=instruction, anchor=anchor,
+            disposition=disp, edit_ids=tuple(e.id for e in made), detail=detail))
+    return tuple(out)
+
+
+def _apply_status_of(apply_report: ApplyReport):
+    """A `status_of(edit_id)` over an apply run's outcomes."""
+    by_id = {o.edit.id: o for o in apply_report.outcomes}
+
+    def status_of(edit_id: str) -> tuple[str, str]:
+        o = by_id.get(edit_id)
+        if o is None:
+            return DISP_NOT_EXTRACTED, ""
+        if o.applied:
+            return DISP_APPLIED, ""
+        if o.needs_human:
+            return DISP_FLAGGED, (o.detail or o.status)
+        # A no-op the model marked "judgment" is a query it would not turn into a
+        # concrete change — a person should decide, so it is flagged, not filed
+        # under "no change needed" where an editor would never see it.
+        if o.edit.kind == JUDGMENT:
+            return DISP_FLAGGED, ("a query for a person — the model proposed no "
+                                  "concrete change")
+        return DISP_NO_OP, ""                  # a true no-op (find == replace)
+
+    return status_of
+
+
 def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
-                      id_prefix: str = "c",
-                      dest_name: str | None = None) -> CorrectionsOutputs:
+                      id_prefix: str = "c", dest_name: str | None = None,
+                      comments: Sequence | None = None,
+                      sanity: tuple[Provider, str] | None = None
+                      ) -> CorrectionsOutputs:
     """Apply a corrections source to `src_idml`, writing the corrected IDML and
     the report into `out_dir`.
 
     `corrections` is anything `parse.parse_edits` accepts (a list, JSON text, a
     `.json` path). `src_idml` is never modified. Entries that cannot be parsed
-    and edits that cannot be anchored are reported, never guessed."""
+    and edits that cannot be anchored are reported, never guessed.
+
+    `comments` is the original reviewer comments (from the marked-up PDF), each
+    with the `id` its edits cite in `source`; when given, every comment gets a row
+    in the report — applied, flagged, a no-op, or never extracted — so none is
+    lost. `sanity` is an optional `(provider, model)` gate that reads each proposed
+    edit and holds a doubtful one back for a human instead of applying it; it adds
+    a small model spend (returned on the outputs) and is off by default."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
 
-    corrected = out / (dest_name or corrected_name(src_idml))
-    apply_report = apply_edits(src_idml, corrected, edits)
-    # Self-check: our own output, verified against the same list. Clean by
-    # construction unless `apply` has a bug — in which case the report says so
-    # instead of the file going out unflagged.
-    verify_report = verify(src_idml, corrected, edits)
+    usage = None
+    withheld: dict[str, str] = {}
+    if sanity is not None:
+        provider, model = sanity
+        usage = Usage()
+        withheld = review_edits(edits, provider, model=model, usage=usage)
 
+    corrected = out / (dest_name or corrected_name(src_idml))
+    apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld)
+    # Self-check: our own output, verified against the same list (withholding the
+    # same edits, so a held-back one is not read as an unaccounted change). Clean
+    # by construction unless `apply` has a bug — then the report says so instead
+    # of the file going out unflagged.
+    verify_report = verify(src_idml, corrected, edits, withheld=withheld)
+
+    dispositions = _reconcile_comments(comments or (), edits,
+                                       _apply_status_of(apply_report))
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
-        apply=apply_report, verify=verify_report)
-    log.info("Corrections applied to %s: %s; verify %s",
-             Path(src_idml).name, apply_report.summary(),
+        apply=apply_report, verify=verify_report, comments=dispositions,
+        deterministic=(sanity is None))
+    log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; verify %s",
+             Path(src_idml).name, apply_report.summary(), len(dispositions),
+             sum(1 for d in dispositions if d.needs_human),
              "clean" if verify_report.clean else "has discrepancies")
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
-        verify=verify_report, corrected_idml=corrected, apply=apply_report)
+        verify=verify_report, corrected_idml=corrected, apply=apply_report,
+        comments=dispositions, usage=usage)
+
+
+def _verify_status_of(verify_report: VerifyReport):
+    """A `status_of(edit_id)` over a verify run's reconciliations: an edit the
+    after file carries exactly is applied; one carried differently or not at all
+    still needs a human."""
+    by_id = {r.edit.id: r for r in verify_report.reconciliations}
+
+    def status_of(edit_id: str) -> tuple[str, str]:
+        r = by_id.get(edit_id)
+        if r is None:
+            return DISP_NOT_EXTRACTED, ""
+        if r.status == APPLIED_EXACTLY:
+            if r.edit.kind == JUDGMENT and r.edit.find == r.edit.replace:
+                return DISP_FLAGGED, ("a query for a person — the model proposed "
+                                      "no concrete change")
+            return DISP_APPLIED, ""
+        return DISP_FLAGGED, (r.detail or r.status)
+
+    return status_of
 
 
 def verify_corrections(before_idml: str | Path, after_idml: str | Path,
                        corrections, out_dir: str | Path, *,
-                       id_prefix: str = "c") -> CorrectionsOutputs:
+                       id_prefix: str = "c",
+                       comments: Sequence | None = None) -> CorrectionsOutputs:
     """Audit an already-corrected IDML against the corrections list.
 
     No IDML is written — `after_idml` is the deliverable, produced elsewhere (a
     hand-run script, InDesign's own find/change). The report names every change
-    in it that the list does not account for."""
+    in it that the list does not account for. `comments`, when given, is
+    reconciled against the after file the same way apply mode does."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
     verify_report = verify(before_idml, after_idml, edits)
+    dispositions = _reconcile_comments(comments or (), edits,
+                                       _verify_status_of(verify_report))
     report_md, report_json = write_report(
         out, source_path=before_idml, after_path=after_idml, parse=parsed,
-        apply=None, verify=verify_report)
+        apply=None, verify=verify_report, comments=dispositions)
     log.info("Corrections verified for %s: %s",
              Path(after_idml).name,
              "clean" if verify_report.clean else
              f"{len(verify_report.discrepancies)} discrepancy(ies)")
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
-        verify=verify_report, corrected_idml=None, apply=None)
+        verify=verify_report, corrected_idml=None, apply=None,
+        comments=dispositions)

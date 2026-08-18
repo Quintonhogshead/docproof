@@ -15,9 +15,21 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..validator import fold_punct
-from .idml import Story, read_stories, rewrite_stories
+from .idml import Paragraph, Story, read_stories, rewrite_stories
 from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
-                    Edit, EditOutcome, NO_CHANGE, NOT_FOUND, ROUTED_TO_DESIGN)
+                    Edit, EditOutcome, NO_CHANGE, NOT_FOUND, OVERLAPS,
+                    ROUTED_TO_DESIGN, WITHHELD)
+
+# Consonant-lettered words that take "an" because they open on a vowel sound (a
+# silent h). Kept short and high-confidence; anything not here follows its first
+# letter. A "u"/"eu" word is left undecided — "a unicorn" and "an umbrella" split
+# on sound, not spelling, and guessing wrong is worse than leaving the article the
+# reviewer had — so the article fixer never touches those.
+_AN_H_WORDS = ("hour", "honest", "honor", "honour", "heir", "heirloom", "homage")
+# Vowel-lettered words that take "a" because they open on a consonant sound (a
+# "w" or "y" glide). A closed set of the common ones — "one" and "once" — so the
+# fixer never writes "an one"; anything else on a vowel letter keeps "an".
+_A_VOWEL_WORDS = ("one", "once", "oneself", "onetime")
 
 
 def all_occurrences(haystack: str, needle: str) -> list[int]:
@@ -116,14 +128,110 @@ def _diagnose_miss(edit: Edit, stories: list[Story]):
     return EditOutcome(edit, NOT_FOUND, occurrences=0)
 
 
-def apply_to_stories(stories: list[Story],
-                     edits: list[Edit]) -> tuple[list[EditOutcome], set[str]]:
+def indefinite_article(word: str) -> str | None:
+    """"a" or "an" for the word that follows — or None when it cannot be decided
+    from spelling alone and the article is better left as the reviewer had it.
+
+    Handles the case a blind word swap breaks: the article agrees with the *sound*
+    of the next word, so changing "huge" to "immense" leaves a stale "a" that
+    should be "an". Vowel-letter openings take "an"; a silent-h word (`hour`,
+    `honest`) does too; a plain consonant takes "a". Only "u"/"eu" is refused —
+    "a unicorn" vs "an umbrella" splits on pronunciation, not letters, so a guess
+    there could introduce a fresh error, which is not a trade worth making."""
+    w = word.strip().lower()
+    if not w:
+        return None
+    if w in _A_VOWEL_WORDS:
+        return "a"
+    if w[0] == "u" or w.startswith("eu"):
+        return None                            # undecidable from spelling ("yoo")
+    if w[0] in "aeio":
+        return "an"
+    if w[0] == "h":
+        return "an" if any(w.startswith(p) for p in _AN_H_WORDS) else "a"
+    return "a"
+
+
+def _with_article_fix(para: Paragraph, start: int, end: int,
+                      replace: str) -> tuple[int, str]:
+    """The span and replacement to write for an edit, widened to correct a
+    preceding indefinite article when the swap changed the following word's
+    initial sound.
+
+    Returns `(start, replace)` unchanged in the common case. When the word just
+    before `start` is a standalone "a"/"an" whose form no longer agrees with the
+    word that will follow, the returned span reaches back to include the article
+    and the replacement carries the corrected one — folded into the one write so
+    offsets shift once, not twice. Case is preserved (sentence-initial "A"/"An")."""
+    text = para.text
+    j = start
+    while j > 0 and text[j - 1] == " ":
+        j -= 1
+    k = j
+    while k > 0 and text[k - 1].isalpha():
+        k -= 1
+    prev = text[k:j]
+    if prev.lower() not in ("a", "an"):
+        return start, replace
+    tail = replace + text[end:]                # what will sit after the article
+    m = 0
+    while m < len(tail) and not tail[m].isalnum():
+        m += 1
+    n = m
+    while n < len(tail) and (tail[n].isalpha() or tail[n] in "'’"):
+        n += 1
+    following = tail[m:n]
+    want = indefinite_article(following)
+    if want is None:
+        return start, replace
+    if prev[0].isupper():
+        want = want[:1].upper() + want[1:]
+    if want == prev:
+        return start, replace
+    return k, want + text[j:start] + replace
+
+
+class _Touched:
+    """The character spans already edited in each paragraph, in current (live)
+    coordinates, kept correct as later edits shift the text after them. Two
+    corrections that land on overlapping spans of one paragraph is the collision
+    that garbles a line ("said just said"); the second is flagged, not applied."""
+
+    def __init__(self) -> None:
+        self._by_para: dict[tuple[str, int], list[list[int]]] = {}
+
+    def collides(self, key: tuple[str, int], start: int, end: int) -> bool:
+        return any(start < e and s < end for s, e in self._by_para.get(key, ()))
+
+    def record(self, key: tuple[str, int], start: int, end: int,
+               new_len: int) -> None:
+        delta = new_len - (end - start)
+        spans = self._by_para.setdefault(key, [])
+        for span in spans:                     # shift what sits after this write
+            if span[0] >= end:
+                span[0] += delta
+                span[1] += delta
+        spans.append([start, start + new_len])
+
+
+def apply_to_stories(stories: list[Story], edits: list[Edit], *,
+                     withheld: dict[str, str] | None = None
+                     ) -> tuple[list[EditOutcome], set[str]]:
     """Apply edits to already-parsed stories, mutating them in place. Returns
     the per-edit outcomes and the set of changed story ids. The in-memory core
-    the verifier reuses to compute what a clean apply would produce."""
+    the verifier reuses to compute what a clean apply would produce.
+
+    `withheld` maps an edit id to the reason a pre-apply sanity gate held it back;
+    such an edit is never applied and comes back as a `WITHHELD` outcome for a
+    human, so the gate's decision is surfaced, not silent."""
     outcomes: list[EditOutcome] = []
     changed: set[str] = set()
+    touched = _Touched()
+    withheld = withheld or {}
     for edit in edits:
+        if edit.id in withheld:
+            outcomes.append(EditOutcome(edit, WITHHELD, detail=withheld[edit.id]))
+            continue
         if edit.kind == DESIGN:
             outcomes.append(EditOutcome(edit, ROUTED_TO_DESIGN,
                                         detail="a design request, not a text edit"))
@@ -136,7 +244,16 @@ def apply_to_stories(stories: list[Story],
             outcomes.append(found)
             continue
         story, para, offset = found
-        para.replace(offset, offset + len(edit.find), edit.replace)
+        key = (story.story_id, para.index)
+        start, end = offset, offset + len(edit.find)
+        if touched.collides(key, start, end):
+            outcomes.append(EditOutcome(
+                edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
+                detail="its span overlaps a correction already applied here"))
+            continue
+        r_start, new_text = _with_article_fix(para, start, end, edit.replace)
+        para.replace(r_start, end, new_text)
+        touched.record(key, r_start, end, len(new_text))
         changed.add(story.story_id)
         outcomes.append(EditOutcome(edit, APPLIED, story_id=story.story_id,
                                     paragraph=para.index, occurrences=1))
@@ -144,14 +261,16 @@ def apply_to_stories(stories: list[Story],
 
 
 def apply_edits(src_idml: str | Path, dest_idml: str | Path,
-                edits: list[Edit]) -> ApplyReport:
+                edits: list[Edit], *,
+                withheld: dict[str, str] | None = None) -> ApplyReport:
     """Apply every edit to a copy of `src_idml`, writing `dest_idml`.
 
     The source is never touched. Only stories that actually changed are
-    rewritten; the rest of the package is copied byte for byte."""
+    rewritten; the rest of the package is copied byte for byte. `withheld` is the
+    optional sanity-gate verdict — edit ids held back for a human, with a reason."""
     stories = read_stories(src_idml)
     by_id = {s.story_id: s for s in stories}
-    outcomes, changed = apply_to_stories(stories, edits)
+    outcomes, changed = apply_to_stories(stories, edits, withheld=withheld)
     payload = {sid: by_id[sid].serialize() for sid in changed}
     rewrite_stories(src_idml, dest_idml, payload)
     return ApplyReport(outcomes=tuple(outcomes),

@@ -47,6 +47,7 @@ class _ExtractedEdit(BaseModel):
     instruction: str = ""
     kind: Literal["mechanical", "judgment", "design"] = "mechanical"
     occurrence: int = 0
+    source: str = ""
 
 
 class _Extracted(BaseModel):
@@ -60,11 +61,16 @@ edit list. Each correction becomes one edit:
 - find: the exact text in the book to change, copied VERBATIM — same words, \
 same punctuation, same capitalization. This is how the edit is located, so it \
 must be text that actually appears in the book, not a paraphrase. Quote the \
-smallest phrase that uniquely identifies the spot. If the source text carries \
-obvious extraction artifacts — a stray space inside a word ("Y ou", "hil t", "b \
-efore"), a broken hyphenation — repair them so find reads as the clean text the \
-book actually contains; the edit is located against the real book, not the \
-artifact.
+smallest phrase that uniquely identifies the spot, and — this matters — for a \
+word swap the find is ONLY the word(s) that change, never the words around them. \
+"change quickly to swiftly" is find "quickly", replace "swiftly"; it is NOT find \
+"moved quickly", replace "moved swiftly", and NEVER find "quickly through" or \
+"slowly eased" when only one of those words is being changed — carrying an \
+unchanged neighbour into find is how a verb or object gets dropped. If the source \
+text carries obvious extraction artifacts — a stray space inside a word ("Y ou", \
+"hil t", "b efore"), a broken hyphenation — repair them so find reads as the \
+clean text the book actually contains; the edit is located against the real book, \
+not the artifact.
 - replace: the corrected text. Use an empty string for a pure deletion. For an \
 insertion, set find to the existing text around the insertion point and put that \
 same text plus the new words in replace.
@@ -82,12 +88,16 @@ into an exact find/replace); "design" for a layout request that is not a text \
 edit at all (move a chapter, change spacing).
 - occurrence: 0 when the text should be unique, or the 1-based Nth when the \
 correction names a specific instance among several.
+- source: when the item carries an id (e.g. "id p3-2"), copy that id here so the \
+edit can be traced back to the comment it came from. Leave empty if there is no id.
 
 Rules:
 - Extract only corrections that are actually stated. Never invent one.
-- If a correction is described but you cannot pin the exact text to change, \
-still emit it as kind "judgment" with the note in instruction, so a human sees \
-it — do not drop it and do not guess a location.
+- Emit exactly one edit for EVERY item, in order, and never drop one — not even a \
+terse or query-like note ("corridor?", "minute", "gray?"). If you cannot pin the \
+exact text to change, still emit it as kind "judgment" with the note in \
+instruction and a find of the anchored line if you have one, so a human sees it; \
+do not guess a location and do not silently omit the item.
 - One edit per correction. Do not merge or split them."""
 
 
