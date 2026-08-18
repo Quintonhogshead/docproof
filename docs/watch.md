@@ -256,25 +256,35 @@ with how many books are ready, not with how many authors exist.
 Turn it back off with `docproof-watch init --disable-subfolders`; the folder is
 read flat again.
 
-### Prepare only the "Book Original" (optional)
+## Prepare only the "Book Original" (optional)
 
-By default DocProof prepares whatever single new manuscript sits in the author's
-subfolder, whatever it is called (two of them is the doubt it refuses). If your
-authors follow the house convention — the intake file is named
-`<surname> - Book Original` — you can hold DocProof to it, so a draft or a
-developmental copy left in the same folder is ignored rather than prepared or
-treated as ambiguity:
+By default a pass prepares any new manuscript it is cleared to touch, whatever
+it is called. If your authors follow the house convention — the intake file is
+named `<surname> - Book Original` — you can hold DocProof to it, so a draft, a
+developmental review or a questionnaire left in the same folder is ignored
+rather than prepared:
 
 ```bash
 docproof-watch init --require-source-label
 ```
 
-Now the only file a pass will prepare is the one named `<surname> - Book
-Original`, where the surname is the author's own last name from HubSpot (the
-`--hubspot-last-property` above). `Johnson - Book Original.docx` is prepared for
-the Johnson record; `Johnson - Draft Two.docx` beside it is left alone. Case and
-stray spaces are forgiven; a wrong surname is not. If the labelled file is not
-there yet the author simply waits — it is not treated as a problem for a person.
+Now the only file a pass prepares is the one carrying the `- Book Original`
+token. `Johnson - Book Original.docx` is prepared; `Johnson - Draft Two.docx` or
+`Developmental Editorial Review 1 Johnson` beside it is left alone. Case, stray
+spaces, and an en or em dash in place of the hyphen are forgiven, and a
+co-author parenthetical on the surname is set aside — but a file with no token
+is never the book.
+
+- **In per-author subfolders**, the surname is matched against the author's own
+  last name from HubSpot (the `--hubspot-last-property` above), so the labelled
+  file is tied to the right record; a wrong surname is refused. If the labelled
+  file is not there yet the author is reported as *missing its Book Original* and
+  you are emailed (see below), so the file gets uploaded or renamed rather than
+  waiting unseen.
+- **In a flat folder**, the check is the token alone: a file that is not a
+  `<something> - Book Original` is left where it is. (Before, this switch was
+  silently ignored outside subfolder mode — a developmental review dropped in
+  the folder could be formatted by mistake.)
 
 Turn it back off with `docproof-watch init --no-require-source-label`.
 
@@ -282,9 +292,11 @@ Turn it back off with `docproof-watch init --no-require-source-label`.
 
 Most of what a pass decides is "wait" — nobody need do anything, and the next
 tick reconsiders. A few outcomes are different: a surname that matches two
-Projects both flagged ready (DocProof will not guess which book it is), or a
-manuscript that failed prep. Those go in the pass report as *needs a person*, and
-DocProof can email you when they happen:
+Projects both flagged ready (DocProof will not guess which book it is), a
+manuscript that failed prep, or an author flagged **Ready for Formatting whose
+folder holds no `<surname> - Book Original`** — the folder is empty, or the files
+in it are drafts and reviews. Those go in the pass report and DocProof can email
+you when they happen:
 
 ```bash
 docproof-watch init --notify-email you@example.com

@@ -78,6 +78,25 @@ def test_the_summary_names_the_needs_human_and_the_failed():
     assert "Jones.docx" in body and "gave up after 3 tries" in body
 
 
+def test_the_summary_names_a_ready_author_missing_its_book_original():
+    report = TickReport()
+    report.missing_source.append(
+        ("Quinton Johnson", "flagged 'Ready for Formatting' but the folder has "
+                            "no manuscript in it yet."))
+
+    subject, body = notify.summary(report)
+
+    assert "1" in subject
+    assert "Quinton Johnson" in body
+    assert "no manuscript" in body
+
+
+def test_a_pass_with_only_a_missing_source_still_emails():
+    report = TickReport()
+    report.missing_source.append(("Quinton Johnson", "no Book Original yet."))
+    assert notify.summary(report) is not None
+
+
 # --- maybe_notify -------------------------------------------------------------
 
 def test_maybe_notify_sends_when_configured_and_a_person_is_needed():
