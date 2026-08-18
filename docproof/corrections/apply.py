@@ -53,35 +53,63 @@ def _find_all(haystack: str, needle: str) -> list[int]:
     return out
 
 
-def _candidates(edit: Edit, stories: list[Story]) -> list:
-    """Every (story, paragraph, offset) where this edit's `find` lands.
-
-    With a context anchor, `find` is located *inside* each occurrence of the
-    context — so a common word is pinned to the instance whose surrounding text
-    the correction named, not to all of them. Without one, `find` is located
-    directly, as before. A context that does not itself contain `find` yields no
-    candidate there; the caller diagnoses that."""
+def _direct_candidates(edit: Edit, stories: list[Story]) -> list:
+    """Every (story, paragraph, offset) where `find` occurs directly, ignoring any
+    context anchor. This is the set a bare find matches against — and the fallback
+    a context narrows, or that recovers an edit when the context fails to land."""
     out = []
-    if edit.context:
-        clen = len(edit.context)
-        for s in stories:
-            for p in s.paragraphs:
-                for c_off in all_occurrences(p.text, edit.context):
-                    within = all_occurrences(p.text[c_off:c_off + clen], edit.find)
-                    if within:
-                        out.append((s, p, c_off + within[0]))
-    else:
-        for s in stories:
-            for p in s.paragraphs:
-                for off in all_occurrences(p.text, edit.find):
-                    out.append((s, p, off))
+    for s in stories:
+        for p in s.paragraphs:
+            for off in all_occurrences(p.text, edit.find):
+                out.append((s, p, off))
+    return out
+
+
+def _scoped_candidates(edit: Edit, stories: list[Story]) -> list:
+    """Every place `find` lands *inside* an occurrence of the context anchor, so a
+    common word is pinned to the instance whose surrounding line the correction
+    named, not to all of them. Empty when the context is not present verbatim — the
+    longer run caught an extraction artifact or a re-wrap the fold cannot bridge —
+    or when it does not itself contain `find`; the caller then falls back to `find`
+    alone or diagnoses the miss."""
+    out = []
+    clen = len(edit.context)
+    for s in stories:
+        for p in s.paragraphs:
+            for c_off in all_occurrences(p.text, edit.context):
+                within = all_occurrences(p.text[c_off:c_off + clen], edit.find)
+                if within:
+                    out.append((s, p, c_off + within[0]))
     return out
 
 
 def _match(edit: Edit, stories: list[Story]):
     """Locate the edit across all stories. Returns (story, paragraph, offset) to
-    apply, or an EditOutcome describing why it could not be applied."""
-    matches = _candidates(edit, stories)
+    apply, or an EditOutcome describing why it could not be applied.
+
+    A context anchor only ever *chooses* among repeated copies of `find`; it is
+    never a second thing that must independently be present. So when a context is
+    given but does not resolve — its verbatim line is not in the book because the
+    longer run caught an extraction artifact or a re-wrap — the edit falls back to
+    `find` alone rather than being lost to "the context was not found": a `find`
+    that is unique needs no disambiguation and still lands, an `occurrence` the
+    correction named still picks among the copies, and only a genuinely repeated
+    `find` with neither is left for a human — because then the very anchor that
+    would have chosen is the part that failed, a choice to surface, not to guess."""
+    if edit.context:
+        matches = _scoped_candidates(edit, stories)
+        if not matches:
+            direct = _direct_candidates(edit, stories)
+            if not direct:
+                return _diagnose_miss(edit, stories)
+            if edit.occurrence == 0 and len(direct) > 1:
+                return EditOutcome(
+                    edit, AMBIGUOUS, occurrences=len(direct),
+                    detail=f"the text appears {len(direct)} times and the marked "
+                           f"context that would choose between them was not found")
+            matches = direct        # a unique find, or an occurrence to honour
+    else:
+        matches = _direct_candidates(edit, stories)
     n = len(matches)
     if n == 0:
         return _diagnose_miss(edit, stories)
@@ -118,8 +146,11 @@ def _diagnose_miss(edit: Edit, stories: list[Story]):
             if all_occurrences(flat, edit.context):
                 return EditOutcome(edit, CROSSES_PARAGRAPH, story_id=s.story_id,
                                    detail="the context spans a paragraph break")
+        # Reached only once the fallback to `find` alone has also come up empty,
+        # so both the target text and its context are absent — name both.
         return EditOutcome(edit, NOT_FOUND, occurrences=0,
-                           detail="the context was not found")
+                           detail="neither the text to change nor its context "
+                                  "was found in the book")
     for s in stories:
         flat = " ".join(p.text for p in s.paragraphs)
         if all_occurrences(flat, edit.find):

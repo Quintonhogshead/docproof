@@ -192,20 +192,58 @@ def test_a_context_that_does_not_contain_the_find_is_flagged(tmp_path):
     assert "not inside" in report.outcomes[0].detail
 
 
-def test_a_context_that_is_not_in_the_document_is_flagged(tmp_path):
+def test_a_repeated_find_whose_context_is_missing_is_ambiguous_not_lost(tmp_path):
+    """The context that would have chosen between the two "runs on" is not in the
+    book, so the engine cannot pick — but the find itself is there, so this is a
+    choice for a human (ambiguous), not a correction silently lost to "the context
+    was not found". Recovering these was the point of making context a soft anchor."""
     out = tmp_path / "out.idml"
     report = apply_edits(LAYOUT, out, [
         Edit(id="e1", find="runs on", replace="x",
              context="nowhere near this book at all")])
-    assert report.outcomes[0].status == NOT_FOUND
+    assert report.applied == 0
+    assert report.outcomes[0].status == AMBIGUOUS
+    assert report.outcomes[0].occurrences == 2
+    assert report.outcomes[0].needs_human
 
 
-def test_a_context_across_a_paragraph_break_is_refused(tmp_path):
+def test_a_unique_find_lands_when_its_context_does_not_match(tmp_path):
+    """The headline fix: a context anchor only *chooses* among repeated copies of a
+    find. When the marked line does not match the book verbatim — an extraction
+    artifact in the longer context run — a find that is unique still lands, rather
+    than being dropped with "the context was not found" as it was before."""
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="Their were", replace="There were",
+             context="a line that is not in the book verbatim")])
+    assert report.applied == 1
+    assert story_text(out)[4] == "There were several mistakes here to find."
+
+
+def test_a_missing_context_still_honours_an_occurrence_number(tmp_path):
+    """The context failing does not throw away a perfectly good disambiguator: if
+    the correction also named which occurrence, that number still picks among the
+    copies of a repeated find."""
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, [
+        Edit(id="e1", find="runs on", replace="rambles on", occurrence=1,
+             context="a context that will not be found")])
+    assert report.applied == 1
+    assert "rambles on" in story_text(out)[5]                 # occurrence 1 = footnote
+    assert story_text(out, "uff")[0].endswith("it runs on.")  # table untouched
+
+
+def test_a_unique_find_lands_though_its_context_ran_across_a_break(tmp_path):
+    """The captured context "forever. She opened" straddles a paragraph break, so
+    it anchors nothing — but "forever" is unique and its own span sits well inside
+    one paragraph, so the correction still lands. Only a span that *itself* crosses
+    a break is refused (see test_a_span_across_a_paragraph_break_is_refused)."""
     out = tmp_path / "out.idml"
     report = apply_edits(LAYOUT, out, [
         Edit(id="e1", find="forever", replace="x",
              context="forever. She opened")])
-    assert report.outcomes[0].status == CROSSES_PARAGRAPH
+    assert report.applied == 1
+    assert story_text(out)[1] == "It was late, we were tired and the road went on x."
 
 
 def test_a_clean_apply_with_a_context_verifies_clean(tmp_path):
