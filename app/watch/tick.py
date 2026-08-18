@@ -817,20 +817,29 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
 
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
-    # A book DocProof already produced — its outputs, or its now-marked source,
-    # are in the folder — is not a missing manuscript, even when HubSpot still
-    # reads ready (a write-back that never landed, or read-only mode). Told apart
-    # so the "no Book Original" alert below is a real gap, not a nag about a
-    # finished book whose status simply did not move.
-    already_done = any(classify(f) in (Stage.OUTPUT, Stage.DONE)
-                       for f in contents)
+    # Is the author's intake file in the folder at all — a new one to prepare, or
+    # an already-formatted one still sitting there (marked done, so out of
+    # `manuscripts`)? This is the real question behind "is the Book Original
+    # missing", and it is asked by name, not by marker: a "- book 0" a human
+    # placed and named is an output, not the intake, so a folder holding only
+    # that still counts as missing its Book Original and is reported. Asking
+    # instead whether *any* output was present was the bug — it silently skipped
+    # exactly that author.
+    intake_present = any(naming.is_source_name(f.name, last) for f in contents)
     if not manuscripts:
-        log.info("Waiting: %s is flagged ready but has no new manuscript yet.",
-                 author)
-        if not already_done:
+        if intake_present:
+            # The intake is there but already formatted; the book is done, not
+            # missing. Quiet — a stuck HubSpot status is a different concern.
+            log.info("Waiting: %s is flagged ready but its book is already "
+                     "formatted; the status did not move off ready.", author)
+        else:
+            where = ("its folder is empty" if not contents else
+                     f"its folder holds {len(contents)} file(s) but none is a "
+                     f"'{last} - {naming.SOURCE_STAGE}'")
+            log.info("Waiting: %s is flagged ready but %s.", author, where)
             report.missing_source.append(
-                (author, f"flagged '{ws.hubspot_format_ready_value}' but the "
-                         f"folder has no manuscript in it yet."))
+                (author, f"flagged '{ws.hubspot_format_ready_value}' but "
+                         f"{where}."))
         report.waiting += 1
         return
 
@@ -842,9 +851,9 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
         labelled = [f for f in manuscripts if naming.is_source_name(f.name, last)]
         if not labelled:
             log.info("Waiting: %s is flagged ready but no manuscript is named "
-                     "'%s - %s' yet (%d other manuscript(s) in the folder).",
+                     "'%s - %s' (%d other manuscript(s) in the folder).",
                      author, last, naming.SOURCE_STAGE, len(manuscripts))
-            if not already_done:
+            if not intake_present:
                 report.missing_source.append(
                     (author, f"flagged '{ws.hubspot_format_ready_value}' but no "
                              f"file is named '{last} - {naming.SOURCE_STAGE}' "
