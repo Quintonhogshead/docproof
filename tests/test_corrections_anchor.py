@@ -228,3 +228,88 @@ def test_an_edit_on_a_straddled_paragraph_lands_on_the_marked_page():
         Edit(id="e1", find="quiet,", replace="quiet.", page=2)], scope=scope)
     assert outs[0].status == APPLIED
     assert "stayed quiet. and nobody" in s.paragraphs[0].text
+
+
+# --- case, which a reviewer cannot see -----------------------------------------
+
+def test_a_title_set_in_capitals_is_found_by_the_title_as_written():
+    """Full capitals in a heading are a design, not spelling. The story holds
+    "TO THE PILOT…"; the reviewer, reading the page, writes the title the way
+    anyone writes a title. Refusing the correction over that is refusing it over
+    the typesetting."""
+    story = _story("TO THE PILOT OF THE BICYCLE CARRIAGE OUTSIDE BARBARELLA’S")
+    edit = Edit("e1", "To the Pilot of the Bicycle Carriage Outside Barbarella’s",
+                "To the Pilot of the Bicycle Carriage")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    # And the design survives: the book's capitals, the reviewer's edit.
+    assert [p.text for p in story.paragraphs] == [
+        "TO THE PILOT OF THE BICYCLE CARRIAGE"]
+
+
+def test_case_folding_is_the_last_resort_not_a_wider_net():
+    """An anchor that matches exactly somewhere must never be pulled onto a
+    differently-cased twin. The fold only runs when every case-exact reading has
+    already come up empty."""
+    story = _story("the harbor at dawn.", "THE HARBOR AT DUSK.")
+    outcomes, _ = apply_to_stories(
+        [story], [Edit("e1", "the harbor at dawn.", "the harbour at dawn.")])
+    assert outcomes[0].status == APPLIED
+    assert [p.text for p in story.paragraphs] == ["the harbour at dawn.",
+                                                  "THE HARBOR AT DUSK."]
+
+
+def test_a_fold_that_finds_two_candidates_is_flagged_not_guessed():
+    story = _story("THE HARBOR AT DAWN.", "The Harbor At Dawn.")
+    outcomes, _ = apply_to_stories(
+        [story], [Edit("e1", "the harbor at dawn.", "the harbour at dawn.")])
+    assert outcomes[0].status == AMBIGUOUS
+    assert outcomes[0].occurrences == 2
+
+
+def test_a_reviewer_correcting_case_on_purpose_still_gets_their_case():
+    """The capitals are kept only where the book's own run is entirely capital and
+    the match was found by folding. An ordinary case fix is untouched by any of
+    this — it matched exactly."""
+    story = _story("we sailed to the harbor.")
+    outcomes, _ = apply_to_stories(
+        [story], [Edit("e1", "the harbor", "the Harbor")])
+    assert outcomes[0].status == APPLIED
+    assert [p.text for p in story.paragraphs] == ["we sailed to the Harbor."]
+
+
+def test_a_mixed_case_run_is_not_recased():
+    """Only an all-capital run is restored, because only that pattern is
+    unambiguously a design. A heading in title case takes the edit as written."""
+    story = _story("The Harbor At Dawn And Dusk")
+    outcomes, _ = apply_to_stories(
+        [story], [Edit("e1", "the harbor at dawn and dusk", "the harbour at dawn")])
+    assert outcomes[0].status == APPLIED
+    assert [p.text for p in story.paragraphs] == ["the harbour at dawn"]
+
+
+def test_a_narrowing_that_leaves_one_candidate_beats_the_ordinal():
+    """An ordinal counts copies on the proof page; the page map and the marked
+    line run before it and have already chosen among those. Having chosen, "the
+    second copy" indexes a set of one and overshoots it — which turned twenty-five
+    corrections that had landed into "asked for #2 of 1" when ordinals were first
+    carried. The narrowing is the better evidence and wins."""
+    story = _story("She said the word once here.", "And the word again there.")
+    edit = Edit("e1", "the word", "the phrase", occurrence=2,
+                context="And the word again there.")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert [p.text for p in story.paragraphs] == ["She said the word once here.",
+                                                  "And the phrase again there."]
+
+
+def test_an_ordinal_counted_on_a_page_that_cannot_be_placed_is_refused():
+    """"The second copy on page 111" is not "the second copy in the novel", and
+    reading it as one would correct whichever copy happened to come second."""
+    story = _story("the word here.", "the word there.")
+    edit = Edit("e1", "the word", "the phrase", occurrence=2, page=111)
+    outcomes, _ = apply_to_stories([story], [edit])          # no page map
+    assert outcomes[0].status == AMBIGUOUS
+    assert "could not be placed" in outcomes[0].detail
+    assert [p.text for p in story.paragraphs] == ["the word here.",
+                                                  "the word there."]

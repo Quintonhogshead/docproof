@@ -20,7 +20,8 @@ from pathlib import Path
 from .apply import apply_to_stories
 from .idml import Story, read_stories
 from .model import (APPLIED_EXACTLY, DEVIATES, Discrepancy, Edit, MISSING,
-                    Reconciliation, ReviewChange, VerifyReport)
+                    PARA_DELETE, PARA_MERGE_NEXT, PARA_SPLIT_AT, Reconciliation,
+                    ReviewChange, VerifyReport)
 
 
 def verify(before_idml: str | Path, after_idml: str | Path,
@@ -102,23 +103,29 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
     is dropped: there is nothing to look at — unless what changed was the
     *formatting*, which rewrites no text and would otherwise disappear from the one
     section a designer uses to confirm the corrections read right."""
+    shifts = _paragraph_shifts(outcomes)
     order: list[tuple[str, int]] = []
     acc: dict[tuple[str, int], dict] = {}
     for o in outcomes:
         if not o.applied:
             continue
-        key = (o.story_id, o.paragraph)
+        b_index, a_index = _indices(o, shifts)
+        key = (o.story_id, a_index)
         if key not in acc:
             bef = before_by_id.get(o.story_id)
             act = actual_by_id.get(o.story_id)
-            acc[key] = {
-                "before": (bef.paragraphs[o.paragraph].text
-                           if bef and 0 <= o.paragraph < len(bef.paragraphs)
-                           else ""),
-                "after": (act.paragraphs[o.paragraph].text
-                          if act and 0 <= o.paragraph < len(act.paragraphs)
-                          else ""),
-                "ids": [], "notes": [], "formats": []}
+            before_text = _para(bef, b_index)
+            after_text = _para(act, a_index)
+            # An edit that moved a break changed two paragraphs, not one, and
+            # showing only the one it is indexed on reads as text having vanished:
+            # a split's "now" would be the first half alone. So the side that holds
+            # two paragraphs is shown as both, with the break marked.
+            if o.edit.paragraph == PARA_MERGE_NEXT:
+                before_text = _joined(bef, b_index)
+            elif o.edit.paragraph == PARA_SPLIT_AT:
+                after_text = _joined(act, a_index)
+            acc[key] = {"before": before_text, "after": after_text,
+                        "ids": [], "notes": [], "formats": []}
             order.append(key)
         acc[key]["ids"].append(o.edit.id)
         if o.edit.format and o.edit.format not in acc[key]["formats"]:
@@ -136,6 +143,68 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
             edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"]),
             formatting=", ".join(d["formats"])))
     return changes
+
+
+# How many paragraphs each structural operation adds to its story.
+_DELTA = {PARA_MERGE_NEXT: -1, PARA_DELETE: -1, PARA_SPLIT_AT: 1}
+
+
+def _paragraph_shifts(outcomes) -> tuple[dict[int, int], dict[str, list]]:
+    """Where every structural edit landed in the *before* file, and the running
+    record of how each moved the paragraphs after it.
+
+    Two paragraph numbers are in play and they are not the same one. A text edit
+    runs before any structural edit, so the index it reports is the before file's;
+    a structural edit runs after, so its index is the live document's, already
+    moved by the structural edits ahead of it. Reading both against the same file
+    is how a split's "was" line ended up quoting a different paragraph entirely
+    once a merge earlier in the story had shortened it.
+
+    Returns `(before index per structural outcome, moves per story)`, where a move
+    is `(before index, paragraphs added)`."""
+    origin: dict[int, int] = {}
+    moves: dict[str, list[tuple[int, int]]] = {}
+    for o in outcomes:
+        if not o.applied or not o.edit.is_structural:
+            continue
+        here = moves.setdefault(o.story_id, [])
+        # Undo the moves already made ahead of this one to get back to the before
+        # file: a merge earlier in the story means this paragraph was one further
+        # down before the merge closed the gap.
+        before = o.paragraph - sum(d for at, d in here if at <= o.paragraph)
+        origin[id(o)] = before
+        here.append((before, _DELTA.get(o.edit.paragraph, 1)))   # inserts add one
+    return origin, moves
+
+
+def _indices(outcome, shifts) -> tuple[int, int]:
+    """The `(before file, after file)` paragraph index one applied edit landed on."""
+    origin, moves = shifts
+    before = origin.get(id(outcome), outcome.paragraph)
+    after = before + sum(d for at, d in moves.get(outcome.story_id, ())
+                         if at < before)
+    return before, after
+
+
+# What stands in for a paragraph break when a change is shown as one line. The
+# pilcrow is the mark a proofreader already uses for it, and it cannot be mistaken
+# for text the book contains.
+_BREAK_MARK = " ¶ "
+
+
+def _para(story, index: int) -> str:
+    """The text of a story's paragraph, or "" when the index is not there."""
+    if story is None or not 0 <= index < len(story.paragraphs):
+        return ""
+    return story.paragraphs[index].text
+
+
+def _joined(story, index: int) -> str:
+    """A paragraph and the one after it as a single line, with the break between
+    them marked — how a merge's "was" and a split's "now" are read."""
+    tail = _para(story, index + 1)
+    head = _para(story, index)
+    return head + _BREAK_MARK + tail if tail else head
 
 
 def _reconcile(outcomes, expected_by_id, actual_by_id) -> list[Reconciliation]:

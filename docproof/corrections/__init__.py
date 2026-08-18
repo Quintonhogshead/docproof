@@ -8,10 +8,13 @@ the designer opens back up.
 Three stages, each its own module and each with one boundary:
 
   * `apply`   — anchor every edit to the exact text it changes and replace that
-                span, deterministically. No model writes code here; a match may
-                never cross a paragraph boundary, so the paragraph-merge and
-                deleted-page failures the hand-written scripts produced are not
-                expressible.
+                span, deterministically. No model writes code here; a text edit's
+                match may never cross a paragraph boundary, so the paragraph-merge
+                and deleted-page failures the hand-written scripts produced are not
+                expressible. The two operations that are *about* a break —
+                `merge-next` and `split-at`, which a proof of verse asks for
+                constantly — are the deliberate exception: they cross one on
+                purpose, say so in the edit, and move exactly one.
   * `verify`  — compare the IDML before and after word for word, reconcile every
                 change against the edit list, and surface anything that changed
                 without being asked for. This is subtraction, not a second

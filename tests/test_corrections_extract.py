@@ -310,6 +310,48 @@ def test_a_note_is_anchored_to_the_line_it_sits_on(tmp_path):
     assert "tobacco" in note[0].anchor
 
 
+@pytest.mark.parametrize("rect_y", [
+    (651, 671),      # a ~20pt icon box, its top at the click point
+    (662, 662),      # a zero-height Rect — the anchor lands INSIDE the line's band
+    (666, 666),      # the same, high on the line
+    (659, 659),      # the same, on the baseline
+    (658, 670),      # a box the height of the line itself
+])
+def test_a_note_lands_on_its_own_line_whatever_box_the_tool_wrote(tmp_path, rect_y):
+    """The same click, stored five ways, must reach the same line.
+
+    A sticky note's `/Rect` is not a reliable shape: the viewer draws a fixed-size
+    icon and ignores the stored one, so tools write anything from a 20pt box to a
+    zero-height point. The reader used to ask only whether a line's *bottom* edge
+    was above the anchor, which meant a short box put the anchor inside the band of
+    the line it marked — and that line then failed the test against its own bottom
+    edge, so the line ABOVE was returned. Every note stored that way reached the
+    extractor quoting the line before the one it was written about."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    lines = [(72, 700 - 20 * i, f"line {100 + i} of the proof here")
+             for i in range(5)]
+    pdf = make_commented_pdf(
+        tmp_path / "n.pdf", lines,
+        [{"subtype": "/Text", "rect": [72, rect_y[0], 90, rect_y[1]],
+          "contents": "fix this"}])
+    note = read_pdf_comments(pdf)[0]
+    assert "line 102" in note.anchor          # the line the click was on
+
+
+def test_a_note_in_the_leading_belongs_to_the_line_above_it(tmp_path):
+    """The rule the box-overlap test replaces, still doing its job where it should:
+    an icon that sits wholly in the gap between two lines hangs under the one it
+    marks, so it belongs to the line above, not the one below."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    lines = [(72, 700 - 20 * i, f"line {100 + i} of the proof here")
+             for i in range(3)]
+    pdf = make_commented_pdf(
+        tmp_path / "g.pdf", lines,
+        [{"subtype": "/Text", "rect": [72, 692, 90, 695],
+          "contents": "fix this"}])
+    assert "line 100" in read_pdf_comments(pdf)[0].anchor
+
+
 def test_a_pdf_with_no_comments_yields_nothing(tmp_path):
     from docproof.corrections.from_pdf import (pdf_corrections_source,
                                                read_pdf_comments)
@@ -428,3 +470,29 @@ def test_a_highlight_over_no_words_falls_back_to_its_line(tmp_path):
     hl = [c for c in read_pdf_comments(pdf) if c.kind == "highlight"]
     assert len(hl) == 1
     assert hl[0].anchor == "the line that carries the mark"
+
+
+def test_a_highlight_does_not_reach_into_the_line_above_it(tmp_path):
+    """A highlight drawn over one word reaches into the leading above and below
+    it, and the leading is only a few points wide. The line test used to forgive a
+    couple of points on the word's *band*, which was enough to catch the words
+    sitting directly over the marked one — and since the anchor runs from the
+    first matching word to the last, it then began on the previous line. Every
+    such correction reached the model quoting the line before the one it was
+    written about.
+
+    The box here is a real one, measured off a proof: its top edge sits in the gap
+    between the lines and comes within a tenth of a point of the line above."""
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(
+        tmp_path / "h.pdf",
+        lines=[(72, 700, "Hopefully I can catch some of the"),
+               (72, 684, "girls too. I did want to.")],
+        annots=[{"subtype": "/Highlight",
+                 # over "did" on the lower line only
+                 "rect": [127, 682, 144, 696],
+                 "quad": [127, 696, 144, 696, 127, 682, 144, 682],
+                 "contents": "does"}])
+    anchor = read_pdf_comments(pdf)[0].anchor
+    assert anchor == "did"
+    assert "Hopefully" not in anchor and "\n" not in anchor

@@ -196,8 +196,11 @@ def _reconcile_comments(comments, edits: Sequence[Edit],
         return ()
     by_source: dict[str, list[Edit]] = {}
     for e in edits:
-        if e.source:
-            by_source.setdefault(e.source, []).append(e)
+        # An edit may cite more than one comment: a reviewer who marks the opening
+        # and closing quotation marks separately has made one request twice, and it
+        # becomes one edit that both comments have to be told the outcome of.
+        for cid in e.source.split():
+            by_source.setdefault(cid, []).append(e)
     out: list[CommentDisposition] = []
     for c in comments:
         cid, page, kind, instruction, anchor = _comment_fields(c)

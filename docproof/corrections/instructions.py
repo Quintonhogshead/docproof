@@ -22,11 +22,13 @@ as before. A rule that is unsure is worth nothing, so it declines.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 
-from .model import (DESIGN, FORMAT_ITALIC, FORMAT_ROMAN, JUDGMENT, MECHANICAL,
-                    PARA_DELETE)
+from .apply import all_spans
+from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
+                    FORMAT_SWASH, JUDGMENT, MECHANICAL, PARA_DELETE,
+                    PARA_MERGE_NEXT, PARA_SPLIT_AT)
 
 # How many words a marked span may hold and still be treated as naming its target.
 # A highlight over a word or a short phrase is pointing at it; a sticky note's
@@ -111,24 +113,66 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
     context = (context or "").strip()
     if not note or not anchor:
         return None
-    if len(anchor.split()) > MAX_ANCHOR_WORDS:
-        return None
     low = note.lower()
 
-    for rule in (_paragraph_op, _discretionary_hyphen,
-                 _italic, _literal_after_colon, _replace_punctuation,
-                 _remove_punctuation, _add_punctuation, _case_change,
-                 _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
-                 _quoted_proposal, _bare_replacement, _composition_check):
+    # A long mark points at nothing in particular, so the rules that have to pick a
+    # target inside it decline. `_line_break_op` is the exception, and only because
+    # it never picks: the note quotes the words either side of the break, and the
+    # mark is just the book text those are cut from. A note about a break has to
+    # carry a whole sentence to be about anything, so applying the guard to it
+    # would be refusing every one of them.
+    rules = (_paragraph_op, _line_break_op, _discretionary_hyphen,
+             _italic, _swash, _literal_after_colon, _replace_punctuation,
+             _remove_punctuation, _add_punctuation, _case_change,
+             _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
+             _quoted_proposal, _bare_replacement, _composition_check)
+    if len(anchor.split()) > MAX_ANCHOR_WORDS:
+        rules = (_line_break_op,)
+
+    for rule in rules:
         got = rule(low, note, anchor, highlighted)
         if got is None and rule is _replace_punctuation and context:
             got = _replace_punctuation_over_line(low, note, anchor, context)
         if got is not None and got.find and got.find in (anchor + "\n" + context):
+            got = _house_apostrophe(got)
             if (got.find == got.replace and not got.format and not got.paragraph
                     and not got.paragraph_style and got.kind != DESIGN):
                 return None            # a rule that changes nothing is no rule
             return got
     return None
+
+
+# A straight apostrophe inside a word, which is what a reviewer types into a
+# comment box and never what the book contains.
+_STRAIGHT_APOSTROPHE = re.compile(r"(?<=\w)'(?=\w)")
+
+
+def _house_apostrophe(got: "Resolved") -> "Resolved":
+    """The same edit with its replacement set in the book's own apostrophe.
+
+    Half these rules take their answer from the reviewer's note verbatim — that is
+    the whole point of them, and it is right. But a note is typed into a comment
+    box, where "didn't" gets a straight quote, and the book is set in curly ones.
+    Applying it as typed corrects the word and introduces a typographic
+    inconsistency in the same stroke, which is precisely what the review pass
+    downstream exists to catch. Twenty-seven of them on one proof.
+
+    Two shapes are converted, both unambiguous: one *inside* a word ("didn't"),
+    and a single one *ending* a word when it is the only straight mark left
+    ("callin'", "Shanklins'") — an elided g or a plural possessive, which cannot be
+    the closing half of a pair because there is no opening half. A leading one
+    ("'til") is left alone: an elision and an opening quotation look identical
+    there, and guessing the direction is not a thing to do silently."""
+    if "'" not in got.replace:
+        return got
+    fixed = _STRAIGHT_APOSTROPHE.sub("’", got.replace)
+    if fixed.count("'") == 1:
+        at = fixed.index("'")
+        if at > 0 and (fixed[at - 1].isalnum() or fixed[at - 1] == "’"):
+            fixed = fixed[:at] + "’" + fixed[at + 1:]
+    if fixed == got.replace:
+        return got
+    return replace(got, replace=fixed)
 
 
 def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | None:
@@ -166,7 +210,7 @@ def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | Non
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
-def edits_from_comments(comments) -> tuple[list[dict], list]:
+def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
     """Split a proof's comments into the ones the rules can resolve and the ones
     the model still has to read.
 
@@ -178,9 +222,23 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
 
     The page is not carried here: an edit cites its comment's id in `source`, and
     that id already names the page (`parse.page_from_source`), so it arrives on the
-    edit without anyone having to retype it."""
+    edit without anyone having to retype it.
+
+    `pages` maps a proof page to THE BOOK'S OWN TEXT for that page (what
+    `pagemap.page_book_text` returns), and it settles what two marks on the same
+    words mean. The book's text and not the proof's: an ordinal is read back after
+    `apply` has narrowed to the page's run of the book, so counting it anywhere
+    else answers a different question. Counted over the PDF's rendering it was
+    measurably worse than not counting it at all — a running head and a word
+    hyphenated across a line end are copies the book does not have. A reviewer marking a quotation puts a note on the opening mark and
+    another on the closing one — one request, recorded twice — while a reviewer
+    marking both copies of "‘Baba’" in a paragraph means two. Those look identical
+    in the edit list and are told apart by where the marks sit: the same position
+    is one request, and different positions are different copies of the text, whose
+    ordinal on the page is what lets both land."""
     rows: list[dict] = []
     unresolved: list = []
+    made: list[tuple] = []                 # (comment, Resolved) in reading order
     for c in comments:
         instruction = getattr(c, "instruction", "") or ""
         anchor = getattr(c, "anchor", "") or ""
@@ -190,6 +248,24 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
                       highlighted=highlighted)
         if got is None:
             unresolved.append(c)
+        else:
+            made.append((c, got))
+
+    seen: dict[tuple, dict] = {}
+    for c, got in made:
+        instruction = getattr(c, "instruction", "") or ""
+        anchor = getattr(c, "anchor", "") or ""
+        context = getattr(c, "context", "") or ""
+        page = getattr(c, "page", 0) or 0
+        offset = getattr(c, "offset", -1)
+        key = (page, offset, instruction, got.find, got.replace)
+        if key in seen:
+            # The same mark, noted twice. One edit, and both comments cite it, so
+            # the change log still accounts for each of them and neither is left
+            # looking like a mark nobody acted on.
+            cid = getattr(c, "id", "")
+            if cid:
+                seen[key]["source"] = f"{seen[key].get('source', '')} {cid}".strip()
             continue
         row = {"find": got.find, "replace": got.replace,
                "instruction": instruction}
@@ -205,8 +281,40 @@ def edits_from_comments(comments) -> tuple[list[dict], list]:
             row["context"] = context
         if getattr(c, "id", ""):
             row["source"] = c.id
+        nth = _ordinal(pages, page, offset, anchor, got.find)
+        if nth:
+            row["occurrence"] = nth
+        seen[key] = row
         rows.append(row)
     return rows, unresolved
+
+
+def _ordinal(pages, page: int, offset: int, anchor: str, find: str) -> int:
+    """Which copy of `find` on the proof page this mark sits on, 1-based — or 0
+    when the question does not arise or cannot be answered.
+
+    0 for text that occurs once on the page, which is the ordinary case: an edit
+    with no ordinal is the one that insists its anchor be unique, and that is a
+    stronger check than any number. An ordinal is only worth carrying when the page
+    holds several copies and the mark says which was meant.
+
+    It is deliberately counted over the *page*, not the book — a page is what the
+    reviewer was looking at — so it is only ever read after the page map has
+    narrowed to that page. `apply` refuses an ordinal it cannot scope that way."""
+    if not pages or offset < 0 or not find:
+        return 0
+    text = (pages.get(page) if hasattr(pages, "get")
+            else (pages[page - 1] if 1 <= page <= len(pages) else ""))
+    if not text:
+        return 0
+    spans = all_spans(text, find)
+    if len(spans) <= 1:
+        return 0
+    at = offset + (anchor.find(find) if find and find in anchor else 0)
+    for i, (start, end) in enumerate(spans, 1):
+        if start <= at < end or abs(start - at) <= 2:
+            return i
+    return 0
 
 
 # --- the rules ----------------------------------------------------------------
@@ -287,6 +395,121 @@ def _paragraph_op(low, note, anchor, highlighted) -> Resolved | None:
     if not find:
         return None
     return Resolved(find, find, MECHANICAL, f"paragraph-{op}", paragraph=op)
+
+
+def _line_break_op(low, note, anchor, highlighted) -> Resolved | None:
+    """`Delete the line break between "stuff:" and "Rotting"`, `insert a paragraph
+    break before "The next hour"`.
+
+    The commonest note on a proof of verse, and one this engine used to refuse on
+    principle: the reviewer's sentence ran across a break, so the anchor did too.
+    But which break they mean is stated exactly — they quote the words on either
+    side of it — so there is nothing to interpret. The find is cut from the marked
+    text itself rather than assembled from the note's quotes, which keeps it
+    verbatim book text and lets the caller's "must be inside the mark" check do its
+    job.
+
+    Declines on a question, as `_paragraph_op` does: "should this run on?" is a
+    query for a person, not an instruction."""
+    if note.rstrip().endswith("?"):
+        return None
+    source = anchor
+    quoted = re.findall(r"[\"“‘']([^\"“”‘’']{2,60})[\"”’']", note)
+    if re.search(r"\b(?:delete|remove|close up|take out)\b[^.]*?\b"
+                 r"(?:line|paragraph)\s+breaks?\b", low):
+        # Two quoted sides name the break; one names the word the break sits before.
+        span = _span_between(source, quoted)
+        if span is None:
+            # "delete the line break before X" names one side. The break is the one
+            # in front of that word, so the anchor reaches back over the few words
+            # before it — enough to cross the break and no more.
+            span = _span_before(source, quoted)
+        if span is None:
+            return None
+        return Resolved(span, span, MECHANICAL, "merge-next",
+                        paragraph=PARA_MERGE_NEXT)
+    if re.search(r"\b(?:insert|add|put)\b[^.]*?\b(?:paragraph|line)\s+breaks?\b"
+                 r"|\bstart a new paragraph\b|\bbreak (?:this )?into "
+                 r"(?:two|separate) paragraphs\b", low):
+        for q in quoted:
+            at = source.find(q)
+            if at > 0:
+                return Resolved(source[at:at + len(q)], source[at:at + len(q)],
+                                MECHANICAL, "split-at", paragraph=PARA_SPLIT_AT)
+        return None
+    return None
+
+
+def _span_between(text: str, quoted: list[str]) -> str | None:
+    """The run of `text` from the first quoted word to the end of the second, when
+    both are there and in that order — the words either side of the break the note
+    names, cut out of the book's own text so the anchor stays verbatim."""
+    if len(quoted) < 2:
+        return None
+    first, second = quoted[0], quoted[1]
+    a = text.find(first)
+    if a == -1:
+        return None
+    b = text.find(second, a + len(first))
+    if b == -1:
+        return None
+    return text[a:b + len(second)]
+
+
+# How many words in front of a named word the anchor reaches back over, when the
+# note gives only the far side of the break ("delete the line break before dead").
+# Enough to be sure of crossing the break, few enough that the run stays inside the
+# sentence the reviewer marked.
+_BREAK_LOOKBACK = 4
+
+
+def _span_before(text: str, quoted: list[str]) -> str | None:
+    """The run of `text` ending at the first quoted word and reaching back over the
+    words in front of it — the anchor for a break named only by what follows it."""
+    if not quoted:
+        return None
+    word = quoted[0]
+    at = text.find(word)
+    if at <= 0:
+        return None
+    before = text[:at].split()
+    if not before:
+        return None
+    lead = " ".join(before[-_BREAK_LOOKBACK:])
+    start = text.find(lead)
+    if start == -1:
+        return None
+    return text[start:at + len(word)]
+
+
+def _swash(low, note, anchor, highlighted) -> Resolved | None:
+    """`Swoop the R`, `swash the S so it matches`, `remove the swash`.
+
+    A flourished capital is not a layout request and not a different font: it is an
+    alternate glyph the face already carries, switched on by an OpenType feature
+    that an IDML writes on the character range. So this is the same shape as
+    italics — the marked words are styled, the text is untouched.
+
+    The whole marked word is styled, never the single letter the note names. A find
+    of "R" is not an anchor (there are thousands), and it does not need to be: the
+    feature substitutes only where the font has a swash form, so the rest of the
+    word is left exactly as it was."""
+    if not highlighted:
+        return None
+    if re.search(r"\b(?:no|remove|take off|kill|drop)\b[^.]*\bswash", low):
+        want = FORMAT_NO_SWASH
+    elif re.search(r"\bswash(?:e[sd])?\b|\bswoop(?:s|ed|ing)?\b"
+                   r"|\bflourish(?:e[sd])?\b|\bcurl(?:s|ed)? the\b", low):
+        want = FORMAT_SWASH
+    else:
+        return None
+    # A note that quotes the word to style names its own target ("swoop the R in
+    # \u201cAuthor\u201d"); otherwise the marked span is it.
+    quoted = re.findall(r"[\"“‘']([^\"“”‘’']{2,60})[\"”’']", note)
+    find = next((q for q in quoted if q in anchor), anchor.strip(_EDGE + "“”‘’\"'"))
+    if not find or len(find.strip()) < 2:
+        return None
+    return Resolved(find, find, MECHANICAL, f"{want}-format", format=want)
 
 
 def _discretionary_hyphen(low, note, anchor, highlighted) -> Resolved | None:
@@ -397,16 +620,47 @@ def _remove_punctuation(low, note, anchor, highlighted) -> Resolved | None:
     mark = PUNCTUATION.get(name)
     if mark is None:
         return None
-    pair = name.endswith("s") and mark in _OPENERS
-    marks = [mark, _OPENERS[mark]] if pair else [mark]
-    if sum(anchor.count(c) for c in marks) < 1:
+    if name.endswith("s") and mark in _OPENERS:
+        span = _outer_pair(anchor, mark)
+        if span is None:
+            return None
+        start, end = span
+        return _focus(anchor, anchor[:start] + anchor[start + 1:end]
+                      + anchor[end + 1:], "remove-punctuation")
+    if anchor.count(mark) != 1:
         return None
-    if not pair and anchor.count(mark) != 1:
-        return None
-    replace = anchor
-    for c in marks:
-        replace = replace.replace(c, "")
-    return _focus(anchor, replace, "remove-punctuation")
+    return _focus(anchor, anchor.replace(mark, ""), "remove-punctuation")
+
+
+def _outer_pair(anchor: str, closer: str) -> tuple[int, int] | None:
+    """The offsets of the quotation marks that open and close `anchor`, or None
+    when it does not hold exactly one unambiguous pair.
+
+    Only the outermost two are the reviewer's quotation marks. Everything between
+    them is the quoted text, and in this book — in any book — that text is full of
+    the *same character*: a closing single quote and an apostrophe are one and the
+    same, so "remove the single quotes" around “For fuck’s sake” had been removing
+    the possessive too and shipping "For fucks sake" as a mechanical edit no one
+    was asked to look at. Taking the first opener and the last closer, and nothing
+    in between, is what tells the reviewer's marks from the author's."""
+    opener = _OPENERS[closer]
+    if anchor.count(opener) != 1:
+        return None                    # no pair, or two quoted runs — ambiguous
+    start = anchor.find(opener)
+    # The closing mark, told from an apostrophe by what follows it: a quotation
+    # closes before a space or a stop, an apostrophe before a letter ("aren’t",
+    # "y’all"). Without this the last apostrophe in an unclosed span passes for the
+    # close — and a quotation running on to the next line is marked one line at a
+    # time, so "‘If you aren’t going to speak to" would have been read as a pair
+    # and written back as "“If you aren”t".
+    end = -1
+    for i in range(len(anchor) - 1, start, -1):
+        if anchor[i] == closer and not anchor[i + 1:i + 2].isalnum():
+            end = i
+            break
+    if end <= start:
+        return None                    # opens but never closes inside the mark
+    return start, end
 
 
 def _add_punctuation(low, note, anchor, highlighted) -> Resolved | None:
@@ -505,19 +759,24 @@ def _enclose_in_quotes(low, note, anchor, highlighted) -> Resolved | None:
 
 
 def _quote_style(low, note, anchor, highlighted) -> Resolved | None:
-    """`Replace single quotes with doubles` — the pair the reviewer marked."""
+    """`Replace single quotes with doubles` — the pair the reviewer marked.
+
+    The singular phrasing is the same request: a reviewer marking a quotation one
+    mark at a time writes "replace single quote with double" twice, once on the
+    opener and once on the closer, and both mean the pair around them."""
     if not re.match(r"^(?:replace|change)\s+single\s+quotes?\s+with\s+"
                     r"double(?:s|\s+quotes?)?\s*$", low):
         return None
-    opens, closes = anchor.count("‘"), anchor.count("’")
-    if opens + closes == 0:
+    # The outermost pair, and only it. A closing single quote and an apostrophe are
+    # the same character, so a span holding "‘LET’S GO’" has three of them and only
+    # two are the reviewer's; converting all three would write "“LET”S GO”". This
+    # used to decline such a span altogether, which is most quoted dialogue there
+    # is — the contraction is the rule, not the exception.
+    span = _outer_pair(anchor, "’")
+    if span is None:
         return None
-    # An apostrophe is the same character as a closing single quote, so a span with
-    # closers but no opener cannot be told from one holding contractions. Only a
-    # matched pair is unambiguous.
-    if opens != 1 or closes != 1:
-        return None
-    replace = anchor.replace("‘", "“").replace("’", "”")
+    start, end = span
+    replace = anchor[:start] + "“" + anchor[start + 1:end] + "”" + anchor[end + 1:]
     return _focus(anchor, replace, "quote-style")
 
 

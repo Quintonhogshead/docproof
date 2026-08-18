@@ -39,13 +39,15 @@ def r(note, anchor, *, context="", highlighted=True):
     ("Capitalize", "solo", "solo", "Solo"),
     ("Capital T", "a tournament", "a tournament", "a Tournament"),
     # the note states the answer
-    ("Add abbreviating apostrophe: callin'", "calling", "calling", "callin'"),
-    ("Possessive: Shanklins'.", "the Shanklins house", "Shanklins", "Shanklins'"),
+    # The reviewer types a straight apostrophe into the comment box; the book is
+    # set in curly ones, and the correction is written in the book's.
+    ("Add abbreviating apostrophe: callin'", "calling", "calling", "callin’"),
+    ("Possessive: Shanklins'.", "the Shanklins house", "Shanklins", "Shanklins’"),
     ("Replace with drop apostrophe: ’Sides", "‘Sides, I’m hoping",
      "‘Sides", "’Sides"),
     # the note *is* the corrected text
     ("all right", "alright. ” There was", "alright", "all right"),
-    ("wouldn't", "wouldnt", "wouldnt", "wouldn't"),
+    ("wouldn't", "wouldnt", "wouldnt", "wouldn’t"),
     ("switched", "switch", "switch", "switched"),
     ("’til", "till", "till", "’til"),
     # other shapes
@@ -271,3 +273,119 @@ def test_no_other_rule_reaches_outside_the_mark():
     assert r("Lowercase", "Hungry", context=line).find == "Hungry"
     assert r("Remove comma", "sure", context=line) is None
     assert r("Add comma after", "hungry", context=line).find == "hungry"
+
+
+# --- quotation marks, and the apostrophe that is the same character -------------
+
+def test_removing_single_quotes_keeps_the_possessive_inside_them():
+    """The bug this pins shipped a wrong change without anyone seeing it. A closing
+    single quote and an apostrophe are one character, so removing "the single
+    quotes" around a marked span removed the possessive too — and the edit is
+    mechanical, so it applied. Only the outermost pair is the reviewer's."""
+    got = resolve("Remove single quotes", "‘For fuck’s sake,’")
+    assert got.replace == "For fuck’s sake,"
+
+
+def test_a_quotation_holding_a_contraction_converts_to_doubles():
+    """Most quoted dialogue holds a contraction, so a rule that could only handle
+    a span with exactly one closing mark declined nearly all of them."""
+    assert resolve("Replace single quotes with doubles",
+                   "‘LET’S GO’").replace == "“LET’S GO”"
+    assert resolve("Replace single quotes with doubles",
+                   "‘y’all.’").replace == "“y’all.”"
+    # `_focus` narrows to the run that changed, so the trailing words drop off.
+    got = resolve("Replace single quote with double",
+                  "‘Oh, son, don’t overexert yourself.’ The latter")
+    assert got.find == "‘Oh, son, don’t overexert yourself.’"
+    assert got.replace == "“Oh, son, don’t overexert yourself.”"
+
+
+def test_a_quotation_that_never_closes_in_the_mark_is_left_for_a_person():
+    """A quotation running on to the next line is marked one line at a time, so
+    the span opens and does not close. The last apostrophe in it must not pass for
+    the closing mark — that would write "aren”t"."""
+    assert resolve("Replace single quote with double",
+                   "on his part. ‘If you aren’t going to speak to") is None
+
+
+def test_two_quoted_runs_in_one_mark_are_left_for_a_person():
+    assert resolve("Replace single quotes with doubles",
+                   "‘towel head,’ ‘terrorist,’") is None
+
+
+def test_a_rule_writes_the_book_s_apostrophe_not_the_reviewer_s():
+    """A note is typed into a comment box, where "didn't" gets a straight quote,
+    and the book is set in curly ones. Correcting the word and introducing a
+    typographic inconsistency in the same stroke is not a correction."""
+    assert resolve("didn't", "doesn’t").replace == "didn’t"
+    assert resolve("Add abbreviating apostrophe: callin'", "callin").replace \
+        == "callin’"
+    assert resolve("Possessive: Shanklins'.", "Shanklins").replace == "Shanklins’"
+
+
+def test_a_leading_straight_quote_is_left_as_typed():
+    """An elision and an opening quotation are indistinguishable there, so the
+    direction is not guessed."""
+    assert resolve("Add drop apostrophe: 'bout", "How bout a drive").replace \
+        == "'bout"
+
+
+# --- two marks on the same words -----------------------------------------------
+
+def _c(cid, page, anchor, instruction, offset, kind="highlight", context=""):
+    return PdfComment(id=cid, page=page, anchor=anchor, instruction=instruction,
+                      offset=offset, kind=kind, context=context)
+
+
+def test_one_request_marked_twice_becomes_one_edit_citing_both_comments():
+    """A reviewer converting a quotation puts a note on the opening mark and
+    another on the closing one. That is one request recorded twice: two edits
+    would mean the second looking for text the first had already changed, and
+    coming back as a correction that could not be found."""
+    rows, unresolved = edits_from_comments([
+        _c("p386-550", 386, "saying ‘KY Kingdom or BUST’ were",
+           "Replace single quote with double", 184),
+        _c("p386-551", 386, "saying ‘KY Kingdom or BUST’ were",
+           "Replace single quote with double", 184)])
+    assert not unresolved and len(rows) == 1
+    # Both comments cite the one edit, so the change log still answers for each.
+    assert rows[0]["source"] == "p386-550 p386-551"
+    assert rows[0]["replace"] == "“KY Kingdom or BUST”"
+
+
+def test_the_same_words_marked_in_two_places_stay_two_edits():
+    """Two copies of "‘Baba’" in one paragraph, both marked, are two requests —
+    and collapsing them would leave one of them uncorrected. The marks sit at
+    different positions, which is what tells this from the case above."""
+    page = "I switch between ‘Baba’ and ‘Dad’ effortlessly. I used ‘Dad’ to " \
+           "make a point and ‘Baba’ to be playful."
+    rows, _ = edits_from_comments(
+        [_c("p111-128", 111, "‘Baba’", "Replace single quotes with doubles", 17),
+         _c("p111-131", 111, "‘Baba’", "Replace single quotes with doubles", 84)],
+        pages={111: page})
+    assert len(rows) == 2
+    assert [r["occurrence"] for r in rows] == [1, 2]
+
+
+def test_no_ordinal_is_carried_for_text_that_occurs_once():
+    """An edit with no ordinal is the one that insists its anchor be unique, which
+    is a stronger check than any number — so the number is only added where the
+    page really does hold several copies."""
+    rows, _ = edits_from_comments(
+        [_c("p9-1", 9, "harbor", "harbour", 10)],
+        pages={9: "we sailed into the harbor at dawn"})
+    assert "occurrence" not in rows[0]
+
+
+def test_the_ledger_reaches_both_comments_of_a_merged_edit():
+    """The point of merging into one edit rather than dropping a comment: every
+    mark still gets told what became of it."""
+    from docproof.corrections.model import DISP_APPLIED, Edit
+    from docproof.corrections.run import _reconcile_comments
+    edit = Edit("e1", "‘x’", "“x”", source="p1-1 p1-2")
+    dispositions = _reconcile_comments(
+        [_c("p1-1", 1, "‘x’", "Replace single quotes with doubles", 0),
+         _c("p1-2", 1, "‘x’", "Replace single quotes with doubles", 0)],
+        [edit], lambda _id: (DISP_APPLIED, ""))
+    assert [d.disposition for d in dispositions] == [DISP_APPLIED, DISP_APPLIED]
+    assert all(d.edit_ids == ("e1",) for d in dispositions)

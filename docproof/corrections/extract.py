@@ -48,11 +48,11 @@ class _ExtractedEdit(BaseModel):
     kind: Literal["mechanical", "judgment", "design"] = "mechanical"
     occurrence: int = 0
     source: str = ""
-    format: Literal["", "italic", "roman"] = ""
+    format: Literal["", "italic", "roman", "swash", "no-swash"] = ""
     paragraph: Literal["", "recto", "verso", "page-break", "column-break",
                        "keep-with-next", "keep-together", "allow-break",
                        "no-page-break", "delete-paragraph", "insert-after",
-                       "insert-before"] = ""
+                       "insert-before", "merge-next", "split-at"] = ""
 
 
 class _Extracted(BaseModel):
@@ -95,15 +95,31 @@ the one the mark was on — not another copy elsewhere. Leave context empty when
 find is already unique. Copy it from the book text for the page, the same as find.
 - instruction: the human note the correction came from, verbatim, for the report.
 - format: "italic" or "roman" when the correction is about how the text is SET \
-rather than what it says — "italicize this film title", "de-italicize". Put the \
-words to style in find, copy them unchanged into replace, and leave kind \
-"mechanical": this is an appliable edit, not a design request. Use "" for every \
-ordinary correction.
+rather than what it says — "italicize this film title", "de-italicize". Also \
+"swash" when the note asks for a decorative or flourished letterform — "swoop the \
+R", "swash the S", "make this match the other swash capitals" — and "no-swash" to \
+take one off. Put the words to style in find (for a swash, the WHOLE WORD holding \
+the letter, never the bare letter: a find of "R" is not an anchor, and the swash \
+only changes the letters the font has a flourished form for), copy them unchanged \
+into replace, and leave kind "mechanical": this is an appliable edit, not a design \
+request. Use "" for every ordinary correction.
 - paragraph: a whole-paragraph request, when the note is about the paragraph \
 rather than its words. "recto"/"verso" to start it on a right/left-hand page, \
 "page-break" to start it on a new page, "keep-with-next" so a heading is not left \
 at the foot of a page, "keep-together" so it does not split, "delete-paragraph" to \
 remove it, "insert-after"/"insert-before" to add one (put the new text in replace). \
+Two more are about where the breaks fall, which is what most notes on a proof of \
+poetry are asking about, because every line of verse is its own paragraph:
+  "merge-next" — "delete the line break between X and Y", "let this run on as one \
+paragraph". Put in find a verbatim run of the book that REACHES ACROSS the break \
+being deleted: the words on both sides of it, e.g. find "dead people stuff: \
+Rotting". One break per edit — if the note asks for several line breaks to go, \
+emit one merge-next edit per break, in order.
+  "split-at" — "insert a paragraph break here", "start a new paragraph at X". Put \
+in find ONLY the text that should START the new paragraph, e.g. find "The next \
+hour or so"; the break is made immediately in front of it. Never make find reach \
+back into the text that stays in the first paragraph.
+  For both, copy find unchanged into replace. \
 Put the words that identify the paragraph in find, copy them unchanged into \
 replace, and leave kind "mechanical" — these are appliable. NEVER read one of these \
 out of a question ("should we cut this?"): that is a "judgment".

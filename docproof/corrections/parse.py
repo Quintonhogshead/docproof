@@ -58,7 +58,11 @@ MIN_ANCHORABLE_FIND = 3
 # that id in `source`, so the page a correction was marked on is already on the
 # edit and does not have to be asked of the model — which is the point: a page read
 # off an id is deterministic, and one a model retypes is a thing it can get wrong.
-_SOURCE_PAGE = re.compile(r"^p(\d+)-\d+$")
+# The first comment id in `source` — which may name several, when one edit
+# answers for more than one mark. They are all on the same page by
+# construction (a mark belongs to the page it was made on), so the first
+# one settles it.
+_SOURCE_PAGE = re.compile(r"^p(\d+)-\d+(?:\s|$)")
 
 
 def page_from_source(source: str) -> int:

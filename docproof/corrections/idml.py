@@ -224,6 +224,17 @@ def _style_range(parent: ET._Element, nodes: list[ET._Element],
     grandparent.remove(parent)
 
 
+def _node_at(para: "Paragraph", offset: int) -> "ET._Element | None":
+    """The last Content node of `para` that ends at `offset` — the node a split at
+    that offset leaves behind. None when no node boundary falls there."""
+    at = 0
+    for node in para.nodes:
+        at += len(node.text or "")
+        if at == offset:
+            return node
+    return None
+
+
 def _ancestor(el: ET._Element, tag: str) -> ET._Element | None:
     """The nearest enclosing element with that tag, or None."""
     node = el.getparent()
@@ -381,6 +392,98 @@ class Story:
         if parent is None:
             return False
         parent.remove(psr)
+        self.reindex()
+        return True
+
+    def merge_paragraph(self, index: int, *, joiner: str = " ") -> bool:
+        """Join the paragraph at `index` with the one after it, removing the break
+        between them. False, changing nothing, when that cannot be done cleanly.
+
+        This is `delete_paragraph`'s opposite, and the operation the hand-written
+        scripts used to perform by accident. On a proof of verse it is asked for
+        constantly: every line is its own paragraph, so "delete the line break
+        between *stuff:* and *Rotting*" is one `Br` to remove — after which the two
+        halves have to be joined by a space, because paragraph text carries no
+        trailing one and the words would otherwise run together.
+
+        Isolating both paragraphs first is what makes it safe: each then owns its
+        range, so moving one range's contents into the other cannot catch a
+        neighbour. Two paragraphs set in different styles are refused rather than
+        merged — the surviving paragraph can only have one style, and silently
+        imposing the first's on the second is the kind of change a reviewer asking
+        about a line break did not ask for."""
+        if not 0 <= index < len(self.paragraphs) - 1:
+            return False
+        if self.isolate(index) is None or self.isolate(index + 1) is None:
+            return False
+        first, second = self.paragraphs[index], self.paragraphs[index + 1]
+        if not first.nodes or not second.nodes:
+            return False
+        psr_a = _ancestor(first.nodes[0], PSR)
+        psr_b = _ancestor(second.nodes[0], PSR)
+        if psr_a is None or psr_b is None or psr_a is psr_b:
+            return False
+        if psr_a.get("AppliedParagraphStyle") != psr_b.get("AppliedParagraphStyle"):
+            return False
+        parent = psr_b.getparent()
+        if parent is None or psr_a.getparent() is not parent:
+            return False
+        # The break that closes the first paragraph is the thing being deleted.
+        flow_a = [el for csr in psr_a if csr.tag == CSR
+                  for el in csr if el.tag in FLOW]
+        if not flow_a or flow_a[-1].tag != BR:
+            return False
+        br = flow_a[-1]
+        br.getparent().remove(br)
+        if joiner and not first.text.endswith(joiner) \
+                and not second.text.startswith(joiner):
+            last = flow_a[-2] if len(flow_a) > 1 else None
+            if last is not None and last.tag == CONTENT:
+                last.text = (last.text or "") + joiner
+            else:
+                return False
+        for csr in [c for c in psr_b if c.tag == CSR]:
+            psr_a.append(csr)                  # moves it out of psr_b
+        parent.remove(psr_b)
+        self.reindex()
+        return True
+
+    def split_paragraph(self, index: int, offset: int) -> bool:
+        """Break the paragraph at `index` in two at character `offset`, so the text
+        from there on becomes a paragraph of its own. False when the split point
+        cannot be isolated.
+
+        The whitespace immediately before the split goes with the break: a
+        paragraph break already separates the two halves, and leaving the space
+        that used to would put a stray one at the end of the first paragraph."""
+        if not 0 <= index < len(self.paragraphs):
+            return False
+        para = self.paragraphs[index]
+        if not 0 < offset <= len(para.text):
+            return False
+        if self.isolate(index) is None:
+            return False
+        para = self.paragraphs[index]
+        text = para.text
+        head = offset
+        while head > 0 and text[head - 1] in " \t":
+            head -= 1
+        if head == 0:
+            return False                       # nothing would be left in front
+        if head < offset:
+            para.replace(head, offset, "")
+        if not para._split_at(head):
+            return False
+        # The break closes the first half, so it goes after the last node in front
+        # of the split — inside the character range that holds it, which is where
+        # a Br lives.
+        cut = _node_at(para, head)
+        if cut is None:
+            return False
+        csr = _ancestor(cut, CSR)
+        if csr is None:
+            return False
+        csr.insert(list(csr).index(cut) + 1, ET.Element(BR))
         self.reindex()
         return True
 

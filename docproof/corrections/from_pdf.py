@@ -180,25 +180,63 @@ class _Page:
         lines = sorted({self.words[i].line for i in range(lo, hi + 1)})
         return self.text[start:end], start, lines
 
-    def line_at(self, y: float) -> int:
-        """The line a point-note belongs to: the nearest one *at or above* the
-        anchor point, because a note's icon hangs just under the word it marks.
-        The plain nearest line would drift one line down whenever a note sits
-        between two. Falls back to the nearest if the note is above all the text."""
+    def line_at(self, y0: float, y1: float | None = None) -> int:
+        """The line a point-note belongs to, from the vertical band of its box.
+
+        A line the box actually *touches* wins, by how much of it the box covers.
+        Only when the box lands wholly in the leading between two lines does the
+        "nearest one at or above" rule apply — a note's icon hangs just under the
+        word it marks, so a mark in the gap belongs to the line above it.
+
+        Touching has to be tested before hanging-under, and that is the whole
+        repair here. The old rule asked only whether a line's *bottom* edge was
+        above the anchor point, so a note whose box was short — many PDF tools
+        store a zero-height `/Rect` for a sticky note, because the viewer draws a
+        fixed-size icon and ignores the stored one — put the anchor point *inside*
+        the band of the line it marked. That line then failed the test against its
+        own bottom edge, and the line above it was returned: every such note
+        reached the extractor quoting the line before the one it was written
+        about."""
         if not self.lines:
             return -1
-        above = [i for i, ln in enumerate(self.lines) if ln.y0 >= y - 2.0]
+        if y1 is None:
+            y1 = y0
+        low, high = min(y0, y1), max(y0, y1)
+        # Overlap of the box with each line's band. Zero counts: a box of no height
+        # sitting inside a band overlaps it by nothing and belongs to it entirely.
+        overlaps = [min(ln.y1, high) - max(ln.y0, low) for ln in self.lines]
+        best = max(range(len(self.lines)), key=lambda i: overlaps[i])
+        if overlaps[best] >= 0:
+            return best
+        above = [i for i, ln in enumerate(self.lines) if ln.y0 >= low - 2.0]
         if above:
-            return min(above, key=lambda i: self.lines[i].y0 - y)
+            return min(above, key=lambda i: self.lines[i].y0 - low)
         return min(range(len(self.lines)),
-                   key=lambda i: abs(self.lines[i].centre - y))
+                   key=lambda i: abs(self.lines[i].centre - low))
+
+
+# How far outside a highlight's band a word's centre may sit and still be read as
+# inside it. Small on purpose: it forgives a box drawn a shade short of the glyphs,
+# and is far less than the ~16pt between one line's centre and the next, so it can
+# never reach a neighbouring line.
+_BOX_SLACK = 2.0
 
 
 def _overlaps(word: _Word, boxes) -> bool:
-    """Whether enough of `word`'s width lies inside any of the highlight boxes."""
+    """Whether enough of `word`'s width lies inside any of the highlight boxes.
+
+    The line test is on the word's *centre*, not on whether its band comes within
+    a couple of points of the box. A highlight drawn over one word reaches into
+    the leading above and below it, and the leading is only a few points wide, so
+    a tolerance big enough to forgive a thin box was also big enough to reach the
+    line above — where it caught the words sitting over the marked one. The
+    anchor then ran from there to the marked word, and the correction arrived
+    quoting the line before the one it was written about. A centre cannot be in
+    two lines at once, which is the property this needs."""
     width = max(word.x1 - word.x0, 0.01)
+    centre = (word.y0 + word.y1) / 2
     for x0, x1, y0, y1 in boxes:
-        if word.y1 < y0 - 2 or word.y0 > y1 + 2:
+        if not y0 - _BOX_SLACK <= centre <= y1 + _BOX_SLACK:
             continue                              # a different line
         covered = min(word.x1, x1) - max(word.x0, x0)
         if covered / width >= _WORD_OVERLAP:
@@ -272,8 +310,8 @@ def _read_annot(ref, layout: _Page, page_no: int, seen: int) -> PdfComment | Non
             # The mark resolved to no word — an empty region, or a highlight over
             # an image. Fall back to the line its box sits on so the comment still
             # arrives anchored to something real.
-            mid = sum((b[2] + b[3]) / 2 for b in boxes) / len(boxes)
-            i = layout.line_at(mid)
+            i = layout.line_at(min(b[2] for b in boxes),
+                               max(b[3] for b in boxes))
             if i >= 0:
                 anchor = context = layout.line_text(i)
                 offset = layout.lines[i].start
@@ -283,7 +321,7 @@ def _read_annot(ref, layout: _Page, page_no: int, seen: int) -> PdfComment | Non
         anchor = context = ""
         offset = -1
         if rect:
-            i = layout.line_at(float(rect[1]))
+            i = layout.line_at(float(rect[1]), float(rect[3]))
             if i >= 0:
                 anchor = context = layout.line_text(i)
                 offset = layout.lines[i].start
