@@ -194,12 +194,37 @@ class Discrepancy:
 
 
 @dataclass(frozen=True)
+class ReviewChange:
+    """One paragraph an applied edit changed, kept as the whole line before and
+    after — so a designer can read the correction *in context* and confirm it is
+    right, not merely that it landed. This is the other half of verification: the
+    discrepancy list proves nothing changed that shouldn't have; this proves what
+    did change reads correctly. A line two edits touched appears once, fully
+    corrected, carrying both their ids and notes."""
+    story_id: str
+    paragraph: int
+    before: str
+    after: str
+    edit_ids: tuple[str, ...] = ()
+    instruction: str = ""              # the reviewer note(s), when the edits had any
+    # The character formatting applied here, when that is what changed. A formatting
+    # edit rewrites no text, so the before and after lines read identically — and
+    # without this the row would look like a change that did not happen, or be
+    # dropped as one. It is still the row a designer needs: the italics have to be
+    # confirmed to have landed on the right words.
+    formatting: str = ""
+
+
+@dataclass(frozen=True)
 class VerifyReport:
     """Before vs after, reconciled against the edit list."""
     reconciliations: tuple[Reconciliation, ...]
     discrepancies: tuple[Discrepancy, ...]
     paragraphs_before: int = 0
     paragraphs_after: int = 0
+    # One entry per paragraph an applied edit changed, before and after, for a
+    # human to read down and confirm. Empty in the rare run that applied nothing.
+    changes: tuple[ReviewChange, ...] = ()
 
     @property
     def clean(self) -> bool:

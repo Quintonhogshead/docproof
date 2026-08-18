@@ -107,6 +107,17 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
                 for r in verify.reconciliations],
             "discrepancies": [dataclasses.asdict(d) for d in verify.discrepancies],
         },
+        # Every paragraph an applied edit changed, before and after — the list a
+        # designer reads down to confirm each correction is right, not merely that
+        # it landed. The pair is the machine truth; the display diffs it into a
+        # redline. The verify discrepancy list is the complement: this is what did
+        # change, that is proof nothing else did.
+        "changes": [
+            {"story_id": c.story_id, "paragraph": c.paragraph,
+             "before": c.before, "after": c.after,
+             "edit_ids": list(c.edit_ids), "instruction": c.instruction,
+             "formatting": c.formatting}
+            for c in verify.changes],
         # One row per reviewer comment — the ledger that makes sure none is lost.
         # `total` and `unresolved` are the honest headline: how many marks came in,
         # and how many a person still owns (flagged, or never turned into an edit).
@@ -154,6 +165,17 @@ def _markdown(d: dict) -> str:
     verify = d["verify"]
     ap = d["apply"]
     com = d.get("comments") or {"total": 0, "unresolved": 0, "items": []}
+    # A flagged edit read from a proof is the same problem as its reviewer comment,
+    # so when comments are present the two would double-count. Fold the edits that a
+    # needs-human comment already covers into that ledger, and surface only the
+    # remainder (a hand-added or typed edit) as its own list.
+    covered: set[str] = set()
+    for c in com["items"]:
+        if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED):
+            covered.update(c.get("edit_ids") or [])
+    ap_flagged = ap["flagged"] if ap is not None else []
+    flagged_uncovered = ([o for o in ap_flagged if o["id"] not in covered]
+                         if com["total"] else ap_flagged)
     if (verify["clean"] and (ap is None or not ap["flagged"])
             and not com["unresolved"]):
         L.append("**Clean.** Every correction landed exactly, nothing else in the "
@@ -162,8 +184,8 @@ def _markdown(d: dict) -> str:
         headline = []
         if ap is not None:
             headline.append(f"{ap['applied']} applied")
-            if ap["flagged"]:
-                headline.append(f"{len(ap['flagged'])} need a human")
+            if flagged_uncovered:
+                headline.append(f"{len(flagged_uncovered)} need a human")
         if com["total"]:
             headline.append(f"{com['total']} comment(s)")
             if com["unresolved"]:
@@ -218,11 +240,13 @@ def _markdown(d: dict) -> str:
 
     if ap is not None:
         L.append(f"## Applied — {ap['applied']}\n")
-        if ap["flagged"]:
-            L.append(f"## For a human — {len(ap['flagged'])}\n")
+        if flagged_uncovered:
+            title = ("Other edits needing a human" if com["total"]
+                     else "For a human")
+            L.append(f"## {title} — {len(flagged_uncovered)}\n")
             L.append("Each of these was refused rather than guessed at.\n")
             by_status: dict[str, list[dict]] = {}
-            for o in ap["flagged"]:
+            for o in flagged_uncovered:
                 by_status.setdefault(o["status"], []).append(o)
             for status, items in by_status.items():
                 L.append(f"### {FLAG_TITLES.get(status, status)} — {len(items)}\n")
@@ -236,6 +260,37 @@ def _markdown(d: dict) -> str:
             for o in no_op:
                 L.append(f"- `{o['id']}` {_change(o)}")
             L.append("")
+
+    # The applied changes, each in the line it changed, for a person to read down
+    # and confirm — the designer's quick check that the corrections are right, not
+    # just that they anchored. The verification section below is the complement.
+    changes = d.get("changes") or []
+    if changes:
+        L.append(f"## Changes to review — {len(changes)}\n")
+        L.append("Every applied correction shown in the line it changed — read "
+                 "down and confirm each reads right. “was” is the original line, "
+                 "“now” the corrected one.\n")
+        for c in changes:
+            where = (f"story `{c['story_id']}`"
+                     + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
+                        else ""))
+            L.append(f"- {where}:")
+            if c.get("formatting") and c["before"] == c["after"]:
+                # Formatting rewrites no text, so a before/after pair would read as
+                # a change that did not happen. Say what changed instead, and show
+                # the line so the words it landed on can be confirmed.
+                L.append(f"  - set {c['formatting']}: "
+                         f"“{_preview(c['after'], 300)}”"
+                         + (f" — reviewer: “{_preview(c['instruction'])}”"
+                            if c.get("instruction") else ""))
+                continue
+            L.append(f"  - was: “{_preview(c['before'], 300)}”")
+            L.append(f"  - now: “{_preview(c['after'], 300)}”"
+                     + (f" — reviewer: “{_preview(c['instruction'])}”"
+                        if c.get("instruction") else "")
+                     + (f" — also set {c['formatting']}"
+                        if c.get("formatting") else ""))
+        L.append("")
 
     L.append("## Verification\n")
     L.append("The file after correcting is compared word for word against what a "

@@ -20,7 +20,7 @@ from pathlib import Path
 from .apply import apply_to_stories
 from .idml import Story, read_stories
 from .model import (APPLIED_EXACTLY, DEVIATES, Discrepancy, Edit, MISSING,
-                    Reconciliation, VerifyReport)
+                    Reconciliation, ReviewChange, VerifyReport)
 
 
 def verify(before_idml: str | Path, after_idml: str | Path,
@@ -59,9 +59,11 @@ def verify(before_idml: str | Path, after_idml: str | Path,
         discrepancies.extend(_story_discrepancies(sid, bef, exp, act))
 
     reconciliations = _reconcile(outcomes, expected_by_id, actual_by_id)
+    changes = _review_changes(outcomes, before_by_id, actual_by_id)
     return VerifyReport(reconciliations=tuple(reconciliations),
                         discrepancies=tuple(discrepancies),
-                        paragraphs_before=p_before, paragraphs_after=p_after)
+                        paragraphs_before=p_before, paragraphs_after=p_after,
+                        changes=tuple(changes))
 
 
 def _story_discrepancies(sid: str, before: Story | None, expected: Story,
@@ -87,6 +89,51 @@ def _story_discrepancies(sid: str, before: Story | None, expected: Story,
             f"({len(act_paras)} in the after file — a paragraph was "
             f"added, removed or merged)"))
     return out
+
+
+def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
+    """One `ReviewChange` per paragraph an applied edit changed — the whole line
+    before (untouched source) and after (the corrected file) — so a person can
+    read each correction in context. Grouped by paragraph in document order, so a
+    line two edits touched is shown once, fully corrected, carrying both ids and
+    notes. A paragraph whose net text did not change (an edit that cancelled out)
+    is dropped: there is nothing to look at — unless what changed was the
+    *formatting*, which rewrites no text and would otherwise disappear from the one
+    section a designer uses to confirm the corrections read right."""
+    order: list[tuple[str, int]] = []
+    acc: dict[tuple[str, int], dict] = {}
+    for o in outcomes:
+        if not o.applied:
+            continue
+        key = (o.story_id, o.paragraph)
+        if key not in acc:
+            bef = before_by_id.get(o.story_id)
+            act = actual_by_id.get(o.story_id)
+            acc[key] = {
+                "before": (bef.paragraphs[o.paragraph].text
+                           if bef and 0 <= o.paragraph < len(bef.paragraphs)
+                           else ""),
+                "after": (act.paragraphs[o.paragraph].text
+                          if act and 0 <= o.paragraph < len(act.paragraphs)
+                          else ""),
+                "ids": [], "notes": [], "formats": []}
+            order.append(key)
+        acc[key]["ids"].append(o.edit.id)
+        if o.edit.format and o.edit.format not in acc[key]["formats"]:
+            acc[key]["formats"].append(o.edit.format)
+        note = (o.edit.instruction or "").strip()
+        if note and note not in acc[key]["notes"]:
+            acc[key]["notes"].append(note)
+    changes: list[ReviewChange] = []
+    for sid, para in order:
+        d = acc[(sid, para)]
+        if d["before"] == d["after"] and not d["formats"]:
+            continue
+        changes.append(ReviewChange(
+            story_id=sid, paragraph=para, before=d["before"], after=d["after"],
+            edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"]),
+            formatting=", ".join(d["formats"])))
+    return changes
 
 
 def _reconcile(outcomes, expected_by_id, actual_by_id) -> list[Reconciliation]:
