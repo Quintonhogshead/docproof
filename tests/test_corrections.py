@@ -859,3 +859,232 @@ def test_the_sanity_gate_withholds_a_doubtful_edit(tmp_path):
     assert gated.apply.outcomes[0].status == WITHHELD
     assert story_text(gated.corrected_idml)[4] == \
         "Their were several mistakes here to find."   # unchanged, held for a human
+
+
+# The judgment shape the extractor emits for a note it will not commit to: the
+# anchored line as both find and replace, the reviewer's note in instruction.
+# Without a second look this is exactly the "a query for a person" flag.
+_QUERY = {"find": "She opened the door, the room was empty.",
+          "replace": "She opened the door, the room was empty.",
+          "kind": "judgment", "source": "p1-1",
+          "instruction": "Replace comma with period (or semicolon)"}
+_QUERY_COMMENT = {"id": "p1-1", "page": 1, "kind": "highlight",
+                  "instruction": _QUERY["instruction"],
+                  "anchor": _QUERY["find"]}
+
+
+def test_the_second_look_settles_a_delegated_choice(tmp_path):
+    """A note that offers alternatives has already ordered the change — with the
+    opt-in second look on, the model's pick becomes a concrete edit that anchors
+    and applies like any other, and the change log names the call it made."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    # Without the pass, the query is flagged for a human and nothing changes.
+    free = apply_corrections(LAYOUT, [dict(_QUERY)], tmp_path / "free",
+                             comments=[dict(_QUERY_COMMENT)])
+    assert free.applied == 0 and free.unresolved == 1
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"choices": [{
+            "id": "c1", "decision": "settled",
+            "find": "door, the", "replace": "door. The",
+            "context": "She opened the door, the room was empty.",
+            "note": "chose the period"}]},
+        usage=NormalizedUsage(input_tokens=80, output_tokens=20))])
+    got = apply_corrections(LAYOUT, [dict(_QUERY)], tmp_path / "looked",
+                            comments=[dict(_QUERY_COMMENT)],
+                            second_look=(provider, "m"))
+    assert got.settled == 1 and got.applied == 1 and got.unresolved == 0
+    assert story_text(got.corrected_idml)[2] == \
+        "She opened the door. The room was empty."
+    out = got.apply.outcomes[0]
+    assert out.applied
+    # The reviewer's note stays verbatim, the model's call is named after it.
+    assert out.edit.instruction.startswith(_QUERY["instruction"])
+    assert "second look: settled: chose the period" in out.edit.instruction
+    assert got.comments[0].disposition == DISP_APPLIED
+    assert got.usage is not None and got.usage.input_tokens == 80
+
+
+def test_the_second_look_leaves_a_true_question_flagged(tmp_path):
+    """A note the model declines stays exactly what it was — a query for a
+    person — and the file is untouched."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"choices": [{"id": "c1", "decision": "needs_human"}]},
+        usage=NormalizedUsage(input_tokens=40, output_tokens=8))])
+    got = apply_corrections(LAYOUT, [dict(_QUERY)], tmp_path,
+                            comments=[dict(_QUERY_COMMENT)],
+                            second_look=(provider, "m"))
+    assert got.settled == 0 and got.applied == 0 and got.unresolved == 1
+    assert "query for a person" in got.comments[0].detail
+    assert story_text(got.corrected_idml)[2] == \
+        "She opened the door, the room was empty."
+
+
+def test_a_failed_second_look_loses_no_flags(tmp_path):
+    """A second look whose call dies settles nothing and sinks nothing: the run
+    completes and every query still reaches a human."""
+    from .fakes import DyingProvider
+
+    got = apply_corrections(LAYOUT, [dict(_QUERY)], tmp_path,
+                            comments=[dict(_QUERY_COMMENT)],
+                            second_look=(DyingProvider(survive=0), "m"))
+    assert got.settled == 0 and got.unresolved == 1
+
+
+# The fixture book's opening page, as a proof reader would hand it back — the
+# page map aligns it, which is what gives the second look the book's own text
+# to re-quote anchors from.
+_PAGE1 = "\n".join([
+    "Chapter One",
+    "It was late, we were tired and the road went on forever.",
+    "She opened the door, the room was empty.",
+    "A third paragraph with plain text for good measure.",
+    "Their were several mistakes here to find.",
+])
+
+
+def test_the_second_look_reanchors_a_lost_find(tmp_path):
+    """An anchor the book does not carry (an artifact-ridden quote) is re-quoted
+    from the book's own page text — the same correction, a matchable find — and
+    then applies like any other edit."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    edits = [{"find": "She opened the daor, the room",
+              "replace": "She opened the daor; the room",
+              "instruction": "Replace comma with semicolon",
+              "source": "p1-1", "page": 1}]
+    comments = [{"id": "p1-1", "page": 1, "kind": "highlight",
+                 "instruction": "Replace comma with semicolon",
+                 "anchor": "She opened the daor, the room"}]
+
+    # Without the pass: nowhere to land, flagged.
+    free = apply_corrections(LAYOUT, [dict(e) for e in edits],
+                             tmp_path / "free", comments=list(comments),
+                             page_texts=[_PAGE1])
+    assert free.applied == 0 and free.unresolved == 1
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"choices": [{
+            "id": "c1", "decision": "settled",
+            "find": "door, the room", "replace": "door; the room",
+            "context": "", "note": "the book has “door”"}]},
+        usage=NormalizedUsage(input_tokens=90, output_tokens=25))])
+    got = apply_corrections(LAYOUT, [dict(e) for e in edits],
+                            tmp_path / "looked", comments=list(comments),
+                            page_texts=[_PAGE1], second_look=(provider, "m"))
+    assert got.reanchored == 1 and got.applied == 1 and got.unresolved == 0
+    assert story_text(got.corrected_idml)[2] == \
+        "She opened the door; the room was empty."
+    assert "second look: re-anchored" in got.apply.outcomes[0].edit.instruction
+    # The prompt carried the book's own page text to quote from.
+    assert "book text, page 1" in provider.calls[0]["user"]
+
+
+def test_the_second_look_merges_colliding_corrections(tmp_path):
+    """Two corrections on overlapping spans of one line — the second would be
+    refused so it cannot garble the first — are merged into one edit carrying
+    both changes, citing both reviewer comments."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    edits = [{"find": "the room was", "replace": "the room felt",
+              "instruction": "was → felt", "source": "p1-1", "page": 1},
+             {"find": "door, the room", "replace": "door — the room",
+              "instruction": "Comma to em dash", "source": "p1-2", "page": 1}]
+    comments = [{"id": "p1-1", "page": 1, "kind": "highlight",
+                 "instruction": "was → felt", "anchor": "the room was"},
+                {"id": "p1-2", "page": 1, "kind": "highlight",
+                 "instruction": "Comma to em dash",
+                 "anchor": "door, the room"}]
+
+    # Without the pass the second is refused: OVERLAPS, naming the first.
+    free = apply_corrections(LAYOUT, [dict(e) for e in edits],
+                             tmp_path / "free", comments=list(comments),
+                             page_texts=[_PAGE1])
+    assert free.applied == 1
+    assert free.apply.outcomes[1].status == OVERLAPS
+    assert free.apply.outcomes[1].collides_with == ("c1",)
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"choices": [{
+            "id": "c1", "decision": "settled",
+            "find": "door, the room was empty",
+            "replace": "door — the room felt empty",
+            "context": "", "note": "the dash, then the word swap"}]},
+        usage=NormalizedUsage(input_tokens=90, output_tokens=25))])
+    got = apply_corrections(LAYOUT, [dict(e) for e in edits],
+                            tmp_path / "merged", comments=list(comments),
+                            page_texts=[_PAGE1], second_look=(provider, "m"))
+    assert got.merged == 1 and got.applied == 1 and got.unresolved == 0
+    assert len(got.apply.outcomes) == 1        # one edit now carries both
+    assert story_text(got.corrected_idml)[2] == \
+        "She opened the door — the room felt empty."
+    merged = got.apply.outcomes[0].edit
+    assert merged.source == "p1-1 p1-2"
+    assert "second look: merged" in merged.instruction
+    # Both reviewer comments reach "applied" through the one merged edit.
+    assert all(c.disposition == DISP_APPLIED for c in got.comments)
+
+
+def test_a_reanchor_answer_not_in_the_book_text_is_refused():
+    """A re-quoted find that is not verbatim in the page's book text was
+    recalled, not copied — the exact failure being repaired — so it is refused
+    and the edit stays flagged."""
+    from docproof.models import Usage
+    from docproof.providers import ProviderResult
+    from .fakes import FakeProvider
+    from docproof.corrections.secondlook import reanchor_edits
+
+    edits = [Edit(id="c1", find="the daor, the", replace="the daor; the",
+                  page=1)]
+    provider = FakeProvider([ProviderResult(parsed={"choices": [
+        {"id": "c1", "decision": "settled",
+         "find": "recalled not quoted", "replace": "still recalled"}]})])
+    out, n = reanchor_edits(edits, {"c1": "not found"}, provider, model="m",
+                            usage=Usage(),
+                            book_pages={1: "She opened the door, the room"})
+    assert n == 0 and out == edits
+
+
+def test_a_collision_involving_a_format_edit_is_not_merged():
+    """A format request cannot be expressed inside a combined find→replace, so
+    a collision involving one is never put to the model — it stays a human's."""
+    from docproof.models import Usage
+    from .fakes import FakeProvider
+    from docproof.corrections.secondlook import merge_overlaps
+
+    edits = [Edit(id="c1", find="the door", replace="the door",
+                  format="italic", page=1),
+             Edit(id="c2", find="the door, the", replace="the door. The",
+                  page=1)]
+    provider = FakeProvider([])
+    out, n = merge_overlaps(edits, {"c2": ("c1",)}, provider, model="m",
+                            usage=Usage(),
+                            book_pages={1: "She opened the door, the room"})
+    assert n == 0 and out == edits and provider.calls == []
+
+
+def test_the_second_look_refuses_an_unanchorable_answer():
+    """A settled answer that fails the guards — a find too short to anchor, or a
+    change that changes nothing — is refused here, not sent on to apply."""
+    from docproof.models import Usage
+    from docproof.providers import ProviderResult
+    from .fakes import FakeProvider
+
+    edits = [Edit(id="c1", find="x, y", replace="x, y", kind=JUDGMENT,
+                  instruction="comma or semicolon?"),
+             Edit(id="c2", find="a, b", replace="a, b", kind=JUDGMENT,
+                  instruction="comma or semicolon?")]
+    provider = FakeProvider([ProviderResult(parsed={"choices": [
+        {"id": "c1", "decision": "settled", "find": ",", "replace": ";"},
+        {"id": "c2", "decision": "settled", "find": "a, b", "replace": "a, b"},
+    ]})])
+    from docproof.corrections.secondlook import settle_queries
+    out, settled = settle_queries(edits, provider, model="m", usage=Usage())
+    assert settled == 0 and out == edits

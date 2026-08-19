@@ -37,6 +37,7 @@ from .pagemap import build_page_map, page_book_text
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
+from .secondlook import merge_overlaps, probe, reanchor_edits, settle_queries
 from .verify import verify
 
 log = logging.getLogger("docproof.corrections.run")
@@ -56,8 +57,16 @@ class CorrectionsOutputs:
     # applied, flagged, a no-op, or never turned into an edit. Empty when the
     # source was a typed list with no comments behind it.
     comments: tuple[CommentDisposition, ...] = ()
-    # The sanity gate's model spend, when it ran; None on the free path.
+    # The model spend of the opt-in passes (second look, sanity gate), when any
+    # ran; None on the free path.
     usage: Usage | None = None
+    # What the opt-in second look repaired: queries settled into concrete edits,
+    # lost anchors re-quoted from the book's page text, and colliding sets of
+    # corrections merged into one. All 0 when the pass was off, or when every
+    # flag it read really was a person's.
+    settled: int = 0
+    reanchored: int = 0
+    merged: int = 0
     # How much of the proof the page map could place in the book. A page it could
     # not place is a page whose marks fall back to searching the whole book, so a
     # low number here explains a run with more flags than expected — and stops the
@@ -278,6 +287,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       id_prefix: str = "c", dest_name: str | None = None,
                       comments: Sequence | None = None,
                       sanity: tuple[Provider, str] | None = None,
+                      second_look: tuple[Provider, str] | None = None,
                       page_texts: Sequence[str] | None = None
                       ) -> CorrectionsOutputs:
     """Apply a corrections source to `src_idml`, writing the corrected IDML and
@@ -293,6 +303,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     lost. `sanity` is an optional `(provider, model)` gate that reads each proposed
     edit and holds a doubtful one back for a human instead of applying it; it adds
     a small model spend (returned on the outputs) and is off by default.
+    `second_look` is the other opt-in `(provider, model)` pass, run first, with
+    three repairs (see `secondlook`): it commits the delegated queries — a
+    reviewer offering alternatives, a conditional the page settles — to concrete
+    edits; it re-quotes an anchor the book does not carry (an artifact-ridden
+    find, a repeated one nothing chose between) from the book's own page text;
+    and it merges corrections that collided on one span into a single edit.
+    Everything it produces then anchors, gates and verifies like any other edit.
+    Both passes share the returned usage.
 
     `page_texts` is the text of each page of the proof, in order, as the PDF reader
     read it. Given it, each page is aligned against the book's own text once, and a
@@ -305,16 +323,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
 
-    usage = None
-    withheld: dict[str, str] = {}
-    if sanity is not None:
-        provider, model = sanity
-        usage = Usage()
-        withheld = review_edits(edits, provider, model=model, usage=usage)
+    usage = Usage() if (sanity is not None or second_look is not None) else None
 
     # The page map, built once and shared by the apply and the self-check so both
-    # place every edit identically.
+    # place every edit identically. The book's own text per cited page rides with
+    # it: the second look quotes its anchors from it, and the ordinal fill below
+    # counts a repeated word's copies over it.
     scope = None
+    book_pages: dict[int, str] = {}
     pages_placed = pages_total = 0
     if page_texts:
         page_texts = list(page_texts)
@@ -322,19 +338,53 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         stories = read_stories(src_idml)
         scope = build_page_map(stories, page_texts)
         pages_placed = scope.placed
-        # Fill the copy-ordinal for a repeated-word edit the model could not count.
-        # The rule-resolved edits already carry it; a model-read one is pinned here
-        # to the copy the mark sits on, read the same deterministic way the rules
-        # read it — from the citing comment's own offset, the book text settling the
-        # count and the proof's page text settling the position. This is the one
-        # place a model-read edit and its mark are back together with both
-        # renderings, so it is where the ordinal the model is unreliable at is put
-        # right.
-        if comments:
-            cited = {e.page for e in edits if e.page and scope.knows(e.page)}
-            book_pages = {p: page_book_text(stories, scope, p) for p in cited}
-            edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
-                                          pdf_pages=page_texts)
+        cited = {e.page for e in edits if e.page and scope.knows(e.page)}
+        book_pages = {p: page_book_text(stories, scope, p) for p in cited}
+
+    # The second look runs before the sanity gate on purpose: what it settles
+    # becomes an ordinary proposed edit, and the gate then reads the model's
+    # choices with the same suspicion as everyone else's.
+    settled = 0
+    if second_look is not None:
+        provider, model = second_look
+        edits, settled = settle_queries(edits, provider, model=model,
+                                        usage=usage, book_pages=book_pages)
+
+    # Fill the copy-ordinal for a repeated-word edit the model could not count.
+    # The rule-resolved edits already carry it; a model-read one is pinned here
+    # to the copy the mark sits on, read the same deterministic way the rules
+    # read it — from the citing comment's own offset, the book text settling the
+    # count and the proof's page text settling the position. This is the one
+    # place a model-read edit and its mark are back together with both
+    # renderings, so it is where the ordinal the model is unreliable at is put
+    # right. It runs before the second look's dry run below, so an edit the
+    # mark's own position can pin is never mistaken for a lost anchor.
+    if scope is not None and comments:
+        edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
+                                      pdf_pages=page_texts)
+
+    # The second look's other two repairs need to know what a real apply would
+    # flag, so a dry run on throwaway stories finds the edits that would fail —
+    # the lost anchors are re-quoted from the book's own page text, and each
+    # set of corrections that collided on one span is merged into a single
+    # edit. Both go back through the real apply below like anything else.
+    reanchored = merged = 0
+    if second_look is not None and book_pages:
+        provider, model = second_look
+        lost, collisions = probe(read_stories(src_idml), edits, scope=scope)
+        if lost:
+            edits, reanchored = reanchor_edits(
+                edits, lost, provider, model=model, usage=usage,
+                book_pages=book_pages)
+        if collisions:
+            edits, merged = merge_overlaps(
+                edits, collisions, provider, model=model, usage=usage,
+                book_pages=book_pages)
+
+    withheld: dict[str, str] = {}
+    if sanity is not None:
+        provider, model = sanity
+        withheld = review_edits(edits, provider, model=model, usage=usage)
 
     corrected = out / (dest_name or corrected_name(src_idml))
     apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld,
@@ -352,19 +402,21 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
-        deterministic=(sanity is None), pages=(pages_placed, pages_total),
-        checks=checks)
+        deterministic=(sanity is None and second_look is None),
+        pages=(pages_placed, pages_total), checks=checks)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
-             "%d/%d page(s) placed; verify %s",
+             "second look settled %d, re-anchored %d, merged %d; %d/%d page(s) "
+             "placed; verify %s",
              Path(src_idml).name, apply_report.summary(), len(dispositions),
              sum(1 for d in dispositions if d.needs_human),
-             pages_placed, pages_total,
+             settled, reanchored, merged, pages_placed, pages_total,
              "clean" if verify_report.clean else "has discrepancies")
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=corrected, apply=apply_report,
-        comments=dispositions, usage=usage, pages_placed=pages_placed,
-        pages_total=pages_total, checks=checks)
+        comments=dispositions, usage=usage, settled=settled,
+        reanchored=reanchored, merged=merged,
+        pages_placed=pages_placed, pages_total=pages_total, checks=checks)
 
 
 def _verify_status_of(verify_report: VerifyReport):

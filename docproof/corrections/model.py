@@ -168,6 +168,10 @@ class EditOutcome:
     paragraph: int = -1
     occurrences: int = 0               # how many times `find` was found in all
     detail: str = ""
+    # On an OVERLAPS outcome: the id(s) of the applied edit(s) whose span this
+    # one collided with — what lets the flag name the other correction, and lets
+    # the second look put the two side by side and merge them into one.
+    collides_with: tuple[str, ...] = ()
 
     @property
     def applied(self) -> bool:

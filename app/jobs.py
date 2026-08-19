@@ -327,6 +327,11 @@ class Job:
     # Corrections only: run the opt-in model sanity gate before applying, holding
     # a doubtful edit back for a human. Off keeps the run deterministic and free.
     corrections_sanity: bool = False
+    # Corrections only: run the opt-in second look before applying — a stronger
+    # model re-reads the notes the extractor left as queries (a reviewer offering
+    # alternatives, a conditional the page settles) and commits the delegated
+    # ones to concrete edits. Off keeps every query a human's.
+    corrections_second_look: bool = False
     # Prep, book output only: the operator's per-job answers for the sketch —
     # subject matter (picks the title-page face), running-head title and
     # author. Empty means "use what the detector reads off the opening pages",
@@ -1706,15 +1711,18 @@ class JobRunner:
             except (json.JSONDecodeError, ValueError):
                 page_texts = None
 
-        # The opt-in sanity gate. Building a provider is the only place this run
-        # touches a model; when it is off (the default) the run stays free and
-        # deterministic. A missing key turns the gate off rather than failing.
+        # The opt-in model passes. Building a provider is the only place this run
+        # touches a model; when both are off (the default) the run stays free and
+        # deterministic. A missing key turns a pass off rather than failing.
         sanity = self._corrections_sanity(job) if job.corrections_sanity else None
+        second = (self._corrections_second_look(job)
+                  if job.corrections_second_look else None)
 
         out = self._claim_results_dir(job)
         try:
             outputs = apply_corrections(job.source_path, job.corrections, out,
                                         comments=comments, sanity=sanity,
+                                        second_look=second,
                                         page_texts=page_texts)
         except (ValueError, OSError) as e:
             # A corrections list the parser refuses whole (malformed JSON), or a
@@ -1728,16 +1736,17 @@ class JobRunner:
             self._release_results_dir(job_id)
             raise
 
-        # The sanity gate's small model spend, when it ran, recorded like any
+        # The opt-in passes' small model spend, when any ran, recorded like any
         # other so the dashboard is honest; the deterministic path stays 0.0.
         cost = 0.0
         if outputs.usage is not None:
             try:
-                cost = cost_of_usage(outputs.usage,
-                                     fallback_model=(sanity[1] if sanity else ""),
+                fallback = (sanity[1] if sanity else
+                            second[1] if second else "")
+                cost = cost_of_usage(outputs.usage, fallback_model=fallback,
                                      batch=False) or 0.0
             except Exception:                 # noqa: BLE001 - spend logging is not the job
-                log.warning("Could not price the corrections sanity gate",
+                log.warning("Could not price the corrections model passes",
                             exc_info=True)
 
         # `applied`/`flags` reuse the fields prep and review already fill so the
@@ -1771,6 +1780,28 @@ class JobRunner:
             return self._provider(cfg), CORRECTIONS_EXTRACT_MODEL
         except Exception:                     # noqa: BLE001 - a missing gate must not sink the run
             log.warning("Could not build the corrections sanity gate; skipping",
+                        exc_info=True)
+            return None
+
+    def _corrections_second_look(self, job):
+        """The `(provider, model)` for the opt-in second look over the extractor's
+        queries, or None when no key is set — the pass is then quietly skipped and
+        every query stays a human's, exactly as with the gate off. Uses the strong
+        reader (see CORRECTIONS_SECOND_LOOK_MODEL): the whole point of the pass is
+        an editorial call the cheap extractor refused to make."""
+        from app.routes.jobs import CORRECTIONS_SECOND_LOOK_MODEL as model
+        try:
+            cfg = self.config_for(job)
+            cfg.api.model = model
+            info = lookup(model)
+            key = get_api_key(info.provider) if info else None
+            if not key:
+                log.warning("Corrections second look requested but no key for "
+                            "%s; skipping the pass", model)
+                return None
+            return self._provider(cfg), model
+        except Exception:                     # noqa: BLE001 - a missing pass must not sink the run
+            log.warning("Could not build the corrections second look; skipping",
                         exc_info=True)
             return None
 

@@ -85,6 +85,11 @@ class JobRequest(BaseModel):
     # applying, holding a doubtful one (an over-grab, an anachronism, nonsense)
     # back for a human. Off keeps the job deterministic and free.
     corrections_sanity: bool = False
+    # Corrections only: run the opt-in second look before applying — a stronger
+    # model re-reads the notes the extractor left as queries and commits the
+    # delegated ones (an either/or the reviewer offered, a conditional the page
+    # settles) to concrete edits. Off keeps every query a human's.
+    corrections_second_look: bool = False
     prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
     # Book output only: the operator's answers for the sketch. Empty means
     # "let the detector read them off the opening pages".
@@ -146,6 +151,13 @@ class JobRequest(BaseModel):
 # person reviews the draft before anything is applied, so the quality is worth
 # the small cost. The redlined-Word path is deterministic and uses no model at all.
 CORRECTIONS_EXTRACT_MODEL = "gpt-5.6-luna"
+
+# The model for the opt-in second look over the extractor's queries. Sol, the
+# strong sibling on the same key Luna's extraction already proved is set: the
+# pass exists to make the editorial calls the reviewer delegated ("em dash or
+# semicolon — pick"), which is judgment work, and it reads a handful of notes
+# per book, so the stronger model costs cents where it costs anything.
+CORRECTIONS_SECOND_LOOK_MODEL = "gpt-5.6-sol"
 
 # How many marked-up comments to read in one model call. A proof can carry
 # hundreds; reading them all at once overruns the model's output ceiling and
@@ -309,6 +321,7 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         corrections_comments=comments,
         corrections_pages=pages,
         corrections_sanity=bool(req.corrections_sanity),
+        corrections_second_look=bool(req.corrections_second_look),
         created_at=datetime.now(timezone.utc).isoformat(),
         owner_id=owner,
     )
