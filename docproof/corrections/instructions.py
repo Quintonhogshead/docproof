@@ -207,6 +207,28 @@ def _tuck_quotes(text: str) -> str:
         text)
 
 
+# A note that asks for something to be done, matched on stems so a participle
+# ("enclosed", "italicized") reads the same as the imperative.
+_ASKS = re.compile(r"\b(?:replac|remov|delet|add|insert|capitali[sz]|lowercas"
+                   r"|italici[sz]|roman|hyphenat|enclos|swap|chang|correct"
+                   r"|spell out|close up|should be|should have|needs? to be)",
+                   re.IGNORECASE)
+# …and the notes that ask for the opposite. "Stet" is an instruction to leave the
+# text exactly as it is, so a no-op is the whole of what it wanted.
+_LEAVE_IT = re.compile(r"\bstet\b|\bleave (?:it|as|this)\b|\bno change\b"
+                       r"|\bas set\b", re.IGNORECASE)
+
+
+def asks_for_a_change(note: str) -> bool:
+    """Whether a reviewer's note is asking for the text to be different.
+
+    Used to tell a real no-op from a mark that was never answered: a note reading
+    "already fine" is satisfied by changing nothing, and one reading "song title
+    should be enclosed in quotes, not italicized" is not."""
+    note = note or ""
+    return bool(_ASKS.search(note)) and not _LEAVE_IT.search(note)
+
+
 def house_typography(edits):
     """`edits` with the two typographic slips a replacement picks up on its way out
     of a comment box put right.
@@ -791,7 +813,26 @@ def _literal_after_colon(low, note, anchor, highlighted) -> Resolved | None:
     find = _target_of(anchor, literal)
     if find is None or literal == find:
         return None
-    return Resolved(find, literal, MECHANICAL, "literal-after-colon")
+    return Resolved(find, _kept_opener(low, find, literal), MECHANICAL,
+                    "literal-after-colon")
+
+
+def _kept_opener(low: str, find: str, literal: str) -> str:
+    """The literal with the marked text's opening quotation mark put back, when
+    the note asked for something to be *added*.
+
+    "Add drop apostrophe: ’bout" against ‘bout is one character away from being
+    the answer, and the character is not the reviewer's to lose: the ‘ opens a
+    nested quotation and the ’ that closes it is further down the line. Writing
+    the literal over the word converts the opener into the apostrophe and leaves
+    the closer with no partner — `I said, ’bout damn time.’”`. A note that says
+    *add* has said that nothing goes, so the mark keeps its opener and the
+    apostrophe joins it."""
+    if not re.match(r"^(?:add|insert)\b", low):
+        return literal
+    if find[:1] not in "‘“" or literal[:1] in "‘“":
+        return literal
+    return find[0] + literal
 
 
 def _replace_punctuation_named(low, note, anchor, highlighted) -> Resolved | None:

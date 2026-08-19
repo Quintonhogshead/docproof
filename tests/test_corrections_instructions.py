@@ -547,3 +547,43 @@ def test_house_typography_leaves_the_book_alone():
     from docproof.corrections.model import Edit
     kept = house_typography([Edit("a", "the pot’”.", "the pot’”. He said")])
     assert kept[0].replace == "the pot’”. He said"
+
+
+def test_a_long_mark_still_answers_a_note_that_names_its_target():
+    """A mark over a whole line points at nothing in particular, so the rules that
+    have to pick inside it decline. Naming is not picking: only one hyphen on this
+    line stands between two digits, and it is the one an en dash is asked for."""
+    got = r("Replace hyphen with en dash (–)",
+            "ing left winger, Danny. It was an easy tap-in to go up 1-0. As")
+    assert got is not None
+    assert got.find == " to go up 1-" and got.replace == " to go up 1–"
+
+
+def test_a_long_mark_declines_the_bare_count():
+    """One comma in a line the reviewer highlighted whole is not evidence of
+    anything — they marked the line, not the comma."""
+    assert r("Replace comma with period",
+             "ing left winger, Danny. It was an easy tap in to go up one nil") is None
+
+
+def test_an_addition_keeps_the_marked_opening_quote():
+    """"Add drop apostrophe: ’bout" against ‘bout — the ‘ opens a nested quotation
+    whose ’ is further down the line, and writing the literal over the word
+    converts the opener and leaves the closer without a partner."""
+    got = r("Add drop apostrophe: ’bout", "‘bout")
+    assert got is not None and got.replace == "‘’bout"
+
+
+def test_a_replacement_after_a_colon_still_replaces():
+    """Only an *addition* keeps what the mark carried. "Replace with" is a swap."""
+    assert r("Replace with: ’bout", "‘bout").replace == "’bout"
+
+
+def test_a_note_that_asks_for_nothing_is_not_a_change_request():
+    from docproof.corrections.instructions import asks_for_a_change
+    assert asks_for_a_change("Song title should be enclosed in quotes, "
+                             "not italicized")
+    assert asks_for_a_change("Replace comma with period")
+    assert not asks_for_a_change("already fine")
+    assert not asks_for_a_change("stet")
+    assert not asks_for_a_change("Leave as set — the repetition is deliberate")

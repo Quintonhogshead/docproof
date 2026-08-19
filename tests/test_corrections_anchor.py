@@ -359,3 +359,123 @@ def test_the_widest_view_gates_the_search_without_narrowing_it():
         assert all_spans(text, needle, cache=cache), (text, needle)
         # and the same answer whether or not a cache is in play
         assert bool(all_spans(text, needle)) is True
+
+
+# --- what the apply can see and the note could not say -------------------------
+
+def test_an_inserted_dash_closes_up_the_space_the_comma_left():
+    """The house sets both dashes closed up. A note asking for an em dash where a
+    comma stands does not quote the space that followed the comma, so the write
+    leaves it: "Exactly— what else". Four shipped on one proof, each a correctly
+    applied edit."""
+    story = _story("“Exactly, what else would you be doing otherwise?”")
+    edit = Edit("e1", "“Exactly, ", "“Exactly—")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].applied
+    assert story.paragraphs[0].text == "“Exactly—what else would you be doing otherwise?”"
+
+
+def test_a_dash_the_edit_quoted_keeps_its_own_spacing():
+    story = _story("the traffic – folks on their commutes")
+    edit = Edit("e1", "traffic – ", "traffic — ")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].applied
+    assert story.paragraphs[0].text == "the traffic — folks on their commutes"
+
+
+def test_the_sentence_comma_moves_inside_a_quotation_mark_just_added():
+    """"Enclose in quotes" quotes only what it was given, so the sentence's own
+    comma is left outside: `for “bon appétit”, and it was`. US practice puts it
+    inside, and the mark is one character past the span, so nothing but the apply
+    can see it."""
+    story = _story("It was Persian for bon appétit, and it was his way.")
+    edit = Edit("e1", "bon appétit", "“bon appétit”")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].applied
+    assert "for “bon appétit,” and it was" in story.paragraphs[0].text
+
+
+def test_doubles_replace_the_singles_they_would_otherwise_nest_inside():
+    """A find that quoted the words without the marks around them printed
+    ‘“What the fuck just happened?”’."""
+    story = _story("‘What the fuck just happened?’ I said to myself.")
+    edit = Edit("e1", "What the fuck just happened?", "“What the fuck just happened?”")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].applied
+    assert story.paragraphs[0].text == "“What the fuck just happened?” I said to myself."
+
+
+def test_a_rewritten_negation_does_not_leave_the_old_one_standing():
+    """"it's" → "it wasn't" against "if it's not the racism" rewrites the whole
+    negation; the "not" is a word further on, outside anything the note quoted."""
+    story = _story("So, if it’s not the racism I faced, it was something else.")
+    edit = Edit("e1", "it’s", "it wasn’t")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].applied
+    assert story.paragraphs[0].text.startswith("So, if it wasn’t the racism")
+
+
+def test_an_ordinal_names_the_copy_the_page_held_when_it_was_marked():
+    """An ordinal counts copies on the page the reviewer read, and is read back
+    against a document the corrections before it have already edited. An earlier
+    "is" → "was" adds a copy the reviewer never counted, and every ordinal after it
+    on the page then names the copy in front of the one it means."""
+    story = _story("Anyone getting to regionals is going to be quick.",
+                   "It was perfect. If there was a light drizzle, better still.")
+    edits = [Edit("e1", "regionals is", "regionals was"),
+             Edit("e2", "was", "were", occurrence=3)]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert all(o.applied for o in outcomes)
+    assert story.paragraphs[1].text == (
+        "It was perfect. If there were a light drizzle, better still.")
+
+
+def test_a_find_an_earlier_correction_changed_is_still_placed():
+    """Every mark was written against the same page, but the corrections are
+    applied one after another: the second mark on a line arrives to find the words
+    it quoted already gone. The run this edit changes came through untouched, so
+    only that run is rewritten and both corrections stand."""
+    story = _story("“No, not all, besides you haven’t been in a while.”")
+    edits = [Edit("e1", "not all", "not at all"),
+             Edit("e2", "“No, not all, besides you", "“No, not all. Besides, you")]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert all(o.applied for o in outcomes), [o.status for o in outcomes]
+    assert story.paragraphs[0].text == (
+        "“No, not at all. Besides, you haven’t been in a while.”")
+
+
+def test_a_stale_find_whose_replacement_already_carries_the_earlier_edit():
+    """A reviewer marking one line twice writes the second note against the line as
+    it will read, so `‘the’ → “the”` arrives inside the note about the possessive.
+    The replacement is written whole."""
+    story = _story("folks always dropped the ‘the’ and the possessive ‘s’)")
+    edits = [Edit("e1", "‘the’", "“the”"),
+             Edit("e2", "‘the’ and the possessive ‘s’)",
+                  "“the” and the possessive ’s)")]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert all(o.applied for o in outcomes), [o.status for o in outcomes]
+    assert story.paragraphs[0].text == (
+        "folks always dropped the “the” and the possessive ’s)")
+
+
+def test_a_stale_find_the_two_corrections_disagree_about_is_still_flagged():
+    """Neither safe reading holds: the earlier write is inside the run this edit
+    changes, and its result is nowhere in the replacement. That is two corrections
+    contradicting each other, which is a person's to settle."""
+    story = _story("She was hungry and tired that evening.")
+    edits = [Edit("e1", "hungry", "starving"),
+             Edit("e2", "was hungry and tired", "was famished and tired")]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert outcomes[0].applied and not outcomes[1].applied
+    assert story.paragraphs[0].text == "She was starving and tired that evening."
+
+
+def test_a_stale_find_is_rewritten_only_where_it_actually_changes():
+    """The earlier write is in the words around the run this edit changes, so
+    neither correction undoes the other."""
+    story = _story("She was hungry and tired that evening.")
+    edits = [Edit("e1", "hungry", "starving"),
+             Edit("e2", "was hungry and tired", "was hungry and cold")]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert all(o.applied for o in outcomes)
+    assert story.paragraphs[0].text == "She was starving and cold that evening."
