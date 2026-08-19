@@ -33,7 +33,7 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .instructions import fill_edit_occurrences
+from .instructions import fill_edit_occurrences, widen_edits_to_marks
 from .pagemap import build_page_map, page_book_text, paragraph_lookup
 from .parse import ParseResult, parse_edits
 from .report import write_report
@@ -412,6 +412,10 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     # right. It runs before the second look's dry run below, so an edit the
     # mark's own position can pin is never mistaken for a lost anchor.
     if scope is not None and comments:
+        # Widen first, then count: an edit put back to the run the reviewer
+        # actually highlighted is a different `find`, and the ordinal has to be
+        # counted over the copies of *that*.
+        edits = widen_edits_to_marks(edits, comments, book_pages=book_pages)
         edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
                                       pdf_pages=page_texts)
 

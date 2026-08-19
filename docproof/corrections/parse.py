@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from .model import DESIGN, FORMATS, JUDGMENT, MECHANICAL, PARA_OPS, Edit
+from .overgrab import repair_pair
 from .textmatch import normalize
 
 KINDS = (MECHANICAL, JUDGMENT, DESIGN)
@@ -295,6 +296,17 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
             return ParseIssue(index, "a design entry needs a find anchor or an "
                               "instruction describing the request", raw)
     else:
+        # An over-grabbing pair pulled back to the change its note describes —
+        # see `overgrab`. It runs here, on the one funnel both a typed list and
+        # an extracted one come through, because the failure it repairs is
+        # invisible everywhere downstream: `apply` writes the pair it is given,
+        # and `verify` then confirms the file matches the pair, so a find that
+        # swallowed a closing quotation mark is reported as applied exactly. A
+        # repair only ever shortens the run written over, and never one a
+        # formatting or paragraph request named (those change no words, and
+        # their find is copied into replace unchanged).
+        if not fmt and not para_op:
+            find, replace = repair_pair(find, replace, instruction)
         # A text edit anchors to the exact run it changes. An empty find is a
         # pure insertion, which the anchor cannot place (there is nothing to
         # locate) — the model documents this and parsers must refuse it.
