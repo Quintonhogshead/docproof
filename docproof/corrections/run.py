@@ -32,7 +32,8 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .pagemap import build_page_map
+from .instructions import fill_edit_occurrences
+from .pagemap import build_page_map, page_book_text
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
@@ -316,9 +317,24 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     scope = None
     pages_placed = pages_total = 0
     if page_texts:
+        page_texts = list(page_texts)
         pages_total = len(page_texts)
-        scope = build_page_map(read_stories(src_idml), list(page_texts))
+        stories = read_stories(src_idml)
+        scope = build_page_map(stories, page_texts)
         pages_placed = scope.placed
+        # Fill the copy-ordinal for a repeated-word edit the model could not count.
+        # The rule-resolved edits already carry it; a model-read one is pinned here
+        # to the copy the mark sits on, read the same deterministic way the rules
+        # read it — from the citing comment's own offset, the book text settling the
+        # count and the proof's page text settling the position. This is the one
+        # place a model-read edit and its mark are back together with both
+        # renderings, so it is where the ordinal the model is unreliable at is put
+        # right.
+        if comments:
+            cited = {e.page for e in edits if e.page and scope.knows(e.page)}
+            book_pages = {p: page_book_text(stories, scope, p) for p in cited}
+            edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
+                                          pdf_pages=page_texts)
 
     corrected = out / (dest_name or corrected_name(src_idml))
     apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld,

@@ -1228,15 +1228,16 @@ def register(app: FastAPI) -> None:
         # notes no rule is certain of, so it neither invents a `find` for the easy
         # ones nor gets billed for them.
         # The book's own words for every page a comment sits on. The model quotes
-        # the file it is editing instead of a rendering of it — and the rules need
-        # the same text to say WHICH copy of a repeated word a mark is on, because
-        # that ordinal is read back after `apply` has narrowed to the page's run of
-        # the book, so counting it over the PDF's rendering answers the wrong
-        # question (a running head and a hyphenated word are copies the book does
-        # not have).
+        # the file it is editing instead of a rendering of it — and the rules count
+        # a repeated word's copies over the same text, because that ordinal is read
+        # back after `apply` has narrowed to the page's run of the book (a running
+        # head and a hyphenated word are copies the book does not have). The proof's
+        # own page texts ride along too: the mark's offset was measured against them,
+        # so they are where `_ordinal` locates which copy the mark sits on.
         book = _book_pages_for(file_id, owner, list(proof.page_texts),
                               {c.page for c in comments})
-        resolved, unresolved = edits_from_comments(comments, pages=book)
+        resolved, unresolved = edits_from_comments(
+            comments, pages=book, pdf_pages=list(proof.page_texts))
         batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
                                           pages=book)
         # The comments themselves ride back too, so the panel can carry them into
@@ -1246,8 +1247,12 @@ def register(app: FastAPI) -> None:
         # which is the difference between an edit that lands and one that can only
         # be flagged. A novel's worth is a few hundred kilobytes of JSON — large
         # for a payload, small next to the PDF it was read from.
+        # `offset` rides along so the job can settle which copy of a repeated word a
+        # model-read edit meant — the ordinal the rules already carry, filled in for
+        # the model's edits at apply time from the mark's own position.
         items = [{"id": c.id, "page": c.page, "kind": c.kind,
-                  "instruction": c.instruction, "anchor": c.anchor}
+                  "instruction": c.instruction, "anchor": c.anchor,
+                  "offset": c.offset}
                  for c in comments]
         return {"count": len(comments), "batches": batches, "comments": items,
                 "pages": list(proof.page_texts),
@@ -1274,7 +1279,8 @@ def register(app: FastAPI) -> None:
         comments = list(proof.comments)
         book = _book_pages_for(file_id, owner, list(proof.page_texts),
                               {c.page for c in comments})
-        resolved, unresolved = edits_from_comments(comments, pages=book)
+        resolved, unresolved = edits_from_comments(
+            comments, pages=book, pdf_pages=list(proof.page_texts))
         batches = comments_source_batches(unresolved, CORRECTIONS_PDF_BATCH_SIZE,
                                           pages=book)
         response = _extract_batches_with_model(app, owner, batches)
@@ -1286,7 +1292,8 @@ def register(app: FastAPI) -> None:
             response["count"] = len(merged)
         response["comments"] = [
             {"id": c.id, "page": c.page, "kind": c.kind,
-             "instruction": c.instruction, "anchor": c.anchor} for c in comments]
+             "instruction": c.instruction, "anchor": c.anchor,
+             "offset": c.offset} for c in comments]
         response["pages"] = list(proof.page_texts)
         return response
 
