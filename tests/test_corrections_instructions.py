@@ -254,6 +254,17 @@ def test_a_capitalize_clause_may_work_over_the_marked_line():
     assert "late, w" in got.find
 
 
+def test_a_capitalize_clause_reaches_across_a_closing_quote_and_a_space():
+    """The commonest shape of all: a comma that closes a line of dialogue, with a
+    closing quotation mark AND a space between it and the named word — "though,” she".
+    The adjacency test has to see across both, or the mark falls to the model, which
+    on the real proof capitalized "she" and left the comma a comma."""
+    got = r('Replace comma with period and capitalize "she"', "though,",
+            context="“I guess. Y’all make sense, though,” she paused.")
+    assert got is not None
+    assert 'though.” S' in got.replace and 'though,” s' in got.find
+
+
 def test_widening_to_the_line_needs_the_word_directly_after_the_mark():
     """That adjacency is the proof the line is the sentence the note is about. A
     line that merely holds a comma somewhere is not evidence of anything."""

@@ -19,7 +19,8 @@ from ..validator import fold_punct
 from .idml import Paragraph, Story, read_stories, rewrite_stories
 from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
                     Edit, EditOutcome, FORMAT_ITALIC, FORMAT_ROMAN, FORMATS,
-                    NO_CHANGE, NO_CHARACTER_STYLE, NOT_FOUND, OVERLAPS,
+                    JUDGMENT, NO_CHANGE, NO_CHARACTER_STYLE, NOT_FOUND,
+                    OFF_PAGE, OVERLAPS,
                     PARA_ATTRS, PARA_DELETE, PARA_INSERT_BEFORE,
                     PARA_MERGE_NEXT, PARA_SPLIT_AT, ROUTED_TO_DESIGN,
                     UNPLACEABLE, UNSTYLEABLE, WITHHELD, is_italic_style,
@@ -128,6 +129,12 @@ def all_spans(haystack: str, needle: str, *, cache: IndexCache | None = None,
 _WORDISH = "'’"
 
 
+def _wordish(ch: str) -> bool:
+    """Whether `ch` continues a word — a letter or digit, or an apostrophe that
+    holds one together ("wouldn’t")."""
+    return bool(ch) and (ch.isalnum() or ch in _WORDISH)
+
+
 def _one_word(probe: str) -> bool:
     """Whether an anchor is a single word and nothing else — letters, digits and
     the apostrophes that hold a word together, with no space and no punctuation.
@@ -157,13 +164,9 @@ def _whole_words(text: str, span: tuple[int, int], probe: str) -> bool:
     themselves word characters are checked; an anchor that starts on punctuation
     is free to begin mid-word."""
     start, end = span
-
-    def wordish(ch: str) -> bool:
-        return ch.isalnum() or ch in _WORDISH
-
-    if probe[:1].isalnum() and start > 0 and wordish(text[start - 1]):
+    if probe[:1].isalnum() and start > 0 and _wordish(text[start - 1]):
         return False
-    if probe[-1:].isalnum() and end < len(text) and wordish(text[end]):
+    if probe[-1:].isalnum() and end < len(text) and _wordish(text[end]):
         return False
     return True
 
@@ -345,7 +348,23 @@ class _Rebase:
     def note(self, key: tuple[str, int], text: str, start: int, end: int,
              new_len: int, new_text: str = "") -> None:
         """Record a write of `new_len` characters over the live `[start, end)` of
-        a paragraph whose text is `text` just before the write."""
+        a paragraph whose text is `text` just before the write.
+
+        Only the run that actually changed is recorded, not the whole matched span:
+        an edit's `find` reaches out to an address, but its write leaves the prefix
+        and suffix it shares with the replacement untouched. Recording the address
+        as "written" would strand the *next* mark on the same line — its own change
+        may sit inside this edit's shared prefix, which never moved, and carrying it
+        forward through a write that did not touch it is what made two em dashes on
+        one line ("subtle—well" then "subtle—middle") lose the second to a
+        `not_found`. Trimming to the changed core keeps every unchanged position
+        carryable."""
+        found = text[start:end]
+        if new_text or found:
+            cpre, csuf = _core(found, new_text)
+            start, end = start + cpre, end - csuf
+            new_text = new_text[cpre:len(new_text) - csuf]
+            new_len = len(new_text)
         self._before.setdefault(key, text)
         moves = self._moves.setdefault(key, [])
         span = (_to_before(moves, start), _to_before(moves, end), new_len)
@@ -601,6 +620,20 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
     # narrowing is the better evidence, so the ordinal yields to it rather than
     # contradicting it.
     if n == 1:
+        # One candidate, but the page it cites was placed in the book and this is
+        # not on it — the page anchor failed and is about to be discarded, which is
+        # exactly how a mark for page 157 landed on the identical wording of page
+        # 181. A lone match on the wrong page is a wrong copy, not an answer: refuse
+        # it. (An unplaced page tells us nothing, so it still applies.)
+        if (edit.page and scope is not None and scope.knows(edit.page)
+                and not on_page):
+            story, para, _s, _e = candidates[0]
+            return EditOutcome(
+                edit, OFF_PAGE, story_id=story.story_id, paragraph=para.index,
+                occurrences=1,
+                detail=f"the only place this text occurs is not on page {edit.page}, "
+                       f"where the mark was made — applying it would land the "
+                       f"correction on the wrong copy")
         return candidates[0]
     # The copy the ordinal named on the page as the reviewer read it, wherever
     # that text has since moved to. Measured before the run touched anything, so
@@ -779,9 +812,23 @@ def _with_article_fix(para: Paragraph, start: int, end: int,
     and the replacement carries the corrected one — folded into the one write so
     offsets shift once, not twice. Case is preserved (sentence-initial "A"/"An")."""
     text = para.text
+    # The span must begin at a word boundary for the letters behind it to be a
+    # standalone article. When `find` opens on a word character glued to the
+    # letter before it, `start` sits *inside* a word — "and made it" quoted as
+    # "d made it", where the "an" behind the cut is the tail of "and", not an
+    # article — and reading it as one ate the n. Only a lone word answers to the
+    # article fixer; anything mid-word is left exactly as matched.
+    if (start < len(text) and _wordish(text[start])
+            and start > 0 and _wordish(text[start - 1])):
+        return start, replace
     j = start
     while j > 0 and text[j - 1] == " ":
         j -= 1
+    # A real article is a separate word, so at least one space stands between it
+    # and the run being changed. No space skipped means the letters behind the
+    # span abut it directly — not an article, just the previous word.
+    if j == start:
+        return start, replace
     k = j
     while k > 0 and text[k - 1].isalpha():
         k -= 1
@@ -789,13 +836,12 @@ def _with_article_fix(para: Paragraph, start: int, end: int,
     if prev.lower() not in ("a", "an"):
         return start, replace
     tail = replace + text[end:]                # what will sit after the article
-    m = 0
-    while m < len(tail) and not tail[m].isalnum():
-        m += 1
-    n = m
-    while n < len(tail) and (tail[n].isalpha() or tail[n] in "'’"):
-        n += 1
-    following = tail[m:n]
+    following = _first_word(tail)
+    # Only when the swap actually changed the word the article introduces. If the
+    # replacement left that word's opening intact, the article was already right
+    # for it, and re-deciding it risks "correcting" the reviewer's own choice.
+    if following == _first_word(text[start:]):
+        return start, replace
     want = indefinite_article(following)
     if want is None:
         return start, replace
@@ -804,6 +850,18 @@ def _with_article_fix(para: Paragraph, start: int, end: int,
     if want == prev:
         return start, replace
     return k, want + text[j:start] + replace
+
+
+def _first_word(s: str) -> str:
+    """The first run of word characters in `s`, skipping any leading punctuation
+    or space — the word an article would have to agree with."""
+    m = 0
+    while m < len(s) and not s[m].isalnum():
+        m += 1
+    n = m
+    while n < len(s) and (s[n].isalpha() or s[n] in "'’"):
+        n += 1
+    return s[m:n]
 
 
 _SENTENCE_END = ".?!"
@@ -1063,6 +1121,49 @@ class _Touched:
         self.record(key, start, end, new_len, edit_id)
 
 
+# A note that asks, in so many words, for text to be cut — so a large deletion it
+# licenses is the reviewer's, not an over-grab. Matched on stems, participles
+# included ("deleted", "removing").
+_DELETE_VERB = re.compile(r"\b(?:delet|remov|cut|drop|omit|strik|excis|take out"
+                          r"|taken out)\w*", re.IGNORECASE)
+
+
+def _query_detail(edit: Edit) -> str:
+    """What a flagged judgment says for itself in the report. A query that carries
+    a concrete proposal (a rewrite the reviewer or a model offered) shows it, so the
+    person deciding sees the candidate answer rather than a bare "no change"."""
+    if edit.replace and edit.replace != edit.find:
+        return (f"a query for a person — a possible answer is "
+                f"\"{edit.replace}\"")
+    return "a query for a person — the model proposed no concrete change"
+
+
+def _destructive_deletion(edit: Edit) -> str:
+    """A reason to withhold `edit`, or "" — the backstop against an edit that would
+    quietly cut a sentence or more.
+
+    Narrow by construction, so a real correction is never held: only a *pure*
+    deletion (the replacement is the found text with a contiguous run removed and
+    nothing put in its place), only when the removed run crosses a sentence boundary
+    (a full stop with a word after it — the "ate a whole sentence" signature, not a
+    within-phrase tightening), and only when the reviewer's note does not itself ask
+    for a cut. A note that says "delete"/"cut"/"remove" has licensed the deletion,
+    however large, and is left alone."""
+    if edit.is_format or edit.is_layout or edit.kind == DESIGN:
+        return ""
+    pre, suf = _core(edit.find, edit.replace)
+    removed = edit.find[pre:len(edit.find) - suf]
+    added = edit.replace[pre:len(edit.replace) - suf]
+    if added.strip() or len(removed.split()) < 3:
+        return ""                          # a rewrite, or a small deletion
+    if not re.search(r"[.?!]([\s”’\"']|$)", removed):
+        return ""                          # no sentence boundary inside the cut
+    if _DELETE_VERB.search(edit.instruction or ""):
+        return ""                          # the reviewer asked for the cut
+    return ("this would delete a sentence or more, and the note does not ask for "
+            "text to be cut — held for a human rather than applied")
+
+
 def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                      withheld: dict[str, str] | None = None, scope=None
                      ) -> tuple[list[EditOutcome], set[str]]:
@@ -1129,10 +1230,33 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                     edit, ROUTED_TO_DESIGN,
                     detail="a design request, not a text edit"))
             continue
+        if edit.kind == JUDGMENT:
+            # A judgment is a person's call and never writes text — not even when it
+            # arrives carrying a proposed rewrite (find != replace). Only a second
+            # look or the last tier converting it to MECHANICAL (each of which
+            # annotates itself) may turn a query into an applied edit; a judgment
+            # that reaches here unconverted stays a query. This is the gate that
+            # stops "em dash or semicolon" from applying as a deletion and
+            # "Should this be could?" from reversing a line's meaning. `advice`
+            # rides onto the outcome so a query a model studied but would not answer
+            # arrives carrying what it found; a bare proposal it carried instead is
+            # surfaced the same way.
+            outcomes.append(EditOutcome(edit, NO_CHANGE,
+                                        detail=edit.advice or _query_detail(edit)))
+            continue
         if edit.find == edit.replace:
-            # `advice` rides onto the outcome so a query a model studied but would
-            # not answer arrives at the report carrying what it found.
+            # A true no-op: the text already reads the way the mark asked. `advice`
+            # rides on for the rare query that reached here as one.
             outcomes.append(EditOutcome(edit, NO_CHANGE, detail=edit.advice))
+            continue
+        reason = _destructive_deletion(edit)
+        if reason:
+            # A pure deletion of a sentence or more with no note asking to cut text
+            # is the shape of an over-grab or a mis-derived query, and cutting copy
+            # is the one thing a wrong edit must never do silently. Held for a human
+            # rather than written — a free backstop that stands whether or not the
+            # opt-in gates ran.
+            outcomes.append(EditOutcome(edit, WITHHELD, detail=reason))
             continue
         found = _match(edit, stories, cache, scope, rebase, pins)
         # A find the book no longer carries because this run changed it: the mark

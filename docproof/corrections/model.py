@@ -191,9 +191,10 @@ CROSSES_PARAGRAPH = "crosses_paragraph"   # the span straddles a paragraph break
 NO_CHANGE = "no_change"            # find == replace, nothing to do
 ROUTED_TO_DESIGN = "routed_to_design"     # a design request, not a text edit
 OVERLAPS = "overlaps"              # its span collides with an edit already applied
-WITHHELD = "withheld"             # the sanity gate held it back for a human
+WITHHELD = "withheld"             # a pre-apply gate held it back for a human
 UNSTYLEABLE = "unstyleable"       # the span's text is not held by a character range
 UNPLACEABLE = "unplaceable"       # the paragraph could not be given a range of its own
+OFF_PAGE = "off_page"             # its only match is not on the page the mark cites
 
 
 @dataclass(frozen=True)
@@ -220,7 +221,7 @@ class EditOutcome:
         """The edit did not land cleanly and someone has to look."""
         return self.status in (NOT_FOUND, AMBIGUOUS, CROSSES_PARAGRAPH,
                                ROUTED_TO_DESIGN, OVERLAPS, WITHHELD,
-                               UNSTYLEABLE, UNPLACEABLE)
+                               UNSTYLEABLE, UNPLACEABLE, OFF_PAGE)
 
 
 @dataclass(frozen=True)

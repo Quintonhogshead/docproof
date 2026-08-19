@@ -91,6 +91,12 @@ class JobRequest(BaseModel):
     # delegated ones (an either/or the reviewer offered, a conditional the page
     # settles) to concrete edits. Off keeps every query a human's.
     corrections_second_look: bool = False
+    # Corrections only: run the last tier — a frontier model given the whole book
+    # for the queries even the second look declined. None follows the second-look
+    # flag (the historical behaviour, so an older page or the watcher is unchanged);
+    # an explicit true/false controls it on its own, so its frontier spend can be
+    # asked for or refused separately from the cheaper second look.
+    corrections_escalate: bool | None = None
     prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
     # Book output only: the operator's answers for the sketch. Empty means
     # "let the detector read them off the opening pages".
@@ -260,7 +266,7 @@ def _result_path(job: Job, which: str) -> Path:
 
 
 def _create_corrections(req: JobRequest, owner: str, paths: Paths,
-                        runner: JobRunner) -> dict:
+                        runner: JobRunner, *, effort: str = "medium") -> dict:
     """Create a corrections job: one exported IDML, one corrections list.
 
     Deterministic and free, so none of the review/prep vetting (models, keys,
@@ -333,6 +339,10 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         corrections_pages=pages,
         corrections_sanity=bool(req.corrections_sanity),
         corrections_second_look=bool(req.corrections_second_look),
+        corrections_escalate=(bool(req.corrections_second_look)
+                              if req.corrections_escalate is None
+                              else bool(req.corrections_escalate)),
+        effort=effort,
         created_at=datetime.now(timezone.utc).isoformat(),
         owner_id=owner,
     )
@@ -515,12 +525,19 @@ def register(app: FastAPI) -> None:
         if req.kind not in ("review", "prep", "corrections"):
             raise HTTPException(
                 400, "kind must be 'review', 'prep' or 'corrections'")
-        # Corrections is its own short, deterministic path: one exported IDML plus
-        # a corrections list, no model and no cost. It shares nothing with the
-        # review/prep validation below (models, keys, rounds, the spend cap), so
-        # it is handled here and returns before any of it.
+        if req.effort is not None and req.effort not in settingslib.EFFORT_LEVELS:
+            raise HTTPException(
+                400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
+        # Corrections is its own short path: one exported IDML plus a corrections
+        # list, applied deterministically. It shares nothing with the review/prep
+        # vetting below (models, keys, rounds, the spend cap), so it is handled here
+        # and returns before any of it — but its opt-in model passes (extraction,
+        # the second look, the last tier) still read a reasoning effort, so the
+        # picker's choice is resolved and carried onto the job the same way review's
+        # is, rather than every corrections run silently taking the "low" default.
         if req.kind == "corrections":
-            return _create_corrections(req, owner, paths, runner)
+            effort = req.effort or app.state.settings.effort
+            return _create_corrections(req, owner, paths, runner, effort=effort)
         if req.prep_output not in ("book", "indesign", "tracked", "both", "all"):
             raise HTTPException(
                 400, "prep_output must be 'book', 'indesign', 'tracked', "

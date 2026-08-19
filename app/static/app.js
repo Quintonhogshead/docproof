@@ -120,6 +120,16 @@ document.querySelectorAll('input[name="kind"]').forEach((r) =>
   r.addEventListener('change', () => { renderFiles(); renderKind(); }));
 document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
   r.addEventListener('change', () => { renderBookOptions(); renderCost(); }));
+// The last tier is on by default with the second look — checking one checks the
+// other — but the two are separable: once the second look is on, the operator can
+// turn the frontier reads off on their own without losing the cheaper pass.
+(() => {
+  const second = $('corrections-second-look');
+  const escalate = $('corrections-escalate');
+  if (second && escalate) {
+    second.addEventListener('change', () => { escalate.checked = second.checked; });
+  }
+})();
 // The corrections list gates its own Start button — enable it the moment there
 // is something to apply — and every change to it redraws the readable review
 // list, which is what a person actually checks (the JSON itself lives under
@@ -3089,6 +3099,11 @@ $('start').addEventListener('click', async () => {
           // The opt-in second look that settles the delegated either/or notes.
           corrections_second_look: isCorrections()
             && !!(($('corrections-second-look') || {}).checked),
+          // The last tier, its own flag now. Sent as a real boolean so it controls
+          // the frontier reads on its own; the server still defaults a null to
+          // follow the second look, for callers that do not send it.
+          corrections_escalate: isCorrections()
+            && !!(($('corrections-escalate') || {}).checked),
           prep_output: prepOutput(),
           prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
           prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
@@ -3446,6 +3461,7 @@ function stageFlowFor(job) {
       if (!s.optional) return true;
       if (s.id === 'pagemap') return !!job.corrections_paged;
       if (s.id === 'sanity') return !!job.corrections_sanity;
+      if (s.id === 'escalate') return !!job.corrections_escalate;   // its own tier now
       return !!job.corrections_second_look;   // the second look and its repairs
     });
   }

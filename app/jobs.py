@@ -354,6 +354,11 @@ class Job:
     # alternatives, a conditional the page settles) and commits the delegated
     # ones to concrete edits. Off keeps every query a human's.
     corrections_second_look: bool = False
+    # Corrections only: run the last tier — a frontier model given the whole book
+    # for the queries the second look declined. Its own flag now (resolved from the
+    # request, which defaults it to follow the second look), so its frontier spend
+    # is asked for or refused on its own rather than riding the cheaper pass.
+    corrections_escalate: bool = False
     # Prep, book output only: the operator's per-job answers for the sketch —
     # subject matter (picks the title-page face), running-head title and
     # author. Empty means "use what the detector reads off the opening pages",
@@ -1749,12 +1754,11 @@ class JobRunner:
         sanity = self._corrections_sanity(job) if job.corrections_sanity else None
         second = (self._corrections_second_look(job)
                   if job.corrections_second_look else None)
-        # The last tier rides with the second look: it is the same request — read
-        # what would otherwise be flagged — one tier further out, and a second
-        # checkbox for it would only ask the operator to reason about which of two
-        # model passes they wanted.
+        # The last tier has its own flag now (the request defaults it to follow the
+        # second look, so nothing that did not send it changed), so an operator can
+        # take the cheap second look without also buying the frontier reads.
         escalate = (self._corrections_escalate(job)
-                    if job.corrections_second_look else None)
+                    if job.corrections_escalate else None)
 
         # Which step the apply is on, straight onto the card. The run holds no
         # lock and writes nothing else while it works, so without this a proof

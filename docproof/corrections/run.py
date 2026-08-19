@@ -28,6 +28,7 @@ from ..models import Usage
 from ..providers import Provider
 from .apply import apply_edits
 from .escalate import escalate_queries
+from .fidelity import screen_edits
 from .idml import read_stories
 from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
@@ -69,6 +70,11 @@ class CorrectionsOutputs:
     settled: int = 0
     reanchored: int = 0
     merged: int = 0
+    # How many edits the merges removed from the list (a set of N collapses to one,
+    # so N-1 ids leave it). Kept so the report can still reconcile every id it
+    # parsed — parsed = applied + flagged + no-op + merged-away — after several
+    # corrections became one.
+    merged_away: int = 0
     # The last tier, when a model was given the book: queries it resolved on the
     # book's own evidence, and queries it studied but left for a person — those
     # still count as unresolved, and now arrive carrying what it found.
@@ -286,7 +292,10 @@ def _apply_status_of(apply_report: ApplyReport):
         # what it found is the detail: the query still belongs to a person, but
         # they get the reading and the evidence rather than a bare "no change".
         if o.edit.kind == JUDGMENT:
-            return DISP_FLAGGED, (o.edit.advice or
+            # The outcome detail already carries the model's advice or, failing
+            # that, the proposal the query holds (`apply._query_detail`); prefer it
+            # so a judgment that arrived with a candidate answer shows it.
+            return DISP_FLAGGED, (o.detail or o.edit.advice or
                                   "a query for a person — the model proposed no "
                                   "concrete change")
         if (o.edit.source and not (o.detail or o.edit.advice)
@@ -406,6 +415,20 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       for p in cited}
         note("pagemap", pages_placed, pages_total)
 
+    # The fidelity gate: a deterministic read of each edit against the mark it came
+    # from, before anything is applied and before the model passes run. It
+    # reclassifies a question the extractor answered as a concrete change back into
+    # the judgment it should have been — so the second look and the last tier get a
+    # chance at it, and failing those it flags rather than applying silently — and it
+    # holds back an edit whose change provably lands outside the mark, on the wrong
+    # page, or does something other than what the note names. Free, and on whenever a
+    # proof's comments are present; a typed list has no marks to check against and
+    # passes through untouched. Its withholds join the sanity gate's below.
+    fidelity_withheld: dict[str, str] = {}
+    if comments:
+        edits, fidelity_withheld = screen_edits(
+            edits, comments, book_pages=book_pages, pdf_pages=page_texts)
+
     # The second look runs before the sanity gate on purpose: what it settles
     # becomes an ordinary proposed edit, and the gate then reads the model's
     # choices with the same suspicion as everyone else's.
@@ -447,7 +470,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     # the lost anchors are re-quoted from the book's own page text, and each
     # set of corrections that collided on one span is merged into a single
     # edit. Both go back through the real apply below like anything else.
-    reanchored = merged = 0
+    reanchored = merged = merged_away = 0
     if second_look is not None and book_pages:
         provider, model = second_look
         note("probing")
@@ -459,7 +482,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                 book_pages=book_pages)
         if collisions:
             note("merge", 0, len(collisions))
-            edits, merged = merge_overlaps(
+            edits, merged, merged_away = merge_overlaps(
                 edits, collisions, provider, model=model, usage=usage,
                 book_pages=book_pages)
 
@@ -475,11 +498,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
             edits, provider, model=model, usage=usage, stories=stories,
             scope=scope, progress=ticker("escalate"))
 
-    withheld: dict[str, str] = {}
+    # The fidelity gate's holds, plus the sanity gate's when it ran. Both name an
+    # edit id and a reason, and both mean the same thing to apply: never write this
+    # one, surface it for a person.
+    withheld: dict[str, str] = dict(fidelity_withheld)
     if sanity is not None:
         provider, model = sanity
-        withheld = review_edits(edits, provider, model=model, usage=usage,
-                                progress=ticker("sanity"))
+        withheld.update(review_edits(edits, provider, model=model, usage=usage,
+                                     progress=ticker("sanity")))
 
     note("applying", 0, len(edits))
     corrected = out / (dest_name or corrected_name(src_idml))
@@ -502,7 +528,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         apply=apply_report, verify=verify_report, comments=dispositions,
         deterministic=(sanity is None and second_look is None
                        and escalate is None),
-        pages=(pages_placed, pages_total), checks=checks)
+        pages=(pages_placed, pages_total), checks=checks,
+        merged_away=merged_away)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "second look settled %d, re-anchored %d, merged %d; last tier "
              "resolved %d, advised %d; %d/%d page(s) placed; verify %s",
@@ -515,7 +542,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=corrected, apply=apply_report,
         comments=dispositions, usage=usage, settled=settled,
-        reanchored=reanchored, merged=merged, resolved=resolved, advised=advised,
+        reanchored=reanchored, merged=merged, merged_away=merged_away,
+        resolved=resolved, advised=advised,
         pages_placed=pages_placed, pages_total=pages_total, checks=checks)
 
 

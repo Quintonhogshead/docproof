@@ -894,8 +894,13 @@ def _replace_punctuation(low, note, anchor, highlighted, *, strict=False
 
 # The dashes the house sets closed up, with no space on either side.
 _CLOSED_UP = "—–"
-# Any quotation marks standing between a mark and the word a note names after it.
-_QUOTES_THEN = r"\s*[\"“”'‘’]*"
+# Whatever stands between a mark and the word a note names after it — a closing
+# quotation mark, a space, or both, in any order. The space has to be inside the
+# class, not a leading `\s*`: the commonest shape on a proof is a comma that closes
+# a line of dialogue, `though,” she`, where a quotation mark AND a space sit between
+# the comma and "she", and a pattern that allowed only quotes-then-word could not
+# reach across the space to find her.
+_QUOTES_THEN = r"[\s\"“”'‘’]*"
 
 
 def _mark_position(text: str, old: str, new: str, word: str = "", *,

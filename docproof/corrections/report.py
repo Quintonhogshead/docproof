@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,11 @@ from .parse import ParseResult
 
 log = logging.getLogger("docproof.corrections.report")
 
+# The mark a model pass appends to an edit's note when it made an editorial call the
+# reviewer had left open — a settled either/or, a merged collision, a resolved query.
+# A re-anchor is only a relocation, not a decision, so it is not gathered here.
+_ANSWERED = re.compile(r"— (?:second look: (?:settled|merged)|resolved on the book):")
+
 # The apply statuses that mean a human has to look, mapped to a plain phrase.
 FLAG_TITLES = {
     "not_found": "The text to change was not found",
@@ -28,8 +34,9 @@ FLAG_TITLES = {
     "crosses_paragraph": "The change would span a paragraph break",
     "routed_to_design": "A layout request, not a text edit",
     "overlaps": "Two corrections land on the same words",
-    "withheld": "Held back by the sanity check",
+    "withheld": "Held back for a human",
     "unstyleable": "The formatting could not be applied here",
+    "off_page": "The text is not on the page it was marked on",
 }
 
 VERIFY_TITLES = {
@@ -52,7 +59,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  comments: tuple[CommentDisposition, ...] = (),
                  deterministic: bool = True,
                  pages: tuple[int, int] = (0, 0),
-                 checks: tuple = ()) -> tuple[Path, Path]:
+                 checks: tuple = (), merged_away: int = 0) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
     return their paths. `deterministic` is False when an opt-in model pass ran
     (the sanity gate, or the second look over the extractor's queries), so the
@@ -61,7 +68,8 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
     silently did not happen says so."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
-                       deterministic=deterministic, pages=pages, checks=checks)
+                       deterministic=deterministic, pages=pages, checks=checks,
+                       merged_away=merged_away)
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -72,7 +80,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
-             deterministic=True, pages=(0, 0), checks=()) -> dict:
+             deterministic=True, pages=(0, 0), checks=(), merged_away=0) -> dict:
     needs_human = [c for c in comments if c.needs_human]
     placed, total = pages
     return {
@@ -95,6 +103,18 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             "flagged": [_outcome(o) for o in apply.flagged],
             "no_op": [_outcome(o) for o in apply.outcomes
                       if not o.applied and not o.needs_human],
+            # Edits that several-into-one merges removed from the list. Reported so
+            # the id count reconciles: parsed + emptied-line removals = applied +
+            # flagged + no-op + merged-away. The comments behind them are accounted
+            # for on the edit they merged into (its `source` carries theirs).
+            "merged_away": merged_away,
+            # Synthetic outcomes the apply added on its own: a paragraph a deletion
+            # left empty is removed as its own change, so it is an extra applied
+            # outcome with no parsed edit behind it. Counted so the equation above
+            # accounts for it rather than reading it as an id that appeared from
+            # nowhere. Identified by the `+…-para` id `_remove_emptied` gives them.
+            "para_removals": sum(1 for o in apply.outcomes
+                                 if o.edit.id.endswith("-para")),
             "stories_changed": list(apply.stories_changed),
         }),
         "verify": {
@@ -293,6 +313,27 @@ def _markdown(d: dict) -> str:
                 L.append(f"- `{o['id']}` {_change(o)}")
             L.append("")
 
+    # The edits a model decided for the reviewer — a delegated either/or it settled,
+    # a colliding pair it merged, a query the last tier resolved on the book's own
+    # evidence. Each applied like any other, but each was a call the reviewer left
+    # open, so they are gathered here as the short confirm list: read these, the rest
+    # are mechanical. Told from the mechanical edits by the note the pass appended.
+    answered = [c for c in (d.get("changes") or [])
+                if _ANSWERED.search(c.get("instruction") or "")]
+    if answered:
+        L.append(f"## Answered for you — {len(answered)}\n")
+        L.append("A model made these calls where the reviewer left the choice open. "
+                 "Each was applied; each is worth a glance to confirm the call.\n")
+        for c in answered:
+            where = (f"story `{c['story_id']}`"
+                     + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
+                        else ""))
+            L.append(f"- {where}:")
+            L.append(f"  - now: “{_preview(c['after'], 300)}”"
+                     + (f" — {_preview(c['instruction'], 200)}"
+                        if c.get("instruction") else ""))
+        L.append("")
+
     # The applied changes, each in the line it changed, for a person to read down
     # and confirm — the designer's quick check that the corrections are right, not
     # just that they anchored. The verification section below is the complement.
@@ -347,6 +388,27 @@ def _markdown(d: dict) -> str:
              "clean apply of the list *should* produce. Anything that differs is "
              "a change the corrections do not explain — there is nowhere for it "
              "to hide.\n")
+    # Every id parsed reaches exactly one outcome — applied, needing a human, a
+    # no-op, or merged into another edit. Said as an equation so the count is
+    # checkable rather than taken on faith, and so a merge (several ids becoming one)
+    # is visibly accounted for rather than looking like ids that went missing. The
+    # left side carries any emptied-line removal the apply added on its own, so the
+    # two sides balance: those are extra outcomes with no parsed id behind them.
+    if ap is not None:
+        merged_away = ap.get("merged_away", 0)
+        para_removals = ap.get("para_removals", 0)
+        parsed_n = d["parse"]["edits"]
+        pieces = [f"{ap['applied']} applied", f"{len(ap['flagged'])} for a human",
+                  f"{len(ap['no_op'])} no-op"]
+        if merged_away:
+            pieces.append(f"{merged_away} merged into others")
+        left = f"{parsed_n} parsed" + (f" + {para_removals} emptied-line "
+                                       f"removal(s)" if para_removals else "")
+        balances = (parsed_n + para_removals
+                    == ap["applied"] + len(ap["flagged"]) + len(ap["no_op"])
+                    + merged_away)
+        note = "" if balances else " — counts do not reconcile"
+        L.append(f"- Corrections: {left} = " + " + ".join(pieces) + f"{note}.")
     L.append(f"- Paragraphs: {verify['paragraphs_before']:,} before, "
              f"{verify['paragraphs_after']:,} after"
              + (f" ({verify.get('paragraphs_expected', 0):,} expected — the "

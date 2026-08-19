@@ -307,6 +307,15 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
         # their find is copied into replace unchanged).
         if not fmt and not para_op:
             find, replace = repair_pair(find, replace, instruction)
+            # A judgment is a question, not a change to carry out. One the extractor
+            # left with an empty replacement — it could not commit to a rewrite —
+            # would read as a deletion, and a deletion is the one thing a
+            # mis-handled query must never do. It never applies (apply treats every
+            # judgment as a person's call), but normalizing it to a no-op shape here
+            # keeps it clear of the deletion path and lets the second look re-read it
+            # as the query it is.
+            if kind == JUDGMENT and find and not replace:
+                replace = find
         # A text edit anchors to the exact run it changes. An empty find is a
         # pure insertion, which the anchor cannot place (there is nothing to
         # locate) — the model documents this and parsers must refuse it.
