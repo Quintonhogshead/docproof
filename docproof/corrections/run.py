@@ -33,7 +33,8 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .instructions import fill_edit_occurrences, widen_edits_to_marks
+from .instructions import (fill_edit_occurrences, house_typography,
+                           widen_edits_to_marks)
 from .pagemap import build_page_map, page_book_text, paragraph_lookup
 from .parse import ParseResult, parse_edits
 from .report import write_report
@@ -418,6 +419,15 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         edits = widen_edits_to_marks(edits, comments, book_pages=book_pages)
         edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
                                       pdf_pages=page_texts)
+
+    # Every replacement, from whichever read produced it, set in the book's own
+    # typography. A note is typed into a comment box and a book is typeset, so a
+    # replacement arrives carrying the box's straight apostrophe or a period parked
+    # outside the quotation mark it belongs inside. The rules already correct their
+    # own answers; this is the same correction for the ones a model read, which is
+    # where the straight ticks on the last proof came from. It runs before the dry
+    # run below so what that probes is the text that will actually be written.
+    edits = house_typography(edits)
 
     # The second look's other two repairs need to know what a real apply would
     # flag, so a dry run on throwaway stories finds the edits that would fail —
