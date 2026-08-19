@@ -33,7 +33,8 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .instructions import fill_edit_occurrences, widen_edits_to_marks
+from .instructions import (asks_for_a_change, fill_edit_occurrences,
+                           house_typography, widen_edits_to_marks)
 from .pagemap import build_page_map, page_book_text, paragraph_lookup
 from .parse import ParseResult, parse_edits
 from .report import write_report
@@ -288,6 +289,19 @@ def _apply_status_of(apply_report: ApplyReport):
             return DISP_FLAGGED, (o.edit.advice or
                                   "a query for a person — the model proposed no "
                                   "concrete change")
+        if (o.edit.source and not (o.detail or o.edit.advice)
+                and asks_for_a_change(o.edit.instruction)):
+            # A no-op with nothing to say for itself is not a no-op. Every real
+            # one carries its reasoning — a query the second look studied, a
+            # design note routed on. This is a reviewer's mark that came back
+            # quoting the text and proposing nothing to do to it, and filing it
+            # under "no change needed" closes it where an editor will never
+            # look again. Two of them on the last proof were a song title asked
+            # for in quotation marks and left in italics. A note that is happy
+            # with the text as set ("stet", "already fine") is a real no-op and
+            # stays one.
+            return DISP_FLAGGED, ("the mark was read but no change was proposed "
+                                  "for it — nothing was applied")
         return DISP_NO_OP, ""                  # a true no-op (find == replace)
 
     return status_of
@@ -418,6 +432,15 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         edits = widen_edits_to_marks(edits, comments, book_pages=book_pages)
         edits = fill_edit_occurrences(edits, comments, book_pages=book_pages,
                                       pdf_pages=page_texts)
+
+    # Every replacement, from whichever read produced it, set in the book's own
+    # typography. A note is typed into a comment box and a book is typeset, so a
+    # replacement arrives carrying the box's straight apostrophe or a period parked
+    # outside the quotation mark it belongs inside. The rules already correct their
+    # own answers; this is the same correction for the ones a model read, which is
+    # where the straight ticks on the last proof came from. It runs before the dry
+    # run below so what that probes is the text that will actually be written.
+    edits = house_typography(edits)
 
     # The second look's other two repairs need to know what a real apply would
     # flag, so a dry run on throwaway stories finds the edits that would fail —

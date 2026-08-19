@@ -129,7 +129,13 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
              _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
              _quoted_proposal, _bare_replacement, _composition_check)
     if len(anchor.split()) > MAX_ANCHOR_WORDS:
-        rules = (_line_break_op,)
+        # `_line_break_op` never picks a target — the note quotes the words either
+        # side of the break — and `_replace_punctuation_named` is held to the notes
+        # that name their own mark, so neither is guessing inside a long span. A
+        # reviewer who highlights a whole line and writes "replace hyphen with en
+        # dash" has still said exactly which hyphen when only one of them stands
+        # between two digits.
+        rules = (_line_break_op, _replace_punctuation_named)
 
     for rule in rules:
         got = rule(low, note, anchor, highlighted)
@@ -177,38 +183,110 @@ def _house_apostrophe(got: "Resolved") -> "Resolved":
     return replace(got, replace=fixed)
 
 
+# A period or comma sitting anywhere but the front of a run of closing quotation
+# marks. US practice — Chicago, and this book — puts both inside every quotation
+# they end, and every other mark outside, so `pot’.”` and `appétit”,` are wrong in
+# the same way and `pot.’”` is the answer to both. Held to a run carrying the
+# double mark on purpose: a lone ’ is as likely to be a plural possessive as a
+# closing quote ("the Shanklins’,"), and moving a comma through one of those
+# would break a word to fix nothing.
+_QUOTE_PUNCT = re.compile(r"([’”]+)([,.])([’”]*)")
+
+
+def _tuck(m: "re.Match") -> str:
+    """One run of closing quotation marks with its comma or period moved to the
+    front of the run — inside every quotation the run closes."""
+    return m.group(2) + m.group(1) + m.group(3)
+
+
+def _tuck_quotes(text: str) -> str:
+    """`text` with each such run put right, leaving the runs that carry no double
+    mark alone."""
+    return _QUOTE_PUNCT.sub(
+        lambda m: _tuck(m) if "”" in m.group(1) + m.group(3) else m.group(0),
+        text)
+
+
+# A note that asks for something to be done, matched on stems so a participle
+# ("enclosed", "italicized") reads the same as the imperative.
+_ASKS = re.compile(r"\b(?:replac|remov|delet|add|insert|capitali[sz]|lowercas"
+                   r"|italici[sz]|roman|hyphenat|enclos|swap|chang|correct"
+                   r"|spell out|close up|should be|should have|needs? to be)",
+                   re.IGNORECASE)
+# …and the notes that ask for the opposite. "Stet" is an instruction to leave the
+# text exactly as it is, so a no-op is the whole of what it wanted.
+_LEAVE_IT = re.compile(r"\bstet\b|\bleave (?:it|as|this)\b|\bno change\b"
+                       r"|\bas set\b", re.IGNORECASE)
+
+
+def asks_for_a_change(note: str) -> bool:
+    """Whether a reviewer's note is asking for the text to be different.
+
+    Used to tell a real no-op from a mark that was never answered: a note reading
+    "already fine" is satisfied by changing nothing, and one reading "song title
+    should be enclosed in quotes, not italicized" is not."""
+    note = note or ""
+    return bool(_ASKS.search(note)) and not _LEAVE_IT.search(note)
+
+
+def house_typography(edits):
+    """`edits` with the two typographic slips a replacement picks up on its way out
+    of a comment box put right.
+
+    A reviewer's note is typed, not typeset. It carries the straight apostrophe the
+    comment box gives them, and it is written from memory of a sentence rather than
+    against the character stream — so a replacement can arrive with "I'd" in it, or
+    with the period parked outside the quotation mark it belongs inside. Applied
+    verbatim, each corrects one thing and introduces another, and the second one is
+    invisible to everything downstream: `verify` confirms the file matches the edit,
+    because it does.
+
+    Both fixes touch the replacement only, and only where the edit is what
+    introduced the shape — a `find` that already carries it is book text the
+    reviewer did not mark, and rewriting that here would be this engine making a
+    change nobody asked for. The rules already do this to their own answers
+    (`_house_apostrophe`); this is the same thing for every edit, whatever read it.
+    """
+    out = []
+    for e in edits:
+        fixed = e.replace
+        if "'" in fixed and "'" not in e.find:
+            fixed = _house_apostrophe(Resolved(e.find, fixed)).replace
+        tucked = _tuck_quotes(fixed)
+        if tucked != fixed and _tuck_quotes(e.find) == e.find:
+            fixed = tucked
+        out.append(e if fixed == e.replace else replace(e, replace=fixed))
+    return out
+
+
 def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | None:
     """`Replace comma with period and capitalize "she"`, worked over the whole line
     the mark sat on.
 
     A reviewer highlights the comma, not the word after it, so this one note
     reaches outside its own mark by construction — and declining it costs the
-    commonest instruction on a proof after the bare word swap. Widening is only
-    safe under two conditions, both required here: the named mark occurs exactly
-    once in the line, so there is no choice to make; and the word to capitalize
-    comes *directly* after it, which is what proves the line is the sentence the
-    note is about rather than some other line that happens to hold a comma."""
-    m = re.search(r'and\s+capitali[sz]e\s+"?([a-z]+)"?', low)
-    if not m:
+    commonest instruction on a proof after the bare word swap. Widening is safe
+    because the note says exactly which mark it means: the one the named word
+    follows. A line with two commas in it is not ambiguous when only one of them
+    has "besides" on its right."""
+    want = _capitalize_word(low)
+    if not want:
         return None
-    want = m.group(1)
     swap = re.match(r"^(?:replace|change)\s+(?:the\s+)?([a-z ]+?)\s+with\s+"
-                    r"(?:an?\s+|the\s+)?([a-z ]+?)\s*$", _strip_capitalize(low))
+                    r"(?:an?\s+|the\s+)?([a-z ]+?)\s*$",
+                    _note_core(_strip_capitalize(low)))
     if not swap:
         return None
     old = PUNCTUATION.get(swap.group(1).strip())
     new = PUNCTUATION.get(swap.group(2).strip())
-    if old is None or new is None or context.count(old) != 1:
+    if old is None or new is None:
         return None
-    # The mark the note names has to be the one this line's target word follows.
-    at = context.index(old)
-    after = re.match(rf'\s*["“”\'‘’]*({re.escape(want)})\b', context[at + 1:],
-                     re.IGNORECASE)
-    if not after:
+    at = _mark_position(context, old, new, want)
+    if at is None:
         return None
-    replaced = context[:at] + new + context[at + 1:]
-    start = at + 1 + after.start(1)
-    replaced = replaced[:start] + replaced[start].upper() + replaced[start + 1:]
+    replaced = _swap_mark(context, at, new, want)
+    if replaced is None:
+        return None
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
@@ -735,43 +813,153 @@ def _literal_after_colon(low, note, anchor, highlighted) -> Resolved | None:
     find = _target_of(anchor, literal)
     if find is None or literal == find:
         return None
-    return Resolved(find, literal, MECHANICAL, "literal-after-colon")
+    return Resolved(find, _kept_opener(low, find, literal), MECHANICAL,
+                    "literal-after-colon")
 
 
-def _replace_punctuation(low, note, anchor, highlighted) -> Resolved | None:
+def _kept_opener(low: str, find: str, literal: str) -> str:
+    """The literal with the marked text's opening quotation mark put back, when
+    the note asked for something to be *added*.
+
+    "Add drop apostrophe: ’bout" against ‘bout is one character away from being
+    the answer, and the character is not the reviewer's to lose: the ‘ opens a
+    nested quotation and the ’ that closes it is further down the line. Writing
+    the literal over the word converts the opener into the apostrophe and leaves
+    the closer with no partner — `I said, ’bout damn time.’”`. A note that says
+    *add* has said that nothing goes, so the mark keeps its opener and the
+    apostrophe joins it."""
+    if not re.match(r"^(?:add|insert)\b", low):
+        return literal
+    if find[:1] not in "‘“" or literal[:1] in "‘“":
+        return literal
+    return find[0] + literal
+
+
+def _replace_punctuation_named(low, note, anchor, highlighted) -> Resolved | None:
+    """`_replace_punctuation` with the "only one such mark in the span" evidence
+    withdrawn — for a mark too long to be pointing at anything, where that count
+    means nothing. What is left is the note naming its own target."""
+    return _replace_punctuation(low, note, anchor, highlighted, strict=True)
+
+
+def _replace_punctuation(low, note, anchor, highlighted, *, strict=False
+                         ) -> Resolved | None:
     """`Replace comma with period`, and the same with a capitalized next word.
 
-    The named mark has to occur exactly once in the marked span. More than once and
-    the note does not say which, so the rule declines rather than picking — the
-    whole failure being fixed here came from picking."""
+    Which mark is meant has to be settled by evidence, never by picking the first
+    one — the whole failure this module was written for came from picking. Three
+    things can settle it, in order of how strongly: the note names the word that
+    follows the mark ("and capitalize \u201cbesides\u201d"), so the mark is the one
+    that word comes after; the note asks for an en dash and exactly one hyphen in
+    the span sits between digits, so the score is meant and not the hyphenated
+    compound beside it; or the span holds the mark only once and there is nothing
+    to choose. Anything else declines to the model."""
     m = re.match(r"^(?:replace|change)\s+(?:the\s+)?([a-z ]+?)\s+with\s+"
-                 r"(?:an?\s+|the\s+)?([a-z ]+?)\s*$", _strip_capitalize(low))
+                 r"(?:an?\s+|the\s+)?([a-z ]+?)\s*$",
+                 _note_core(_strip_capitalize(low)))
     if not m:
         # "Replace with em dash" — the mark to replace is whatever the span holds.
         m2 = re.match(r"^replace\s+with\s+(?:an?\s+|the\s+)?([a-z ]+?)\s*$",
-                      _strip_capitalize(low))
+                      _note_core(_strip_capitalize(low)))
         if not m2:
             return None
         target = PUNCTUATION.get(m2.group(1).strip())
         if target is None:
             return None
         hits = [c for c in anchor if c in ",.;:!?-–—…"]
-        if len(set(hits)) != 1:
+        if target == "–" and _score_hyphen(anchor) is not None:
+            # A range is the one thing an en dash is asked for, and the span it
+            # sits in ordinarily holds other marks too — "We won 3-1, and I played
+            # reasonably well" holds a comma. Requiring the span to carry a single
+            # kind of mark sent every score to the model.
+            old, new = "-", target
+        elif strict or len(set(hits)) != 1:
             return None
-        old, new = hits[0], target
+        else:
+            old, new = hits[0], target
     else:
         old = PUNCTUATION.get(m.group(1).strip())
         new = PUNCTUATION.get(m.group(2).strip())
         if old is None or new is None:
             return None
-    if anchor.count(old) != 1:
+    word = _capitalize_word(low)
+    at = _mark_position(anchor, old, new, word, strict=strict)
+    if at is None:
         return None
-    find = anchor
-    replace = anchor.replace(old, new)
-    replace = _apply_capitalize(low, replace)
-    if replace is None:
+    replaced = _swap_mark(anchor, at, new, word)
+    if replaced is None:
         return None
-    return _focus(find, replace, "replace-punctuation")
+    return _focus(anchor, replaced, "replace-punctuation")
+
+
+# The dashes the house sets closed up, with no space on either side.
+_CLOSED_UP = "—–"
+# Any quotation marks standing between a mark and the word a note names after it.
+_QUOTES_THEN = r"\s*[\"“”'‘’]*"
+
+
+def _mark_position(text: str, old: str, new: str, word: str = "", *,
+                   strict: bool = False) -> int | None:
+    """The offset in `text` of the mark a note means, or None when nothing in the
+    note or the text says which. See `_replace_punctuation` for the three ways it
+    can be settled; `strict` withdraws the weakest of them, the bare count."""
+    at = [i for i, ch in enumerate(text) if ch == old]
+    if not at:
+        return None
+    if word:
+        # The mark this line's target word follows — and only that one. A note
+        # that names the next word has named its own mark, however many others
+        # the line holds.
+        named = [i for i in at
+                 if re.match(_QUOTES_THEN + re.escape(word) + r"\b",
+                             text[i + 1:], re.IGNORECASE)]
+        if len(named) == 1:
+            return named[0]
+        return None
+    if new == "–" and old == "-":
+        # An en dash is the mark between the halves of a range — a score, a span
+        # of pages or years. A hyphen joining two words is a different animal
+        # entirely, and "tap-in" standing next to "1-0" is the shape that got the
+        # dash put on the wrong one.
+        score = _score_hyphen(text)
+        if score is not None:
+            return score
+    if len(at) == 1 and not strict:
+        return at[0]
+    return None
+
+
+def _score_hyphen(text: str) -> int | None:
+    """The offset of the one hyphen in `text` standing between two digits, or None
+    when there is none or more than one — a score, a span of pages, a span of
+    years: the only thing anybody asks an en dash for."""
+    at = [i for i, ch in enumerate(text)
+          if ch == "-" and text[i - 1:i].isdigit() and text[i + 1:i + 2].isdigit()]
+    return at[0] if len(at) == 1 else None
+
+
+def _swap_mark(text: str, at: int, new: str, word: str = "") -> str | None:
+    """`text` with the single character at `at` replaced by `new`.
+
+    A dash is closed up as it goes in: the house sets both dashes with no space
+    around them, and a comma swapped for an em dash leaves the space that followed
+    the comma behind — "Exactly— what else", which is the one shape in the book
+    that is not house style. And when the note named a word to capitalize, it is
+    the copy after this mark that is capitalized, not the first one in the span."""
+    out = text[:at] + new + text[at + 1:]
+    end = at + len(new)
+    if new in _CLOSED_UP:
+        after = end + (len(out[end:]) - len(out[end:].lstrip(" \t")))
+        before = len(out[:at].rstrip(" \t"))
+        out = out[:before] + out[at:end] + out[after:]
+        end -= at - before
+    if word:
+        hit = re.search(rf"\b{re.escape(word)}\b", out[end:], re.IGNORECASE)
+        if not hit:
+            return None
+        start = end + hit.start()
+        out = out[:start] + out[start].upper() + out[start + 1:]
+    return out
 
 
 def _remove_punctuation(low, note, anchor, highlighted) -> Resolved | None:
@@ -910,14 +1098,28 @@ def _hyphenate(low, note, anchor, highlighted) -> Resolved | None:
 
 
 def _enclose_in_quotes(low, note, anchor, highlighted) -> Resolved | None:
-    """`Enclose in quotation marks` — the marked span, quoted."""
+    """`Enclose in quotation marks` — the marked span, quoted.
+
+    A span the author already set in single quotes is *converted*, not wrapped: a
+    reviewer asking for quotation marks around a nested quotation means the marks
+    it has become doubles, and wrapping instead nests one pair inside the other
+    and prints ‘“like this”’. The find string that omitted the singles was what
+    let that through."""
     if not highlighted:
         return None
-    if not re.match(r"^enclose\s+in\s+(quotes|quotation\s+marks)\s*$", low):
+    if not re.match(r"^enclose\s+in\s+(?:double\s+)?(quotes|quotation\s+marks)"
+                    r"\s*$", low):
         return None
     find = anchor.strip(_EDGE)
-    if not find or find[0] in "“‘\"'":
+    if not find:
         return None
+    if find[0] in "“\"":
+        return None                    # already carries the marks it is asking for
+    if find[0] in "‘'":
+        closer = "’" if find[0] == "‘" else "'"
+        if not find.endswith(closer) or find.count(find[0]) != 1:
+            return None                # not one plain pair — leave it to a person
+        return _focus(find, "“" + find[1:-1] + "”", "enclose-in-quotes")
     return Resolved(find, f"“{find}”", MECHANICAL, "enclose-in-quotes")
 
 
@@ -1041,19 +1243,31 @@ def _strip_capitalize(low: str) -> str:
     return re.sub(r"\s+and\s+capitali[sz]e\s+.*$", "", low).strip()
 
 
-def _apply_capitalize(low: str, text: str) -> str | None:
-    """`… and capitalize "she"` applied to a replacement, or None if the word the
-    note names is not in the span (so the mark did not reach it and the rule
-    cannot carry the note out in full)."""
-    m = re.search(r'and\s+capitali[sz]e\s+"?([a-z]+)"?', low)
-    if not m:
-        return text
-    word = m.group(1)
-    hit = re.search(rf"\b{re.escape(word)}\b", text)
-    if not hit:
-        return None
-    at = hit.start()
-    return text[:at] + text[at].upper() + text[at + 1:]
+def _capitalize_word(low: str) -> str:
+    """The word a `… and capitalize "she"` clause names, or "".
+
+    Worth more than the capitalization it asks for: the word says *which* mark
+    the note is about — the one it comes directly after — which is the only thing
+    that tells two commas on a line apart."""
+    m = re.search(r'and\s+capitali[sz]e\s+["“\'‘]?([a-z]+)', low)
+    return m.group(1) if m else ""
+
+
+# A note may show the character it is naming, or end in a full stop: "Replace with
+# en dash (–)." is the same instruction as "Replace with en dash", and reading it
+# as neither was how a score kept its hyphen.
+_NOTE_TAIL = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _note_core(low: str) -> str:
+    """A note without a trailing parenthetical or full stop — the instruction
+    itself, in the shape the rules match."""
+    core = low.strip()
+    while True:
+        shorter = _NOTE_TAIL.sub("", core).strip().rstrip(".").strip()
+        if shorter == core:
+            return core
+        core = shorter
 
 
 # The shortest `find` a rule will emit. A minimal span is the right thing to

@@ -261,9 +261,22 @@ def test_widening_to_the_line_needs_the_word_directly_after_the_mark():
              context="He paused, then looked away.") is None
 
 
-def test_widening_to_the_line_needs_the_mark_to_be_unique_in_it():
+def test_the_named_word_picks_the_mark_out_of_several():
+    """A line with two commas in it is not ambiguous when only one of them has the
+    named word on its right. Refusing these was how "Because I\u2019m in the middle of
+    preseason, besides, none of them\u2026" got its *second* comma turned into the
+    period \u2014 the rule declined, the model picked, and it picked wrong."""
+    got = r('Replace comma with period and capitalize "besides"', "preseason,",
+            context="in the middle of preseason, besides, none of them are due")
+    assert got is not None
+    assert got.find == "preseason, b" and got.replace == "preseason. B"
+
+
+def test_two_candidate_marks_carrying_the_named_word_still_decline():
+    """The adjacency has to choose. When it does not, nothing else in the note
+    does either."""
     assert r('Replace comma with period and capitalize "she"', "here,",
-             context="Everyone else here, she said, was already gone.") is None
+             context="Yes, she said, she was already gone.") is None
 
 
 def test_no_other_rule_reaches_outside_the_mark():
@@ -465,3 +478,112 @@ def test_the_ledger_reaches_both_comments_of_a_merged_edit():
         [edit], lambda _id: (DISP_APPLIED, ""))
     assert [d.disposition for d in dispositions] == [DISP_APPLIED, DISP_APPLIED]
     assert all(d.edit_ids == ("e1",) for d in dispositions)
+
+
+# --- the typography a note cannot carry ---------------------------------------
+
+def test_an_inserted_dash_is_closed_up():
+    """The house sets both dashes with no space around them. A comma swapped for
+    an em dash leaves the space that followed the comma standing, and "Exactly—
+    what else" is then the one shape in the book that is not house style — four of
+    them on the last proof, each one a correctly applied edit."""
+    got = r("Replace with em dash", "Exactly, what else would you be doing")
+    assert got is not None
+    assert got.find == "Exactly, wha" and got.replace == "Exactly—wha"
+
+
+def test_a_dash_is_closed_up_on_both_sides():
+    got = r("Replace comma with em dash", "the pitch , when things got tough")
+    assert got is not None
+    assert got.find == "the pitch , " and got.replace == "the pitch—"
+
+
+def test_an_en_dash_takes_the_score_not_the_hyphenated_compound():
+    """"an easy tap-in to go up 1-0" holds two hyphens and the note names neither.
+    One of them is between digits, which is the only thing an en dash is ever asked
+    for here — and picking the other one printed "tap–in" and left the score."""
+    got = r("Replace with en dash", "an easy tap-in to go up 1-0")
+    assert got is not None
+    assert got.find == " to go up 1-" and got.replace == " to go up 1–"
+
+
+def test_a_note_may_show_the_character_it_names():
+    """`Replace with en dash (–).` is the same instruction. Reading it as neither
+    sent a score to the model, which put an em dash in instead."""
+    got = r("Replace with en dash (–).", "We won 3-1, and I played")
+    assert got is not None
+    assert got.find == "We won 3-1, " and got.replace == "We won 3–1, "
+
+
+def test_enclosing_a_single_quoted_span_converts_the_marks():
+    """Wrapping it instead nests one pair inside the other and prints ‘“like
+    this”’ — which is what the find string that omitted the singles produced."""
+    got = r("Enclose in quotation marks", "‘What the fuck just happened?’")
+    assert got is not None
+    assert got.replace == "“What the fuck just happened?”"
+
+
+def test_enclosing_declines_a_span_whose_quotes_do_not_pair():
+    assert r("Enclose in quotation marks", "‘it isn’t over") is None
+
+
+def test_house_typography_over_edits_a_model_read():
+    from docproof.corrections.instructions import house_typography
+    from docproof.corrections.model import Edit
+    got = {e.id: e.replace for e in house_typography([
+        Edit("a", "Id just had", "I'd just had"),
+        Edit("b", "appétit”", "appétit”,"),
+        Edit("c", "off the pot’”", "off the pot’”."),
+    ])}
+    assert got["a"] == "I’d just had"
+    assert got["b"] == "appétit,”"
+    assert got["c"] == "off the pot.’”"
+
+
+def test_house_typography_leaves_the_book_alone():
+    """Only what the edit itself introduced. A `find` that already carries the
+    shape is book text the reviewer did not mark."""
+    from docproof.corrections.instructions import house_typography
+    from docproof.corrections.model import Edit
+    kept = house_typography([Edit("a", "the pot’”.", "the pot’”. He said")])
+    assert kept[0].replace == "the pot’”. He said"
+
+
+def test_a_long_mark_still_answers_a_note_that_names_its_target():
+    """A mark over a whole line points at nothing in particular, so the rules that
+    have to pick inside it decline. Naming is not picking: only one hyphen on this
+    line stands between two digits, and it is the one an en dash is asked for."""
+    got = r("Replace hyphen with en dash (–)",
+            "ing left winger, Danny. It was an easy tap-in to go up 1-0. As")
+    assert got is not None
+    assert got.find == " to go up 1-" and got.replace == " to go up 1–"
+
+
+def test_a_long_mark_declines_the_bare_count():
+    """One comma in a line the reviewer highlighted whole is not evidence of
+    anything — they marked the line, not the comma."""
+    assert r("Replace comma with period",
+             "ing left winger, Danny. It was an easy tap in to go up one nil") is None
+
+
+def test_an_addition_keeps_the_marked_opening_quote():
+    """"Add drop apostrophe: ’bout" against ‘bout — the ‘ opens a nested quotation
+    whose ’ is further down the line, and writing the literal over the word
+    converts the opener and leaves the closer without a partner."""
+    got = r("Add drop apostrophe: ’bout", "‘bout")
+    assert got is not None and got.replace == "‘’bout"
+
+
+def test_a_replacement_after_a_colon_still_replaces():
+    """Only an *addition* keeps what the mark carried. "Replace with" is a swap."""
+    assert r("Replace with: ’bout", "‘bout").replace == "’bout"
+
+
+def test_a_note_that_asks_for_nothing_is_not_a_change_request():
+    from docproof.corrections.instructions import asks_for_a_change
+    assert asks_for_a_change("Song title should be enclosed in quotes, "
+                             "not italicized")
+    assert asks_for_a_change("Replace comma with period")
+    assert not asks_for_a_change("already fine")
+    assert not asks_for_a_change("stet")
+    assert not asks_for_a_change("Leave as set — the repetition is deliberate")

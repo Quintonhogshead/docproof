@@ -12,6 +12,7 @@ before the file is written, which is the whole safety argument.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..validator import fold_punct
@@ -331,14 +332,18 @@ class _Rebase:
     invertible: writes never overlap (`_Touched` refuses that), so each one moves
     everything after it by a fixed amount and nothing else."""
 
-    __slots__ = ("_before", "_moves")
+    __slots__ = ("_before", "_moves", "_wrote")
 
     def __init__(self) -> None:
         self._before: dict[tuple[str, int], str] = {}
         self._moves: dict[tuple[str, int], list[tuple[int, int, int]]] = {}
+        # What each write put in, against the span it covered, in original
+        # coordinates — so an edit that failed because of one can be read beside
+        # it. The lengths alone say a write happened; the text says what it did.
+        self._wrote: dict[tuple[str, int], list[tuple[int, int, str]]] = {}
 
     def note(self, key: tuple[str, int], text: str, start: int, end: int,
-             new_len: int) -> None:
+             new_len: int, new_text: str = "") -> None:
         """Record a write of `new_len` characters over the live `[start, end)` of
         a paragraph whose text is `text` just before the write."""
         self._before.setdefault(key, text)
@@ -346,6 +351,49 @@ class _Rebase:
         span = (_to_before(moves, start), _to_before(moves, end), new_len)
         moves.append(span)
         moves.sort()
+        self._wrote.setdefault(key, []).append((span[0], span[1], new_text))
+
+    def absorb(self, key: tuple[str, int], a: int, b: int, new_len: int,
+               new_text: str) -> None:
+        """Record a write over the paragraph's original `[a, b)` that reproduces
+        every earlier write inside it — so those are dropped rather than counted
+        twice, and the spans stay non-overlapping in original coordinates, which
+        is what keeps the two directions invertible."""
+        moves = [m for m in self._moves.get(key, []) if m[0] < a or m[1] > b]
+        moves.append((a, b, new_len))
+        self._moves[key] = sorted(moves)
+        wrote = [w for w in self._wrote.get(key, []) if w[0] < a or w[1] > b]
+        wrote.append((a, b, new_text))
+        self._wrote[key] = sorted(wrote)
+
+    def spans(self, key: tuple[str, int], start: int, end: int) -> list:
+        """The original spans this run has written to that meet `[start, end)`."""
+        return [(a, b) for a, b, _ in self._wrote.get(key, ())
+                if a < end and b > start]
+
+    def search(self, text: str, cache: IndexCache) -> list:
+        """`(key, start, end)` for every place `text` sat in a paragraph this run
+        has since written to — in that paragraph's original coordinates."""
+        out = []
+        for key, before in self._before.items():
+            for a, b in all_spans(before, text, cache=cache):
+                out.append((key, a, b))
+        return out
+
+    def original(self, key: tuple[str, int]) -> str:
+        return self._before.get(key, "")
+
+    def now(self, key: tuple[str, int], before: int) -> int:
+        """An original offset in this paragraph, carried forward."""
+        return _to_now(self._moves.get(key, []), before)
+
+    def writes(self, key: tuple[str, int], start: int, end: int) -> list:
+        """The writes this run made inside `[start, end)` of the paragraph as it
+        was — each `(old text, new text)`."""
+        before = self._before.get(key, "")
+        return [(before[a:b], new)
+                for a, b, new in self._wrote.get(key, [])
+                if a < end and b > start]
 
     def windows(self, key: tuple[str, int], context: str, cache: IndexCache
                 ) -> list[tuple[int, int]]:
@@ -367,7 +415,7 @@ class _Rebase:
         window computed from one paragraph's old text against another's is worse
         than no window at all. Structural edits run after every text edit, so
         this costs nothing that was going to be used."""
-        for store in (self._before, self._moves):
+        for store in (self._before, self._moves, self._wrote):
             for key in [k for k in store if k[0] == story_id]:
                 del store[key]
 
@@ -443,8 +491,58 @@ def _narrow_to_page(edit: Edit, candidates: list, scope) -> list:
             if scope.contains(edit.page, c[0].story_id, c[1].index, c[2], c[3])]
 
 
+def _pin_occurrences(stories: list[Story], edits: list[Edit], cache: IndexCache,
+                     scope) -> dict[str, tuple[str, int, int, int]]:
+    """Where each ordinal names, measured on the book before this run changes it.
+
+    An ordinal counts copies on the page the reviewer read (see
+    `instructions._ordinal`). It is read back, though, against a document the
+    corrections before it have already edited — and those are not the same page.
+    An earlier correction turning "is" into "was" adds a copy of "was" the
+    reviewer never counted, and every ordinal after it on that page then names
+    the copy in front of the one it means: "the ninth was on page 309" landed on
+    "It was perfect" and left the conditional the note was written for standing.
+    One correction on a page is enough to move every later one on it.
+
+    So each ordinal is resolved once, here, against the stories as they arrive —
+    the same text the ordinal was counted over — and what it names is remembered
+    as a span. `_match` carries that span forward through the writes since, which
+    is a fact about where the text moved rather than a count that has to hold
+    twice."""
+    pinned: dict[str, tuple[str, int, int, int]] = {}
+    for edit in edits:
+        if not (edit.occurrence and edit.find) or edit.is_layout or edit.is_format:
+            continue
+        on_page = _narrow_to_page(
+            edit, _direct_candidates(edit, stories, cache), scope)
+        if on_page and edit.occurrence <= len(on_page):
+            story, para, start, end = on_page[edit.occurrence - 1]
+            pinned[edit.id] = (story.story_id, para.index, start, end)
+    return pinned
+
+
+def _pinned_candidate(edit: Edit, candidates: list, pins: dict,
+                      rebase: "_Rebase | None"):
+    """The candidate the edit's ordinal named before the run started, carried
+    forward to where that text sits now — or None when it is not among the
+    candidates the other anchors left."""
+    pin = pins.get(edit.id) if pins else None
+    if pin is None:
+        return None
+    story_id, index, p0, p1 = pin
+    for story, para, start, end in candidates:
+        if story.story_id != story_id or para.index != index:
+            continue
+        key = (story.story_id, para.index)
+        now = ((rebase.now(key, p0), rebase.now(key, p1))
+               if rebase is not None else (p0, p1))
+        if (start, end) == now:
+            return story, para, start, end
+    return None
+
+
 def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
-           rebase: "_Rebase | None" = None):
+           rebase: "_Rebase | None" = None, pins: dict | None = None):
     """Locate the edit across all stories. Returns (story, paragraph, start, end)
     to apply, or an EditOutcome describing why it could not be applied.
 
@@ -504,6 +602,12 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
     # contradicting it.
     if n == 1:
         return candidates[0]
+    # The copy the ordinal named on the page as the reviewer read it, wherever
+    # that text has since moved to. Measured before the run touched anything, so
+    # a correction already applied to this page cannot have shifted the count.
+    pinned = _pinned_candidate(edit, candidates, pins, rebase)
+    if pinned is not None:
+        return pinned
     # Several copies are still in play, so the line the mark sat on could not
     # choose between them — it holds them all. The ordinal can: it is counted off
     # the mark's own position on the page (`instructions.fill_edit_occurrences`),
@@ -530,6 +634,79 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
         return EditOutcome(edit, NOT_FOUND, occurrences=n,
                            detail=f"asked for #{edit.occurrence} of {n}")
     return candidates[edit.occurrence - 1]
+
+
+def _core(find: str, replace: str) -> tuple[int, int]:
+    """`(prefix, suffix)` — how much of the two sides is the same text, so what
+    lies between is the run the edit actually changes."""
+    pre = 0
+    while pre < len(find) and pre < len(replace) and find[pre] == replace[pre]:
+        pre += 1
+    suf = 0
+    while (suf < len(find) - pre and suf < len(replace) - pre
+           and find[-1 - suf] == replace[-1 - suf]):
+        suf += 1
+    return pre, suf
+
+
+def _match_as_marked(edit: Edit, stories: list[Story], cache: IndexCache,
+                     rebase: "_Rebase") -> tuple | None:
+    """An edit whose text the run has already changed, located in the page as the
+    reviewer marked it — with the replacement carried across the change.
+
+    Every mark on a proof was written against the same page, but the corrections
+    are applied one after another against a live document. So the second mark on
+    a line can arrive to find the words it quoted no longer there: "not all" had
+    become "not at all" three edits earlier, and the reviewer's "No, not all,
+    besides you" then matched nothing in the book. The mark was right, the book
+    was right, and the correction was flagged for a human.
+
+    `_Rebase` already looks for a stale *context* in the paragraph as it was; this
+    is the same idea for the text to change, and it has one more thing to settle —
+    what to write. Two answers are safe, and nothing else is:
+
+      * the run this edit changes came through untouched, and the earlier writes
+        were in the words around it. The current span is kept and only that run is
+        rewritten, so neither correction undoes the other.
+      * the earlier write is already *in* the replacement — a reviewer marking one
+        line twice writes the second note against the line as it will read, so
+        `‘the’ → “the”` arrives inside the note about the possessive. The
+        replacement is written whole.
+
+    A stale find that is neither is left alone and flagged, as before: the two
+    corrections disagree about the same words, which is a person's to settle."""
+    if not edit.find:
+        return None
+    by_id = {s.story_id: s for s in stories}
+    hits = rebase.search(edit.find, cache)
+    if len(hits) != 1:
+        return None                        # nothing, or nothing that chooses
+    key, a, b = hits[0]
+    story = by_id.get(key[0])
+    if story is None or not 0 <= key[1] < len(story.paragraphs):
+        return None
+    para = story.paragraphs[key[1]]
+    lo, hi = rebase.now(key, a), rebase.now(key, b)
+    if not 0 <= lo < hi <= len(para.text):
+        return None
+    current = para.text[lo:hi]
+    if current == edit.find:
+        return None                        # not stale; the ordinary path had it
+    if any(x < a or y > b for x, y in rebase.spans(key, a, b)):
+        return None                        # a write straddles the edge; refuse
+    pre, suf = _core(edit.find, edit.replace)
+    core_lo, core_hi = rebase.now(key, a + pre), rebase.now(key, b - suf)
+    if (core_lo >= lo and core_hi <= hi
+            and para.text[core_lo:core_hi] == edit.find[pre:len(edit.find) - suf]):
+        composed = (para.text[lo:core_lo]
+                    + edit.replace[pre:len(edit.replace) - suf]
+                    + para.text[core_hi:hi])
+        return story, para, lo, hi, composed, key, a, b
+    made = rebase.writes(key, a, b)
+    if made and all(new and new in edit.replace and old not in edit.replace
+                    for old, new in made):
+        return story, para, lo, hi, edit.replace, key, a, b
+    return None
 
 
 def _diagnose_miss(edit: Edit, stories: list[Story], cache: IndexCache):
@@ -719,6 +896,103 @@ def _added_tail(found: str, replacement: str) -> str:
     return replacement[len(found):]
 
 
+# The dashes the house sets closed up, and the quotation marks that come in pairs.
+_DASHES = "—–"
+_QUOTE_PAIRS = {"“": "”", "‘": "’", '"': '"', "'": "'"}
+
+
+def _absorb_dash_space(para: Paragraph, start: int, end: int, found: str,
+                       replacement: str) -> tuple[int, int]:
+    """The span widened over a space an inserted dash would otherwise leave.
+
+    A reviewer asking for an em dash where a comma stands is asking for the
+    house's dash, and the house sets both dashes closed up. The comma's trailing
+    space is not part of what the note quoted, so the write puts the dash in and
+    leaves the space behind it: "Exactly— what else", which is the one shape in
+    this book that is not house style. Four of them shipped on one proof, each a
+    correctly applied edit.
+
+    Only where the edit itself put the dash at the edge of its span — a
+    replacement that quoted the dash it changes has already said what spacing it
+    wants, and a dash in the middle of a replacement carries its own."""
+    if replacement and replacement[-1] in _DASHES and not (
+            found and found[-1] in _DASHES):
+        while para.text[end:end + 1] in (" ", "\u00a0"):
+            end += 1
+    if replacement and replacement[0] in _DASHES and not (
+            found and found[0] in _DASHES):
+        while start and para.text[start - 1:start] in (" ", "\u00a0"):
+            start -= 1
+    return start, end
+
+
+def _tuck_quote_punctuation(para: Paragraph, end: int, found: str,
+                            replacement: str) -> tuple[int, str]:
+    """The span's end and replacement with a following comma or period moved
+    inside the quotation mark the write just put in front of it.
+
+    US practice — Chicago, and this book — sets a comma or a period inside the
+    closing quotation mark. An edit that encloses a phrase the book had bare
+    quotes only what it was given, so the sentence's own comma is left outside:
+    `for “bon appétit”, and it was`. The mark is one character past the span, so
+    nothing but this can see it.
+
+    Held to the double mark the edit introduced. A single ’ is as likely to be a
+    plural possessive as a closing quote, and the edit that quoted its own closing
+    mark has already placed the punctuation it meant to."""
+    if not replacement or replacement[-1] != "”" or (found and found[-1] == "”"):
+        return end, replacement
+    after = para.text[end:end + 1]
+    if after not in (",", "."):
+        return end, replacement
+    return end + 1, replacement[:-1] + after + "”"
+
+
+def _absorb_nested_quotes(para: Paragraph, start: int, end: int, found: str,
+                          replacement: str) -> tuple[int, int]:
+    """The span widened over quotation marks the write would otherwise nest
+    inside.
+
+    "Enclose in quotation marks" against a run the author already set in single
+    quotes is a request to *convert* those marks, not to add a second pair. A
+    find that quoted the words without the marks it sits in puts the doubles
+    inside the singles and prints ‘“What the fuck just happened?”’ — a defect
+    nothing downstream can see, because the file does match the edit.
+
+    Only when the replacement is exactly the matched text inside a fresh pair of
+    quotation marks, and the book has a matching pair immediately around it."""
+    if len(replacement) != len(found) + 2 or replacement[1:-1] != found:
+        return start, end
+    if _QUOTE_PAIRS.get(replacement[0]) != replacement[-1]:
+        return start, end
+    before = para.text[start - 1:start] if start else ""
+    if before and _QUOTE_PAIRS.get(before) == para.text[end:end + 1]:
+        return start - 1, end + 1
+    return start, end
+
+
+# A contracted negative — the half of "it wasn't not" the edit brought with it.
+_CONTRACTED_NOT = re.compile(r"n[’']t\b", re.IGNORECASE)
+
+
+def _absorb_stale_negation(para: Paragraph, end: int, found: str,
+                           replacement: str) -> int:
+    """The span's end, widened over a "not" the write would otherwise double.
+
+    A reviewer writing "it wasn't" against "it's" in "if it's not the racism" is
+    rewriting the whole negation, not adding a second one — but the "not" is a
+    word further on, outside anything the note quoted, so the write leaves "if it
+    wasn't not the racism". Narrow by construction: the replacement has to bring a
+    contracted negative the matched text did not have, and the very next word has
+    to be "not"."""
+    if not _CONTRACTED_NOT.search(replacement):
+        return end
+    if found and _CONTRACTED_NOT.search(found):
+        return end                         # the edit rewrote the negation itself
+    m = re.match(r"\s+not\b", para.text[end:])
+    return end + m.end() if m else end
+
+
 def _keep_book_case(found: str, find: str, replace: str) -> str:
     """The replacement to write, in the book's capitals rather than the
     reviewer's, when those are the only thing the two disagree about.
@@ -777,6 +1051,17 @@ class _Touched:
                 span[1] += delta
         spans.append([start, start + new_len, edit_id])
 
+    def absorb(self, key: tuple[str, int], start: int, end: int,
+               new_len: int, edit_id: str = "") -> None:
+        """Record a write that *carries* the writes it lands over rather than
+        clobbering them — see `_match_as_marked`. The spans inside it are dropped,
+        since the text they produced is in what is being written."""
+        spans = self._by_para.get(key)
+        if spans is not None:
+            self._by_para[key] = [s for s in spans
+                                  if s[0] < start or s[1] > end]
+        self.record(key, start, end, new_len, edit_id)
+
 
 def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                      withheld: dict[str, str] | None = None, scope=None
@@ -795,6 +1080,9 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
     touched = _Touched()
     rebase = _Rebase()
     cache = IndexCache()
+    # Every ordinal resolved against the book as it arrives, before the first
+    # write moves anything — see `_pin_occurrences`.
+    pins = _pin_occurrences(stories, edits, cache, scope)
     withheld = withheld or {}
     # Paragraphs the text edits emptied, and who emptied them — swept up after the
     # loop; see `_remove_emptied`.
@@ -846,13 +1134,25 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
             # not answer arrives at the report carrying what it found.
             outcomes.append(EditOutcome(edit, NO_CHANGE, detail=edit.advice))
             continue
-        found = _match(edit, stories, cache, scope, rebase)
+        found = _match(edit, stories, cache, scope, rebase, pins)
+        # A find the book no longer carries because this run changed it: the mark
+        # was written against the page, not against the file as the corrections
+        # before it left it. Looked for where it still exists — see
+        # `_match_as_marked` — before it is given up as missing.
+        written = carried = None
+        if isinstance(found, EditOutcome) and found.status == NOT_FOUND:
+            again = _match_as_marked(edit, stories, cache, rebase)
+            if again is not None:
+                found, written, carried = again[:4], again[4], again[5:]
         if isinstance(found, EditOutcome):
             outcomes.append(found)
             continue
         story, para, start, end = found
         key = (story.story_id, para.index)
-        hit = touched.collides(key, start, end)
+        # A rebased write reproduces the corrections it lands over, so the spans
+        # it covers are carried, not clobbered — the one case where an overlap is
+        # the right answer rather than a collision to flag.
+        hit = () if carried else touched.collides(key, start, end)
         if hit:
             outcomes.append(EditOutcome(
                 edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
@@ -860,14 +1160,28 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                 collides_with=hit))
             continue
         found_text = para.text[start:end]
-        replacement = _keep_book_case(found_text, edit.find, edit.replace)
+        replacement = (written if written is not None
+                       else _keep_book_case(found_text, edit.find, edit.replace))
         r_start, new_text = _with_article_fix(para, start, end, replacement)
         r_end = _absorb_duplicate(para, end, found_text, new_text)
         r_end = _absorb_stale_terminal(para, r_end, found_text, new_text)
+        r_end = _absorb_stale_negation(para, r_end, found_text, new_text)
+        r_start, r_end = _absorb_nested_quotes(para, r_start, r_end, found_text,
+                                               new_text)
+        r_end, new_text = _tuck_quote_punctuation(para, r_end, found_text,
+                                                  new_text)
+        r_start, r_end = _absorb_dash_space(para, r_start, r_end, found_text,
+                                            new_text)
         r_start, r_end = _close_deletion_gap(para, r_start, r_end, new_text)
-        rebase.note(key, para.text, r_start, r_end, len(new_text))
-        para.replace(r_start, r_end, new_text)
-        touched.record(key, r_start, r_end, len(new_text), edit.id)
+        if carried:
+            _, a, b = carried
+            rebase.absorb(key, a, b, len(new_text), new_text)
+            para.replace(r_start, r_end, new_text)
+            touched.absorb(key, r_start, r_end, len(new_text), edit.id)
+        else:
+            rebase.note(key, para.text, r_start, r_end, len(new_text), new_text)
+            para.replace(r_start, r_end, new_text)
+            touched.record(key, r_start, r_end, len(new_text), edit.id)
         changed.add(story.story_id)
         if not para.text.strip():
             emptied.setdefault(key, []).append(edit.id)
