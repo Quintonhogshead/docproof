@@ -988,7 +988,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
                 dictionary=cfg.languagetool.dictionary,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
-                workers=cfg.languagetool.workers, progress=progress,
+                workers=cfg.languagetool.workers,
+                scan_chars=cfg.languagetool.scan_chars, progress=progress,
                 coverage=coverage)
             lt_provider, lt_model = provider, cfg.api.model
             if cfg.languagetool.confirm_model:

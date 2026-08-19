@@ -24,7 +24,7 @@ import logging
 from array import array
 from statistics import median
 
-from .idml import Story
+from .idml import Paragraph, Story
 from .textmatch import NormIndex, normalize
 
 log = logging.getLogger("docproof.corrections.pagemap")
@@ -134,7 +134,8 @@ class _Stream:
         return out
 
 
-def page_book_text(stories: list[Story], page_map: PageMap, page: int) -> str:
+def page_book_text(stories: list[Story], page_map: PageMap, page: int, *,
+                   by_para: dict | None = None) -> str:
     """The book's own words for one proof page, in reading order.
 
     This is the text an extractor should be quoting from. Until now the model was
@@ -144,10 +145,16 @@ def page_book_text(stories: list[Story], page_map: PageMap, page: int) -> str:
     that matches a document you have not seen" into "copy a phrase from this",
     which is a different and much easier task.
 
+    `by_para` is the paragraph lookup, for a caller asking about many pages: it
+    covers the whole book, so building it per page is a walk of the novel per
+    proof page. `paragraph_lookup` builds it; passing nothing builds a private
+    one, which is what a single-page caller wants.
+
     Empty when the page was never placed."""
     if not page_map.knows(page):
         return ""
-    by_para = {(s.story_id, p.index): p for s in stories for p in s.paragraphs}
+    if by_para is None:
+        by_para = paragraph_lookup(stories)
     out: list[str] = []
     for story_id, para_index, lo, hi in page_map.span_of(page):
         para = by_para.get((story_id, para_index))
@@ -156,6 +163,12 @@ def page_book_text(stories: list[Story], page_map: PageMap, page: int) -> str:
             if run:
                 out.append(run)
     return "\n".join(out)
+
+
+def paragraph_lookup(stories: list[Story]) -> dict[tuple[str, int], Paragraph]:
+    """Every paragraph of the book, keyed by (story id, index) — the lookup
+    `page_book_text` reads a page's spans out of."""
+    return {(s.story_id, p.index): p for s in stories for p in s.paragraphs}
 
 
 def _normalized_with_map(text: str) -> tuple[str, list[int]]:

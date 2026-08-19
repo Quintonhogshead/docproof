@@ -63,6 +63,18 @@ def all_spans(haystack: str, needle: str, *, cache: IndexCache | None = None,
     on for a context anchor, which only ever narrows and never overwrites."""
     if not needle:
         return []
+    # Every tier below is a subset of the last one, because each normalization is
+    # applied character by character to both sides: text that carries `needle`
+    # exactly still carries it once both are folded, and still carries it once
+    # both are folded and case-folded. So the widest view answering "no" is a
+    # no for all four, and it answers in one cached lookup and one C-level
+    # search. Locating one edit asks this of every paragraph in the book and
+    # almost every one of them says no, which is the case this exists for — the
+    # ladder below is untouched for the handful that say yes.
+    if cache is not None:
+        widest = cache.get(haystack, fold_case=True)
+        if normalize(needle, fold_case=True) not in widest.view:
+            return []
     hits = _find_all(haystack, needle)
     if hits:
         return [(s, s + len(needle)) for s in hits]

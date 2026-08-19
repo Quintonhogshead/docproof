@@ -313,3 +313,49 @@ def test_an_ordinal_counted_on_a_page_that_cannot_be_placed_is_refused():
     assert "could not be placed" in outcomes[0].detail
     assert [p.text for p in story.paragraphs] == ["the word here.",
                                                   "the word there."]
+
+
+# --- what makes locating an edit fast ------------------------------------------
+
+def test_a_paragraph_reports_the_text_it_has_after_an_edit():
+    """`Paragraph.text` is cached — the corrections engine reads it once per
+    paragraph per edit — so the thing to hold it to is that an edited paragraph
+    reports what it now says, not what it said when the cache was filled."""
+    s = _story("The cat sat on the mat.")
+    para = s.paragraphs[0]
+    assert para.text == "The cat sat on the mat."       # fills the cache
+    para.replace(4, 7, "dog")
+    assert para.text == "The dog sat on the mat."
+    para.replace(0, 3, "A")
+    assert para.text == "A dog sat on the mat."
+    assert s.text == "A dog sat on the mat."
+
+
+def test_a_paragraph_reports_its_text_after_a_run_is_split():
+    """Styling part of a paragraph splits the Content nodes under it. The text is
+    the same either side of that, and the cache has to say so."""
+    s = _story("Read Dune tonight.")
+    para = s.paragraphs[0]
+    assert para.text == "Read Dune tonight."
+    assert para.restyle(5, 9, {"FontStyle": "Italic"})
+    assert para.text == "Read Dune tonight."
+    assert len(para.nodes) > 1                          # it really did split
+    para.replace(5, 9, "Emma")
+    assert para.text == "Read Emma tonight."
+
+
+def test_the_widest_view_gates_the_search_without_narrowing_it():
+    """Locating an edit asks every paragraph in the book whether it carries the
+    anchor, and the case-folded normalized view is asked first because it is the
+    widest of the four readings. Anything the exact, folded or normalized tiers
+    would have found has to survive that gate — these are the four, one each."""
+    cache = IndexCache()
+    for text, needle in (
+            ("the cat sat down", "cat sat"),             # exact
+            ("she said “no” twice", 'said "no"'),        # punctuation fold
+            ("a conces- sion was made", "concession"),   # normalized
+            ("TO THE PILOT of the carriage", "To the Pilot"),   # case fold
+    ):
+        assert all_spans(text, needle, cache=cache), (text, needle)
+        # and the same answer whether or not a cache is in play
+        assert bool(all_spans(text, needle)) is True

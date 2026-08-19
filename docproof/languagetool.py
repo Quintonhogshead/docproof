@@ -23,6 +23,13 @@ and certain:
   * a small rule/issue-type denylist drops paragraph-isolation artifacts
     (unpaired-quote, sentence-start caps) and pure style advice (wordiness).
 
+Paragraphs share a request rather than getting one each — joined by a blank
+line, which LanguageTool reads as a paragraph break, so each is still analysed on
+its own. The fixed cost of asking is most of the scan on a book of ordinary
+paragraphs: 43k words took 9.7s one paragraph at a time and 4.8s in 20,000-
+character requests, on one thread, for a candidate set that came back identical.
+That is the lever that helps a one-core box, where the thread pool cannot.
+
 Opt-in and off by default: it needs Java + the LanguageTool jar, so a run only
 pays for it when `languagetool.enabled` is set. See RewriteCandidate reuse below
 — the confirm machinery is shared verbatim.
@@ -32,6 +39,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
 
@@ -77,7 +85,15 @@ _cache_lock = threading.Lock()
 
 def _get_tool(dictionary: str):
     """One long-lived local server per dictionary. The first call downloads the
-    jar (~260 MB, cached under ~/.cache) and boots a JVM; reused thereafter."""
+    jar (~260 MB, cached under ~/.cache) and boots a JVM; reused thereafter.
+
+    The denylist is deliberately NOT pushed to the server. Handing it
+    `disabledRules` so the JVM skips those rules sounds like the obvious saving
+    and measures as nothing: on 28k words of prose with a warm server it was
+    6.96s against 6.93s, the same run to run. (An earlier reading of that pair as
+    a 1.4x win was the JVM's JIT warming up on the first of the two.) The
+    filtering in `propose` is where the denylist belongs — it is the guarantee,
+    it covers the issue types too, and it costs nothing worth measuring."""
     with _cache_lock:
         tool = _tool_cache.get(dictionary)
         if tool is None:
@@ -109,12 +125,70 @@ def shutdown() -> None:
         _tool_cache.clear()
 
 
+# Paragraphs are sent several to a request, joined by a blank line. The blank
+# line is a paragraph break to LanguageTool, so each one is still analysed on its
+# own — what changes is how many times the cost of *asking* is paid. That cost is
+# most of the scan: on 28k words of prose, one request per paragraph took 6.4s
+# and the same text in ~20k-character requests took 3.0s, for a candidate set
+# that was identical at every batch size tried (1, 5, 10, 25, 50, 100, 200
+# paragraphs per request). Grouping by characters rather than by paragraph count
+# is what keeps that true of a book of long paragraphs as well as one of verse.
+_JOIN = "\n\n"
+
+
+def _groups(texts: Sequence[str], budget: int) -> list[list[int]]:
+    """Runs of consecutive paragraph indices to send as one request, each run
+    under `budget` characters. A paragraph longer than the budget is a group of
+    its own rather than being split — a check has to see a whole sentence."""
+    if budget <= 0:
+        return [[i] for i in range(len(texts))]
+    out: list[list[int]] = []
+    cur: list[int] = []
+    size = 0
+    for i, t in enumerate(texts):
+        if cur and size + len(t) > budget:
+            out.append(cur)
+            cur, size = [], 0
+        cur.append(i)
+        size += len(t) + len(_JOIN)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _scan(tool, texts: Sequence[str]) -> list[list]:
+    """One request for all of `texts`; the matches split back out per text, with
+    offsets made paragraph-local again.
+
+    A match whose span crosses the join is dropped. A per-paragraph check could
+    not have produced one, so keeping it would be the batching inventing a
+    finding — and there is no single paragraph to anchor it to anyway."""
+    if len(texts) == 1:
+        return [tool.check(texts[0])]
+    starts, at = [], 0
+    for t in texts:
+        starts.append(at)
+        at += len(t) + len(_JOIN)
+    out: list[list] = [[] for _ in texts]
+    for m in tool.check(_JOIN.join(texts)):
+        i = bisect_right(starts, m.offset) - 1
+        if i < 0:
+            continue
+        local = m.offset - starts[i]
+        if local + m.error_length > len(texts[i]):
+            continue                      # straddles the join
+        m.offset = local
+        out[i].append(m)
+    return out
+
+
 def propose(paragraphs: Sequence[ParagraphRef], *,
             lexicon: Sequence[str] = (),
             dictionary: str = "en-US",
             disabled_rules: frozenset[str] = DEFAULT_DISABLED_RULES,
             disabled_issue_types: frozenset[str] = DEFAULT_DISABLED_ISSUE_TYPES,
             workers: int = 0,
+            scan_chars: int = 20000,
             coverage=None,
             progress: Callable[[int, int], None] | None = None,
             ) -> list[RewriteCandidate]:
@@ -125,13 +199,20 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
     to apply or to show in a query. `lexicon` is the spell scan's protected words;
     a misspelling flag on one of them is a name/coinage and is dropped here.
 
-    The per-paragraph checks run over a thread pool so a multi-core box scans in
-    parallel; the pool is capped at the usable CPU count (`workers` lowers it,
-    0 = auto), so on a single-core VM it stays the old serial loop. `progress`,
-    if given, is called `(done, total)` as each paragraph's check lands — the
-    scan is otherwise silent for minutes on a long manuscript, and the job card
-    reads that as a hang. Candidate order stays deterministic: the filtering
-    below walks the paragraphs in order, not in completion order."""
+    Paragraphs are checked several to a request — `scan_chars` of text per
+    request, 0 for one request per paragraph — because the fixed cost of a
+    request is most of the scan on a book of ordinary paragraphs. They are joined
+    by a blank line, which LanguageTool reads as a paragraph break, so each is
+    still analysed on its own; see `_scan`. This is the lever that matters on a
+    one-core box, where the thread pool below cannot help.
+
+    The requests run over a thread pool so a multi-core box scans in parallel;
+    the pool is capped at the usable CPU count (`workers` lowers it, 0 = auto),
+    so on a single-core VM it stays a serial loop. `progress`, if given, is
+    called `(done, total)` in paragraphs as each request lands — the scan is
+    otherwise silent for minutes on a long manuscript, and the job card reads
+    that as a hang. Candidate order stays deterministic: the filtering below
+    walks the paragraphs in order, not in completion order."""
     if not AVAILABLE:
         log.warning("LanguageTool not installed; propose() returns nothing.")
         if coverage is not None:
@@ -144,29 +225,45 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
     tool = _get_tool(dictionary)
 
     reviewable = [p for p in paragraphs if getattr(p, "reviewable", True)]
+    texts = [p.text for p in reviewable]
     total = len(reviewable)
     pool = _usable_cpus()
     if workers:
         pool = max(1, min(workers, pool))
 
+    def scan(group: list[int]) -> tuple[list[int], list[list], int]:
+        """One request's worth of paragraphs. On failure the group is retried one
+        paragraph at a time, so a paragraph the scanner chokes on costs that
+        paragraph and not the fifty it was batched with."""
+        try:
+            return group, _scan(tool, [texts[i] for i in group]), 0
+        except Exception as e:           # pragma: no cover - server/JVM trouble
+            if len(group) == 1:
+                log.warning("LanguageTool: check failed on %s: %s",
+                            reviewable[group[0]].para_id, e)
+                return group, [[]], 1
+            log.warning("LanguageTool: request of %d paragraph(s) failed (%s); "
+                        "retrying them one at a time", len(group), e)
+            out, bad = [], 0
+            for i in group:
+                _, got, f = scan([i])
+                out.append(got[0])
+                bad += f
+            return group, out, bad
+
     # Scan concurrently, but keep results keyed by input position so the ordered
-    # walk afterwards is unaffected by which check finished first.
+    # walk afterwards is unaffected by which request finished first.
     matches_by_idx: dict[int, list] = {}
     done = 0
     failed = 0
     with ThreadPoolExecutor(max_workers=pool) as ex:
-        futs = {ex.submit(tool.check, p.text): i
-                for i, p in enumerate(reviewable)}
+        futs = [ex.submit(scan, g) for g in _groups(texts, scan_chars)]
         for fut in as_completed(futs):
-            i = futs[fut]
-            try:
-                matches_by_idx[i] = fut.result()
-            except Exception as e:       # pragma: no cover - one bad paragraph
-                log.warning("LanguageTool: check failed on %s: %s",
-                            reviewable[i].para_id, e)
-                matches_by_idx[i] = []
-                failed += 1
-            done += 1
+            group, got, bad = fut.result()
+            for i, ms in zip(group, got):
+                matches_by_idx[i] = ms
+            failed += bad
+            done += len(group)
             if progress:
                 progress(done, total)
     # A handful of paragraphs the scanner choked on read downstream as fewer

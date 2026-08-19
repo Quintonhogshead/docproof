@@ -33,7 +33,7 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
 from .instructions import fill_edit_occurrences
-from .pagemap import build_page_map, page_book_text
+from .pagemap import build_page_map, page_book_text, paragraph_lookup
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
@@ -339,7 +339,12 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         scope = build_page_map(stories, page_texts)
         pages_placed = scope.placed
         cited = {e.page for e in edits if e.page and scope.knows(e.page)}
-        book_pages = {p: page_book_text(stories, scope, p) for p in cited}
+        # One lookup over the book for all of the cited pages; it covers every
+        # paragraph, so building it per page walks the novel once per page of
+        # the proof.
+        by_para = paragraph_lookup(stories)
+        book_pages = {p: page_book_text(stories, scope, p, by_para=by_para)
+                      for p in cited}
 
     # The second look runs before the sanity gate on purpose: what it settles
     # becomes an ordinary proposed edit, and the gate then reads the model's

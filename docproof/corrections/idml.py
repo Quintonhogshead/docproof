@@ -49,10 +49,26 @@ class Paragraph:
     index: int
     style: str
     nodes: list[ET._Element] = field(default_factory=list)
+    # The concatenation, held until something changes it. Locating one correction
+    # reads every paragraph's text once, so a book's worth of edits rebuilds this
+    # from the lxml nodes millions of times over — and rebuilding it is a Python
+    # loop over the nodes plus a fresh string. Only `replace` and `_split_node`
+    # touch the nodes; every structural edit goes through `Story.reindex`, which
+    # builds new Paragraph objects and so starts from an empty cache by
+    # construction.
+    _text: str | None = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def text(self) -> str:
-        return "".join((n.text or "") for n in self.nodes)
+        cached = self._text
+        if cached is None:
+            cached = self._text = "".join((n.text or "") for n in self.nodes)
+        return cached
+
+    def _text_changed(self) -> None:
+        """Drop the cached concatenation. Called before any write to the nodes,
+        so a stale read is not possible even if the write then bails out."""
+        self._text = None
 
     def restyle(self, start: int, end: int, attrs: dict[str, str]) -> bool:
         """Apply character attributes (`{"FontStyle": "Italic"}`) to the
@@ -135,6 +151,7 @@ class Paragraph:
         parent = node.getparent()
         if parent is None:
             return False
+        self._text_changed()
         tail = ET.SubElement(parent, CONTENT)
         parent.remove(tail)
         tail.text = text[at:]
@@ -171,6 +188,7 @@ class Paragraph:
             raise ValueError("could not locate the span in the paragraph")
         first_node, first_n0 = first
         last_node, last_n0 = last
+        self._text_changed()
         prefix = (first_node.text or "")[: start - first_n0]
         suffix = (last_node.text or "")[end - last_n0:]
         if first_node is last_node:

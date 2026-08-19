@@ -642,10 +642,20 @@ class LanguageToolConfig(BaseModel):
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)
-    # Threads for the per-paragraph scan. The pass caps this at the usable CPU
-    # count regardless, so 0 (auto) is one thread per core; on a single-core VM
-    # the scan is serial no matter what. Lower it only to leave cores free.
+    # Threads for the scan. The pass caps this at the usable CPU count
+    # regardless, so 0 (auto) is one thread per core; on a single-core VM the
+    # scan is serial no matter what. Lower it only to leave cores free.
     workers: int = Field(default=0, ge=0)
+    # Characters of manuscript per request to the local server. Paragraphs are
+    # joined by a blank line, which LanguageTool reads as a paragraph break, so
+    # each is still analysed on its own — this only stops the fixed cost of a
+    # request being paid once per paragraph, which on a book of ordinary
+    # paragraphs is most of the scan. Measured on 28k words of prose, one
+    # thread: 6.96s at one paragraph per request against 3.27s here, for a
+    # candidate set that came back identical at every size tried (1 to 200
+    # paragraphs a request). It is the lever that helps a one-core box, where the
+    # thread pool cannot. 0 restores one request per paragraph.
+    scan_chars: int = Field(default=20000, ge=0)
     max_output_tokens: int = Field(default=16000, ge=1)
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
     # The confidence at or above which an affirmed fix edits; softer is a margin

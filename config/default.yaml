@@ -339,6 +339,14 @@ languagetool:
                             # pass caps this at the CPU count, so on a single-core
                             # VM the scan stays serial. Raise nothing to speed it
                             # up — give the machine more cores instead.
+  scan_chars: 20000         # characters per request to the local server. The
+                            # paragraphs in a request are blank-line separated,
+                            # which LanguageTool reads as a paragraph break, so
+                            # each is still checked on its own; this only stops
+                            # the per-request cost being paid once per paragraph.
+                            # Measured on 28k words, one thread: 6.96s at one
+                            # paragraph per request vs 3.27s here, identical
+                            # candidates. 0 = one request per paragraph
   # Ceiling per confirm request. The verdicts are terse, but the ceiling has to
   # cover the model's THINKING as well as what it writes back, and on a
   # reasoning model the thinking is most of it. Measured on a real manuscript at
