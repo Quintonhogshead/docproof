@@ -129,7 +129,13 @@ def resolve(instruction: str, anchor: str, *, context: str = "",
              _named_capital, _hyphenate, _enclose_in_quotes, _quote_style,
              _quoted_proposal, _bare_replacement, _composition_check)
     if len(anchor.split()) > MAX_ANCHOR_WORDS:
-        rules = (_line_break_op,)
+        # `_line_break_op` never picks a target — the note quotes the words either
+        # side of the break — and `_replace_punctuation_named` is held to the notes
+        # that name their own mark, so neither is guessing inside a long span. A
+        # reviewer who highlights a whole line and writes "replace hyphen with en
+        # dash" has still said exactly which hyphen when only one of them stands
+        # between two digits.
+        rules = (_line_break_op, _replace_punctuation_named)
 
     for rule in rules:
         got = rule(low, note, anchor, highlighted)
@@ -177,13 +183,28 @@ def _house_apostrophe(got: "Resolved") -> "Resolved":
     return replace(got, replace=fixed)
 
 
-# A period or comma left outside a closing double quotation mark. US practice —
-# Chicago, and this book — puts both inside, and every other closing mark outside,
-# so this shape is always wrong here and never a judgment call. Held to the double
-# mark on purpose: a lone ’ is as likely to be a plural possessive as a closing
-# quote ("the Shanklins’,"), and moving a comma through one of those would break a
-# word to fix nothing.
-_QUOTE_PUNCT = re.compile(r"([’”]*”)([,.])")
+# A period or comma sitting anywhere but the front of a run of closing quotation
+# marks. US practice — Chicago, and this book — puts both inside every quotation
+# they end, and every other mark outside, so `pot’.”` and `appétit”,` are wrong in
+# the same way and `pot.’”` is the answer to both. Held to a run carrying the
+# double mark on purpose: a lone ’ is as likely to be a plural possessive as a
+# closing quote ("the Shanklins’,"), and moving a comma through one of those
+# would break a word to fix nothing.
+_QUOTE_PUNCT = re.compile(r"([’”]+)([,.])([’”]*)")
+
+
+def _tuck(m: "re.Match") -> str:
+    """One run of closing quotation marks with its comma or period moved to the
+    front of the run — inside every quotation the run closes."""
+    return m.group(2) + m.group(1) + m.group(3)
+
+
+def _tuck_quotes(text: str) -> str:
+    """`text` with each such run put right, leaving the runs that carry no double
+    mark alone."""
+    return _QUOTE_PUNCT.sub(
+        lambda m: _tuck(m) if "”" in m.group(1) + m.group(3) else m.group(0),
+        text)
 
 
 def house_typography(edits):
@@ -209,8 +230,9 @@ def house_typography(edits):
         fixed = e.replace
         if "'" in fixed and "'" not in e.find:
             fixed = _house_apostrophe(Resolved(e.find, fixed)).replace
-        if _QUOTE_PUNCT.search(fixed) and not _QUOTE_PUNCT.search(e.find):
-            fixed = _QUOTE_PUNCT.sub(r"\2\1", fixed)
+        tucked = _tuck_quotes(fixed)
+        if tucked != fixed and _tuck_quotes(e.find) == e.find:
+            fixed = tucked
         out.append(e if fixed == e.replace else replace(e, replace=fixed))
     return out
 
@@ -772,7 +794,15 @@ def _literal_after_colon(low, note, anchor, highlighted) -> Resolved | None:
     return Resolved(find, literal, MECHANICAL, "literal-after-colon")
 
 
-def _replace_punctuation(low, note, anchor, highlighted) -> Resolved | None:
+def _replace_punctuation_named(low, note, anchor, highlighted) -> Resolved | None:
+    """`_replace_punctuation` with the "only one such mark in the span" evidence
+    withdrawn — for a mark too long to be pointing at anything, where that count
+    means nothing. What is left is the note naming its own target."""
+    return _replace_punctuation(low, note, anchor, highlighted, strict=True)
+
+
+def _replace_punctuation(low, note, anchor, highlighted, *, strict=False
+                         ) -> Resolved | None:
     """`Replace comma with period`, and the same with a capitalized next word.
 
     Which mark is meant has to be settled by evidence, never by picking the first
@@ -802,7 +832,7 @@ def _replace_punctuation(low, note, anchor, highlighted) -> Resolved | None:
             # reasonably well" holds a comma. Requiring the span to carry a single
             # kind of mark sent every score to the model.
             old, new = "-", target
-        elif len(set(hits)) != 1:
+        elif strict or len(set(hits)) != 1:
             return None
         else:
             old, new = hits[0], target
@@ -812,7 +842,7 @@ def _replace_punctuation(low, note, anchor, highlighted) -> Resolved | None:
         if old is None or new is None:
             return None
     word = _capitalize_word(low)
-    at = _mark_position(anchor, old, new, word)
+    at = _mark_position(anchor, old, new, word, strict=strict)
     if at is None:
         return None
     replaced = _swap_mark(anchor, at, new, word)
@@ -827,10 +857,11 @@ _CLOSED_UP = "—–"
 _QUOTES_THEN = r"\s*[\"“”'‘’]*"
 
 
-def _mark_position(text: str, old: str, new: str, word: str = "") -> int | None:
+def _mark_position(text: str, old: str, new: str, word: str = "", *,
+                   strict: bool = False) -> int | None:
     """The offset in `text` of the mark a note means, or None when nothing in the
     note or the text says which. See `_replace_punctuation` for the three ways it
-    can be settled."""
+    can be settled; `strict` withdraws the weakest of them, the bare count."""
     at = [i for i, ch in enumerate(text) if ch == old]
     if not at:
         return None
@@ -852,7 +883,7 @@ def _mark_position(text: str, old: str, new: str, word: str = "") -> int | None:
         score = _score_hyphen(text)
         if score is not None:
             return score
-    if len(at) == 1:
+    if len(at) == 1 and not strict:
         return at[0]
     return None
 
