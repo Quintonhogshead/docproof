@@ -378,3 +378,124 @@ def test_a_break_that_is_already_there_is_no_change_not_a_flag():
     assert outcomes[0].status == NO_CHANGE
     assert "already begins here" in outcomes[0].detail
     assert not outcomes[0].needs_human
+
+
+# --- the anchors a model writes from the note, not the book -------------------
+#
+# A prose list of notes gives the extractor no book text at all, so every anchor
+# it emits is its guess at how the book spells what the reviewer described. Three
+# guesses go wrong often enough to be worth repairing deterministically, and all
+# three came off one proof of verse: punctuation invented at the end of a line
+# that has none, the note's own connective carried into a break anchor, and the
+# line the reviewer quoted left behind in the prose instead of anchoring the edit.
+
+
+def _extracted(entry: dict):
+    """One model-proposed edit, run through the extractor (repairs and all)."""
+    from docproof.corrections.extract import extract_edits
+    from docproof.models import Usage
+    from docproof.providers import NormalizedUsage, ProviderResult
+
+    from .fakes import FakeProvider
+    provider = FakeProvider([ProviderResult(
+        parsed={"edits": [entry]},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=10))])
+    result = extract_edits("the reviewer's notes", provider, model="m",
+                           usage=Usage())
+    assert result.ok, result.issues
+    return result.edits[0]
+
+
+def test_a_mark_the_note_asks_to_add_is_not_assumed_to_be_there():
+    """"Place a ? at the end" says the mark is absent — and a line of verse
+    usually ends bare, so a find quoting a full stop the model supplied itself
+    matches nothing and the correction is lost."""
+    edit = _extracted({
+        "find": "your cowardice.", "replace": "your cowardice?",
+        "instruction": "Please place a ? at the end of the first sentence in the "
+                       "second paragraph so that it reads like\n\nCan’t you see –\n"
+                       "Our decade of duplicity\nIs the outcome of your cowardice?"})
+    assert edit.find == "your cowardice"
+    story = _story("Our decade of duplicity", "Is the outcome of your cowardice")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert texts(story)[1] == "Is the outcome of your cowardice?"
+
+
+def test_the_added_mark_does_not_double_one_the_book_did_carry():
+    """The other half of the same repair: the note said nothing about a full stop,
+    but the book has one. The mark is replaced, not written in front of."""
+    edit = _extracted({
+        "find": "your cowardice.", "replace": "your cowardice?",
+        "instruction": "Please place a ? at the end of that sentence."})
+    story = _story("Is the outcome of your cowardice.")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert texts(story)[0] == "Is the outcome of your cowardice?"
+
+
+def test_a_note_that_names_the_existing_mark_keeps_it_in_the_anchor():
+    """"Replace the semicolon with a period" says the mark IS there, so the find
+    must carry it — the repair above must not fire on a swap."""
+    edit = _extracted({
+        "find": "after you; I", "replace": "after you. I",
+        "instruction": "Please replace the semicolon between “you” and “I” with a "
+                       "period."})
+    assert edit.find == "after you; I"
+
+
+def test_a_break_anchor_drops_the_notes_own_connective():
+    """"Delete the line break between “study” and “spelunking”" wants the two
+    sides as they meet once the break is gone. The "and" belongs to the note; the
+    book has no such run, so the anchor matched nothing."""
+    edit = _extracted({
+        "find": "study and spelunking", "replace": "study and spelunking",
+        "paragraph": PARA_MERGE_NEXT,
+        "instruction": "Last paragraph, please delete the line break between "
+                       "“study” and “spelunking” so that it all flows as a "
+                       "natural paragraph."})
+    assert edit.find == "study spelunking" == edit.replace
+    story = _story("The silhouettes superimpose and I’m left to study",
+                   "spelunking. I’m left to investigate the nuances.")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert texts(story) == ["The silhouettes superimpose and I’m left to study "
+                            "spelunking. I’m left to investigate the nuances."]
+
+
+def test_an_anchor_the_model_quoted_from_the_book_is_left_alone():
+    """The same note shape, but the model did what it was asked and quoted the
+    book across the break. Nothing to repair."""
+    edit = _extracted({
+        "find": "dead people stuff: Rotting", "replace": "dead people stuff: Rotting",
+        "paragraph": PARA_MERGE_NEXT,
+        "instruction": "Please delete the line break between “stuff:” and "
+                       "“Rotting” so that the paragraph breaks naturally."})
+    assert edit.find == "dead people stuff: Rotting"
+
+
+def test_the_line_the_reviewer_quoted_becomes_the_context():
+    """A note that quotes the sentence has already said which copy of a common
+    word it means. Leaving that in the prose threw the answer away and the edit
+    came back ambiguous with the disambiguation sitting in its own instruction."""
+    edit = _extracted({
+        "find": "siren’s", "replace": "Siren’s",
+        "instruction": "In the last sentence, please capitalize the S in "
+                       "“siren’s”\n\n“And resist the pull of a Siren’s "
+                       "locomotive.”"})
+    assert edit.context == "And resist the pull of a Siren’s locomotive."
+    story = _story("The daughter of a pirate choir and siren’s sea is wary.",
+                   "and resist the pull of a siren’s locomotive.")
+    outcomes, _ = apply_to_stories([story], [edit])
+    assert outcomes[0].status == APPLIED
+    assert texts(story) == ["The daughter of a pirate choir and siren’s sea is wary.",
+                            "and resist the pull of a Siren’s locomotive."]
+
+
+def test_the_notes_quote_of_the_changed_word_is_not_a_context():
+    """Only a quote materially longer than the find is a line. The note quoting
+    the word it is changing says nothing about where it sits."""
+    edit = _extracted({
+        "find": "dismay", "replace": "consternation",
+        "instruction": "Paragraph 3. Please replace “dismay” with “consternation”"})
+    assert edit.context == ""

@@ -1114,3 +1114,23 @@ def test_the_second_look_refuses_an_unanchorable_answer():
     from docproof.corrections.secondlook import settle_queries
     out, settled = settle_queries(edits, provider, model="m", usage=Usage())
     assert settled == 0 and out == edits
+
+
+def test_absorbing_a_stale_mark_does_not_reach_past_a_sentence_end():
+    """The guard that lets an "add a full stop" edit land on a sentence that
+    already has one is deliberately narrow: only a sentence mark written over a
+    sentence mark. A comma after the span is the next clause's, not a duplicate."""
+    s = _one_para_story("She waited, then left, and the door shut.")
+    outs, _ = apply_to_stories([s], [Edit(id="e1", find="waited", replace="paused.")])
+    assert outs[0].status == APPLIED
+    assert s.text == "She paused., then left, and the door shut."
+
+
+def test_deleting_a_trailing_mark_still_deletes_it():
+    """The same guard must not fire on an edit that quoted the mark itself — the
+    reviewer asking for no closing punctuation gets none."""
+    s = _one_para_story("GO O SPELUNKING.")
+    outs, _ = apply_to_stories(
+        [s], [Edit(id="e1", find="GO O SPELUNKING.", replace="GO O SPELUNKING")])
+    assert outs[0].status == APPLIED
+    assert s.text == "GO O SPELUNKING"

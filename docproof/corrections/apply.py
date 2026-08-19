@@ -479,6 +479,33 @@ def _with_article_fix(para: Paragraph, start: int, end: int,
     return k, want + text[j:start] + replace
 
 
+_SENTENCE_END = ".?!"
+
+
+def _absorb_stale_terminal(para: Paragraph, end: int, found: str,
+                           replacement: str) -> int:
+    """The span's end, widened over a sentence mark the write would otherwise
+    double.
+
+    An edit that *adds* terminal punctuation is anchored on the words, not on a
+    mark — "place a ? at the end" says there is none there to quote (see
+    `extract._repair_added_terminal_mark`). Usually there is none, and this does
+    nothing. When the book turns out to carry one after all, writing "cowardice?"
+    in front of it would leave "cowardice?." — so the stale mark is taken into the
+    span and replaced along with the words, which is what the reviewer asked for
+    either way.
+
+    Deliberately narrow: only a *sentence* mark being written over a sentence
+    mark, and only when the text the edit matched did not already end in one — an
+    edit that quoted the mark it changes has said what to do with it."""
+    if not replacement or replacement[-1] not in _SENTENCE_END:
+        return end
+    if found and found[-1] in _SENTENCE_END:
+        return end                         # the edit rewrote the mark itself
+    after = para.text[end:end + 1]
+    return end + 1 if after and after in _SENTENCE_END else end
+
+
 def _keep_book_case(found: str, find: str, replace: str) -> str:
     """The replacement to write, in the book's capitals rather than the
     reviewer's, when those are the only thing the two disagree about.
@@ -612,10 +639,12 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                 detail="its span overlaps a correction already applied here",
                 collides_with=hit))
             continue
-        replacement = _keep_book_case(para.text[start:end], edit.find, edit.replace)
+        found_text = para.text[start:end]
+        replacement = _keep_book_case(found_text, edit.find, edit.replace)
         r_start, new_text = _with_article_fix(para, start, end, replacement)
-        para.replace(r_start, end, new_text)
-        touched.record(key, r_start, end, len(new_text), edit.id)
+        r_end = _absorb_stale_terminal(para, end, found_text, new_text)
+        para.replace(r_start, r_end, new_text)
+        touched.record(key, r_start, r_end, len(new_text), edit.id)
         changed.add(story.story_id)
         outcomes.append(EditOutcome(edit, APPLIED, story_id=story.story_id,
                                     paragraph=para.index, occurrences=1))

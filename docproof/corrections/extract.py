@@ -18,13 +18,16 @@ prep's subject detection does, so it works on whichever model the caller wired.
 """
 from __future__ import annotations
 
+import re
 from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
 from ..models import Usage
 from ..providers import Provider, strict_json_schema
+from .model import DESIGN, PARA_MERGE_NEXT
 from .parse import ParseResult, parse_edits
+from .textmatch import normalize
 
 MAX_OUTPUT_TOKENS = 8000
 
@@ -84,6 +87,15 @@ a verb or object gets dropped. But a find of one or two characters is not an \
 anchor: NEVER emit a find that is a bare "," or "." or a single quote mark. A \
 punctuation change takes the few words around the mark, so the find can be found — \
 find "he said, and then", replace "he said. And then", not find ",".
+  NEVER PUT PUNCTUATION IN find THAT YOU HAVE NOT SEEN IN THE BOOK. A note that \
+asks you to PLACE or ADD a mark ("please put a ? at the end of that sentence") is \
+telling you the mark is NOT there — the find is the words alone and the replace \
+is those same words with the mark added: find "your cowardice", replace "your \
+cowardice?", never find "your cowardice." on the assumption a full stop is \
+sitting there. Only a note that asks you to REPLACE or CHANGE an existing mark \
+("change the semicolon after 'you' to a period") tells you the mark is in the \
+book, and only then does find carry it. This matters most in verse, where a line \
+routinely ends with no punctuation at all.
 - replace: the corrected text. Use an empty string for a pure deletion. For an \
 insertion, set find to the existing text around the insertion point and put that \
 same text plus the new words in replace.
@@ -93,6 +105,13 @@ sentence or line the correction is attached to) that contains find exactly once.
 The edit is then located inside this context, so it lands on the intended spot — \
 the one the mark was on — not another copy elsewhere. Leave context empty when \
 find is already unique. Copy it from the book text for the page, the same as find.
+  WHEN THE NOTE ITSELF QUOTES THE LINE — "capitalize the S in 'siren's': 'And \
+resist the pull of a Siren's locomotive.'" — that quote IS the context: copy it \
+in, even if you think find is unique. It is the reviewer telling you which copy \
+they marked, and it is the only thing that can tell two copies apart in a book \
+you cannot see. Quote it as the book has it where you have the book's text; \
+otherwise copy the note's quote as written, with the correction it shows undone \
+if you can (the reviewer often quotes the line already corrected).
 - instruction: the human note the correction came from, verbatim, for the report.
 - format: "italic" or "roman" when the correction is about how the text is SET \
 rather than what it says — "italicize this film title", "de-italicize". Also \
@@ -113,8 +132,12 @@ poetry are asking about, because every line of verse is its own paragraph:
   "merge-next" — "delete the line break between X and Y", "let this run on as one \
 paragraph". Put in find a verbatim run of the book that REACHES ACROSS the break \
 being deleted: the words on both sides of it, e.g. find "dead people stuff: \
-Rotting". One break per edit — if the note asks for several line breaks to go, \
-emit one merge-next edit per break, in order.
+Rotting". The note's own words are not the book's: "delete the line break between \
+"study" and "spelunking"" gives find "study spelunking" — the two sides as they \
+meet once the break is gone — NEVER "study and spelunking", which carries the \
+note's connective into an anchor and matches nothing. One break per edit — if the \
+note asks for several line breaks to go, emit one merge-next edit per break, in \
+order.
   "split-at" — "insert a paragraph break here", "start a new paragraph at X". Put \
 in find ONLY the text that should START the new paragraph, e.g. find "The next \
 hour or so"; the break is made immediately in front of it. Never make find reach \
@@ -148,6 +171,156 @@ do not guess a location and do not silently omit the item.
 - One edit per correction. Do not merge or split them."""
 
 
+# --- repairing the three anchors a model writes from the note, not the book ----
+#
+# The rules above tell the model not to make these mistakes. This is what catches
+# the ones it makes anyway, deterministically, before the list ever reaches a
+# person to review — each repair reads only the note the correction came from and
+# the find/replace beside it, and each is narrow enough to be wrong about nothing
+# else. They matter most on the source that gives the model no book text at all: a
+# prose list of notes, where every anchor is the model's guess at how the book
+# spells what the reviewer described.
+
+# A run the note quotes — the reviewer's own rendering of the book. Both quote
+# styles, and short of a paragraph: a "quote" longer than this is prose about the
+# correction, not a line lifted out of the book.
+_QUOTED = re.compile(r"[“\"]([^“”\"]{2,400})[”\"]")
+
+# How much more than the anchor a quoted run has to carry before it counts as the
+# line the anchor sits in. A note quotes the words it is changing at least as
+# often as it quotes their sentence ("replace “dismay” with “consternation”"), and
+# that quote is not a context — it is the edit itself, and pinning the edit inside
+# a copy of itself narrows nothing while risking the wrong copy.
+_CONTEXT_EXTRA_WORDS = 3
+
+_SENTENCE_MARKS = ".?!,;:"
+# "Place a ? at the end" says the mark is absent; "change the . to a ?" says it is
+# there. The two verbs are what tell an insertion from a swap, and a note carrying
+# either kind of swap word is left alone.
+_ADD_VERB = re.compile(r"\b(place|add|insert|put)\b", re.IGNORECASE)
+_SWAP_VERB = re.compile(r"\b(replace|replacing|change|changing|swap|delete|"
+                        r"remove|instead of|take out)\b", re.IGNORECASE)
+
+
+def _quoted_runs(note: str) -> list[str]:
+    """The runs the note quotes, in order, as the reviewer wrote them."""
+    return [m.group(1).strip() for m in _QUOTED.finditer(note or "")]
+
+
+def _same(a: str, b: str) -> bool:
+    """The two anchors are the same text once spelling of quotes, dashes,
+    spacing and case are set aside — the comparison `apply` itself would make."""
+    return normalize(a, fold_case=True) == normalize(b, fold_case=True)
+
+
+def _repair_break_anchor(entry: dict) -> None:
+    """A merge-next anchor rebuilt from the two sides of the break, when the model
+    copied the note's phrasing instead.
+
+    "Delete the line break between “study” and “spelunking”" wants an anchor that
+    reaches across the break — "study spelunking" — and what comes back is often
+    the note's own sentence, "study and spelunking", whose "and" is nowhere in the
+    book. Only that exact shape is rewritten: the find must be the two quoted
+    sides joined by the note's connective and nothing else, so an anchor the model
+    did quote from the book is never touched."""
+    if entry.get("paragraph") != PARA_MERGE_NEXT:
+        return
+    find = entry.get("find") or ""
+    quoted = _quoted_runs(entry.get("instruction") or "")
+    for left, right in zip(quoted, quoted[1:]):
+        if _same(find, f"{left} and {right}"):
+            joined = f"{left} {right}"
+            if _same(entry.get("replace") or "", find):
+                entry["replace"] = joined   # a break edit rewrites no words
+            entry["find"] = joined
+            return
+
+
+def _repair_added_terminal_mark(entry: dict) -> None:
+    """The punctuation an "add a mark" note never said was there, dropped from the
+    find.
+
+    A note reading "please place a ? at the end of that sentence" is an insertion:
+    the book has the words and no mark. A model that has not been shown the book
+    tends to write the sentence out with a full stop anyway and swap that for the
+    question mark, and the full stop it invented is what stops the anchor matching
+    — a verse line, which is where these notes mostly land, usually ends bare.
+
+    So a find and replace differing only in a final sentence mark, on a note that
+    asks to *place* one and never mentions an existing one, become the insertion
+    the note described. If the book does turn out to carry a mark there, `apply`
+    absorbs it rather than doubling it (`_absorb_stale_terminal`)."""
+    find, replace = entry.get("find") or "", entry.get("replace") or ""
+    if entry.get("paragraph") or entry.get("format") or entry.get("kind") == DESIGN:
+        return
+    if len(find) < 2 or len(replace) < 2 or find[-1] == replace[-1]:
+        return
+    if find[-1] not in _SENTENCE_MARKS or replace[-1] not in _SENTENCE_MARKS:
+        return
+    if find[:-1] != replace[:-1]:
+        return
+    note = entry.get("instruction") or ""
+    if not _ADD_VERB.search(note) or _SWAP_VERB.search(note):
+        return
+    entry["find"] = find[:-1]
+    entry["replace"] = find[:-1] + replace[-1]
+
+
+def _lift_context_from_note(entry: dict) -> None:
+    """The line the reviewer quoted, lifted onto the edit as its context anchor.
+
+    A note that quotes the sentence it was written against has already said which
+    copy of a common word it means; leaving that in the prose of the instruction
+    throws the answer away, and a `find` of "siren’s" in a book with two of them
+    is then flagged as ambiguous with the disambiguation sitting right there in
+    the note. The quote is only ever a *narrowing*: one that does not match the
+    book is dropped by `apply` and the edit is located exactly as it would have
+    been, so lifting it can lose nothing.
+
+    Only a quote that is materially longer than the find and contains it (or the
+    corrected form the reviewer usually quotes) is taken — the note's quote of the
+    changed word itself is not a line."""
+    if (entry.get("context") or "").strip() or entry.get("kind") == DESIGN:
+        return
+    find, replace = entry.get("find") or "", entry.get("replace") or ""
+    if not find:
+        return
+    probe = normalize(find, fold_case=True)
+    corrected = normalize(replace, fold_case=True)
+    if not probe:
+        return
+    best = ""
+    for run in _quoted_runs(entry.get("instruction") or ""):
+        view = normalize(run, fold_case=True)
+        if probe not in view and not (corrected and corrected in view):
+            continue
+        anchor = find if probe in view else replace
+        if len(run.split()) - len(anchor.split()) < _CONTEXT_EXTRA_WORDS:
+            continue                        # the word again, not the line it sits in
+        if len(view) > len(normalize(best, fold_case=True)):
+            best = run
+    if best:
+        entry["context"] = best
+
+
+def repair_entries(parsed):
+    """The model's edit list with the three anchors it writes from the note rather
+    than the book repaired. Takes and returns the shape the schema produces (an
+    object with an "edits" list); anything else is passed through untouched, since
+    `parse_edits` owns what a valid source looks like."""
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("edits"), list):
+        return parsed
+    entries = []
+    for entry in parsed["edits"]:
+        if isinstance(entry, dict):
+            entry = dict(entry)
+            _repair_break_anchor(entry)
+            _repair_added_terminal_mark(entry)
+            _lift_context_from_note(entry)   # last: it reads the repaired find
+        entries.append(entry)
+    return {**parsed, "edits": entries}
+
+
 def extract_edits(source_text: str, provider: Provider, *, model: str,
                   usage: Usage, max_tokens: int = MAX_OUTPUT_TOKENS
                   ) -> ParseResult:
@@ -168,8 +341,10 @@ def extract_edits(source_text: str, provider: Provider, *, model: str,
             result.error or result.stop_reason or "no answer from the model")
     # parse_edits owns the "flag, never guess" contract and accepts the
     # {"edits": [...]} wrapper the schema produces, so validation lands in one
-    # place whether a list was typed or extracted.
-    return parse_edits(result.parsed)
+    # place whether a list was typed or extracted. The repair pass runs first, so
+    # what a person reviews in the panel is the repaired anchor — not one that
+    # will silently fail to match hours later, when the file is being corrected.
+    return parse_edits(repair_entries(result.parsed))
 
 
 def extract_edits_batched(sources: Sequence[str], provider: Provider, *,
