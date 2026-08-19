@@ -37,6 +37,37 @@ FORMATS: dict[str, dict[str, str | None]] = {
     FORMAT_NO_SWASH: {"OTFSwash": None},
 }
 
+# The other way an IDML says "italic": a character style the designer applied,
+# rather than a local override on the range. Which one a book uses is the book's
+# choice — this one uses its `Italic` style 117 times — and a correction has to
+# read what is there rather than assume. Clearing a `FontStyle` that was never
+# set is what left every "de-italicize this song title" reported as applied and
+# visibly unchanged in the file. `apply._format_attrs` resolves the pair against
+# the span being styled.
+NO_CHARACTER_STYLE = "CharacterStyle/$ID/[No character style]"
+# The style names that mean italic. InDesign's default is "Italic"; a designer
+# who renamed it usually says so in the name.
+_ITALIC_NAMES = ("italic", "italics", "oblique")
+
+
+def style_name(applied: str) -> str:
+    """The bare name of an `AppliedCharacterStyle` — "Italic" for
+    "CharacterStyle/Italic"."""
+    return (applied or "").rsplit("/", 1)[-1].strip()
+
+
+def is_italic_style(applied: str) -> bool:
+    """Whether an applied character style is one that sets italics."""
+    return style_name(applied).lower() in _ITALIC_NAMES
+
+
+def is_plain_style(applied: str) -> bool:
+    """Whether a range carries no character style of its own — the case where a
+    correction may set one without taking anything out."""
+    name = style_name(applied)
+    return not name or name == "[No character style]"
+
+
 # What a reviewer can ask of a whole paragraph, and the IDML range attributes that
 # say it. These are the requests that read as layout and are not: where a chapter
 # starts, whether a heading may be left stranded at the foot of a page, and how much

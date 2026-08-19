@@ -128,6 +128,26 @@ class Paragraph:
                 covered.append(node)
         return covered or None
 
+    def applied_character_styles(self, start: int, end: int) -> list[str]:
+        """The `AppliedCharacterStyle` of every character range the `[start, end)`
+        span touches, in order and without splitting anything.
+
+        What a span is *already* set in decides how to change it: an IDML says
+        "italic" either as a local `FontStyle` override or as an applied
+        character style, and a request to take italics off has to clear the one
+        that is actually there."""
+        out, offset = [], 0
+        for node in self.nodes:
+            text = node.text or ""
+            n0, n1 = offset, offset + len(text)
+            offset = n1
+            if not text or n1 <= start or n0 >= end:
+                continue
+            parent = node.getparent()
+            if parent is not None and parent.tag == CSR:
+                out.append(parent.get("AppliedCharacterStyle", ""))
+        return out
+
     def _split_at(self, pos: int) -> bool:
         """Ensure a Content-node boundary falls at paragraph offset `pos`, splitting
         the node that straddles it. True when a boundary is there (or already was)."""
@@ -323,6 +343,14 @@ class Story:
         """The whole story as text, one newline between paragraphs — the shape
         the verifier diffs and word-counts."""
         return "\n".join(p.text for p in self.paragraphs)
+
+    def character_styles(self) -> set[str]:
+        """Every `AppliedCharacterStyle` this story uses. What a book already has
+        is what a correction should be written in, so "italicize this" can reach
+        for the style the designer set the other italics in rather than laying a
+        local override over the top of it."""
+        return {csr.get("AppliedCharacterStyle", "")
+                for csr in self.root.iter(CSR)}
 
     def serialize(self) -> bytes:
         return ET.tostring(self.root, xml_declaration=True, encoding="UTF-8",

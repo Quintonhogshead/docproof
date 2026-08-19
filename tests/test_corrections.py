@@ -75,18 +75,20 @@ def test_an_ambiguous_following_word_leaves_the_article_alone():
     from spelling, so the article is left as the reviewer had it."""
     s = _one_para_story("It was a good university.")
     apply_to_stories([s], [Edit(id="e1", find="good", replace="")])
-    assert s.text == "It was a  university."       # article untouched
+    # "a", not "an" — and one space, not the two that lifting a word out from
+    # between them used to leave.
+    assert s.text == "It was a university."
 
 
 def test_two_edits_on_overlapping_spans_flag_the_second():
     """A second correction whose span collides with one already applied to the
     paragraph is flagged, not applied blindly on top of it."""
-    s = _one_para_story("abcabc def")
+    s = _one_para_story("one two three four")
     outs, _ = apply_to_stories([s], [
-        Edit(id="e1", find="abc", occurrence=1, replace="Z"),
-        Edit(id="e2", find="Zab", replace="Q")])
+        Edit(id="e1", find="two", replace="six"),
+        Edit(id="e2", find="six three", replace="seven")])
     assert [o.status for o in outs] == [APPLIED, OVERLAPS]
-    assert s.text == "Zabc def"                    # the second never landed
+    assert s.text == "one six three four"          # the second never landed
     assert any(o.needs_human for o in outs)
 
 

@@ -29,6 +29,8 @@ from .apply import all_spans
 from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
                     FORMAT_SWASH, JUDGMENT, MECHANICAL, PARA_DELETE,
                     PARA_MERGE_NEXT, PARA_SPLIT_AT)
+from .overgrab import repair_pair
+from .textmatch import normalize
 
 # How many words a marked span may hold and still be treated as naming its target.
 # A highlight over a word or a short phrase is pointing at it; a sticky note's
@@ -364,6 +366,76 @@ def _cget(comment, field: str, default=""):
     if isinstance(comment, dict):
         return comment.get(field, default)
     return getattr(comment, field, default)
+
+
+def widen_edits_to_marks(edits, comments, *, book_pages=None):
+    """`edits` with a `find` that quoted less than the reviewer highlighted put
+    back to the whole highlighted run.
+
+    A highlight with a bare word written beside it is the oldest mark there is:
+    it says "this run becomes that". "is hoping" highlighted, "hoped" written —
+    both words go, and one word arrives. A model shown the note alone tends to
+    match the parts of speech instead and emit "hoping" → "hoped", which applies
+    perfectly and leaves "he is hoped" in the book. `verify` then confirms the
+    file matches the edit, because it does; nothing downstream can see it. The
+    mark can, and the mark is right here.
+
+    Held to the case where the reading is not in doubt:
+
+      * the mark is a highlight, and the note is *exactly* the replacement — a
+        substitution written out, not an instruction ("Lowercase") to carry out;
+      * the highlighted run contains the find and adds no more than one word to
+        it, so a note attached to a whole line ("three" against "…and a 3-mile")
+        can never swallow the line;
+      * the extra is a word, not punctuation — the marks around a word are
+        `overgrab`'s business, and widening onto them would undo it;
+      * and the widened find is text the page really carries, so an anchor made
+        from the PDF's rendering of a highlight can never lose an edit that was
+        landing before.
+    """
+    if not edits or not comments:
+        return edits
+    by_id = {}
+    for c in comments:
+        cid = _cget(c, "id")
+        if cid:
+            by_id.setdefault(cid, c)
+    out = []
+    for e in edits:
+        c = by_id.get((e.source or "").split()[0]) if e.source else None
+        wider = _mark_run(e, c, book_pages) if c is not None else ""
+        out.append(replace(e, find=wider) if wider else e)
+    return out
+
+
+def _mark_run(edit, comment, book_pages) -> str:
+    """The highlighted run an edit should have quoted, or "" when this edit is
+    not that case. See `widen_edits_to_marks` for each condition."""
+    if edit.format or edit.paragraph or edit.kind == DESIGN or not edit.find:
+        return ""
+    if _cget(comment, "kind") != "highlight":
+        return ""
+    anchor = (_cget(comment, "anchor") or "").strip()
+    note = (_cget(comment, "instruction") or "").strip()
+    if not anchor or not note or note != edit.replace.strip():
+        return ""
+    marked, quoted = (normalize(anchor, fold_case=True),
+                      normalize(edit.find, fold_case=True))
+    if not quoted or quoted == marked or quoted not in marked:
+        return ""
+    # What the highlight has that the find does not. A find the anchor carries
+    # only once it is normalized leaves the whole anchor here, which is more than
+    # a word and declines below — the conservative answer either way.
+    extra = anchor.replace(edit.find, " ", 1) if edit.find in anchor else anchor
+    if not any(ch.isalnum() for ch in extra):
+        return ""                          # only punctuation to spare
+    if len(extra.split()) > 1:
+        return ""                          # a line, not the word beside the find
+    wider, _ = repair_pair(anchor, edit.replace, edit.instruction)
+    book = _page_text(book_pages, edit.page)
+    if not book or not all_spans(book, wider):
+        return ""                          # the book does not carry it
+    return wider
 
 
 def fill_edit_occurrences(edits, comments, *, book_pages=None, pdf_pages=None):

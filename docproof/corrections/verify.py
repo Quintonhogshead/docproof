@@ -125,9 +125,17 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
             elif o.edit.paragraph == PARA_SPLIT_AT:
                 after_text = _joined(act, a_index)
             acc[key] = {"before": before_text, "after": after_text,
-                        "ids": [], "notes": [], "formats": []}
+                        "ids": [], "notes": [], "formats": [], "gone": False}
             order.append(key)
         acc[key]["ids"].append(o.edit.id)
+        if o.edit.paragraph == PARA_DELETE:
+            # The index now holds the *next* paragraph, so reading it as this
+            # one's "now" shows the line being replaced by its neighbour. What
+            # happened is that the line went. Recorded per outcome rather than
+            # per paragraph, because the correction that emptied a line and the
+            # removal of the emptied line are two outcomes on the same one.
+            acc[key]["gone"] = True
+
         if o.edit.format and o.edit.format not in acc[key]["formats"]:
             acc[key]["formats"].append(o.edit.format)
         note = (o.edit.instruction or "").strip()
@@ -136,10 +144,11 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
     changes: list[ReviewChange] = []
     for sid, para in order:
         d = acc[(sid, para)]
-        if d["before"] == d["after"] and not d["formats"]:
+        after = "" if d["gone"] else d["after"]
+        if d["before"] == after and not d["formats"]:
             continue
         changes.append(ReviewChange(
-            story_id=sid, paragraph=para, before=d["before"], after=d["after"],
+            story_id=sid, paragraph=para, before=d["before"], after=after,
             edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"]),
             formatting=", ".join(d["formats"])))
     return changes
