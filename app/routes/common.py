@@ -129,7 +129,15 @@ def token_totals(paths: Paths, ids: list[str],
         if path is None:
             continue
         try:
-            prepared = prepare(cfg, path, ERROR_DIR)
+            # Counts only, so skip the whole-document analyses: the sweeps, the
+            # spell scan (Hunspell suggestions are seconds per manuscript), the
+            # consistency pass and the audit baseline all read every paragraph,
+            # make no API call, and are thrown away here — `request_count` and
+            # `est_document_tokens` come off the pass plan, which is built
+            # before any of them run. Pricing a drop is the picker's first
+            # round trip; paying for a scan nobody reads is pure latency, and
+            # a corrections job pays it to be told it costs nothing.
+            prepared = prepare(cfg, path, ERROR_DIR, analyses=False)
         except (IngestError, ValueError):
             continue
         tokens += prepared.est_document_tokens
