@@ -159,6 +159,16 @@ CORRECTIONS_EXTRACT_MODEL = "gpt-5.6-luna"
 # per book, so the stronger model costs cents where it costs anything.
 CORRECTIONS_SECOND_LOOK_MODEL = "gpt-5.6-sol"
 
+# The model for the last tier — the queries even the second look would not
+# answer, put up with the passage around the mark and every occurrence in the
+# book of the terms the note names. Opus rather than Fable: the work is reading
+# a lot of gathered evidence and being honest about what it does not settle,
+# which Opus does at half Fable's price, and the tier reads a handful of notes
+# per book either way. Change this one line to "claude-fable-5" for the ceiling.
+# A book with no Anthropic key falls back to the second look's model, so the
+# tier still runs rather than silently not existing.
+CORRECTIONS_ESCALATE_MODEL = "claude-opus-5"
+
 # How many marked-up comments to read in one model call. A proof can carry
 # hundreds; reading them all at once overruns the model's output ceiling and
 # truncates, silently losing every edit. A bounded batch keeps each call small,

@@ -256,7 +256,7 @@ def _annotated(instruction: str, what: str, note: str) -> str:
 
 # --- the three repairs --------------------------------------------------------
 
-def _is_query(e: Edit) -> bool:
+def is_query(e: Edit) -> bool:
     """Whether an edit is the kind of flag `settle_queries` exists to settle: a
     note the extractor read but would not commit to. Format and paragraph
     requests are already concrete, and a judgment that carries a real
@@ -289,13 +289,13 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
     """The edit list with every query the model settled made concrete, in place
     and in order, plus how many it settled.
 
-    Only queries are put to the model (see `_is_query`); everything else rides
+    Only queries are put to the model (see `is_query`); everything else rides
     through untouched. `usage` accrues the spend. A batch whose call fails is
     logged and left as it was — the queries stand for a human, exactly as if
     the pass had not run."""
     out = list(edits)
     at = {e.id: i for i, e in enumerate(out)}
-    candidates = [e for e in out if _is_query(e)]
+    candidates = [e for e in out if is_query(e)]
     if not candidates:
         return out, 0
     pages = book_pages or {}

@@ -1070,6 +1070,32 @@ def test_a_collision_involving_a_format_edit_is_not_merged():
     assert n == 0 and out == edits and provider.calls == []
 
 
+def test_an_advised_query_reaches_the_report_carrying_the_reading(tmp_path):
+    """The last tier's other answer. A query it studied but would not decide for
+    the reviewer is still flagged and still a person's — the count does not
+    move — but the change log gives them the reading instead of "the model
+    proposed no concrete change"."""
+    import json
+
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"verdict": "recommend",
+                "note": "the narration is first person throughout the scene"},
+        usage=NormalizedUsage(input_tokens=700, output_tokens=30))])
+    got = apply_corrections(LAYOUT, [dict(_QUERY)], tmp_path,
+                            comments=[dict(_QUERY_COMMENT)],
+                            page_texts=[_PAGE1], escalate=(provider, "m"))
+    assert got.advised == 1 and got.resolved == 0
+    assert got.applied == 0 and got.unresolved == 1     # still a person's
+    detail = got.comments[0].detail
+    assert "first person throughout the scene" in detail
+    assert "proposed no concrete change" not in detail
+    payload = json.loads((tmp_path / "corrections.json").read_text("utf-8"))
+    assert "first person" in payload["comments"]["items"][0]["detail"]
+
+
 def test_the_second_look_refuses_an_unanchorable_answer():
     """A settled answer that fails the guards — a find too short to anchor, or a
     change that changes nothing — is refused here, not sent on to apply."""
