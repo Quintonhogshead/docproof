@@ -1717,12 +1717,18 @@ class JobRunner:
         sanity = self._corrections_sanity(job) if job.corrections_sanity else None
         second = (self._corrections_second_look(job)
                   if job.corrections_second_look else None)
+        # The last tier rides with the second look: it is the same request — read
+        # what would otherwise be flagged — one tier further out, and a second
+        # checkbox for it would only ask the operator to reason about which of two
+        # model passes they wanted.
+        escalate = (self._corrections_escalate(job)
+                    if job.corrections_second_look else None)
 
         out = self._claim_results_dir(job)
         try:
             outputs = apply_corrections(job.source_path, job.corrections, out,
                                         comments=comments, sanity=sanity,
-                                        second_look=second,
+                                        second_look=second, escalate=escalate,
                                         page_texts=page_texts)
         except (ValueError, OSError) as e:
             # A corrections list the parser refuses whole (malformed JSON), or a
@@ -1741,8 +1747,8 @@ class JobRunner:
         cost = 0.0
         if outputs.usage is not None:
             try:
-                fallback = (sanity[1] if sanity else
-                            second[1] if second else "")
+                fallback = next((p[1] for p in (sanity, second, escalate)
+                                 if p), "")
                 cost = cost_of_usage(outputs.usage, fallback_model=fallback,
                                      batch=False) or 0.0
             except Exception:                 # noqa: BLE001 - spend logging is not the job
@@ -1802,6 +1808,39 @@ class JobRunner:
             return self._provider(cfg), model
         except Exception:                     # noqa: BLE001 - a missing pass must not sink the run
             log.warning("Could not build the corrections second look; skipping",
+                        exc_info=True)
+            return None
+
+    def _corrections_escalate(self, job):
+        """The `(provider, model)` for the last tier over the queries the second
+        look declined, or None when neither model can be keyed.
+
+        Prefers the frontier reader (CORRECTIONS_ESCALATE_MODEL) and falls back to
+        the second look's own model when its vendor has no key here — the tier is
+        worth more on the weaker model than not at all, since most of what it adds
+        is the evidence it is given rather than the model it is given to. The
+        fallback is logged, not silent: a run whose last tier quietly dropped to a
+        cheaper model should be readable from the log."""
+        from app.routes.jobs import (CORRECTIONS_ESCALATE_MODEL,
+                                     CORRECTIONS_SECOND_LOOK_MODEL)
+        try:
+            cfg = self.config_for(job)
+            for model, why in ((CORRECTIONS_ESCALATE_MODEL, ""),
+                               (CORRECTIONS_SECOND_LOOK_MODEL, "fallback")):
+                info = lookup(model)
+                if info and get_api_key(info.provider):
+                    if why:
+                        log.warning("No key for %s; running the corrections last "
+                                    "tier on %s instead",
+                                    CORRECTIONS_ESCALATE_MODEL, model)
+                    cfg.api.model = model
+                    return self._provider(cfg), model
+            log.warning("Corrections last tier requested but no key for %s or "
+                        "%s; skipping the tier", CORRECTIONS_ESCALATE_MODEL,
+                        CORRECTIONS_SECOND_LOOK_MODEL)
+            return None
+        except Exception:                     # noqa: BLE001 - a missing tier must not sink the run
+            log.warning("Could not build the corrections last tier; skipping",
                         exc_info=True)
             return None
 

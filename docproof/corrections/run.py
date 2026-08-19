@@ -27,6 +27,7 @@ from typing import Sequence
 from ..models import Usage
 from ..providers import Provider
 from .apply import apply_edits
+from .escalate import escalate_queries
 from .idml import read_stories
 from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
@@ -67,6 +68,11 @@ class CorrectionsOutputs:
     settled: int = 0
     reanchored: int = 0
     merged: int = 0
+    # The last tier, when a model was given the book: queries it resolved on the
+    # book's own evidence, and queries it studied but left for a person — those
+    # still count as unresolved, and now arrive carrying what it found.
+    resolved: int = 0
+    advised: int = 0
     # How much of the proof the page map could place in the book. A page it could
     # not place is a page whose marks fall back to searching the whole book, so a
     # low number here explains a run with more flags than expected — and stops the
@@ -274,9 +280,13 @@ def _apply_status_of(apply_report: ApplyReport):
             return DISP_FLAGGED, (o.detail or o.status)
         # A no-op the model marked "judgment" is a query it would not turn into a
         # concrete change — a person should decide, so it is flagged, not filed
-        # under "no change needed" where an editor would never see it.
+        # under "no change needed" where an editor would never see it. When the
+        # second look studied it and stopped short of answering for the reviewer,
+        # what it found is the detail: the query still belongs to a person, but
+        # they get the reading and the evidence rather than a bare "no change".
         if o.edit.kind == JUDGMENT:
-            return DISP_FLAGGED, ("a query for a person — the model proposed no "
+            return DISP_FLAGGED, (o.edit.advice or
+                                  "a query for a person — the model proposed no "
                                   "concrete change")
         return DISP_NO_OP, ""                  # a true no-op (find == replace)
 
@@ -288,6 +298,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       comments: Sequence | None = None,
                       sanity: tuple[Provider, str] | None = None,
                       second_look: tuple[Provider, str] | None = None,
+                      escalate: tuple[Provider, str] | None = None,
                       page_texts: Sequence[str] | None = None
                       ) -> CorrectionsOutputs:
     """Apply a corrections source to `src_idml`, writing the corrected IDML and
@@ -310,7 +321,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     find, a repeated one nothing chose between) from the book's own page text;
     and it merges corrections that collided on one span into a single edit.
     Everything it produces then anchors, gates and verifies like any other edit.
-    Both passes share the returned usage.
+
+    `escalate` is the last tier (see `escalate`), and the only pass given the
+    book rather than a page: each query the second look declined goes up to a
+    frontier model with the passage around the mark and every occurrence in the
+    book of the terms the note names, so a consistency question is settled by
+    counting instead of recalled. It resolves only what that evidence settles and
+    *advises* on the rest, which stay flagged for a person — carrying what it
+    found. All three passes share the returned usage.
 
     `page_texts` is the text of each page of the proof, in order, as the PDF reader
     read it. Given it, each page is aligned against the book's own text once, and a
@@ -323,13 +341,18 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
 
-    usage = Usage() if (sanity is not None or second_look is not None) else None
+    usage = (Usage() if any(p is not None
+                            for p in (sanity, second_look, escalate)) else None)
 
     # The page map, built once and shared by the apply and the self-check so both
     # place every edit identically. The book's own text per cited page rides with
     # it: the second look quotes its anchors from it, and the ordinal fill below
-    # counts a repeated word's copies over it.
+    # counts a repeated word's copies over it. The parsed stories are kept too —
+    # the last tier reads the passage around a mark and searches the whole book
+    # out of them, and re-reading the package for that would be the same work
+    # twice.
     scope = None
+    stories: list = []
     book_pages: dict[int, str] = {}
     pages_placed = pages_total = 0
     if page_texts:
@@ -386,6 +409,18 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                 edits, collisions, provider, model=model, usage=usage,
                 book_pages=book_pages)
 
+    # Last, and only over what everything above it declined: the queries that are
+    # still queries go up with the book behind them. It runs after the second
+    # look by construction — there is no point spending a frontier model on a
+    # note the cheap pass could settle — and before the sanity gate, so what it
+    # resolves is vetted like any other proposed edit.
+    resolved = advised = 0
+    if escalate is not None and stories:
+        provider, model = escalate
+        edits, resolved, advised = escalate_queries(
+            edits, provider, model=model, usage=usage, stories=stories,
+            scope=scope)
+
     withheld: dict[str, str] = {}
     if sanity is not None:
         provider, model = sanity
@@ -407,20 +442,22 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
-        deterministic=(sanity is None and second_look is None),
+        deterministic=(sanity is None and second_look is None
+                       and escalate is None),
         pages=(pages_placed, pages_total), checks=checks)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
-             "second look settled %d, re-anchored %d, merged %d; %d/%d page(s) "
-             "placed; verify %s",
+             "second look settled %d, re-anchored %d, merged %d; last tier "
+             "resolved %d, advised %d; %d/%d page(s) placed; verify %s",
              Path(src_idml).name, apply_report.summary(), len(dispositions),
              sum(1 for d in dispositions if d.needs_human),
-             settled, reanchored, merged, pages_placed, pages_total,
+             settled, reanchored, merged, resolved, advised,
+             pages_placed, pages_total,
              "clean" if verify_report.clean else "has discrepancies")
     return CorrectionsOutputs(
         report_md=report_md, report_json=report_json, parse=parsed,
         verify=verify_report, corrected_idml=corrected, apply=apply_report,
         comments=dispositions, usage=usage, settled=settled,
-        reanchored=reanchored, merged=merged,
+        reanchored=reanchored, merged=merged, resolved=resolved, advised=advised,
         pages_placed=pages_placed, pages_total=pages_total, checks=checks)
 
 
@@ -436,7 +473,8 @@ def _verify_status_of(verify_report: VerifyReport):
             return DISP_NOT_EXTRACTED, ""
         if r.status == APPLIED_EXACTLY:
             if r.edit.kind == JUDGMENT and r.edit.find == r.edit.replace:
-                return DISP_FLAGGED, ("a query for a person — the model proposed "
+                return DISP_FLAGGED, (r.edit.advice or
+                                      "a query for a person — the model proposed "
                                       "no concrete change")
             return DISP_APPLIED, ""
         return DISP_FLAGGED, (r.detail or r.status)

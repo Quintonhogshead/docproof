@@ -595,7 +595,9 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
                     detail="a design request, not a text edit"))
             continue
         if edit.find == edit.replace:
-            outcomes.append(EditOutcome(edit, NO_CHANGE))
+            # `advice` rides onto the outcome so a query a model studied but would
+            # not answer arrives at the report carrying what it found.
+            outcomes.append(EditOutcome(edit, NO_CHANGE, detail=edit.advice))
             continue
         found = _match(edit, stories, cache, scope)
         if isinstance(found, EditOutcome):
@@ -628,26 +630,31 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     same three matching tiers — so "italicize this" is as anchored as "change this",
     and as refusable. A span whose text is not held directly by a character range
     cannot be styled without rewriting more of the story than a correction should,
-    so it is flagged rather than forced."""
+    so it is flagged rather than forced.
+
+    The overlap guard that every text edit answers to does not apply here, and
+    that is the point of the exception: the collision it exists to prevent is one
+    write garbling another's words, and this writes no words. A reviewer who
+    marks a song title for de-italicizing and separately corrects a quotation
+    mark inside it has asked for both, and a designer doing it by hand would do
+    both — refusing the second because the first had been made was losing real
+    work over a danger that is not present. The span is re-located against the
+    live text, so it is the corrected words that get styled; two formats on one
+    span settle last-wins, exactly as they would in InDesign."""
     found = _match(edit, stories, cache, scope)
     if isinstance(found, EditOutcome):
         return found
     story, para, start, end = found
     key = (story.story_id, para.index)
-    hit = touched.collides(key, start, end)
-    if hit:
-        return EditOutcome(
-            edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
-            detail="its span overlaps a correction already applied here",
-            collides_with=hit)
     if not para.restyle(start, end, FORMATS[edit.format]):
         return EditOutcome(
             edit, UNSTYLEABLE, story_id=story.story_id, paragraph=para.index,
             detail="the text here is not held by a character range this engine can "
                    "split, so the formatting would mean rewriting more of the story "
                    "than a correction should")
-    # Recorded like a text write, at its own length, so a later correction on the
-    # same words is flagged instead of landing inside the run just restyled.
+    # Recorded like a text write, at its own length, so a later edit that does
+    # rewrite these words is flagged instead of landing inside the run just
+    # restyled and taking the styling out with it.
     touched.record(key, start, end, end - start, edit.id)
     return EditOutcome(edit, APPLIED, story_id=story.story_id,
                        paragraph=para.index, occurrences=1)

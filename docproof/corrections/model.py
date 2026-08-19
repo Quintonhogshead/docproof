@@ -124,6 +124,13 @@ class Edit:
     # the book already — this reassigns a paragraph to a design, it does not invent
     # one.
     paragraph_style: str = ""
+    # What a model concluded about a query it would not answer for the reviewer —
+    # the evidence and the reading, written for the person who now owns it. This
+    # changes nothing about how the edit is applied: an edit carrying advice is
+    # still the query it was, still flagged, still a human's. It only means the
+    # flag arrives with the work done, so resolving it is a glance rather than an
+    # investigation.
+    advice: str = ""
 
     @property
     def is_structural(self) -> bool:

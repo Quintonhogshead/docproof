@@ -17,8 +17,8 @@ import pytest
 
 from docproof.corrections.apply import apply_edits, apply_to_stories
 from docproof.corrections.idml import parse_story, read_stories
-from docproof.corrections.model import (APPLIED, Edit, ROUTED_TO_DESIGN,
-                                        UNSTYLEABLE)
+from docproof.corrections.model import (APPLIED, Edit, OVERLAPS,
+                                        ROUTED_TO_DESIGN, UNSTYLEABLE)
 
 from .conftest import FIXTURES
 
@@ -216,3 +216,33 @@ def test_an_italicised_idml_still_opens_as_a_package(tmp_path):
         story = parse_story(z.read("Stories/Story_ue0.xml"), "ue0")
     assert story.paragraphs[4].text == "Their were several mistakes here to find."
     assert ("several", "Italic") in styled_runs(story)
+
+
+def test_a_format_edit_styles_words_another_correction_already_changed():
+    """The overlap guard exists to stop one write garbling another's words. A
+    formatting edit writes no words, so it is exempt: a reviewer who both fixes a
+    quotation mark in a song title and asks for the title to be de-italicized has
+    asked for both, and refusing the second because the first landed was losing
+    real work over a collision that cannot happen."""
+    s = _story(('He played “Come Away With Me" twice.', "None"))
+    outs, _ = apply_to_stories([s], [
+        Edit(id="e1", find='Away With Me"', replace="Away With Me”",
+             instruction="Close the quote"),
+        Edit(id="e2", find="Come Away With Me", replace="Come Away With Me",
+             format="roman", instruction="De-italicize")])
+    assert [o.status for o in outs] == [APPLIED, APPLIED]
+    # The styling landed on the corrected text, not the text as it was quoted.
+    assert s.paragraphs[0].text == "He played “Come Away With Me” twice."
+
+
+def test_a_text_edit_over_a_restyled_span_is_still_refused():
+    """The exemption runs one way only. A rewrite over words just restyled would
+    take the styling out with it, so that collision is still flagged."""
+    s = _story(("He hummed American Pie all evening.", "None"))
+    outs, _ = apply_to_stories([s], [
+        Edit(id="e1", find="American Pie", replace="American Pie",
+             format="italic"),
+        Edit(id="e2", find="American Pie", replace="American Pie (1971)")])
+    assert outs[0].status == APPLIED
+    assert outs[1].status == OVERLAPS
+    assert outs[1].collides_with == ("e1",)
