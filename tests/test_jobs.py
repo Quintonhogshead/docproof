@@ -245,6 +245,28 @@ def test_a_running_review_names_the_step_it_is_on():
     assert "judge" in Job(**common, stage="round_judge").plain_state()
 
 
+def test_a_running_corrections_job_names_its_own_steps():
+    """Corrections has its own short pipeline, and with the model passes on the
+    middle of it is minutes long — so the card names the step instead of one
+    flat "Applying your corrections"."""
+    common = dict(id="j", filename="book.idml", source_path="book.idml",
+                  model="m", mode="now", state="running", kind="corrections")
+    assert "Second look" in Job(**common, stage="second_look",
+                                done=2, total=9).plain_state()
+    assert "(2 of 9)" in Job(**common, stage="second_look",
+                             done=2, total=9).plain_state()
+    assert "whole book" in Job(**common, stage="escalate").plain_state()
+    # Its own "writing" wins over the review's, which writes a document.
+    assert Job(**common, stage="writing").plain_state() \
+        == "Almost done — writing your file"
+    # And with no stage at all it still reads the way it always did.
+    assert Job(**common).plain_state() == "Applying your corrections"
+    # A review is untouched by any of it.
+    review = dict(common, kind="review", filename="a.docx")
+    assert "Reviewing" in Job(**review, stage="reviewing",
+                              done=1, total=2).plain_state()
+
+
 def test_a_record_without_a_stage_keeps_the_plain_running_message():
     """Older records (and the moment before the first stage lands) fall back to
     the generic running message with its count."""

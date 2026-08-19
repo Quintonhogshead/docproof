@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from ..models import Usage
 from ..providers import Provider
@@ -299,7 +299,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       sanity: tuple[Provider, str] | None = None,
                       second_look: tuple[Provider, str] | None = None,
                       escalate: tuple[Provider, str] | None = None,
-                      page_texts: Sequence[str] | None = None
+                      page_texts: Sequence[str] | None = None,
+                      progress: Callable[[str, int, int], None] | None = None
                       ) -> CorrectionsOutputs:
     """Apply a corrections source to `src_idml`, writing the corrected IDML and
     the report into `out_dir`.
@@ -335,9 +336,26 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     correction then narrows to the run of text the page it was marked on actually
     set — which is what lets a mark on a comma land at all, instead of finding
     seven thousand of them. It is a narrower and nothing more: a page the alignment
-    cannot place costs precision on that page's marks, never a correction."""
+    cannot place costs precision on that page's marks, never a correction.
+
+    `progress(stage, done, total)`, when given, is called as each step of the
+    run begins — and, inside the three model passes, as they work through their
+    queries — so a caller can say which of them is running rather than showing
+    one flat "applying" over what can be several minutes of frontier reads.
+    `total` is 0 for a step with nothing to count."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    def note(stage: str, done: int = 0, total: int = 0) -> None:
+        if progress:
+            progress(stage, done, total)
+
+    def ticker(stage: str) -> Callable[[int, int], None]:
+        """The per-pass `progress(done, total)` the model passes take, tagged
+        with the stage it belongs to."""
+        return lambda done, total: note(stage, done, total)
+
+    note("reading")
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
 
@@ -358,6 +376,10 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     if page_texts:
         page_texts = list(page_texts)
         pages_total = len(page_texts)
+        # Reading the book and aligning every proof page against it is the one
+        # long stretch of the deterministic path, so it says so rather than
+        # hiding inside "reading".
+        note("pagemap", 0, pages_total)
         stories = read_stories(src_idml)
         scope = build_page_map(stories, page_texts)
         pages_placed = scope.placed
@@ -368,6 +390,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         by_para = paragraph_lookup(stories)
         book_pages = {p: page_book_text(stories, scope, p, by_para=by_para)
                       for p in cited}
+        note("pagemap", pages_placed, pages_total)
 
     # The second look runs before the sanity gate on purpose: what it settles
     # becomes an ordinary proposed edit, and the gate then reads the model's
@@ -376,7 +399,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     if second_look is not None:
         provider, model = second_look
         edits, settled = settle_queries(edits, provider, model=model,
-                                        usage=usage, book_pages=book_pages)
+                                        usage=usage, book_pages=book_pages,
+                                        progress=ticker("second_look"))
 
     # Fill the copy-ordinal for a repeated-word edit the model could not count.
     # The rule-resolved edits already carry it; a model-read one is pinned here
@@ -399,12 +423,15 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     reanchored = merged = 0
     if second_look is not None and book_pages:
         provider, model = second_look
+        note("probing")
         lost, collisions = probe(read_stories(src_idml), edits, scope=scope)
         if lost:
+            note("reanchor", 0, len(lost))
             edits, reanchored = reanchor_edits(
                 edits, lost, provider, model=model, usage=usage,
                 book_pages=book_pages)
         if collisions:
+            note("merge", 0, len(collisions))
             edits, merged = merge_overlaps(
                 edits, collisions, provider, model=model, usage=usage,
                 book_pages=book_pages)
@@ -419,13 +446,15 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         provider, model = escalate
         edits, resolved, advised = escalate_queries(
             edits, provider, model=model, usage=usage, stories=stories,
-            scope=scope)
+            scope=scope, progress=ticker("escalate"))
 
     withheld: dict[str, str] = {}
     if sanity is not None:
         provider, model = sanity
-        withheld = review_edits(edits, provider, model=model, usage=usage)
+        withheld = review_edits(edits, provider, model=model, usage=usage,
+                                progress=ticker("sanity"))
 
+    note("applying", 0, len(edits))
     corrected = out / (dest_name or corrected_name(src_idml))
     apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld,
                                scope=scope)
@@ -433,9 +462,11 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     # same edits, so a held-back one is not read as an unaccounted change). Clean
     # by construction unless `apply` has a bug — then the report says so instead
     # of the file going out unflagged.
+    note("verifying", 0, len(edits))
     verify_report = verify(src_idml, corrected, edits, withheld=withheld,
                            scope=scope)
 
+    note("writing")
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
     checks = _checks(apply_report)

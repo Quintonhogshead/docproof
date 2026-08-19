@@ -200,6 +200,29 @@ def test_corrections_never_asks_for_a_model_or_a_key(client, monkeypatch):
     assert job["applied"] == 1
 
 
+def test_the_run_records_the_step_it_is_on(client, monkeypatch):
+    """The steps the applier reports reach the job record, so the card can name
+    them — and the finished job is left with no stage at all."""
+    seen = []
+    store = client.app_state.runner.store
+    real = store.update
+
+    def spy(job_id, **fields):
+        if "stage" in fields:
+            seen.append(fields["stage"])
+        return real(job_id, **fields)
+
+    monkeypatch.setattr(store, "update", spy)
+    job = run_corrections(client, upload(client, "layout.idml")["id"],
+                          json.dumps([{"find": "Their were",
+                                       "replace": "There were"}]))
+    assert job["state"] == "done"
+    assert ["reading", "applying", "verifying", "writing"] == \
+        [s for s in seen if s]
+    assert seen[-1] == ""                  # cleared when it finished
+    assert job["stage"] == ""
+
+
 # --- extracting a list from a Word file or prose ------------------------------
 
 def test_extract_from_a_redlined_word_file(client, tmp_path):
@@ -220,13 +243,37 @@ def test_extract_from_a_redlined_word_file(client, tmp_path):
     assert job["state"] == "done" and job["applied"] == 1
 
 
-def test_a_word_file_with_no_tracked_changes_says_so(client, tmp_path):
-    doc = make_tracked_docx(tmp_path / "plain.docx",
-                            [[("", "Nothing tracked in here.")]])
+def test_a_word_file_that_is_a_typed_list_goes_to_the_model(client, tmp_path,
+                                                            monkeypatch):
+    """No redline in it, but plenty of corrections: an editor's typed list. It is
+    read like a pasted one rather than refused."""
+    provider = FakeProvider([ProviderResult(
+        parsed={"edits": [
+            {"find": "Their were", "replace": "There were", "instruction": "",
+             "kind": "mechanical", "occurrence": 0}]},
+        usage=NormalizedUsage(input_tokens=300, output_tokens=50))])
+    monkeypatch.setattr("app.routes.jobs.build_provider",
+                        lambda cfg, api_key=None: provider)
+    doc = make_tracked_docx(tmp_path / "list.docx", [
+        [("", "p. 12 — change 'Their were' to 'There were'")]])
     with doc.open("rb") as fh:
         r = client.post("/api/corrections/extract-docx",
-                        files={"file": ("plain.docx", fh.read())})
-    assert r.status_code == 400 and "No tracked changes" in r.json()["detail"]
+                        files={"file": ("list.docx", fh.read())})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 1 and provider.calls
+    # The model was shown the file's own words, and the JSON it produced is what
+    # the applicator takes.
+    assert "Their were" in provider.calls[0]["user"]
+    assert json.loads(body["json"])[0]["find"] == "Their were"
+
+
+def test_an_empty_word_file_says_there_is_nothing_to_read(client, tmp_path):
+    doc = make_tracked_docx(tmp_path / "blank.docx", [[("", "   ")]])
+    with doc.open("rb") as fh:
+        r = client.post("/api/corrections/extract-docx",
+                        files={"file": ("blank.docx", fh.read())})
+    assert r.status_code == 400 and "no text" in r.json()["detail"]
 
 
 def test_a_non_docx_upload_to_extract_is_refused(client):

@@ -861,6 +861,37 @@ def test_the_sanity_gate_withholds_a_doubtful_edit(tmp_path):
         "Their were several mistakes here to find."   # unchanged, held for a human
 
 
+def test_the_run_reports_the_step_it_is_on(tmp_path):
+    """The deterministic path is quick, but the card still wants to name its
+    steps — and with a model pass on, the pass reports its way through the
+    queries so the card can move rather than sit."""
+    seen = []
+    result = apply_corrections(
+        LAYOUT, [{"find": "Their were", "replace": "There were"}],
+        tmp_path / "out",
+        progress=lambda stage, done, total: seen.append((stage, done, total)))
+    assert result.applied == 1
+    stages = [s for s, _, _ in seen]
+    # In order, and ending on the write.
+    assert stages == ["reading", "applying", "verifying", "writing"]
+
+
+def test_the_sanity_gate_reports_its_way_through_the_edits(tmp_path):
+    """The slow passes are the model ones, so those are the ones that count."""
+    from docproof.providers import NormalizedUsage, ProviderResult
+    from .fakes import FakeProvider
+
+    provider = FakeProvider([ProviderResult(
+        parsed={"verdicts": []},
+        usage=NormalizedUsage(input_tokens=50, output_tokens=10))])
+    seen = []
+    apply_corrections(LAYOUT, [{"find": "Their were", "replace": "There were"}],
+                      tmp_path / "out", sanity=(provider, "m"),
+                      progress=lambda s, d, t: seen.append((s, d, t)))
+    gate = [(d, t) for s, d, t in seen if s == "sanity"]
+    assert gate == [(0, 1), (1, 1)]        # reached, then finished
+
+
 # The judgment shape the extractor emits for a note it will not commit to: the
 # anchored line as both find and replace, the reviewer's note in instruction.
 # Without a second look this is exactly the "a query for a person" flag.

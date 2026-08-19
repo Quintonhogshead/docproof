@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import Literal, Sequence
+from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
@@ -284,7 +284,8 @@ def _settled_edit(original: Edit, choice: dict) -> Edit | None:
 
 def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
                    usage: Usage, book_pages: dict[int, str] | None = None,
-                   max_tokens: int = MAX_OUTPUT_TOKENS
+                   max_tokens: int = MAX_OUTPUT_TOKENS,
+                   progress: Callable[[int, int], None] | None = None
                    ) -> tuple[list[Edit], int]:
     """The edit list with every query the model settled made concrete, in place
     and in order, plus how many it settled.
@@ -292,7 +293,10 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
     Only queries are put to the model (see `is_query`); everything else rides
     through untouched. `usage` accrues the spend. A batch whose call fails is
     logged and left as it was — the queries stand for a human, exactly as if
-    the pass had not run."""
+    the pass had not run.
+
+    `progress(done, total)`, when given, is called a batch at a time so the
+    caller can show the pass moving through the queries."""
     out = list(edits)
     at = {e.id: i for i, e in enumerate(out)}
     candidates = [e for e in out if is_query(e)]
@@ -302,6 +306,8 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
     settled = 0
     for i in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[i:i + BATCH_SIZE]
+        if progress:
+            progress(i, len(candidates))
         lines = ["The reviewer's open notes:", ""]
         for e in batch:
             where = f" (page {e.page})" if e.page else ""
@@ -321,6 +327,8 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
             if made is not None:
                 out[at[cid]] = made
                 settled += 1
+    if progress:
+        progress(len(candidates), len(candidates))
     if settled:
         log.info("Second look settled %d of %d query(ies); the rest stay for "
                  "a human", settled, len(candidates))

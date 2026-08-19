@@ -135,6 +135,28 @@ CORR_STATE = {
     "collecting": "Almost done — writing your file",
 }
 
+# …except that it is not always quick: with the second look and the last tier
+# switched on, a proof full of open queries is minutes of frontier reads, and
+# the card used to sit on a single "Applying your corrections" for all of it.
+# These are the steps apply_corrections emits through its `progress` hook,
+# keyed the same way STAGE_STATE is. See _run_corrections.
+CORR_STAGE = {
+    "reading": "Reading the corrections list",
+    "pagemap": "Matching the proof's pages to the book ({done} of {total})",
+    "second_look": "Second look at the reviewer's open notes "
+                   "({done} of {total})",
+    "probing": "Checking which corrections still need an anchor",
+    "reanchor": "Re-quoting the corrections that didn't match",
+    "merge": "Merging the corrections that overlap",
+    "escalate": "Settling the last queries against the whole book "
+                "({done} of {total})",
+    "sanity": "Checking each correction before it is applied "
+              "({done} of {total})",
+    "applying": "Applying your corrections ({total} in all)",
+    "verifying": "Checking the corrected file against the list",
+    "writing": "Almost done — writing your file",
+}
+
 PREP_OUTPUTS = {"book": ["book"], "indesign": ["indesign"],
                 "tracked": ["tracked"], "both": ["indesign", "tracked"],
                 "all": ["book", "indesign", "tracked"]}
@@ -475,6 +497,10 @@ class Job:
                  else PROMO_STATE if self.is_promo
                  else CORR_STATE if self.is_corrections else {})
         states = {**PLAIN_STATE, **extra}
+        # Corrections names its own steps, so its ids win over the review's
+        # where they share a name ("writing" writes one file, not a document).
+        stage_states = ({**STAGE_STATE, **CORR_STAGE} if self.is_corrections
+                        else STAGE_STATE)
         # A running review names the actual step it is on, so the card doesn't
         # read "reviewing" while the rewrite pass retypes the book. Only reviews
         # set a stage; prep and promo never do, so they keep their own messages.
@@ -493,8 +519,9 @@ class Job:
             if self.mode == "batch":
                 return f"{head} — processing overnight"
             return f"{head} — reviewing"
-        if self.state in ("queued", "running", "collecting") and self.stage in STAGE_STATE:
-            template = STAGE_STATE[self.stage]
+        if (self.state in ("queued", "running", "collecting")
+                and self.stage in stage_states):
+            template = stage_states[self.stage]
         else:
             template = states.get(self.state, self.state)
         return template.format(done=self.done, total=self.total,
@@ -508,6 +535,11 @@ class Job:
         d["is_promo"] = self.is_promo
         d["is_plan"] = self.is_plan
         d["is_corrections"] = self.is_corrections
+        # Whether the proof carried page texts, which is what decides whether the
+        # run takes the page-matching step at all. A boolean, so the card can
+        # promise that step (or not) without the texts themselves riding on
+        # every poll.
+        d["corrections_paged"] = bool(self.corrections_pages)
         # The stored reviewer-comment list and page texts are backend input for
         # the run, not card data, and on a big proof they are large — keep them off
         # every job payload.
@@ -1682,7 +1714,7 @@ class JobRunner:
         # the job sat in the queue is honoured, and the card reads "applying"
         # instead of a stale "waiting".
         if self.store.update_if(job_id, expect=job.state, state="running",
-                                done=0, total=0) is None:
+                                done=0, total=0, stage="reading") is None:
             return
         if self._cancel_pending(job_id):
             self._abort(job_id)
@@ -1724,19 +1756,30 @@ class JobRunner:
         escalate = (self._corrections_escalate(job)
                     if job.corrections_second_look else None)
 
+        # Which step the apply is on, straight onto the card. The run holds no
+        # lock and writes nothing else while it works, so without this a proof
+        # that takes the model passes shows one motionless line for minutes.
+        # A store that refuses the write must not sink an otherwise-good run.
+        def on_progress(stage: str, done: int, total: int) -> None:
+            try:
+                self.store.update(job_id, stage=stage, done=done, total=total)
+            except Exception:             # noqa: BLE001 - progress is not the job
+                log.debug("Could not record corrections progress", exc_info=True)
+
         out = self._claim_results_dir(job)
         try:
             outputs = apply_corrections(job.source_path, job.corrections, out,
                                         comments=comments, sanity=sanity,
                                         second_look=second, escalate=escalate,
-                                        page_texts=page_texts)
+                                        page_texts=page_texts,
+                                        progress=on_progress)
         except (ValueError, OSError) as e:
             # A corrections list the parser refuses whole (malformed JSON), or a
             # source that will not read — fail with the sentence, and give the
             # empty results folder back so the next run names cleanly.
             self._release_results_dir(job_id)
             self.store.update_if(job_id, expect="running", state="failed",
-                                 error=str(e))
+                                 error=str(e), stage="")
             return
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
@@ -1760,7 +1803,7 @@ class JobRunner:
         # `total_comments` and `unresolved` are the figures corrections adds, and
         # `verified` carries the clean flag.
         self.store.update(
-            job_id, state="done", results_dir=str(out), error=None,
+            job_id, state="done", results_dir=str(out), error=None, stage="",
             applied=outputs.applied, flags=outputs.flagged,
             discrepancies=outputs.discrepancies,
             total_comments=outputs.total_comments,

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from typing import get_args
@@ -1135,30 +1136,42 @@ def register(app: FastAPI) -> None:
     @app.post("/api/corrections/extract-docx")
     async def extract_corrections_docx(
             file: UploadFile, owner: str = Depends(owner_for)) -> dict:
-        """Read an author's redlined Word file into a draft edit list.
+        """Read a corrections Word file into a draft edit list.
 
-        Deterministic — the tracked changes ARE the before/after, so no model
-        and no cost. The result fills the corrections textarea for a person to
-        review; nothing is applied here."""
-        from docproof.corrections.from_word import edits_from_docx
+        Two kinds of file arrive here, and this reads both. A *redlined* one is
+        deterministic — the tracked changes ARE the before/after, so no model
+        and no cost. A file that is simply a *list* of corrections ("p. 12,
+        change 'teh' to 'the'") carries no redline at all: rather than refusing
+        it, its text goes to the same model that reads a pasted list, which is
+        what a person dropping it plainly meant. Either way the result fills
+        the corrections textarea for a person to review; nothing is applied
+        here."""
+        from docproof.corrections.from_word import edits_from_docx, text_from_docx
         name = Path(file.filename or "corrections.docx").name
         if not name.lower().endswith(".docx"):
             raise HTTPException(
-                400, "Upload a Word (.docx) file with tracked changes.")
+                400, "Upload a Word (.docx) file — either tracked changes or a "
+                     "typed list of corrections.")
         data = await file.read()
         tmp = Path(tempfile.mkstemp(suffix=".docx")[1])
         try:
             tmp.write_bytes(data)
             try:
                 result = edits_from_docx(tmp)
+                text = "" if (result.edits or result.issues) else text_from_docx(tmp)
             except Exception as e:         # noqa: BLE001 - a bad/again unreadable upload
                 raise HTTPException(400, f"Could not read {name}: {e}")
         finally:
             tmp.unlink(missing_ok=True)
         if not result.edits and not result.issues:
-            raise HTTPException(
-                400, f"No tracked changes found in {name} — turn on Track "
-                     "Changes in Word, mark the corrections, and upload it again.")
+            if not text.strip():
+                raise HTTPException(
+                    400, f"{name} has no tracked changes and no text to read. "
+                         "Either mark the corrections with Track Changes on, or "
+                         "type them out as a list, and upload it again.")
+            # The model read, off the event loop: it is a network call of a few
+            # seconds, and this route is async.
+            return await run_in_threadpool(_extract_with_model, app, owner, text)
         return _extract_response(result)
 
     @app.post("/api/corrections/extract-list")

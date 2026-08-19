@@ -47,7 +47,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import replace as _replace
-from typing import Literal, Sequence
+from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
@@ -291,7 +291,8 @@ def _resolved_edit(original: Edit, verdict: dict, passage: str) -> Edit | None:
 
 def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
                      usage: Usage, stories: Sequence[Story], scope=None,
-                     max_tokens: int = MAX_OUTPUT_TOKENS
+                     max_tokens: int = MAX_OUTPUT_TOKENS,
+                     progress: Callable[[int, int], None] | None = None
                      ) -> tuple[list[Edit], int, int]:
     """The edit list with the surviving queries either resolved into concrete
     edits or annotated with what the model found, plus `(resolved, recommended)`.
@@ -299,7 +300,11 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
     One call per query: each carries its own passage and its own whole-book
     evidence, so there is nothing to gain by batching them and a truncated reply
     would cost every query in the batch rather than one. A call that fails leaves
-    its query exactly as it was — flagged, and a person's."""
+    its query exactly as it was — flagged, and a person's.
+
+    `progress(done, total)`, when given, is called before each query — this is
+    the slowest pass on the list, one frontier call per note, so it is the one
+    a card most needs to show moving."""
     out = list(edits)
     at = {e.id: i for i, e in enumerate(out)}
     candidates = [e for e in out if is_query(e) and e.kind != DESIGN]
@@ -313,7 +318,9 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
 
     resolved = recommended = 0
     schema = strict_json_schema(_Verdict)
-    for edit in candidates:
+    for n, edit in enumerate(candidates):
+        if progress:
+            progress(n, len(candidates))
         passage = passage_around(stories, scope, edit.page)
         evidence = term_evidence(
             stories, gather_terms(edit.instruction, edit.context or edit.find))
@@ -347,6 +354,8 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
         if note:
             out[at[edit.id]] = _replace(out[at[edit.id]], advice=note)
             recommended += 1
+    if progress:
+        progress(len(candidates), len(candidates))
     if resolved or recommended:
         log.info("Last tier read %d query(ies): resolved %d on the book's own "
                  "evidence, advised on %d that stay a person's",

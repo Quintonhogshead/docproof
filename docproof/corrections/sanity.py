@@ -21,7 +21,7 @@ run proceed — a broken check must not sink the corrections it was checking.
 from __future__ import annotations
 
 import logging
-from typing import Literal, Sequence
+from typing import Callable, Literal, Sequence
 
 from pydantic import BaseModel
 
@@ -85,18 +85,26 @@ def _format(edits: Sequence[Edit]) -> str:
 
 
 def review_edits(edits: Sequence[Edit], provider: Provider, *, model: str,
-                 usage: Usage, max_tokens: int = MAX_OUTPUT_TOKENS
+                 usage: Usage, max_tokens: int = MAX_OUTPUT_TOKENS,
+                 progress: Callable[[int, int], None] | None = None
                  ) -> dict[str, str]:
     """The edit ids the gate holds back, each mapped to a short reason.
 
     Only real text edits are judged — a design route or a no-op has nothing to
     apply. `usage` accrues the model spend. A batch whose model call fails is
     logged and skipped (nothing withheld from it), so the gate degrades to
-    letting edits through rather than blocking the run."""
+    letting edits through rather than blocking the run.
+
+    `progress(done, total)`, when given, is called as each batch is reached and
+    once at the end, so a caller (the app's job card) can show the gate moving
+    instead of one long silence."""
     candidates = [e for e in edits if e.kind != DESIGN and e.find != e.replace]
+    total = len(candidates)
     withheld: dict[str, str] = {}
     for i in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[i:i + BATCH_SIZE]
+        if progress:
+            progress(i, total)
         try:
             result = provider.complete_structured(
                 model=model, system=_SYSTEM, user=_format(batch),
@@ -116,6 +124,8 @@ def review_edits(edits: Sequence[Edit], provider: Provider, *, model: str,
             if eid and verdict in WITHHOLD:
                 reason = (v.get("reason") or "").strip()
                 withheld[eid] = f"{verdict}: {reason}" if reason else verdict
+    if progress:
+        progress(total, total)
     if withheld:
         log.info("Sanity gate held back %d of %d edit(s) for a human",
                  len(withheld), len(candidates))

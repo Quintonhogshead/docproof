@@ -573,11 +573,14 @@
           <legend>The corrections</legend>
           <p class="field muted small">Drop <strong>both files together</strong>
             at the top: the finished <strong>InDesign file (IDML)</strong> and the
-            <strong>marked-up PDF proof</strong> (or a redlined Word file). Then
-            click <strong>Read corrections &amp; apply</strong> — DocProof reads the
-            proof’s comments and highlights, applies them exactly, and hands back
-            the corrected IDML with a report showing every change to review. One
-            book at a time.</p>
+            <strong>marked-up PDF proof</strong> (or a Word file — redlined, or
+            just a typed list). A Word file is read into corrections the moment
+            it lands; for a PDF, click <strong>Read corrections &amp;
+            apply</strong>. DocProof reads the proof’s comments and highlights,
+            applies them exactly, and hands back the corrected IDML with a report
+            showing every change to review. <strong>Apply corrections</strong>
+            stays greyed out until every correction has been read. One book at a
+            time.</p>
           <p class="field" id="corrections-source" hidden></p>
 
           <div class="options">
@@ -591,12 +594,14 @@
                 marks is read in batches.</small>
             </label>
             <label class="field">
-              <span>A redlined Word file (tracked changes)</span>
+              <span>A Word file — redlined, or a typed list</span>
               <input type="file" id="corrections-docx" accept=".docx">
               <button type="button" id="extract-docx">Read the Word file</button>
-              <small class="muted">Deterministic — the tracked changes are the
-                corrections, read straight off the markup. No model, no
-                cost.</small>
+              <small class="muted">Tracked changes are read straight off the
+                markup — deterministic, no model, no cost. A file that is simply
+                a list of corrections is read by the house model instead, like a
+                pasted one. Dropping a Word file above reads it on the
+                spot.</small>
             </label>
             <label class="field">
               <span>Or just type them</span>

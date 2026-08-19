@@ -48,6 +48,23 @@ const state = { files: [], models: [], pollTimer: null, selected: new Map(),
                 // as a job file: the manuscript preflight rejects it) until the
                 // one-button "read and apply" reads it into the edit list.
                 correctionsSource: null,
+                // How many reads of that proof (or of a typed list) are in
+                // flight. A PDF is read a batch at a time and each batch fills
+                // the edit list as it lands, so a half-read list is indistin-
+                // guishable from a finished one by its contents alone: this is
+                // what keeps Apply greyed out until the model has read them all.
+                correctionsReading: 0,
+                // And whether the last read ended in an error, which leaves a
+                // part-read list behind. Apply stays locked on that too: the
+                // corrections past the failure were never read at all.
+                correctionsReadFailed: false,
+                // Raised while a read writes into the edit-list box, so the
+                // box's own input handler can tell that fill from a hand-edit.
+                correctionsFilling: false,
+                // Set while the Start button's own click is running, so a
+                // re-render mid-run (a read filling the list, files clearing)
+                // can't hand the button back before the job is away.
+                startBusy: false,
                 // The Promo tab stages its file on selection (not at run time)
                 // so it can price it before the run; this holds that staged
                 // entry, with its preflight token counts, until the run uses it.
@@ -110,8 +127,14 @@ document.querySelectorAll('input[name="prep-output"]').forEach((r) =>
 (() => {
   const corr = $('corrections-input');
   if (corr) corr.addEventListener('input', () => {
+    // A hand-edit of the JSON is someone taking the list in hand, so it clears
+    // the lock a failed read left. The reads' own fills dispatch this same
+    // event to re-gate Start, and must not unlock anything — they raise the
+    // flag below for the length of the dispatch, which is synchronous.
+    if (!state.correctionsFilling) state.correctionsReadFailed = false;
     renderCost();
     renderCorrectionsReview();
+    renderCorrectionsSource();   // the line under the drop zone follows the read
   });
   // Typing a plain list arms the button too (it reads, then applies), so the
   // gate and its label follow the box as it fills or empties.
@@ -152,10 +175,48 @@ let readCorrectionsList = null;
   };
   const hideProgress = () => { if (progressEl) progressEl.hidden = true; };
 
+  // Hold the Start gate for the whole of a read. Each batch of a PDF read fills
+  // the textarea as it lands, which on its own would arm Start — and label it
+  // "Apply corrections" — over a list the model is still only part way through.
+  // Counted rather than boolean so overlapping reads can't unlock it early.
+  // A read that dies partway leaves behind exactly what it had read — useful to
+  // look at, but not a list anyone should apply: the corrections after the
+  // failure would be dropped silently. So a failure locks Apply too, until the
+  // proof is read again (or the list is taken in hand under Advanced).
+  const duringRead = async (task) => {
+    state.correctionsReading += 1;
+    state.correctionsReadFailed = false;
+    renderKind();
+    renderCost();
+    try {
+      return await task();
+    } catch (e) {
+      // Only a failure that left something behind locks Apply. One that read
+      // nothing at all is just the unread state again — Start goes back to
+      // offering the read, so a retry is one click rather than a hunt for the
+      // panel's own button.
+      state.correctionsReadFailed =
+        !!(($('corrections-input') || {}).value || '').trim();
+      throw e;
+    } finally {
+      state.correctionsReading -= 1;
+      renderKind();
+      renderCost();
+    }
+  };
+
   const setEdits = (edits) => {
     const ta = $('corrections-input');
     ta.value = JSON.stringify(edits, null, 2);
-    ta.dispatchEvent(new Event('input', { bubbles: true }));   // re-gate Start
+    // Flagged for the length of the dispatch so the listener can tell this fill
+    // from a person editing the JSON by hand — only the latter clears the lock
+    // a failed read leaves behind.
+    state.correctionsFilling = true;
+    try {
+      ta.dispatchEvent(new Event('input', { bubbles: true }));   // re-gate Start
+    } finally {
+      state.correctionsFilling = false;
+    }
   };
   const plural = (n) => (n === 1 ? '' : 's');
   const summarise = (count, issues, noun) => {
@@ -258,9 +319,9 @@ let readCorrectionsList = null;
   // The one read both the panel button and the one-button apply drive: pick the
   // reader by the file's suffix. Throws on failure so a caller that means to
   // apply next can stop instead of applying a half-read list.
-  readCorrectionsSource = (file) =>
-    (file.name || '').toLowerCase().endsWith('.pdf')
-      ? readPdfFile(file) : readDocxFile(file);
+  readCorrectionsSource = (file) => duringRead(() =>
+    ((file.name || '').toLowerCase().endsWith('.pdf')
+      ? readPdfFile(file) : readDocxFile(file)));
 
   // The panel's own PDF button previews the list into the textarea (does not
   // apply), so a designer who wants to eyeball it first still can. It reads the
@@ -279,12 +340,12 @@ let readCorrectionsList = null;
     async () => {
       const file = (($('corrections-docx') || {}).files || [])[0];
       if (!file) { show('Choose a Word file first.', 'error'); return; }
-      await readDocxFile(file).catch(() => {});
+      await duringRead(() => readDocxFile(file)).catch(() => {});
     }));
 
   // The typed plain-English list, read by the house model into an edit list.
   // Throws on failure like the source readers, so the one-button apply stops.
-  readCorrectionsList = async () => {
+  const readListText = async () => {
     const text = (($('corrections-list-text') || {}).value || '').trim();
     if (!text) {
       show('Type or paste a list of corrections first.', 'error');
@@ -298,6 +359,7 @@ let readCorrectionsList = null;
       }));
     } catch (e) { show(e.message, 'error'); throw e; }
   };
+  readCorrectionsList = () => duringRead(readListText);
 
   const listBtn = $('extract-list');
   if (listBtn) listBtn.addEventListener('click', () => withBusy(listBtn, 'Reading…',
@@ -574,9 +636,13 @@ function renderKind() {
     && !(($('corrections-input') || {}).value || '').trim()
     && (state.correctionsSource
         || (($('corrections-list-text') || {}).value || '').trim());
+  // While the model is still reading, the button says so rather than offering
+  // to apply a list that is only part read — renderCost keeps it greyed out to
+  // match.
   $('start').textContent = promo ? 'Write promo copy'
     : prep ? 'Format the manuscript'
-    : corrections ? (corrNeedsRead ? 'Read corrections & apply' : 'Apply corrections')
+    : corrections ? (state.correctionsReading ? 'Reading corrections…'
+      : corrNeedsRead ? 'Read corrections & apply' : 'Apply corrections')
     : 'Start review';
   $('staged-title').textContent = promo ? 'Ready to write copy'
     : prep ? 'Ready to prepare'
@@ -681,7 +747,9 @@ function setCorrectionsKind() {
 
 function attachCorrectionsSource(file) {
   state.correctionsSource = file;
-  // A fresh proof supersedes any earlier draft in the box, so it is read anew.
+  // A fresh proof supersedes any earlier draft in the box, so it is read anew —
+  // and clears the lock an earlier failed read left on Apply.
+  state.correctionsReadFailed = false;
   const ta = $('corrections-input');
   if (ta && ta.value.trim()) {
     ta.value = '';
@@ -692,10 +760,26 @@ function attachCorrectionsSource(file) {
   renderCorrectionsSource();
   renderKind();          // relabel Start → "Read corrections & apply"
   renderCost();          // re-gate Start
+  autoReadCorrectionsSource(file);
+}
+
+// A dropped Word file is read into the edit list there and then, rather than
+// waiting on the button: a redline is deterministic and free, and a file that
+// is really a typed list goes to the model the same way a pasted one does — so
+// either way, dropping it is enough to get JSON the applicator can take. The
+// review list fills in under the panel as it lands, and the status card carries
+// any failure. A PDF proof is left to the button on purpose: a big proof is a
+// batched model read, and that spend stays a decision someone makes.
+function autoReadCorrectionsSource(file) {
+  if (!file || !(file.name || '').toLowerCase().endsWith('.docx')) return;
+  if ((($('corrections-input') || {}).value || '').trim()) return;  // already read
+  if (!readCorrectionsSource) return;                 // panel absent (older page)
+  readCorrectionsSource(file).catch(() => {});        // surfaced on the status card
 }
 
 function clearCorrectionsSource() {
   state.correctionsSource = null;
+  state.correctionsReadFailed = false;
   renderCorrectionsSource();
 }
 
@@ -706,13 +790,18 @@ function clearCorrectionsSource() {
 function renderCorrectionsSource() {
   const src = state.correctionsSource;
   const bookStaged = usableFiles().some((f) => f.can_correct);
+  // A Word file is read on arrival, so the nudge is about what is still
+  // missing, not about a button that has already done its work.
+  const read = (($('corrections-input') || {}).value || '').trim().length > 0;
   const note = $('corrections-source-note');
   if (note) {
     note.hidden = !src;
     if (src) {
-      note.textContent = bookStaged
-        ? `Proof attached: ${src.name}. Click “Read corrections & apply” below.`
-        : `Proof attached: ${src.name}. Now drop the InDesign file (.idml) to correct.`;
+      note.textContent = !bookStaged
+        ? `Proof attached: ${src.name}. Now drop the InDesign file (.idml) to correct.`
+        : read
+          ? `Proof read: ${src.name}. Review the corrections below, then Apply.`
+          : `Proof attached: ${src.name}. Click “Read corrections & apply” below.`;
     }
   }
   const summary = $('corrections-source');
@@ -2782,8 +2871,16 @@ function renderCost() {
     const hasSource = !!state.correctionsSource;
     const hasTyped = (($('corrections-list-text') || {}).value || '')
       .trim().length > 0;
-    $('start').disabled = !(filesToRun().length > 0
-                            && (hasList || hasSource || hasTyped));
+    // …and stays greyed out while a read is in flight: a PDF fills the list a
+    // batch at a time, so until the last one lands "Apply" would mean applying
+    // the corrections the model has read and silently dropping the rest.
+    // A failed read locks it the same way, for the same reason.
+    $('start').disabled = state.startBusy
+                          || state.correctionsReading > 0
+                          || state.correctionsReadFailed
+                          || !(filesToRun().length > 0
+                               && (hasList || hasSource || hasTyped));
+    correctionsHint();
     setStartPrice(null);
     return;
   }
@@ -2892,6 +2989,26 @@ function modelHint(m) {
   }
 }
 
+// Why a greyed-out Apply is greyed out. Corrections never reaches modelHint (it
+// runs no model), so it says its own piece in the same place: locked while the
+// model is still reading, and locked after a read that failed — with where to
+// go from there, since a part-read list looks perfectly fine on screen.
+function correctionsHint() {
+  const hint = $('start-hint');
+  if (!hint) return;
+  if (state.correctionsReading > 0) {
+    hint.textContent = 'The model is still reading the corrections — Apply '
+      + 'unlocks when the last one is in.';
+    hint.hidden = false;
+  } else if (state.correctionsReadFailed) {
+    hint.textContent = 'That read didn’t finish, so the list below is only part '
+      + 'of the proof. Read it again — Apply stays locked until a read completes.';
+    hint.hidden = false;
+  } else {
+    hint.hidden = true;
+  }
+}
+
 // ── starting a review ─────────────────────────────────────────────────────
 
 $('schedule-on').addEventListener('change', () => {
@@ -2908,6 +3025,9 @@ const mode = () => document.querySelector('input[name="mode"]:checked').value;
 $('start').addEventListener('click', async () => {
   const button = $('start');
   const label = button.textContent;
+  // The read below re-renders the button as it fills the edit list; this keeps
+  // that from handing it back mid-flight.
+  state.startBusy = true;
   button.disabled = true;
   button.textContent = 'Starting…';
   try {
@@ -3017,8 +3137,13 @@ $('start').addEventListener('click', async () => {
   } catch (err) {
     fail(err.message);
   } finally {
+    state.startBusy = false;
     button.disabled = false;
     button.textContent = label;
+    // Re-gate off the real state: a failed corrections read leaves a part-read
+    // list behind, and the label/greying should say so rather than sit on
+    // whatever it read as the click began.
+    if (isCorrections()) { renderKind(); renderCost(); }
   }
 });
 
@@ -3251,6 +3376,47 @@ const STAGE_FLOW = [
   { id: 'writing', label: 'Writing your document',
     quip: 'Folding every accepted change back in and packaging up your files.' },
 ];
+// Corrections walks its own short pipeline — no detector, no rounds — and,
+// with the two model passes switched on, the middle of it is minutes of
+// frontier reads. Same shape as the review flow so the tracker renders it
+// unchanged: ids match the stages apply_corrections emits (see CORR_STAGE in
+// app/jobs.py), `optional` ones appear only when the job asked for them.
+const CORRECTIONS_FLOW = [
+  { id: 'reading', label: 'Reading the corrections list',
+    quip: 'Parsing every correction and working out exactly what each one asks '
+        + 'the book to do.' },
+  { id: 'pagemap', label: 'Matching pages to the book', optional: true,
+    quip: 'Lining the proof’s pages up against the book’s own text, so a mark '
+        + 'on page 49 lands on page 49 and not on the first comma it finds.' },
+  { id: 'second_look', label: 'Second look at open notes', optional: true,
+    quip: 'Reading the reviewer’s open questions — the either/ors, the '
+        + '“if this then that” — and settling what the page itself settles.' },
+  { id: 'probing', label: 'Checking the anchors', optional: true,
+    quip: 'A dry run to see which corrections would miss, before anything is '
+        + 'written.' },
+  { id: 'reanchor', label: 'Re-quoting what didn’t match', optional: true,
+    quip: 'Quoting a lost anchor again from the book’s own words, so a '
+        + 'correction the proof rendered differently still lands.' },
+  { id: 'merge', label: 'Merging overlapping corrections', optional: true,
+    quip: 'Two marks on one span become a single edit instead of fighting '
+        + 'over it.' },
+  { id: 'escalate', label: 'Settling the last queries', optional: true,
+    quip: 'What’s still a question goes up to a stronger model with the whole '
+        + 'book behind it — a consistency call settled by counting, not '
+        + 'recalling.' },
+  { id: 'sanity', label: 'Checking each correction', optional: true,
+    quip: 'A last read of every proposed change; anything doubtful is held '
+        + 'back for a person instead of applied.' },
+  { id: 'applying', label: 'Applying your corrections',
+    quip: 'Anchoring each correction to the exact text it names and replacing '
+        + 'that span — the file itself, at last.' },
+  { id: 'verifying', label: 'Checking the corrected file',
+    quip: 'Reading our own output back against the list, so nothing went in '
+        + 'that the list didn’t ask for.' },
+  { id: 'writing', label: 'Writing your file',
+    quip: 'Packaging the corrected InDesign file and the change report.' },
+];
+
 // A re-judge walks its own one-step flow, not the pipeline above: it runs the
 // gates over a finished run's corrections and writes a new deliverable, and no
 // detector pass fires. Shown on its own so the tracker can't check off passes
@@ -3270,6 +3436,19 @@ const REJUDGE_FLOW = [
 // never promised in advance.
 function stageFlowFor(job) {
   if (job.stage === 'judging') return REJUDGE_FLOW;
+  if (job.kind === 'corrections') {
+    // The two model passes are the job's own checkboxes; the steps inside the
+    // second look (page map, probe, re-anchor, merge) ride with it, and — like
+    // the review's unswitched passes — the current one is always kept, so a
+    // step that turns out not to run is simply never promised.
+    return CORRECTIONS_FLOW.filter((s) => {
+      if (s.id === job.stage) return true;
+      if (!s.optional) return true;
+      if (s.id === 'pagemap') return !!job.corrections_paged;
+      if (s.id === 'sanity') return !!job.corrections_sanity;
+      return !!job.corrections_second_look;   // the second look and its repairs
+    });
+  }
   const f = job.features || {};
   const on = (k) => !!f[k];
   return STAGE_FLOW.filter((s) => {
@@ -3287,7 +3466,7 @@ function stageFlowFor(job) {
 // stretch that used to read as one long "almost done". Prep and promo have
 // their own single-step lives and set no stage, so they never show one.
 function tracksStages(job) {
-  return job.kind === 'review' && !!job.stage
+  return ['review', 'corrections'].includes(job.kind) && !!job.stage
     && stageFlowFor(job).some((s) => s.id === job.stage)
     && (job.state === 'running' || job.state === 'queued'
         || job.state === 'collecting');
@@ -3352,9 +3531,15 @@ function stageTracker(job) {
 
 // What to show beside the current step's name: how far through the section
 // count when there is one, otherwise how long the step has run.
+// Which stages carry a count worth showing beside the step's name. The
+// review's per-chunk loop, and the corrections passes that work through a
+// list of queries one batch at a time.
+const COUNTED_STAGES = ['reviewing', 'pagemap', 'second_look', 'escalate',
+                        'sanity'];
+
 function stageMeta(job) {
   const elapsed = stageElapsed(job);
-  if (job.stage === 'reviewing' && job.total) {
+  if (COUNTED_STAGES.includes(job.stage) && job.total) {
     return elapsed ? `${job.done} of ${job.total} · ${elapsed}`
                    : `${job.done} of ${job.total}`;
   }

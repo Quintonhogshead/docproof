@@ -50,6 +50,20 @@ def edits_from_docx(path: str | Path) -> ParseResult:
     return ParseResult(edits=tuple(edits), issues=tuple(issues))
 
 
+def text_from_docx(path: str | Path) -> str:
+    """The Word file's plain text, one paragraph per line.
+
+    Not every corrections .docx is a redline: an editor or a proofreader as
+    often sends a *list* — "p. 12, change 'teh' to 'the'" — typed in Word. That
+    file has no tracked changes to read off, so it is read as text and put to
+    the same model that reads a pasted list (see `corrections.extract`). Any
+    tracked changes in it are taken as accepted, which is what the list-writer
+    meant by leaving them in."""
+    pkg = DocxPackage(Path(path))
+    lines = [paragraph_view_text(wp.element, "accept") for wp in walk_package(pkg)]
+    return "\n".join(line for line in lines if line.strip())
+
+
 def _anchored_edit(eid: str, before: str, after: str, *, index: int):
     """Turn one paragraph's before/after into an anchored `Edit`, or a
     `ParseIssue` if it cannot be anchored (nothing in the 'before' to find)."""
