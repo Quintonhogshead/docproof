@@ -258,12 +258,16 @@ def _annotated(instruction: str, what: str, note: str) -> str:
 
 def is_query(e: Edit) -> bool:
     """Whether an edit is the kind of flag `settle_queries` exists to settle: a
-    note the extractor read but would not commit to. Format and paragraph
-    requests are already concrete, and a judgment that carries a real
-    find→replace is already an edit — apply will land it — so neither is
-    re-asked."""
+    note the extractor read but would not commit to.
+
+    Any judgment carrying a note qualifies, whether or not it arrived with a
+    proposed rewrite. A judgment never applies on its own (apply holds every one
+    for a person), so a proposal it carries is a candidate answer, not a settled
+    edit — "em dash or semicolon" and "Should this be could?" both reach the model
+    here, which settles the delegated ones and declines the real questions. Format
+    and paragraph requests are already concrete, so neither is re-asked."""
     return (e.kind == JUDGMENT and not e.format and not e.paragraph
-            and e.find == e.replace and bool((e.instruction or "").strip()))
+            and bool((e.instruction or "").strip()))
 
 
 def _settled_edit(original: Edit, choice: dict) -> Edit | None:
@@ -422,12 +426,13 @@ def reanchor_edits(edits: Sequence[Edit], lost: dict[str, str],
 
 
 def _mergeable(e: Edit | None) -> bool:
-    """Whether an edit can take part in a merge: a plain text rewrite. A format
-    or paragraph request cannot be expressed inside a combined find→replace, a
-    structural edit moves text a span cannot describe, and a design note edits
-    nothing — a collision involving any of them stays a human's."""
-    return (e is not None and e.kind != DESIGN and not e.format
-            and not e.paragraph)
+    """Whether an edit can take part in a merge: a plain, concrete text rewrite. A
+    format or paragraph request cannot be expressed inside a combined find→replace,
+    a structural edit moves text a span cannot describe, a design note edits
+    nothing, and a judgment is a person's call that must not be folded into a merge
+    and thereby applied — a collision involving any of them stays a human's."""
+    return (e is not None and e.kind != DESIGN and e.kind != JUDGMENT
+            and not e.format and not e.paragraph)
 
 
 def merge_overlaps(edits: Sequence[Edit],
@@ -435,9 +440,11 @@ def merge_overlaps(edits: Sequence[Edit],
                    provider: Provider, *, model: str, usage: Usage,
                    book_pages: dict[int, str],
                    max_tokens: int = MAX_OUTPUT_TOKENS
-                   ) -> tuple[list[Edit], int]:
+                   ) -> tuple[list[Edit], int, int]:
     """The edit list with each set of colliding corrections replaced by the one
-    combined edit the model composed, plus how many sets were merged.
+    combined edit the model composed, how many sets were merged, and how many edits
+    that removed from the list — so the run can still account for every id it parsed
+    even after several became one.
 
     `collisions` maps a refused edit's id → the applied edit id(s) it hit, from
     `probe`. Each group — the refused edit and everything it collided with,
@@ -470,8 +477,8 @@ def merge_overlaps(edits: Sequence[Edit],
         if page and all(_mergeable(e) for e in member_edits):
             workable.append((member_edits, page))
     if not workable:
-        return out, 0
-    merged = 0
+        return out, 0, 0
+    merged = merged_away = 0
     for i in range(0, len(workable), BATCH_SIZE):
         batch = workable[i:i + BATCH_SIZE]
         lines = ["Corrections that collided on the same words:", ""]
@@ -498,10 +505,11 @@ def merge_overlaps(edits: Sequence[Edit],
                 out = [e for e in out if e.id not in dropped]
                 order = {e.id: j for j, e in enumerate(out)}
                 merged += 1
+                merged_away += len(dropped)
     if merged:
-        log.info("Second look merged %d colliding set(s); the rest stay for "
-                 "a human", merged)
-    return out, merged
+        log.info("Second look merged %d colliding set(s), combining %d edit(s) "
+                 "into others; the rest stay for a human", merged, merged_away)
+    return out, merged, merged_away
 
 
 def _merged_edit(members: list[Edit], choice: dict, page_text: str

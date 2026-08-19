@@ -7,12 +7,17 @@ the extractor over-grabbed so it drops a verb ("slowly eased" → "unhurriedly")
 is applied as loyally as a real typo fix. Neither is a *mechanical* error the
 apply stage can see; each is an edit that should never have been made.
 
-This gate reads each proposed edit beside the line it changes and judges whether
-carrying it out leaves sound, faithful prose. What it doubts it does not apply —
-it hands back the edit ids to withhold, with a reason, and those become
-`WITHHELD` outcomes in the "for a human" bucket. It never *makes* an edit and
-never rewrites one; it only holds a doubtful one back for a person, so a false
-alarm costs a second look, never a wrong change shipped.
+This gate reads each proposed edit beside the line it changes and the reviewer's
+own note, and judges whether the change is the one the note asked for — the whole
+of it and nothing beyond it — and leaves sound prose. It is the model-judgment
+companion to the deterministic `fidelity` gate: that one catches the fidelity
+failures a rule can prove, this one the ones only reading the note against the
+change can see (a wrong mark picked, a meaning quietly reversed, a compound note
+half-done). What it doubts it does not apply — it hands back the edit ids to
+withhold, with a reason, and those become `WITHHELD` outcomes in the "for a human"
+bucket. It never *makes* an edit and never rewrites one; it only holds a doubtful
+one back for a person, so a false alarm costs a second look, never a wrong change
+shipped.
 
 Opt-in: the default corrections run stays deterministic, model-free and free. A
 gate that itself fails (a refusal, a truncation) withholds nothing and lets the
@@ -38,12 +43,12 @@ MAX_OUTPUT_TOKENS = 8000
 BATCH_SIZE = 40
 
 # The verdicts that hold an edit back. "safe" is the only one that lets it apply.
-WITHHOLD = {"over_grab", "absurd", "nonsense"}
+WITHHOLD = {"off_note", "over_grab", "absurd", "nonsense"}
 
 
 class _Verdict(BaseModel):
     id: str
-    verdict: Literal["safe", "over_grab", "absurd", "nonsense"]
+    verdict: Literal["safe", "off_note", "over_grab", "absurd", "nonsense"]
     reason: str = ""
 
 
@@ -52,14 +57,22 @@ class _Verdicts(BaseModel):
 
 
 _SYSTEM = """\
-You are a careful copy editor's second pair of eyes. You are given a list of \
-proposed corrections to a book — each an exact find → replace against a line of \
-the manuscript, with the reviewer's note. For each, decide whether carrying it \
-out leaves sound, faithful prose, and return one verdict:
+You are a careful copy editor checking that each proposed correction does what the \
+reviewer's mark asked — and only that. You are given a list of edits, each an exact \
+find → replace against a line of the manuscript, with the reviewer's note. The \
+mechanical apply is already known to be faithful to the find → replace pair; your \
+job is the thing it cannot see — whether the pair itself is the change the note \
+asked for. Return one verdict per edit:
 
-- "safe": a sensible correction — a typo, punctuation, word choice, or a \
-deletion that reads cleanly. When in doubt between safe and a concern, choose \
+- "safe": the change carries out the note, the whole note, and nothing beyond it, \
+and the result reads cleanly. When in doubt between safe and a concern, choose \
 safe; the goal is to catch the clear problems, not to second-guess the editor.
+- "off_note": the edit does something OTHER than what the note asks, or only PART \
+of it, or the opposite of it. The note says replace a comma and the edit changed a \
+period; the note says "she was not" and the edit wrote "was not", dropping a word; \
+the note asks to lowercase two words and the edit changed a third; a note reading \
+"could?" was applied as a certainty. The change is grammatical and would apply \
+cleanly — it is simply not the change the reviewer marked.
 - "over_grab": the replace drops or garbles words it should have kept — the find \
 reached past the word that actually changes and took a verb, object, or phrase \
 with it (e.g. find "slowly eased", replace "unhurriedly", losing "eased"). The \

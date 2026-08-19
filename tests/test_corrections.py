@@ -21,9 +21,9 @@ from docproof.corrections.model import (AMBIGUOUS, APPLIED, APPLIED_EXACTLY,
                                         CROSSES_PARAGRAPH, DESIGN, DEVIATES,
                                         DISP_APPLIED, DISP_NO_OP,
                                         DISP_NOT_EXTRACTED, Edit,
-                                        JUDGMENT, MECHANICAL, MISSING, NOT_FOUND,
-                                        OVERLAPS, ReviewChange, ROUTED_TO_DESIGN,
-                                        WITHHELD)
+                                        JUDGMENT, MECHANICAL, MISSING, NO_CHANGE,
+                                        NOT_FOUND, OVERLAPS, ReviewChange,
+                                        ROUTED_TO_DESIGN, WITHHELD)
 from docproof.corrections.parse import ParseIssue, parse_edits
 from docproof.corrections.run import (apply_corrections, corrected_name,
                                       verify_corrections)
@@ -90,6 +90,143 @@ def test_two_edits_on_overlapping_spans_flag_the_second():
     assert [o.status for o in outs] == [APPLIED, OVERLAPS]
     assert s.text == "one six three four"          # the second never landed
     assert any(o.needs_human for o in outs)
+
+
+def test_the_article_fixer_does_not_fire_inside_a_word():
+    """A find that opens mid-word — "and made it" quoted from the proof as "d made
+    it" — has the "an" of "and" behind it, which is not an article. The fixer must
+    leave the word alone, not eat its n. The real Shams bug: "2-0" → "2–0" on a
+    hyphen-to-en-dash swap ate the n and shipped "pass ad made it"."""
+    s = _one_para_story("Jack picked up an errant back pass and made it 2-0.")
+    outs, _ = apply_to_stories([s], [Edit(id="e1", find="d made it 2-",
+                                          replace="d made it 2–")])
+    assert outs[0].status == APPLIED
+    assert s.text == "Jack picked up an errant back pass and made it 2–0."
+
+
+def test_a_judgment_never_writes_even_carrying_a_proposal():
+    """A judgment is a person's call. One that arrives with a concrete rewrite
+    (find != replace) — "Should this be could?" extracted as couldn't→could — must
+    not apply and reverse the line; it flags, carrying the proposal for the person
+    who now owns it."""
+    s = _one_para_story("It couldn’t have been much worse.")
+    outs, _ = apply_to_stories([s], [Edit(
+        id="e1", find="couldn’t", replace="could", kind=JUDGMENT,
+        instruction="Should this be \"could\"?")])
+    assert outs[0].status == NO_CHANGE and not outs[0].applied
+    assert s.text == "It couldn’t have been much worse."   # untouched
+    assert "could" in outs[0].detail                       # the proposal is shown
+
+
+def test_a_judgment_with_an_empty_replacement_is_normalized_not_a_deletion():
+    """The "em dash or semicolon" query the extractor could not commit to arrives
+    with an empty replacement. Parsed, it must become a no-op-shaped query, never a
+    deletion of the text it quoted."""
+    result = parse_edits([{
+        "find": "insist. She was right.", "replace": "",
+        "kind": "judgment", "instruction": "Replace comma with em dash or semicolon",
+        "source": "p1-1"}])
+    e = result.edits[0]
+    assert e.kind == JUDGMENT and e.replace == e.find     # normalized to a no-op
+    s = _one_para_story("But I wasn’t going to insist. She was right. And then.")
+    outs, _ = apply_to_stories([s], [e])
+    assert not outs[0].applied
+    assert s.text == "But I wasn’t going to insist. She was right. And then."
+
+
+def test_a_pure_deletion_of_a_sentence_is_withheld_without_a_delete_verb():
+    """The backstop: a mechanical edit whose replacement drops a whole sentence,
+    with no note asking for a cut, is held for a human rather than applied — the
+    over-grab signature that must never silently cut copy."""
+    s = _one_para_story("I was glad. She was right. And then we left.")
+    outs, _ = apply_to_stories([s], [Edit(
+        id="e1", find="glad. She was right. And", replace="glad. And",
+        instruction="Replace comma with em dash")])
+    assert outs[0].status == WITHHELD and outs[0].needs_human
+    assert s.text == "I was glad. She was right. And then we left."   # untouched
+
+
+def test_a_deletion_the_reviewer_asked_for_still_applies():
+    """The backstop must not block a real deletion: a note that says "delete" has
+    licensed the cut, however large."""
+    s = _one_para_story("I was glad. She was right. And then we left.")
+    outs, _ = apply_to_stories([s], [Edit(
+        id="e1", find="glad. She was right. And", replace="glad. And",
+        instruction="Delete the middle sentence")])
+    assert outs[0].status == APPLIED
+    assert s.text == "I was glad. And then we left."
+
+
+def test_the_full_pipeline_flags_unfaithful_and_query_edits(tmp_path):
+    """End to end through apply_corrections with a marked-up proof's comments: a
+    faithful edit lands, a question the extractor answered is held as a query, and an
+    edit whose change is not what its note asks is withheld — the three failure modes
+    the Shams QA pass turned up, caught together, deterministically and free."""
+    comments = [
+        {"id": "p1-1", "page": 1, "kind": "highlight",
+         "instruction": "vacant", "anchor": "empty"},
+        {"id": "p1-2", "page": 1, "kind": "highlight",
+         "instruction": "Should this be a chamber?", "anchor": "room"},
+        {"id": "p1-3", "page": 1, "kind": "highlight",
+         "instruction": "Replace comma with period", "anchor": "opened the door"},
+    ]
+    edits = [
+        {"find": "was empty", "replace": "was vacant",
+         "instruction": "vacant", "source": "p1-1"},
+        {"find": "the room", "replace": "the chamber", "kind": "judgment",
+         "instruction": "Should this be a chamber?", "source": "p1-2"},
+        {"find": "opened", "replace": "closed",
+         "instruction": "Replace comma with period", "source": "p1-3"},
+    ]
+    got = apply_corrections(LAYOUT, edits, tmp_path, comments=comments)
+    by = {o.edit.id: o for o in got.apply.outcomes}
+    assert by["c1"].applied                          # faithful edit lands
+    assert not by["c2"].applied                      # a question stays a query
+    assert by["c3"].status == WITHHELD               # off-note: changed no comma
+    # The corrected file carries the good edit and neither of the held ones.
+    assert story_text(got.corrected_idml)[2] == "She opened the door, the room was vacant."
+
+
+def test_the_count_reconciles_when_a_deletion_empties_a_paragraph(tmp_path):
+    """A deletion that empties a paragraph adds a synthetic removal outcome — an
+    applied change with no parsed edit behind it. The report's id reconciliation
+    must carry it on the parsed side, not read it as an applied count that overshoots
+    the edits and print "counts do not reconcile"."""
+    got = apply_corrections(
+        LAYOUT,
+        [{"find": "A third paragraph with plain text for good measure.",
+          "replace": "", "instruction": "Delete this line"}],
+        tmp_path)
+    notes = got.report_md.read_text(encoding="utf-8")
+    assert "do not reconcile" not in notes
+    assert "emptied-line removal" in notes        # the synthetic outcome is named
+
+
+def test_verify_flags_a_newly_unbalanced_curly_quote():
+    """An independent whole-document invariant: a run that leaves a closing quotation
+    mark without its opener is caught even though the paragraph diff cannot see it
+    (the diff compares against a clean apply, which carries the same mangling)."""
+    from docproof.corrections.verify import _quote_balance
+    before = [_one_para_story("“He said hello,” and left.")]
+    assert _quote_balance(before, [_one_para_story("“He said hi,” and left.")]) == []
+    bad = _quote_balance(before, [_one_para_story("“He said hi, and left.")])
+    assert len(bad) == 1 and "without its partner" in bad[0].after
+
+
+def test_two_marks_quoting_the_same_line_both_land():
+    """Two reviewer marks quote the whole line and each asks for an em dash in a
+    different spot. The first changes the line; the second's identical quote is now
+    stale — but its own change sits in a part the first left untouched, so recording
+    only the changed core lets it carry forward rather than being lost to a
+    not_found. The real Shams "…subtle—well, not so subtle—middle" pair."""
+    s = _one_para_story("One last subtle, well, not so subtle, middle finger.")
+    outs, _ = apply_to_stories([s], [
+        Edit(id="e1", find="One last subtle, well, not so subtle, middle",
+             replace="One last subtle—well, not so subtle, middle"),
+        Edit(id="e2", find="One last subtle, well, not so subtle, middle",
+             replace="One last subtle, well, not so subtle—middle")])
+    assert [o.status for o in outs] == [APPLIED, APPLIED]
+    assert s.text == "One last subtle—well, not so subtle—middle finger."
 
 
 def story_text(idml: Path, story_id: str = "ue0") -> list[str]:
@@ -1097,10 +1234,10 @@ def test_a_collision_involving_a_format_edit_is_not_merged():
              Edit(id="c2", find="the door, the", replace="the door. The",
                   page=1)]
     provider = FakeProvider([])
-    out, n = merge_overlaps(edits, {"c2": ("c1",)}, provider, model="m",
-                            usage=Usage(),
-                            book_pages={1: "She opened the door, the room"})
-    assert n == 0 and out == edits and provider.calls == []
+    out, n, away = merge_overlaps(edits, {"c2": ("c1",)}, provider, model="m",
+                                  usage=Usage(),
+                                  book_pages={1: "She opened the door, the room"})
+    assert n == 0 and away == 0 and out == edits and provider.calls == []
 
 
 def test_an_advised_query_reaches_the_report_carrying_the_reading(tmp_path):

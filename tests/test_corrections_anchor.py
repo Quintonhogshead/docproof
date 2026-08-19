@@ -18,7 +18,7 @@ import pytest
 
 from docproof.corrections.apply import all_spans, apply_to_stories
 from docproof.corrections.idml import parse_story
-from docproof.corrections.model import AMBIGUOUS, APPLIED, Edit
+from docproof.corrections.model import AMBIGUOUS, APPLIED, Edit, OFF_PAGE
 from docproof.corrections.pagemap import PageMap, build_page_map
 from docproof.corrections.textmatch import IndexCache, NormIndex, normalize
 
@@ -156,6 +156,21 @@ def test_a_page_scope_that_cannot_place_the_page_falls_back_to_the_book():
                                           replace="waiting", page=99)],
                                scope=scope)
     assert outs[0].status == APPLIED
+
+
+def test_a_lone_match_on_the_wrong_placed_page_is_refused():
+    """The p157→181 bug: a mark cites a page that WAS placed, but the only copy of
+    its text is on another page. Applying it would land on the wrong copy, so the
+    failed page anchor is refused rather than discarded just because one candidate
+    remains. (Contrast the page-99 case above, where the page could not be placed
+    and the edit rightly falls back to the book.)"""
+    s = _three_page_story()
+    scope = build_page_map([s], BOOK_PAGES)
+    outs, _ = apply_to_stories([s], [Edit(id="e1", find="listening",
+                                          replace="waiting", page=3)],
+                               scope=scope)
+    assert outs[0].status == OFF_PAGE and outs[0].needs_human
+    assert s.paragraphs[0].text == BOOK_PAGES[0]     # page 1 untouched
 
 
 def test_the_page_map_survives_a_pdf_rendering_of_the_page():

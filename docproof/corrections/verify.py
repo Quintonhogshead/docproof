@@ -60,6 +60,8 @@ def verify(before_idml: str | Path, after_idml: str | Path,
             continue
         discrepancies.extend(_story_discrepancies(sid, bef, exp, act))
 
+    discrepancies.extend(_quote_balance(before, actual))
+
     reconciliations = _reconcile(outcomes, expected_by_id, actual_by_id)
     changes = _review_changes(outcomes, before_by_id, actual_by_id)
     return VerifyReport(reconciliations=tuple(reconciliations),
@@ -67,6 +69,29 @@ def verify(before_idml: str | Path, after_idml: str | Path,
                         paragraphs_before=p_before, paragraphs_after=p_after,
                         paragraphs_expected=p_expected,
                         changes=tuple(changes))
+
+
+def _quote_balance(before: list[Story], after: list[Story]) -> list[Discrepancy]:
+    """A whole-document check that no run left the book's curly quotation marks
+    unbalanced that were balanced before — an independent invariant that shares no
+    code with the anchoring, so it catches a quote the apply mangled that the
+    paragraph diff cannot see (the diff compares against a clean apply, which would
+    carry the same mangling). Held to the double mark: a single quote and an
+    apostrophe are the same character, so their count says nothing. Only a balance
+    that was even and is now odd is flagged — an intended edit that adds a matched
+    pair keeps it even."""
+    def opens_closes(stories):
+        text = "\n".join(p.text for s in stories for p in s.paragraphs)
+        return text.count("“"), text.count("”")
+    b_open, b_close = opens_closes(before)
+    a_open, a_close = opens_closes(after)
+    if b_open == b_close and a_open != a_close:
+        return [Discrepancy(
+            "", -1,
+            f"curly double quotes balanced ({b_open} open, {b_close} close)",
+            f"now {a_open} open and {a_close} close — a correction left a quotation "
+            f"mark without its partner")]
+    return []
 
 
 def _story_discrepancies(sid: str, before: Story | None, expected: Story,

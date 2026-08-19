@@ -161,6 +161,31 @@ correction names a specific instance among several.
 - source: when the item carries an id (e.g. "id p3-2"), copy that id here so the \
 edit can be traced back to the comment it came from. Leave empty if there is no id.
 
+Getting the RIGHT mark, not just a valid one — the change has to be the one the \
+reviewer marked, in the place they marked it:
+- A COMPOUND note asks for more than one thing at once ("replace the comma with a \
+period AND capitalize she", "remove the quotes AND italicize"). The one edit you \
+emit must carry EVERY part: find "sense, though,” she", replace "sense. though.” \
+She" does the comma and the capital together. If any part cannot be applied as \
+text (an italicization is a "format" edit; a second, separate change), and the \
+rest cannot stand alone, emit the whole note as kind "judgment" rather than doing \
+half of it. Doing half — capitalizing "she" but leaving the comma — is a silent \
+failure nothing downstream can see.
+- The reviewer's WRITTEN-OUT correction is the replacement, verbatim and whole. \
+"would start" written beside "start" means replace becomes "would start", not \
+"started"; "she was not" written beside "not" means replace carries "she was \
+not", not "was not". Do not paraphrase it or drop a word of it.
+- When the note names a mark the highlighted span holds MORE THAN ONE of \
+("remove comma" on a line with three commas; "replace period with comma" on a \
+line with two full stops) and nothing tells you WHICH — no named next word, no \
+single candidate — do NOT pick one. Emit kind "judgment": which mark is a \
+person's call, and guessing is how the wrong comma gets deleted.
+- DIALOGUE that runs into its tag is the one exception where you can tell: \
+"replace period with comma" on a line like '...again.” I said' or '...here.” \
+Isabella asked' means the full stop that ends the quoted sentence and runs it \
+into the attribution — the period right before the closing quote and the "he \
+said / she asked / I said" — never an earlier sentence break on the same line.
+
 Rules:
 - Extract only corrections that are actually stated. Never invent one.
 - Emit exactly one edit for EVERY item, in order, and never drop one — not even a \

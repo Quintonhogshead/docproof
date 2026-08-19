@@ -643,14 +643,24 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 is ordered, only the pick was left open); it re-quotes an anchor
                 the book doesn’t carry, from the book’s own text for that page;
                 and it merges two corrections that collided on the same words
-                into one. What’s left then goes up to a frontier model with the
-                <strong>book</strong> behind it — the passage around the mark and
-                every other instance of the terms the note names — so “should
-                this match the other instances?” is settled by counting. A
-                question that turns on what the author <em>meant</em> is never
-                decided for you: it stays flagged, but arrives with the reading
-                and the evidence attached. Every call is named in the change log.
+                into one. A question that turns on what the author <em>meant</em>
+                is never decided for you. Every call is named in the change log.
                 Adds a small model cost.</small></span>
+          </label>
+
+          <label class="field checkbox">
+            <input type="checkbox" id="corrections-escalate">
+            <span>Last tier: read the hardest queries against the whole book
+              <small class="muted">— the queries even the second look declines go
+                up to a frontier model with the <strong>book</strong> behind them
+                — the passage around the mark and every other instance of the
+                terms the note names — so “should this match the other
+                instances?” is settled by counting rather than recalled. A
+                question that turns on what the author meant still stays flagged,
+                but arrives with the reading and the evidence attached. Adds a
+                frontier-model cost on top of the second look, on the handful of
+                notes that reach it; on by default with the second look, turn it
+                off to keep to the cheaper pass.</small></span>
           </label>
 
           <label class="field checkbox">
