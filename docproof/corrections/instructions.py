@@ -210,7 +210,8 @@ def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | Non
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
-def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
+def edits_from_comments(comments, pages=None,
+                        pdf_pages=None) -> tuple[list[dict], list]:
     """Split a proof's comments into the ones the rules can resolve and the ones
     the model still has to read.
 
@@ -226,16 +227,20 @@ def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
 
     `pages` maps a proof page to THE BOOK'S OWN TEXT for that page (what
     `pagemap.page_book_text` returns), and it settles what two marks on the same
-    words mean. The book's text and not the proof's: an ordinal is read back after
-    `apply` has narrowed to the page's run of the book, so counting it anywhere
-    else answers a different question. Counted over the PDF's rendering it was
-    measurably worse than not counting it at all — a running head and a word
-    hyphenated across a line end are copies the book does not have. A reviewer marking a quotation puts a note on the opening mark and
-    another on the closing one — one request, recorded twice — while a reviewer
-    marking both copies of "‘Baba’" in a paragraph means two. Those look identical
-    in the edit list and are told apart by where the marks sit: the same position
-    is one request, and different positions are different copies of the text, whose
-    ordinal on the page is what lets both land."""
+    words mean. The book's text and not the proof's for the *count*: an ordinal is
+    read back after `apply` has narrowed to the page's run of the book, so the
+    number of copies it indexes has to be the number there — a running head and a
+    word hyphenated across a line end are copies the book does not have. But the
+    mark's own offset was measured against the PDF's rendering, so `pdf_pages` — the
+    proof's page texts — is where that offset is exact and where the copy is
+    actually located; the two are reconciled in `_ordinal`, which trusts the offset
+    only when both renderings agree on how many copies the page holds. A reviewer
+    marking a quotation puts a note on the opening mark and another on the closing
+    one — one request, recorded twice — while a reviewer marking both copies of
+    "‘Baba’" in a paragraph means two. Those look identical in the edit list and
+    are told apart by where the marks sit: the same position is one request, and
+    different positions are different copies of the text, whose ordinal on the page
+    is what lets both land."""
     rows: list[dict] = []
     unresolved: list = []
     made: list[tuple] = []                 # (comment, Resolved) in reading order
@@ -281,7 +286,7 @@ def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
             row["context"] = context
         if getattr(c, "id", ""):
             row["source"] = c.id
-        nth = _ordinal(pages, page, offset, anchor, got.find)
+        nth = _ordinal(pages, page, offset, anchor, got.find, pdf_pages=pdf_pages)
         if nth:
             row["occurrence"] = nth
         seen[key] = row
@@ -289,7 +294,18 @@ def edits_from_comments(comments, pages=None) -> tuple[list[dict], list]:
     return rows, unresolved
 
 
-def _ordinal(pages, page: int, offset: int, anchor: str, find: str) -> int:
+def _page_text(pages, page: int) -> str:
+    """The text of `page` from `pages` — a dict keyed by page, or a list indexed
+    from page 1 — or "" when the page is not there."""
+    if not pages:
+        return ""
+    if hasattr(pages, "get"):
+        return pages.get(page) or ""
+    return pages[page - 1] if 1 <= page <= len(pages) else ""
+
+
+def _ordinal(pages, page: int, offset: int, anchor: str, find: str,
+             pdf_pages=None) -> int:
     """Which copy of `find` on the proof page this mark sits on, 1-based — or 0
     when the question does not arise or cannot be answered.
 
@@ -298,23 +314,98 @@ def _ordinal(pages, page: int, offset: int, anchor: str, find: str) -> int:
     stronger check than any number. An ordinal is only worth carrying when the page
     holds several copies and the mark says which was meant.
 
-    It is deliberately counted over the *page*, not the book — a page is what the
-    reviewer was looking at — so it is only ever read after the page map has
-    narrowed to that page. `apply` refuses an ordinal it cannot scope that way."""
+    The count is taken over the *page* — what the reviewer was looking at — so it
+    is only ever read after the page map has narrowed to that page; `apply` refuses
+    an ordinal it cannot scope that way. And the count that has to hold is the
+    book's: `apply` narrows to the book's text for the page, so the Nth copy the
+    ordinal names must be the Nth copy *there*.
+
+    But the mark's `offset` is measured in the PDF page's own text — running head
+    and folio included — a different coordinate system from the book story. So the
+    copy is located in `pdf_pages`, where the offset is exact, and the ordinal is
+    trusted only when the two renderings hold the same number of copies: that
+    equality is what proves the running head added none, so a rank counted in the
+    one is a rank in the other. Dropping the PDF offset straight into the book text
+    was the bug this replaces — a running head's characters shifted every offset
+    past the first, so the mark fell between the book's copies and chose none of
+    them. With no `pdf_pages` the offset is read as the page text's own coordinate,
+    the contract the callers without a rendering still rely on."""
     if not pages or offset < 0 or not find:
         return 0
-    text = (pages.get(page) if hasattr(pages, "get")
-            else (pages[page - 1] if 1 <= page <= len(pages) else ""))
-    if not text:
+    book = _page_text(pages, page)
+    if not book:
         return 0
-    spans = all_spans(text, find)
-    if len(spans) <= 1:
+    book_spans = all_spans(book, find)
+    if len(book_spans) <= 1:
         return 0
-    at = offset + (anchor.find(find) if find and find in anchor else 0)
-    for i, (start, end) in enumerate(spans, 1):
+    src = book
+    if pdf_pages is not None:
+        rendered = _page_text(pdf_pages, page)
+        if rendered:
+            src = rendered
+    src_spans = book_spans if src is book else all_spans(src, find)
+    if len(src_spans) != len(book_spans):
+        # The renderings disagree on how many copies the page holds — a running
+        # head, or a word hyphenated across a line, is a copy one has and the other
+        # does not — so a rank in the PDF is not a rank in the book. Refuse rather
+        # than miscount; the anchor's own uniqueness check still guards `apply`.
+        return 0
+    at = offset + (anchor.find(find) if find in anchor else 0)
+    for i, (start, end) in enumerate(src_spans, 1):
         if start <= at < end or abs(start - at) <= 2:
             return i
     return 0
+
+
+def _cget(comment, field: str, default=""):
+    """A field off a reviewer comment, whether it is the app's `PdfComment`
+    dataclass or the plain dict a job carries it as once it has been through
+    JSON."""
+    if isinstance(comment, dict):
+        return comment.get(field, default)
+    return getattr(comment, field, default)
+
+
+def fill_edit_occurrences(edits, comments, *, book_pages=None, pdf_pages=None):
+    """`edits` with each one's `occurrence` set from the mark it was read from.
+
+    The rule-resolved edits already carry the ordinal `edits_from_comments`
+    computed; a model-read edit does not — the extraction schema asks the model for
+    it, and a page dumped to text is exactly where a model miscounts, so a repeated
+    word arrives with no ordinal and `apply` can only flag it. This fills it the one
+    deterministic way there is, and the same way the rule path does: the citing
+    comment's own `offset` says which copy the reviewer marked. A find unique on its
+    page keeps occurrence 0 — the uniqueness check is stronger than any number, and
+    this clears a stray one a model may have invented; a find that repeats and whose
+    mark locates gets that copy's ordinal; a find that repeats but cannot be located
+    (no offset, an unplaced page, renderings that disagree on the count) is left
+    exactly as extracted, guessed at by nothing."""
+    if not edits or not comments:
+        return edits
+    by_id: dict = {}
+    for c in comments:
+        cid = _cget(c, "id")
+        if cid:
+            by_id.setdefault(cid, c)
+    out = []
+    for e in edits:
+        occ = e.occurrence
+        c = by_id.get((e.source or "").split()[0]) if e.source else None
+        if c is not None and e.find:
+            page = e.page or (_cget(c, "page", 0) or 0)
+            book = _page_text(book_pages, page)
+            copies = all_spans(book, e.find) if book else []
+            if copies:
+                if len(copies) <= 1:
+                    occ = 0            # unique: the uniqueness check, not a number
+                else:
+                    nth = _ordinal(book_pages, page, _cget(c, "offset", -1),
+                                   _cget(c, "anchor", "") or "", e.find,
+                                   pdf_pages=pdf_pages)
+                    if nth:
+                        occ = nth
+        out.append(e if occ == e.occurrence else replace(e, occurrence=occ))
+    return out
 
 
 # --- the rules ----------------------------------------------------------------

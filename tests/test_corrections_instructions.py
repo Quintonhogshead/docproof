@@ -377,6 +377,82 @@ def test_no_ordinal_is_carried_for_text_that_occurs_once():
     assert "occurrence" not in rows[0]
 
 
+def test_a_repeated_word_reads_its_offset_in_the_proof_not_the_book():
+    """The mark's offset is measured against the PDF's rendering of the page —
+    running head and folio included — while the copies are counted over the book's
+    own text. Those are different coordinate systems: dropping the offset straight
+    into the book text put the mark between the book's copies and chose none of
+    them, so the edit came back ambiguous. Positioned in the proof text, where the
+    offset is exact, it lands on the copy the reviewer marked."""
+    book = "the harbor at dawn, and the harbor at dusk"      # two copies
+    proof = "48  THE CROSSING\n" + book                      # + a running head
+    off = proof.index("harbor", proof.index("harbor") + 1)   # the 2nd copy's mark
+    rows, _ = edits_from_comments(
+        [_c("p48-2", 48, "harbor", "harbour", off)],
+        pages={48: book}, pdf_pages={48: proof})
+    assert rows[0]["occurrence"] == 2
+
+
+def test_no_ordinal_when_the_renderings_disagree_on_the_count():
+    """A running head that itself holds the word is a copy the proof has and the
+    book does not, so a rank in the one is not a rank in the other. The ordinal is
+    refused rather than miscounted — the anchor's uniqueness check still guards the
+    apply."""
+    book = "the harbor at dawn, and the harbor at dusk"      # two copies
+    proof = "48  the harbor chapter\n" + book                # running head: three
+    off = proof.index("harbor", proof.index("harbor") + 1)
+    rows, _ = edits_from_comments(
+        [_c("p48-2", 48, "harbor", "harbour", off)],
+        pages={48: book}, pdf_pages={48: proof})
+    assert "occurrence" not in rows[0]
+
+
+def test_a_model_edit_takes_its_ordinal_from_the_mark_it_cites():
+    """A model-read edit carries no reliable ordinal — the schema asks the model to
+    count copies off a page dumped to text, and that is exactly where it miscounts.
+    The citing comment's own offset settles it deterministically, the same way and
+    in the same coordinate the rule path does, so a repeated word the model left at
+    0 lands on the copy the mark sits on instead of flagging."""
+    from docproof.corrections.instructions import fill_edit_occurrences
+    from docproof.corrections.model import Edit
+    book = "she can wait, or she can leave"
+    proof = "90  THE OFFER\n" + book
+    off = proof.index("can", proof.index("can") + 1)          # the 2nd copy
+    edit = Edit("e1", "can", "could", source="p90-3", page=90)   # occurrence 0
+    filled = fill_edit_occurrences(
+        [edit], [_c("p90-3", 90, "can", "could", off)],
+        book_pages={90: book}, pdf_pages={90: proof})
+    assert filled[0].occurrence == 2
+
+
+def test_filling_clears_an_ordinal_the_model_invented_for_a_unique_word():
+    """A find that occurs once needs no ordinal, and insisting the anchor be unique
+    is the stronger check — so a stray number a model attached is cleared, rather
+    than left to turn a clean apply into 'asked for #2 of 1'."""
+    from docproof.corrections.instructions import fill_edit_occurrences
+    from docproof.corrections.model import Edit
+    book = "she can wait by the door"                         # one copy
+    edit = Edit("e1", "can", "could", occurrence=2, source="p90-3", page=90)
+    filled = fill_edit_occurrences(
+        [edit], [_c("p90-3", 90, "can", "could", 4)],
+        book_pages={90: book}, pdf_pages={90: book})
+    assert filled[0].occurrence == 0
+
+
+def test_filling_leaves_a_repeat_it_cannot_locate_as_extracted():
+    """A sticky note carries no highlight and so no position; a repeated word it
+    marks cannot be pinned to a copy deterministically, so the fill leaves the edit
+    exactly as extracted rather than guessing."""
+    from docproof.corrections.instructions import fill_edit_occurrences
+    from docproof.corrections.model import Edit
+    book = "she can wait, or she can leave"                   # two copies
+    edit = Edit("e1", "can", "could", occurrence=1, source="p90-3", page=90)
+    filled = fill_edit_occurrences(
+        [edit], [_c("p90-3", 90, "can", "could", -1)],        # -1: no position
+        book_pages={90: book}, pdf_pages={90: book})
+    assert filled[0].occurrence == 1
+
+
 def test_the_ledger_reaches_both_comments_of_a_merged_edit():
     """The point of merging into one edit rather than dropping a comment: every
     mark still gets told what became of it."""
