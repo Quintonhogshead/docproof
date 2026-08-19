@@ -498,23 +498,32 @@ class _Touched:
     """The character spans already edited in each paragraph, in current (live)
     coordinates, kept correct as later edits shift the text after them. Two
     corrections that land on overlapping spans of one paragraph is the collision
-    that garbles a line ("said just said"); the second is flagged, not applied."""
+    that garbles a line ("said just said"); the second is flagged, not applied.
+
+    Each span remembers which edit made it, so a collision can *name* the
+    correction it hit — which is what lets the flag say something useful, and
+    what lets the opt-in second look put the two colliding corrections side by
+    side and merge them into one."""
 
     def __init__(self) -> None:
-        self._by_para: dict[tuple[str, int], list[list[int]]] = {}
+        self._by_para: dict[tuple[str, int], list[list]] = {}
 
-    def collides(self, key: tuple[str, int], start: int, end: int) -> bool:
-        return any(start < e and s < end for s, e in self._by_para.get(key, ()))
+    def collides(self, key: tuple[str, int], start: int, end: int
+                 ) -> tuple[str, ...]:
+        """The ids of the edits whose spans this one overlaps — empty when it
+        lands clear of everything applied here so far."""
+        return tuple(eid for s, e, eid in self._by_para.get(key, ())
+                     if start < e and s < end)
 
     def record(self, key: tuple[str, int], start: int, end: int,
-               new_len: int) -> None:
+               new_len: int, edit_id: str = "") -> None:
         delta = new_len - (end - start)
         spans = self._by_para.setdefault(key, [])
         for span in spans:                     # shift what sits after this write
             if span[0] >= end:
                 span[0] += delta
                 span[1] += delta
-        spans.append([start, start + new_len])
+        spans.append([start, start + new_len, edit_id])
 
 
 def apply_to_stories(stories: list[Story], edits: list[Edit], *,
@@ -582,15 +591,17 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
             continue
         story, para, start, end = found
         key = (story.story_id, para.index)
-        if touched.collides(key, start, end):
+        hit = touched.collides(key, start, end)
+        if hit:
             outcomes.append(EditOutcome(
                 edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
-                detail="its span overlaps a correction already applied here"))
+                detail="its span overlaps a correction already applied here",
+                collides_with=hit))
             continue
         replacement = _keep_book_case(para.text[start:end], edit.find, edit.replace)
         r_start, new_text = _with_article_fix(para, start, end, replacement)
         para.replace(r_start, end, new_text)
-        touched.record(key, r_start, end, len(new_text))
+        touched.record(key, r_start, end, len(new_text), edit.id)
         changed.add(story.story_id)
         outcomes.append(EditOutcome(edit, APPLIED, story_id=story.story_id,
                                     paragraph=para.index, occurrences=1))
@@ -611,10 +622,12 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
         return found
     story, para, start, end = found
     key = (story.story_id, para.index)
-    if touched.collides(key, start, end):
+    hit = touched.collides(key, start, end)
+    if hit:
         return EditOutcome(
             edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
-            detail="its span overlaps a correction already applied here")
+            detail="its span overlaps a correction already applied here",
+            collides_with=hit)
     if not para.restyle(start, end, FORMATS[edit.format]):
         return EditOutcome(
             edit, UNSTYLEABLE, story_id=story.story_id, paragraph=para.index,
@@ -623,7 +636,7 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
                    "than a correction should")
     # Recorded like a text write, at its own length, so a later correction on the
     # same words is flagged instead of landing inside the run just restyled.
-    touched.record(key, start, end, end - start)
+    touched.record(key, start, end, end - start, edit.id)
     return EditOutcome(edit, APPLIED, story_id=story.story_id,
                        paragraph=para.index, occurrences=1)
 
@@ -669,10 +682,12 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     else:
         story, para, start, end = found
         key = (story.story_id, para.index)
-        if touched.collides(key, start, end):
+        hit = touched.collides(key, start, end)
+        if hit:
             return EditOutcome(
                 edit, OVERLAPS, story_id=story.story_id, paragraph=para.index,
-                detail="its span overlaps a correction already applied here")
+                detail="its span overlaps a correction already applied here",
+                collides_with=hit)
     index = para.index
     if edit.paragraph == PARA_MERGE_NEXT:
         ok = story.merge_paragraph(index)
@@ -719,7 +734,7 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
         # Structural edits shift every index after them, so their spans are not
         # comparable with anything recorded before; they run last for that reason
         # and re-find their own anchor by text.
-        touched.record(key, start, end, end - start)
+        touched.record(key, start, end, end - start, edit.id)
     return EditOutcome(edit, APPLIED, story_id=story.story_id, paragraph=index,
                        occurrences=1)
 

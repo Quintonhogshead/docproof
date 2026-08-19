@@ -54,8 +54,9 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  pages: tuple[int, int] = (0, 0),
                  checks: tuple = ()) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
-    return their paths. `deterministic` is False when the opt-in sanity gate ran —
-    a model call — so the report does not over-claim being model-free. `pages` is
+    return their paths. `deterministic` is False when an opt-in model pass ran
+    (the sanity gate, or the second look over the extractor's queries), so the
+    report does not over-claim being model-free. `pages` is
     `(placed, total)` from the page map, reported so a run whose page narrowing
     silently did not happen says so."""
     payload = _payload(source_path=source_path, after_path=after_path,
@@ -165,7 +166,7 @@ def _markdown(d: dict) -> str:
     mode = ("applied to the InDesign file" if d["mode"] == "apply"
             else "checked against a file corrected elsewhere")
     how = ("deterministic, no model calls" if d.get("deterministic", True)
-           else "deterministic apply, with a model sanity check over the edits")
+           else "deterministic apply, with an opt-in model pass over the edits")
     L.append(f"*{when} UTC · {mode} · {how}*\n")
 
     verify = d["verify"]

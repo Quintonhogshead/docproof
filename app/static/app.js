@@ -2966,6 +2966,9 @@ $('start').addEventListener('click', async () => {
           // The opt-in model gate that holds a doubtful edit back for a human.
           corrections_sanity: isCorrections()
             && !!(($('corrections-sanity') || {}).checked),
+          // The opt-in second look that settles the delegated either/or notes.
+          corrections_second_look: isCorrections()
+            && !!(($('corrections-second-look') || {}).checked),
           prep_output: prepOutput(),
           prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
           prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
@@ -4437,7 +4440,7 @@ function correctionsReportHTML(d) {
     + `<h1>${esc(title)}</h1>`
     + '<p class="sub">'
     + (d.deterministic === false
-      ? 'Deterministic apply, with a model sanity check over the edits'
+      ? 'Deterministic apply, with an opt-in model pass over the edits'
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
     + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
