@@ -13,7 +13,7 @@ from .site_models import PENDING_STATES, TERMINAL_STATES
 
 def build_coverage_report(ledger: ExaminationLedger, graph: ExaminationGraph,
                           *, mode: str, omitted: dict[str, int] | None = None,
-                          source: str = "") -> dict:
+                          source: str = "", judgment: dict | None = None) -> dict:
     ledger.assert_accounted()
     projection = ledger.projection()
     total = len(ledger)
@@ -47,6 +47,7 @@ def build_coverage_report(ledger: ExaminationLedger, graph: ExaminationGraph,
         },
         "graph": graph.counts(),
         "generation_omissions": dict(sorted((omitted or {}).items())),
+        "judgment": judgment or {"enabled": False},
         "scope": {
             "phase": 1,
             "shadow_only": True,
@@ -58,6 +59,7 @@ def build_coverage_report(ledger: ExaminationLedger, graph: ExaminationGraph,
                 "paragraph-level model examination obligations",
                 "context-sharing judgment packets",
                 "exact verdict coverage validation",
+                "optional independent site judgment with legacy comparison",
                 "sparse document/paragraph graph",
             ],
             "not_yet_implemented": [
@@ -114,6 +116,28 @@ def write_coverage_markdown(path: Path, report: dict) -> None:
                   "not generated and are counted here rather than silently lost:", ""]
         for label, count in report["generation_omissions"].items():
             lines.append(f"- `{label}`: {count:,}")
+    judgment = report.get("judgment") or {}
+    if judgment.get("enabled"):
+        selection = judgment.get("selection") or {}
+        execution = judgment.get("execution") or {}
+        comparison = judgment.get("comparison") or {}
+        lines += ["", "## Phase 1B independent judgment", "",
+                  "This paid lane was blind to the production review and could "
+                  "not create findings or manuscript edits.", "",
+                  f"- Eligible precise sites: **{selection.get('eligible_sites', 0):,}**",
+                  f"- Selected sites: **{selection.get('selected_sites', 0):,}**",
+                  f"- Primary packets completed: "
+                  f"**{execution.get('primary_packets_completed', 0):,}**",
+                  f"- Judgment cost: "
+                  f"**${judgment.get('estimated_cost_usd', 0):.4f}**",
+                  f"- Both lanes found an error: "
+                  f"**{comparison.get('both_found_error', 0):,}**",
+                  f"- Examination-only error: "
+                  f"**{comparison.get('examination_only_error', 0):,}**",
+                  f"- Production-only error: "
+                  f"**{comparison.get('production_only_error', 0):,}**",
+                  f"- Explicitly unresolved: "
+                  f"**{comparison.get('unresolved', 0):,}**"]
     lines += ["", "## What the pending count means", "",
               "The current production reviewer returns findings, not an explicit "
               "pass/error verdict for every paragraph-level obligation. Shadow "

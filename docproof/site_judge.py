@@ -1,6 +1,8 @@
 """Batched site judgment with exact response-coverage validation."""
 from __future__ import annotations
 
+import hashlib
+
 from pydantic import BaseModel, Field
 
 from .models import Usage
@@ -34,6 +36,16 @@ author intent or house style. Defer means stronger or broader context is needed.
 Explain only errors and uncertain decisions. Never omit a site id, invent an id,
 or silently discard a plausible problem.\
 """
+
+
+def judgment_prompt_fingerprint() -> str:
+    """Stable cache identity for the exact site-judgment contract."""
+    return hashlib.sha256(_SYSTEM.encode("utf-8")).hexdigest()
+
+
+def judgment_system_prompt() -> str:
+    """The prompt text, exposed for honest pre-run token estimation."""
+    return _SYSTEM
 
 
 def parse_judgments(packet: JudgmentPacket, parsed: dict, *, judge: str

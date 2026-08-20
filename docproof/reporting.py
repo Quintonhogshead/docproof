@@ -266,6 +266,10 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Smoothing", on(cfg.smoothing.enabled)),
         ("Examination graph", (cfg.examination_graph.mode
                                if cfg.examination_graph.enabled else "off")),
+        ("Independent examination judge",
+         (f"on (`{cfg.examination_graph.judgment.primary_model}`, "
+          f"${cfg.examination_graph.judgment.max_cost_usd:.2f} cap)"
+          if cfg.examination_graph.judgment.enabled else "off")),
     ]
     L = ["## Settings used\n"]
     L.append(f"- **Reviewer:** `{cfg.api.model}`"
@@ -379,6 +383,26 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             f"This run was observation-only: the examination graph created no "
             f"edits. See `examination-coverage.md` and the compressed, "
             f"append-only `examination-ledger.jsonl.gz`.\n")
+        judgment = examination.get("judgment") or {}
+        if judgment.get("enabled"):
+            selection = judgment.get("selection") or {}
+            comparison = judgment.get("comparison") or {}
+            L.append("### Independent examination — evaluation only\n")
+            L.append(
+                f"A separate model blindly judged **"
+                f"{comparison.get('judged_sites', 0):,}** of "
+                f"{selection.get('selected_sites', 0):,} selected precise "
+                f"site(s), at an estimated cost of **$"
+                f"{judgment.get('estimated_cost_usd', 0):.2f}**. It agreed "
+                f"with the production review on "
+                f"{comparison.get('both_found_error', 0):,} error(s); "
+                f"{comparison.get('examination_only_error', 0):,} appeared "
+                f"only in the independent lane and "
+                f"{comparison.get('production_only_error', 0):,} only in the "
+                f"production lane. These verdicts were evaluation data only: "
+                f"they created no findings and made no manuscript edits. "
+                f"Disagreements, when present, are in the blinded "
+                f"`examination-evaluation.json` sample.\n")
 
     if coverage is not None:
         L.append("## Coverage\n")

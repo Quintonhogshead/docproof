@@ -1034,6 +1034,37 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     if coverage is not None:
         coverage.record_windows(window_losses)
 
+    # Phase 1B: a paid but observation-only second lane over precise candidate
+    # sites. It runs here, where provider calls are resumable and billable, not
+    # in finish(), whose only job is to assemble the proven manuscript path.
+    # Its Usage is folded into the real job total, but its verdicts remain on
+    # prepared.examination and can never enter this function's findings list.
+    if (prepared.examination is not None
+            and cfg.examination_graph.judgment.enabled):
+        from .checkpoint import add_usage
+        from .config import examination_judgment_killed
+        from .examination_judgment import (JudgmentCancelled,
+                                           run_shadow_judgment)
+        if examination_judgment_killed():
+            prepared.examination.judgment_execution = {
+                "disabled_by_deployment_kill_switch": True}
+            log.warning("Examination judgment disabled by "
+                        "DOCPROOF_EXAMINATION_JUDGMENT")
+        else:
+            if on_phase:
+                on_phase("examination_judgment")
+            try:
+                shadow_usage = run_shadow_judgment(
+                    prepared.examination, cfg,
+                    provider_factory=provider_factory,
+                    checkpoint=checkpoint, should_cancel=should_cancel)
+                add_usage(usage, dataclasses.asdict(shadow_usage))
+            except JudgmentCancelled:
+                raise JobCancelled()
+            except Exception:  # shadow instrumentation never blocks a review
+                log.exception("Examination judgment failed outside a packet; "
+                              "the production review is unchanged.")
+
     return findings, usage
 
 
