@@ -59,17 +59,20 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  comments: tuple[CommentDisposition, ...] = (),
                  deterministic: bool = True,
                  pages: tuple[int, int] = (0, 0),
-                 checks: tuple = (), merged_away: int = 0) -> tuple[Path, Path]:
+                 checks: tuple = (), merged_away: int = 0,
+                 page_labels: dict[int, str] | None = None) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
     return their paths. `deterministic` is False when an opt-in model pass ran
     (the sanity gate, or the second look over the extractor's queries), so the
     report does not over-claim being model-free. `pages` is
     `(placed, total)` from the page map, reported so a run whose page narrowing
-    silently did not happen says so."""
+    silently did not happen says so. `page_labels` maps a proof page to the
+    InDesign folio it should be shown as (see `idml.page_label_map`), so every
+    page a reviewer or designer reads here is the page InDesign shows."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
                        deterministic=deterministic, pages=pages, checks=checks,
-                       merged_away=merged_away)
+                       merged_away=merged_away, page_labels=page_labels or {})
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -80,9 +83,11 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
-             deterministic=True, pages=(0, 0), checks=(), merged_away=0) -> dict:
+             deterministic=True, pages=(0, 0), checks=(), merged_away=0,
+             page_labels=None) -> dict:
     needs_human = [c for c in comments if c.needs_human]
     placed, total = pages
+    page_labels = page_labels or {}
     return {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -156,7 +161,7 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         "comments": {
             "total": len(comments),
             "unresolved": len(needs_human),
-            "items": [_comment(c) for c in comments],
+            "items": [_comment(c, page_labels) for c in comments],
         },
         # How much of the proof the page map placed in the book. A page it could
         # not place is one whose marks had the whole book to land in, which is the
@@ -165,8 +170,28 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         "pages": {"placed": placed, "total": total},
         # The designer's list: what needs InDesign open, located. Composition is the
         # one thing this engine cannot do, so it is the one thing it does not claim.
-        "checks": [dataclasses.asdict(c) for c in checks],
+        "checks": [_with_label(dataclasses.asdict(c), page_labels) for c in checks],
     }
+
+
+def _page_where(row: dict) -> str:
+    """`page N` for a report row, using the InDesign folio when the row carries one
+    and falling back to the physical proof page otherwise. `—` when neither is
+    known (a typed list has no page)."""
+    label = row.get("page_label")
+    if label:
+        return f"page {label}"
+    return f"page {row['page']}" if row.get("page") else "—"
+
+
+def _with_label(row: dict, page_labels: dict[int, str]) -> dict:
+    """A row carrying a `page` gains the InDesign folio it should be shown as, so
+    every page a designer reads points at the page InDesign shows. Absent when the
+    page could not be aligned to a folio, and the physical page stands."""
+    label = page_labels.get(row.get("page") or 0)
+    if label is not None:
+        row["page_label"] = label
+    return row
 
 
 def _outcome(o) -> dict:
@@ -181,11 +206,13 @@ def _outcome(o) -> dict:
     return row
 
 
-def _comment(c: CommentDisposition) -> dict:
-    return {"id": c.id, "page": c.page, "kind": c.kind,
-            "instruction": c.instruction, "anchor": c.anchor,
-            "disposition": c.disposition, "edit_ids": list(c.edit_ids),
-            "detail": c.detail}
+def _comment(c: CommentDisposition, page_labels: dict[int, str]) -> dict:
+    return _with_label(
+        {"id": c.id, "page": c.page, "kind": c.kind,
+         "instruction": c.instruction, "anchor": c.anchor,
+         "disposition": c.disposition, "edit_ids": list(c.edit_ids),
+         "detail": c.detail},
+        page_labels)
 
 
 def _markdown(d: dict) -> str:
@@ -290,12 +317,31 @@ def _markdown(d: dict) -> str:
         L.append("Every one carries the reviewer's original note and the page it "
                  "was marked on, so it can be handled by hand.\n")
         for c in unresolved:
-            where = f"page {c['page']}" if c["page"] else "—"
+            where = _page_where(c)
             why = DISP_TITLES.get(c["disposition"], c["disposition"])
             note = c["instruction"] or "(no note)"
             L.append(f"- **{where}** ({why}): “{_preview(note)}”"
                      + (f" — on “{_preview(c['anchor'])}”" if c["anchor"] else "")
                      + (f" — {c['detail']}" if c["detail"] else ""))
+        L.append("")
+
+    # Period/capitalization queries the last tier read and confirmed correct as set
+    # — a deliberate open line, an intended lowercase. Each is off the human's list
+    # by a decision, not by omission, so the reasoning is shown for a person to
+    # audit at a glance rather than left to be taken on trust.
+    confirmed = [c for c in com["items"]
+                 if c["disposition"] == DISP_NO_OP and c.get("detail")]
+    if confirmed:
+        L.append(f"## Confirmed as set — {len(confirmed)}\n")
+        L.append("A model read each against the passage around it and found the "
+                 "line correct as set, so no change was made. The reasoning is "
+                 "given so the call can be checked.\n")
+        for c in confirmed:
+            where = _page_where(c)
+            note = c["instruction"] or "(no note)"
+            L.append(f"- **{where}**: “{_preview(note)}”"
+                     + (f" — on “{_preview(c['anchor'])}”" if c["anchor"] else "")
+                     + f" — {c['detail']}")
         L.append("")
 
     if ap is not None:
@@ -385,7 +431,7 @@ def _markdown(d: dict) -> str:
                  "files can settle it. Each of these is located; none was guessed "
                  "at.\n")
         for c in checks:
-            where = (f"page {c['page']}" if c.get("page") else "—")
+            where = _page_where(c)
             if c.get("paragraph", -1) >= 0:
                 where += f" (story `{c['story_id']}`, ¶ {c['paragraph']})"
             L.append(f"- **{where}**: {c['what']} — “{_preview(c['why'])}”")

@@ -29,7 +29,7 @@ from ..providers import Provider
 from .apply import apply_edits
 from .escalate import escalate_queries
 from .fidelity import screen_edits
-from .idml import read_stories
+from .idml import page_label_map, read_stories
 from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
@@ -267,7 +267,12 @@ def _reconcile_comments(comments, edits: Sequence[Edit],
         elif any(d[0] == DISP_APPLIED for d in classified):
             disp, detail = DISP_APPLIED, ""
         else:
-            disp, detail = DISP_NO_OP, ""
+            # A no-op the last tier confirmed as correct-as-set carries its
+            # reasoning; keep it, so a comment cleared by a decision arrives with
+            # why rather than as a bare "no change needed".
+            disp = DISP_NO_OP
+            detail = next((d[1] for d in classified
+                           if d[0] == DISP_NO_OP and d[1]), "")
         out.append(CommentDisposition(
             id=cid, page=page, kind=kind, instruction=instruction, anchor=anchor,
             disposition=disp, edit_ids=tuple(e.id for e in made), detail=detail))
@@ -312,7 +317,11 @@ def _apply_status_of(apply_report: ApplyReport):
             # stays one.
             return DISP_FLAGGED, ("the mark was read but no change was proposed "
                                   "for it — nothing was applied")
-        return DISP_NO_OP, ""                  # a true no-op (find == replace)
+        # A true no-op (find == replace). Its detail carries the reasoning when the
+        # last tier confirmed the mark as correct as set — the reviewer asked "add a
+        # period?" and the book's open-line convention answered "no" — so the
+        # comment clears the needs-a-human list but arrives with why it was left.
+        return DISP_NO_OP, (o.detail or "")
 
     return status_of
 
@@ -532,13 +541,18 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
     checks = _checks(apply_report)
+    # The InDesign folio each proof page should be shown as, so a mark reported on
+    # "page 7" sends the designer to the page InDesign calls 7 — not the seventh
+    # leaf of a proof whose front matter is numbered apart. Only when the file and
+    # the proof have the same number of pages; otherwise the physical page stands.
+    page_labels = (page_label_map(src_idml, pages_total) if pages_total else {})
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
         deterministic=(sanity is None and second_look is None
                        and escalate is None),
         pages=(pages_placed, pages_total), checks=checks,
-        merged_away=merged_away)
+        merged_away=merged_away, page_labels=page_labels)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "second look settled %d, re-anchored %d, merged %d; last tier "
              "resolved %d, advised %d; %d/%d page(s) placed; verify %s",

@@ -94,11 +94,30 @@ attaches to the preceding word or mark.
 
 
 class _Verdict(BaseModel):
-    verdict: Literal["resolve", "recommend"]
+    verdict: Literal["resolve", "recommend", "leave"]
     find: str = ""
     replace: str = ""
     context: str = ""
     note: str = ""
+
+
+# A reviewer note that questions a terminal period or a capital — the two marks a
+# passage's own convention can settle. "Add period?", "Capitalize?", "should this
+# be lowercase". These are the queries the last tier is allowed to *decide* rather
+# than defer: the surrounding lines show whether the book punctuates its sentences
+# or runs its verse open, whether a word is set as a proper noun elsewhere.
+_PERIOD_CAP = re.compile(
+    r"\b(period|full[ -]?stop|terminal punctuation|"
+    r"capitali[sz]e?d?|capitali[sz]ation|capital|uppercase|upper[ -]case|"
+    r"lowercase|lower[ -]case|cap)\b", re.IGNORECASE)
+
+
+def is_period_cap_query(note: str) -> bool:
+    """Whether a note is asking about a terminal period or a capitalization — the
+    marks the surrounding text's own convention can decide, so the last tier may
+    settle them (add the mark, or confirm the line as deliberately set) instead of
+    deferring. A note about a word choice or meaning is not one of these."""
+    return bool(note and _PERIOD_CAP.search(note))
 
 
 # --- gathering the context ----------------------------------------------------
@@ -144,6 +163,40 @@ def passage_around(stories: Sequence[Story], scope, page: int, *,
 _DISTINCTIVE = re.compile(r"\b[A-Z][a-z’']*(?:[-’'][A-Z][a-z’']*)+\b|"
                           r"\b[A-Z][a-z]+[A-Z][A-Za-z]*\b")
 _QUOTED = re.compile(r"[\"“‘']([^\"“”‘’']{3,40})[\"”’']")
+
+
+# A reviewer note that names its own fix: "should this be 'lightning'?", "should
+# be lightning", "change to lightning". The proposed word is what the reviewer
+# already decided; when the book's own usage confirms it, resolving carries out
+# their mark rather than deciding what the author meant.
+_PROPOSAL = re.compile(
+    r"(?:should(?:\s+(?:this|it|that|these|they))?\s+be|should\s+be|"
+    r"change\s+to|make\s+it|use)\s*"
+    r"[\"“‘']?([A-Za-z][^\"”’'?!.]*?)[\"”’'?!.]*\s*$",
+    re.IGNORECASE)
+
+
+def proposed_replacement(note: str) -> str | None:
+    """The specific correction a reviewer's note proposes, or None.
+
+    "Should this be 'lightning'?" and "should be lightning" both name the word the
+    reviewer wants — a proposal, not a question of intent. This reads it back out,
+    so the last tier can be told the reviewer has already chosen the target and
+    need only confirm it against the book. A note that asks without proposing
+    ("Add period?", "Capitalize?", "Should we cut this?") yields nothing — those
+    stay the author's call."""
+    if not note:
+        return None
+    m = _PROPOSAL.search(note.strip())
+    if not m:
+        return None
+    proposal = " ".join(m.group(1).split())
+    # A handful of words are directions, not targets — "should be removed",
+    # "should be deleted" name an operation the reviewer wants, not a replacement.
+    if proposal.lower() in {"removed", "deleted", "cut", "changed", "different",
+                            "corrected", "fixed", "here", "this", "that"}:
+        return None
+    return proposal or None
 
 
 def gather_terms(note: str, anchor: str) -> list[str]:
@@ -198,13 +251,36 @@ def term_evidence(stories: Sequence[Story], terms: Sequence[str], *,
 
 
 def _brief(edit: Edit, passage: str,
-           evidence: list[tuple[str, int, list[str]]]) -> str:
+           evidence: list[tuple[str, int, list[str]]],
+           proposal: str | None = None) -> str:
     """One query, with everything gathered for it."""
     lines = [f"The reviewer's note: \"{edit.instruction}\""]
     if edit.context or edit.find:
         lines.append(f"Marked on: \"{edit.context or edit.find}\"")
     if edit.page:
         lines.append(f"Page of the proof: {edit.page}")
+    if is_period_cap_query(edit.instruction):
+        lines.append(
+            "This mark questions a terminal period or a capitalization — decide it "
+            "from the surrounding text's own convention, which the passage above "
+            "shows. If comparable lines in the passage take the mark (prose that "
+            "punctuates its sentences, a genuine sentence start), RESOLVE and make "
+            "the change. If they consistently do without it — an open-line poem "
+            "that drops terminal periods, a lowercase the passage keeps throughout "
+            "— answer LEAVE: it is deliberate and correct as set, no change needed. "
+            "Only RECOMMEND when the passage genuinely mixes both with no rule to "
+            "read off. Deciding from a clear convention carries out the reviewer's "
+            "check; it does not override the author.")
+    if proposal:
+        lines.append(
+            f"The reviewer has PROPOSED a specific correction: \"{proposal}\". "
+            "They have already chosen the target; your job is to confirm it "
+            "against the book's own usage, not to decide it afresh. If the "
+            "evidence below shows \"" + proposal + "\" is the spelling or word "
+            "the book uses elsewhere and this instance is the outlier, RESOLVE "
+            "with it — carrying out the reviewer's mark is not deciding the "
+            "author's intent. Recommend only if the evidence is absent or the "
+            "choice is genuinely the author's voice.")
     if passage:
         lines += ["", "THE BOOK AROUND THAT MARK — copy any find you quote out "
                       "of this, character for character:", "", passage]
@@ -230,7 +306,7 @@ rules.
 Every query you see has already been through a pass that settles the easy ones, \
 so do not expect the answer to be obvious. Read the evidence before you decide.
 
-Answer in one of exactly two ways.
+Answer in one of exactly three ways: "resolve", "leave", or "recommend".
 
 "resolve" — the text in front of you settles the matter, and the change follows \
 from evidence rather than from taste. Use it when:
@@ -242,6 +318,13 @@ rules or the passage decide it (a trailing-off line takes an ellipsis; a broken 
 two-dot mark is wrong either way).
 - The note offers two repairs and the surrounding prose makes exactly one of \
 them grammatical.
+- The note PROPOSES a specific word or spelling ("should this be 'lightning'?", \
+"should be eaves") and the book's own usage confirms it — the proposed spelling \
+is what the book uses elsewhere and this instance is the lone outlier. The \
+reviewer named the target, so applying it carries out their mark; you are \
+confirming a proofreader's catch against the book, not deciding the author's \
+meaning. (Confirm it against the evidence — do not resolve a proposed word the \
+book gives no support for.)
 Then give the edit:
 - find: copied VERBATIM out of the book passage above — same words, punctuation \
 and capitalization. Only what changes plus the least surround needed to locate \
@@ -252,12 +335,27 @@ more than once in the passage.
 - note: one sentence giving the evidence you used ("the book has 'Winn-Dixie' \
 without the article in eight of nine instances").
 
+"leave" — for a mark that questions a terminal period or a capitalization, when \
+the surrounding text shows the line is correct as set and needs no change: an \
+open-line poem that drops terminal periods on comparable lines, a lowercase the \
+passage keeps throughout, a word already capitalized the way the book capitalizes \
+it. This is the mirror of "resolve": the passage's own convention decides the \
+answer, and here the answer is that nothing changes. Use it ONLY for a period or \
+capitalization question the convention settles — never to wave off a query about \
+a word, a meaning, or anything else; those "recommend". Give:
+- note: the convention you read and why it leaves this mark as set, in one \
+sentence ("the poem ends four comparable lines without a period, so this open \
+line is deliberate").
+
 "recommend" — you have a view, but answering would decide something only the \
 author or the editor can. Use it whenever the question touches what the writer \
 MEANT: whether a word is a typo or the character's voice, whether a line was \
 cut on purpose, whether a repetition is deliberate. Do NOT resolve these, however \
 confident you are — a reader's dialect written as dialect is not an error, and \
-"corrected" it is a real loss. Then give:
+"corrected" it is a real loss. The one exception is the proposed-and-confirmed \
+case above: when the reviewer named the exact fix AND the book's usage confirms \
+it, that is a proofreader's catch to carry out, not intent to decide. Absent that \
+confirmation, recommend. Then give:
 - note: what you found and what you would do, in one or two sentences, written \
 for the person who now has to decide. Name the evidence. Say plainly if your \
 recommendation is to change nothing.
@@ -289,6 +387,25 @@ def _resolved_edit(original: Edit, verdict: dict, passage: str) -> Edit | None:
                     occurrence=0, kind=MECHANICAL, instruction=instruction)
 
 
+def _left_edit(original: Edit, verdict: dict) -> Edit:
+    """The query turned into a recorded no-op: the model read the passage and found
+    the mark's target correct as set — a terminal period the open-line verse drops
+    on purpose, a lowercase the poem keeps throughout — so the answer is no change.
+
+    `find == replace` makes `apply` file it as a true no change rather than an open
+    query, so it clears the needs-a-human list; the reasoning rides on `advice` (and
+    so onto the outcome's detail), so the report can show WHY it was left, which is
+    the whole of "clear it, but record the reasoning". A no-op is never written to
+    the file, so a wrong "leave" costs a mark unmade, never a wrong change shipped."""
+    note = " ".join((verdict.get("note") or "").split())
+    instruction = (original.instruction or "").rstrip()
+    if note:
+        instruction += f" — confirmed as set: {note}"
+    return _replace(original, find=original.find, replace=original.find,
+                    context="", occurrence=0, kind=MECHANICAL,
+                    advice=note or original.advice, instruction=instruction)
+
+
 def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
                      usage: Usage, stories: Sequence[Story], scope=None,
                      max_tokens: int = MAX_OUTPUT_TOKENS,
@@ -316,20 +433,27 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
                     len(candidates) - MAX_QUERIES)
         candidates = candidates[:MAX_QUERIES]
 
-    resolved = recommended = 0
+    resolved = recommended = left = 0
     schema = strict_json_schema(_Verdict)
     for n, edit in enumerate(candidates):
         if progress:
             progress(n, len(candidates))
         passage = passage_around(stories, scope, edit.page)
-        evidence = term_evidence(
-            stories, gather_terms(edit.instruction, edit.context or edit.find))
+        proposal = proposed_replacement(edit.instruction)
+        terms = gather_terms(edit.instruction, edit.context or edit.find)
+        # Research the reviewer's proposed word and the word they marked, so a
+        # "should this be 'lightning'?" arrives with how often the book spells it
+        # each way — the evidence that turns the guess into a count.
+        for extra in (proposal, (edit.find or "").strip(" ,.;:!?\"'“”‘’")):
+            if extra and extra not in terms:
+                terms.append(extra)
+        evidence = term_evidence(stories, terms)
         if not passage and not evidence:
             continue                   # nothing to reason over that it lacked
         try:
             result = provider.complete_structured(
                 model=model, system=_SYSTEM,
-                user=_brief(edit, passage, evidence),
+                user=_brief(edit, passage, evidence, proposal),
                 schema=schema, schema_name="escalated_query",
                 max_tokens=max_tokens)
         except Exception:              # noqa: BLE001 - a failed read must not lose the flag
@@ -342,11 +466,21 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
                         "query stays for a human", edit.id, result.stop_reason)
             continue
         verdict = result.parsed
+        answer = verdict.get("verdict")
         made = (_resolved_edit(out[at[edit.id]], verdict, passage)
-                if verdict.get("verdict") == "resolve" else None)
+                if answer == "resolve" else None)
         if made is not None:
             out[at[edit.id]] = made
             resolved += 1
+            continue
+        # A period/capitalization mark the model read as correct as set — a
+        # deliberate open line, an intended lowercase. Only for those marks: "leave"
+        # on any other query would be the tier answering a person's question with
+        # silence, so it falls through to a flag. This clears the mark and keeps
+        # the reasoning, which is the whole of "decide it, but record why".
+        if answer == "leave" and is_period_cap_query(edit.instruction):
+            out[at[edit.id]] = _left_edit(out[at[edit.id]], verdict)
+            left += 1
             continue
         # Either it recommended, or a resolution failed a guard — both leave the
         # query flagged, and both are worth the note it wrote.
@@ -356,8 +490,10 @@ def escalate_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
             recommended += 1
     if progress:
         progress(len(candidates), len(candidates))
-    if resolved or recommended:
-        log.info("Last tier read %d query(ies): resolved %d on the book's own "
-                 "evidence, advised on %d that stay a person's",
-                 len(candidates), resolved, recommended)
-    return out, resolved, recommended
+    if resolved or recommended or left:
+        log.info("Last tier read %d query(ies): resolved %d and confirmed %d as "
+                 "set on the book's own evidence, advised on %d that stay a "
+                 "person's", len(candidates), resolved, left, recommended)
+    # A confirm-as-set is a resolution — the query was settled, the mark cleared —
+    # so it counts with the resolved for the caller's ledger and log.
+    return out, resolved + left, recommended

@@ -678,6 +678,67 @@ def read_stories(idml_path: str | Path) -> list[Story]:
     return out
 
 
+DESIGNMAP = "designmap.xml"
+
+
+def read_page_folios(idml_path: str | Path) -> list[str]:
+    """The page numbers InDesign shows for this file, in reading order.
+
+    A designer's exported IDML is a laid-out document, and its spreads carry the
+    one thing a page-flow does not: the folio of each page — `<Page Name="…">`,
+    the number InDesign's Pages panel shows and the reader sees at the foot of the
+    page, roman for front matter, arabic where a section restarts. The order is
+    the order `designmap.xml` threads the spreads in, which is the order the pages
+    read and the order a PDF exported from the file paginates in — so the folio of
+    reading-order page *i* is what proof page *i* should be shown as.
+
+    Empty for a package with no laid-out spreads — a prep/generated IDML InDesign
+    has never composed. Master spreads are skipped: their pages are templates, not
+    pages of the book."""
+    with zipfile.ZipFile(Path(idml_path)) as z:
+        names = set(z.namelist())
+        if DESIGNMAP not in names:
+            return []
+        design = ET.fromstring(z.read(DESIGNMAP))
+        # designmap lists every spread in reading order as `<idPkg:Spread src=…>`;
+        # a `<idPkg:MasterSpread>` points at a template and is left out by pinning
+        # the src to the Spreads/ folder the book's own spreads live in.
+        srcs = [el.get("src") for el in design.iter()
+                if ET.QName(el).localname == "Spread" and el.get("src")]
+        folios: list[str] = []
+        for src in srcs:
+            if not src.startswith("Spreads/") or src not in names:
+                continue
+            spread = ET.fromstring(z.read(src))
+            for el in spread.iter():
+                if ET.QName(el).localname == "Page":
+                    name = el.get("Name")
+                    if name is not None:
+                        folios.append(name)
+    return folios
+
+
+def page_label_map(idml_path: str | Path, page_count: int) -> dict[int, str]:
+    """Which InDesign folio each 1-based proof page should be shown as.
+
+    The proof's pages are numbered by where they physically sit in the PDF; the
+    designer navigates by the folio InDesign prints. They diverge the moment a book
+    has front matter — physical page 7 is folio "1" once six roman-numbered leaves
+    precede it — and a mark reported on "page 7" then sends the designer to the
+    wrong page. This aligns the two.
+
+    The map is trusted only when the file's page count matches the proof's exactly:
+    equal counts mean the proof is an export of this file and page *i* of one is
+    page *i* of the other. A cover the proof carries and the file does not (or the
+    reverse) breaks that one-to-one, so rather than relabel by a broken offset the
+    map is left empty and the physical page stands — a lost alignment, never a
+    wrong one, the same bargain the page map strikes."""
+    folios = read_page_folios(idml_path)
+    if not folios or page_count <= 0 or len(folios) != page_count:
+        return {}
+    return {i + 1: folio for i, folio in enumerate(folios)}
+
+
 def rewrite_stories(src: str | Path, dest: str | Path,
                     changed: dict[str, bytes]) -> None:
     """Copy the IDML, swapping in the serialized bytes of the changed stories.
