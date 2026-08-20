@@ -37,7 +37,8 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
 from .instructions import (asks_for_a_change, enforce_note_fidelity,
                            fill_edit_occurrences, house_typography,
                            widen_edits_to_marks)
-from .pagemap import build_page_map, page_book_text, paragraph_lookup
+from .pagemap import (build_page_map, page_book_text, paragraph_lookup,
+                      printed_folio_labels)
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
@@ -543,9 +544,30 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     checks = _checks(apply_report)
     # The InDesign folio each proof page should be shown as, so a mark reported on
     # "page 7" sends the designer to the page InDesign calls 7 — not the seventh
-    # leaf of a proof whose front matter is numbered apart. Only when the file and
-    # the proof have the same number of pages; otherwise the physical page stands.
-    page_labels = (page_label_map(src_idml, pages_total) if pages_total else {})
+    # leaf of a proof whose front matter is numbered apart. The spreads' own
+    # folios lead, trusted only when the file and the proof have the same number
+    # of pages; a proof that carries a page the file does not (a cover, a spread
+    # exported oddly) breaks that one-to-one, and the folios each page *prints* —
+    # read off the proof's own text, validated as one consistent run — take over.
+    # Only when both fail does the physical page stand, and the log says which.
+    label_source = ""
+    page_labels: dict[int, str] = {}
+    if pages_total:
+        page_labels = page_label_map(src_idml, pages_total)
+        label_source = "spreads" if page_labels else ""
+        if not page_labels:
+            page_labels = printed_folio_labels(page_texts)
+            label_source = "printed" if page_labels else ""
+        if not page_labels:
+            log.warning(
+                "No page labels for %s: the file's folio count and the proof's "
+                "%d page(s) do not match, and no consistent printed folios "
+                "could be read off the proof — reported pages are the proof's "
+                "physical pages.", Path(src_idml).name, pages_total)
+        else:
+            log.info("Page labels for %s: %d of %d proof page(s) labelled "
+                     "from %s.", Path(src_idml).name, len(page_labels),
+                     pages_total, label_source)
     # The review screen's queue: one item per flag a person still owns, each
     # with every concrete place its change could land — computed against the
     # *corrected* file, because that is the file a clicked resolution edits.
@@ -554,15 +576,21 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     try:
         from .resolve import build_queue
         queue = build_queue(read_stories(corrected), apply_report,
-                            dispositions, scope=scope)
+                            dispositions, scope=scope, book_pages=book_pages)
     except Exception:                  # noqa: BLE001 - the report stands without it
         log.warning("Could not build the resolution queue", exc_info=True)
     # The queue is the review screen too, so its pages read as the InDesign folio
-    # the same way the flagged-comment list does.
+    # the same way the flagged-comment list does — and each clickable option's
+    # page along with it, because "apply here, on page 43" is the whole point of
+    # the label.
     for item in queue:
         label = page_labels.get(item.get("page") or 0)
         if label is not None:
             item["page_label"] = label
+        for row in (item.get("options") or []) + (item.get("targets") or []):
+            label = page_labels.get(row.get("page") or 0)
+            if label is not None:
+                row["page_label"] = label
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,

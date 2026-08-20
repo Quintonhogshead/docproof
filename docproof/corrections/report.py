@@ -171,7 +171,11 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         # not place is one whose marks had the whole book to land in, which is the
         # difference between an edit that applies and one that is flagged — so it
         # is reported rather than left to be inferred from a flag count.
-        "pages": {"placed": placed, "total": total},
+        "pages": {"placed": placed, "total": total,
+                  # How many proof pages could be shown as the file's own folio.
+                  # 0 with a nonzero total means every reported page is the
+                  # proof's physical page — worth the report saying out loud.
+                  "labeled": len(page_labels)},
         # The designer's list: what needs InDesign open, located. Composition is the
         # one thing this engine cannot do, so it is the one thing it does not claim.
         "checks": [_with_label(dataclasses.asdict(c), page_labels) for c in checks],
@@ -245,12 +249,19 @@ def _markdown(d: dict) -> str:
             covered.update(c.get("edit_ids") or [])
     # A flag the designer resolved from the review screen is done — it leaves
     # the needs-a-human lists and counts with the applied, and the resolutions
-    # get a section of their own below.
-    ap_flagged = ([o for o in ap["flagged"] if not o.get("resolved")]
+    # get a section of their own below. A flag they deliberately set aside
+    # ("ignore this") leaves the lists too, into its own bucket: neither
+    # applied nor awaiting anyone, and said so rather than hidden.
+    ap_flagged = ([o for o in ap["flagged"]
+                   if not o.get("resolved") and not o.get("dismissed")]
                   if ap is not None else [])
+    ap_dismissed = ([o for o in ap["flagged"] if o.get("dismissed")]
+                    if ap is not None else [])
     flagged_uncovered = ([o for o in ap_flagged if o["id"] not in covered]
                          if com["total"] else ap_flagged)
-    resolutions = d.get("resolutions") or []
+    all_res = d.get("resolutions") or []
+    resolutions = [r for r in all_res if r.get("kind") != "dismissed"]
+    set_aside = [r for r in all_res if r.get("kind") == "dismissed"]
     if (verify["clean"] and (ap is None or not ap_flagged)
             and not com["unresolved"]):
         L.append("**Clean.** Every correction landed exactly, nothing else in the "
@@ -274,16 +285,21 @@ def _markdown(d: dict) -> str:
                             if c["disposition"] == DISP_APPLIED
                             or c.get("resolved"))
             nochange_c = sum(1 for c in items if c["disposition"] == DISP_NO_OP)
+            aside_c = sum(1 for c in items if c.get("dismissed"))
             headline.append(f"{com['total']} reviewer comment(s)")
             headline.append(f"{applied_c} applied")
             if nochange_c:
                 headline.append(f"{nochange_c} no change needed")
+            if aside_c:
+                headline.append(f"{aside_c} set aside in review")
             if com["unresolved"]:
                 headline.append(f"{com['unresolved']} need a human")
         elif ap is not None:
             headline.append(f"{ap['applied']} applied")
             if ap["no_op"]:
                 headline.append(f"{len(ap['no_op'])} no change needed")
+            if ap_dismissed:
+                headline.append(f"{len(ap_dismissed)} set aside in review")
             if flagged_uncovered:
                 headline.append(f"{len(flagged_uncovered)} need a human")
         if verify["discrepancies"]:
@@ -313,6 +329,14 @@ def _markdown(d: dict) -> str:
                      f"whole book to match against, so a repeated word or a bare "
                      f"comma among them will have been flagged rather than "
                      f"applied.\n")
+        # Which page numbers this report speaks in. Labels come from the file's
+        # own spreads, or from the folios the proof itself prints; when neither
+        # aligned, saying so beats a designer hunting for a page that InDesign
+        # numbers differently.
+        if not pages.get("labeled"):
+            L.append("*Page numbers here are the proof PDF's physical pages — "
+                     "the file's own folios could not be aligned to the proof "
+                     "for this run.*\n")
 
     issues = d["parse"]["issues"]
     if issues:
@@ -329,7 +353,7 @@ def _markdown(d: dict) -> str:
     # that keeps a comment from being swallowed.
     unresolved = [c for c in com["items"]
                   if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)
-                  and not c.get("resolved")]
+                  and not c.get("resolved") and not c.get("dismissed")]
     if unresolved:
         L.append(f"## Reviewer comments needing a human — {len(unresolved)}\n")
         L.append("Every one carries the reviewer's original note and the page it "
@@ -370,12 +394,35 @@ def _markdown(d: dict) -> str:
         L.append("These flags were resolved on the review screen; the changes "
                  "are in the corrected file.\n")
         for r in resolutions:
-            how = (f"typed: “{_preview(r['text'])}”" if r.get("text")
+            how = ("edited the line by hand" if r.get("kind") == "manual"
+                   else "applied the model's suggestion"
+                   if r.get("kind") == "suggestion"
+                   else f"typed: “{_preview(r['text'])}”" if r.get("text")
                    else "picked a placement")
             L.append(f"- {how}:")
             if r.get("before"):
                 L.append(f"  - was: “{_preview(r['before'], 300)}”")
             L.append(f"  - now: “{_preview(r.get('after') or '(line removed)', 300)}”")
+            breaks = _break_notes(r.get("breaks") or {})
+            if breaks:
+                L.append(f"  - and {breaks}")
+        L.append("")
+
+    # The flags the designer deliberately left alone. Not applied and not
+    # awaiting anyone — a decision, recorded so the printable log shows who
+    # made it and what was left as set.
+    if set_aside:
+        by_item = {q.get("id"): q for q in d.get("queue") or []}
+        L.append(f"## Set aside in review — {len(set_aside)}\n")
+        L.append("The designer chose to leave each of these as set (or to "
+                 "handle it in InDesign). Nothing was changed.\n")
+        for r in set_aside:
+            q = by_item.get(r.get("item_id")) or {}
+            where = _page_where(q)
+            note = q.get("instruction") or "(no note)"
+            L.append(f"- **{where}**: “{_preview(note)}”"
+                     + (f" — on “{_preview(q.get('anchor') or '')}”"
+                        if q.get("anchor") else ""))
         L.append("")
 
     if ap is not None:
@@ -488,9 +535,13 @@ def _markdown(d: dict) -> str:
         fmt_companions = ap.get("fmt_companions", 0)
         parsed_n = d["parse"]["edits"]
         # A resolution moves an edit from "for a human" to "applied", so the
-        # equation counts the flags still standing, not the flags as raised.
+        # equation counts the flags still standing, not the flags as raised —
+        # and a deliberate set-aside is its own addend, neither applied nor
+        # awaiting anyone.
         pieces = [f"{ap['applied']} applied", f"{len(ap_flagged)} for a human",
                   f"{len(ap['no_op'])} no-op"]
+        if ap_dismissed:
+            pieces.append(f"{len(ap_dismissed)} set aside")
         if merged_away:
             pieces.append(f"{merged_away} merged into others")
         added = para_removals + fmt_companions
@@ -511,8 +562,8 @@ def _markdown(d: dict) -> str:
             extra.append(f"{no_edit} resolution(s) of an unextracted comment")
         left = f"{parsed_n} parsed" + (" + " + " + ".join(extra) if extra else "")
         balances = (parsed_n + added + no_edit
-                    == ap["applied"] + len(ap_flagged) + len(ap["no_op"])
-                    + merged_away)
+                    == ap["applied"] + len(ap_flagged) + len(ap_dismissed)
+                    + len(ap["no_op"]) + merged_away)
         note = "" if balances else " — counts do not reconcile"
         L.append(f"- Corrections: {left} = " + " + ".join(pieces) + f"{note}.")
     L.append(f"- Paragraphs: {verify['paragraphs_before']:,} before, "
@@ -575,6 +626,19 @@ def _change(o: dict) -> str:
         return f"{core} — reviewer: “{_preview(note)}”" if core \
             else f"reviewer: “{_preview(note)}”"
     return core
+
+
+def _break_notes(breaks: dict) -> str:
+    """What a manual save did to the section breaks around its line, as one
+    clause — empty when it touched none."""
+    bits = []
+    if breaks.get("added_after"):
+        bits.append("added a section break after it")
+    if breaks.get("removed_above"):
+        bits.append("removed the break above it")
+    if breaks.get("removed_below"):
+        bits.append("removed the break below it")
+    return " and ".join(bits)
 
 
 def _preview(s: str, n: int = 90) -> str:

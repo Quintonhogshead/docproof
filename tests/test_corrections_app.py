@@ -511,7 +511,7 @@ def test_a_corrections_job_carries_the_page_texts_into_the_run(client):
         corrections_pages=json.dumps([book[4]]))
     assert job["state"] == "done", job.get("error")
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
-    assert report["pages"] == {"placed": 1, "total": 1}
+    assert report["pages"] == {"placed": 1, "total": 1, "labeled": 1}
 
 
 # --- resolving flags from the review screen ------------------------------------
@@ -605,3 +605,112 @@ def test_resolving_an_unknown_flag_is_a_404(client):
     r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
                     json={"item_id": "nope", "option_id": "x"})
     assert r.status_code == 404
+
+
+def test_ignore_sets_a_flag_aside_and_reopen_puts_it_back(client):
+    job, item = _flagged_job(client)
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "dismiss": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["item"]["resolved"]["kind"] == "dismissed"
+    assert body["counts"]["flags"] == 0
+    assert body["counts"]["applied"] == 0          # nothing was applied
+    # The file was never touched.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room was empty." \
+        in story_text(corrected, "ue0")
+    # Put it back: the flag returns to the awaiting pile.
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "reopen": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["counts"]["flags"] == 1
+    assert r.json()["item"]["resolved"] is None
+
+
+def test_the_models_suggestion_applies_in_one_click(client, monkeypatch):
+    job, item = _flagged_job(client)
+    # A run whose escalate tier advised would have stamped this; inject it the
+    # way that run would have, then apply it with one click.
+    json_path = Path(job["results_dir"]) / "corrections.json"
+    payload = json.loads(json_path.read_text("utf-8"))
+    payload["queue"][0]["advice"] = ("the mark is on the room sentence — "
+                                     "change that copy")
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "apply", "find": "the room was empty",
+                "replace": "the room is empty", "context": "",
+                "format": "", "note": "as the advice says"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "suggestion": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["resolved"]["kind"] == "suggestion"
+    # The adjudicator was handed the advice as the instruction to carry out.
+    assert "change that copy" in provider.calls[0]["user"]
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room is empty." \
+        in story_text(corrected, "ue0")
+
+
+def test_a_suggestion_click_without_advice_is_refused(client):
+    job, item = _flagged_job(client)
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "suggestion": True})
+    assert r.status_code == 422
+    assert "no model suggestion" in r.json()["detail"]
+
+
+def test_the_manual_editor_reads_and_saves_a_line_over_http(client):
+    job, item = _flagged_job(client)
+    option = next(o for o in item["options"] if "room" in o["before"])
+    loc = f"story_id={option['story_id']}&paragraph={option['paragraph']}"
+    state = client.get(
+        f"/api/jobs/{job['id']}/corrections/paragraph?{loc}").json()
+    assert state["text"] == "She opened the door, the room was empty."
+    assert state["runs"] and state["prev_break"] is False
+    new = "She opened the door; the room was bare."
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve", json={
+        "item_id": item["id"],
+        "manual": {
+            "story_id": option["story_id"],
+            "paragraph": option["paragraph"],
+            "expected": state["text"], "text": new,
+            "runs": [{"start": new.index("bare"),
+                      "end": new.index("bare") + 4,
+                      "bold": False, "italic": True}],
+            "insert_break_after": True,
+        }})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["item"]["resolved"]["kind"] == "manual"
+    assert body["item"]["resolved"]["breaks"]["added_after"] is True
+    assert body["counts"]["flags"] == 0 and body["counts"]["applied"] == 1
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    texts = story_text(corrected, "ue0")
+    at = texts.index(new)
+    assert texts[at + 1] == ""              # the section break landed
+    # The italics read back through the same editor endpoint.
+    state = client.get(f"/api/jobs/{job['id']}/corrections/paragraph"
+                       f"?story_id={option['story_id']}"
+                       f"&paragraph={option['paragraph']}").json()
+    assert any(r["italic"] for r in state["runs"])
+    # And the printable report says what happened.
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    assert report["resolutions"][0]["kind"] == "manual"
+
+
+def test_a_stale_manual_save_is_refused_over_http(client):
+    job, item = _flagged_job(client)
+    option = item["options"][0]
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve", json={
+        "item_id": item["id"],
+        "manual": {"story_id": option["story_id"],
+                   "paragraph": option["paragraph"],
+                   "expected": "not what the line says", "text": "x",
+                   "runs": []}})
+    assert r.status_code == 422
+    assert "changed since" in r.json()["detail"]
+    assert client.get(f"/api/jobs/{job['id']}").json()["flags"] == 1
