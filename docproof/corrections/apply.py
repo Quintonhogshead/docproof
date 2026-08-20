@@ -1297,6 +1297,19 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
         r_start, r_end = _absorb_dash_space(para, r_start, r_end, found_text,
                                             new_text)
         r_start, r_end = _close_deletion_gap(para, r_start, r_end, new_text)
+        if para.text[r_start:r_end] == new_text:
+            # The span already reads the way this edit would write it — another
+            # correction on the same words got there first. Writing it changes
+            # nothing, and reporting it "applied" is the false accounting that let
+            # a reviewer's second mark on a line ("He paused." after "Whatever.")
+            # be logged as done while the comma it named was never touched. It is
+            # a no-op, and a no-op with a note that asks for a change surfaces to a
+            # human downstream rather than hiding here.
+            outcomes.append(EditOutcome(
+                edit, NO_CHANGE, story_id=story.story_id, paragraph=para.index,
+                detail="another correction already made this change, so this one "
+                       "had nothing to do"))
+            continue
         if carried:
             _, a, b = carried
             rebase.absorb(key, a, b, len(new_text), new_text)

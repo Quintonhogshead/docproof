@@ -17,10 +17,10 @@ Two shapes account for almost all of it, and both are visible in the pair:
     hyphenated compound in front of it — and en-dashes that too, so
     "left-footed" becomes "left–footed" alongside the "2–0" that was wanted.
 
-The model sanity gate calls this family "over_grab" and holds it back for a
-person to look at. These are the members of it that need no judgement at all, so
-they are repaired here instead — deterministically, on the free path, before the
-list is ever reviewed.
+This family is an over-grab: the find reached past the word that changes and took
+a neighbouring mark with it. The members that need no judgement at all are
+repaired here — deterministically, on the free path, before the list is ever
+reviewed — rather than left for the grammar gate to catch downstream.
 
 Every repair narrows: it shrinks the run an edit writes over and never widens
 it, it leaves the replacement's words alone, and it declines wherever the note
@@ -30,6 +30,9 @@ no-op is not made, so an edit can never be repaired out of existence.
 from __future__ import annotations
 
 import re
+
+from .apply import _core
+from .textmatch import normalize
 
 # The marks that carry meaning at the edge of a quoted anchor, by class. The
 # class is what tells a *substitution* from a *loss*: a note that turns a comma
@@ -183,3 +186,132 @@ def repair_pair(find: str, replace: str, instruction: str = ""
     reads the trimmed run. Returns the pair unchanged when neither applies."""
     find, replace = keep_edge_marks(find, replace, instruction)
     return keep_marked_dash(find, replace, instruction)
+
+
+# --- pulling an edit back to the plain sense of its note ----------------------
+#
+# Three more repairs, each reading the reviewer's note beside the find/replace and
+# each narrow enough to be wrong about nothing else. Unlike the two above — which
+# read only the pair — these need the note, because the failure is a mismatch
+# between what the reviewer wrote and what the edit carries: a "remove" that
+# substitutes, a written-out correction whose case was dropped, a spell-out that
+# lost the qualifier fused to it. They run late, over the whole edit list, so they
+# catch a slip a model pass introduces (a re-anchored "remove" that came back as a
+# swap) as well as one the extractor made.
+
+# The annotation a model pass appends to a note ("Remove comma — second look:
+# re-anchored: …"). The reviewer's own words are what these repairs read, so the
+# tail is cut off first.
+_ANNOTATION = re.compile(r"\s+—\s+(?:second look|resolved on the book"
+                         r"|re-anchored)\b", re.IGNORECASE)
+# A note that is an instruction to carry out rather than a literal the reviewer
+# wrote — so the two literal-repairs below stand down, exactly as the extraction
+# rules do.
+_INSTRUCTION_VERB = re.compile(
+    r"\b(?:replac|remov|delet|add|insert|capital|lowercas|lower case|italic"
+    r"|roman|hyphenat|close up|spell out|enclos|swap|chang|correct|move|stet"
+    r"|swash)\w*", re.IGNORECASE)
+# The marks a "remove" note can name, by the word it uses.
+_NAMED_MARK = {
+    "comma": ",", "period": ".", "full stop": ".", "colon": ":",
+    "semicolon": ";", "semi-colon": ";", "question mark": "?",
+    "exclamation point": "!", "exclamation mark": "!", "hyphen": "-",
+}
+_PUNCT = set(".,;:!?—–-…")
+# A qualifier a spell-out note may leave fused to the front of a hyphenated find.
+# Deliberately a closed set of the prefixes a date or degree carries, so a closed
+# compound ("left-footed", "tap-in") is never rebuilt around a swapped tail.
+_QUALIFIER = re.compile(
+    r"^(?:mid|late|early|pre|post|non|self|ex|anti|semi|sub|super|co|re|un|well"
+    r"|multi|inter|over|under|high|low)$", re.IGNORECASE)
+
+
+def _note_head(instruction: str) -> str:
+    """The reviewer's own note, before any pass appended its annotation."""
+    return _ANNOTATION.split(instruction or "", 1)[0].strip()
+
+
+def enforce_removal(find: str, replace: str, instruction: str = ""
+                    ) -> tuple[str, str]:
+    """A "remove <mark>" note whose edit *substitutes* the mark, repaired to
+    delete it.
+
+    "Remove comma" is a deletion: the comma goes and nothing takes its place. An
+    edit that came back turning the comma into a full stop — which a re-anchor
+    pass did on the last proof, shipping "your buddy. here know'd" — did the
+    opposite of what the note said, and left a sentence broken mid-line. So when
+    the note is purely a removal of a named mark, and the run the edit changes is
+    exactly that mark swapped for a single other mark, the swap is turned back
+    into the deletion the reviewer asked for. A pair that already deletes the
+    mark, or changes more than the one mark, is left alone."""
+    head = _note_head(instruction).lower()
+    m = re.fullmatch(r"(?:remove|delete|drop|omit|take out)\s+(?:the\s+)?"
+                     r"([a-z][a-z ]*?)", head)
+    if not m:
+        return find, replace
+    name = m.group(1).strip()
+    mark = _NAMED_MARK.get(name) or _NAMED_MARK.get(name.rstrip("s"))
+    if mark is None:
+        return find, replace
+    pre, suf = _core(find, replace)
+    old = find[pre:len(find) - suf]
+    new = replace[pre:len(replace) - suf]
+    if old != mark or not new:
+        return find, replace               # already a deletion, or a different run
+    if len(new) != 1 or new not in _PUNCT or new == mark:
+        return find, replace               # not a plain mark-for-mark substitution
+    return find, find[:pre] + find[len(find) - suf:]
+
+
+def restore_literal_case(find: str, replace: str, instruction: str = ""
+                         ) -> tuple[str, str]:
+    """A bare-literal note whose reviewer-written case the edit dropped, restored.
+
+    A copy editor who writes "Fourth" beside "4th" has written the case they want
+    — it is the holiday, not the ordinal — and applying it as "fourth" corrects
+    the numeral and loses the capital in the same stroke. When the note is a plain
+    literal (no instruction verb), and the replacement is that literal in a
+    different case and nothing more, the reviewer's case is restored."""
+    note = _note_head(instruction)
+    if not note or _INSTRUCTION_VERB.search(note):
+        return find, replace
+    if not 1 <= len(note.split()) <= 3 or not re.fullmatch(r"[\w’'\- ]+", note):
+        return find, replace
+    if note == replace or note.casefold() != replace.casefold():
+        return find, replace               # already the reviewer's case, or not it
+    return find, note
+
+
+def keep_hyphen_qualifier(find: str, replace: str, instruction: str = ""
+                          ) -> tuple[str, str]:
+    """A bare spell-out that dropped a hyphen-attached qualifier the note never
+    named, restored.
+
+    "nineties" marked on "mid-90s" spells out the "90s"; the "mid-" is a separate
+    morpheme the reviewer did not touch, and dropping it broadens the date from
+    the middle of the decade to the whole of it. The same reviewer's same note on
+    "late-90s" was applied as "late-nineties", so the convention is not in doubt.
+    When the note is a plain literal equal to the whole replacement, the find is a
+    known qualifier hyphenated to a tail, and neither the note nor the replacement
+    carries that qualifier, it is put back."""
+    note = _note_head(instruction)
+    if not note or _INSTRUCTION_VERB.search(note):
+        return find, replace
+    if "-" not in find or "-" in replace or note.casefold() != replace.casefold():
+        return find, replace
+    prefix = find.partition("-")[0]
+    if not _QUALIFIER.fullmatch(prefix):
+        return find, replace
+    if prefix.casefold() in note.casefold() \
+            or replace.casefold().startswith(prefix.casefold()):
+        return find, replace               # the note named it, or it is already kept
+    return find, f"{prefix}-{replace}"
+
+
+def repair_from_note(find: str, replace: str, instruction: str = ""
+                     ) -> tuple[str, str]:
+    """The three note-reading repairs, composed. Returns the pair unchanged when
+    none applies."""
+    find, replace = enforce_removal(find, replace, instruction)
+    find, replace = restore_literal_case(find, replace, instruction)
+    return keep_hyphen_qualifier(find, replace, instruction)

@@ -598,3 +598,37 @@ def test_a_note_that_asks_for_nothing_is_not_a_change_request():
     assert not asks_for_a_change("already fine")
     assert not asks_for_a_change("stet")
     assert not asks_for_a_change("Leave as set — the repetition is deliberate")
+
+
+# --- "replace period with comma" on a line of dialogue ------------------------
+#
+# The mark runs a quoted line into its attribution — "…again." I said → "…again,"
+# I said. The right period is the one before the closing quote, even when the line
+# holds other sentence periods; picking an interior one splices two clauses and
+# leaves the tag period the note was written for standing.
+
+def test_replace_period_with_comma_finds_the_dialogue_tag_period():
+    got = r("Replace period with comma",
+            "We still have regionals. I don’t want this to happen again.” I")
+    assert got is not None
+    # It landed on the tag period (after "again", before the closing quote), not
+    # the interior one after "regionals": the change is exactly that period → comma.
+    assert "again" in got.find and got.find.endswith(".")
+    assert "regionals" not in got.find
+    assert got.replace == got.find[:-1] + ","
+
+
+def test_a_dialogue_period_swap_keeps_the_interior_period():
+    """The interior sentence period is not the one the mark meant, so it is left
+    exactly as it was — no comma splice."""
+    got = r("Replace period with comma",
+            "Producers know their stuff.” I said as we passed the road")
+    assert got is not None and got.find.endswith(".") and "stuff" in got.find
+
+
+def test_two_dialogue_tag_periods_decline_to_the_model():
+    """When the tell is not unique the rule does not guess — it declines and the
+    model reads it with the fuller context."""
+    got = r("Replace period with comma",
+            "“Done.” She left.” I said")   # contrived: two closing-quote periods
+    assert got is None

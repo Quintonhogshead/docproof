@@ -51,8 +51,8 @@ from ..models import Usage
 from ..providers import Provider, strict_json_schema
 from .apply import apply_to_stories
 from .idml import Story
-from .model import (AMBIGUOUS, DESIGN, Edit, JUDGMENT, MECHANICAL, NOT_FOUND,
-                    OVERLAPS)
+from .model import (AMBIGUOUS, DESIGN, Edit, FORMAT_ITALIC, FORMAT_ROMAN,
+                    JUDGMENT, MECHANICAL, NOT_FOUND, OVERLAPS)
 
 log = logging.getLogger("docproof.corrections.secondlook")
 
@@ -74,6 +74,11 @@ class _Choice(BaseModel):
     replace: str = ""
     context: str = ""
     note: str = ""
+    # "italic" or "roman" when the settled note also asks how the text is SET, not
+    # only what it says — "remove the quotes and italicize the thought". The text
+    # change (if any) rides in find/replace as usual; this rides beside it, and
+    # becomes a companion format edit on the settled words.
+    format: str = ""
 
 
 class _Choices(BaseModel):
@@ -118,8 +123,17 @@ them — never a bare punctuation mark; quote a few words around it.
 em dash —, the ellipsis …).
 - context: a longer verbatim run around the find (the sentence or line), \
 whenever the find could appear more than once on the page.
+- format: set this to "italic" or "roman" WHEN THE NOTE ALSO ASKS HOW THE TEXT \
+IS SET, not only what it says — "remove the single quotes and italicize the \
+thought" (italic), "a song title, set in quotes not italics" (roman). The text \
+change still goes in find/replace (the quotes removed, or added); format is the \
+styling that goes with it, applied to the words as they read AFTER that change. \
+When a note is only about styling and changes no words, set find and replace to \
+the same verbatim run — the words to style — and set format. Leave format "" for \
+an ordinary correction.
 - note: a short clause naming the call you made ("chose the em dash", "the tag \
-says it is spoken, so double quotes").
+says it is spoken, so double quotes", "removed the quotes and set the thought \
+italic").
 
 Return one entry per item id, decision "settled" or "needs_human" — never \
 invent an item and never drop one."""
@@ -270,20 +284,37 @@ def is_query(e: Edit) -> bool:
             and bool((e.instruction or "").strip()))
 
 
-def _settled_edit(original: Edit, choice: dict) -> Edit | None:
-    """The concrete edit one settled query makes, or None when the answer does
-    not survive the guards — too short a find to anchor, or a change that
-    changes nothing. The reviewer's note is kept verbatim and the model's call
-    appended after it, so the change log shows who decided what."""
+def _settled_edits(original: Edit, choice: dict) -> list[Edit]:
+    """The concrete edit(s) one settled query makes — a text change, a companion
+    format edit when the note also restyles, or both. Empty when the answer does
+    not survive the guards (too short a find to anchor, or nothing to do at all).
+
+    The reviewer's note is kept verbatim and the model's call appended after it,
+    so the change log shows who decided what. A compound note ("remove the quotes
+    and italicize the thought") becomes two edits that both cite the query's
+    comment, so the ledger still reconciles: the text change first, then the
+    format edit on the words as they will read once it has run."""
     find = (choice.get("find") or "").strip("\n")
     rep = choice.get("replace") or ""
-    if len(find.strip()) < MIN_FIND or rep == find:
-        return None
-    return replace(original, find=find, replace=rep,
-                   context=(choice.get("context") or "").strip("\n"),
-                   kind=MECHANICAL,
-                   instruction=_annotated(original.instruction, "settled",
-                                          choice.get("note") or ""))
+    context = (choice.get("context") or "").strip("\n")
+    fmt = (choice.get("format") or "").strip()
+    note = _annotated(original.instruction, "settled", choice.get("note") or "")
+    made: list[Edit] = []
+    if len(find.strip()) >= MIN_FIND and rep != find:
+        made.append(replace(original, find=find, replace=rep, context=context,
+                            kind=MECHANICAL, instruction=note))
+    if fmt in (FORMAT_ITALIC, FORMAT_ROMAN):
+        # The words to style are the text as it will read after any change above
+        # — the quotes gone, or added — so the format edit lands on the corrected
+        # run. It carries the query's comment as its source (so the mark is still
+        # accounted for) under a distinct id, and applies after the text edit
+        # because it is appended to the list.
+        styled = (rep if len(rep.strip()) >= MIN_FIND else find).strip("\n")
+        if len(styled.strip()) >= MIN_FIND:
+            made.append(replace(original, id=f"{original.id}-fmt",
+                                find=styled, replace=styled, context=context,
+                                kind=MECHANICAL, format=fmt, instruction=note))
+    return made
 
 
 def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
@@ -308,6 +339,7 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
         return out, 0
     pages = book_pages or {}
     settled = 0
+    extras: list[Edit] = []            # companion format edits, appended at the end
     for i in range(0, len(candidates), BATCH_SIZE):
         batch = candidates[i:i + BATCH_SIZE]
         if progress:
@@ -327,10 +359,15 @@ def settle_queries(edits: Sequence[Edit], provider: Provider, *, model: str,
         if choices is None:
             continue
         for cid, c in _settled_only(choices, {e.id for e in batch}):
-            made = _settled_edit(out[at[cid]], c)
-            if made is not None:
-                out[at[cid]] = made
+            made = _settled_edits(out[at[cid]], c)
+            if made:
+                # The first edit takes the query's slot in place; a companion
+                # format edit (if any) is appended after every text edit, so it
+                # lands on the words as the text change leaves them.
+                out[at[cid]] = made[0]
+                extras.extend(made[1:])
                 settled += 1
+    out.extend(extras)
     if progress:
         progress(len(candidates), len(candidates))
     if settled:

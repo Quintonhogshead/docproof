@@ -115,10 +115,14 @@ def test_the_corrected_file_and_report_are_downloadable(client):
 
 
 def test_the_corrections_report_reads_back_for_the_screen(client):
+    # Gates off, so this exercises the free, deterministic path the assertions
+    # below describe; the model passes are on by default and have their own tests.
     job = run_corrections(
         client, upload(client, "layout.idml")["id"],
         [{"find": "Their were", "replace": "There were"},
-         {"find": "nowhere in the book", "replace": "x"}])
+         {"find": "nowhere in the book", "replace": "x"}],
+        corrections_sanity=False, corrections_second_look=False,
+        corrections_escalate=False)
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
     assert report["mode"] == "apply"
     assert report["deterministic"] is True
@@ -213,9 +217,13 @@ def test_the_run_records_the_step_it_is_on(client, monkeypatch):
         return real(job_id, **fields)
 
     monkeypatch.setattr(store, "update", spy)
+    # Gates off: the deterministic path reports exactly these steps. With the model
+    # passes on it reports theirs too, which their own tests cover.
     job = run_corrections(client, upload(client, "layout.idml")["id"],
                           json.dumps([{"find": "Their were",
-                                       "replace": "There were"}]))
+                                       "replace": "There were"}]),
+                          corrections_sanity=False, corrections_second_look=False,
+                          corrections_escalate=False)
     assert job["state"] == "done"
     assert ["reading", "applying", "verifying", "writing"] == \
         [s for s in seen if s]

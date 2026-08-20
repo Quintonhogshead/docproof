@@ -34,8 +34,9 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .instructions import (asks_for_a_change, fill_edit_occurrences,
-                           house_typography, widen_edits_to_marks)
+from .instructions import (asks_for_a_change, enforce_note_fidelity,
+                           fill_edit_occurrences, house_typography,
+                           widen_edits_to_marks)
 from .pagemap import build_page_map, page_book_text, paragraph_lookup
 from .parse import ParseResult, parse_edits
 from .report import write_report
@@ -497,6 +498,14 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         edits, resolved, advised = escalate_queries(
             edits, provider, model=model, usage=usage, stories=stories,
             scope=scope, progress=ticker("escalate"))
+
+    # One more pass of the note-reading repairs over the finished list, so a slip
+    # a model pass introduced is caught before apply — the extraction repair only
+    # saw the model's first draft, and a re-anchored "Remove comma" that came back
+    # as a comma-to-period swap is exactly the kind of thing that reaches here
+    # unrepaired. Free and deterministic; declines everything that is not its
+    # exact shape.
+    edits = enforce_note_fidelity(edits)
 
     # The fidelity gate's holds, plus the sanity gate's when it ran. Both name an
     # edit id and a reason, and both mean the same thing to apply: never write this

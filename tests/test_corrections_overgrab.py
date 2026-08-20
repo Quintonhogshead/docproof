@@ -381,3 +381,74 @@ def test_a_widened_find_the_book_does_not_carry_is_not_adopted():
     marks = [_Mark(id="p1-1", anchor="is hop- ing", instruction="hoped")]
     book = {1: "he is hoping I will move on"}
     assert widen_edits_to_marks(edits, marks, book_pages=book)[0].find == "hoping"
+
+
+# --- pulling an edit back to the plain sense of its note ----------------------
+#
+# Three more repairs the fourth QA of Shams Book 7 turned up, each a mismatch
+# between what the reviewer wrote and what the edit carried.
+
+from docproof.corrections.overgrab import (  # noqa: E402
+    enforce_removal, keep_hyphen_qualifier, repair_from_note,
+    restore_literal_case)
+
+
+def test_a_remove_that_substitutes_is_pulled_back_to_a_deletion():
+    """"Remove comma" came back from the re-anchor pass as a comma-to-period swap
+    and shipped "your buddy. here know'd" — a full stop dropped mid-sentence. The
+    removal is restored."""
+    note = ('Remove comma — second look: re-anchored: re-anchored the comma '
+            'after "your buddy" within the marked sentence · Remove comma')
+    assert enforce_removal("your buddy,", "your buddy.", note) == \
+        ("your buddy,", "your buddy")
+
+
+def test_a_correct_removal_is_left_alone():
+    """The paired mark that really deleted its comma is untouched."""
+    assert enforce_removal("here, know’d", "here know’d",
+                           "Remove comma") == ("here, know’d", "here know’d")
+
+
+def test_a_removal_that_changes_more_than_the_mark_is_left_alone():
+    """Only a plain mark-for-mark swap is repaired; a real rewrite is not."""
+    assert enforce_removal("the, big", "the big cat",
+                           "Remove comma") == ("the, big", "the big cat")
+
+
+def test_a_written_out_literals_case_is_restored():
+    """"Fourth" marked, "fourth" applied — the holiday lost its capital. The
+    reviewer's own case is put back."""
+    assert restore_literal_case("4th", "fourth", "Fourth") == ("4th", "Fourth")
+
+
+def test_a_literal_already_in_the_reviewers_case_is_left_alone():
+    assert restore_literal_case("4th", "Fourth", "Fourth") == ("4th", "Fourth")
+
+
+def test_an_instruction_note_is_not_treated_as_a_literal():
+    """A note that is an instruction, not a written-out correction, is not a case
+    to restore."""
+    assert restore_literal_case("quickly", "swiftly",
+                                "replace with swiftly") == ("quickly", "swiftly")
+
+
+def test_a_dropped_hyphen_qualifier_is_restored():
+    """"nineties" on "mid-90s" dropped the "mid-" and broadened the date; the same
+    note on "late-90s" kept it. The qualifier is put back."""
+    assert keep_hyphen_qualifier("mid-90s", "nineties", "nineties") == \
+        ("mid-90s", "mid-nineties")
+
+
+def test_a_kept_qualifier_and_a_closed_compound_are_left_alone():
+    # already kept
+    assert keep_hyphen_qualifier("late-90s", "late-nineties", "nineties") == \
+        ("late-90s", "late-nineties")
+    # not a date qualifier — a closed compound is never rebuilt
+    assert keep_hyphen_qualifier("left-footed", "right-footed", "right-footed") \
+        == ("left-footed", "right-footed")
+
+
+def test_repair_from_note_composes_the_three():
+    assert repair_from_note("4th", "fourth", "Fourth") == ("4th", "Fourth")
+    assert repair_from_note("your buddy,", "your buddy.", "Remove comma") == \
+        ("your buddy,", "your buddy")

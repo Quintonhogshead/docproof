@@ -976,9 +976,9 @@ def test_a_flagged_edits_comment_is_unresolved_not_applied(tmp_path):
 
 
 def test_the_sanity_gate_withholds_a_doubtful_edit(tmp_path):
-    """With the opt-in gate on, an edit the model judges an over-grab is held back
-    as WITHHELD (a human owns it) and never written — the deterministic default,
-    with no gate, still applies it."""
+    """With the opt-in gate on, an edit the model judges grammatically broken is
+    held back as WITHHELD (a human owns it) and never written — the deterministic
+    default, with no gate, still applies it."""
     from docproof.providers import NormalizedUsage, ProviderResult
     from .fakes import FakeProvider
 
@@ -987,9 +987,9 @@ def test_the_sanity_gate_withholds_a_doubtful_edit(tmp_path):
     free = apply_corrections(LAYOUT, edits, tmp_path / "free")
     assert free.applied == 1
 
-    # Gate on, and the model calls this one an over-grab: it is withheld.
+    # Gate on, and the model calls this one a broken sentence: it is withheld.
     provider = FakeProvider([ProviderResult(
-        parsed={"verdicts": [{"id": "c1", "verdict": "over_grab",
+        parsed={"verdicts": [{"id": "c1", "verdict": "broken",
                               "reason": "drops a word"}]},
         usage=NormalizedUsage(input_tokens=50, output_tokens=10))])
     gated = apply_corrections(LAYOUT, edits, tmp_path / "gated",
@@ -1075,6 +1075,70 @@ def test_the_second_look_settles_a_delegated_choice(tmp_path):
     assert "second look: settled: chose the period" in out.edit.instruction
     assert got.comments[0].disposition == DISP_APPLIED
     assert got.usage is not None and got.usage.input_tokens == 80
+
+
+def test_a_duplicated_correction_is_a_no_op_not_a_false_apply(tmp_path):
+    """Two marks that resolve to the same change on one span — a reviewer's second
+    mark on a line the first already corrected. The first applies; the second finds
+    its words already read the way it would write them, and is a no-op with a
+    reason, not a second "applied exactly". This is what let "He paused." be logged
+    as done while the comma it named went untouched."""
+    edits = [
+        {"find": "door, the", "replace": "door. The", "source": "p1-1"},
+        {"find": "door, the", "replace": "door. The", "source": "p1-2"},
+    ]
+    got = apply_corrections(LAYOUT, edits, tmp_path)
+    assert got.applied == 1
+    statuses = sorted(o.status for o in got.apply.outcomes)
+    assert statuses == ["applied", "no_change"]
+    dup = next(o for o in got.apply.outcomes if o.status == "no_change")
+    assert "already made this change" in dup.detail
+    assert story_text(got.corrected_idml)[2] == \
+        "She opened the door. The room was empty."
+
+
+def test_the_second_look_settles_a_compound_format_note():
+    """"Recommend removing the single quotes and italicizing the thought" is a
+    compound: a text change (quotes off) and a styling (italic). The settle pass
+    emits both — a text edit and a companion format edit on the corrected words,
+    citing the same comment — so the italics are actually applied, not just
+    reported. Before this the quotes came off and the thought was left roman."""
+    from docproof.corrections.model import Edit, FORMAT_ITALIC, JUDGMENT
+    from docproof.corrections.secondlook import _settled_edits
+
+    original = Edit(id="c1", find="‘What the fuck was that?’",
+                    replace="‘What the fuck was that?’", kind=JUDGMENT,
+                    source="p25-1", page=25,
+                    instruction="Recommend removing single quotes & italicizing "
+                                "thought")
+    choice = {"id": "c1", "decision": "settled",
+              "find": "‘What the fuck was that?’",
+              "replace": "What the fuck was that?",
+              "format": "italic", "note": "removed the quotes, set it italic"}
+    made = _settled_edits(original, choice)
+    assert len(made) == 2
+    text, fmt = made
+    # The text edit removes the quotes and is a real mechanical change.
+    assert text.find == "‘What the fuck was that?’"
+    assert text.replace == "What the fuck was that?" and not text.is_format
+    # The companion styles the corrected (unquoted) words, cites the same comment
+    # under a distinct id, and carries no text change of its own.
+    assert fmt.is_format and fmt.format == FORMAT_ITALIC
+    assert fmt.find == "What the fuck was that?" == fmt.replace
+    assert fmt.id == "c1-fmt" and fmt.source == "p25-1"
+
+
+def test_a_settled_note_with_no_format_makes_one_edit():
+    """The companion is only for a note that also restyles; an ordinary settled
+    query still makes exactly one edit."""
+    from docproof.corrections.model import Edit, JUDGMENT
+    from docproof.corrections.secondlook import _settled_edits
+
+    original = Edit(id="c1", find="door, the", replace="door, the",
+                    kind=JUDGMENT, instruction="Replace comma with period")
+    made = _settled_edits(original, {"id": "c1", "decision": "settled",
+                                     "find": "door, the", "replace": "door. The"})
+    assert len(made) == 1 and not made[0].is_format
 
 
 def test_the_second_look_leaves_a_true_question_flagged(tmp_path):

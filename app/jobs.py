@@ -346,19 +346,19 @@ class Job:
     # without it, a correction to a comma has every comma in the book to choose
     # from and can only be flagged. Empty for a typed/pasted list.
     corrections_pages: str = ""
-    # Corrections only: run the opt-in model sanity gate before applying, holding
-    # a doubtful edit back for a human. Off keeps the run deterministic and free.
-    corrections_sanity: bool = False
-    # Corrections only: run the opt-in second look before applying — a stronger
-    # model re-reads the notes the extractor left as queries (a reviewer offering
-    # alternatives, a conditional the page settles) and commits the delegated
-    # ones to concrete edits. Off keeps every query a human's.
-    corrections_second_look: bool = False
+    # Corrections only: run the model sanity gate before applying. It is a grammar
+    # safety net over the author's approved marks — it holds an edit back only when,
+    # applied as written, it would leave a broken sentence, and never second-guesses
+    # the editorial call. On by default, with the other passes.
+    corrections_sanity: bool = True
+    # Corrections only: run the second look before applying — a stronger model
+    # re-reads the notes the extractor left as queries (a reviewer offering
+    # alternatives, a conditional the page settles) and commits the delegated ones
+    # to concrete edits. On by default.
+    corrections_second_look: bool = True
     # Corrections only: run the last tier — a frontier model given the whole book
-    # for the queries the second look declined. Its own flag now (resolved from the
-    # request, which defaults it to follow the second look), so its frontier spend
-    # is asked for or refused on its own rather than riding the cheaper pass.
-    corrections_escalate: bool = False
+    # for the queries the second look declined. On by default with the second look.
+    corrections_escalate: bool = True
     # Prep, book output only: the operator's per-job answers for the sketch —
     # subject matter (picks the title-page face), running-head title and
     # author. Empty means "use what the detector reads off the opening pages",

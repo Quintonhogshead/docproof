@@ -115,6 +115,14 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             # nowhere. Identified by the `+…-para` id `_remove_emptied` gives them.
             "para_removals": sum(1 for o in apply.outcomes
                                  if o.edit.id.endswith("-para")),
+            # The other synthetic outcome: a settled compound note ("remove the
+            # quotes and italicize it") that the second look split into a text edit
+            # and a companion format edit, the latter under a `…-fmt` id. It too is
+            # an extra outcome with no parsed id behind it, so the equation counts
+            # it. The reviewer comment it came from is accounted for on the text
+            # edit; this is only the styling that rode along.
+            "fmt_companions": sum(1 for o in apply.outcomes
+                                  if o.edit.id.endswith("-fmt")),
             "stories_changed": list(apply.stories_changed),
         }),
         "verify": {
@@ -397,14 +405,20 @@ def _markdown(d: dict) -> str:
     if ap is not None:
         merged_away = ap.get("merged_away", 0)
         para_removals = ap.get("para_removals", 0)
+        fmt_companions = ap.get("fmt_companions", 0)
         parsed_n = d["parse"]["edits"]
         pieces = [f"{ap['applied']} applied", f"{len(ap['flagged'])} for a human",
                   f"{len(ap['no_op'])} no-op"]
         if merged_away:
             pieces.append(f"{merged_away} merged into others")
-        left = f"{parsed_n} parsed" + (f" + {para_removals} emptied-line "
-                                       f"removal(s)" if para_removals else "")
-        balances = (parsed_n + para_removals
+        added = para_removals + fmt_companions
+        extra = []
+        if para_removals:
+            extra.append(f"{para_removals} emptied-line removal(s)")
+        if fmt_companions:
+            extra.append(f"{fmt_companions} companion format edit(s)")
+        left = f"{parsed_n} parsed" + (" + " + " + ".join(extra) if extra else "")
+        balances = (parsed_n + added
                     == ap["applied"] + len(ap["flagged"]) + len(ap["no_op"])
                     + merged_away)
         note = "" if balances else " — counts do not reconcile"
