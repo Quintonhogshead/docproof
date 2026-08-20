@@ -251,3 +251,40 @@ def test_a_degraded_pass_is_named_everywhere(tmp_path):
     assert cov["degraded"] == [{"pass": "continuity read",
                                 "reason": "provider error 401"}]
     assert out.warnings == ["continuity read: provider error 401"]
+
+
+def test_shadow_reporting_failure_is_named_without_blocking_review(
+        tmp_path, monkeypatch):
+    """Experimental reporting stays fail-open, but never fails silently."""
+    cfg, prepared = _prepared(tmp_path,
+                              ["A paragraph with teh typo to review here."])
+    cfg.glossary.enabled = False
+    coverage = CoverageLedger()
+    findings, usage = run_sync(cfg, prepared, _AlwaysAnswer(),
+                               coverage=coverage)
+
+    def fail_reporting(*_args, **_kwargs):
+        raise RuntimeError("synthetic shadow failure")
+
+    assert prepared.examination is not None
+    monkeypatch.setattr(prepared.examination, "observe_findings",
+                        fail_reporting)
+    out = finish(prepared, findings, usage, cfg, out_dir=tmp_path / "out",
+                 source_path=tmp_path / "m.docx", coverage=coverage)
+
+    assert out.reviewed_path.is_file()
+    assert len(out.warnings) == 1
+    assert "Examination graph reporting failed" in out.warnings[0]
+    assert "normal review unchanged" in out.warnings[0]
+    import json as jsonlib
+    examination = jsonlib.loads(out.findings_json.read_text()) \
+        ["examination_graph"]
+    assert examination["failures"] == [{
+        "stage": "reporting",
+        "type": "RuntimeError",
+        "message": "synthetic shadow failure",
+        "review_unchanged": True,
+    }]
+    summary = out.summary_md.read_text()
+    assert "Examination graph reporting failed" in summary
+    assert "normal review was unchanged" in summary

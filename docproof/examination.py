@@ -40,6 +40,7 @@ class ShadowExamination:
     judgment_execution: dict = field(default_factory=dict)
     judgment_usage: dict = field(default_factory=dict)
     legacy_observations: dict[str, list[dict]] = field(default_factory=dict)
+    failures: list[dict] = field(default_factory=list)
 
     @classmethod
     def prepare(cls, cfg, doc: DocumentModel, *, paragraphs,
@@ -93,6 +94,7 @@ class ShadowExamination:
     def observe_findings(self, findings: list[Finding], doc: DocumentModel,
                          *, applied_ids=()) -> None:
         applied = set(applied_ids)
+        obligation_findings: dict[str, list[Finding]] = {}
         for finding in findings:
             site = site_from_finding(finding, doc)
             if site is None:
@@ -106,7 +108,9 @@ class ShadowExamination:
             obligation_id = self.model_obligations.get(
                 (finding.para_id, finding.error_type))
             if obligation_id and obligation_id != site.site_id:
-                self._observe_target(obligation_id, finding, applied)
+                obligation_findings.setdefault(obligation_id, []).append(finding)
+        for obligation_id, matched in obligation_findings.items():
+            self._observe_obligation(obligation_id, matched, applied)
         self.ledger.assert_accounted()
 
     def write(self, out_dir: Path, cfg, *, source: str) -> tuple[dict, Path, Path]:
@@ -114,6 +118,7 @@ class ShadowExamination:
         report = build_coverage_report(
             self.ledger, self.graph, mode=self.mode,
             omitted=dict(self.omitted), source=source, judgment=judgment)
+        report["failures"] = list(self.failures)
         ledger_path = out_dir / cfg.ledger_filename
         report_path = out_dir / cfg.report_filename
         if cfg.write_ledger:
@@ -133,6 +138,37 @@ class ShadowExamination:
                 write_coverage_json(out_dir / cfg.evaluation_key_filename, {
                     "schema_version": 1, "rows": key})
         return report, ledger_path, report_path
+
+    def record_failure(self, stage: str, error: Exception) -> dict:
+        failure = {
+            "stage": stage,
+            "type": type(error).__name__,
+            "message": str(error),
+            "review_unchanged": True,
+        }
+        self.failures.append(failure)
+        return failure
+
+    def failure_warnings(self) -> list[str]:
+        return [
+            f"Examination graph {failure['stage']} failed "
+            f"({failure['type']}: {failure['message']}); normal review unchanged"
+            for failure in self.failures
+        ]
+
+    def diagnostic_report(self, cfg, *, source: str) -> dict:
+        """Machine-readable fallback when the full artifact write fails."""
+        return {
+            "schema_version": 1,
+            "mode": self.mode,
+            "source": source,
+            "failures": list(self.failures),
+            "judgment": self.judgment_report(cfg.judgment),
+            "scope": {
+                "shadow_only": True,
+                "may_create_edits": False,
+            },
+        }
 
     def _observe_target(self, site_id: str, finding: Finding,
                         applied: set[str]) -> None:
@@ -155,6 +191,48 @@ class ShadowExamination:
             return
         self._confirm_site(site_id, finding)
         self._record_outcome(site_id, finding, applied)
+
+    def _observe_obligation(self, site_id: str, findings: list[Finding],
+                            applied: set[str]) -> None:
+        """Project many precise outcomes onto one broad category obligation.
+
+        A paragraph/category obligation is intentionally coarser than a
+        finding, so several findings can match it. Applying their transitions
+        one at a time makes the result order-dependent and can try to reopen a
+        terminal or uncertain ledger state. The precise sites already preserve
+        every individual outcome; this row records each as observation evidence
+        and takes the strongest aggregate outcome exactly once.
+        """
+        if site_id in self.primary_judgment_verdicts:
+            for finding in findings:
+                self._observe_target(site_id, finding, applied)
+            return
+
+        for finding in findings:
+            self.ledger.record_observation(
+                site_id, actor="production reviewer",
+                reason="production finding matched this broad obligation",
+                evidence={
+                    "finding_id": finding.finding_id,
+                    "status": finding.status,
+                    "confidence": finding.confidence,
+                    "applied": finding.finding_id in applied,
+                })
+
+        def strength(finding: Finding) -> int:
+            if finding.status == "validated":
+                return 5 if finding.finding_id in applied else 4
+            if finding.status == "query":
+                return 3
+            if finding.status == "skipped_low_confidence":
+                return 2
+            if finding.status.startswith("rejected"):
+                return 1
+            return 0
+
+        representative = max(findings, key=strength)
+        self._confirm_site(site_id, representative)
+        self._record_outcome(site_id, representative, applied)
 
     def comparison(self) -> dict:
         counts = Counter()

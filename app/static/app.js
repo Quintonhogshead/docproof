@@ -3881,16 +3881,16 @@ function renderJobs(jobs) {
         where.textContent = job.format.where_to_look;
         li.append(where);
       }
-      // A "done" run that quietly skipped a paid pass (a dead or unkeyed
-      // judge/continuity/glossary model) must not read as a clean one: the
-      // findings are absent, not empty. summary.md has the full accounting.
+      // A "done" run with a fail-open component must not read as clean: the
+      // normal manuscript may be sound while an optional pass or experimental
+      // artifact is missing. summary.md has the full accounting.
       if (Array.isArray(job.warnings) && job.warnings.length) {
         const warn = document.createElement('div');
         warn.className = 'job-warning';
-        const lead = job.warnings.length === 1 ? '1 pass did not run'
-          : `${job.warnings.length} passes did not run`;
+        const lead = job.warnings.length === 1 ? '1 review warning'
+          : `${job.warnings.length} review warnings`;
         warn.textContent = `⚠ ${lead} — ${job.warnings.join('; ')}. `
-          + 'Check the model’s API key; see summary.md.';
+          + 'See summary.md.';
         li.append(warn);
       }
     }

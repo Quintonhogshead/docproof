@@ -169,7 +169,8 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
 
 
 def run_health(coverage=None, audit=None, smoothing=None,
-               chapter_continuity=None, judges=None) -> list[str]:
+               chapter_continuity=None, judges=None,
+               examination=None) -> list[str]:
     """Every way this run came up short, as plain one-line sentences, gathered
     into one leading list so a degraded run announces itself at the top of the
     report instead of hiding the shortfall in a section a reader has to know to
@@ -222,6 +223,12 @@ def run_health(coverage=None, audit=None, smoothing=None,
                 f"{report.spec.label}: {report.unread} change(s) were applied "
                 f"WITHOUT being read — the judge refused, timed out, or replied "
                 f"unusably.")
+    for failure in (examination or {}).get("failures", []):
+        lines.append(
+            f"Examination graph {failure.get('stage', 'shadow')} failed "
+            f"({failure.get('type', 'error')}: "
+            f"{failure.get('message', 'no detail')}); shadow artifacts may be "
+            f"incomplete, but the normal review was unchanged.")
     return lines
 
 
@@ -354,7 +361,8 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     # to open. This gathers the whole-pass failures (coverage.degraded) with the
     # finer shortfalls (gaps, unruled, a failed audit, an incomplete smoothing or
     # chapter read, an unread judge gate) into one leading list.
-    health = run_health(coverage, audit, smoothing, chapter_continuity, judges)
+    health = run_health(coverage, audit, smoothing, chapter_continuity, judges,
+                        examination)
     if health:
         L.append("## ⚠️ Run health — this review is degraded\n")
         L.append("One or more passes did not run in full, so parts of the "
@@ -371,6 +379,21 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
     L += _settings_section(cfg, batch)
 
     if examination is not None:
+        failures = examination.get("failures") or []
+        if failures:
+            L.append("## Examination graph — shadow failure\n")
+            L.append(
+                "The experimental examination lane did not complete cleanly. "
+                "Its artifacts may be incomplete or absent; the normal review "
+                "was unchanged and its manuscript output remains available.\n")
+            for failure in failures:
+                L.append(
+                    f"- **Examination graph {failure.get('stage', 'shadow')} "
+                    f"failed** — `{failure.get('type', 'error')}`: "
+                    f"{failure.get('message', 'no detail')}")
+            L.append("")
+
+    if examination is not None and "accounting" in examination:
         accounting = examination["accounting"]
         L.append("## Examination graph — shadow mode\n")
         L.append(

@@ -1,0 +1,26 @@
+.git/
+.github/
+.claude/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Local build and review artifacts are never runtime inputs.
+build/
+dist/
+output/
+scratch/
+tests/
+handoff.json
+
+# Local credentials and editor/OS noise.
+.env
+.env.*
+secrets.db
+hubspot.config.yml
+.DS_Store

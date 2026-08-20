@@ -1061,7 +1061,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 add_usage(usage, dataclasses.asdict(shadow_usage))
             except JudgmentCancelled:
                 raise JobCancelled()
-            except Exception:  # shadow instrumentation never blocks a review
+            except Exception as exc:  # shadow lane never blocks a review
+                prepared.examination.record_failure("judgment", exc)
                 log.exception("Examination judgment failed outside a packet; "
                               "the production review is unchanged.")
 
@@ -2039,7 +2040,10 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
             (examination_report, examination_ledger_path,
              examination_report_path) = prepared.examination.write(
                  out, cfg.examination_graph, source=prepared.doc.source_path)
-        except Exception:
+        except Exception as exc:
+            prepared.examination.record_failure("reporting", exc)
+            examination_report = prepared.examination.diagnostic_report(
+                cfg.examination_graph, source=prepared.doc.source_path)
             log.exception("Examination graph shadow reporting failed; the "
                           "reviewed manuscript path is unchanged.")
 
@@ -2095,6 +2099,10 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # as inline Notes and carries the same `queried`/`unplaced` stats the .docx
     # reassembler does, so the count is a count of what is in the file either
     # way.
+    warnings = ([f"{d.label}: {d.reason}" for d in coverage.degraded]
+                if coverage is not None else [])
+    if prepared.examination is not None:
+        warnings += prepared.examination.failure_warnings()
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated),
@@ -2103,6 +2111,4 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                    judge_held=held_count,
                    examination_ledger=examination_ledger_path,
                    examination_report=examination_report_path,
-                   warnings=([f"{d.label}: {d.reason}"
-                              for d in coverage.degraded]
-                             if coverage is not None else []))
+                   warnings=warnings)

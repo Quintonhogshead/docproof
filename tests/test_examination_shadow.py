@@ -100,3 +100,52 @@ def test_shadow_observes_applied_findings_and_writes_separate_artifacts(tmp_path
     assert report["accounting"]["all_sites_have_state"] is True
     assert json.loads((tmp_path / "examination-coverage.json").read_text()) \
         ["accounting"]["generated_sites"] == len(run.ledger)
+
+
+def test_model_obligation_aggregates_multiple_outcomes_without_reopening_state(
+        tmp_path):
+    """One paragraph/category obligation can match more than one finding.
+
+    The Lighthouse production run surfaced this exact ordering: a soft finding
+    moved the shared obligation to ``uncertain``, then a validated finding for a
+    different span tried the illegal ``uncertain -> edit`` transition. Precise
+    sites retain each outcome; the broad obligation records the strongest
+    aggregate outcome once, after every matching finding has been observed.
+    """
+    text = "Teh first word and teh second word."
+    para = ParagraphRef("body-0000", "word/document.xml", "body", text,
+                        "Normal")
+    doc = DocumentModel("book.docx", (para,))
+    cfg = Config(
+        error_types=[["spelling"]], sweeps=[],
+        examination_graph={"enabled": True})
+    run = prepare_shadow(
+        cfg, doc, paragraphs=[para], sweep_findings=[],
+        consistency_findings=[], spell=SpellScan(available=False),
+        adjudicate_candidates=[])
+    assert run is not None
+
+    first = text.index("Teh")
+    second = text.index("teh", first + 1)
+    soft = Finding(
+        "f-soft", "chunk-000", para.para_id, "spelling", text, 1,
+        text.replace("Teh", "The", 1), "Soft candidate.", "low",
+        status="skipped_low_confidence",
+        anchor=Anchor(first, first + 3, "Teh", "The"))
+    applied = Finding(
+        "f-applied", "chunk-000", para.para_id, "spelling", text, 1,
+        text[:second] + "the" + text[second + 3:], "Validated candidate.",
+        "high", status="validated",
+        anchor=Anchor(second, second + 3, "teh", "the"))
+
+    run.observe_findings([soft, applied], doc,
+                         applied_ids=(applied.finding_id,))
+
+    obligation_id = run.model_obligations[(para.para_id, "spelling")]
+    assert run.ledger.state(obligation_id) == LedgerState.APPLIED
+    assert run.ledger.state(site_from_finding(soft, doc).site_id) \
+        == LedgerState.UNCERTAIN
+    assert run.ledger.state(site_from_finding(applied, doc).site_id) \
+        == LedgerState.APPLIED
+    run.write(tmp_path, cfg.examination_graph, source=doc.source_path)
+    assert (tmp_path / "examination-coverage.md").is_file()
