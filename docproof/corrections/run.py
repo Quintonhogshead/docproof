@@ -532,13 +532,24 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
     checks = _checks(apply_report)
+    # The review screen's queue: one item per flag a person still owns, each
+    # with every concrete place its change could land — computed against the
+    # *corrected* file, because that is the file a clicked resolution edits.
+    # A queue that cannot be built must never sink a finished run.
+    queue: list[dict] = []
+    try:
+        from .resolve import build_queue
+        queue = build_queue(read_stories(corrected), apply_report,
+                            dispositions, scope=scope)
+    except Exception:                  # noqa: BLE001 - the report stands without it
+        log.warning("Could not build the resolution queue", exc_info=True)
     report_md, report_json = write_report(
         out, source_path=src_idml, after_path=corrected, parse=parsed,
         apply=apply_report, verify=verify_report, comments=dispositions,
         deterministic=(sanity is None and second_look is None
                        and escalate is None),
         pages=(pages_placed, pages_total), checks=checks,
-        merged_away=merged_away)
+        merged_away=merged_away, queue=queue)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "second look settled %d, re-anchored %d, merged %d; last tier "
              "resolved %d, advised %d; %d/%d page(s) placed; verify %s",

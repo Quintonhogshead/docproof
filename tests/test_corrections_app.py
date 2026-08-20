@@ -512,3 +512,96 @@ def test_a_corrections_job_carries_the_page_texts_into_the_run(client):
     assert job["state"] == "done", job.get("error")
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
     assert report["pages"] == {"placed": 1, "total": 1}
+
+
+# --- resolving flags from the review screen ------------------------------------
+
+def _flagged_job(client):
+    """A finished run with one ambiguous flag ("was" appears twice), and the
+    queue its report left for the review screen."""
+    job = run_corrections(client, upload(client, "layout.idml")["id"],
+                          [{"find": "was", "replace": "is"}],
+                          corrections_sanity=False,
+                          corrections_second_look=False,
+                          corrections_escalate=False)
+    assert job["state"] == "done", job.get("error")
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    return job, report["queue"][0]
+
+
+def test_clicking_an_option_resolves_the_flag_over_http(client):
+    job, item = _flagged_job(client)
+    assert job["flags"] == 1
+    option = next(o for o in item["options"] if "room" in o["before"])
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "option_id": option["id"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["counts"]["flags"] == 0
+    assert body["item"]["resolved"]["kind"] == "option"
+    # The corrected file the download serves carries the change.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room is empty." \
+        in story_text(corrected, "ue0")
+    # The card's counters moved with it.
+    card = client.get(f"/api/jobs/{job['id']}").json()
+    assert card["flags"] == 0 and card["applied"] == 1
+    # And it cannot land twice.
+    again = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                        json={"item_id": item["id"],
+                              "option_id": option["id"]})
+    assert again.status_code == 409
+
+
+def test_a_typed_answer_resolves_the_flag_over_http(client, monkeypatch):
+    job, item = _flagged_job(client)
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "apply", "find": "the room was empty",
+                "replace": "the room stood empty", "context": "",
+                "format": "", "note": "as asked"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"],
+                          "text": "make it 'stood empty'"})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["resolved"]["kind"] == "typed"
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room stood empty." \
+        in story_text(corrected, "ue0")
+
+
+def test_a_declined_answer_reports_the_reason_and_writes_nothing(client,
+                                                                 monkeypatch):
+    job, item = _flagged_job(client)
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "decline", "find": "", "replace": "",
+                "context": "", "format": "", "note": "that is layout work"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "text": "move it up a line"})
+    assert r.status_code == 422
+    assert "layout work" in r.json()["detail"]
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room was empty." \
+        in story_text(corrected, "ue0")
+    # Still resolvable: the flag was not consumed.
+    assert client.get(f"/api/jobs/{job['id']}").json()["flags"] == 1
+
+
+def test_resolve_requires_exactly_one_of_option_and_text(client):
+    job, item = _flagged_job(client)
+    for body in ({"item_id": item["id"]},
+                 {"item_id": item["id"], "option_id": "x", "text": "y"}):
+        r = client.post(f"/api/jobs/{job['id']}/corrections/resolve", json=body)
+        assert r.status_code == 400, body
+
+
+def test_resolving_an_unknown_flag_is_a_404(client):
+    job, _ = _flagged_job(client)
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": "nope", "option_id": "x"})
+    assert r.status_code == 404

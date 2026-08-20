@@ -155,6 +155,42 @@ def due_jobs(store, *, limit: int = PER_TICK, now: datetime | None = None):
     return out
 
 
+def refresh_files(home, job, names, *, get_key=None, opener=None) -> int:
+    """Re-push files whose local contents changed after they were archived — a
+    corrected IDML the review screen just edited, and the report beside it.
+
+    The archive's uploads are otherwise write-once (`_archive_job` skips any
+    name already placed, and would re-adopt the stale orphan on a bare re-run),
+    so a changed file is updated *in place* by its Drive id: same file, same
+    manifest, fresh bytes. A name never archived is left for the ordinary sweep,
+    which will upload the current contents anyway. Best-effort; returns how many
+    were refreshed."""
+    opener = opener or drive._open_url
+    ws = WatchSettings.load(home)
+    if not is_enabled(ws) or not job.results_dir:
+        return 0
+    wanted = [(n, job.drive_files.get(n)) for n in names
+              if job.drive_files.get(n)]
+    if not wanted:
+        return 0
+    token = _token(ws, get_key, opener)
+    if token is None:
+        return 0
+    done = 0
+    for name, file_id in wanted:
+        path = Path(job.results_dir) / name
+        if not path.is_file():
+            continue
+        try:
+            drive.update_media(token, file_id, path, mime_type=_mime(name),
+                               opener=opener)
+            done += 1
+        except drive.DriveError as e:
+            log.warning("Could not refresh %s for %s in the archive: %s",
+                        name, job.filename, e)
+    return done
+
+
 # --- reading back: one file, and the whole list --------------------------------
 
 def fetch_file(home, job, name: str, dest_dir, *, save_as: str | None = None,

@@ -71,6 +71,14 @@ class PageMap:
                 return True
         return False
 
+    def page_of(self, story_id: str, paragraph: int) -> int:
+        """The lowest proof page whose run covers any of that paragraph, or 0
+        when no placed page does. The reverse of `contains`, for labelling a
+        candidate with the page a designer would look for it on."""
+        pages = [pg for (pg, sid, para) in self._ranges
+                 if sid == story_id and para == paragraph]
+        return min(pages) if pages else 0
+
     def span_of(self, page: int) -> list[tuple[str, int, int, int]]:
         """Every (story_id, paragraph, start, end) run this page covers. For
         showing a reviewer, and for handing the extractor the book's own words for
