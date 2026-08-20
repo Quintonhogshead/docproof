@@ -29,7 +29,7 @@ from .apply import all_spans
 from .model import (DESIGN, FORMAT_ITALIC, FORMAT_NO_SWASH, FORMAT_ROMAN,
                     FORMAT_SWASH, JUDGMENT, MECHANICAL, PARA_DELETE,
                     PARA_MERGE_NEXT, PARA_SPLIT_AT)
-from .overgrab import repair_pair
+from .overgrab import repair_from_note, repair_pair
 from .textmatch import normalize
 
 # How many words a marked span may hold and still be treated as naming its target.
@@ -256,6 +256,29 @@ def house_typography(edits):
         if tucked != fixed and _tuck_quotes(e.find) == e.find:
             fixed = tucked
         out.append(e if fixed == e.replace else replace(e, replace=fixed))
+    return out
+
+
+def enforce_note_fidelity(edits):
+    """`edits` with each one pulled back to the plain sense of its note — a
+    "remove" that a pass turned into a substitution, a written-out literal whose
+    case was dropped, a spell-out that lost its qualifier (see
+    `overgrab.repair_from_note`).
+
+    The extraction repair does this to the model's first draft; this is the same
+    repair over the finished list, so a slip a *later* pass introduced is caught
+    too — a re-anchored "Remove comma" that came back as a comma-to-period swap
+    was the one that shipped a broken line last time. Only concrete text edits are
+    touched: a format, paragraph or design edit names no pair to repair, and the
+    guards inside each repair decline anything that is not its exact shape."""
+    out = []
+    for e in edits:
+        if e.is_format or e.is_layout or e.kind == DESIGN or not e.find:
+            out.append(e)
+            continue
+        find, rep = repair_from_note(e.find, e.replace, e.instruction)
+        out.append(e if (find, rep) == (e.find, e.replace)
+                   else replace(e, find=find, replace=rep))
     return out
 
 
@@ -902,12 +925,22 @@ _CLOSED_UP = "—–"
 # reach across the space to find her.
 _QUOTES_THEN = r"[\s\"“”'‘’]*"
 
+# The sentence-ending marks, and the shape of a dialogue tag right after one.
+_TERMINALS = ".!?"
+# A closing double quote, then whitespace, then the start of an attribution — the
+# narrator's "I", another pronoun, or a capitalized name ("Isabella asked", "Jack
+# boomed"). This is what marks the period that runs a line of dialogue into its
+# tag, so "replace period with comma" can find it among a line's other periods.
+_DIALOGUE_TAG_AFTER = re.compile(
+    r'^["”]\s+(?:I\b|[Hh]e\b|[Ss]he\b|[Tt]hey\b|[Ww]e\b|[Yy]ou\b|[Ii]t\b'
+    r'|[A-Z][a-z]+)')
+
 
 def _mark_position(text: str, old: str, new: str, word: str = "", *,
                    strict: bool = False) -> int | None:
     """The offset in `text` of the mark a note means, or None when nothing in the
-    note or the text says which. See `_replace_punctuation` for the three ways it
-    can be settled; `strict` withdraws the weakest of them, the bare count."""
+    note or the text says which. See `_replace_punctuation` for the ways it can be
+    settled; `strict` withdraws the weakest of them, the bare count."""
     at = [i for i, ch in enumerate(text) if ch == old]
     if not at:
         return None
@@ -921,6 +954,17 @@ def _mark_position(text: str, old: str, new: str, word: str = "", *,
         if len(named) == 1:
             return named[0]
         return None
+    if new == "," and old in _TERMINALS:
+        # A terminal mark that ends a line of dialogue and runs it into its
+        # attribution — "…again.” I said". "Replace period with comma" on such a
+        # line means that mark, the one before the closing quote, even when the
+        # line holds other sentence periods; picking one of those instead splices
+        # two clauses and leaves the tag period the note was written for standing.
+        # The tell is the closing double quote and a following tag word, and it is
+        # certain only when exactly one mark on the line carries it.
+        tagged = [i for i in at if _DIALOGUE_TAG_AFTER.match(text[i + 1:])]
+        if len(tagged) == 1:
+            return tagged[0]
     if new == "–" and old == "-":
         # An en dash is the mark between the halves of a range — a score, a span
         # of pages or years. A hyphen joining two words is a different animal

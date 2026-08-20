@@ -635,7 +635,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           </div>
 
           <label class="field checkbox">
-            <input type="checkbox" id="corrections-second-look">
+            <input type="checkbox" id="corrections-second-look" checked>
             <span>Second look at what would be flagged
               <small class="muted">— an optional stronger read works over what
                 would otherwise be flagged. It settles the delegated calls
@@ -649,7 +649,7 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           </label>
 
           <label class="field checkbox">
-            <input type="checkbox" id="corrections-escalate">
+            <input type="checkbox" id="corrections-escalate" checked>
             <span>Last tier: read the hardest queries against the whole book
               <small class="muted">— the queries even the second look declines go
                 up to a frontier model with the <strong>book</strong> behind them
@@ -664,13 +664,15 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
           </label>
 
           <label class="field checkbox">
-            <input type="checkbox" id="corrections-sanity">
-            <span>Sanity-check the edits first
-              <small class="muted">— an optional model pass reads each edit
-                against the line it changes and holds a doubtful one (a dropped
-                word, an anachronism, nonsense) back for a human instead of
-                applying it. Adds a small model cost; off keeps the run
-                free.</small></span>
+            <input type="checkbox" id="corrections-sanity" checked>
+            <span>Grammar safety net
+              <small class="muted">— the corrections are the author’s own and are
+                applied as marked; this pass second-guesses none of them. It reads
+                each edit against the line it changes and holds one back
+                <em>only</em> when, applied as written, it would leave a broken
+                sentence — a dropped word, a comma splice, a dangling dash, a
+                shorthand the grammar needed expanded. Everything that reads
+                cleanly goes straight through. Adds a small model cost.</small></span>
           </label>
 
           <details class="advanced" id="corrections-json">

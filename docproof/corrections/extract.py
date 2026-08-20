@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from ..models import Usage
 from ..providers import Provider, strict_json_schema
 from .model import DESIGN, PARA_MERGE_NEXT
+from .overgrab import repair_from_note
 from .parse import ParseResult, parse_edits
 from .textmatch import normalize
 
@@ -328,10 +329,26 @@ def _lift_context_from_note(entry: dict) -> None:
         entry["context"] = best
 
 
+def _repair_from_note(entry: dict) -> None:
+    """The edit pulled back to the plain sense of its note — a "remove" that
+    substitutes, a written-out literal whose case was dropped, a spell-out that
+    lost its qualifier (see `overgrab.repair_from_note`). A text edit only; a
+    format, paragraph or design entry names no find/replace pair to repair."""
+    if entry.get("format") or entry.get("paragraph") or entry.get("kind") == DESIGN:
+        return
+    find, replace = entry.get("find") or "", entry.get("replace") or ""
+    if not find:
+        return
+    fixed_find, fixed_replace = repair_from_note(
+        find, replace, entry.get("instruction") or "")
+    if (fixed_find, fixed_replace) != (find, replace):
+        entry["find"], entry["replace"] = fixed_find, fixed_replace
+
+
 def repair_entries(parsed):
-    """The model's edit list with the three anchors it writes from the note rather
-    than the book repaired. Takes and returns the shape the schema produces (an
-    object with an "edits" list); anything else is passed through untouched, since
+    """The model's edit list with the anchors it writes from the note rather than
+    the book repaired. Takes and returns the shape the schema produces (an object
+    with an "edits" list); anything else is passed through untouched, since
     `parse_edits` owns what a valid source looks like."""
     if not isinstance(parsed, dict) or not isinstance(parsed.get("edits"), list):
         return parsed
@@ -341,6 +358,7 @@ def repair_entries(parsed):
             entry = dict(entry)
             _repair_break_anchor(entry)
             _repair_added_terminal_mark(entry)
+            _repair_from_note(entry)
             _lift_context_from_note(entry)   # last: it reads the repaired find
         entries.append(entry)
     return {**parsed, "edits": entries}

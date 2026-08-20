@@ -82,20 +82,20 @@ class JobRequest(BaseModel):
     # order, as JSON. The page map aligns these against the book so a mark narrows
     # to the text its own page set. Empty when the list was typed or pasted.
     corrections_pages: str = ""
-    # Corrections only: run the opt-in model sanity gate over the edits before
-    # applying, holding a doubtful one (an over-grab, an anachronism, nonsense)
-    # back for a human. Off keeps the job deterministic and free.
-    corrections_sanity: bool = False
-    # Corrections only: run the opt-in second look before applying — a stronger
-    # model re-reads the notes the extractor left as queries and commits the
-    # delegated ones (an either/or the reviewer offered, a conditional the page
-    # settles) to concrete edits. Off keeps every query a human's.
-    corrections_second_look: bool = False
+    # Corrections only: run the model sanity gate over the edits before applying.
+    # It is a grammar safety net — it holds an edit back only when, applied as the
+    # author's mark asked, it would leave a broken sentence, never over an editorial
+    # call. None defaults it on; an explicit false turns it off.
+    corrections_sanity: bool | None = None
+    # Corrections only: run the second look before applying — a stronger model
+    # re-reads the notes the extractor left as queries and commits the delegated
+    # ones (an either/or the reviewer offered, a conditional the page settles) to
+    # concrete edits. None defaults it on; an explicit false turns it off.
+    corrections_second_look: bool | None = None
     # Corrections only: run the last tier — a frontier model given the whole book
     # for the queries even the second look declined. None follows the second-look
-    # flag (the historical behaviour, so an older page or the watcher is unchanged);
-    # an explicit true/false controls it on its own, so its frontier spend can be
-    # asked for or refused separately from the cheaper second look.
+    # flag (on by default); an explicit true/false controls it on its own, so its
+    # frontier spend can be asked for or refused separately from the second look.
     corrections_escalate: bool | None = None
     prep_output: str = "book"       # "book" | "indesign" | "tracked" | "both" | "all"
     # Book output only: the operator's answers for the sketch. Empty means
@@ -337,9 +337,12 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
         corrections=req.corrections,
         corrections_comments=comments,
         corrections_pages=pages,
-        corrections_sanity=bool(req.corrections_sanity),
-        corrections_second_look=bool(req.corrections_second_look),
-        corrections_escalate=(bool(req.corrections_second_look)
+        corrections_sanity=(True if req.corrections_sanity is None
+                            else bool(req.corrections_sanity)),
+        corrections_second_look=(True if req.corrections_second_look is None
+                                 else bool(req.corrections_second_look)),
+        corrections_escalate=((True if req.corrections_second_look is None
+                               else bool(req.corrections_second_look))
                               if req.corrections_escalate is None
                               else bool(req.corrections_escalate)),
         effort=effort,

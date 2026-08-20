@@ -33,11 +33,20 @@ import re
 from dataclasses import replace as _replace
 
 from .apply import _core, all_spans
+from .instructions import asks_for_a_change
 from .model import DESIGN, Edit, JUDGMENT
 from .textmatch import normalize
 
 # A word, apostrophes and all ("aren’t", "y’all"), for the word-level comparisons.
 _WORD = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
+
+# A note whose action is a styling or enclosing the second look can now carry out
+# through a format edit — italics, roman, or enclosing quotation marks. An edit
+# that came back a no-op on one of these is one the extractor could not express,
+# not one the text already satisfied, so it is turned into a query for the second
+# look rather than reported as done or flagged as unactioned.
+_STYLING_NOTE = re.compile(r"\b(?:italic|roman|de-?italic|un-?italic|enclos"
+                           r"|in quotes|in quotation)\w*", re.IGNORECASE)
 
 
 def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
@@ -76,6 +85,17 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
         # A question the extractor answered for the reviewer becomes the judgment it
         # should have been — routed to a person (and to the second look), not applied.
         if e.find != e.replace and _is_question(note):
+            out.append(_replace(e, kind=JUDGMENT))
+            continue
+
+        # A styling note the extractor could not turn into a change — "the song
+        # title should be in quotes, not italics" that came back a no-op because
+        # the italics are a format the text swap cannot express. It is not a mark
+        # the text already satisfies; it is one the second look can now carry out
+        # through a companion format edit, so it becomes a query rather than a flag
+        # that reads as an author decision.
+        if e.find == e.replace and _STYLING_NOTE.search(note) \
+                and asks_for_a_change(note):
             out.append(_replace(e, kind=JUDGMENT))
             continue
 

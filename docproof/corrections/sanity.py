@@ -1,27 +1,35 @@
 """An optional model gate over the proposed edits, before any is applied.
 
-The deterministic core is faithful by design: it applies exactly what the edit
-list says, and refuses what it cannot anchor. That faithfulness is also its blind
-spot — a reviewer's mark that reads "iPhone" against a fantasy novel, or a swap
-the extractor over-grabbed so it drops a verb ("slowly eased" → "unhurriedly"),
-is applied as loyally as a real typo fix. Neither is a *mechanical* error the
-apply stage can see; each is an edit that should never have been made.
+Every correction here is the author's own, marked on a proof and approved — so
+this gate is emphatically *not* an editor second-guessing the calls. It does not
+ask whether an edit is the change the reviewer "really meant", whether the word
+fits the register, or whether the world of the book would carry it. All of that
+is settled: the mark is the instruction, and the instruction is to be carried
+out.
 
-This gate reads each proposed edit beside the line it changes and the reviewer's
-own note, and judges whether the change is the one the note asked for — the whole
-of it and nothing beyond it — and leaves sound prose. It is the model-judgment
-companion to the deterministic `fidelity` gate: that one catches the fidelity
-failures a rule can prove, this one the ones only reading the note against the
-change can see (a wrong mark picked, a meaning quietly reversed, a compound note
-half-done). What it doubts it does not apply — it hands back the edit ids to
-withhold, with a reason, and those become `WITHHELD` outcomes in the "for a human"
-bucket. It never *makes* an edit and never rewrites one; it only holds a doubtful
-one back for a person, so a false alarm costs a second look, never a wrong change
-shipped.
+The one thing an author's approval cannot vouch for is a mechanical slip in
+carrying the mark out — an edit that, applied exactly as written, leaves a
+sentence a reader would trip over. A find that reached past the word that changes
+and dropped a verb with it ("slowly eased" → "unhurriedly"); a punctuation mark
+moved so it splits a sentence or leaves a dangling comma, an unclosed dash, a
+stray capital mid-clause; a reviewer's shorthand ("been") applied to the letter
+where the sentence needed it expanded ("have been"). None of these is a
+judgment call. Each is a broken sentence, and a broken sentence in a printed book
+is the one outcome worth holding a correction back over.
 
-Opt-in: the default corrections run stays deterministic, model-free and free. A
-gate that itself fails (a refusal, a truncation) withholds nothing and lets the
-run proceed — a broken check must not sink the corrections it was checking.
+So the gate reads each proposed edit beside the line it changes and asks a single,
+narrow question: **applied as written, does this leave a grammatically broken or
+incoherent sentence?** If yes, it hands the edit id back to be withheld, with the
+break named and the grammatical repair spelled out, so a person can set it right
+in a moment. If no — including every edit it merely finds inelegant, unexpected,
+or not to its taste — it lets the edit through untouched. Put the fries in the
+basket: apply the author's marks, and stop only for a sentence that will not
+stand up.
+
+It never *makes* an edit and never rewrites one; a false alarm costs a second
+look, never a wrong change shipped. Opt-in, and a gate that itself fails (a
+refusal, a truncation) withholds nothing and lets the run proceed — a broken
+check must not sink the corrections it was checking.
 """
 from __future__ import annotations
 
@@ -42,13 +50,14 @@ MAX_OUTPUT_TOKENS = 8000
 # would withhold nothing and silently wave the whole batch through.
 BATCH_SIZE = 40
 
-# The verdicts that hold an edit back. "safe" is the only one that lets it apply.
-WITHHOLD = {"off_note", "over_grab", "absurd", "nonsense"}
+# The one verdict that holds an edit back. "ok" lets it apply — and "ok" is the
+# answer for everything except a sentence that is grammatically broken as written.
+WITHHOLD = {"broken"}
 
 
 class _Verdict(BaseModel):
     id: str
-    verdict: Literal["safe", "off_note", "over_grab", "absurd", "nonsense"]
+    verdict: Literal["ok", "broken"]
     reason: str = ""
 
 
@@ -57,31 +66,44 @@ class _Verdicts(BaseModel):
 
 
 _SYSTEM = """\
-You are a careful copy editor checking that each proposed correction does what the \
-reviewer's mark asked — and only that. You are given a list of edits, each an exact \
-find → replace against a line of the manuscript, with the reviewer's note. The \
-mechanical apply is already known to be faithful to the find → replace pair; your \
-job is the thing it cannot see — whether the pair itself is the change the note \
-asked for. Return one verdict per edit:
+You are a proofreader's last mechanical check on a list of corrections an author \
+marked on a proof of their own book. The corrections are APPROVED — the mark is \
+the instruction, and it is to be carried out. You are given each edit as an exact \
+find → replace against the line it changes, with the reviewer's note.
 
-- "safe": the change carries out the note, the whole note, and nothing beyond it, \
-and the result reads cleanly. When in doubt between safe and a concern, choose \
-safe; the goal is to catch the clear problems, not to second-guess the editor.
-- "off_note": the edit does something OTHER than what the note asks, or only PART \
-of it, or the opposite of it. The note says replace a comma and the edit changed a \
-period; the note says "she was not" and the edit wrote "was not", dropping a word; \
-the note asks to lowercase two words and the edit changed a third; a note reading \
-"could?" was applied as a certainty. The change is grammatical and would apply \
-cleanly — it is simply not the change the reviewer marked.
-- "over_grab": the replace drops or garbles words it should have kept — the find \
-reached past the word that actually changes and took a verb, object, or phrase \
-with it (e.g. find "slowly eased", replace "unhurriedly", losing "eased"). The \
-result is missing a word or ungrammatical.
-- "absurd": the change is out of place in the work — an anachronism, a joke, or \
-content that does not belong in this book's world or register (e.g. changing a \
-fantasy dagger to "an iPhone").
-- "nonsense": the replacement is not real language, is broken, or makes the \
-sentence incoherent.
+You are NOT judging the correction. Do not ask whether it is the change the \
+reviewer meant, whether the wording fits the book's register, whether it is an \
+anachronism, whether a dialect spelling is "wrong", or whether a different edit \
+would read better. Every one of those is the author's call and is already made. \
+Second-guessing them is not your job and is a real cost — it holds up an approved \
+correction over a matter of taste.
+
+Your one job is to catch a MECHANICAL slip in how the mark was carried out: an \
+edit that, applied exactly as written, leaves a sentence that is grammatically \
+broken or incoherent — the kind of thing a reader would catch in the printed \
+book. Return one verdict per edit:
+
+- "broken": applied as written, the edit leaves a sentence that does not stand \
+up grammatically. The clear cases:
+  · a dropped or garbled word — the find reached past the word that changes and \
+took a verb, object or phrase with it, so the result is missing a word or does \
+not parse ("slowly eased" → "unhurriedly", losing "eased").
+  · a punctuation mark changed in a way that fractures the sentence — a full stop \
+dropped into the middle of one clause, an independent clause spliced to another by \
+a comma, a dash or a quotation mark opened and never closed, a stray capital left \
+mid-sentence.
+  · the reviewer's shorthand applied to the letter where the grammar of the \
+sentence needed it expanded — "been" written where the past conditional needs \
+"have been" ("I'd been forced" for "I'd have been forced"); a bare word swap that \
+leaves the article, number or verb around it disagreeing.
+  · the replacement is not real language, or makes the sentence incoherent.
+  When you answer "broken", name the break and give the grammatical repair in the \
+reason, so a person can fix it at a glance.
+- "ok": the sentence stands up. Use this for everything else — including every \
+edit you merely find inelegant, surprising, unnecessary, or not to your taste. A \
+grammatical sentence is "ok" even if you would not have made the change. When in \
+doubt, "ok": the author approved it, and only a genuinely broken sentence is \
+worth stopping for.
 
 Judge only what is in front of you; do not invent problems. Return a verdict for \
 every edit id, using the exact id given."""
