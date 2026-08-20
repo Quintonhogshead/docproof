@@ -569,6 +569,11 @@ class Job:
             and (Path(self.results_dir)
                  / get_format(self.filename).change_log_name(self.filename)
                  ).is_file())
+        d["has_examination_report"] = bool(
+            self.kind == "review" and self.state == "done"
+            and ((self.results_dir
+                  and (Path(self.results_dir) / "examination-coverage.md").is_file())
+                 or "examination-coverage.md" in self.drive_files))
         # A click-through to this job's folder in the Drive archive, once it has
         # one. The card shows "In Drive" when archived, so the deliverable is one
         # link away even after the local copy is recycled on a redeploy.

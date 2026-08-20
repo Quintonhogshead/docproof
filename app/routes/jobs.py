@@ -218,6 +218,9 @@ def _result_name(job: Job, which: str) -> str | None:
         "changes": get_format(job.filename).change_log_name(job.filename),
         "summary": "summary.md",
         "findings": "findings.json",
+        "examination": "examination-coverage.md",
+        "examination-json": "examination-coverage.json",
+        "examination-ledger": "examination-ledger.jsonl.gz",
         "book": f"book_{stem}.docx",
         # The InDesign deliverable is now an IDML the designer opens directly —
         # no Place step. (Kept name "indesign" so existing buttons/routing work.)

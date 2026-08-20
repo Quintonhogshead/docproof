@@ -945,6 +945,33 @@ class ResidualsConfig(BaseModel):
     max_per_rule: int = Field(default=150, ge=1)
 
 
+class ExaminationGraphConfig(BaseModel):
+    """Phase-one examination ledger, isolated behind a shadow-mode flag.
+
+    Shadow mode may write ledger/report artifacts but is never allowed to feed
+    findings into the validator or tracked-change writer.  ``Config()`` keeps it
+    off for API/backward compatibility; the shipped YAML opts into measurement
+    explicitly and can roll back by changing one value to false.
+    """
+    enabled: bool = False
+    mode: Literal["shadow"] = "shadow"
+    model_obligations: bool = True
+    spell_sites: bool = True
+    max_sites: int = Field(default=200_000, ge=1)
+    write_ledger: bool = True
+    write_report: bool = True
+    ledger_filename: str = "examination-ledger.jsonl.gz"
+    report_json_filename: str = "examination-coverage.json"
+    report_filename: str = "examination-coverage.md"
+
+    @field_validator("ledger_filename", "report_json_filename", "report_filename")
+    @classmethod
+    def _plain_filename(cls, value):
+        if not value or Path(value).name != value or value in {".", ".."}:
+            raise ValueError("examination artifact names must be plain filenames")
+        return value
+
+
 class EnsembleConfig(BaseModel):
     """Several detectors reviewing each chunk, their findings merged by
     agreement, then a stronger verifier adjudicating before anything reaches the
@@ -1260,6 +1287,8 @@ class Config(BaseModel):
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
+    examination_graph: ExaminationGraphConfig = Field(
+        default_factory=ExaminationGraphConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
@@ -1464,6 +1493,18 @@ class Config(BaseModel):
 
 
 CACHE_DIR_ENV = "DOCPROOF_CACHE_DIR"
+EXAMINATION_GRAPH_ENV = "DOCPROOF_EXAMINATION_GRAPH"
+
+
+def examination_graph_killed() -> bool:
+    """The deployment-wide emergency brake for shadow instrumentation.
+
+    Only false-like values override configuration. This is intentionally a kill
+    switch, not a second source of truth that can enable a feature a job/config
+    turned off.
+    """
+    value = os.environ.get(EXAMINATION_GRAPH_ENV, "").strip().lower()
+    return value in {"0", "false", "off", "no", "disabled"}
 
 
 def default_cache_dir() -> str | None:
@@ -1516,4 +1557,7 @@ def load_config(path: str | Path) -> Config:
     if not isinstance(raw, dict):
         raise ValueError(
             f"Configuration root must be a YAML mapping, not {type(raw).__name__}")
-    return Config.model_validate(raw)
+    cfg = Config.model_validate(raw)
+    if examination_graph_killed():
+        cfg.examination_graph.enabled = False
+    return cfg

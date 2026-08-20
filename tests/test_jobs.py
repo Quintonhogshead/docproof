@@ -1216,6 +1216,19 @@ def test_the_change_log_is_a_named_result(runner):
             == "Book - Atmosphere Press Proofreader Change Log.docx")
 
 
+def test_the_examination_artifacts_are_named_web_results(runner):
+    """Fly has no Finder, so all three shadow artifacts need stable routes."""
+    from app.routes.jobs import _result_name
+
+    store, _ = runner
+    job = _job(store, filename="Book.docx")
+    assert _result_name(job, "examination") == "examination-coverage.md"
+    assert (_result_name(job, "examination-json")
+            == "examination-coverage.json")
+    assert (_result_name(job, "examination-ledger")
+            == "examination-ledger.jsonl.gz")
+
+
 def test_to_api_flags_the_change_log_only_when_present(runner, tmp_path):
     store, _ = runner
     out = tmp_path / "results"
@@ -1230,3 +1243,25 @@ def test_to_api_flags_the_change_log_only_when_present(runner, tmp_path):
     prep = _job(store, id="j2", filename="Book.docx", state="done",
                 results_dir=str(out), kind="prep")
     assert prep.to_api()["has_change_log"] is False   # reviews only
+
+
+def test_to_api_flags_a_local_or_archived_examination_report(runner, tmp_path):
+    store, _ = runner
+    out = tmp_path / "results"
+    out.mkdir()
+    job = _job(store, filename="Book.docx", state="done",
+               results_dir=str(out))
+    assert job.to_api()["has_examination_report"] is False
+
+    (out / "examination-coverage.md").write_text("# coverage\n")
+    assert job.to_api()["has_examination_report"] is True
+
+    archived = _job(
+        store, id="j2", filename="Book.docx", state="done",
+        results_dir=str(tmp_path / "recycled"),
+        drive_files={"examination-coverage.md": "drive-file-id"})
+    assert archived.to_api()["has_examination_report"] is True
+
+    prep = _job(store, id="j3", filename="Book.docx", state="done",
+                results_dir=str(out), kind="prep")
+    assert prep.to_api()["has_examination_report"] is False

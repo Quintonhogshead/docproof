@@ -55,6 +55,7 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                         batch: bool = False, sweeps=None, spell=None,
                         normalization=None, audit=None, consistency=None,
                         coverage=None, smoothing=None, chapter_continuity=None,
+                        examination=None,
                         queried_ids: tuple[str, ...] = (),
                         unplaced_ids: tuple[str, ...] = ()) -> None:
     applied = set(applied_ids)
@@ -139,6 +140,9 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
         # nothing.
         "chapter_continuity": (dataclasses.asdict(chapter_continuity)
                                if chapter_continuity is not None else None),
+        # Discoverability for the shadow artifacts. The full append-only journal
+        # stays in examination-ledger.jsonl.gz; this is its state/count projection.
+        "examination_graph": examination,
         "stats": _tally(findings),
         "stats_by_error_type": _tally_types(findings),
         "skipped_paragraphs": [{"para_id": pid, "reason": r}
@@ -260,6 +264,8 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Continuity read", on(cfg.continuity.enabled)),
         ("Chapter continuity", on(cfg.chapter_continuity.enabled)),
         ("Smoothing", on(cfg.smoothing.enabled)),
+        ("Examination graph", (cfg.examination_graph.mode
+                               if cfg.examination_graph.enabled else "off")),
     ]
     L = ["## Settings used\n"]
     L.append(f"- **Reviewer:** `{cfg.api.model}`"
@@ -288,7 +294,8 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      applied_ids: tuple[str, ...], batch: bool = False,
                      fmt=None, sweeps=None, spell=None, normalization=None,
                      audit=None, consistency=None, coverage=None,
-                     judges=None, smoothing=None, chapter_continuity=None) -> None:
+                     judges=None, smoothing=None, chapter_continuity=None,
+                     examination=None) -> None:
     paras = index_paragraphs(doc)
     applied = [f for f in findings if f.finding_id in set(applied_ids)]
     low = [f for f in findings if f.status == "skipped_low_confidence"]
@@ -358,6 +365,20 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                  "failed, and no section was left partly unreviewed.\n")
 
     L += _settings_section(cfg, batch)
+
+    if examination is not None:
+        accounting = examination["accounting"]
+        L.append("## Examination graph — shadow mode\n")
+        L.append(
+            f"The examination layer generated **{accounting['generated_sites']:,} "
+            f"site(s)** and recorded a current state for every one. "
+            f"{accounting['terminal_sites']:,} reached a terminal decision "
+            f"({accounting['terminal_percent']:.2f}%); "
+            f"{accounting['explicitly_pending_sites']:,} remain explicitly "
+            f"pending rather than being interpreted as clean from silence. "
+            f"This run was observation-only: the examination graph created no "
+            f"edits. See `examination-coverage.md` and the compressed, "
+            f"append-only `examination-ledger.jsonl.gz`.\n")
 
     if coverage is not None:
         L.append("## Coverage\n")

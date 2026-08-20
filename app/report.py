@@ -178,4 +178,5 @@ def build_report(findings_path: str | Path,
         "low_confidence": low,
         "not_placed": not_placed,
         "not_applied": other,
+        "examination_graph": data.get("examination_graph"),
     }

@@ -623,6 +623,24 @@ residuals:
   enabled: true
   max_per_rule: 150         # overflow is logged loudly, never silently dropped
 
+# Phase-one examination graph. It observes the existing review and writes an
+# append-only site ledger plus coverage reports; it CANNOT create edits in
+# shadow mode. Roll back immediately by changing only `enabled` to false — the
+# validator, tracked-change writer, and reviewed manuscript are otherwise the
+# same path as before this feature.
+examination_graph:
+  enabled: true
+  mode: shadow
+  model_obligations: true   # one explicit pending obligation per paragraph/category;
+                            # legacy model silence is never called a pass
+  spell_sites: true         # site each unknown-word occurrence from spellscan
+  max_sites: 200000         # cap is reported as omissions, never silently hidden
+  write_ledger: true
+  write_report: true
+  ledger_filename: examination-ledger.jsonl.gz  # compressed for Fly volume retention
+  report_json_filename: examination-coverage.json
+  report_filename: examination-coverage.md
+
 # Ensemble review. Empty `detectors` (the default) is single-detector mode:
 # api.model runs once, nothing is merged, no verifier runs — exactly the
 # behaviour that shipped before. List two or more detectors to fan out: each

@@ -3722,6 +3722,10 @@ function renderJobs(jobs) {
           WEB ? 'Download the change log' : 'Open the change log', note,
           { quiet: true }));
       }
+      if (job.has_examination_report) {
+        actions.append(openButton(job, 'examination',
+          'Download examination coverage', note, { quiet: true }));
+      }
       // "Show in Finder" only means something on the Mac the file lives on.
       if (!WEB) {
         actions.append(
@@ -4724,6 +4728,21 @@ function renderReport(r, format) {
 
   const groups = $('report-groups');
   groups.innerHTML = '';
+  if (r.examination_graph && r.examination_graph.accounting) {
+    const a = r.examination_graph.accounting;
+    const section = document.createElement('section');
+    section.className = 'card';
+    const head = document.createElement('h3');
+    head.textContent = 'Examination coverage — shadow mode';
+    const copy = document.createElement('p');
+    copy.textContent = `${Number(a.generated_sites || 0).toLocaleString()} sites · `
+      + `${Number(a.terminal_sites || 0).toLocaleString()} terminal decisions `
+      + `(${Number(a.terminal_percent || 0).toFixed(2)}%) · `
+      + `${Number(a.explicitly_pending_sites || 0).toLocaleString()} explicitly pending. `
+      + 'The examination layer observed this review and created no edits.';
+    section.append(head, copy);
+    groups.append(section);
+  }
   // Nothing below is applied to the document by this screen — it is a reading
   // of what is waiting in the file — so say where that file is reviewed first.
   if (format && h.applied) {

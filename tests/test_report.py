@@ -80,6 +80,18 @@ def test_findings_are_grouped_by_kind_commonest_first(tmp_path):
     assert report["headline"]["top_name"] == "Comma splices"
 
 
+def test_examination_projection_reaches_the_fly_report(tmp_path):
+    projection = {
+        "mode": "shadow",
+        "accounting": {"generated_sites": 12, "terminal_sites": 7,
+                       "explicitly_pending_sites": 5,
+                       "terminal_percent": 58.33},
+    }
+    report = build_report(_write(
+        tmp_path, [_finding("0001")], examination_graph=projection))
+    assert report["examination_graph"] == projection
+
+
 def test_the_headline_counts_paragraphs_not_findings(tmp_path):
     two_in_one = [_finding("0001"), _finding("0002")]
     two_in_one[1]["para_id"] = two_in_one[0]["para_id"]

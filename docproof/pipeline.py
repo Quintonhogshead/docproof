@@ -106,6 +106,9 @@ class Prepared:
     # empty and `effective_pass_plan` synthesizes the historical one-pass-per-
     # group-over-`chunks` plan, so old call sites keep working unchanged.
     pass_plan: list["PassRun"] = field(default_factory=list)
+    # Optional phase-one examination ledger. It observes the existing pipeline
+    # in shadow mode and is never consulted by validation or edit application.
+    examination: object | None = None
 
     @property
     def effective_pass_plan(self) -> tuple["PassRun", ...]:
@@ -206,6 +209,8 @@ class Outputs:
     # full accounting is summary.md's Coverage section — because the card only
     # needs to say "this 'done' run quietly skipped a paid pass, go look".
     warnings: list[str] = field(default_factory=list)
+    examination_ledger: Path | None = None
+    examination_report: Path | None = None
 
 
 def content_hash(doc: DocumentModel) -> str:
@@ -584,6 +589,15 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         consistency_findings = []
         adjudicate_candidates = []
         story_sheet = ""
+        swept = []
+
+    examination = None
+    if analyses and cfg.examination_graph.enabled:
+        from .examination import prepare_shadow
+        examination = prepare_shadow(
+            cfg, doc, paragraphs=swept, sweep_findings=sweep_findings,
+            consistency_findings=consistency_findings, spell=spell,
+            adjudicate_candidates=adjudicate_candidates)
 
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups,
                     pass_plan=pass_plan, fmt=fmt,
@@ -594,7 +608,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     adjudicate_candidates=adjudicate_candidates,
                     story_sheet=story_sheet,
                     whole_document=whole,
-                    n_detectors=len(cfg.ensemble.detectors) or 1)
+                    n_detectors=len(cfg.ensemble.detectors) or 1,
+                    examination=examination)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -1978,6 +1993,25 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                     prepared.spell.lexicon, cfg.revision_author)
     stats = fmt.apply_tracked_changes(prepared.pkg, prepared.doc, validated, cfg)
 
+    # Shadow-only examination accounting. It observes the final validator and
+    # writer outcomes but cannot add to `validated`, change `stats`, or touch the
+    # package. A defect in experimental reporting must not block the proven
+    # manuscript path, so it is logged and omitted rather than raised through a
+    # production review.
+    examination_report = None
+    examination_ledger_path = None
+    examination_report_path = None
+    if prepared.examination is not None and cfg.examination_graph.enabled:
+        try:
+            prepared.examination.observe_findings(
+                validated, prepared.doc, applied_ids=stats.applied)
+            (examination_report, examination_ledger_path,
+             examination_report_path) = prepared.examination.write(
+                 out, cfg.examination_graph, source=prepared.doc.source_path)
+        except Exception:
+            log.exception("Examination graph shadow reporting failed; the "
+                          "reviewed manuscript path is unchanged.")
+
     audit_report = AuditReport()
     if cfg.audit != "off" and fmt.snapshot and prepared.baseline:
         audit_report = run_audit(prepared.baseline,
@@ -1996,6 +2030,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                         audit=audit_report, consistency=prepared.consistency,
                         coverage=coverage, smoothing=smoothing_report,
                         chapter_continuity=chapter_continuity_report,
+                        examination=examination_report,
                         # Both reassemblers report these; getattr keeps a format
                         # that predates them constructing rather than crashing.
                         queried_ids=getattr(stats, "queried", ()),
@@ -2007,7 +2042,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                      normalization=prepared.normalization, audit=audit_report,
                      consistency=prepared.consistency, coverage=coverage,
                      judges=judge_reports, smoothing=smoothing_report,
-                     chapter_continuity=chapter_continuity_report)
+                     chapter_continuity=chapter_continuity_report,
+                     examination=examination_report)
     change_log = None
     if cfg.change_log:
         change_log = out / fmt.change_log_name(source_path)
@@ -2034,6 +2070,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                    change_log=change_log,
                    queried=sum(1 for f in validated if f.status == "query"),
                    judge_held=held_count,
+                   examination_ledger=examination_ledger_path,
+                   examination_report=examination_report_path,
                    warnings=([f"{d.label}: {d.reason}"
                               for d in coverage.degraded]
                              if coverage is not None else []))

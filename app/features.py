@@ -237,6 +237,13 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "around it. This is the one check that catches a silent edit; turning it "
         "off removes that safety net entirely.",
         "safety", ("audit",), on_value="strict", off_value="off"),
+    FeatureSpec(
+        "examination_graph", "Examination coverage ledger — shadow",
+        "Generate explicit examination obligations and an append-only decision "
+        "ledger beside the normal review. Shadow mode observes only: it cannot "
+        "create edits or bypass the existing validator. Turn it off to restore "
+        "the pre-ledger runtime and output set immediately.",
+        "safety", ("examination_graph", "enabled")),
 )
 
 FEATURES_BY_ID: dict[str, FeatureSpec] = {f.id: f for f in FEATURES}

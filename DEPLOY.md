@@ -6,8 +6,8 @@ server experience — every command is written out. Work through it top to
 bottom the first time; after that, the **Everyday operations** section is all
 you'll need.
 
-The desktop `.app` is a separate thing (built with PyInstaller from
-`DocProof.spec`) and is unaffected by anything here.
+Fly is the supported production deployment. The old desktop `.app` is sunset
+and is not part of this guide or the release path.
 
 ---
 
@@ -225,6 +225,27 @@ Everyone is on the new version at their next page load — nobody installs
 anything. **A deploy is safe to run mid-review:** jobs are files on disk,
 overnight (batch) jobs resume on their own, and at worst one review that was
 actively running needs a one-click retry.
+
+### Examination-graph emergency rollback
+
+The phase-one examination graph is shadow instrumentation: it writes coverage
+artifacts but cannot feed edits into a manuscript. To disable it across the
+live Fly site immediately, without reverting or redeploying code:
+
+```bash
+fly secrets set DOCPROOF_EXAMINATION_GRAPH=0 -a atmosphere-docproof
+```
+
+Fly restarts the app with the kill switch set. It overrides the YAML default
+and any old job's per-run feature choice. To re-enable the shipped setting:
+
+```bash
+fly secrets unset DOCPROOF_EXAMINATION_GRAPH -a atmosphere-docproof
+```
+
+For one job only, turn off **Examination coverage ledger — shadow** in the
+submission panel's Safety section. See [the shadow rollout and artifact
+contract](docs/examination-graph.md) for the full rollback ladder.
 
 **The one exception** is a change to the *accounts database schema* (a new
 column, say). Those need a migration: bump `CURRENT_SCHEMA` in

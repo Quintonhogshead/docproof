@@ -3,6 +3,7 @@ No test here reaches a vendor, and none sleeps on a timer — the ticker's body
 is called directly."""
 from __future__ import annotations
 
+import gzip
 import json
 import time
 from datetime import datetime, timedelta
@@ -393,6 +394,20 @@ def test_run_now_produces_downloadable_results(client, provider):
         f"/api/jobs/{job['id']}/file/summary").text
     assert json.loads(
         client.get(f"/api/jobs/{job['id']}/file/findings").text)["findings"]
+
+    # The supported deployment is Fly, so prove the shadow report is visible
+    # through the same HTTP surface an editor uses rather than only on disk.
+    assert final["has_examination_report"] is True
+    coverage = client.get(f"/api/jobs/{job['id']}/file/examination")
+    assert coverage.status_code == 200
+    assert "Examination graph shadow report" in coverage.text
+    coverage_json = json.loads(client.get(
+        f"/api/jobs/{job['id']}/file/examination-json").text)
+    assert coverage_json["scope"]["shadow_only"] is True
+    assert coverage_json["scope"]["may_create_edits"] is False
+    ledger = client.get(f"/api/jobs/{job['id']}/file/examination-ledger")
+    assert ledger.status_code == 200
+    assert b'"sequence":1' in gzip.decompress(ledger.content)
 
 
 def test_a_finished_job_is_pushed_to_the_drive_archive(client, provider,
