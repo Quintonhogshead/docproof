@@ -976,7 +976,7 @@ class ExaminationJudgmentConfig(BaseModel):
 
 
 class ExaminationGraphConfig(BaseModel):
-    """Phase-one examination ledger, isolated behind a shadow-mode flag.
+    """Examination ledger, isolated behind a shadow-mode flag.
 
     Shadow mode may write ledger/report artifacts but is never allowed to feed
     findings into the validator or tracked-change writer.  ``Config()`` keeps it
@@ -986,6 +986,11 @@ class ExaminationGraphConfig(BaseModel):
     enabled: bool = False
     mode: Literal["shadow"] = "shadow"
     model_obligations: bool = True
+    # Phase 2 makes a successful production detector response explicitly name
+    # every paragraph it reviewed.  A named paragraph with no finding is then a
+    # model pass for that paragraph/category obligation; a missing name stays
+    # pending.  The verdict is ledger evidence only and cannot create a Finding.
+    production_verdicts: bool = False
     spell_sites: bool = True
     max_sites: int = Field(default=200_000, ge=1)
     write_ledger: bool = True
@@ -1005,6 +1010,14 @@ class ExaminationGraphConfig(BaseModel):
         if not value or Path(value).name != value or value in {".", ".."}:
             raise ValueError("examination artifact names must be plain filenames")
         return value
+
+    @model_validator(mode="after")
+    def _production_verdicts_need_obligations(self):
+        if self.production_verdicts and not self.model_obligations:
+            raise ValueError(
+                "examination_graph.production_verdicts requires "
+                "model_obligations")
+        return self
 
 
 class EnsembleConfig(BaseModel):
@@ -1530,6 +1543,8 @@ class Config(BaseModel):
 CACHE_DIR_ENV = "DOCPROOF_CACHE_DIR"
 EXAMINATION_GRAPH_ENV = "DOCPROOF_EXAMINATION_GRAPH"
 EXAMINATION_JUDGMENT_ENV = "DOCPROOF_EXAMINATION_JUDGMENT"
+EXAMINATION_PRODUCTION_VERDICTS_ENV = \
+    "DOCPROOF_EXAMINATION_PRODUCTION_VERDICTS"
 
 
 def examination_graph_killed() -> bool:
@@ -1547,6 +1562,22 @@ def examination_judgment_killed() -> bool:
     """Deployment-wide brake for the paid Phase-1B lane only."""
     value = os.environ.get(EXAMINATION_JUDGMENT_ENV, "").strip().lower()
     return value in {"0", "false", "off", "no", "disabled"}
+
+
+def examination_production_verdicts_killed() -> bool:
+    """Deployment-wide brake for Phase 2's production prompt receipts."""
+    value = os.environ.get(
+        EXAMINATION_PRODUCTION_VERDICTS_ENV, "").strip().lower()
+    return value in {"0", "false", "off", "no", "disabled"}
+
+
+def examination_production_verdicts_enabled(cfg) -> bool:
+    """The effective Phase 2 switch for loaded configs and stored jobs."""
+    graph = getattr(cfg, "examination_graph", cfg)
+    return bool(
+        graph.enabled and graph.production_verdicts
+        and not examination_graph_killed()
+        and not examination_production_verdicts_killed())
 
 
 def default_cache_dir() -> str | None:
@@ -1602,6 +1633,8 @@ def load_config(path: str | Path) -> Config:
     cfg = Config.model_validate(raw)
     if examination_graph_killed():
         cfg.examination_graph.enabled = False
+    if examination_production_verdicts_killed():
+        cfg.examination_graph.production_verdicts = False
     if examination_judgment_killed():
         cfg.examination_graph.judgment.enabled = False
     return cfg

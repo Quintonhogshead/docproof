@@ -18,7 +18,7 @@ from .site_generators import (site_from_candidate, site_from_finding,
                               sites_from_spell_scan,
                               sites_from_sweep_obligations)
 from .site_ledger import ExaminationLedger, LedgerInvariantError
-from .site_models import LedgerState, Verdict
+from .site_models import LedgerState, TERMINAL_STATES, Verdict
 
 log = logging.getLogger("docproof.examination")
 
@@ -41,6 +41,14 @@ class ShadowExamination:
     judgment_usage: dict = field(default_factory=dict)
     legacy_observations: dict[str, list[dict]] = field(default_factory=dict)
     failures: list[dict] = field(default_factory=list)
+    # Phase 2's production-lane receipts. Expected and observed are keyed by
+    # the paid call/checkpoint id, then by the broad paragraph/category site.
+    # They stay separate until every response has folded so repeated passes and
+    # ensembles cannot make the ledger result depend on arrival order.
+    production_expected: dict[str, set[str]] = field(default_factory=dict)
+    production_observed: dict[str, dict[str, bool]] = field(default_factory=dict)
+    production_contract_issues: list[dict] = field(default_factory=list)
+    production_finalized: bool = False
 
     @classmethod
     def prepare(cls, cfg, doc: DocumentModel, *, paragraphs,
@@ -114,10 +122,16 @@ class ShadowExamination:
         self.ledger.assert_accounted()
 
     def write(self, out_dir: Path, cfg, *, source: str) -> tuple[dict, Path, Path]:
+        from .config import examination_production_verdicts_enabled
+        phase_two = examination_production_verdicts_enabled(cfg)
+        if phase_two:
+            self.finalize_production_verdicts()
         judgment = self.judgment_report(cfg.judgment)
         report = build_coverage_report(
             self.ledger, self.graph, mode=self.mode,
-            omitted=dict(self.omitted), source=source, judgment=judgment)
+            omitted=dict(self.omitted), source=source, judgment=judgment,
+            production_verdicts=self.production_verdicts_report(
+                phase_two))
         report["failures"] = list(self.failures)
         ledger_path = out_dir / cfg.ledger_filename
         report_path = out_dir / cfg.report_filename
@@ -150,24 +164,193 @@ class ShadowExamination:
         return failure
 
     def failure_warnings(self) -> list[str]:
-        return [
+        warnings = [
             f"Examination graph {failure['stage']} failed "
             f"({failure['type']}: {failure['message']}); normal review unchanged"
             for failure in self.failures
         ]
+        production = self.production_verdicts_report(True)
+        incomplete = (production["expected_responses"]
+                      - production["complete_responses"])
+        if production["expected_responses"] and incomplete:
+            warnings.append(
+                f"Phase 2 examination receipts were incomplete for "
+                f"{incomplete} production response(s); unacknowledged sites "
+                f"remain pending and the normal review is unchanged")
+        return warnings
 
     def diagnostic_report(self, cfg, *, source: str) -> dict:
         """Machine-readable fallback when the full artifact write fails."""
+        from .config import examination_production_verdicts_enabled
         return {
             "schema_version": 1,
             "mode": self.mode,
             "source": source,
             "failures": list(self.failures),
             "judgment": self.judgment_report(cfg.judgment),
+            "production_verdicts": self.production_verdicts_report(
+                examination_production_verdicts_enabled(cfg)),
             "scope": {
                 "shadow_only": True,
                 "may_create_edits": False,
             },
+        }
+
+    def expect_production_response(self, response_id: str, error_types,
+                                   paragraphs) -> None:
+        """Register the broad sites one paid production call must account for."""
+        expected: set[str] = set()
+        for para in paragraphs:
+            for error_type in error_types:
+                site_id = self.model_obligations.get(
+                    (para.para_id, str(error_type)))
+                if site_id:
+                    expected.add(site_id)
+        if expected:
+            self.production_expected.setdefault(response_id, set()).update(
+                expected)
+
+    def observe_production_response(self, response_id: str, error_types,
+                                    paragraphs, reviewed_paragraph_ids,
+                                    findings: list[Finding]) -> None:
+        """Fold one explicit production receipt without changing manuscript work.
+
+        Returned paragraph ids are coverage receipts. A valid receipt plus no
+        finding is pass evidence; an actual finding is error evidence even when
+        the receipt list itself is malformed. Missing receipts remain missing —
+        silence is never converted into a pass.
+        """
+        self.expect_production_response(response_id, error_types, paragraphs)
+        paragraph_ids = tuple(p.para_id for p in paragraphs)
+        expected_paragraphs = set(paragraph_ids)
+        returned = tuple(str(x) for x in reviewed_paragraph_ids)
+        counts = Counter(returned)
+        missing = expected_paragraphs - set(returned)
+        unknown = set(returned) - expected_paragraphs
+        duplicate = {pid for pid, count in counts.items() if count != 1}
+        if missing or unknown or duplicate:
+            issue = {
+                "response_id": response_id,
+                "missing_paragraph_ids": sorted(missing),
+                "unknown_paragraph_ids": sorted(unknown),
+                "duplicate_paragraph_ids": sorted(duplicate),
+            }
+            if issue not in self.production_contract_issues:
+                self.production_contract_issues.append(issue)
+
+        finding_paragraphs = {
+            f.para_id for f in findings if f.para_id in expected_paragraphs
+        }
+        accounted = ((set(returned) & expected_paragraphs)
+                     | finding_paragraphs)
+        outcomes = self.production_observed.setdefault(response_id, {})
+        for para_id in accounted:
+            is_error = para_id in finding_paragraphs
+            for error_type in error_types:
+                site_id = self.model_obligations.get(
+                    (para_id, str(error_type)))
+                if site_id:
+                    outcomes[site_id] = outcomes.get(site_id, False) or is_error
+
+    def checkpoint_metadata(self, response_id: str) -> dict:
+        """The receipt portion of a paid call that a resume must replay."""
+        outcomes = self.production_observed.get(response_id)
+        issues = [row for row in self.production_contract_issues
+                  if row.get("response_id") == response_id]
+        if outcomes is None and not issues:
+            return {}
+        return {"examination_production_verdicts": {
+            "outcomes": dict(outcomes or {}),
+            "contract_issues": issues,
+        }}
+
+    def restore_production_response(self, response_id: str,
+                                    metadata: dict | None) -> None:
+        """Replay a checkpointed receipt after its expected sites are rebuilt."""
+        payload = (metadata or {}).get("examination_production_verdicts") or {}
+        expected = self.production_expected.get(response_id, set())
+        outcomes = self.production_observed.setdefault(response_id, {})
+        for site_id, is_error in (payload.get("outcomes") or {}).items():
+            if site_id in expected and self.ledger.has(site_id):
+                outcomes[site_id] = outcomes.get(site_id, False) or bool(is_error)
+        for issue in payload.get("contract_issues") or []:
+            if isinstance(issue, dict) and issue not in self.production_contract_issues:
+                self.production_contract_issues.append(dict(issue))
+
+    def finalize_production_verdicts(self) -> None:
+        """Project all production receipts once, strongest evidence first."""
+        if self.production_finalized:
+            return
+        expected_by_site: dict[str, set[str]] = {}
+        observed_by_site: dict[str, dict[str, bool]] = {}
+        for response_id, site_ids in self.production_expected.items():
+            for site_id in site_ids:
+                expected_by_site.setdefault(site_id, set()).add(response_id)
+        for response_id, outcomes in self.production_observed.items():
+            for site_id, is_error in outcomes.items():
+                observed_by_site.setdefault(site_id, {})[response_id] = is_error
+
+        for site_id, expected_responses in expected_by_site.items():
+            if self.ledger.state(site_id) != LedgerState.NEEDS_JUDGMENT:
+                continue
+            observed = observed_by_site.get(site_id, {})
+            evidence = {
+                "expected_responses": sorted(expected_responses),
+                "observed_responses": sorted(observed),
+            }
+            if any(observed.values()):
+                self.ledger.transition(
+                    site_id, LedgerState.MODEL_CONFIRMED,
+                    actor="production detector",
+                    reason="explicit Phase 2 response reported a finding",
+                    evidence=evidence)
+            elif expected_responses and set(observed) == expected_responses:
+                self.ledger.transition(
+                    site_id, LedgerState.MODEL_PASSED,
+                    actor="production detector",
+                    reason="every expected Phase 2 response explicitly reviewed "
+                           "this paragraph/category and reported no finding",
+                    evidence=evidence)
+        self.production_finalized = True
+
+    def production_verdicts_report(self, enabled: bool) -> dict:
+        expected_by_site: dict[str, set[str]] = {}
+        observed_by_site: dict[str, dict[str, bool]] = {}
+        for response_id, site_ids in self.production_expected.items():
+            for site_id in site_ids:
+                expected_by_site.setdefault(site_id, set()).add(response_id)
+        for response_id, outcomes in self.production_observed.items():
+            for site_id, is_error in outcomes.items():
+                observed_by_site.setdefault(site_id, {})[response_id] = is_error
+        explicit_errors = 0
+        explicit_passes = 0
+        for site_id, expected_responses in expected_by_site.items():
+            observed = observed_by_site.get(site_id, {})
+            if any(observed.values()):
+                explicit_errors += 1
+            elif expected_responses and set(observed) == expected_responses:
+                explicit_passes += 1
+        expected_sites = len(expected_by_site)
+        explicit_sites = explicit_errors + explicit_passes
+        complete_responses = sum(
+            bool(site_ids) and site_ids <= set(
+                self.production_observed.get(response_id, {}))
+            for response_id, site_ids in self.production_expected.items())
+        return {
+            "enabled": bool(enabled),
+            "shadow_only": True,
+            "may_create_findings": False,
+            "expected_sites": expected_sites,
+            "explicit_sites": explicit_sites,
+            "explicit_passes": explicit_passes,
+            "explicit_errors": explicit_errors,
+            "pending_sites": max(0, expected_sites - explicit_sites),
+            "coverage_percent": round(
+                explicit_sites / expected_sites * 100 if expected_sites else 100.0,
+                2),
+            "expected_responses": len(self.production_expected),
+            "complete_responses": complete_responses,
+            "contract_issues": list(self.production_contract_issues),
         }
 
     def _observe_target(self, site_id: str, finding: Finding,
@@ -206,6 +389,20 @@ class ShadowExamination:
         if site_id in self.primary_judgment_verdicts:
             for finding in findings:
                 self._observe_target(site_id, finding, applied)
+            return
+
+        # A Phase 2 explicit pass is terminal evidence from the production
+        # detector. A later auxiliary pass may still surface a matching finding,
+        # but that is independent evidence, not permission to rewrite history.
+        if self.ledger.state(site_id) in TERMINAL_STATES:
+            for finding in findings:
+                self.ledger.record_observation(
+                    site_id, actor="production reviewer",
+                    reason="later finding observed after an explicit terminal "
+                           "production verdict",
+                    evidence={"finding_id": finding.finding_id,
+                              "status": finding.status,
+                              "applied": finding.finding_id in applied})
             return
 
         for finding in findings:

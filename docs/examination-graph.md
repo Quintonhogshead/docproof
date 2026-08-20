@@ -46,19 +46,43 @@ examination comparison, and cost. When the lanes disagree, the job also writes:
 - `examination-evaluation-key.json` — the separate source answer key, retained
   with the job artifacts but deliberately not offered by the results UI.
 
+## Phase 2: explicit production verdicts
+
+Phase 2 closes the largest accounting gap left by phase one without widening
+the examination layer's authority. Each successful production detector reply
+must return `reviewed_paragraph_ids`: every non-context paragraph it checked,
+exactly once. For the error-type category in that call, a paragraph named in
+the receipt with no finding becomes an explicit model pass; a returned finding
+becomes explicit error evidence. Missing, duplicate, or unknown ids are reported
+as receipt-contract issues and the missing obligations stay pending.
+
+Receipts are aggregated before the ledger is projected. This matters for
+repeated categories, split retries, resumable checkpoints, and ensemble reads:
+an error from any completed read is preserved, while a pass requires every
+expected read for that paragraph/category to have returned a receipt. A cached
+call replays its receipt alongside its findings, so resuming a job never turns
+paid coverage back into silence.
+
+Phase 2 is still shadow-only. Its pass/error evidence cannot create a Finding,
+enter validation, change confidence, or write a tracked change. Disable
+`examination_graph.production_verdicts` to restore the phase-one finding-only
+prompt while retaining the ledger, or use the existing examination-graph kill
+switch to remove the whole shadow layer.
+
 ## What phase one measures
 
-Phase one adapts the existing sweep, spell, consistency, adjudication, and model
+The examination graph adapts the existing sweep, spell, consistency,
+adjudication, and model
 finding paths into stable examination sites. Deterministic sweep obligations
 record negative evidence explicitly: a scanned paragraph is locally passed or
-locally confirmed. The current model contract returns only findings, so its
-paragraph/category obligations remain `needs_judgment` when no matching finding
-was returned. Silence is deliberately not counted as a pass.
+locally confirmed. With Phase 2 enabled, production model silence counts as a
+pass only when every expected response explicitly names the paragraph it read;
+an absent or malformed receipt remains `needs_judgment`.
 
 The coverage report gives generated, terminal, and explicitly pending counts;
 current-state totals by site type and generator; sparse graph totals; and any
 obligations omitted by the configured site cap. It also lists the phase-two work
-that is not represented yet.
+  that is not represented yet.
 
 ## Rollback on Fly
 

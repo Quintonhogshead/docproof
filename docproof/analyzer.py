@@ -7,7 +7,7 @@ import logging
 from pydantic import BaseModel, ValidationError, create_model
 from typing import Literal, Sequence
 
-from .config import Config
+from .config import Config, examination_production_verdicts_enabled
 from .error_registry import ErrorType
 from .models import Chunk, Finding, Usage
 from .providers import Provider, ProviderResult, strict_json_schema
@@ -36,7 +36,8 @@ class FindingList(BaseModel):
 
 
 def build_output_model(keys: tuple[str, ...], *,
-                       explanations: bool = True) -> type[BaseModel]:
+                       explanations: bool = True,
+                       explicit_verdicts: bool = False) -> type[BaseModel]:
     """A FindingList whose error_type is an enum over exactly this pass's keys,
     so the API itself guarantees a label we can trust. Dropping `explanation`
     from the schema is what actually saves the tokens — asking for it and
@@ -44,7 +45,14 @@ def build_output_model(keys: tuple[str, ...], *,
     raw = create_model("RawFinding",
                        __base__=RawFinding if explanations else _FindingCore,
                        error_type=(Literal[keys], ...))
-    return create_model("FindingList", findings=(list[raw], ...))
+    fields = {"findings": (list[raw], ...)}
+    if explicit_verdicts:
+        # One compact receipt per paragraph, rather than one pass row per
+        # paragraph x error type.  The analyzer already knows the pass's exact
+        # error-type set, so a paragraph receipt accounts for that whole
+        # paragraph/category obligation without multiplying output tokens.
+        fields["reviewed_paragraph_ids"] = (list[str], ...)
+    return create_model("FindingList", **fields)
 
 
 _CONTRACT = """OUTPUT CONTRACT
@@ -58,8 +66,23 @@ _EXPLANATION_RULE = (
     '\n- explanation: one short sentence a writer will read as a margin comment.')
 
 
-def base_rules(*, explanations: bool = True) -> str:
+def base_rules(*, explanations: bool = True,
+               explicit_verdicts: bool = False) -> str:
     contract = _CONTRACT % (' "explanation": "...",' if explanations else "")
+    if explicit_verdicts:
+        contract = contract.replace(
+            'Return an object with a "findings" array — empty if there are no errors.',
+            'Return an object with a "findings" array — empty if there are no '
+            'errors — and a "reviewed_paragraph_ids" array.')
+        contract += """
+
+EXPLICIT COVERAGE RECEIPT
+- reviewed_paragraph_ids contains every <paragraph> id in the user message,
+  exactly once, after you have checked that paragraph against every error type
+  in this pass. Include paragraphs where you found errors as well as clean ones.
+- Do not include ids from the read-only <context> block.
+- Never omit an id to mean clean. An omitted id is recorded as unreviewed and
+  stays pending; only an explicitly returned id can support a pass verdict."""
     return """You are a grammar-error detector inside an automated document \
 pipeline. You review paragraphs and report errors, as structured findings, for \
 the error types defined below and no others. You never rewrite documents; you \
@@ -171,8 +194,10 @@ def build_system_prompt(types: Sequence[ErrorType], *,
                         vocabulary: str = "",
                         conventions: str = "",
                         story: str = "",
-                        ensemble: bool = False) -> str:
-    parts = [base_rules(explanations=explanations)]
+                        ensemble: bool = False,
+                        explicit_verdicts: bool = False) -> str:
+    parts = [base_rules(explanations=explanations,
+                        explicit_verdicts=explicit_verdicts)]
     if len(types) > 1:
         index = "\n".join(f"- {et.key}: {et.name}" for et in types)
         parts.append(
@@ -226,7 +251,8 @@ class Analyzer:
 
     def __init__(self, cfg: Config, error_types: Sequence[ErrorType],
                  provider: Provider, finding_ids: itertools.count,
-                 vocabulary: str = "", conventions: str = "", story: str = ""):
+                 vocabulary: str = "", conventions: str = "", story: str = "",
+                 examination=None):
         if not error_types:
             raise ValueError("Analyzer needs at least one error type")
         self.cfg = cfg
@@ -235,15 +261,23 @@ class Analyzer:
         self.label = "+".join(self.keys)
         self.ids = finding_ids           # shared across passes → unique IDs
         self.provider = provider
+        self.examination = examination
+        self.explicit_verdicts = examination_production_verdicts_enabled(cfg)
         explanations = cfg.report_explanations
         self.system_prompt = build_system_prompt(self.types,
                                                  explanations=explanations,
                                                  vocabulary=vocabulary,
                                                  conventions=conventions,
                                                  story=story,
-                                                 ensemble=cfg.ensemble.verifies)
+                                                 ensemble=cfg.ensemble.verifies,
+                                                 explicit_verdicts=(
+                                                     self.explicit_verdicts))
         self.output_model = build_output_model(self.keys,
-                                               explanations=explanations)
+                                               explanations=explanations,
+                                               explicit_verdicts=(
+                                                   self.explicit_verdicts))
+        self.legacy_output_model = build_output_model(
+            self.keys, explanations=explanations, explicit_verdicts=False)
         self.schema = strict_json_schema(self.output_model)
         log.debug("System prompt for [%s]: %d chars", self.label,
                   len(self.system_prompt))
@@ -268,7 +302,8 @@ class Analyzer:
         )
 
     def process_result(self, result: ProviderResult, chunk: Chunk,
-                       usage: Usage) -> tuple[list[Finding], bool]:
+                       usage: Usage, *, response_id: str | None = None
+                       ) -> tuple[list[Finding], bool]:
         """Turn one provider result into findings, counting its tokens and
         assigning ids. Must run in document order — it advances the shared id
         counter — so the caller calls it serially even when fetch() ran in
@@ -279,7 +314,13 @@ class Analyzer:
         parsed = self._unwrap(result, chunk.chunk_id)
         if parsed is None:
             return [], False
-        return self._to_findings(list(parsed.findings), chunk), True
+        findings = self._to_findings(list(parsed.findings), chunk)
+        if self.explicit_verdicts and self.examination is not None:
+            receipt_id = response_id or f"{self.label}:{chunk.chunk_id}"
+            self.examination.observe_production_response(
+                receipt_id, self.keys, chunk.paragraphs,
+                tuple(getattr(parsed, "reviewed_paragraph_ids", ())), findings)
+        return findings, True
 
     def analyze_chunk(self, chunk: Chunk, usage: Usage
                       ) -> tuple[list[Finding], bool]:
@@ -308,6 +349,24 @@ class Analyzer:
         try:
             return self.output_model.model_validate(result.parsed)
         except ValidationError as e:
+            # Phase 2 coverage is a shadow contract. A provider that returns a
+            # valid legacy finding payload but omits/mangles the new receipt
+            # must not erase production findings or turn a clean review into a
+            # failed call. Parse the proven contract, let the receipt observer
+            # record every paragraph as missing, and keep the manuscript path
+            # byte-for-byte on its previous fail-open behavior.
+            if self.explicit_verdicts:
+                try:
+                    legacy = self.legacy_output_model.model_validate(result.parsed)
+                except ValidationError:
+                    pass
+                else:
+                    log.warning(
+                        "%s [%s]: production findings were valid but the Phase "
+                        "2 paragraph receipt was missing or malformed; keeping "
+                        "the findings and leaving those examination obligations "
+                        "pending.", chunk_id, self.label)
+                    return legacy
             log.error("%s [%s]: response did not match the finding schema: %s",
                       chunk_id, self.label, e)
             return None

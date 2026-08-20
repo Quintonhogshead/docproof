@@ -4838,6 +4838,24 @@ function renderReport(r, format) {
     section.append(head, copy);
     groups.append(section);
 
+    const p = r.examination_graph.production_verdicts;
+    if (p && p.enabled) {
+      const production = document.createElement('section');
+      production.className = 'card examination-production';
+      const productionHead = document.createElement('h3');
+      productionHead.textContent = 'Phase 2 production verdicts — shadow only';
+      const productionCopy = document.createElement('p');
+      productionCopy.textContent = `${Number(p.explicit_sites || 0).toLocaleString()} `
+        + `of ${Number(p.expected_sites || 0).toLocaleString()} paragraph/category `
+        + `sites explicitly accounted for (${Number(p.coverage_percent || 0).toFixed(2)}%): `
+        + `${Number(p.explicit_passes || 0).toLocaleString()} passes, `
+        + `${Number(p.explicit_errors || 0).toLocaleString()} error signals, `
+        + `${Number(p.pending_sites || 0).toLocaleString()} pending. `
+        + 'These receipts created no findings or edits.';
+      production.append(productionHead, productionCopy);
+      groups.append(production);
+    }
+
     const j = r.examination_graph.judgment;
     if (j && j.enabled) {
       const selection = j.selection || {};

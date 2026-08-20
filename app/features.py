@@ -244,9 +244,11 @@ FEATURES: tuple[FeatureSpec, ...] = (
     FeatureSpec(
         "examination_graph", "Examination coverage ledger — shadow",
         "Generate explicit examination obligations and an append-only decision "
-        "ledger beside the normal review. Shadow mode observes only: it cannot "
-        "create edits or bypass the existing validator. Turn it off to restore "
-        "the pre-ledger runtime and output set immediately.",
+        "ledger beside the normal review. Production replies explicitly receipt "
+        "each paragraph they reviewed; missing receipts stay pending rather than "
+        "being called clean. Shadow mode observes only: it cannot create edits "
+        "or bypass the existing validator. Turn it off to restore the pre-ledger "
+        "runtime and output set immediately.",
         "safety", ("examination_graph", "enabled")),
     FeatureSpec(
         "examination_judgment", "Independent examination judge — experiment",

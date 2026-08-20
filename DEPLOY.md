@@ -258,6 +258,20 @@ not turn the experiment on globally):
 fly secrets unset DOCPROOF_EXAMINATION_JUDGMENT -a atmosphere-docproof
 ```
 
+Phase 2's production-receipt prompt has a separate narrow brake too. It leaves
+the phase-one ledger and optional Phase 1B judge available, but restores the
+finding-only production prompt and leaves its broad obligations pending:
+
+```bash
+fly secrets set DOCPROOF_EXAMINATION_PRODUCTION_VERDICTS=0 -a atmosphere-docproof
+```
+
+Remove the override to restore the shipped Phase 2 setting:
+
+```bash
+fly secrets unset DOCPROOF_EXAMINATION_PRODUCTION_VERDICTS -a atmosphere-docproof
+```
+
 Phase 1B is visible only to administrators and can run only as one **Right now**
 review round. Its UI shows the $2.00 per-manuscript ceiling, and the server
 enforces the role and timing constraints even for direct API requests. The

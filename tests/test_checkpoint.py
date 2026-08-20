@@ -37,6 +37,20 @@ def test_a_written_entry_comes_back_after_a_reload(tmp_path):
     assert again.max_finding_id() == 1
 
 
+def test_optional_shadow_metadata_survives_without_changing_old_entries(tmp_path):
+    c = _ckpt(tmp_path)
+    receipt = {"examination_production_verdicts": {
+        "outcomes": {"X-site": False}}}
+    c.put("p0-chunk-000", items=[], usage=_usage(), ok=True,
+          metadata=receipt)
+    c.put("p0-chunk-001", items=[], usage=_usage(), ok=True)
+
+    again = _ckpt(tmp_path)
+    assert again.load() == 2
+    assert again.get("p0-chunk-000").metadata == receipt
+    assert again.get("p0-chunk-001").metadata == {}
+
+
 def test_a_failed_call_is_kept_for_its_cost_but_never_replayed(tmp_path):
     c = _ckpt(tmp_path)
     c.put("p0-chunk-000", items=[], usage=_usage(3), ok=False)
