@@ -77,6 +77,9 @@ class Entry:
     items: list[dict]
     usage: dict
     ok: bool
+    # Optional shadow-lane receipts associated with this paid call. Unknown to
+    # older checkpoints and ignored by consumers that do not need them.
+    metadata: dict = dataclasses.field(default_factory=dict)
 
 
 class Checkpoint:
@@ -131,9 +134,9 @@ class Checkpoint:
                             "the calls before it still count.", n, self.path)
                 continue
             try:
-                self._entries[row["key"]] = Entry(items=list(row["items"]),
-                                                  usage=dict(row["usage"]),
-                                                  ok=bool(row["ok"]))
+                self._entries[row["key"]] = Entry(
+                    items=list(row["items"]), usage=dict(row["usage"]),
+                    ok=bool(row["ok"]), metadata=dict(row.get("metadata") or {}))
             except (KeyError, TypeError) as e:
                 log.warning("Skipping malformed checkpoint entry on line %d "
                             "(%s)", n, e)
@@ -158,8 +161,9 @@ class Checkpoint:
         return entry.usage if entry is not None and not entry.ok else None
 
     def put(self, key: str, *, items: list[dict], usage: Usage,
-            ok: bool) -> None:
-        entry = Entry(items=items, usage=dataclasses.asdict(usage), ok=ok)
+            ok: bool, metadata: dict | None = None) -> None:
+        entry = Entry(items=items, usage=dataclasses.asdict(usage), ok=ok,
+                      metadata=dict(metadata or {}))
         self._entries[key] = entry
         self._append(key, entry)
 

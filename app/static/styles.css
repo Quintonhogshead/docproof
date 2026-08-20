@@ -1506,3 +1506,42 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
 }
+
+/* ── the fix screen: resolving flagged corrections in place ─────────────── */
+.fix-item {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.8rem 1rem; margin: 0.7rem 0;
+}
+.fix-item.is-busy { opacity: 0.6; }
+.fix-head { margin-bottom: 0.3rem; }
+.fix-note {
+  margin: 0.3rem 0; padding: 0.15rem 0.75rem;
+  border-left: 3px solid var(--accent-soft); font-style: italic;
+}
+.fix-anchor { margin: 0.15rem 0; font-size: 0.9rem; }
+.fix-opt {
+  display: flex; align-items: center; gap: 0.8rem;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.45rem 0.7rem; margin: 0.45rem 0;
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+.fix-opt-loc {
+  flex: 0 0 auto; font-size: 0.72rem; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--muted);
+}
+.fix-opt .fix-rl { flex: 1 1 auto; }
+.fix-opt button { flex: 0 0 auto; }
+.fix-rl { margin: 0.15rem 0; line-height: 1.55; }
+.fix-rl del {
+  color: var(--warn); text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.fix-rl ins {
+  color: var(--ok); text-decoration: none; font-weight: 600;
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-radius: 2px; padding: 0 0.1em;
+}
+.fix-typed { display: flex; gap: 0.5rem; margin-top: 0.55rem; }
+.fix-typed input { flex: 1 1 auto; }
+.fix-error { color: var(--warn); margin: 0.4rem 0 0; font-size: 0.9rem; }
+.fix-done { color: var(--ok); font-weight: 600; margin: 0.35rem 0 0.1rem; }

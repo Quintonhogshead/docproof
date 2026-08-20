@@ -229,6 +229,14 @@ def run_health(coverage=None, audit=None, smoothing=None,
             f"({failure.get('type', 'error')}: "
             f"{failure.get('message', 'no detail')}); shadow artifacts may be "
             f"incomplete, but the normal review was unchanged.")
+    production = (examination or {}).get("production_verdicts") or {}
+    incomplete = (production.get("expected_responses", 0)
+                  - production.get("complete_responses", 0))
+    if production.get("enabled") and incomplete:
+        lines.append(
+            f"Phase 2 examination receipts were incomplete for {incomplete} "
+            f"production response(s); unacknowledged sites remain pending and "
+            f"the normal review was unchanged.")
     return lines
 
 
@@ -253,6 +261,8 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
     def on(flag: bool) -> str:
         return "on" if flag else "off"
 
+    from .config import examination_production_verdicts_enabled
+
     n_pass = len(cfg.error_type_groups)
     glossary = f"on (`{cfg.glossary.model}`)" if cfg.glossary.enabled else "off"
     sapling = "off"
@@ -273,6 +283,8 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("Smoothing", on(cfg.smoothing.enabled)),
         ("Examination graph", (cfg.examination_graph.mode
                                if cfg.examination_graph.enabled else "off")),
+        ("Production examination receipts",
+         on(examination_production_verdicts_enabled(cfg))),
         ("Independent examination judge",
          (f"on (`{cfg.examination_graph.judgment.primary_model}`, "
           f"${cfg.examination_graph.judgment.max_cost_usd:.2f} cap)"
@@ -406,6 +418,20 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
             f"This run was observation-only: the examination graph created no "
             f"edits. See `examination-coverage.md` and the compressed, "
             f"append-only `examination-ledger.jsonl.gz`.\n")
+        production = examination.get("production_verdicts") or {}
+        if production.get("enabled"):
+            L.append("### Phase 2 production verdicts — shadow only\n")
+            L.append(
+                f"Production detector replies explicitly accounted for **"
+                f"{production.get('explicit_sites', 0):,} of "
+                f"{production.get('expected_sites', 0):,}** paragraph/category "
+                f"site(s) ({production.get('coverage_percent', 0):.2f}%): "
+                f"{production.get('explicit_passes', 0):,} explicit pass(es), "
+                f"{production.get('explicit_errors', 0):,} explicit error "
+                f"signal(s), and {production.get('pending_sites', 0):,} still "
+                f"pending. Missing or malformed receipts were not treated as "
+                f"clean. These verdicts changed no finding and made no "
+                f"manuscript edit.\n")
         judgment = examination.get("judgment") or {}
         if judgment.get("enabled"):
             selection = judgment.get("selection") or {}

@@ -60,7 +60,8 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  deterministic: bool = True,
                  pages: tuple[int, int] = (0, 0),
                  checks: tuple = (), merged_away: int = 0,
-                 page_labels: dict[int, str] | None = None) -> tuple[Path, Path]:
+                 page_labels: dict[int, str] | None = None,
+                 queue: list[dict] | None = None) -> tuple[Path, Path]:
     """Write `corrections.json` and `corrections_notes.md` into `out_dir`, and
     return their paths. `deterministic` is False when an opt-in model pass ran
     (the sanity gate, or the second look over the extractor's queries), so the
@@ -68,11 +69,14 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
     `(placed, total)` from the page map, reported so a run whose page narrowing
     silently did not happen says so. `page_labels` maps a proof page to the
     InDesign folio it should be shown as (see `idml.page_label_map`), so every
-    page a reviewer or designer reads here is the page InDesign shows."""
+    page a reviewer or designer reads here is the page InDesign shows. `queue` is
+    the review screen's list of unresolved flags with their clickable resolutions
+    (see `resolve`)."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
                        deterministic=deterministic, pages=pages, checks=checks,
-                       merged_away=merged_away, page_labels=page_labels or {})
+                       merged_away=merged_away, page_labels=page_labels or {},
+                       queue=queue)
     json_path = out_dir / "corrections.json"
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
@@ -84,7 +88,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
              deterministic=True, pages=(0, 0), checks=(), merged_away=0,
-             page_labels=None) -> dict:
+             page_labels=None, queue=None) -> dict:
     needs_human = [c for c in comments if c.needs_human]
     placed, total = pages
     page_labels = page_labels or {}
@@ -171,6 +175,10 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
         # The designer's list: what needs InDesign open, located. Composition is the
         # one thing this engine cannot do, so it is the one thing it does not claim.
         "checks": [_with_label(dataclasses.asdict(c), page_labels) for c in checks],
+        # The review screen's queue: every flag a person still owns, each with the
+        # concrete places its change could land, ready to click-apply — and, once
+        # someone does, the record of what they chose (see `resolve`).
+        "queue": list(queue or []),
     }
 
 
@@ -235,10 +243,15 @@ def _markdown(d: dict) -> str:
     for c in com["items"]:
         if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED):
             covered.update(c.get("edit_ids") or [])
-    ap_flagged = ap["flagged"] if ap is not None else []
+    # A flag the designer resolved from the review screen is done — it leaves
+    # the needs-a-human lists and counts with the applied, and the resolutions
+    # get a section of their own below.
+    ap_flagged = ([o for o in ap["flagged"] if not o.get("resolved")]
+                  if ap is not None else [])
     flagged_uncovered = ([o for o in ap_flagged if o["id"] not in covered]
                          if com["total"] else ap_flagged)
-    if (verify["clean"] and (ap is None or not ap["flagged"])
+    resolutions = d.get("resolutions") or []
+    if (verify["clean"] and (ap is None or not ap_flagged)
             and not com["unresolved"]):
         L.append("**Clean.** Every correction landed exactly, nothing else in the "
                  "file changed, and every reviewer comment was accounted for.\n")
@@ -255,7 +268,11 @@ def _markdown(d: dict) -> str:
         # read off the apply outcomes instead.
         if com["total"]:
             items = com.get("items") or []
-            applied_c = sum(1 for c in items if c["disposition"] == DISP_APPLIED)
+            # A resolved comment counts with the applied — its change is in the
+            # file now — so the buckets still sum to the reviewer's total.
+            applied_c = sum(1 for c in items
+                            if c["disposition"] == DISP_APPLIED
+                            or c.get("resolved"))
             nochange_c = sum(1 for c in items if c["disposition"] == DISP_NO_OP)
             headline.append(f"{com['total']} reviewer comment(s)")
             headline.append(f"{applied_c} applied")
@@ -311,7 +328,8 @@ def _markdown(d: dict) -> str:
     # flagged during apply or never turned into an edit at all. This is the section
     # that keeps a comment from being swallowed.
     unresolved = [c for c in com["items"]
-                  if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)]
+                  if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)
+                  and not c.get("resolved")]
     if unresolved:
         L.append(f"## Reviewer comments needing a human — {len(unresolved)}\n")
         L.append("Every one carries the reviewer's original note and the page it "
@@ -342,6 +360,22 @@ def _markdown(d: dict) -> str:
             L.append(f"- **{where}**: “{_preview(note)}”"
                      + (f" — on “{_preview(c['anchor'])}”" if c["anchor"] else "")
                      + f" — {c['detail']}")
+        L.append("")
+
+    # What the designer settled from the review screen — a clicked placement, or
+    # a typed answer a model transcribed. Each is in the file now; each is
+    # listed so the log says who decided it.
+    if resolutions:
+        L.append(f"## Resolved in review — {len(resolutions)}\n")
+        L.append("These flags were resolved on the review screen; the changes "
+                 "are in the corrected file.\n")
+        for r in resolutions:
+            how = (f"typed: “{_preview(r['text'])}”" if r.get("text")
+                   else "picked a placement")
+            L.append(f"- {how}:")
+            if r.get("before"):
+                L.append(f"  - was: “{_preview(r['before'], 300)}”")
+            L.append(f"  - now: “{_preview(r.get('after') or '(line removed)', 300)}”")
         L.append("")
 
     if ap is not None:
@@ -453,7 +487,9 @@ def _markdown(d: dict) -> str:
         para_removals = ap.get("para_removals", 0)
         fmt_companions = ap.get("fmt_companions", 0)
         parsed_n = d["parse"]["edits"]
-        pieces = [f"{ap['applied']} applied", f"{len(ap['flagged'])} for a human",
+        # A resolution moves an edit from "for a human" to "applied", so the
+        # equation counts the flags still standing, not the flags as raised.
+        pieces = [f"{ap['applied']} applied", f"{len(ap_flagged)} for a human",
                   f"{len(ap['no_op'])} no-op"]
         if merged_away:
             pieces.append(f"{merged_away} merged into others")
@@ -463,9 +499,19 @@ def _markdown(d: dict) -> str:
             extra.append(f"{para_removals} emptied-line removal(s)")
         if fmt_companions:
             extra.append(f"{fmt_companions} companion format edit(s)")
+        # A resolution of a flagged *edit* moves that edit across the equals
+        # sign (one more applied, one fewer for a human), so the two sides
+        # still balance. A resolution of a comment that never became an edit
+        # applies a change no parsed id stands behind, so it joins the left
+        # side like the other synthetic outcomes.
+        by_item = {q.get("id"): q for q in d.get("queue") or []}
+        no_edit = sum(1 for r in resolutions
+                      if not (by_item.get(r.get("item_id")) or {}).get("edit_ids"))
+        if no_edit:
+            extra.append(f"{no_edit} resolution(s) of an unextracted comment")
         left = f"{parsed_n} parsed" + (" + " + " + ".join(extra) if extra else "")
-        balances = (parsed_n + added
-                    == ap["applied"] + len(ap["flagged"]) + len(ap["no_op"])
+        balances = (parsed_n + added + no_edit
+                    == ap["applied"] + len(ap_flagged) + len(ap["no_op"])
                     + merged_away)
         note = "" if balances else " — counts do not reconcile"
         L.append(f"- Corrections: {left} = " + " + ".join(pieces) + f"{note}.")

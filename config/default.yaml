@@ -632,7 +632,9 @@ examination_graph:
   enabled: true
   mode: shadow
   model_obligations: true   # one explicit pending obligation per paragraph/category;
-                            # legacy model silence is never called a pass
+                            # Phase 2 settles it only from an explicit response receipt
+  production_verdicts: true # require each production reply to name every reviewed
+                            # paragraph; unacknowledged work remains pending
   spell_sites: true         # site each unknown-word occurrence from spellscan
   max_sites: 200000         # cap is reported as omissions, never silently hidden
   write_ledger: true

@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .config import Config, cache_dir_for
+from .config import (Config, cache_dir_for,
+                     examination_production_verdicts_enabled)
 from .models import CoverageLedger, Usage
 from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
                        continuity_findings, finish, prepare)
@@ -702,11 +703,13 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
     usage = Usage()
     analyzers = build_analyzers(cfg, prepared.pass_types, provider, ids,
                                 prepared.vocabulary, prepared.conventions,
-                                prepared.story_sheet)
+                                prepared.story_sheet,
+                                examination=prepared.examination)
     plan = prepared.effective_pass_plan
     findings: list = []
     recovered = 0
     unrecovered = 0
+    phase_two = examination_production_verdicts_enabled(cfg)
 
     # Ordered by pass then chunk so finding IDs come out in the same order a
     # synchronous run would produce — including any recovered inline, which
@@ -716,13 +719,19 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
     for prun in plan:
         analyzer = analyzers[prun.index]
         for chunk in prun.chunks:
-            result = results.get(custom_id(prun.index, chunk.chunk_id))
+            response_id = custom_id(prun.index, chunk.chunk_id)
+            if prepared.examination is not None and phase_two:
+                prepared.examination.expect_production_response(
+                    response_id, analyzer.keys, chunk.paragraphs)
+            result = results.get(response_id)
             found: list = []
             ok = False
             if result is not None:
-                found, ok = analyzer.process_result(result, chunk, usage)
+                found, ok = analyzer.process_result(
+                    result, chunk, usage, response_id=response_id)
             if not ok and provider is not None:
-                found, ok = analyze_with_retry(analyzer, chunk, usage)
+                found, ok = analyze_with_retry(
+                    analyzer, chunk, usage, response_id=response_id)
                 if ok:
                     recovered += 1
             if not ok:
@@ -751,4 +760,6 @@ def _assemble(cfg: Config, prepared: Prepared, results: dict,
                           f"for requests that map to no known (pass, section) "
                           f"and were discarded — their verdicts were paid for "
                           f"but not applied", "partial")
+    if prepared.examination is not None and phase_two:
+        prepared.examination.finalize_production_verdicts()
     return findings, usage

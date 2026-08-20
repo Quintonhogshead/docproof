@@ -2090,6 +2090,24 @@ class JobRunner:
         completing job takes. The "Retry archive" route's entry point."""
         self._archive_done(job_id)
 
+    def refresh_archive(self, job_id: str, names: list[str]) -> None:
+        """Re-push named files whose contents changed after archiving — the
+        corrected IDML and report a review-screen resolution just rewrote —
+        updating each in place by its Drive id so the archive never serves a
+        stale deliverable back onto a wiped volume. Best-effort and silent when
+        the archive is off, like every other archive touch."""
+        if self.notify_home is None:
+            return
+        try:
+            from .watch import archive
+            job = self.store.get(job_id)
+            if job is None:
+                return
+            with self._archive_lock:
+                archive.refresh_files(self.notify_home, job, names)
+        except Exception:                 # noqa: BLE001 - never over a resolution
+            log.exception("Refreshing the archive for %s failed", job_id)
+
     def _archive_done(self, job_id: str) -> None:
         """Push a finished job's outputs to the Drive archive, if it is switched
         on. One inline attempt; a Drive hiccup leaves the job "pending" for the

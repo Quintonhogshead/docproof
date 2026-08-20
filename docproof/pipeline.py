@@ -16,7 +16,8 @@ from typing import Sequence
 
 from .analyzer import Analyzer
 from .chunker import _SENTENCE_SPLIT, chunk_document
-from .config import Config, cache_dir_for
+from .config import (Config, cache_dir_for,
+                     examination_production_verdicts_enabled)
 from .consistency import (CONSISTENCY_KEY, ConsistencyReport,
                           find_inconsistencies, to_findings)
 from .error_registry import ErrorType, load_error_types
@@ -636,9 +637,10 @@ def build_analyzers(cfg: Config, groups: list[list[ErrorType]],
                     finding_ids: itertools.count,
                     vocabulary: str = "",
                     conventions: str = "",
-                    story: str = "") -> list[Analyzer]:
+                    story: str = "",
+                    examination=None) -> list[Analyzer]:
     return [Analyzer(cfg, group, provider, finding_ids, vocabulary, conventions,
-                     story)
+                     story, examination=examination)
             for group in groups]
 
 
@@ -668,7 +670,8 @@ def _split_for_retry(chunk: Chunk) -> list[Chunk]:
     return [_subchunk(chunk, (left,), "a"), _subchunk(chunk, (right,), "b")]
 
 
-def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage
+def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage,
+                  *, response_id: str | None = None
                   ) -> tuple[list, bool]:
     """One bounded semantic retry for a (pass, chunk) the provider did not
     answer, so a single hiccup no longer drops a whole section silently.
@@ -690,7 +693,8 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage
         out: list = []
         ok_any = False
         for part in parts:
-            found, ok = analyzer.process_result(analyzer.fetch(part), part, usage)
+            found, ok = analyzer.process_result(
+                analyzer.fetch(part), part, usage, response_id=response_id)
             out.extend(found)
             ok_any = ok_any or ok
         if ok_any:
@@ -698,7 +702,8 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage
                      "truncation", chunk.chunk_id, analyzer.label)
         return out, ok_any
     if result.stop_reason == "refusal":
-        found, ok = analyzer.process_result(analyzer.fetch(chunk), chunk, usage)
+        found, ok = analyzer.process_result(
+            analyzer.fetch(chunk), chunk, usage, response_id=response_id)
         if ok:
             log.info("%s [%s]: recovered on a second attempt", chunk.chunk_id,
                      analyzer.label)
@@ -706,16 +711,19 @@ def _retry_failed(analyzer: Analyzer, chunk: Chunk, result, usage: Usage
     return [], False
 
 
-def analyze_with_retry(analyzer: Analyzer, chunk: Chunk, usage: Usage
+def analyze_with_retry(analyzer: Analyzer, chunk: Chunk, usage: Usage, *,
+                       response_id: str | None = None
                        ) -> tuple[list, bool]:
     """A fresh synchronous fetch for one (pass, chunk), with the same one-shot
     retry as the concurrent path. Used to recover a batch request the provider
     never returned, without duplicating the retry policy."""
     result = analyzer.fetch(chunk)
-    found, ok = analyzer.process_result(result, chunk, usage)
+    found, ok = analyzer.process_result(
+        result, chunk, usage, response_id=response_id)
     if ok:
         return found, ok
-    return _retry_failed(analyzer, chunk, result, usage)
+    return _retry_failed(analyzer, chunk, result, usage,
+                         response_id=response_id)
 
 
 def _detector_specs(cfg: Config) -> list[tuple[str, str | None]]:
@@ -803,7 +811,8 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             dprov = provider_factory(dcfg)
         det_analyzers.append(build_analyzers(
             dcfg, prepared.pass_types, dprov, ids,
-            prepared.vocabulary, prepared.conventions, prepared.story_sheet))
+            prepared.vocabulary, prepared.conventions, prepared.story_sheet,
+            examination=prepared.examination))
 
     # The work list, in the order results must be folded back in: pass, then
     # chunk, then detector. With one detector this is (pass, chunk), the legacy
@@ -818,6 +827,11 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 work.append((det_analyzers[d][prun.index], chunk,
                              _ckpt_key(prun.index, chunk.chunk_id, d), d,
                              prun.index))
+    phase_two = examination_production_verdicts_enabled(cfg)
+    if prepared.examination is not None and phase_two:
+        for analyzer, chunk, key, _d, _pass_i in work:
+            prepared.examination.expect_production_response(
+                key, analyzer.keys, chunk.paragraphs)
 
     usage = Usage()
     findings: list = []
@@ -856,6 +870,9 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 cached = checkpoint.get(key)
                 findings.extend(finding_from_dict(x) for x in cached.items)
                 add_usage(usage, cached.usage)
+                if prepared.examination is not None and phase_two:
+                    prepared.examination.restore_production_response(
+                        key, cached.metadata)
                 ok = True                            # only ok calls are cached
             else:
                 before = snapshot(usage)
@@ -869,19 +886,26 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 # .result() blocks only until THIS call lands; later ones keep
                 # fetching in the pool meanwhile. Bookkeeping stays in order.
                 result = future.result()
-                found, ok = analyzer.process_result(result, chunk, usage)
+                found, ok = analyzer.process_result(
+                    result, chunk, usage, response_id=key)
                 # A provider non-answer used to drop the whole (pass, chunk)
                 # here with only a log line. One bounded retry recovers most of
                 # them; whatever it can't is recorded below as a coverage gap.
                 if not ok:
-                    found, ok = _retry_failed(analyzer, chunk, result, usage)
+                    found, ok = _retry_failed(
+                        analyzer, chunk, result, usage, response_id=key)
                 if ensemble:
                     found = [dataclasses.replace(f, detector=d) for f in found]
                 findings.extend(found)
                 if checkpoint:
+                    metadata = (
+                        prepared.examination.checkpoint_metadata(key)
+                        if prepared.examination is not None and phase_two
+                        else None)
                     checkpoint.put(
                         key, items=[finding_to_dict(f) for f in found],
-                        usage=usage_delta(before, usage), ok=ok)
+                        usage=usage_delta(before, usage), ok=ok,
+                        metadata=metadata)
             if coverage is not None:
                 pc = (pass_i, chunk.chunk_id)
                 prev = covered.get(pc)
@@ -893,6 +917,9 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
     if coverage is not None:
         for label, chunk, ok in covered.values():
             coverage.record(label, chunk, ok)
+
+    if prepared.examination is not None and phase_two:
+        prepared.examination.finalize_production_verdicts()
 
     # Two post-loop passes, run once (not per-chunk) after the detectors. The
     # glossary reads the whole book with its own (stronger) model; its casing
