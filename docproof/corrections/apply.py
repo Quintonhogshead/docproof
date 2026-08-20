@@ -13,6 +13,7 @@ before the file is written, which is the whole safety argument.
 from __future__ import annotations
 
 import re
+from dataclasses import replace as _replace
 from pathlib import Path
 
 from ..validator import fold_punct
@@ -682,6 +683,39 @@ def _core(find: str, replace: str) -> tuple[int, int]:
     return pre, suf
 
 
+def _narrow_across_break(edit: Edit) -> Edit | None:
+    """An edit whose `find` spans a paragraph break, narrowed to the one paragraph
+    its change actually sits in — or None when the change genuinely crosses the
+    break and must stay a person's.
+
+    A reviewer reading a typeset poem marks across its line ends freely: to
+    lowercase one word they highlight "left,⏎Even his wife", and the mark arrives
+    with the break inside it though the change — "Even" → "even" — sits wholly in
+    the second line. Split both sides on the break: when the two sides break into
+    the same number of lines and exactly one line differs, that line is the whole
+    of the change, and it can be located and applied inside its own paragraph like
+    any word swap. When the sides break into a different number of lines the change
+    rewrites the break itself — joining two lines with an em dash, splitting one —
+    which is a paragraph operation this narrowing must not paper over, so it is
+    left alone. `context` is dropped: the reviewer's context spanned the break too,
+    and the narrowed find carries its own paragraph now. Every other field — id,
+    source, page, occurrence — is kept, so the ledger still ties the outcome to the
+    comment it came from."""
+    find_lines = edit.find.split("\n")
+    replace_lines = edit.replace.split("\n")
+    if len(find_lines) != len(replace_lines) or len(find_lines) < 2:
+        return None                            # the change rewrites the break
+    differ = [i for i, (f, r) in enumerate(zip(find_lines, replace_lines))
+              if f != r]
+    if len(differ) != 1:
+        return None                            # nothing, or a change on two lines
+    i = differ[0]
+    new_find, new_replace = find_lines[i], replace_lines[i]
+    if not new_find or new_find == new_replace:
+        return None                            # nothing locatable to change
+    return _replace(edit, find=new_find, replace=new_replace, context="")
+
+
 def _match_as_marked(edit: Edit, stories: list[Story], cache: IndexCache,
                      rebase: "_Rebase") -> tuple | None:
     """An edit whose text the run has already changed, located in the page as the
@@ -1258,6 +1292,16 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
             # opt-in gates ran.
             outcomes.append(EditOutcome(edit, WITHHELD, detail=reason))
             continue
+        if "\n" in edit.find:
+            # A find that spans a paragraph break can match nothing (a paragraph's
+            # text carries no break) — but a reviewer reading a typeset poem quotes
+            # across its line ends freely to mark a change that sits wholly on one
+            # side. When the change itself does not rewrite the break, narrow the
+            # edit to the one paragraph it belongs in and apply it there; a genuine
+            # line-join is left to fall through and flag as a cross-paragraph edit.
+            narrowed = _narrow_across_break(edit)
+            if narrowed is not None:
+                edit = narrowed
         found = _match(edit, stories, cache, scope, rebase, pins)
         # A find the book no longer carries because this run changed it: the mark
         # was written against the page, not against the file as the corrections

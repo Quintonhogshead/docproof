@@ -4736,6 +4736,13 @@ function wordDiff(before, after) {
 // report styling. Every value came from a document, so all of it is escaped.
 function correctionsReportHTML(d) {
   const num = (n) => Number(n || 0).toLocaleString();
+  // The page a designer navigates to: the InDesign folio when the run could align
+  // one (`page_label`, e.g. roman front matter or a restarted section), otherwise
+  // the physical proof page. So a mark shown on “page 7” is the page InDesign
+  // calls 7, not the seventh leaf of the proof.
+  const pageOf = (c) => (c.page_label
+    ? esc(c.page_label)
+    : (c.page ? num(c.page) : ''));
   const ap = d.apply || {};
   const v = d.verify || {};
   const issues = (d.parse || {}).issues || [];
@@ -4844,11 +4851,30 @@ function correctionsReportHTML(d) {
       + 'page, so it can be handled by hand.</p>'
       + needHuman.map((c) =>
         '<div class="flag"><b>'
-        + (c.page ? `page ${num(c.page)}` : '—') + '</b> '
+        + (pageOf(c) ? `page ${pageOf(c)}` : '—') + '</b> '
         + `<span class="caveat">(${esc(DISP[c.disposition] || c.disposition)})`
         + '</span><br>“' + esc(c.instruction || '(no note)') + '”'
         + (c.anchor ? ` <span class="caveat">— on “${esc(c.anchor)}”</span>` : '')
         + (c.detail ? ` <span class="caveat">— ${esc(c.detail)}</span>` : '')
+        + '</div>').join('')
+    : '';
+
+  // Period/capitalization queries the last tier read and confirmed correct as set
+  // — off the human's list by a decision, not omission, so the reasoning is shown
+  // for a person to check the call rather than take it on trust.
+  const confirmedSet = comItems.filter((c) =>
+    c.disposition === 'no_op' && c.detail);
+  const commentsConfirmedHTML = confirmedSet.length
+    ? `<h2>Confirmed as set — ${num(confirmedSet.length)}</h2>`
+      + '<p class="blurb">A model read each against the passage around it and found '
+      + 'the line correct as set, so no change was made. The reasoning is given so '
+      + 'the call can be checked.</p>'
+      + confirmedSet.map((c) =>
+        '<div class="flag"><b>'
+        + (pageOf(c) ? `page ${pageOf(c)}` : '—') + '</b> '
+        + '“' + esc(c.instruction || '(no note)') + '”'
+        + (c.anchor ? ` <span class="caveat">— on “${esc(c.anchor)}”</span>` : '')
+        + ` <span class="caveat">— ${esc(c.detail)}</span>`
         + '</div>').join('')
     : '';
 
@@ -4863,7 +4889,7 @@ function correctionsReportHTML(d) {
         const outcome = c.resolved ? 'resolved in review'
           : (DISP[c.disposition] || c.disposition);
         return `<tr${bad ? ' style="background:#fbeae2"' : ''}>`
-          + `<td${rightNum}>${c.page ? num(c.page) : '—'}</td>`
+          + `<td${rightNum}>${pageOf(c) || '—'}</td>`
           + `<td>${esc(c.instruction || '(no note)')}</td>`
           + `<td>${esc(outcome)}</td></tr>`;
       }).join('') + '</tbody></table></details>'
@@ -4946,7 +4972,7 @@ function correctionsReportHTML(d) {
       + '<table><thead><tr><th>Where</th><th>What to look at</th><th>Why</th>'
       + '</tr></thead><tbody>'
       + checks.map((c) => {
-        const where = (c.page ? `page ${num(c.page)}` : '—')
+        const where = (pageOf(c) ? `page ${pageOf(c)}` : '—')
           + (c.paragraph >= 0 ? `<br><span class="loc">${esc(c.story_id)}, `
             + `¶ ${num(c.paragraph)}</span>` : '');
         return `<tr><td>${where}</td><td>${esc(c.what)}</td>`
@@ -5000,8 +5026,9 @@ function correctionsReportHTML(d) {
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
     + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
-    + resolvedHTML + changesHTML + checkHTML + discHTML + verifyHTML
-    + commentsAllHTML + '</div></body></html>';
+    + resolvedHTML + changesHTML + checkHTML + commentsConfirmedHTML + discHTML
+    + verifyHTML + commentsAllHTML
+    + '</div></body></html>';
 }
 
 // ── the report ────────────────────────────────────────────────────────────

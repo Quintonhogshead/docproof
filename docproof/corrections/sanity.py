@@ -99,7 +99,12 @@ not parse ("slowly eased" → "unhurriedly", losing "eased").
   · a punctuation mark changed in a way that fractures the sentence — a full stop \
 dropped into the middle of one clause, an independent clause spliced to another by \
 a comma, a dash or a quotation mark opened and never closed, a stray capital left \
-mid-sentence.
+mid-sentence. But judge a mark against the whole passage, not the fragment you \
+were handed: a replacement that inserts a block quotation, an epigraph or a run of \
+verse may carry a quotation mark whose partner sits in text outside the line \
+shown, or open a quotation the block itself closes further down — that is not a \
+break. Only call a quotation unbalanced when a single ordinary prose sentence, \
+read whole, is plainly left with a dangling mark.
   · the reviewer's shorthand applied to the letter where the grammar of the \
 sentence needed it expanded — "been" written where the past conditional needs \
 "have been" ("I'd been forced" for "I'd have been forced"); a bare word swap that \
