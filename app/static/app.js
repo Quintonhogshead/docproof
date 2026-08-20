@@ -731,14 +731,15 @@ function routeCorrectionsDrop(files) {
   const idmls = files.filter((f) => suffix(f) === '.idml');
   const bookPresent = idmls.length > 0
     || usableFiles().some((f) => f.can_correct);
-  // A PDF is unambiguous — nothing else uses one. A Word file counts as a proof
-  // only alongside a book, or once corrections is the chosen job; otherwise a
-  // .docx is a manuscript for review or prep and must not be hijacked.
-  const intent = pdfs.length > 0 || isCorrections()
-    || (idmls.length > 0 && docxs.length > 0);
+  // A PDF is unambiguous — nothing else uses one, so it is always the proof. A
+  // Word file is claimed as a proof only when a book is present to correct;
+  // even under the corrections kind, a lone .docx must stay a staged file so it
+  // shows in the list with the kind picker live — otherwise it vanishes into the
+  // proof slot and the run is stuck behind a missing IDML with no way to reroute
+  // it to review, prep, or promo. Once a book lands, a Word drop is a proof again.
+  const intent = pdfs.length > 0 || (bookPresent && docxs.length > 0);
   if (!intent) return files;
-  const source = pdfs[0]
-    || ((bookPresent || isCorrections()) ? docxs[0] : null);
+  const source = pdfs[0] || (bookPresent ? docxs[0] : null);
   if (!source) return files;
   if (pdfs.length > 1) {
     fail(`One proof at a time — reading ${source.name}, ignoring the other PDF(s).`);
