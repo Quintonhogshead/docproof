@@ -714,3 +714,85 @@ def test_a_stale_manual_save_is_refused_over_http(client):
     assert r.status_code == 422
     assert "changed since" in r.json()["detail"]
     assert client.get(f"/api/jobs/{job['id']}").json()["flags"] == 1
+
+
+def test_the_paragraph_endpoint_relocates_by_expected_text(client):
+    job, item = _flagged_job(client)
+    room = "She opened the door, the room was empty."
+    # POST with the wrong index but the right text: relocated, not misread.
+    r = client.post(f"/api/jobs/{job['id']}/corrections/paragraph",
+                    json={"story_id": "ue0", "paragraph": 0, "expect": room})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == room and r.json()["paragraph"] == 2
+    # Text the story does not carry: refused, not guessed.
+    r = client.post(f"/api/jobs/{job['id']}/corrections/paragraph",
+                    json={"story_id": "ue0", "paragraph": 0,
+                          "expect": "never in the book"})
+    assert r.status_code == 409
+
+
+def test_a_touchup_edits_an_applied_change_without_moving_counts(client):
+    job = run_corrections(client, upload(client, "layout.idml")["id"],
+                          [{"find": "Their were", "replace": "There were"}],
+                          corrections_sanity=False,
+                          corrections_second_look=False,
+                          corrections_escalate=False)
+    assert job["applied"] == 1 and job["flags"] == 0
+    line = "There were several mistakes here to find."
+    r = client.post(f"/api/jobs/{job['id']}/corrections/edit", json={
+        "manual": {"story_id": "ue0", "paragraph": 4, "expected": line,
+                   "text": line.replace("mistakes", "errors"), "runs": []}})
+    assert r.status_code == 200, r.text
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "There were several errors here to find." \
+        in story_text(corrected, "ue0")
+    # Counts unmoved; the report carries the touch-up.
+    card = client.get(f"/api/jobs/{job['id']}").json()
+    assert card["applied"] == 1 and card["flags"] == 0
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    assert report["resolutions"][0]["touchup"] is True
+    assert report["changes"][-1]["instruction"] == "edited by hand in review"
+
+
+def test_suggest_lands_a_placement_the_designer_accepts(client, monkeypatch):
+    job, item = _flagged_job(client)
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "apply", "find": "the room was empty",
+                "replace": "the room is empty", "context": "",
+                "format": "", "note": "the mark reads as the room copy"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/suggest",
+                    json={"item_id": item["id"]})
+    assert r.status_code == 200, r.text
+    options = r.json()["item"]["options"]
+    suggested = [o for o in options if o.get("suggested")]
+    assert len(suggested) == 1
+    assert suggested[0]["id"] == f"{item['id']}-s1"
+    # Nothing applied yet.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room was empty." \
+        in story_text(corrected, "ue0")
+    # Accepting it is the ordinary option click — recorded as a suggestion.
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"],
+                          "option_id": suggested[0]["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["item"]["resolved"]["kind"] == "suggestion"
+    assert "She opened the door, the room is empty." \
+        in story_text(corrected, "ue0")
+
+
+def test_a_declined_suggest_returns_the_reason(client, monkeypatch):
+    job, item = _flagged_job(client)
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "decline", "find": "", "replace": "",
+                "context": "", "format": "", "note": "nothing settles it"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/suggest",
+                    json={"item_id": item["id"]})
+    assert r.status_code == 422
+    assert "nothing settles it" in r.json()["detail"]

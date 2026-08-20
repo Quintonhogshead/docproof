@@ -1579,3 +1579,12 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 .fix-editor:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .fix-edit-checks { margin: 0.5rem 0 0.2rem; display: grid; gap: 0.25rem; }
 .fix-check-row { display: block; cursor: pointer; }
+.fix-hl {
+  background: color-mix(in srgb, var(--ok) 24%, transparent);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.fix-applied { margin: 0.9rem 0; }
+.fix-applied > summary {
+  cursor: pointer; font-weight: 600; padding: 0.3rem 0;
+}
