@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -189,6 +190,15 @@ CORRECTIONS_PDF_BATCH_SIZE = 40
 class ExtractListRequest(BaseModel):
     """A free-form corrections list to read into a draft edit list."""
     text: str
+
+
+class ResolveRequest(BaseModel):
+    """One flagged correction resolved from the review screen: either a clicked
+    option (a concrete placement the report offered) or a typed answer for the
+    model to transcribe into an exact edit. Exactly one of the two."""
+    item_id: str
+    option_id: str = ""
+    text: str = ""
 
 
 class RejudgeRequest(BaseModel):
@@ -394,7 +404,8 @@ def _extract_response(result) -> dict:
     }
 
 
-def _record_extract_spend(app, owner: str, model: str, usage: Usage) -> None:
+def _record_extract_spend(app, owner: str, model: str, usage: Usage, *,
+                          filename: str = "corrections list") -> None:
     """Snapshot a corrections extraction's (small) model spend to the ledger, so
     it shows in the dashboard rather than being invisible. Filed under the
     corrections kind; best-effort, never fails the request."""
@@ -403,7 +414,7 @@ def _record_extract_spend(app, owner: str, model: str, usage: Usage) -> None:
         stamp = datetime.now(timezone.utc)
         app.state.runner.ledger.record(LedgerEntry(
             id=f"cx-{stamp.strftime('%Y%m%d%H%M%S%f')}",
-            filename="corrections list", kind="corrections", model=model,
+            filename=filename, kind="corrections", model=model,
             mode="now", source="app", owner_id=owner,
             created_at=stamp.isoformat(), words=0,
             input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
@@ -428,6 +439,36 @@ def _build_extract_provider():
                  f"({info.display if info else model}). Paste the corrections as "
                  "JSON, or upload a redlined Word file instead.")
     return build_provider(cfg, api_key=key), model
+
+
+def _build_resolve_provider():
+    """The `(provider, model)` the review screen's typed answers are transcribed
+    by: the second-look model (the pass this most resembles — carrying out a
+    settled editorial call), falling back to the extraction model when only its
+    vendor has a key. A 400 the screen can show when neither does."""
+    cfg = load_config(CONFIG_PATH)
+    for model in (CORRECTIONS_SECOND_LOOK_MODEL, CORRECTIONS_EXTRACT_MODEL):
+        info = lookup(model)
+        if info and settingslib.get_api_key(info.provider):
+            cfg.api.model = model
+            return build_provider(cfg, api_key=settingslib.get_api_key(
+                info.provider)), model
+    raise HTTPException(
+        400, "No API key is set for a model that can carry out a typed answer "
+             "— add one in Settings, or pick one of the offered placements "
+             "instead.")
+
+
+# One resolution at a time per job: two clicks racing would both rewrite the
+# corrected IDML and its report. Process-local, like the app's other runtime
+# state — there is one server over one job folder.
+_resolve_locks: dict[str, threading.Lock] = {}
+_resolve_locks_guard = threading.Lock()
+
+
+def _resolve_lock(job_id: str) -> threading.Lock:
+    with _resolve_locks_guard:
+        return _resolve_locks.setdefault(job_id, threading.Lock())
 
 
 def _extract_with_model(app, owner: str, source_text: str) -> dict:
@@ -1207,6 +1248,102 @@ def register(app: FastAPI) -> None:
         if path is None:
             raise HTTPException(404, "This job has no corrections report")
         return json.loads(path.read_text("utf-8"))
+
+    @app.post("/api/jobs/{job_id}/corrections/resolve")
+    def resolve_correction(job_id: str, req: ResolveRequest,
+                           owner: str = Depends(owner_for)) -> dict:
+        """Resolve one flagged correction from the review screen, editing the
+        corrected IDML in place.
+
+        Two shapes, exactly one per call. A clicked *option* is a placement the
+        report already materialized — the exact span and the exact replacement —
+        so applying it is deterministic and free. A typed *answer* is the
+        designer's decision in plain words; a model transcribes it into an
+        exact edit against the book's own text (a small spend, recorded), and
+        the edit applies through the same anchoring machinery a run uses — or
+        is declined back with the reason, nothing written. Either way the
+        report is updated beside the file, so the change log and the download
+        never disagree."""
+        from docproof.corrections.resolve import (ResolveError,
+                                                  adjudicate_instruction,
+                                                  apply_edit_to_corrected,
+                                                  apply_option, queue_counts,
+                                                  record_resolution)
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections:
+            raise HTTPException(400, "Only a corrections job has flags to "
+                                     "resolve.")
+        if job.state != "done":
+            raise HTTPException(409, "This one is not finished yet.")
+        if bool(req.option_id) == bool(req.text.strip()):
+            raise HTTPException(400, "Pick one of the offered placements, or "
+                                     "type what to do — one or the other.")
+        with _resolve_lock(job_id):
+            json_path = _resolve_result(job, "corrections.json")
+            if json_path is None:
+                raise HTTPException(404, "This job has no corrections report")
+            corrected_name_ = _result_name(job, "corrected")
+            corrected = _resolve_result(job, corrected_name_)
+            if corrected is None:
+                raise HTTPException(404, f"{corrected_name_} is missing")
+            payload = json.loads(json_path.read_text("utf-8"))
+            item = next((q for q in payload.get("queue") or []
+                         if q.get("id") == req.item_id), None)
+            if item is None:
+                raise HTTPException(
+                    404, "This flag is not in the report — it may predate "
+                         "in-app resolutions; re-run the corrections to get "
+                         "them.")
+            if item.get("resolved"):
+                raise HTTPException(409, "This flag was already resolved.")
+            try:
+                if req.option_id:
+                    option = next((o for o in item.get("options") or []
+                                   if o.get("id") == req.option_id), None)
+                    if option is None:
+                        raise HTTPException(404, "No such placement for this "
+                                                 "flag.")
+                    result = apply_option(corrected, option)
+                    resolution = {"kind": "option",
+                                  "option_id": req.option_id,
+                                  "edit_id": option.get("edit_id", ""),
+                                  **result}
+                else:
+                    from docproof.corrections.idml import read_stories
+                    provider, model = _build_resolve_provider()
+                    usage = Usage()
+                    edit, note = adjudicate_instruction(
+                        item, req.text, provider, model=model, usage=usage,
+                        stories=read_stories(corrected))
+                    _record_extract_spend(app, owner, model, usage,
+                                          filename="corrections review")
+                    if edit is None:
+                        # An answered decline, not a failure: nothing was
+                        # written, and the reason is the designer's to act on.
+                        raise HTTPException(422, f"Not applied — {note}")
+                    result = apply_edit_to_corrected(corrected, edit)
+                    resolution = {"kind": "typed", "text": req.text.strip(),
+                                  "note": note, **result}
+                updated = record_resolution(json_path, req.item_id, resolution)
+            except ResolveError as e:
+                raise HTTPException(422, str(e))
+            counts = queue_counts(updated)
+            app.state.store.update(
+                job_id, applied=counts["applied"], flags=counts["flags"],
+                unresolved=counts["unresolved"])
+            # The archive holds the pre-resolution copies; refresh them in the
+            # background so a wiped volume never serves a stale deliverable
+            # back. Best-effort, off the request thread.
+            names = [corrected_name_, "corrections.json",
+                     "corrections_notes.md"]
+            threading.Thread(
+                target=lambda: app.state.runner.refresh_archive(job_id, names),
+                name=f"docproof-archive-refresh-{job_id}", daemon=True).start()
+            fresh = next((q for q in updated.get("queue") or []
+                          if q.get("id") == req.item_id), None)
+            return {"item": fresh, "counts": counts}
 
     @app.post("/api/corrections/extract-docx")
     async def extract_corrections_docx(

@@ -88,14 +88,15 @@ document.querySelectorAll('.tab').forEach((tab) => {
 $('watch-banner').addEventListener('click', () => show('watch'));
 
 function show(name) {
-  // The report has no tab of its own; it is reached from Results, so keep that
-  // tab lit while it is open rather than leaving the nav with nothing current.
-  const current = name === 'report' ? 'jobs' : name;
+  // The report and fix screens have no tab of their own; both are reached from
+  // Results, so keep that tab lit while either is open rather than leaving the
+  // nav with nothing current.
+  const current = (name === 'report' || name === 'fix') ? 'jobs' : name;
   document.querySelectorAll('.tab').forEach((t) => {
     t.setAttribute('aria-current', String(t.dataset.screen === current));
   });
-  ['drop', 'jobs', 'report', 'compare', 'sapling', 'watch', 'promo', 'spending',
-   'prompts', 'settings', 'admin'].forEach((s) => {
+  ['drop', 'jobs', 'report', 'fix', 'compare', 'sapling', 'watch', 'promo',
+   'spending', 'prompts', 'settings', 'admin'].forEach((s) => {
     $(`screen-${s}`).hidden = s !== name;
   });
   if (name === 'jobs') refreshJobs({ tick: true });
@@ -4375,6 +4376,16 @@ function correctionsActions(job) {
   read.textContent = 'Read the corrections report';
   read.addEventListener('click', () => openCorrectionsReport(job));
   actions.append(read);
+  // The flags a person still owns, resolvable in place: comment-level when the
+  // list came off a proof, edit-level for a typed list. Zero flags, no button.
+  const toFix = (job.total_comments ? job.unresolved : job.flags) || 0;
+  if (toFix > 0) {
+    const fix = document.createElement('button');
+    fix.className = 'primary';
+    fix.textContent = `Resolve flagged corrections (${toFix})`;
+    fix.addEventListener('click', () => openCorrectionsFix(job));
+    actions.append(fix);
+  }
   actions.append(openButton(job, 'corrections-notes',
     WEB ? 'Download the report (Markdown)' : 'Open the report notes', note,
     { quiet: true }));
@@ -4456,6 +4467,226 @@ async function openCorrectionsReport(job) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// ── resolving flagged corrections in place ─────────────────────────────────
+// The fix screen: every flag the run left for a person, each with the concrete
+// places its change could land (click one, it applies) and a box to type what
+// to do (a model transcribes the answer into an exact edit, or declines with
+// the reason). Each resolution edits the corrected IDML on the server in
+// place; the user downloads it again when done.
+
+$('fix-back').addEventListener('click', () => show('jobs'));
+
+const FIX_STATUS = {
+  not_found: 'the text to change was not found',
+  ambiguous: 'the text appears more than once',
+  crosses_paragraph: 'the change would span a paragraph break',
+  routed_to_design: 'a layout request, not a text edit',
+  overlaps: 'two corrections land on the same words',
+  withheld: 'held back for a human',
+  unstyleable: 'the formatting could not be applied here',
+  unplaceable: 'the paragraph could not be given a range of its own',
+  off_page: 'the text is not on the page it was marked on',
+  no_change: 'a query — no concrete change was proposed',
+  not_extracted: 'no edit was made for this comment',
+  flagged: 'flagged for a human',
+};
+
+// A window around what changed, so a paragraph-long preview reads as the line
+// the designer has to eye rather than a wall of text.
+function fixPreview(before, after) {
+  const KEEP = 70;
+  let p = 0;
+  while (p < before.length && p < after.length && before[p] === after[p]) p += 1;
+  let s = 0;
+  while (s < before.length - p && s < after.length - p
+         && before[before.length - 1 - s] === after[after.length - 1 - s]) s += 1;
+  const lead = Math.max(0, p - KEEP);
+  const cut = (t) => {
+    const end = Math.min(t.length, t.length - s + KEEP);
+    return (lead ? '…' : '') + t.slice(lead, end) + (end < t.length ? '…' : '');
+  };
+  return [cut(before), cut(after)];
+}
+
+async function openCorrectionsFix(job) {
+  show('fix');
+  $('fix-title').textContent = `Resolve flagged corrections — ${job.filename}`;
+  $('fix-sub').textContent = 'Reading the report…';
+  $('fix-list').textContent = '';
+  let data;
+  try {
+    data = await api(`/api/jobs/${job.id}/corrections`);
+  } catch (err) {
+    $('fix-sub').textContent = `Couldn't load the corrections report: `
+      + err.message;
+    return;
+  }
+  if (!(data.queue || []).length) {
+    $('fix-sub').textContent = (job.total_comments ? job.unresolved : job.flags)
+      ? 'This run predates in-place resolutions — re-run the corrections and '
+        + 'the flags will come back resolvable here.'
+      : 'Nothing left to resolve.';
+    return;
+  }
+  renderFixList(job, data);
+}
+
+function renderFixList(job, data) {
+  const list = $('fix-list');
+  list.textContent = '';
+  const queue = data.queue || [];
+  const open = queue.filter((q) => !q.resolved);
+  const done = queue.filter((q) => q.resolved);
+  $('fix-sub').textContent = open.length
+    ? `${open.length} to resolve` + (done.length
+      ? ` · ${done.length} resolved here` : '')
+    : 'Everything here is resolved — download the corrected file again to '
+      + 'carry it all.';
+  open.forEach((item) => list.append(fixItemCard(job, data, item)));
+  if (done.length) {
+    const h = document.createElement('h3');
+    h.textContent = `Resolved here — ${done.length}`;
+    list.append(h);
+    done.forEach((item) => list.append(fixItemCard(job, data, item)));
+  }
+}
+
+function fixItemCard(job, data, item) {
+  const card = document.createElement('div');
+  card.className = 'fix-item';
+
+  const head = document.createElement('div');
+  head.className = 'fix-head';
+  const where = document.createElement('b');
+  where.textContent = item.page ? `Page ${item.page}` : 'No page cited';
+  head.append(where);
+  const why = document.createElement('span');
+  why.className = 'muted';
+  why.textContent = ` — ${FIX_STATUS[item.status] || item.status || 'flagged'}`;
+  head.append(why);
+  card.append(head);
+
+  if (item.instruction) {
+    const note = document.createElement('blockquote');
+    note.className = 'fix-note';
+    note.textContent = `“${item.instruction}”`;
+    card.append(note);
+  }
+  if (item.anchor) {
+    const anchor = document.createElement('p');
+    anchor.className = 'muted fix-anchor';
+    anchor.textContent = `Marked on: “${item.anchor}”`;
+    card.append(anchor);
+  }
+  if (item.why && item.why !== FIX_STATUS[item.status]) {
+    const detail = document.createElement('p');
+    detail.className = 'muted fix-anchor';
+    detail.textContent = item.why;
+    card.append(detail);
+  }
+
+  if (item.resolved) {
+    const r = item.resolved;
+    const doneLine = document.createElement('p');
+    doneLine.className = 'fix-done';
+    doneLine.textContent = '✓ Resolved — '
+      + (r.kind === 'typed' ? `you typed: “${r.text}”` : 'you picked a '
+        + 'placement') + (r.note ? ` (${r.note})` : '');
+    card.append(doneLine);
+    const rl = document.createElement('p');
+    rl.className = 'rl fix-rl';
+    if (r.removed_line) {
+      rl.innerHTML = `<del>${esc(fixPreview(r.before || '', '')[0])}</del> `
+        + '<span class="muted">(the emptied line was removed)</span>';
+    } else {
+      const [b, a] = fixPreview(r.before || '', r.after || '');
+      rl.innerHTML = wordDiff(b, a);
+      if (r.format) {
+        rl.innerHTML += ` <span class="muted">— set ${esc(r.format)}</span>`;
+      }
+    }
+    card.append(rl);
+    return card;
+  }
+
+  const err = document.createElement('p');
+  err.className = 'fix-error';
+  err.hidden = true;
+
+  const busy = (on) => {
+    card.querySelectorAll('button, input').forEach((el) => {
+      el.disabled = on;
+    });
+    card.classList.toggle('is-busy', on);
+  };
+
+  const resolve = async (body) => {
+    err.hidden = true;
+    busy(true);
+    try {
+      const out = await api(`/api/jobs/${job.id}/corrections/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_id: item.id, ...body }),
+      });
+      const i = (data.queue || []).findIndex((q) => q.id === item.id);
+      if (i >= 0 && out.item) data.queue[i] = out.item;
+      renderFixList(job, data);
+    } catch (e) {
+      busy(false);
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+  };
+
+  (item.options || []).forEach((o) => {
+    const opt = document.createElement('div');
+    opt.className = 'fix-opt';
+    const loc = document.createElement('div');
+    loc.className = 'fix-opt-loc';
+    loc.textContent = o.page ? `Page ${o.page}` : `¶ ${o.paragraph}`;
+    opt.append(loc);
+    const rl = document.createElement('p');
+    rl.className = 'rl fix-rl';
+    const [b, a] = fixPreview(o.before || '', o.after || '');
+    rl.innerHTML = wordDiff(b, a);
+    opt.append(rl);
+    const apply = document.createElement('button');
+    apply.textContent = 'Apply here';
+    apply.addEventListener('click', () => resolve({ option_id: o.id }));
+    opt.append(apply);
+    card.append(opt);
+  });
+
+  const nl = document.createElement('div');
+  nl.className = 'fix-typed';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = (item.options || []).length
+    ? 'Or type what to do instead — e.g. “use the em dash”, “change the '
+      + 'second one”, “leave it as set”'
+    : 'Type what to do — e.g. “change ‘teh’ to ‘the’ in this line”, “use the '
+      + 'em dash”';
+  const go = document.createElement('button');
+  go.textContent = 'Make this change';
+  const submit = () => {
+    const text = input.value.trim();
+    if (!text) {
+      err.textContent = 'Say what to do first.';
+      err.hidden = false;
+      return;
+    }
+    resolve({ text });
+  };
+  go.addEventListener('click', submit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submit();
+  });
+  nl.append(input, go);
+  card.append(nl, err);
+  return card;
+}
+
 // A word-level redline between two versions of one line: shared runs are plain,
 // removed words struck, added words underlined. Whitespace is tokenised too, so
 // the spacing survives. This is what turns a bare find→replace into a change a
@@ -4508,7 +4739,10 @@ function correctionsReportHTML(d) {
   const ap = d.apply || {};
   const v = d.verify || {};
   const issues = (d.parse || {}).issues || [];
-  const flagged = ap.flagged || [];
+  // A flag the designer already resolved on the review screen is done — it
+  // counts with the applied and leaves the needs-a-human lists.
+  const flagged = (ap.flagged || []).filter((o) => !o.resolved);
+  const resolutions = d.resolutions || [];
   const disc = v.discrepancies || [];
   const com = d.comments || { total: 0, unresolved: 0, items: [] };
   const comItems = com.items || [];
@@ -4522,7 +4756,8 @@ function correctionsReportHTML(d) {
   // as a sub-line, never as a fourth card that would break the sum. A typed list
   // has no comments, so there the unit is the edit and the same three are read off
   // the apply outcomes instead.
-  const appliedC = comItems.filter((c) => c.disposition === 'applied').length;
+  const appliedC = comItems.filter((c) => c.disposition === 'applied'
+    || c.resolved).length;
   const noChangeC = comItems.filter((c) => c.disposition === 'no_op').length;
   const rightNum = ' style="text-align:right;font-variant-numeric:tabular-nums"';
   // The reviewer's own words are appended even when a find→replace is shown, so a
@@ -4601,7 +4836,8 @@ function correctionsReportHTML(d) {
   // page it was marked on, so an editor can act on it straight from here. This is
   // the section that keeps a comment from being swallowed.
   const needHuman = comItems.filter((c) =>
-    c.disposition === 'flagged' || c.disposition === 'not_extracted');
+    (c.disposition === 'flagged' || c.disposition === 'not_extracted')
+    && !c.resolved);
   const commentsHumanHTML = needHuman.length
     ? `<h2>Reviewer comments needing a human — ${num(needHuman.length)}</h2>`
       + '<p class="blurb">Every one carries the reviewer’s original note and its '
@@ -4622,13 +4858,32 @@ function correctionsReportHTML(d) {
       + '<table><thead><tr><th>Page</th><th>Comment</th><th>Outcome</th>'
       + '</tr></thead><tbody>'
       + comItems.map((c) => {
-        const bad = c.disposition === 'flagged'
-          || c.disposition === 'not_extracted';
+        const bad = (c.disposition === 'flagged'
+          || c.disposition === 'not_extracted') && !c.resolved;
+        const outcome = c.resolved ? 'resolved in review'
+          : (DISP[c.disposition] || c.disposition);
         return `<tr${bad ? ' style="background:#fbeae2"' : ''}>`
           + `<td${rightNum}>${c.page ? num(c.page) : '—'}</td>`
           + `<td>${esc(c.instruction || '(no note)')}</td>`
-          + `<td>${esc(DISP[c.disposition] || c.disposition)}</td></tr>`;
+          + `<td>${esc(outcome)}</td></tr>`;
       }).join('') + '</tbody></table></details>'
+    : '';
+
+  // What the designer settled from the review screen — each is in the file now.
+  const resolvedHTML = resolutions.length
+    ? `<h2>Resolved in review — ${num(resolutions.length)}</h2>`
+      + '<p class="blurb">These flags were resolved on the review screen; each '
+      + 'change is in the corrected file.</p>'
+      + resolutions.map((r) => {
+        const how = r.text ? `typed: “${esc(r.text)}”` : 'picked a placement';
+        const body = r.removed_line
+          ? `<p class="rl"><del>${esc(r.before || '')}</del> <span class="caveat">`
+            + '(the emptied line was removed)</span></p>'
+          : `<p class="rl">${wordDiff(r.before || '', r.after || '')}</p>`
+            + (r.format
+              ? `<div class="loc">also set ${esc(r.format)}</div>` : '');
+        return `<div class="chg"><div class="loc">${how}</div>${body}</div>`;
+      }).join('')
     : '';
 
   // A flagged edit read from a proof is the same problem as its reviewer comment,
@@ -4745,8 +5000,8 @@ function correctionsReportHTML(d) {
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
     + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
-    + changesHTML + checkHTML + discHTML + verifyHTML + commentsAllHTML
-    + '</div></body></html>';
+    + resolvedHTML + changesHTML + checkHTML + discHTML + verifyHTML
+    + commentsAllHTML + '</div></body></html>';
 }
 
 // ── the report ────────────────────────────────────────────────────────────
