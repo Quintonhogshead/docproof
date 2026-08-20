@@ -622,6 +622,12 @@ def test_features_endpoint_lists_switches_at_their_current_defaults(client):
     assert by_id["storysheet"]["cost"]["kind"] == "read"
     assert by_id["rewrite"]["cost"]["kind"] == "retype"
     assert by_id["adjudicate"]["cost"] is None
+    # The desktop catalog includes administrator experiments; Fly filters this
+    # one by role. Its estimate is a hard worst-case ceiling, not a guessed read.
+    assert by_id["examination_judgment"]["admin_only"] is True
+    assert by_id["examination_judgment"]["default"] is False
+    assert by_id["examination_judgment"]["cost"] == {
+        "kind": "budget_cap", "model": "gpt-5.6-luna", "max_usd": 2.0}
 
 
 def test_a_job_with_an_unknown_feature_is_refused(client):

@@ -243,6 +243,26 @@ and any old job's per-run feature choice. To re-enable the shipped setting:
 fly secrets unset DOCPROOF_EXAMINATION_GRAPH -a atmosphere-docproof
 ```
 
+The paid Phase 1B judge has its own, narrower kill switch. Use this first when
+you want to stop all independent model calls and spend while leaving the free
+coverage ledger running:
+
+```bash
+fly secrets set DOCPROOF_EXAMINATION_JUDGMENT=0 -a atmosphere-docproof
+```
+
+To remove that override later (the shipped setting remains off, so this does
+not turn the experiment on globally):
+
+```bash
+fly secrets unset DOCPROOF_EXAMINATION_JUDGMENT -a atmosphere-docproof
+```
+
+Phase 1B is visible only to administrators and can run only as one **Right now**
+review round. Its UI shows the $2.00 per-manuscript ceiling, and the server
+enforces the role and timing constraints even for direct API requests. The
+verdicts are evaluation-only and cannot create findings or alter the document.
+
 For one job only, turn off **Examination coverage ledger — shadow** in the
 submission panel's Safety section. See [the shadow rollout and artifact
 contract](docs/examination-graph.md) for the full rollback ladder.

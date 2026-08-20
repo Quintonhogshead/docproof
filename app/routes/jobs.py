@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 from typing import get_args
 
 from docproof import batch as batchlib
-from docproof.config import SmoothingConfig, load_config
+from docproof.config import (SmoothingConfig, examination_graph_killed,
+                             examination_judgment_killed, load_config)
 from docproof.formats import get_format
 from docproof.models import Usage
 from docproof.providers import build_provider, cost_of_usage, estimate_cost, lookup
@@ -221,6 +222,7 @@ def _result_name(job: Job, which: str) -> str | None:
         "examination": "examination-coverage.md",
         "examination-json": "examination-coverage.json",
         "examination-ledger": "examination-ledger.jsonl.gz",
+        "examination-evaluation": "examination-evaluation.json",
         "book": f"book_{stem}.docx",
         # The InDesign deliverable is now an IDML the designer opens directly —
         # no Place step. (Kept name "indesign" so existing buttons/routing work.)
@@ -605,6 +607,54 @@ def register(app: FastAPI) -> None:
             rounds = 1
         if not 1 <= rounds <= 4:
             raise HTTPException(400, "rounds must be between 1 and 4")
+        # Phase 1B is deliberately a narrow experiment on Fly: an administrator
+        # may run it synchronously over one ordinary review. It never enters the
+        # batch collector (whose checkpoint lifecycle is different), prep, or a
+        # multi-round run. Enforce that at the API boundary as well as in the UI
+        # so a hand-written request cannot create an unsupported run.
+        _house = None
+        judgment_asked = (req.features or {}).get("examination_judgment")
+        if judgment_asked is None:
+            _house = load_config(CONFIG_PATH)
+            judgment_on = _house.examination_graph.judgment.enabled
+        else:
+            judgment_on = bool(judgment_asked)
+        if judgment_on:
+            if app.state.web:
+                user = app.state.accounts.get_user(owner)
+                if not (user and user.is_admin):
+                    raise HTTPException(
+                        403, "The independent examination judge is currently "
+                             "an administrator-only experiment.")
+            if examination_graph_killed() or examination_judgment_killed():
+                raise HTTPException(
+                    409, "The independent examination judge is disabled by "
+                         "the Fly deployment kill switch.")
+            _house = _house or load_config(CONFIG_PATH)
+            graph_asked = (req.features or {}).get("examination_graph")
+            graph_on = (_house.examination_graph.enabled
+                        if graph_asked is None else bool(graph_asked))
+            if not graph_on:
+                raise HTTPException(
+                    400, "The independent examination judge requires the "
+                         "shadow examination coverage ledger to stay on.")
+            if req.kind != "review" or mode != "now" or rounds != 1:
+                raise HTTPException(
+                    400, "The independent examination judge currently requires "
+                         "one review round run right now (not overnight batch).")
+            judgment_cfg = _house.examination_graph.judgment
+            for role, model_id in (("primary", judgment_cfg.primary_model),
+                                   ("escalation", judgment_cfg.escalation_model)):
+                if not model_id:
+                    continue
+                jinfo = lookup(model_id)
+                if jinfo is None:
+                    raise HTTPException(
+                        400, f"Unknown {role} examination model {model_id!r}")
+                if not settingslib.get_api_key(jinfo.provider):
+                    raise HTTPException(
+                        400, f"No API key saved for {jinfo.display} (the {role} "
+                             "examination model). Add one in Settings first.")
         # The judge only runs with 2+ rounds, so only vet its model then: it must
         # be a real catalog model and its vendor must have a key on file.
         if req.judge_model and rounds > 1:
@@ -621,7 +671,6 @@ def register(app: FastAPI) -> None:
         # file only matters if the gate will actually run, and that is the
         # config's answer, not the request's: the panel sends the switch, but a
         # house config could ship a gate on with the switch untouched.
-        _house = None
         for _gate, _picked in (("meaning_check", req.meaning_model),
                                ("fix_check", req.fix_model)):
             if not _picked:
@@ -767,7 +816,7 @@ def register(app: FastAPI) -> None:
         return {"jobs": created, "group_id": group_id}
 
     @app.get("/api/features")
-    def features() -> dict:
+    def features(owner: str = Depends(owner_for)) -> dict:
         """The per-run pass switches to render, each with the value this run
         would take if left untouched. Read off a config built the way a review's
         is — the shipped defaults plus the two settings-backed toggles — so the
@@ -798,7 +847,10 @@ def register(app: FastAPI) -> None:
         categories = cfg.category_states()
         for cat in categories:
             cat["names"] = [knob_names.get(k, k) for k in cat["keys"]]
-        return {"features": featureslib.feature_catalog(cfg),
+        user = app.state.accounts.get_user(owner) if app.state.web else None
+        include_admin = not app.state.web or bool(user and user.is_admin)
+        return {"features": featureslib.feature_catalog(
+                    cfg, include_admin=include_admin),
                 "categories": categories,
                 "rounds": {"default": app.state.settings.rounds, "max": 4,
                            "judge_prompt_default": default_judge_prompt()},

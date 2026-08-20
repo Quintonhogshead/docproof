@@ -52,6 +52,10 @@ class FeatureSpec:
     # Materially changes what a review costs (a whole-book read, a second pass),
     # so the panel warns the estimate does not include it.
     heavy: bool = False
+    # Experimental controls that should not be offered to ordinary Fly users.
+    # They still live in the same catalog so validation and per-run config
+    # application have one source of truth.
+    admin_only: bool = False
     on_value: object = True
     off_value: object = False
 
@@ -244,6 +248,15 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "create edits or bypass the existing validator. Turn it off to restore "
         "the pre-ledger runtime and output set immediately.",
         "safety", ("examination_graph", "enabled")),
+    FeatureSpec(
+        "examination_judgment", "Independent examination judge — experiment",
+        "Ask a separate model to judge a bounded sample of precise examination "
+        "sites, then compare its blind verdicts with the production review. "
+        "Run-now only, administrators only, and capped per manuscript. Its "
+        "verdicts are evaluation data only: they never create findings or edit "
+        "the manuscript.",
+        "safety", ("examination_graph", "judgment", "enabled"),
+        heavy=True, admin_only=True),
 )
 
 FEATURES_BY_ID: dict[str, FeatureSpec] = {f.id: f for f in FEATURES}
@@ -308,14 +321,19 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
         return {"kind": "judge", "model": cfg.meaning_check.model}
     if fid == "fix_check":
         return {"kind": "judge", "model": cfg.fix_check.model}
+    if fid == "examination_judgment":
+        return {"kind": "budget_cap",
+                "model": cfg.examination_graph.judgment.primary_model,
+                "max_usd": cfg.examination_graph.judgment.max_cost_usd}
     return None
 
 
-def feature_catalog(cfg: Config) -> list[dict]:
+def feature_catalog(cfg: Config, *, include_admin: bool = True) -> list[dict]:
     """The switches to render, each with the value it would take on this run if
     left untouched — read off the config the run would actually use, so the
     panel opens showing what the pipeline does today. Heavy passes also carry a
     `cost` hint so the estimate can move with them; the rest carry cost=null."""
     return [{"id": f.id, "label": f.label, "blurb": f.blurb, "group": f.group,
-             "heavy": f.heavy, "default": f.read(cfg),
-             "cost": _cost_meta(f.id, cfg)} for f in FEATURES]
+             "heavy": f.heavy, "admin_only": f.admin_only,
+             "default": f.read(cfg), "cost": _cost_meta(f.id, cfg)}
+            for f in FEATURES if include_admin or not f.admin_only]

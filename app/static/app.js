@@ -631,6 +631,7 @@ function renderKind() {
   // and the sweep above has just un-hidden both. Put them back.
   syncRounds();
   syncJudgeGates();
+  syncExaminationJudgment();
   $('prep-options').hidden = !prep;
   const corr = $('corrections-options');
   if (corr) corr.hidden = !corrections;
@@ -1990,6 +1991,65 @@ function syncJudgeGates() {
     });
 }
 
+// The independent judge is intentionally synchronous in Phase 1B. Keep the
+// timing control responsive to its switch instead of letting the user reach
+// Start with a combination the API must reject. Turning it off restores the
+// normal overnight choice immediately.
+function syncExaminationJudgment() {
+  const sw = document.querySelector(
+    '.features input[data-feature="examination_judgment"]');
+  const graph = document.querySelector(
+    '.features input[data-feature="examination_graph"]');
+  const batch = document.querySelector('input[name="mode"][value="batch"]');
+  const now = document.querySelector('input[name="mode"][value="now"]');
+  const rounds = $('rounds');
+  if (!batch || !now) return;
+  const active = kind() === 'review' && !!(sw && sw.checked);
+  if (graph) {
+    const graphRow = graph.closest('label');
+    if (active) {
+      if (!graph.disabled) graph.dataset.beforeJudgment = graph.checked ? '1' : '0';
+      graph.checked = true;
+      graph.disabled = true;
+      if (graphRow) graphRow.title =
+        'The shadow coverage ledger is required while independent judgment is on.';
+    } else if (graph.disabled) {
+      graph.disabled = false;
+      if (graph.dataset.beforeJudgment) {
+        graph.checked = graph.dataset.beforeJudgment === '1';
+        delete graph.dataset.beforeJudgment;
+      }
+      if (graphRow) graphRow.title = '';
+    }
+  }
+  batch.disabled = active;
+  const batchLabel = batch.closest('label');
+  if (batchLabel) {
+    batchLabel.classList.toggle('choice-disabled', active);
+    batchLabel.title = active
+      ? 'The independent examination experiment runs right now only.' : '';
+  }
+  if (active && !now.checked) {
+    now.checked = true;
+    $('schedule-wrap').hidden = true;
+  }
+  if (rounds) {
+    if (active) {
+      if (!rounds.disabled) rounds.dataset.beforeExamination = rounds.value;
+      rounds.value = '1';
+      rounds.disabled = true;
+      syncRounds();
+    } else if (!active && rounds.disabled) {
+      rounds.disabled = false;
+      if (rounds.dataset.beforeExamination) {
+        rounds.value = rounds.dataset.beforeExamination;
+        delete rounds.dataset.beforeExamination;
+      }
+      syncRounds();
+    }
+  }
+}
+
 // Each group renders into its own tab's host: the passes under Passes, the
 // output switches under Output, the safety nets under Safety. collectFeatures()
 // reads them back across all three via the shared .features class.
@@ -2025,6 +2085,7 @@ function renderFeatures() {
   } else if (state.tier === null) {
     maybeInitTier();
   }
+  syncExaminationJudgment();
   renderCost();
 }
 
@@ -2050,9 +2111,20 @@ function featureRow(f) {
   const blurb = document.createElement('small');
   blurb.className = 'muted';
   blurb.textContent = f.blurb;
-  text.append(name, blurb);
+  text.append(name);
+  if (f.id === 'examination_judgment' && f.cost) {
+    const badge = document.createElement('span');
+    badge.className = 'experiment-badge';
+    badge.textContent = `Admin experiment · one round now · up to $${Number(
+      f.cost.max_usd || 0).toFixed(2)} per manuscript`;
+    text.append(badge);
+  }
+  text.append(blurb);
   input.addEventListener('change', () => {
     if (f.id === 'meaning_check' || f.id === 'fix_check') syncJudgeGates();
+    if (f.id === 'examination_judgment' || f.id === 'examination_graph') {
+      syncExaminationJudgment();
+    }
     renderCost();
     reEvaluateTier();
   });
@@ -2065,7 +2137,10 @@ function featureRow(f) {
 function collectFeatures() {
   const out = {};
   document.querySelectorAll('.features input[data-feature]')
-    .forEach((el) => { out[el.dataset.feature] = el.checked; });
+    .forEach((el) => {
+      out[el.dataset.feature] = el.dataset.feature === 'examination_judgment'
+        ? el.checked && kind() === 'review' : el.checked;
+    });
   return out;
 }
 
@@ -2368,6 +2443,18 @@ function priceReview(bundle, files) {
                                 m, bundle.effort, outFactor);
     reviewedIn += keptTok;   // one read's worth — the judge base, knobs aside
 
+    // Phase 1B stops before this ceiling, but exact eligible-site counts are
+    // known only after the manuscript has been examined. Show the defensible
+    // worst case in the preflight price: one cap per submitted manuscript.
+    if (feats.examination_judgment === true) {
+      const spec = state.features.find((s) => s.id === 'examination_judgment');
+      if (spec && spec.cost && spec.cost.kind === 'budget_cap') {
+        flat += Number(spec.cost.max_usd || 0);
+        approx = true;
+        any = true;
+      }
+    }
+
     // The meaning/fix gates are priced before the whole-document guard below,
     // because unlike those passes they read whatever changes a run produces —
     // including on a partial selection. Each enabled gate is its own pass over
@@ -2585,6 +2672,7 @@ function applyPreset(tierId) {
   if (b.judge_model && $('judge-model')) $('judge-model').value = b.judge_model;
   if ($('confidence')) $('confidence').value = b.min_confidence;
   applyPresetSwitches(tierId);
+  syncExaminationJudgment();
   state.tier = tierId;
   renderCost();
   paintTierCards(b);
@@ -3358,6 +3446,9 @@ const STAGE_FLOW = [
   { id: 'continuity', label: 'Continuity read', optional: true,
     quip: 'Reading cover to cover for facts the book contradicts about itself — '
         + 'ages, dates, eye colours, the day of the week.' },
+  { id: 'examination_judgment', label: 'Independent examination', optional: true,
+    quip: 'A separate model is blindly judging a bounded sample of precise '
+        + 'sites. Its answers are evaluation data only and cannot change the book.' },
   // Multi-round only: the judge between rounds. No switch backs it (it rides
   // the rounds choice), so it appears in the flow only while it is running.
   { id: 'round_judge', label: 'Judging the round', optional: true,
@@ -3725,6 +3816,10 @@ function renderJobs(jobs) {
       if (job.has_examination_report) {
         actions.append(openButton(job, 'examination',
           'Download examination coverage', note, { quiet: true }));
+      }
+      if (job.has_examination_evaluation) {
+        actions.append(openButton(job, 'examination-evaluation',
+          'Download blind examination sample', note, { quiet: true }));
       }
       // "Show in Finder" only means something on the Mac the file lives on.
       if (!WEB) {
@@ -4742,6 +4837,41 @@ function renderReport(r, format) {
       + 'The examination layer observed this review and created no edits.';
     section.append(head, copy);
     groups.append(section);
+
+    const j = r.examination_graph.judgment;
+    if (j && j.enabled) {
+      const selection = j.selection || {};
+      const comparison = j.comparison || {};
+      const experiment = document.createElement('section');
+      experiment.className = 'card examination-experiment';
+      const experimentHead = document.createElement('h3');
+      experimentHead.textContent = 'Independent examination — evaluation only';
+      const guardrail = document.createElement('p');
+      guardrail.textContent = 'A separate judge reviewed a deterministic, '
+        + 'bounded sample. Its verdicts did not create findings or change the '
+        + 'manuscript.';
+      const metrics = document.createElement('dl');
+      metrics.className = 'experiment-metrics';
+      [
+        ['Eligible sites', selection.eligible_sites],
+        ['Selected', selection.selected_sites],
+        ['Judged', comparison.judged_sites],
+        ['Both found an error', comparison.both_found_error],
+        ['Examination only', comparison.examination_only_error],
+        ['Production only', comparison.production_only_error],
+        ['Unresolved', comparison.unresolved],
+        ['Cost', `$${Number(j.estimated_cost_usd || 0).toFixed(2)}`],
+      ].forEach(([label, value]) => {
+        const term = document.createElement('dt');
+        term.textContent = label;
+        const number = document.createElement('dd');
+        number.textContent = typeof value === 'number'
+          ? value.toLocaleString() : String(value == null ? 0 : value);
+        metrics.append(term, number);
+      });
+      experiment.append(experimentHead, guardrail, metrics);
+      groups.append(experiment);
+    }
   }
   // Nothing below is applied to the document by this screen — it is a reading
   // of what is waiting in the file — so say where that file is reviewed first.

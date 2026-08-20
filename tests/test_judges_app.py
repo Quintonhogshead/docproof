@@ -329,9 +329,11 @@ def test_continuity_only_strips_both_gates(runner):
     store, r = runner
     cfg = r.config_for(_job(store, continuity_only=True,
                             features={"meaning_check": True,
-                                      "fix_check": True}))
+                                      "fix_check": True,
+                                      "examination_judgment": True}))
     assert cfg.meaning_check.enabled is False
     assert cfg.fix_check.enabled is False
+    assert cfg.examination_graph.judgment.enabled is False
 
 
 # --- the whole-book continuity model picker ----------------------------------

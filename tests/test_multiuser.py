@@ -164,6 +164,51 @@ def test_web_accepts_a_prep_job(app):
     assert r.json()["jobs"][0]["is_prep"] is True
 
 
+def test_independent_examination_is_hidden_and_refused_for_regular_users(app):
+    user = _as(app, "a@press.com")
+    feature_ids = {f["id"] for f in user.get("/api/features").json()["features"]}
+    assert "examination_judgment" not in feature_ids
+
+    file_id = _upload(user)
+    r = user.post("/api/jobs", json={
+        "file_ids": [file_id], "model": "claude-sonnet-5", "mode": "now",
+        "features": {"examination_judgment": True}})
+    assert r.status_code == 403
+    assert "administrator-only" in r.json()["detail"]
+
+
+def test_admin_examination_is_visible_but_run_now_and_one_round_only(
+        app, monkeypatch):
+    app.state.accounts.create_user("admin@press.com", "password1", is_admin=True)
+    admin = _as(app, "admin@press.com")
+    feature_ids = {f["id"] for f in admin.get("/api/features").json()["features"]}
+    assert "examination_judgment" in feature_ids
+    file_id = _upload(admin)
+    body = {"file_ids": [file_id], "model": "claude-sonnet-5",
+            "features": {"examination_judgment": True}}
+
+    batch = admin.post("/api/jobs", json={**body, "mode": "batch"})
+    assert batch.status_code == 400
+    assert "run right now" in batch.json()["detail"]
+    rounds = admin.post("/api/jobs", json={**body, "mode": "now", "rounds": 2})
+    assert rounds.status_code == 400
+    no_ledger = admin.post("/api/jobs", json={
+        **body, "mode": "now",
+        "features": {"examination_judgment": True,
+                     "examination_graph": False}})
+    assert no_ledger.status_code == 400
+    assert "coverage ledger" in no_ledger.json()["detail"]
+
+    accepted = admin.post("/api/jobs", json={**body, "mode": "now", "rounds": 1})
+    assert accepted.status_code == 200
+    assert accepted.json()["jobs"][0]["features"]["examination_judgment"] is True
+
+    monkeypatch.setenv("DOCPROOF_EXAMINATION_JUDGMENT", "0")
+    killed = admin.post("/api/jobs", json={**body, "mode": "now", "rounds": 1})
+    assert killed.status_code == 409
+    assert "kill switch" in killed.json()["detail"]
+
+
 def test_healthz_reports_version(app):
     body = _as(app, "a@press.com").get("/healthz").json()
     assert body["ok"] and body["version"]

@@ -107,6 +107,7 @@ STAGE_STATE = {
     "chapter_continuity": "Reading each chapter for continuity",
     "meaning_check": "Checking every change keeps your meaning",
     "fix_check": "Checking every fix is the right fix",
+    "examination_judgment": "Running the independent shadow examination",
     "writing": "Almost done — writing your document",
     # A re-judge is not the pipeline above: it runs the gates over a finished
     # run's corrections and writes a new deliverable, emitting this one stage and
@@ -574,6 +575,12 @@ class Job:
             and ((self.results_dir
                   and (Path(self.results_dir) / "examination-coverage.md").is_file())
                  or "examination-coverage.md" in self.drive_files))
+        d["has_examination_evaluation"] = bool(
+            self.kind == "review" and self.state == "done"
+            and ((self.results_dir
+                  and (Path(self.results_dir)
+                       / "examination-evaluation.json").is_file())
+                 or "examination-evaluation.json" in self.drive_files))
         # A click-through to this job's folder in the Drive archive, once it has
         # one. The card shows "In Drive" when archived, so the deliverable is one
         # link away even after the local copy is recycled on a redeploy.
@@ -976,6 +983,7 @@ class JobRunner:
                           "sapling", "smoothing", "consistency", "spellcheck",
                           "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
+            cfg.examination_graph.judgment.enabled = False
             cfg.continuity.enabled = True
             cfg.chapter_continuity.enabled = True
         # Prompts the user has edited win over the shipped ones, per key.
@@ -1547,6 +1555,7 @@ class JobRunner:
             findings, usage = run_sync(
                 cfg, prepared, provider, progress=progress, on_phase=on_phase,
                 checkpoint=checkpoint, coverage=coverage,
+                provider_factory=self._provider,
                 should_cancel=lambda: self._cancel_pending(job_id))
         except JobCancelled:
             self._abort(job_id)

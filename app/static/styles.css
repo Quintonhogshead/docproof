@@ -1073,13 +1073,42 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 }
 .switch input:checked + .track { background: var(--accent); }
 .switch input:checked + .track .thumb { transform: translateX(18px); }
+.switch input:disabled + .track { opacity: 0.6; cursor: not-allowed; }
 .switch input:focus-visible + .track {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.switch-text { display: grid; gap: 0.15rem; }
+.switch-text { display: grid; gap: 0.15rem; min-width: 0; overflow-wrap: anywhere; }
 .switch-label { font-weight: 600; font-size: 0.9rem; }
 .switch-safety .switch-label { color: var(--warn); }
+.experiment-badge {
+  justify-self: start;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.choice-disabled { opacity: 0.55; cursor: not-allowed; }
+.experiment-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+.experiment-metrics dt { color: var(--muted); min-width: 0; }
+.experiment-metrics dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+@media (max-width: 34rem) {
+  .experiment-badge { border-radius: 6px; }
+  .experiment-metrics { grid-template-columns: minmax(0, 1fr) auto; }
+}
 
 .category-knobs { display: grid; gap: 0.6rem; }
 .knob-row {
