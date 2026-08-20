@@ -220,3 +220,229 @@ def test_a_resolution_cannot_land_twice(tmp_path):
         record_resolution(out.report_json, item["id"],
                           {"kind": "option", "option_id": option["id"],
                            "edit_id": option["edit_id"], **result})
+
+
+# --- ignoring a flag (set aside), and putting it back --------------------------
+
+def test_a_dismissal_sets_the_flag_aside_without_touching_the_file(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    before_counts = queue_counts(payload)
+    updated = record_resolution(out.report_json, item["id"],
+                                {"kind": "dismissed"})
+    after = queue_counts(updated)
+    assert after["flags"] == 0                      # off the awaiting pile
+    assert after["applied"] == before_counts["applied"]   # nothing applied
+    # The file was never touched — both copies still read "was".
+    texts = _texts(out.corrected_idml)
+    assert "It was late, we were tired and the road went on forever." in texts
+    md = (out.report_json.parent / "corrections_notes.md").read_text("utf-8")
+    assert "Set aside in review" in md
+    assert "counts do not reconcile" not in md
+
+
+def test_a_dismissal_can_be_reopened(tmp_path):
+    from docproof.corrections.resolve import reopen_dismissed
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    record_resolution(out.report_json, item["id"], {"kind": "dismissed"})
+    updated = reopen_dismissed(out.report_json, item["id"])
+    assert queue_counts(updated)["flags"] == 1
+    assert updated["queue"][0]["resolved"] is None
+    md = (out.report_json.parent / "corrections_notes.md").read_text("utf-8")
+    assert "Set aside in review" not in md
+
+
+def test_an_applied_resolution_cannot_be_reopened(tmp_path):
+    from docproof.corrections.resolve import reopen_dismissed
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    option = next(o for o in item["options"] if "room" in o["before"])
+    result = apply_option(out.corrected_idml, option)
+    record_resolution(out.report_json, item["id"],
+                      {"kind": "option", "option_id": option["id"],
+                       "edit_id": option["edit_id"], **result})
+    with pytest.raises(ResolveError):
+        reopen_dismissed(out.report_json, item["id"])
+
+
+# --- the one-click suggestion and the adjudicator's context --------------------
+
+def test_suggestion_instruction_wraps_the_advice_and_requires_one():
+    from docproof.corrections.resolve import suggestion_instruction
+    item = {"advice": "the book uses the em dash here; replace the comma"}
+    text = suggestion_instruction(item)
+    assert "the em dash" in text and "exactly" in text
+    with pytest.raises(ResolveError):
+        suggestion_instruction({"advice": ""})
+
+
+def test_the_prompt_carries_the_screen_options_page_and_advice(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = dict(payload["queue"][0])
+    item["advice"] = "use the copy in the room sentence"
+    item["page_text"] = "She opened the door, the room was empty."
+    provider = _scripted({"decision": "decline", "find": "", "replace": "",
+                          "context": "", "format": "", "note": "n/a"})
+    adjudicate_instruction(item, "the second one", provider,
+                           model="fake-model", usage=Usage(),
+                           stories=read_stories(out.corrected_idml))
+    user = provider.calls[0]["user"]
+    # The numbered placements the designer's "the second one" refers to.
+    assert "PLACEMENTS SHOWN ON SCREEN" in user
+    assert "1. [" in user and "2. [" in user
+    # The page the mark was made on, and the earlier advice.
+    assert "THE BOOK'S OWN TEXT FOR PAGE" in user
+    assert "use the copy in the room sentence" in user
+    # And the passages now bring the paragraph either side of each candidate.
+    assert "Chapter One" in user or "A third paragraph" in user
+
+
+# --- the manual editor: reading a line, and hand-editing it --------------------
+
+from docproof.corrections.resolve import (apply_manual,  # noqa: E402
+                                          paragraph_state, _targets_for)
+
+ROAD = "It was late, we were tired and the road went on forever."
+ROOM = "She opened the door, the room was empty."
+
+
+def test_paragraph_state_reads_text_runs_and_neighbours(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    state = paragraph_state(read_stories(out.corrected_idml), "ue0", 2)
+    assert state["text"] == ROOM
+    # The fixture carries no bold or italics here: one plain run, covering all.
+    assert state["runs"][0]["start"] == 0
+    assert state["runs"][-1]["end"] == len(ROOM)
+    assert all(not r["bold"] and not r["italic"] for r in state["runs"])
+    assert state["prev_break"] is False and state["next_break"] is False
+
+
+def test_a_hand_edit_rewrites_only_what_changed(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    new = ROAD.replace("tired", "exhausted")
+    result = apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 1, "expected": ROAD, "text": new,
+        "runs": []})
+    assert result["after"] == new
+    assert new in _texts(corrected)
+    # The character style on "late," — a different run of the same paragraph —
+    # survived, because only the changed span was rewritten.
+    story = next(s for s in read_stories(corrected) if s.story_id == "ue0")
+    styles = {(n.text or ""): (n.getparent().get("AppliedCharacterStyle") or "")
+              for n in story.paragraphs[1].nodes}
+    assert styles.get("late,", "").endswith("/Emph")
+
+
+def test_bolding_a_selection_lands_and_reads_back(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    start = ROOM.index("opened")
+    end = start + len("opened the door")
+    apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+        "runs": [{"start": start, "end": end, "bold": True, "italic": False}]})
+    state = paragraph_state(read_stories(corrected), "ue0", 2)
+    bolded = [r for r in state["runs"] if r["bold"]]
+    assert bolded == [{"start": start, "end": end, "bold": True,
+                       "italic": False}]
+    # And clearing it again takes the override back off.
+    apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+        "runs": []})
+    state = paragraph_state(read_stories(corrected), "ue0", 2)
+    assert all(not r["bold"] for r in state["runs"])
+
+
+def test_bold_and_italic_together_set_the_combined_face(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+        "runs": [{"start": 0, "end": 3, "bold": True, "italic": True}]})
+    story = next(s for s in read_stories(corrected) if s.story_id == "ue0")
+    faces = {(n.text or ""): (n.getparent().get("FontStyle") or "")
+             for n in story.paragraphs[2].nodes}
+    assert faces.get("She") == "Bold Italic"
+
+
+def test_section_breaks_add_and_remove(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    line = "A third paragraph with plain text for good measure."
+    before = _texts(corrected)
+    apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 3, "expected": line, "text": line,
+        "runs": [{"start": 0, "end": len(line)}],
+        "insert_break_after": True})
+    texts = _texts(corrected)
+    assert len(texts) == len(before) + 1
+    assert texts[4] == ""                    # the new blank line
+    # Now the paragraph after the blank can remove it again.
+    follows = texts[5]
+    result = apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 5, "expected": follows,
+        "text": follows, "runs": [{"start": 0, "end": len(follows)}],
+        "remove_break_above": True})
+    assert _texts(corrected) == before
+    assert result["paragraph"] == 4          # renumbered by the removal
+
+
+def test_manual_refusals_write_nothing(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    before = _texts(corrected)
+    for spec in (
+        # a stale editor
+        {"story_id": "ue0", "paragraph": 2, "expected": "something else",
+         "text": ROOM, "runs": []},
+        # contradictory break asks
+        {"story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+         "runs": [{"start": 0, "end": len(ROOM)}],
+         "insert_break_after": True, "remove_break_below": True},
+        # removing a break that is not there
+        {"story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+         "runs": [{"start": 0, "end": len(ROOM)}],
+         "remove_break_above": True},
+        # nothing changed at all
+        {"story_id": "ue0", "paragraph": 2, "expected": ROOM, "text": ROOM,
+         "runs": [{"start": 0, "end": len(ROOM)}]},
+    ):
+        with pytest.raises(ResolveError):
+            apply_manual(corrected, spec)
+    assert _texts(corrected) == before
+
+
+def test_clearing_the_whole_line_removes_it(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    line = "A third paragraph with plain text for good measure."
+    result = apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 3, "expected": line, "text": "",
+        "runs": []})
+    assert result["removed_line"] is True
+    assert line not in _texts(corrected)
+
+
+def test_a_located_design_note_gets_an_editable_target(tmp_path):
+    # A layout request is never a clickable option, but it IS located — so the
+    # editor can open on the line it names.
+    out, payload = _run(tmp_path, [
+        {"find": "Their were", "replace": "Their were", "kind": "design",
+         "instruction": "bad break here — tighten this line"}])
+    item = payload["queue"][0]
+    assert item["status"] == "routed_to_design"
+    assert item["options"] == []
+    assert len(item["targets"]) == 1
+    assert "Their were" in item["targets"][0]["before"]
+
+
+def test_targets_fall_back_to_the_anchor_text(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    from docproof.corrections.textmatch import IndexCache
+    stories = read_stories(out.corrected_idml)
+    targets = _targets_for(None, "the road went on", [], stories, None,
+                           IndexCache())
+    assert len(targets) == 1
+    assert targets[0]["before"].startswith("It was late")

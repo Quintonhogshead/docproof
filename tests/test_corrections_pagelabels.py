@@ -135,3 +135,101 @@ def test_end_to_end_the_written_report_carries_the_folio(tmp_path):
     item = report["comments"]["items"][0]
     assert item["page"] == 1
     assert item["page_label"] == "1"
+
+
+# --- the folios the proof itself prints (the count-mismatch fallback) ----------
+
+from docproof.corrections.pagemap import printed_folio_labels  # noqa: E402
+
+
+def _body_pages(n, offset, *, skip=()):
+    """`n` proof pages whose running feet print folios `1+offset … n+offset`,
+    except the pages in `skip` (chapter openers print none)."""
+    out = []
+    for i in range(1, n + 1):
+        body = f"Body text of proof page {i}, long enough to be a page.\n"
+        folio = "" if i in skip else f"\n{i + offset}"
+        out.append(body + folio)
+    return out
+
+
+def test_printed_folios_label_the_run_by_consensus():
+    labels = printed_folio_labels(_body_pages(12, 6))
+    assert labels[1] == "7" and labels[12] == "18"
+    assert len(labels) == 12
+
+
+def test_a_chapter_opener_printing_no_folio_is_interpolated():
+    labels = printed_folio_labels(_body_pages(12, 6, skip=(5, 9)))
+    # The openers sit inside the consensus run, so their folio is arithmetic.
+    assert labels[5] == "11" and labels[9] == "15"
+
+
+def test_running_head_folios_count_too():
+    pages = [f"{i + 3}  THE LONG ROAD\nBody text of proof page {i}."
+             for i in range(1, 11)]
+    labels = printed_folio_labels(pages)
+    assert labels[1] == "4" and labels[10] == "13"
+
+
+def test_scattered_numbers_never_become_folios():
+    # Numbers in body copy with no consistent page offset must not be believed.
+    pages = [f"In {1900 + i * 7} the harvest failed on page-like text {i}."
+             for i in range(1, 13)]
+    assert printed_folio_labels(pages) == {}
+
+
+def test_too_few_reads_never_label():
+    assert printed_folio_labels(_body_pages(4, 0)) == {}
+
+
+def test_front_matter_outside_the_run_keeps_its_physical_page():
+    # Two unnumbered leaves, then a body printing folios offset by -2.
+    pages = ["HALF TITLE", "FULL TITLE"] + _body_pages(10, 0)[:10]
+    # Rebuild with the body starting at proof page 3: folio = page - 2.
+    pages = ["HALF TITLE", "FULL TITLE"] + [
+        f"Body text of proof page {i}.\n{i - 2}" for i in range(3, 13)]
+    labels = printed_folio_labels(pages)
+    assert 1 not in labels and 2 not in labels
+    assert labels[3] == "1" and labels[12] == "10"
+
+
+def test_the_fallback_labels_a_mismatched_proof_end_to_end(tmp_path):
+    """A proof one page longer than the file (a cover), so the spread map is
+    refused — and the folios the proof itself prints label the run instead:
+    the comment on proof page 8 is shown as the page InDesign calls 3."""
+    comments = [{"id": "p8-1", "page": 8, "kind": "highlight",
+                 "instruction": "vacant", "anchor": "empty"}]
+    edits = [{"find": "was empty", "replace": "was vacant",
+              "instruction": "vacant", "source": "p8-1"}]
+    # Fourteen proof pages against a one-page file: pages 6..14 print folios 1..9.
+    page_texts = (["COVER"] + [f"Front matter leaf {i}" for i in range(2, 6)]
+                  + [f"Body text of the book, page {i}.\n{i - 5}"
+                     for i in range(6, 15)])
+    got = apply_corrections(LAYOUT, json.dumps(edits), tmp_path,
+                            comments=comments, page_texts=page_texts)
+    report = json.loads(got.report_json.read_text(encoding="utf-8"))
+    item = report["comments"]["items"][0]
+    assert item["page"] == 8
+    assert item["page_label"] == "3"
+    assert report["pages"]["labeled"] == 9
+
+
+def test_queue_options_carry_the_folio_too(tmp_path):
+    """The fix screen's clickable placements name the page a designer navigates
+    to, so each option is stamped with the folio, not just its item."""
+    # The whole one-page book as the one proof page: counts match (1 == 1), the
+    # spread map holds, and every paragraph sits on placed page 1.
+    from docproof.corrections.idml import read_stories
+    book = "\n".join(p.text for s in read_stories(LAYOUT)
+                     for p in s.paragraphs)
+    got = apply_corrections(LAYOUT,
+                            json.dumps([{"find": "was", "replace": "is",
+                                         "page": 1}]),
+                            tmp_path, page_texts=[book])
+    report = json.loads(got.report_json.read_text(encoding="utf-8"))
+    queue = report["queue"]
+    assert queue, "the ambiguous edit should be flagged"
+    options = queue[0]["options"]
+    assert options
+    assert all(o["page"] == 1 and o["page_label"] == "1" for o in options)

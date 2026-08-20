@@ -4468,11 +4468,14 @@ async function openCorrectionsReport(job) {
 }
 
 // ── resolving flagged corrections in place ─────────────────────────────────
-// The fix screen: every flag the run left for a person, each with the concrete
-// places its change could land (click one, it applies) and a box to type what
-// to do (a model transcribes the answer into an exact edit, or declines with
-// the reason). Each resolution edits the corrected IDML on the server in
-// place; the user downloads it again when done.
+// The fix screen: every flag the run left for a person, dealt with without
+// leaving the app. Each card offers, in order of least effort: the model's own
+// suggestion (one click), the concrete placements the change could land on
+// (one click each), the line itself opened for hand-editing (bold, italics,
+// section breaks), and a box to type a decision for the model to carry out.
+// "Ignore" sets a flag aside, recorded and reversible. Every action edits the
+// corrected IDML on the server in place; the bar at the top hands the file
+// back when the pile is empty.
 
 $('fix-back').addEventListener('click', () => show('jobs'));
 
@@ -4491,6 +4494,16 @@ const FIX_STATUS = {
   flagged: 'flagged for a human',
 };
 
+// What a manual save did to the section breaks around its line, as one clause.
+function breakNotes(b) {
+  if (!b) return '';
+  const bits = [];
+  if (b.added_after) bits.push('added a section break after it');
+  if (b.removed_above) bits.push('removed the break above it');
+  if (b.removed_below) bits.push('removed the break below it');
+  return bits.join(' and ');
+}
+
 // A window around what changed, so a paragraph-long preview reads as the line
 // the designer has to eye rather than a wall of text.
 function fixPreview(before, after) {
@@ -4506,6 +4519,12 @@ function fixPreview(before, after) {
     return (lead ? '…' : '') + t.slice(lead, end) + (end < t.length ? '…' : '');
   };
   return [cut(before), cut(after)];
+}
+
+// The page label a designer navigates by: folio first, physical page second.
+function fixLoc(row) {
+  return row.page_label ? `Page ${row.page_label}`
+    : row.page ? `Page ${row.page}` : `¶ ${row.paragraph}`;
 }
 
 async function openCorrectionsFix(job) {
@@ -4536,12 +4555,39 @@ function renderFixList(job, data) {
   list.textContent = '';
   const queue = data.queue || [];
   const open = queue.filter((q) => !q.resolved);
-  const done = queue.filter((q) => q.resolved);
-  $('fix-sub').textContent = open.length
-    ? `${open.length} to resolve` + (done.length
-      ? ` · ${done.length} resolved here` : '')
-    : 'Everything here is resolved — download the corrected file again to '
-      + 'carry it all.';
+  const done = queue.filter((q) => q.resolved
+    && q.resolved.kind !== 'dismissed');
+  const aside = queue.filter((q) => q.resolved
+    && q.resolved.kind === 'dismissed');
+
+  // Which page numbers this screen speaks in, said once.
+  const paged = queue.some((q) => q.page);
+  const labeled = queue.some((q) => q.page_label);
+  $('fix-sub').textContent = (paged && !labeled)
+    ? 'Page numbers are the proof PDF’s own — the book’s folios could not be '
+      + 'aligned for this run.'
+    : '';
+
+  // The working bar: how far along, and the file itself once — or while —
+  // you're at it. Downloading mid-way is fine; it simply carries what's
+  // resolved so far.
+  const bar = document.createElement('div');
+  bar.className = 'fix-bar';
+  const progress = document.createElement('span');
+  progress.className = 'fix-progress';
+  const dealt = done.length + aside.length;
+  progress.textContent = open.length
+    ? `${dealt} of ${queue.length} dealt with · ${open.length} to go`
+    : `All ${queue.length} dealt with — the corrected file is ready.`;
+  bar.append(progress);
+  const note = actionNote();
+  const dl = openButton(job, 'corrected',
+    WEB ? 'Download the corrected file' : 'Open the corrected file in InDesign',
+    note, { quiet: open.length > 0 });
+  if (!open.length) dl.className = 'primary';
+  bar.append(dl);
+  list.append(bar, note);
+
   open.forEach((item) => list.append(fixItemCard(job, data, item)));
   if (done.length) {
     const h = document.createElement('h3');
@@ -4549,21 +4595,86 @@ function renderFixList(job, data) {
     list.append(h);
     done.forEach((item) => list.append(fixItemCard(job, data, item)));
   }
+  if (aside.length) {
+    const h = document.createElement('h3');
+    h.textContent = `Set aside — ${aside.length}`;
+    list.append(h);
+    aside.forEach((item) => list.append(fixItemCard(job, data, item)));
+  }
+}
+
+// One resolve call, shared by the card's actions and the manual editor: on
+// success the queue entry is swapped for the server's copy and the list
+// re-renders; on failure the caller shows the sentence.
+async function fixResolve(job, data, item, body, onError) {
+  try {
+    const out = await api(`/api/jobs/${job.id}/corrections/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: item.id, ...body }),
+    });
+    const i = (data.queue || []).findIndex((q) => q.id === item.id);
+    if (i >= 0 && out.item) data.queue[i] = out.item;
+    renderFixList(job, data);
+    return true;
+  } catch (e) {
+    onError(e.message);
+    return false;
+  }
 }
 
 function fixItemCard(job, data, item) {
   const card = document.createElement('div');
   card.className = 'fix-item';
 
+  const err = document.createElement('p');
+  err.className = 'fix-error';
+  err.hidden = true;
+
+  const busy = (on) => {
+    card.querySelectorAll('button, input').forEach((el) => {
+      el.disabled = on;
+    });
+    card.classList.toggle('is-busy', on);
+  };
+
+  const resolve = async (body) => {
+    err.hidden = true;
+    busy(true);
+    const ok = await fixResolve(job, data, item, body, (msg) => {
+      busy(false);
+      err.textContent = msg;
+      err.hidden = false;
+    });
+    return ok;
+  };
+
   const head = document.createElement('div');
   head.className = 'fix-head';
   const where = document.createElement('b');
-  where.textContent = item.page ? `Page ${item.page}` : 'No page cited';
+  // The page a designer navigates to: the InDesign folio when the run aligned
+  // one, otherwise the proof's physical page — same rule as the report. The
+  // physical page rides along when the two differ, because the flag's own
+  // detail text may still speak in it ("the page 8 it was marked on").
+  where.textContent = item.page_label
+    ? `Page ${item.page_label}`
+      + (item.page && String(item.page) !== item.page_label
+        ? ` (proof PDF p. ${item.page})` : '')
+    : item.page ? `Page ${item.page}` : 'No page cited';
   head.append(where);
   const why = document.createElement('span');
   why.className = 'muted';
   why.textContent = ` — ${FIX_STATUS[item.status] || item.status || 'flagged'}`;
   head.append(why);
+  if (!item.resolved) {
+    const ignore = document.createElement('button');
+    ignore.className = 'quiet fix-ignore';
+    ignore.textContent = 'Ignore';
+    ignore.title = 'Leave it as set (or handle it in InDesign) — recorded as '
+      + 'set aside, and it can be put back';
+    ignore.addEventListener('click', () => resolve({ dismiss: true }));
+    head.append(ignore);
+  }
   card.append(head);
 
   if (item.instruction) {
@@ -4587,56 +4698,71 @@ function fixItemCard(job, data, item) {
 
   if (item.resolved) {
     const r = item.resolved;
+    if (r.kind === 'dismissed') {
+      const doneLine = document.createElement('p');
+      doneLine.className = 'muted fix-done-aside';
+      doneLine.textContent = '⊘ Set aside — you chose to leave this as set. '
+        + 'Nothing was changed.';
+      const back = document.createElement('button');
+      back.className = 'quiet';
+      back.textContent = 'Put it back';
+      back.addEventListener('click', () => resolve({ reopen: true }));
+      card.append(doneLine, back, err);
+      return card;
+    }
     const doneLine = document.createElement('p');
     doneLine.className = 'fix-done';
     doneLine.textContent = '✓ Resolved — '
-      + (r.kind === 'typed' ? `you typed: “${r.text}”` : 'you picked a '
-        + 'placement') + (r.note ? ` (${r.note})` : '');
+      + (r.kind === 'manual' ? 'you edited the line yourself'
+        : r.kind === 'suggestion' ? 'you applied the model’s suggestion'
+          : r.kind === 'typed' ? `you typed: “${r.text}”`
+            : 'you picked a placement') + (r.note ? ` (${r.note})` : '');
     card.append(doneLine);
-    const rl = document.createElement('p');
-    rl.className = 'rl fix-rl';
     if (r.removed_line) {
+      const rl = document.createElement('p');
+      rl.className = 'rl fix-rl';
       rl.innerHTML = `<del>${esc(fixPreview(r.before || '', '')[0])}</del> `
         + '<span class="muted">(the emptied line was removed)</span>';
+      card.append(rl);
     } else {
-      const [b, a] = fixPreview(r.before || '', r.after || '');
-      rl.innerHTML = wordDiff(b, a);
-      if (r.format) {
-        rl.innerHTML += ` <span class="muted">— set ${esc(r.format)}</span>`;
-      }
+      card.append(fixRedline(r.before, r.after, r.format));
     }
-    card.append(rl);
+    const breaks = breakNotes(r.breaks);
+    if (breaks) {
+      const b = document.createElement('p');
+      b.className = 'muted fix-anchor';
+      b.textContent = `And ${breaks}.`;
+      card.append(b);
+    }
     return card;
   }
 
-  const err = document.createElement('p');
-  err.className = 'fix-error';
-  err.hidden = true;
+  // A model pass already studied this flag and wrote what it would do — offer
+  // carrying that out as one click, through the same typed path, so a good
+  // suggestion is a button rather than a retype.
+  if (item.advice) {
+    const row = document.createElement('div');
+    row.className = 'fix-advice';
+    const text = document.createElement('p');
+    text.className = 'fix-advice-text';
+    text.textContent = `The model suggests: ${item.advice}`;
+    const go = document.createElement('button');
+    go.className = 'primary';
+    go.textContent = 'Apply the suggestion';
+    go.addEventListener('click', () => resolve({ suggestion: true }));
+    row.append(text, go);
+    card.append(row);
+  }
 
-  const busy = (on) => {
-    card.querySelectorAll('button, input').forEach((el) => {
-      el.disabled = on;
-    });
-    card.classList.toggle('is-busy', on);
-  };
-
-  const resolve = async (body) => {
-    err.hidden = true;
-    busy(true);
-    try {
-      const out = await api(`/api/jobs/${job.id}/corrections/resolve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_id: item.id, ...body }),
-      });
-      const i = (data.queue || []).findIndex((q) => q.id === item.id);
-      if (i >= 0 && out.item) data.queue[i] = out.item;
-      renderFixList(job, data);
-    } catch (e) {
-      busy(false);
-      err.textContent = e.message;
-      err.hidden = false;
-    }
+  const editButton = (loc) => {
+    const b = document.createElement('button');
+    b.className = 'quiet';
+    b.textContent = 'Edit the line';
+    b.title = 'Open this line and edit it yourself — bold, italics and '
+      + 'section breaks included';
+    b.addEventListener('click', () => openManualEditor(job, data, item, loc,
+                                                       card));
+    return b;
   };
 
   (item.options || []).forEach((o) => {
@@ -4644,18 +4770,28 @@ function fixItemCard(job, data, item) {
     opt.className = 'fix-opt';
     const loc = document.createElement('div');
     loc.className = 'fix-opt-loc';
-    loc.textContent = o.page ? `Page ${o.page}` : `¶ ${o.paragraph}`;
+    loc.textContent = fixLoc(o);
     opt.append(loc);
-    const rl = document.createElement('p');
-    rl.className = 'rl fix-rl';
-    const [b, a] = fixPreview(o.before || '', o.after || '');
-    rl.innerHTML = wordDiff(b, a);
-    opt.append(rl);
+    opt.append(fixRedline(o.before, o.after));
     const apply = document.createElement('button');
     apply.textContent = 'Apply here';
     apply.addEventListener('click', () => resolve({ option_id: o.id }));
-    opt.append(apply);
+    opt.append(apply, editButton(o));
     card.append(opt);
+  });
+
+  // Where the editor can open when there is nothing to click — the line the
+  // flag was located in, or the line carrying the marked text.
+  (item.targets || []).forEach((t) => {
+    const row = document.createElement('div');
+    row.className = 'fix-opt';
+    const loc = document.createElement('div');
+    loc.className = 'fix-opt-loc';
+    loc.textContent = fixLoc(t);
+    row.append(loc);
+    row.append(fixRedline(t.before, t.before));
+    row.append(editButton(t));
+    card.append(row);
   });
 
   const nl = document.createElement('div');
@@ -4664,7 +4800,7 @@ function fixItemCard(job, data, item) {
   input.type = 'text';
   input.placeholder = (item.options || []).length
     ? 'Or type what to do instead — e.g. “use the em dash”, “change the '
-      + 'second one”, “leave it as set”'
+      + 'second one”'
     : 'Type what to do — e.g. “change ‘teh’ to ‘the’ in this line”, “use the '
       + 'em dash”';
   const go = document.createElement('button');
@@ -4685,6 +4821,240 @@ function fixItemCard(job, data, item) {
   nl.append(input, go);
   card.append(nl, err);
   return card;
+}
+
+// A redline that opens as a window around the change and expands to the whole
+// paragraph on click — judging a fix often needs the full line, and the full
+// line does not fit a list. Only clickable when there is more to see. Called
+// with before === after it renders the line plain, no marks.
+function fixRedline(before, after, format) {
+  const rl = document.createElement('p');
+  rl.className = 'rl fix-rl';
+  const [b, a] = fixPreview(before || '', after || '');
+  const trimmed = b !== (before || '') || a !== (after || '');
+  const draw = (full) => {
+    rl.innerHTML = wordDiff(full ? (before || '') : b, full ? (after || '') : a);
+    if (format) {
+      rl.innerHTML += ` <span class="muted">— set ${esc(format)}</span>`;
+    }
+    rl.dataset.full = full ? '1' : '';
+    rl.title = !trimmed ? ''
+      : full ? 'Click to trim back to the change'
+        : 'Click to see the whole paragraph';
+  };
+  draw(false);
+  if (trimmed) {
+    rl.classList.add('fix-expandable');
+    rl.addEventListener('click', () => draw(!rl.dataset.full));
+  }
+  return rl;
+}
+
+// ── the manual editor ──────────────────────────────────────────────────────
+// The line itself, opened in place of the card: edit the words directly, bold
+// or italicize a selection, tick a section break on or off, and Save writes
+// exactly that into the corrected IDML — resolving the flag.
+
+async function openManualEditor(job, data, item, loc, card) {
+  let state;
+  try {
+    state = await api(`/api/jobs/${job.id}/corrections/paragraph`
+      + `?story_id=${encodeURIComponent(loc.story_id)}`
+      + `&paragraph=${loc.paragraph}`);
+  } catch (e) {
+    const err = card.querySelector('.fix-error');
+    if (err) {
+      err.textContent = e.message;
+      err.hidden = false;
+    }
+    return;
+  }
+  card.textContent = '';
+  card.classList.add('is-editing');
+
+  const head = document.createElement('div');
+  head.className = 'fix-head';
+  const title = document.createElement('b');
+  title.textContent = `Edit the line — ${fixLoc(loc)}`;
+  head.append(title);
+  card.append(head);
+  if (item.instruction) {
+    const note = document.createElement('blockquote');
+    note.className = 'fix-note';
+    note.textContent = `“${item.instruction}”`;
+    card.append(note);
+  }
+
+  const bar = document.createElement('div');
+  bar.className = 'fix-edit-bar';
+  const tool = (label, cmd, hint) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'quiet';
+    b.innerHTML = label;
+    b.title = hint;
+    // mousedown, and swallowed, so the selection in the box survives the click.
+    b.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      document.execCommand(cmd);
+    });
+    return b;
+  };
+  bar.append(tool('<b>B</b>', 'bold', 'Bold the selection'),
+             tool('<i>I</i>', 'italic', 'Italicize the selection'));
+  const hint = document.createElement('span');
+  hint.className = 'muted fix-edit-hint';
+  hint.textContent = 'Select text, then B or I. One paragraph — breaks are '
+    + 'the boxes below.';
+  bar.append(hint);
+  card.append(bar);
+
+  const box = document.createElement('div');
+  box.className = 'fix-editor';
+  box.contentEditable = 'true';
+  box.spellcheck = false;
+  box.innerHTML = runsHTML(state.text, state.runs);
+  // One paragraph stays one paragraph: Enter is refused (section breaks are
+  // the checkboxes), and a paste lands as plain text.
+  box.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') e.preventDefault();
+  });
+  box.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData)
+      .getData('text/plain').replace(/\s*\n\s*/g, ' ');
+    document.execCommand('insertText', false, text);
+  });
+  card.append(box);
+
+  const checks = document.createElement('div');
+  checks.className = 'fix-edit-checks';
+  const check = (label) => {
+    const wrap = document.createElement('label');
+    wrap.className = 'fix-check-row';
+    const c = document.createElement('input');
+    c.type = 'checkbox';
+    wrap.append(c, document.createTextNode(` ${label}`));
+    checks.append(wrap);
+    return c;
+  };
+  const addAfter = check('Add a section break (blank line) after this '
+    + 'paragraph');
+  const removeAbove = state.prev_break
+    ? check('Remove the section break above') : null;
+  const removeBelow = state.next_break
+    ? check('Remove the section break below') : null;
+  if (removeBelow) {
+    // Adding a break below and removing the one below contradict.
+    addAfter.addEventListener('change', () => {
+      if (addAfter.checked) removeBelow.checked = false;
+    });
+    removeBelow.addEventListener('change', () => {
+      if (removeBelow.checked) addAfter.checked = false;
+    });
+  }
+  card.append(checks);
+
+  const err = document.createElement('p');
+  err.className = 'fix-error';
+  err.hidden = true;
+
+  const row = document.createElement('div');
+  row.className = 'fix-typed';
+  const save = document.createElement('button');
+  save.className = 'primary';
+  save.textContent = 'Save & apply';
+  const cancel = document.createElement('button');
+  cancel.className = 'quiet';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', () => renderFixList(job, data));
+  save.addEventListener('click', async () => {
+    const parsed = parseEditor(box, state.text);
+    err.hidden = true;
+    save.disabled = cancel.disabled = true;
+    save.textContent = 'Applying…';
+    const ok = await fixResolve(job, data, item, {
+      manual: {
+        story_id: loc.story_id,
+        paragraph: loc.paragraph,
+        expected: state.text,
+        text: parsed.text,
+        runs: parsed.runs,
+        insert_break_after: addAfter.checked,
+        remove_break_above: !!(removeAbove && removeAbove.checked),
+        remove_break_below: !!(removeBelow && removeBelow.checked),
+      },
+    }, (msg) => {
+      err.textContent = msg;
+      err.hidden = false;
+      save.disabled = cancel.disabled = false;
+      save.textContent = 'Save & apply';
+    });
+    return ok;
+  });
+  row.append(save, cancel);
+  card.append(row, err);
+  box.focus();
+}
+
+// The paragraph rendered for the editor: its text, with the runs the book
+// carries wrapped in <b>/<i> so the designer sees what is already set.
+function runsHTML(text, runs) {
+  const parts = [];
+  let at = 0;
+  (runs || []).forEach((r) => {
+    if (r.start > at) parts.push(esc(text.slice(at, r.start)));
+    let piece = esc(text.slice(r.start, r.end));
+    if (r.italic) piece = `<i>${piece}</i>`;
+    if (r.bold) piece = `<b>${piece}</b>`;
+    parts.push(piece);
+    at = r.end;
+  });
+  if (at < text.length) parts.push(esc(text.slice(at)));
+  return parts.join('');
+}
+
+// The editor read back: plain text plus the bold/italic runs the designer
+// left, walked off the contenteditable DOM (execCommand writes <b>/<i> or
+// styled spans depending on the browser — both are read).
+function parseEditor(box, originalText) {
+  const segs = [];
+  const walk = (node, bold, italic) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.nodeValue) segs.push({ t: node.nodeValue, bold, italic });
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE || node.tagName === 'BR') return;
+    const style = node.style || {};
+    const b = bold || node.tagName === 'B' || node.tagName === 'STRONG'
+      || /^(bold|[7-9]00)$/.test(style.fontWeight || '');
+    const i = italic || node.tagName === 'I' || node.tagName === 'EM'
+      || /italic|oblique/.test(style.fontStyle || '');
+    node.childNodes.forEach((c) => walk(c, b, i));
+  };
+  walk(box, false, false);
+  let text = '';
+  const runs = [];
+  segs.forEach((s) => {
+    let piece = s.t.replace(/\n/g, ' ');
+    // contenteditable pads with non-breaking spaces the designer never typed;
+    // fold them back to spaces unless the line legitimately carries NBSPs
+    // (house style does, before an ellipsis) — then leave every one alone.
+    if (!originalText.includes('\u00a0')) {
+      piece = piece.replace(/\u00a0/g, ' ');
+    }
+    if (!piece) return;
+    const start = text.length;
+    text += piece;
+    const last = runs[runs.length - 1];
+    if (last && last.bold === s.bold && last.italic === s.italic
+        && last.end === start) {
+      last.end = text.length;
+    } else {
+      runs.push({ start, end: text.length, bold: s.bold, italic: s.italic });
+    }
+  });
+  return { text, runs };
 }
 
 // A word-level redline between two versions of one line: shared runs are plain,
@@ -4748,8 +5118,10 @@ function correctionsReportHTML(d) {
   const issues = (d.parse || {}).issues || [];
   // A flag the designer already resolved on the review screen is done — it
   // counts with the applied and leaves the needs-a-human lists.
-  const flagged = (ap.flagged || []).filter((o) => !o.resolved);
-  const resolutions = d.resolutions || [];
+  const flagged = (ap.flagged || []).filter((o) => !o.resolved && !o.dismissed);
+  const allRes = d.resolutions || [];
+  const resolutions = allRes.filter((r) => r.kind !== 'dismissed');
+  const setAside = allRes.filter((r) => r.kind === 'dismissed');
   const disc = v.discrepancies || [];
   const com = d.comments || { total: 0, unresolved: 0, items: [] };
   const comItems = com.items || [];
@@ -4830,6 +5202,16 @@ function correctionsReportHTML(d) {
       + 'human, or the file changed in ways the list did not ask for.</b> '
       + 'See below.</p>';
 
+  // Which page numbers this report speaks in: the file's own folios when the
+  // run aligned them, otherwise the proof's physical pages — said out loud so a
+  // designer is not hunting for a page InDesign numbers differently.
+  const pg = d.pages || {};
+  const pagesNote = (pg.total && !pg.labeled)
+    ? '<p class="blurb">Page numbers here are the proof PDF’s physical pages — '
+      + 'the file’s own folios could not be aligned to the proof for this '
+      + 'run.</p>'
+    : '';
+
   const issuesHTML = issues.length
     ? `<h2>Corrections that could not be read — ${num(issues.length)}</h2>`
       + '<p class="blurb">Skipped; nothing was guessed.</p>'
@@ -4844,7 +5226,7 @@ function correctionsReportHTML(d) {
   // the section that keeps a comment from being swallowed.
   const needHuman = comItems.filter((c) =>
     (c.disposition === 'flagged' || c.disposition === 'not_extracted')
-    && !c.resolved);
+    && !c.resolved && !c.dismissed);
   const commentsHumanHTML = needHuman.length
     ? `<h2>Reviewer comments needing a human — ${num(needHuman.length)}</h2>`
       + '<p class="blurb">Every one carries the reviewer’s original note and its '
@@ -4885,9 +5267,10 @@ function correctionsReportHTML(d) {
       + '</tr></thead><tbody>'
       + comItems.map((c) => {
         const bad = (c.disposition === 'flagged'
-          || c.disposition === 'not_extracted') && !c.resolved;
+          || c.disposition === 'not_extracted') && !c.resolved && !c.dismissed;
         const outcome = c.resolved ? 'resolved in review'
-          : (DISP[c.disposition] || c.disposition);
+          : c.dismissed ? 'set aside in review'
+            : (DISP[c.disposition] || c.disposition);
         return `<tr${bad ? ' style="background:#fbeae2"' : ''}>`
           + `<td${rightNum}>${pageOf(c) || '—'}</td>`
           + `<td>${esc(c.instruction || '(no note)')}</td>`
@@ -4901,14 +5284,39 @@ function correctionsReportHTML(d) {
       + '<p class="blurb">These flags were resolved on the review screen; each '
       + 'change is in the corrected file.</p>'
       + resolutions.map((r) => {
-        const how = r.text ? `typed: “${esc(r.text)}”` : 'picked a placement';
+        const how = r.kind === 'manual' ? 'edited the line by hand'
+          : r.kind === 'suggestion' ? 'applied the model’s suggestion'
+            : r.text ? `typed: “${esc(r.text)}”` : 'picked a placement';
         const body = r.removed_line
           ? `<p class="rl"><del>${esc(r.before || '')}</del> <span class="caveat">`
             + '(the emptied line was removed)</span></p>'
           : `<p class="rl">${wordDiff(r.before || '', r.after || '')}</p>`
             + (r.format
               ? `<div class="loc">also set ${esc(r.format)}</div>` : '');
-        return `<div class="chg"><div class="loc">${how}</div>${body}</div>`;
+        const breaks = breakNotes(r.breaks);
+        return `<div class="chg"><div class="loc">${how}</div>${body}`
+          + (breaks ? `<div class="loc">and ${esc(breaks)}</div>` : '')
+          + '</div>';
+      }).join('')
+    : '';
+
+  // The flags the designer deliberately left alone — a decision, not an
+  // omission, so it is printed with the note it left as set.
+  const byItem = {};
+  (d.queue || []).forEach((q) => { byItem[q.id] = q; });
+  const setAsideHTML = setAside.length
+    ? `<h2>Set aside in review — ${num(setAside.length)}</h2>`
+      + '<p class="blurb">The designer chose to leave each of these as set (or '
+      + 'to handle it in InDesign). Nothing was changed.</p>'
+      + setAside.map((r) => {
+        const q = byItem[r.item_id] || {};
+        const where = q.page_label || q.page;
+        return '<div class="flag"><b>'
+          + (where ? `page ${esc(String(where))}` : '—') + '</b> '
+          + '“' + esc(q.instruction || '(no note)') + '”'
+          + (q.anchor
+            ? ` <span class="caveat">— on “${esc(q.anchor)}”</span>` : '')
+          + '</div>';
       }).join('')
     : '';
 
@@ -5025,8 +5433,9 @@ function correctionsReportHTML(d) {
       ? 'Deterministic apply, with an opt-in model pass over the edits'
       : 'Deterministic — no model, no cost')
     + (gen ? ' · ' + esc(gen) : '') + '</p></header>'
-    + cards + headline + commentsHumanHTML + issuesHTML + flaggedHTML
-    + resolvedHTML + changesHTML + checkHTML + commentsConfirmedHTML + discHTML
+    + cards + headline + pagesNote + commentsHumanHTML + issuesHTML + flaggedHTML
+    + resolvedHTML + setAsideHTML + changesHTML + checkHTML
+    + commentsConfirmedHTML + discHTML
     + verifyHTML + commentsAllHTML
     + '</div></body></html>';
 }

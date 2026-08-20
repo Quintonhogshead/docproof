@@ -36,13 +36,16 @@ from typing import Literal, Sequence
 
 from pydantic import BaseModel
 
+import difflib
+
 from ..models import Usage
 from ..providers import Provider, strict_json_schema
 from .apply import _keep_book_case, all_spans, apply_to_stories
 from .idml import Story, read_stories, rewrite_stories
 from .model import (ApplyReport, CommentDisposition, DESIGN, DISP_FLAGGED,
                     DISP_NOT_EXTRACTED, Edit, EditOutcome, FORMATS, JUDGMENT,
-                    MECHANICAL, NO_CHANGE)
+                    MECHANICAL, NO_CHANGE, NO_CHARACTER_STYLE, is_italic_style,
+                    style_name)
 from .secondlook import MIN_FIND
 from .textmatch import IndexCache
 
@@ -75,8 +78,8 @@ class ResolveError(RuntimeError):
 # --- the queue the run leaves behind -------------------------------------------
 
 def build_queue(stories: list[Story], apply_report: ApplyReport | None,
-                comments: Sequence[CommentDisposition] = (), scope=None
-                ) -> list[dict]:
+                comments: Sequence[CommentDisposition] = (), scope=None,
+                book_pages: dict[int, str] | None = None) -> list[dict]:
     """One item per flag a person still owns, each with every concrete place its
     change could land, computed against `stories` — the *corrected* book, because
     that is the file a resolution will edit.
@@ -85,7 +88,9 @@ def build_queue(stories: list[Story], apply_report: ApplyReport | None,
     (one item per needs-human comment), and flagged edits no comment covers
     follow; a typed list has no comments, so every flagged edit is its own item.
     `scope` is the run's page map, used only to label and order options by the
-    page they sit on."""
+    page they sit on. `book_pages` is the book's own text per cited page, from
+    the run — stamped onto each item so a typed answer's adjudicator can read
+    the whole page even when no option could be built."""
     if apply_report is None:
         return []
     outcomes = {o.edit.id: o for o in apply_report.outcomes}
@@ -101,12 +106,13 @@ def build_queue(stories: list[Story], apply_report: ApplyReport | None,
         edit = outcome.edit if outcome is not None else None
         options = (_options_for(edit, stories, scope, cache)
                    if edit is not None else [])
+        page = (comment.page if comment is not None
+                else (edit.page if edit is not None else 0))
         return {
             "id": f"q{n}",
             "comment_id": comment.id if comment is not None else "",
             "edit_ids": list(edit_ids),
-            "page": (comment.page if comment is not None
-                     else (edit.page if edit is not None else 0)),
+            "page": page,
             "instruction": (comment.instruction if comment is not None
                             else (edit.instruction if edit is not None else "")),
             "anchor": comment.anchor if comment is not None else "",
@@ -120,7 +126,21 @@ def build_queue(stories: list[Story], apply_report: ApplyReport | None,
             "find": edit.find if edit is not None else "",
             "replace": edit.replace if edit is not None else "",
             "format": edit.format if edit is not None else "",
+            # What a model pass already concluded about this flag — the advice
+            # the escalate tier wrote for the person who owns it. Kept on the
+            # item so the screen can offer carrying it out as one click.
+            "advice": edit.advice if edit is not None else "",
+            # The book's own words for the cited page, so a typed answer's
+            # adjudicator reads the page the reviewer read — not just the
+            # paragraphs a candidate happened to land in.
+            "page_text": ((book_pages or {}).get(page) or "")[:MAX_CONTEXT_CHARS],
             "options": options,
+            # Where the manual editor can open when there is nothing to click:
+            # the paragraph the flag was located in, or the one(s) carrying the
+            # marked text. Options already carry their own locations.
+            "targets": _targets_for(
+                outcome, comment.anchor if comment is not None else "",
+                options, stories, scope, cache),
             "resolved": None,
         }
 
@@ -199,6 +219,43 @@ def _options_for(edit: Edit, stories: list[Story], scope,
     return made
 
 
+def _targets_for(outcome: EditOutcome | None, anchor: str, options: list[dict],
+                 stories: list[Story], scope, cache: IndexCache) -> list[dict]:
+    """The paragraphs the manual editor can open for a flag with nothing to
+    click: where the outcome was located (a design note, a placed query), or
+    failing that the paragraph(s) carrying the marked text. Deduplicated
+    against the options, which already carry their own locations."""
+    seen = {(o["story_id"], o["paragraph"]) for o in options}
+    by_story = {s.story_id: s for s in stories}
+    out: list[dict] = []
+
+    def add(story_id: str, index: int) -> None:
+        key = (story_id, index)
+        story = by_story.get(story_id)
+        if (key in seen or story is None
+                or not 0 <= index < len(story.paragraphs)):
+            return
+        text = story.paragraphs[index].text
+        if not text.strip():
+            return
+        seen.add(key)
+        out.append({"story_id": story_id, "paragraph": index, "before": text,
+                    "page": (scope.page_of(story_id, index)
+                             if scope is not None else 0)})
+
+    if (outcome is not None and outcome.story_id
+            and outcome.paragraph >= 0):
+        add(outcome.story_id, outcome.paragraph)
+    if not out and len((anchor or "").strip()) >= MIN_FIND:
+        for s in stories:
+            for p in s.paragraphs:
+                if len(out) >= 2:
+                    return out
+                if all_spans(p.text, anchor, cache=cache, partial_words=True):
+                    add(s.story_id, p.index)
+    return out
+
+
 # --- applying a clicked option -------------------------------------------------
 
 def apply_option(corrected: str | Path, option: dict) -> dict:
@@ -258,6 +315,207 @@ def _rewrite_in_place(corrected: Path, changed: dict[str, bytes]) -> None:
         os.replace(tmp, corrected)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+# --- reading and hand-editing one paragraph ------------------------------------
+# The manual mode: the designer opens the line itself, retypes what needs
+# retyping, bolds or italicizes a selection, adds or removes the section break
+# beside it — and the save writes exactly that into the corrected IDML. The
+# engine's job here is fidelity: only the characters that changed are touched
+# (so the formatting of everything around them survives), and styling is
+# applied per run against what the book actually carries.
+
+# What counts as a section break between paragraphs: a blank line, or an
+# ornament line — a short run of non-letter marks ("* * *", "⁂", "~") that
+# typesets as a scene divider.
+_BREAK_MAX = 12
+
+
+def _is_break_para(text: str) -> bool:
+    s = (text or "").strip()
+    return not s or (len(s) <= _BREAK_MAX and not any(c.isalnum() for c in s))
+
+
+def _char_states(para) -> list[tuple[bool, bool, bool]]:
+    """(bold, italic, italic-from-style) for every character of the paragraph,
+    read off the character range each Content node sits in. `italic-from-style`
+    is kept apart because clearing it means clearing the applied style, not a
+    FontStyle override."""
+    states: list[tuple[bool, bool, bool]] = []
+    for node in para.nodes:
+        csr = node.getparent()
+        face = ((csr.get("FontStyle") or "") if csr is not None else "").lower()
+        applied = ((csr.get("AppliedCharacterStyle") or "")
+                   if csr is not None else "")
+        style_italic = is_italic_style(applied)
+        bold = "bold" in face or "bold" in style_name(applied).lower()
+        italic = "italic" in face or "oblique" in face or style_italic
+        states.extend([(bold, italic, style_italic)] * len(node.text or ""))
+    return states
+
+
+def paragraph_state(stories: list[Story], story_id: str, index: int) -> dict:
+    """One paragraph as the manual editor loads it: its text, its bold/italic
+    runs, and whether a section break sits either side of it — so the editor
+    can offer removing one that exists and only that."""
+    story = next((s for s in stories if s.story_id == story_id), None)
+    if story is None:
+        raise ResolveError("the corrected file no longer has this story — "
+                           "re-run the corrections and try again")
+    if not 0 <= index < len(story.paragraphs):
+        raise ResolveError("the corrected file has changed since the report "
+                           "was written — reload it and try again")
+    para = story.paragraphs[index]
+    runs: list[dict] = []
+    for i, (bold, italic, _s) in enumerate(_char_states(para)):
+        if runs and runs[-1]["bold"] == bold and runs[-1]["italic"] == italic:
+            runs[-1]["end"] = i + 1
+        else:
+            runs.append({"start": i, "end": i + 1, "bold": bold,
+                         "italic": italic})
+    prev_text = (story.paragraphs[index - 1].text if index > 0 else None)
+    next_text = (story.paragraphs[index + 1].text
+                 if index + 1 < len(story.paragraphs) else None)
+    return {
+        "story_id": story_id, "paragraph": index,
+        "text": para.text, "runs": runs,
+        "prev_break": prev_text is not None and _is_break_para(prev_text),
+        "next_break": next_text is not None and _is_break_para(next_text),
+    }
+
+
+def apply_manual(corrected: str | Path, spec: dict) -> dict:
+    """Write one hand-edited paragraph into the corrected IDML, in place.
+
+    `spec` carries what the editor holds: the paragraph's address, the text it
+    loaded (`expected`, the staleness guard), the text as edited, the desired
+    bold/italic runs over that text, and the section-break asks. Only the
+    characters that differ are rewritten — the diff is applied span by span, so
+    the formatting of untouched text survives — and styling is changed only
+    where the desired state differs from what the book carries. Anything that
+    cannot be done cleanly is refused with a sentence; nothing is written on a
+    refusal."""
+    corrected = Path(corrected)
+    stories = read_stories(corrected)
+    story = next((s for s in stories
+                  if s.story_id == spec.get("story_id")), None)
+    if story is None:
+        raise ResolveError("the corrected file no longer has this story — "
+                           "re-run the corrections and try again")
+    index = int(spec.get("paragraph", -1))
+    if not 0 <= index < len(story.paragraphs):
+        raise ResolveError("the corrected file has changed since the editor "
+                           "opened — reload the report and try again")
+    para = story.paragraphs[index]
+    before = para.text
+    if before != (spec.get("expected") or ""):
+        raise ResolveError("this line has changed since the editor opened — "
+                           "reopen it and try again")
+    new_text = spec.get("text")
+    if new_text is None:
+        raise ResolveError("the edited text is missing")
+    insert_after = bool(spec.get("insert_break_after"))
+    rm_above = bool(spec.get("remove_break_above"))
+    rm_below = bool(spec.get("remove_break_below"))
+    if insert_after and rm_below:
+        raise ResolveError("adding a break after this paragraph and removing "
+                           "the one below it contradict — pick one")
+
+    removed_line = False
+    changed = False
+    if not new_text.strip():
+        # Clearing the whole line means removing it — a paragraph with no text
+        # sets as a blank line, which is not what deleting the words meant.
+        if insert_after or rm_above or rm_below:
+            raise ResolveError("clearing the whole line removes it — the "
+                               "breaks around it can't be edited in the same "
+                               "save")
+        if not story.delete_paragraph(index):
+            raise ResolveError("this line could not be removed cleanly — "
+                               "delete it in InDesign")
+        after = ""
+        removed_line = changed = True
+    else:
+        # The words: only the spans that differ are rewritten, in reverse so
+        # each earlier span's offsets still hold.
+        matcher = difflib.SequenceMatcher(a=before, b=new_text, autojunk=False)
+        ops = [op for op in matcher.get_opcodes() if op[0] != "equal"]
+        for _tag, i1, i2, j1, j2 in reversed(ops):
+            para.replace(i1, i2, new_text[j1:j2])
+        changed = changed or bool(ops)
+
+        # The styling: desired state per character vs what the book now
+        # carries, restyled only where they differ — split where the source of
+        # an italic differs too, because clearing a styled italic means
+        # clearing the style, not writing an override.
+        desired = [(False, False)] * len(new_text)
+        for r in spec.get("runs") or []:
+            lo = max(0, int(r.get("start", 0)))
+            hi = min(len(new_text), int(r.get("end", 0)))
+            state = (bool(r.get("bold")), bool(r.get("italic")))
+            for i in range(lo, hi):
+                desired[i] = state
+        current = _char_states(para)
+        i = 0
+        while i < len(new_text):
+            want = desired[i]
+            have = current[i]
+            j = i
+            while (j < len(new_text) and desired[j] == want
+                   and current[j] == have):
+                j += 1
+            if want != (have[0], have[1]):
+                bold, italic = want
+                face = ("Bold Italic" if bold and italic else
+                        "Bold" if bold else "Italic" if italic else None)
+                attrs: dict = {"FontStyle": face}
+                if have[2] and not italic:
+                    attrs["AppliedCharacterStyle"] = NO_CHARACTER_STYLE
+                if not para.restyle(i, j, attrs):
+                    raise ResolveError(
+                        "the styling could not be applied here — the text is "
+                        "not held by a character range; do this one in "
+                        "InDesign")
+                changed = True
+            i = j
+        after = para.text
+
+        # The breaks: the side below first, because removing the line above
+        # renumbers this one.
+        if rm_below:
+            if not (index + 1 < len(story.paragraphs)
+                    and _is_break_para(story.paragraphs[index + 1].text)):
+                raise ResolveError("there is no blank line or break marker "
+                                   "below this paragraph to remove")
+            if not story.delete_paragraph(index + 1):
+                raise ResolveError("the break below could not be removed "
+                                   "cleanly — do it in InDesign")
+            changed = True
+        if insert_after:
+            if not story.insert_paragraph(index, "", after=True):
+                raise ResolveError("a section break could not be added here — "
+                                   "do it in InDesign")
+            changed = True
+        if rm_above:
+            if not (index > 0
+                    and _is_break_para(story.paragraphs[index - 1].text)):
+                raise ResolveError("there is no blank line or break marker "
+                                   "above this paragraph to remove")
+            if not story.delete_paragraph(index - 1):
+                raise ResolveError("the break above could not be removed "
+                                   "cleanly — do it in InDesign")
+            index -= 1
+            changed = True
+
+    if not changed:
+        raise ResolveError("nothing was changed — edit the line, the styling "
+                           "or a break first")
+    _rewrite_in_place(corrected, {story.story_id: story.serialize()})
+    return {"story_id": story.story_id, "paragraph": index,
+            "before": before, "after": after, "removed_line": removed_line,
+            "breaks": {"added_after": insert_after,
+                       "removed_above": rm_above,
+                       "removed_below": rm_below}}
 
 
 # --- applying a typed answer ---------------------------------------------------
@@ -364,6 +622,23 @@ def _adjudicate_prompt(item: dict, typed: str, stories: list[Story]) -> str:
                      f"“{item['replace']}”")
     if item.get("why"):
         lines.append(f"- why it was flagged: {item['why']}")
+    if item.get("advice"):
+        lines.append(f"- what an earlier read of the whole book advised: "
+                     f"{item['advice']}")
+    # The placements the screen showed, numbered as the designer saw them — the
+    # referent of an answer like "the second one" or "not that one, the other".
+    options = item.get("options") or []
+    if options:
+        lines += ["", "THE PLACEMENTS SHOWN ON SCREEN — when the answer says "
+                      "\"the first one\" / \"the second one\", it means these, "
+                      "in this order:"]
+        for i, o in enumerate(options, 1):
+            where = (f"page {o['page_label']}" if o.get("page_label")
+                     else f"page {o['page']}" if o.get("page")
+                     else f"story {o['story_id']}, paragraph {o['paragraph']}")
+            lines.append(f"{i}. [{where}] “{o.get('found', '')}” → "
+                         f"“{o.get('replacement', '')}” in: "
+                         f"“{(o.get('before') or '')[:300]}”")
     lines += ["", "THE DESIGNER'S ANSWER — the decision to carry out:",
               f"“{typed.strip()}”", ""]
     passages = _context_passages(item, stories)
@@ -372,7 +647,10 @@ def _adjudicate_prompt(item: dict, typed: str, stories: list[Story]) -> str:
                      "it, character for character:")
         lines.append("")
         lines.extend(passages)
-    else:
+    if item.get("page_text"):
+        lines += [f"THE BOOK'S OWN TEXT FOR PAGE {item.get('page') or '?'} — "
+                  "the page the mark was made on:", "", item["page_text"], ""]
+    if not passages and not item.get("page_text"):
         lines.append("(No passage of the book could be located for this flag; "
                      "decline unless the designer's answer itself quotes the "
                      "exact book text to change.)")
@@ -380,12 +658,15 @@ def _adjudicate_prompt(item: dict, typed: str, stories: list[Story]) -> str:
 
 
 def _context_passages(item: dict, stories: list[Story]) -> list[str]:
-    """The paragraphs the answer is about: the ones the item's options sit in,
-    or failing those the ones its anchor (then its find) is found in. Bounded,
+    """The paragraphs the answer is about: the ones the item's options sit in —
+    each with the paragraph either side of it, because a decision like "make it
+    match the rest of the scene" is about the flow, not one line — or failing
+    those the ones its anchor (then its find) is found in. Bounded,
     deduplicated, in reading order."""
     seen: set[tuple[str, int]] = set()
     out: list[str] = []
     total = 0
+    by_story = {s.story_id: s for s in stories}
 
     def add(story_id: str, index: int, text: str) -> None:
         nonlocal total
@@ -399,8 +680,16 @@ def _context_passages(item: dict, stories: list[Story]) -> list[str]:
         out.append("")
         total += len(clipped)
 
+    def add_around(story_id: str, index: int) -> None:
+        story = by_story.get(story_id)
+        if story is None:
+            return
+        for i in (index - 1, index, index + 1):
+            if 0 <= i < len(story.paragraphs):
+                add(story_id, i, story.paragraphs[i].text)
+
     for o in item.get("options") or []:
-        add(o["story_id"], o["paragraph"], o.get("before") or "")
+        add_around(o["story_id"], o["paragraph"])
     if not out:
         cache = IndexCache()
         for probe in (item.get("anchor") or "", item.get("find") or ""):
@@ -410,7 +699,7 @@ def _context_passages(item: dict, stories: list[Story]) -> list[str]:
                 for p in s.paragraphs:
                     if all_spans(p.text, probe, cache=cache,
                                  partial_words=True):
-                        add(s.story_id, p.index, p.text)
+                        add_around(s.story_id, p.index)
             if out:
                 break
     return out
@@ -449,17 +738,29 @@ def apply_edit_to_corrected(corrected: str | Path, edit: Edit) -> dict:
 
 # --- keeping the report honest -------------------------------------------------
 
+def suggestion_instruction(item: dict) -> str:
+    """The typed answer a one-click "apply the suggestion" stands for: carry out
+    exactly what the earlier model advice described, nothing more. Raises when
+    the item carries no advice to apply."""
+    advice = " ".join((item.get("advice") or "").split())
+    if not advice:
+        raise ResolveError("this flag carries no model suggestion to apply")
+    return ("Carry out exactly the change this earlier advice describes — "
+            f"nothing more, nothing else: “{advice}”")
+
+
 def queue_counts(payload: dict) -> dict:
     """The card's counters, read off the report as it now stands: edits applied
-    (the run's plus every resolution), flagged edits still unresolved, and
+    (the run's plus every resolution), flagged edits still awaiting someone, and
     reviewer comments still a person's. The same numbers the run computed,
-    re-derived so a resolution moves them."""
+    re-derived so a resolution — or a deliberate set-aside — moves them."""
     ap = payload.get("apply") or {}
-    flagged = [o for o in (ap.get("flagged") or []) if not o.get("resolved")]
+    flagged = [o for o in (ap.get("flagged") or [])
+               if not o.get("resolved") and not o.get("dismissed")]
     com = payload.get("comments") or {}
     unresolved = [c for c in (com.get("items") or [])
                   if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)
-                  and not c.get("resolved")]
+                  and not c.get("resolved") and not c.get("dismissed")]
     return {"applied": int(ap.get("applied") or 0), "flags": len(flagged),
             "unresolved": len(unresolved)}
 
@@ -483,9 +784,17 @@ def record_resolution(json_path: str | Path, item_id: str,
     resolution = dict(resolution)
     resolution["at"] = datetime.now(timezone.utc).isoformat()
     item["resolved"] = resolution
+    dismissed = resolution.get("kind") == "dismissed"
 
     ap = payload.get("apply")
-    if ap is not None:
+    if ap is not None and dismissed:
+        # A set-aside applies nothing; it moves the item's flags out of the
+        # awaiting pile into their own bucket, so the counts say what the
+        # designer decided rather than pretending the work was done.
+        for o in ap.get("flagged") or []:
+            if o["id"] in (item.get("edit_ids") or []):
+                o["dismissed"] = True
+    elif ap is not None:
         ap["applied"] = int(ap.get("applied") or 0) + 1
         # One resolution applies one change, so it retires exactly one flagged
         # edit — the one the clicked option belonged to, or the item's first
@@ -501,26 +810,72 @@ def record_resolution(json_path: str | Path, item_id: str,
     if item.get("comment_id"):
         for c in com.get("items") or []:
             if c["id"] == item["comment_id"]:
-                c["resolved"] = True
-        com["unresolved"] = sum(
-            1 for c in com.get("items") or []
-            if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)
-            and not c.get("resolved"))
-    note = ("resolved in review by the designer"
-            + (f" — “{resolution['text']}”" if resolution.get("text") else ""))
-    payload.setdefault("changes", []).append({
-        "story_id": resolution.get("story_id", ""),
-        "paragraph": resolution.get("paragraph", -1),
-        "before": resolution.get("before", ""),
-        "after": resolution.get("after", ""),
-        "edit_ids": list(item.get("edit_ids") or [item_id]),
-        "instruction": " — ".join(x for x in (item.get("instruction"), note)
-                                  if x),
-        "formatting": resolution.get("format", ""),
-        "resolved_in_review": True,
-    })
+                c["dismissed" if dismissed else "resolved"] = True
+        _recount_unresolved(com)
+    if not dismissed:
+        note = ("resolved in review by the designer"
+                + (f" — “{resolution['text']}”" if resolution.get("text")
+                   else ""))
+        payload.setdefault("changes", []).append({
+            "story_id": resolution.get("story_id", ""),
+            "paragraph": resolution.get("paragraph", -1),
+            "before": resolution.get("before", ""),
+            "after": resolution.get("after", ""),
+            "edit_ids": list(item.get("edit_ids") or [item_id]),
+            "instruction": " — ".join(x for x in (item.get("instruction"), note)
+                                      if x),
+            "formatting": resolution.get("format", ""),
+            "resolved_in_review": True,
+        })
     payload.setdefault("resolutions", []).append({"item_id": item_id,
                                                   **resolution})
+    _write_updated(json_path, payload)
+    return payload
+
+
+def reopen_dismissed(json_path: str | Path, item_id: str) -> dict:
+    """Put a set-aside flag back in the awaiting pile — the undo a one-click
+    "ignore" deserves. Only a dismissal can be reopened: it wrote nothing to the
+    file, so unwinding it is pure bookkeeping; an applied resolution changed the
+    book and stays."""
+    json_path = Path(json_path)
+    payload = json.loads(json_path.read_text("utf-8"))
+    item = next((q for q in payload.get("queue") or []
+                 if q.get("id") == item_id), None)
+    if item is None:
+        raise ResolveError("this flag is not in the report — reload it and "
+                           "try again")
+    resolved = item.get("resolved") or {}
+    if resolved.get("kind") != "dismissed":
+        raise ResolveError("only an ignored flag can be put back — an applied "
+                           "change is in the file")
+    item["resolved"] = None
+    ap = payload.get("apply")
+    if ap is not None:
+        for o in ap.get("flagged") or []:
+            if o["id"] in (item.get("edit_ids") or []):
+                o.pop("dismissed", None)
+    com = payload.get("comments") or {}
+    if item.get("comment_id"):
+        for c in com.get("items") or []:
+            if c["id"] == item["comment_id"]:
+                c.pop("dismissed", None)
+        _recount_unresolved(com)
+    payload["resolutions"] = [r for r in payload.get("resolutions") or []
+                              if not (r.get("item_id") == item_id
+                                      and r.get("kind") == "dismissed")]
+    _write_updated(json_path, payload)
+    return payload
+
+
+def _recount_unresolved(com: dict) -> None:
+    com["unresolved"] = sum(
+        1 for c in com.get("items") or []
+        if c["disposition"] in (DISP_FLAGGED, DISP_NOT_EXTRACTED)
+        and not c.get("resolved") and not c.get("dismissed"))
+
+
+def _write_updated(json_path: Path, payload: dict) -> None:
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                          encoding="utf-8")
     md_path = json_path.parent / "corrections_notes.md"
@@ -530,4 +885,3 @@ def record_resolution(json_path: str | Path, item_id: str,
     except Exception:                  # noqa: BLE001 - the JSON is the record
         log.warning("Could not re-render %s after a resolution", md_path,
                     exc_info=True)
-    return payload

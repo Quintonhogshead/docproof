@@ -1545,3 +1545,37 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 .fix-typed input { flex: 1 1 auto; }
 .fix-error { color: var(--warn); margin: 0.4rem 0 0; font-size: 0.9rem; }
 .fix-done { color: var(--ok); font-weight: 600; margin: 0.35rem 0 0.1rem; }
+.fix-advice {
+  display: flex; align-items: center; gap: 0.8rem;
+  border: 1px solid var(--accent); border-radius: var(--radius);
+  padding: 0.5rem 0.7rem; margin: 0.45rem 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.fix-advice-text { flex: 1 1 auto; margin: 0; }
+.fix-advice button { flex: 0 0 auto; }
+.fix-expandable { cursor: pointer; }
+.fix-expandable:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 3px; }
+.fix-done-aside { margin: 0.35rem 0 0.3rem; }
+.fix-bar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 0.8rem;
+  padding: 0.55rem 0.2rem; margin: 0 0 0.6rem;
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.fix-progress { flex: 1 1 auto; font-weight: 600; }
+.fix-head { display: flex; align-items: baseline; gap: 0.3rem; }
+.fix-head .fix-ignore { margin-left: auto; }
+.fix-item.is-editing { border-color: var(--accent); }
+.fix-edit-bar {
+  display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0 0.3rem;
+}
+.fix-edit-bar button { min-width: 2.2em; }
+.fix-edit-hint { font-size: 0.85rem; }
+.fix-editor {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 0.6rem 0.8rem; min-height: 3.2em; line-height: 1.6;
+  background: var(--bg);
+}
+.fix-editor:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fix-edit-checks { margin: 0.5rem 0 0.2rem; display: grid; gap: 0.25rem; }
+.fix-check-row { display: block; cursor: pointer; }

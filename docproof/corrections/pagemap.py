@@ -21,6 +21,7 @@ so a bad alignment can cost precision, never a correction.
 from __future__ import annotations
 
 import logging
+import re
 from array import array
 from statistics import median
 
@@ -185,6 +186,73 @@ def paragraph_lookup(stories: list[Story]) -> dict[tuple[str, int], Paragraph]:
     """Every paragraph of the book, keyed by (story id, index) — the lookup
     `page_book_text` reads a page's spans out of."""
     return {(s.story_id, p.index): p for s in stories for p in s.paragraphs}
+
+
+# --- the folios the proof itself prints ----------------------------------------
+# The fallback for a proof whose page count does not match the file's (a cover
+# the file does not carry, a spread exported as one page): the folio printed at
+# the head or foot of each page is direct evidence of what InDesign calls it,
+# and it rides in the page's own extracted text.
+
+# A folio as it appears in a page's text: a line that is nothing but a 1-4 digit
+# number, or a number that opens or closes one of the page's edge lines (a
+# running head reads "42  THE LONG ROAD" or "AUTHOR NAME  42").
+_FOLIO_LINE = re.compile(r"^\d{1,4}$")
+_FOLIO_EDGE = re.compile(r"^(\d{1,4})\b|\b(\d{1,4})$")
+# How many of a page's first and last non-blank lines may hold the folio.
+_EDGE_LINES = 2
+# The least evidence worth trusting: this many pages must print a folio, and at
+# least this many (and half of all read) must agree on one page-to-folio offset,
+# before any label is written. A novel's body prints one on nearly every page,
+# so a real proof clears this easily and a coincidence of stray numbers never
+# does.
+_MIN_READS = 8
+
+
+def _printed_number(text: str) -> int | None:
+    """The folio this page prints, or None. Only the page's edges are read — a
+    number in running text is body copy, not a folio."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    edges = lines[:_EDGE_LINES] + lines[-_EDGE_LINES:]
+    for ln in edges:
+        if _FOLIO_LINE.match(ln):
+            return int(ln)
+    for ln in edges:
+        m = _FOLIO_EDGE.search(ln)
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
+def printed_folio_labels(page_texts) -> dict[int, str]:
+    """Which folio each 1-based proof page prints, read off the proof's own text
+    and accepted only as one consistent run.
+
+    The validation is the point: any one number on a page could be anything, but
+    a book's body is a single arithmetic sequence — folio minus physical page is
+    one constant offset from the first body page to the last. So every page's
+    candidate votes on that offset, the winning offset must carry at least half
+    the votes, and only then is the run labelled — every page inside it, folio =
+    page + offset, including the chapter openers and section breaks that print
+    no folio of their own. Front matter numbered apart (or not at all) falls
+    outside the run and keeps its physical page: a lost label, never a wrong
+    one."""
+    reads: dict[int, int] = {}
+    for i, text in enumerate(page_texts or (), 1):
+        n = _printed_number(text)
+        if n is not None:
+            reads[i] = n
+    if len(reads) < _MIN_READS:
+        return {}
+    votes: dict[int, int] = {}
+    for page, folio in reads.items():
+        votes[folio - page] = votes.get(folio - page, 0) + 1
+    offset, count = max(votes.items(), key=lambda kv: kv[1])
+    if count < max(_MIN_READS, (len(reads) + 1) // 2):
+        return {}
+    matching = [p for p, f in reads.items() if f - p == offset]
+    lo, hi = min(matching), max(matching)
+    return {p: str(p + offset) for p in range(lo, hi + 1)}
 
 
 def _normalized_with_map(text: str) -> tuple[str, list[int]]:

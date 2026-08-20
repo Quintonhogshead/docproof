@@ -193,12 +193,23 @@ class ExtractListRequest(BaseModel):
 
 
 class ResolveRequest(BaseModel):
-    """One flagged correction resolved from the review screen: either a clicked
-    option (a concrete placement the report offered) or a typed answer for the
-    model to transcribe into an exact edit. Exactly one of the two."""
+    """One flagged correction acted on from the review screen. Exactly one of
+    the four actions: a clicked *option* (a concrete placement the report
+    offered — deterministic, free), a typed *answer* for the model to
+    transcribe into an exact edit, *suggestion* (one click carrying out the
+    advice a model pass already wrote on this flag, through the same typed
+    path), or *dismiss* (deliberately leave it — recorded as set aside, nothing
+    written). *reopen* undoes a dismiss and nothing else."""
     item_id: str
     option_id: str = ""
     text: str = ""
+    suggestion: bool = False
+    dismiss: bool = False
+    reopen: bool = False
+    # The manual editor's save: the paragraph's address, the text it loaded
+    # (the staleness guard), the text as the designer edited it, the desired
+    # bold/italic runs, and the section-break asks. See resolve.apply_manual.
+    manual: dict | None = None
 
 
 class RejudgeRequest(BaseModel):
@@ -1249,6 +1260,29 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "This job has no corrections report")
         return json.loads(path.read_text("utf-8"))
 
+    @app.get("/api/jobs/{job_id}/corrections/paragraph")
+    def corrections_paragraph(job_id: str, story_id: str, paragraph: int,
+                              owner: str = Depends(owner_for)) -> dict:
+        """One paragraph of the corrected file, as the manual editor loads it:
+        the text as it is *now* (after any earlier resolutions), its bold and
+        italic runs, and whether a section break sits either side."""
+        from docproof.corrections.idml import read_stories
+        from docproof.corrections.resolve import ResolveError, paragraph_state
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections or job.state != "done":
+            raise HTTPException(400, "Only a finished corrections job can be "
+                                     "edited.")
+        corrected = _resolve_result(job, _result_name(job, "corrected"))
+        if corrected is None:
+            raise HTTPException(404, "The corrected file is missing")
+        try:
+            return paragraph_state(read_stories(corrected), story_id,
+                                   paragraph)
+        except ResolveError as e:
+            raise HTTPException(409, str(e))
+
     @app.post("/api/jobs/{job_id}/corrections/resolve")
     def resolve_correction(job_id: str, req: ResolveRequest,
                            owner: str = Depends(owner_for)) -> dict:
@@ -1267,8 +1301,11 @@ def register(app: FastAPI) -> None:
         from docproof.corrections.resolve import (ResolveError,
                                                   adjudicate_instruction,
                                                   apply_edit_to_corrected,
-                                                  apply_option, queue_counts,
-                                                  record_resolution)
+                                                  apply_manual, apply_option,
+                                                  queue_counts,
+                                                  record_resolution,
+                                                  reopen_dismissed,
+                                                  suggestion_instruction)
         job = _owned_job(job_id, owner)
         if job is None:
             raise HTTPException(404, "No results for this job yet")
@@ -1277,9 +1314,14 @@ def register(app: FastAPI) -> None:
                                      "resolve.")
         if job.state != "done":
             raise HTTPException(409, "This one is not finished yet.")
-        if bool(req.option_id) == bool(req.text.strip()):
-            raise HTTPException(400, "Pick one of the offered placements, or "
-                                     "type what to do — one or the other.")
+        asked = [bool(req.option_id), bool(req.text.strip()),
+                 req.suggestion, req.dismiss, req.reopen,
+                 req.manual is not None]
+        if sum(asked) != 1:
+            raise HTTPException(400, "Pick one of the offered placements, type "
+                                     "what to do, apply the suggestion, edit "
+                                     "the line, or ignore it — one action per "
+                                     "call.")
         with _resolve_lock(job_id):
             json_path = _resolve_result(job, "corrections.json")
             if json_path is None:
@@ -1296,10 +1338,17 @@ def register(app: FastAPI) -> None:
                     404, "This flag is not in the report — it may predate "
                          "in-app resolutions; re-run the corrections to get "
                          "them.")
-            if item.get("resolved"):
+            if item.get("resolved") and not req.reopen:
                 raise HTTPException(409, "This flag was already resolved.")
             try:
-                if req.option_id:
+                if req.reopen:
+                    updated = reopen_dismissed(json_path, req.item_id)
+                elif req.dismiss:
+                    # Nothing is written; the flag is recorded as deliberately
+                    # set aside, and can be put back with `reopen`.
+                    updated = record_resolution(json_path, req.item_id,
+                                                {"kind": "dismissed"})
+                elif req.option_id:
                     option = next((o for o in item.get("options") or []
                                    if o.get("id") == req.option_id), None)
                     if option is None:
@@ -1310,12 +1359,25 @@ def register(app: FastAPI) -> None:
                                   "option_id": req.option_id,
                                   "edit_id": option.get("edit_id", ""),
                                   **result}
+                    updated = record_resolution(json_path, req.item_id,
+                                                resolution)
+                elif req.manual is not None:
+                    # The designer edited the line themselves — deterministic,
+                    # free, and exactly what the editor showed.
+                    result = apply_manual(corrected, req.manual)
+                    resolution = {"kind": "manual", **result}
+                    updated = record_resolution(json_path, req.item_id,
+                                                resolution)
                 else:
+                    # A typed answer, or the one-click form of it: carrying out
+                    # the advice a model pass already wrote on this flag.
+                    text = (suggestion_instruction(item) if req.suggestion
+                            else req.text.strip())
                     from docproof.corrections.idml import read_stories
                     provider, model = _build_resolve_provider()
                     usage = Usage()
                     edit, note = adjudicate_instruction(
-                        item, req.text, provider, model=model, usage=usage,
+                        item, text, provider, model=model, usage=usage,
                         stories=read_stories(corrected))
                     _record_extract_spend(app, owner, model, usage,
                                           filename="corrections review")
@@ -1324,9 +1386,11 @@ def register(app: FastAPI) -> None:
                         # written, and the reason is the designer's to act on.
                         raise HTTPException(422, f"Not applied — {note}")
                     result = apply_edit_to_corrected(corrected, edit)
-                    resolution = {"kind": "typed", "text": req.text.strip(),
-                                  "note": note, **result}
-                updated = record_resolution(json_path, req.item_id, resolution)
+                    resolution = {"kind": ("suggestion" if req.suggestion
+                                           else "typed"),
+                                  "text": text, "note": note, **result}
+                    updated = record_resolution(json_path, req.item_id,
+                                                resolution)
             except ResolveError as e:
                 raise HTTPException(422, str(e))
             counts = queue_counts(updated)
@@ -1335,9 +1399,11 @@ def register(app: FastAPI) -> None:
                 unresolved=counts["unresolved"])
             # The archive holds the pre-resolution copies; refresh them in the
             # background so a wiped volume never serves a stale deliverable
-            # back. Best-effort, off the request thread.
-            names = [corrected_name_, "corrections.json",
-                     "corrections_notes.md"]
+            # back. Best-effort, off the request thread. A dismiss or reopen
+            # touched only the report, so only the report is re-pushed.
+            names = ["corrections.json", "corrections_notes.md"]
+            if not (req.dismiss or req.reopen):
+                names.insert(0, corrected_name_)
             threading.Thread(
                 target=lambda: app.state.runner.refresh_archive(job_id, names),
                 name=f"docproof-archive-refresh-{job_id}", daemon=True).start()
