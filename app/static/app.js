@@ -4470,12 +4470,15 @@ async function openCorrectionsReport(job) {
 // ── resolving flagged corrections in place ─────────────────────────────────
 // The fix screen: every flag the run left for a person, dealt with without
 // leaving the app. Each card offers, in order of least effort: the model's own
-// suggestion (one click), the concrete placements the change could land on
-// (one click each), the line itself opened for hand-editing (bold, italics,
-// section breaks), and a box to type a decision for the model to carry out.
-// "Ignore" sets a flag aside, recorded and reversible. Every action edits the
-// corrected IDML on the server in place; the bar at the top hands the file
-// back when the pile is empty.
+// suggestion (stored advice applies in one click; any flag can ask for one and
+// accept the highlighted preview), the concrete placements the change could
+// land on (one click each), the line itself opened for hand-editing (bold,
+// italics, section breaks, the proposed change pre-applied and highlighted),
+// and a box to type a decision for the model to carry out. "Ignore" sets a
+// flag aside, recorded and reversible. The applied corrections are reviewable
+// and editable in their own section, recorded as touch-ups. Every action edits
+// the corrected IDML on the server in place; the bar at the top hands the file
+// back.
 
 $('fix-back').addEventListener('click', () => show('jobs'));
 
@@ -4521,6 +4524,17 @@ function fixPreview(before, after) {
   return [cut(before), cut(after)];
 }
 
+// The span a change occupies in its after-text — common prefix and suffix off.
+// [x, x) (empty) when the two read identically (a formatting-only change).
+function changedSpan(before, after) {
+  let p = 0;
+  while (p < before.length && p < after.length && before[p] === after[p]) p += 1;
+  let s = 0;
+  while (s < before.length - p && s < after.length - p
+         && before[before.length - 1 - s] === after[after.length - 1 - s]) s += 1;
+  return [p, after.length - s];
+}
+
 // The page label a designer navigates by: folio first, physical page second.
 function fixLoc(row) {
   return row.page_label ? `Page ${row.page_label}`
@@ -4540,11 +4554,11 @@ async function openCorrectionsFix(job) {
       + err.message;
     return;
   }
-  if (!(data.queue || []).length) {
+  if (!(data.queue || []).length && !(data.changes || []).length) {
     $('fix-sub').textContent = (job.total_comments ? job.unresolved : job.flags)
       ? 'This run predates in-place resolutions — re-run the corrections and '
         + 'the flags will come back resolvable here.'
-      : 'Nothing left to resolve.';
+      : 'Nothing here to review.';
     return;
   }
   renderFixList(job, data);
@@ -4578,7 +4592,9 @@ function renderFixList(job, data) {
   const dealt = done.length + aside.length;
   progress.textContent = open.length
     ? `${dealt} of ${queue.length} dealt with · ${open.length} to go`
-    : `All ${queue.length} dealt with — the corrected file is ready.`;
+    : queue.length
+      ? `All ${queue.length} dealt with — the corrected file is ready.`
+      : 'No flags — every correction below applied.';
   bar.append(progress);
   const note = actionNote();
   const dl = openButton(job, 'corrected',
@@ -4589,6 +4605,21 @@ function renderFixList(job, data) {
   list.append(bar, note);
 
   open.forEach((item) => list.append(fixItemCard(job, data, item)));
+
+  // Every correction the run applied, reviewable and editable — the machine
+  // proposed these; the last word is the designer's. Edits here are recorded
+  // as touch-ups, resolving nothing and counted as nothing else.
+  const applied = (data.changes || []).filter((c) => (c.after || '').trim());
+  if (applied.length) {
+    const det = document.createElement('details');
+    det.className = 'fix-applied';
+    const sum = document.createElement('summary');
+    sum.textContent = `Applied corrections — review or edit (${applied.length})`;
+    det.append(sum);
+    applied.forEach((c) => det.append(fixAppliedRow(job, data, c)));
+    list.append(det);
+  }
+
   if (done.length) {
     const h = document.createElement('h3');
     h.textContent = `Resolved here — ${done.length}`;
@@ -4754,14 +4785,20 @@ function fixItemCard(job, data, item) {
     card.append(row);
   }
 
-  const editButton = (loc) => {
+  const editButton = (loc, preApply) => {
     const b = document.createElement('button');
     b.className = 'quiet';
     b.textContent = 'Edit the line';
     b.title = 'Open this line and edit it yourself — bold, italics and '
-      + 'section breaks included';
-    b.addEventListener('click', () => openManualEditor(job, data, item, loc,
-                                                       card));
+      + 'section breaks included' + (preApply
+      ? '; the proposed change opens pre-applied, highlighted green' : '');
+    b.addEventListener('click', () => openManualEditor(job, data, {
+      item,
+      loc,
+      expect: loc.before || '',
+      preApply,
+      container: card,
+    }));
     return b;
   };
 
@@ -4770,13 +4807,18 @@ function fixItemCard(job, data, item) {
     opt.className = 'fix-opt';
     const loc = document.createElement('div');
     loc.className = 'fix-opt-loc';
-    loc.textContent = fixLoc(o);
+    loc.textContent = (o.suggested ? '✨ Model’s pick · ' : '') + fixLoc(o);
+    if (o.suggested && o.note) loc.title = o.note;
     opt.append(loc);
     opt.append(fixRedline(o.before, o.after));
     const apply = document.createElement('button');
     apply.textContent = 'Apply here';
+    if (o.suggested) apply.className = 'primary';
     apply.addEventListener('click', () => resolve({ option_id: o.id }));
-    opt.append(apply, editButton(o));
+    opt.append(apply, editButton(o, {
+      start: o.start, end: o.end, found: o.found,
+      replacement: o.replacement,
+    }));
     card.append(opt);
   });
 
@@ -4790,12 +4832,44 @@ function fixItemCard(job, data, item) {
     loc.textContent = fixLoc(t);
     row.append(loc);
     row.append(fixRedline(t.before, t.before));
-    row.append(editButton(t));
+    row.append(editButton(t, null));
     card.append(row);
   });
 
   const nl = document.createElement('div');
   nl.className = 'fix-typed';
+  // Any flag can ask the model for a fix; it comes back as a highlighted,
+  // clickable placement to accept — never applied sight-unseen. Hidden once a
+  // suggestion is already on the card, and when the advice banner (a stronger
+  // one-click) is there instead.
+  if (!item.advice && !(item.options || []).some((o) => o.suggested)) {
+    const suggest = document.createElement('button');
+    suggest.className = 'quiet';
+    suggest.textContent = 'Suggest a fix';
+    suggest.title = 'Ask the model to work this one out — its fix appears '
+      + 'above as a placement for you to accept or edit';
+    suggest.addEventListener('click', async () => {
+      err.hidden = true;
+      busy(true);
+      suggest.textContent = 'Asking…';
+      try {
+        const out = await api(`/api/jobs/${job.id}/corrections/suggest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_id: item.id }),
+        });
+        const i = (data.queue || []).findIndex((q) => q.id === item.id);
+        if (i >= 0 && out.item) data.queue[i] = out.item;
+        renderFixList(job, data);
+      } catch (e) {
+        busy(false);
+        suggest.textContent = 'Suggest a fix';
+        err.textContent = e.message;
+        err.hidden = false;
+      }
+    });
+    nl.append(suggest);
+  }
   const input = document.createElement('input');
   input.type = 'text';
   input.placeholder = (item.options || []).length
@@ -4821,6 +4895,33 @@ function fixItemCard(job, data, item) {
   nl.append(input, go);
   card.append(nl, err);
   return card;
+}
+
+// One applied correction, reviewable in its line and editable — recorded as a
+// touch-up, resolving nothing.
+function fixAppliedRow(job, data, c) {
+  const row = document.createElement('div');
+  row.className = 'fix-opt';
+  const loc = document.createElement('div');
+  loc.className = 'fix-opt-loc';
+  loc.textContent = `¶ ${c.paragraph}`;
+  row.append(loc);
+  row.append(fixRedline(c.before, c.after, c.formatting));
+  const edit = document.createElement('button');
+  edit.className = 'quiet';
+  edit.textContent = 'Edit the line';
+  edit.title = 'Open this line and adjust it yourself — the applied change is '
+    + 'highlighted green';
+  edit.addEventListener('click', () => openManualEditor(job, data, {
+    item: null,
+    loc: { story_id: c.story_id, paragraph: c.paragraph },
+    expect: c.after || '',
+    highlight: changedSpan(c.before || '', c.after || ''),
+    instruction: c.instruction || '',
+    container: row,
+  }));
+  row.append(edit);
+  return row;
 }
 
 // A redline that opens as a window around the change and expands to the whole
@@ -4851,37 +4952,55 @@ function fixRedline(before, after, format) {
 }
 
 // ── the manual editor ──────────────────────────────────────────────────────
-// The line itself, opened in place of the card: edit the words directly, bold
-// or italicize a selection, tick a section break on or off, and Save writes
-// exactly that into the corrected IDML — resolving the flag.
+// The line itself, opened in place of its card or row: edit the words
+// directly, bold or italicize a selection, tick a section break on or off,
+// and Save writes exactly that into the corrected IDML. Opened from a
+// placement, the proposed change arrives pre-applied and highlighted green —
+// accept it by saving, or adjust it first. Opened from an applied correction,
+// the change already in the file is what glows.
 
-async function openManualEditor(job, data, item, loc, card) {
+async function openManualEditor(job, data, ctx) {
+  const showErr = (msg) => {
+    let err = ctx.container.querySelector('.fix-error');
+    if (!err) {
+      err = document.createElement('p');
+      err.className = 'fix-error';
+      ctx.container.append(err);
+    }
+    err.textContent = msg;
+    err.hidden = false;
+  };
   let state;
   try {
-    state = await api(`/api/jobs/${job.id}/corrections/paragraph`
-      + `?story_id=${encodeURIComponent(loc.story_id)}`
-      + `&paragraph=${loc.paragraph}`);
+    state = await api(`/api/jobs/${job.id}/corrections/paragraph`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ story_id: ctx.loc.story_id,
+                             paragraph: ctx.loc.paragraph,
+                             expect: ctx.expect || '' }),
+    });
   } catch (e) {
-    const err = card.querySelector('.fix-error');
-    if (err) {
-      err.textContent = e.message;
-      err.hidden = false;
-    }
+    showErr(e.message);
     return;
   }
+  const card = ctx.container;
   card.textContent = '';
-  card.classList.add('is-editing');
+  card.className = 'fix-item is-editing';
+
+  const model = editorModel(state, ctx.preApply || null, ctx.highlight || null);
 
   const head = document.createElement('div');
   head.className = 'fix-head';
   const title = document.createElement('b');
-  title.textContent = `Edit the line — ${fixLoc(loc)}`;
+  title.textContent = `Edit the line — ${fixLoc({ ...ctx.loc,
+    paragraph: state.paragraph })}`;
   head.append(title);
   card.append(head);
-  if (item.instruction) {
+  const instruction = ctx.item ? ctx.item.instruction : ctx.instruction;
+  if (instruction) {
     const note = document.createElement('blockquote');
     note.className = 'fix-note';
-    note.textContent = `“${item.instruction}”`;
+    note.textContent = `“${instruction}”`;
     card.append(note);
   }
 
@@ -4905,7 +5024,8 @@ async function openManualEditor(job, data, item, loc, card) {
   const hint = document.createElement('span');
   hint.className = 'muted fix-edit-hint';
   hint.textContent = 'Select text, then B or I. One paragraph — breaks are '
-    + 'the boxes below.';
+    + 'the boxes below.'
+    + (model.hl ? ' The proposed change is highlighted green.' : '');
   bar.append(hint);
   card.append(bar);
 
@@ -4913,7 +5033,7 @@ async function openManualEditor(job, data, item, loc, card) {
   box.className = 'fix-editor';
   box.contentEditable = 'true';
   box.spellcheck = false;
-  box.innerHTML = runsHTML(state.text, state.runs);
+  box.innerHTML = editorHTML(model.text, model.chars, model.hl);
   // One paragraph stays one paragraph: Enter is refused (section breaks are
   // the checkboxes), and a paste lands as plain text.
   box.addEventListener('keydown', (e) => {
@@ -4973,50 +5093,124 @@ async function openManualEditor(job, data, item, loc, card) {
     err.hidden = true;
     save.disabled = cancel.disabled = true;
     save.textContent = 'Applying…';
-    const ok = await fixResolve(job, data, item, {
-      manual: {
-        story_id: loc.story_id,
-        paragraph: loc.paragraph,
-        expected: state.text,
-        text: parsed.text,
-        runs: parsed.runs,
-        insert_break_after: addAfter.checked,
-        remove_break_above: !!(removeAbove && removeAbove.checked),
-        remove_break_below: !!(removeBelow && removeBelow.checked),
-      },
-    }, (msg) => {
+    const fail = (msg) => {
       err.textContent = msg;
       err.hidden = false;
       save.disabled = cancel.disabled = false;
       save.textContent = 'Save & apply';
-    });
-    return ok;
+    };
+    const manual = {
+      story_id: ctx.loc.story_id,
+      paragraph: state.paragraph,
+      expected: state.text,
+      text: parsed.text,
+      runs: parsed.runs,
+      insert_break_after: addAfter.checked,
+      remove_break_above: !!(removeAbove && removeAbove.checked),
+      remove_break_below: !!(removeBelow && removeBelow.checked),
+    };
+    if (ctx.item) {
+      await fixResolve(job, data, ctx.item, { manual }, fail);
+      return;
+    }
+    // A touch-up: no flag answered, so it goes through the edit route and the
+    // fresh report is re-read for the re-render.
+    try {
+      await api(`/api/jobs/${job.id}/corrections/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual }),
+      });
+      renderFixList(job, await api(`/api/jobs/${job.id}/corrections`));
+    } catch (e) {
+      fail(e.message);
+    }
   });
   row.append(save, cancel);
   card.append(row, err);
   box.focus();
 }
 
-// The paragraph rendered for the editor: its text, with the runs the book
-// carries wrapped in <b>/<i> so the designer sees what is already set.
-function runsHTML(text, runs) {
-  const parts = [];
-  let at = 0;
-  (runs || []).forEach((r) => {
-    if (r.start > at) parts.push(esc(text.slice(at, r.start)));
-    let piece = esc(text.slice(r.start, r.end));
-    if (r.italic) piece = `<i>${piece}</i>`;
-    if (r.bold) piece = `<b>${piece}</b>`;
-    parts.push(piece);
-    at = r.end;
+// The editor's working model: per-character bold/italic states off the server
+// runs, the proposed change spliced in (inheriting the state where it lands)
+// when a placement opened the editor, and the green-highlight span. A
+// placement whose span no longer matches is relocated by its text when that
+// text now appears exactly once; otherwise the editor opens plain.
+function editorModel(state, preApply, highlight) {
+  let text = state.text;
+  const chars = [];
+  for (let i = 0; i < text.length; i += 1) {
+    chars.push({ bold: false, italic: false });
+  }
+  (state.runs || []).forEach((r) => {
+    for (let i = r.start; i < r.end && i < chars.length; i += 1) {
+      chars[i] = { bold: !!r.bold, italic: !!r.italic };
+    }
   });
-  if (at < text.length) parts.push(esc(text.slice(at)));
+  let hl = null;
+  if (preApply) {
+    let { start, end } = preApply;
+    if (text.slice(start, end) !== preApply.found) {
+      const first = text.indexOf(preApply.found);
+      if (first >= 0 && text.indexOf(preApply.found, first + 1) < 0) {
+        start = first;
+        end = first + preApply.found.length;
+      } else {
+        return { text, chars, hl: null };
+      }
+    }
+    const inherit = chars[start] || { bold: false, italic: false };
+    const insert = Array.from({ length: preApply.replacement.length },
+                              () => ({ ...inherit }));
+    chars.splice(start, end - start, ...insert);
+    text = text.slice(0, start) + preApply.replacement + text.slice(end);
+    hl = [start, start + preApply.replacement.length];
+  } else if (highlight && highlight[1] > highlight[0]
+             && highlight[1] <= text.length) {
+    hl = highlight;
+  }
+  if (hl) hl = wordSpan(text, hl);
+  return { text, chars, hl };
+}
+
+// A highlight widened to whole words — “There” glows, not the “re” a minimal
+// character diff leaves inside it. Visual only; the save reads none of this.
+function wordSpan(text, span) {
+  const wordish = (ch) => !!ch && /[\p{L}\p{N}'’]/u.test(ch);
+  let [s, e] = span;
+  while (s > 0 && wordish(text[s - 1]) && wordish(text[s])) s -= 1;
+  while (e < text.length && wordish(text[e]) && wordish(text[e - 1])) e += 1;
+  return [s, e];
+}
+
+// The paragraph rendered for the editor: its text with the book's bold/italic
+// runs as <b>/<i>, and the proposed-change span wrapped green. The highlight
+// wrapper carries no styling of its own that the parser reads, so it is
+// invisible to the save.
+function editorHTML(text, chars, hl) {
+  const parts = [];
+  const key = (k) => `${chars[k].bold ? 1 : 0}${chars[k].italic ? 1 : 0}`
+    + `${hl && k >= hl[0] && k < hl[1] ? 1 : 0}`;
+  let i = 0;
+  while (i < text.length) {
+    let j = i;
+    while (j < text.length && key(j) === key(i)) j += 1;
+    let piece = esc(text.slice(i, j));
+    if (chars[i].italic) piece = `<i>${piece}</i>`;
+    if (chars[i].bold) piece = `<b>${piece}</b>`;
+    if (hl && i >= hl[0] && i < hl[1]) {
+      piece = `<span class="fix-hl">${piece}</span>`;
+    }
+    parts.push(piece);
+    i = j;
+  }
   return parts.join('');
 }
 
 // The editor read back: plain text plus the bold/italic runs the designer
 // left, walked off the contenteditable DOM (execCommand writes <b>/<i> or
-// styled spans depending on the browser — both are read).
+// styled spans depending on the browser — both are read; the green highlight
+// wrapper is transparent).
 function parseEditor(box, originalText) {
   const segs = [];
   const walk = (node, bold, italic) => {

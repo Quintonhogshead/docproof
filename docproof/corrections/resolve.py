@@ -354,14 +354,31 @@ def _char_states(para) -> list[tuple[bool, bool, bool]]:
     return states
 
 
-def paragraph_state(stories: list[Story], story_id: str, index: int) -> dict:
+def paragraph_state(stories: list[Story], story_id: str, index: int, *,
+                    expect: str = "") -> dict:
     """One paragraph as the manual editor loads it: its text, its bold/italic
     runs, and whether a section break sits either side of it — so the editor
-    can offer removing one that exists and only that."""
+    can offer removing one that exists and only that.
+
+    `expect` is the text the caller believes the paragraph holds — the report
+    recorded it at run time, and a resolution since may have inserted or
+    removed a line and renumbered everything after it. When the paragraph at
+    `index` no longer reads as expected, the story is searched for the one
+    paragraph that does, and *that* is returned (its current index included),
+    so the editor never opens on a neighbour by silent off-by-one. Found
+    nowhere or twice, it is refused instead of guessed."""
     story = next((s for s in stories if s.story_id == story_id), None)
     if story is None:
         raise ResolveError("the corrected file no longer has this story — "
                            "re-run the corrections and try again")
+    if expect and not (0 <= index < len(story.paragraphs)
+                       and story.paragraphs[index].text == expect):
+        matches = [p.index for p in story.paragraphs if p.text == expect]
+        if len(matches) != 1:
+            raise ResolveError(
+                "this line has changed since the report was written — reload "
+                "the report and try again")
+        index = matches[0]
     if not 0 <= index < len(story.paragraphs):
         raise ResolveError("the corrected file has changed since the report "
                            "was written — reload it and try again")
@@ -749,6 +766,75 @@ def suggestion_instruction(item: dict) -> str:
             f"nothing more, nothing else: “{advice}”")
 
 
+# The one-click ask for a flag that carries no stored advice: the designer
+# explicitly hands the model the call. It answers with a concrete edit or a
+# decline — the same contract as a typed answer, because it goes down the same
+# path.
+DELEGATED_INSTRUCTION = (
+    "Decide this one and carry it out: apply the reviewer's mark at the "
+    "placement the evidence supports — the cited page first, then the marked "
+    "line. If the evidence does not settle what to change or where, decline "
+    "and say what is missing.")
+
+
+def materialize_suggestion(item: dict, corrected: str | Path,
+                           provider: Provider, *, model: str,
+                           usage: Usage) -> dict:
+    """One model call turned into a clickable placement: the flag's stored
+    advice — or a delegated ask when it has none — adjudicated into an edit,
+    dry-run against the corrected book in memory, and handed back as the exact
+    span it would change, in the same shape as a queue option. Nothing is
+    written; the designer accepts it by clicking, exactly like any other
+    placement. A decline, or a suggestion that cannot be shown as one clean
+    span, is refused with the reason."""
+    typed = (suggestion_instruction(item) if item.get("advice")
+             else DELEGATED_INSTRUCTION)
+    stories = read_stories(corrected)
+    edit, note = adjudicate_instruction(item, typed, provider, model=model,
+                                        usage=usage, stories=stories)
+    if edit is None:
+        raise ResolveError(f"the model declined — {note}")
+    snapshot = {s.story_id: [p.text for p in s.paragraphs] for s in stories}
+    outcomes, _ = apply_to_stories(stories, [edit])
+    mine = next((o for o in outcomes if o.edit.id == edit.id), None)
+    if mine is None or not mine.applied:
+        why = (mine.detail or mine.status) if mine is not None else "unknown"
+        raise ResolveError(f"the model's suggestion could not be placed: {why}")
+    if any(o.applied and o.edit.id.endswith("-para") for o in outcomes):
+        raise ResolveError("the model's suggestion would remove a whole line "
+                           "— use Edit the line, or type the answer instead")
+    story = next(s for s in stories if s.story_id == mine.story_id)
+    lines = snapshot.get(mine.story_id) or []
+    if not 0 <= mine.paragraph < min(len(lines), len(story.paragraphs)):
+        raise ResolveError("the model's suggestion could not be shown — type "
+                           "it as an answer instead")
+    before = lines[mine.paragraph]
+    after = story.paragraphs[mine.paragraph].text
+    if before == after:
+        raise ResolveError("the model's suggestion only re-styles the text — "
+                           "use Edit the line to set it by hand")
+    p = 0
+    while p < len(before) and p < len(after) and before[p] == after[p]:
+        p += 1
+    s = 0
+    while (s < len(before) - p and s < len(after) - p
+           and before[len(before) - 1 - s] == after[len(after) - 1 - s]):
+        s += 1
+    return {
+        "id": "",                     # numbered into the item by the caller
+        "edit_id": "",
+        "story_id": mine.story_id,
+        "paragraph": mine.paragraph,
+        "start": p, "end": len(before) - s,
+        "found": before[p:len(before) - s],
+        "replacement": after[p:len(after) - s],
+        "before": before, "after": after,
+        "page": item.get("page") or 0,
+        "suggested": True,
+        "note": note,
+    }
+
+
 def queue_counts(payload: dict) -> dict:
     """The card's counters, read off the report as it now stands: edits applied
     (the run's plus every resolution), flagged edits still awaiting someone, and
@@ -829,6 +915,34 @@ def record_resolution(json_path: str | Path, item_id: str,
         })
     payload.setdefault("resolutions", []).append({"item_id": item_id,
                                                   **resolution})
+    _write_updated(json_path, payload)
+    return payload
+
+
+def record_touchup(json_path: str | Path, resolution: dict) -> dict:
+    """Fold a hand edit that answers no flag — the designer touching up an
+    *applied* correction from the review list — into the report. It joins the
+    resolutions (so the log says who edited what) and the changes list (so the
+    printable review shows the line as it now reads), but moves no counter: it
+    resolved nothing and applied no correction from the list, and the
+    reconciliation treats it accordingly."""
+    json_path = Path(json_path)
+    payload = json.loads(json_path.read_text("utf-8"))
+    resolution = dict(resolution)
+    resolution["at"] = datetime.now(timezone.utc).isoformat()
+    resolution["kind"] = "manual"
+    resolution["touchup"] = True
+    payload.setdefault("resolutions", []).append({"item_id": "", **resolution})
+    payload.setdefault("changes", []).append({
+        "story_id": resolution.get("story_id", ""),
+        "paragraph": resolution.get("paragraph", -1),
+        "before": resolution.get("before", ""),
+        "after": resolution.get("after", ""),
+        "edit_ids": [],
+        "instruction": "edited by hand in review",
+        "formatting": "",
+        "resolved_in_review": True,
+    })
     _write_updated(json_path, payload)
     return payload
 

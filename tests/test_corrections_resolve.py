@@ -446,3 +446,84 @@ def test_targets_fall_back_to_the_anchor_text(tmp_path):
                            IndexCache())
     assert len(targets) == 1
     assert targets[0]["before"].startswith("It was late")
+
+
+# --- relocation, touch-ups, and materialized suggestions -----------------------
+
+from docproof.corrections.resolve import (materialize_suggestion,  # noqa: E402
+                                          record_touchup)
+
+
+def test_paragraph_state_relocates_a_renumbered_line(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    line = "A third paragraph with plain text for good measure."
+    # A break inserted above renumbers everything after it.
+    apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 3, "expected": line, "text": line,
+        "runs": [{"start": 0, "end": len(line)}], "insert_break_after": True})
+    # The report still says the corrected line sits at index 4 — but the file
+    # now has the blank there. Expect-based relocation finds it at 5.
+    state = paragraph_state(read_stories(corrected), "ue0", 4,
+                            expect="There were several mistakes here to find.")
+    assert state["text"] == "There were several mistakes here to find."
+    assert state["paragraph"] == 5
+    # A text the story does not carry is refused, not guessed.
+    with pytest.raises(ResolveError):
+        paragraph_state(read_stories(corrected), "ue0", 4,
+                        expect="text the book never held")
+
+
+def test_a_touchup_records_without_moving_the_counts(tmp_path):
+    out, payload = _run(tmp_path,
+                        [{"find": "Their were", "replace": "There were"}])
+    corrected = out.corrected_idml
+    line = "There were several mistakes here to find."
+    new = line.replace("mistakes", "errors")
+    result = apply_manual(corrected, {
+        "story_id": "ue0", "paragraph": 4, "expected": line, "text": new,
+        "runs": []})
+    before_counts = queue_counts(payload)
+    updated = record_touchup(out.report_json, result)
+    assert queue_counts(updated) == before_counts
+    assert updated["resolutions"][0]["touchup"] is True
+    assert updated["changes"][-1]["instruction"] == "edited by hand in review"
+    md = (out.report_json.parent / "corrections_notes.md").read_text("utf-8")
+    assert "edited the line by hand" in md
+    assert "counts do not reconcile" not in md
+
+
+def test_a_suggestion_materializes_as_a_clickable_placement(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    provider = _scripted({"decision": "apply",
+                          "find": "the room was empty",
+                          "replace": "the room is empty",
+                          "context": "", "format": "", "note": "the room copy"})
+    option = materialize_suggestion(item, out.corrected_idml, provider,
+                                    model="fake-model", usage=Usage())
+    assert option["suggested"] is True
+    # The span is the minimal character diff — "wa" → "i" carries "was" → "is".
+    assert option["found"] == "wa" and option["replacement"] == "i"
+    assert option["before"] == "She opened the door, the room was empty."
+    assert option["after"] == "She opened the door, the room is empty."
+    # Nothing was written by the dry run.
+    assert "She opened the door, the room was empty." \
+        in _texts(out.corrected_idml)
+    # And the materialized placement applies exactly like any other option.
+    result = apply_option(out.corrected_idml, {**option, "id": "q1-s1"})
+    assert result["after"] == "She opened the door, the room is empty."
+    # With no stored advice, the model was asked to decide — the delegated
+    # instruction, not a transcription of advice.
+    assert "Decide this one" in provider.calls[0]["user"]
+
+
+def test_a_declined_suggestion_is_refused_with_the_reason(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    provider = _scripted({"decision": "decline", "find": "", "replace": "",
+                          "context": "", "format": "",
+                          "note": "nothing settles which copy"})
+    with pytest.raises(ResolveError) as e:
+        materialize_suggestion(payload["queue"][0], out.corrected_idml,
+                               provider, model="fake-model", usage=Usage())
+    assert "nothing settles which copy" in str(e.value)

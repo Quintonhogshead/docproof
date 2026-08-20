@@ -212,6 +212,25 @@ class ResolveRequest(BaseModel):
     manual: dict | None = None
 
 
+class ParagraphRequest(BaseModel):
+    """The manual editor asking for one paragraph, with the text the report
+    recorded so a renumbered line is relocated rather than misread."""
+    story_id: str
+    paragraph: int
+    expect: str = ""
+
+
+class EditRequest(BaseModel):
+    """A touch-up save: a manual edit that answers no flag. Same `manual`
+    payload as a resolution's."""
+    manual: dict
+
+
+class SuggestRequest(BaseModel):
+    """One flag the designer wants the model's fix for, shown before accepting."""
+    item_id: str
+
+
 class RejudgeRequest(BaseModel):
     """Which gates to run over a finished review, and on what. Nothing else is
     re-run, so the switches here ARE the job — an empty request is refused
@@ -1260,12 +1279,14 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "This job has no corrections report")
         return json.loads(path.read_text("utf-8"))
 
-    @app.get("/api/jobs/{job_id}/corrections/paragraph")
-    def corrections_paragraph(job_id: str, story_id: str, paragraph: int,
-                              owner: str = Depends(owner_for)) -> dict:
+    def _paragraph_state_for(job_id: str, owner: str, story_id: str,
+                             paragraph: int, expect: str = "") -> dict:
         """One paragraph of the corrected file, as the manual editor loads it:
         the text as it is *now* (after any earlier resolutions), its bold and
-        italic runs, and whether a section break sits either side."""
+        italic runs, and whether a section break sits either side. `expect` is
+        the text the report recorded — when a resolution since has renumbered
+        the paragraphs, the line is relocated by it rather than opened at a
+        neighbour's index."""
         from docproof.corrections.idml import read_stories
         from docproof.corrections.resolve import ResolveError, paragraph_state
         job = _owned_job(job_id, owner)
@@ -1279,9 +1300,113 @@ def register(app: FastAPI) -> None:
             raise HTTPException(404, "The corrected file is missing")
         try:
             return paragraph_state(read_stories(corrected), story_id,
-                                   paragraph)
+                                   paragraph, expect=expect)
         except ResolveError as e:
             raise HTTPException(409, str(e))
+
+    @app.get("/api/jobs/{job_id}/corrections/paragraph")
+    def corrections_paragraph(job_id: str, story_id: str, paragraph: int,
+                              owner: str = Depends(owner_for)) -> dict:
+        return _paragraph_state_for(job_id, owner, story_id, paragraph)
+
+    @app.post("/api/jobs/{job_id}/corrections/paragraph")
+    def corrections_paragraph_post(job_id: str, req: ParagraphRequest,
+                                   owner: str = Depends(owner_for)) -> dict:
+        # The POST twin exists because `expect` is a whole paragraph — too
+        # long to belong in a query string.
+        return _paragraph_state_for(job_id, owner, req.story_id,
+                                    req.paragraph, req.expect)
+
+    @app.post("/api/jobs/{job_id}/corrections/edit")
+    def edit_correction(job_id: str, req: EditRequest,
+                        owner: str = Depends(owner_for)) -> dict:
+        """A hand edit that answers no flag: the designer touching up one of
+        the *applied* corrections (or any line the editor opened) from the
+        review screen. Applies exactly what the editor holds, records it as a
+        touch-up in the report, and moves no counter — it resolved nothing."""
+        from docproof.corrections.resolve import (ResolveError, apply_manual,
+                                                  record_touchup)
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections or job.state != "done":
+            raise HTTPException(400, "Only a finished corrections job can be "
+                                     "edited.")
+        with _resolve_lock(job_id):
+            json_path = _resolve_result(job, "corrections.json")
+            if json_path is None:
+                raise HTTPException(404, "This job has no corrections report")
+            corrected_name_ = _result_name(job, "corrected")
+            corrected = _resolve_result(job, corrected_name_)
+            if corrected is None:
+                raise HTTPException(404, f"{corrected_name_} is missing")
+            try:
+                result = apply_manual(corrected, req.manual)
+                record_touchup(json_path, result)
+            except ResolveError as e:
+                raise HTTPException(422, str(e))
+            names = [corrected_name_, "corrections.json",
+                     "corrections_notes.md"]
+            threading.Thread(
+                target=lambda: app.state.runner.refresh_archive(job_id, names),
+                name=f"docproof-archive-refresh-{job_id}",
+                daemon=True).start()
+            return {"ok": True, "resolution": result}
+
+    @app.post("/api/jobs/{job_id}/corrections/suggest")
+    def suggest_correction(job_id: str, req: SuggestRequest,
+                           owner: str = Depends(owner_for)) -> dict:
+        """Ask the model for a fix for one flag, shown before it is accepted.
+
+        The flag's stored advice — or, when it has none, an explicit "you
+        decide" from the designer — is adjudicated into an exact edit and
+        dry-run against the corrected book; the result lands in the flag's
+        options as a marked, clickable placement. Nothing is applied here: the
+        designer reads the highlighted preview and accepts it with the same
+        click as any other placement (or edits it first). The small model
+        spend is recorded; a decline comes back as the sentence to show."""
+        from docproof.corrections.resolve import (ResolveError,
+                                                  materialize_suggestion,
+                                                  _write_updated)
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections or job.state != "done":
+            raise HTTPException(400, "Only a finished corrections job has "
+                                     "flags to resolve.")
+        with _resolve_lock(job_id):
+            json_path = _resolve_result(job, "corrections.json")
+            if json_path is None:
+                raise HTTPException(404, "This job has no corrections report")
+            corrected = _resolve_result(job, _result_name(job, "corrected"))
+            if corrected is None:
+                raise HTTPException(404, "The corrected file is missing")
+            payload = json.loads(json_path.read_text("utf-8"))
+            item = next((q for q in payload.get("queue") or []
+                         if q.get("id") == req.item_id), None)
+            if item is None:
+                raise HTTPException(404, "This flag is not in the report.")
+            if item.get("resolved"):
+                raise HTTPException(409, "This flag was already resolved.")
+            provider, model = _build_resolve_provider()
+            usage = Usage()
+            try:
+                option = materialize_suggestion(item, corrected, provider,
+                                                model=model, usage=usage)
+            except ResolveError as e:
+                _record_extract_spend(app, owner, model, usage,
+                                      filename="corrections review")
+                raise HTTPException(422, str(e))
+            _record_extract_spend(app, owner, model, usage,
+                                  filename="corrections review")
+            options = item.setdefault("options", [])
+            option["id"] = (f"{item['id']}-s"
+                            f"{sum(1 for o in options if o.get('suggested')) + 1}")
+            if item.get("page_label"):
+                option["page_label"] = item["page_label"]
+            options.append(option)
+            _write_updated(Path(json_path), payload)
+            return {"item": item}
 
     @app.post("/api/jobs/{job_id}/corrections/resolve")
     def resolve_correction(job_id: str, req: ResolveRequest,
@@ -1355,9 +1480,14 @@ def register(app: FastAPI) -> None:
                         raise HTTPException(404, "No such placement for this "
                                                  "flag.")
                     result = apply_option(corrected, option)
-                    resolution = {"kind": "option",
+                    # Accepting a placement the model suggested is recorded as
+                    # a suggestion, so the log says whose call it carried out.
+                    resolution = {"kind": ("suggestion"
+                                           if option.get("suggested")
+                                           else "option"),
                                   "option_id": req.option_id,
                                   "edit_id": option.get("edit_id", ""),
+                                  "note": option.get("note", ""),
                                   **result}
                     updated = record_resolution(json_path, req.item_id,
                                                 resolution)

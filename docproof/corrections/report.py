@@ -556,8 +556,11 @@ def _markdown(d: dict) -> str:
         # applies a change no parsed id stands behind, so it joins the left
         # side like the other synthetic outcomes.
         by_item = {q.get("id"): q for q in d.get("queue") or []}
+        # A touch-up answers no flag and applies no correction from the list,
+        # so it stands outside the equation entirely.
         no_edit = sum(1 for r in resolutions
-                      if not (by_item.get(r.get("item_id")) or {}).get("edit_ids"))
+                      if not r.get("touchup")
+                      and not (by_item.get(r.get("item_id")) or {}).get("edit_ids"))
         if no_edit:
             extra.append(f"{no_edit} resolution(s) of an unextracted comment")
         left = f"{parsed_n} parsed" + (" + " + " + ".join(extra) if extra else "")
