@@ -494,3 +494,28 @@ def test_a_stale_find_is_rewritten_only_where_it_actually_changes():
     outcomes, _ = apply_to_stories([story], edits)
     assert all(o.applied for o in outcomes)
     assert story.paragraphs[0].text == "She was starving and cold that evening."
+
+
+def test_a_pdf_artifact_hyphen_or_space_still_matches():
+    """An anchor quoted from the proof can carry a mark the book does not set — a
+    soft or non-breaking hyphen at a line end, a narrow or zero-width space around
+    a comma, a horizontal-bar dash for an em dash. The normalized view drops every
+    one of them, so a mark whose text occurs once still lands instead of being
+    reported "not found"."""
+    from docproof.corrections.textmatch import normalize
+    assert normalize("t‑shirt") == normalize("t-shirt")         # NB hyphen
+    assert normalize("tour­nament") == normalize("tournament")  # soft hyphen
+    assert normalize("rumors―it") == normalize("rumors—it")  # horiz bar
+    assert normalize("Maryam, and") == normalize("Maryam, and")   # narrow nbsp
+    assert normalize("wo​rd") == normalize("word")              # zero-width
+
+
+def test_a_soft_hyphen_anchor_lands_on_the_book_word():
+    """End to end: a find carrying a soft hyphen the proof put at a line break is
+    located in a book that sets the word whole, and the edit applies."""
+    story = _story("In my hand was the plaque for the Tournament.")
+    edits = [Edit("e1", "Tour­nament", "tournament")]
+    outcomes, _ = apply_to_stories([story], edits)
+    assert all(o.applied for o in outcomes)
+    assert story.paragraphs[0].text == \
+        "In my hand was the plaque for the tournament."

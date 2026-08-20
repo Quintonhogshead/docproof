@@ -1141,6 +1141,75 @@ def test_a_settled_note_with_no_format_makes_one_edit():
     assert len(made) == 1 and not made[0].is_format
 
 
+def test_a_styling_note_makes_the_companion_even_without_a_format_field():
+    """The model settled "remove the quotes and italicize the thought" but named
+    the styling only in its prose, leaving the structured format field empty. The
+    italic is read off the reviewer's own note, so the companion is still made —
+    the thought is not shipped roman while the change log claims it was italicized,
+    the "single roman run" the proof came back with."""
+    from docproof.corrections.model import (Edit, FORMAT_ITALIC, FORMAT_ROMAN,
+                                            JUDGMENT)
+    from docproof.corrections.secondlook import _note_format, _settled_edits
+
+    original = Edit(id="c1", find="‘What now’", replace="‘What now’",
+                    kind=JUDGMENT, source="p25-1", page=25,
+                    instruction="remove single quotes and italicize the thought")
+    # The model's answer carries no "format" key at all.
+    made = _settled_edits(original, {"id": "c1", "decision": "settled",
+                                     "find": "‘What now’", "replace": "What now",
+                                     "note": "removed the quotes, set it italic"})
+    assert len(made) == 2
+    assert made[1].is_format and made[1].format == FORMAT_ITALIC
+    assert made[1].find == "What now" == made[1].replace
+
+    # And the reader that infers it: roman first, so a de-italicize is not an italic.
+    assert _note_format("italicize the thought") == FORMAT_ITALIC
+    assert _note_format("a song title, roman not italics") == FORMAT_ROMAN
+    assert _note_format("de-italicize this") == FORMAT_ROMAN
+    assert _note_format("Replace comma with period") == ""
+
+
+def test_the_sanity_gate_judges_a_line_by_its_combined_result():
+    """A reviewer's mark that split into a pair — the opening quote fixed by one
+    edit, the closing by another — must be judged as the line reads once both have
+    run. Grouped and shown together, the pair is balanced; judged apart, the second
+    looks like it leaves a double closing mark against a single opener, and half the
+    mark is withheld. That was ¶2291."""
+    from docproof.corrections.model import Edit, MECHANICAL
+    from docproof.corrections.sanity import _apply_all, _format, _groups
+
+    line = "it meant, ‘Okay.’"
+    a = Edit(id="c1", find="‘", replace="“", context=line, kind=MECHANICAL)
+    b = Edit(id="c2", find="’", replace="”", context=line, kind=MECHANICAL)
+    groups = _groups([a, b])
+    assert groups == [[a, b]]                     # one line, one group
+    assert _apply_all(line, [a, b]) == "it meant, “Okay.”"
+    shown = _format(groups)
+    assert "applied together" in shown
+    assert "“Okay.”" in shown                     # the combined line is put to the gate
+    assert "c1" in shown and "c2" in shown
+
+
+def test_the_sanity_gate_never_splits_a_line_across_batches():
+    """A line's edits must reach the model in one call — split across two batches,
+    the gate is judging half of the mark in isolation again."""
+    from docproof.corrections.model import Edit, MECHANICAL
+    from docproof.corrections.sanity import _batched_groups, _groups
+
+    edits = []
+    for i in range(3):
+        line = f"line {i}: ‘x’"
+        edits.append(Edit(id=f"a{i}", find="‘", replace="“", context=line,
+                          kind=MECHANICAL))
+        edits.append(Edit(id=f"b{i}", find="’", replace="”", context=line,
+                          kind=MECHANICAL))
+    batches = list(_batched_groups(_groups(edits), 3))   # a size that would cut a pair
+    for batch in batches:
+        for group in batch:
+            ids = {e.id for e in group}
+            assert ids in ({"a0", "b0"}, {"a1", "b1"}, {"a2", "b2"})
+
+
 def test_the_second_look_leaves_a_true_question_flagged(tmp_path):
     """A note the model declines stays exactly what it was — a query for a
     person — and the file is untouched."""

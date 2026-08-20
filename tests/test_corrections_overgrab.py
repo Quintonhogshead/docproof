@@ -389,8 +389,8 @@ def test_a_widened_find_the_book_does_not_carry_is_not_adopted():
 # between what the reviewer wrote and what the edit carried.
 
 from docproof.corrections.overgrab import (  # noqa: E402
-    enforce_removal, keep_hyphen_qualifier, repair_from_note,
-    restore_literal_case)
+    enforce_removal, flip_wrong_apostrophe, keep_hyphen_qualifier,
+    repair_from_note, restore_literal_case)
 
 
 def test_a_remove_that_substitutes_is_pulled_back_to_a_deletion():
@@ -448,7 +448,42 @@ def test_a_kept_qualifier_and_a_closed_compound_are_left_alone():
         == ("left-footed", "right-footed")
 
 
-def test_repair_from_note_composes_the_three():
+def test_a_drop_apostrophe_that_changed_a_letter_is_pulled_back_to_the_flip():
+    """"Replace with drop apostrophe" flips the wrong-facing ‘ to the elision ’ —
+    ‘on't → ’on't. A pass read the elision as a truncated word and shipped "don't",
+    a letter changed under a note that named only the mark. The flip is restored,
+    and no other character of the word is touched."""
+    assert flip_wrong_apostrophe("‘on’t", "don’t", "Replace with drop apostrophe") \
+        == ("‘on’t", "’on’t")
+    # The surround the find carried is kept; only the lone opener is set.
+    assert flip_wrong_apostrophe("I ‘on’t", "I don’t", "drop apostrophe") \
+        == ("I ‘on’t", "I ’on’t")
+
+
+def test_a_correct_apostrophe_flip_is_left_alone():
+    """‘sides → ’sides already makes the flip; there is nothing to repair, and a
+    pair that would be repaired into a no-op is never made one."""
+    assert flip_wrong_apostrophe("‘sides", "’sides", "drop apostrophe") \
+        == ("‘sides", "’sides")
+
+
+def test_an_apostrophe_note_does_not_touch_a_letter_run():
+    """A note naming an apostrophe whose edit adds one inside a word — the mark is
+    not a lone wrong-facing opener — is not this repair's business."""
+    assert flip_wrong_apostrophe("cant", "can’t", "add apostrophe") \
+        == ("cant", "can’t")
+
+
+def test_the_flip_needs_the_note_to_name_the_apostrophe():
+    """Without "apostrophe" in the note the repair stands down — a ‘ that a
+    different instruction turns into a letter is not its call to make."""
+    assert flip_wrong_apostrophe("‘on’t", "don’t", "Replace with the word") \
+        == ("‘on’t", "don’t")
+
+
+def test_repair_from_note_composes_the_repairs():
     assert repair_from_note("4th", "fourth", "Fourth") == ("4th", "Fourth")
     assert repair_from_note("your buddy,", "your buddy.", "Remove comma") == \
         ("your buddy,", "your buddy")
+    assert repair_from_note("‘on’t", "don’t", "drop apostrophe") == \
+        ("‘on’t", "’on’t")
