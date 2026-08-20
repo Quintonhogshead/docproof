@@ -945,6 +945,36 @@ class ResidualsConfig(BaseModel):
     max_per_rule: int = Field(default=150, ge=1)
 
 
+class ExaminationJudgmentConfig(BaseModel):
+    """Optional paid judgment over precise examination sites.
+
+    This is a separate switch from site accounting because measurement is free
+    while model judgment is not. Phase 1B remains shadow-only: verdicts are
+    compared with the production reviewer but can never become Findings.
+    """
+    enabled: bool = False
+    primary_model: str = "gpt-5.6-luna"
+    primary_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = \
+        "low"
+    escalation_model: str | None = None
+    escalation_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = \
+        "high"
+    batch_size: int = Field(default=100, ge=1, le=200)
+    max_output_tokens: int = Field(default=16_000, ge=1)
+    max_missing_retries: int = Field(default=1, ge=0, le=3)
+    max_sites: int = Field(default=2_000, ge=1)
+    max_cost_usd: float = Field(default=2.0, gt=0)
+    sample_rate: float = Field(default=0.10, gt=0.0, le=1.0)
+    # Phase 1B starts only with exact, locally generated candidates. The broad
+    # paragraph/category placeholders remain useful coverage measurements but
+    # are not correction-shaped sites and must not be billed as if they were.
+    eligible_generator_prefixes: tuple[str, ...] = (
+        "deterministic.spellscan",
+        "deterministic.adjudicate",
+    )
+    allow_legacy_obligations: bool = False
+
+
 class ExaminationGraphConfig(BaseModel):
     """Phase-one examination ledger, isolated behind a shadow-mode flag.
 
@@ -963,8 +993,13 @@ class ExaminationGraphConfig(BaseModel):
     ledger_filename: str = "examination-ledger.jsonl.gz"
     report_json_filename: str = "examination-coverage.json"
     report_filename: str = "examination-coverage.md"
+    evaluation_filename: str = "examination-evaluation.json"
+    evaluation_key_filename: str = "examination-evaluation-key.json"
+    judgment: ExaminationJudgmentConfig = Field(
+        default_factory=ExaminationJudgmentConfig)
 
-    @field_validator("ledger_filename", "report_json_filename", "report_filename")
+    @field_validator("ledger_filename", "report_json_filename", "report_filename",
+                     "evaluation_filename", "evaluation_key_filename")
     @classmethod
     def _plain_filename(cls, value):
         if not value or Path(value).name != value or value in {".", ".."}:
@@ -1494,6 +1529,7 @@ class Config(BaseModel):
 
 CACHE_DIR_ENV = "DOCPROOF_CACHE_DIR"
 EXAMINATION_GRAPH_ENV = "DOCPROOF_EXAMINATION_GRAPH"
+EXAMINATION_JUDGMENT_ENV = "DOCPROOF_EXAMINATION_JUDGMENT"
 
 
 def examination_graph_killed() -> bool:
@@ -1504,6 +1540,12 @@ def examination_graph_killed() -> bool:
     turned off.
     """
     value = os.environ.get(EXAMINATION_GRAPH_ENV, "").strip().lower()
+    return value in {"0", "false", "off", "no", "disabled"}
+
+
+def examination_judgment_killed() -> bool:
+    """Deployment-wide brake for the paid Phase-1B lane only."""
+    value = os.environ.get(EXAMINATION_JUDGMENT_ENV, "").strip().lower()
     return value in {"0", "false", "off", "no", "disabled"}
 
 
@@ -1560,4 +1602,6 @@ def load_config(path: str | Path) -> Config:
     cfg = Config.model_validate(raw)
     if examination_graph_killed():
         cfg.examination_graph.enabled = False
+    if examination_judgment_killed():
+        cfg.examination_graph.judgment.enabled = False
     return cfg

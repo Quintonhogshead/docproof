@@ -48,3 +48,18 @@ def test_packet_coverage_must_be_exact():
     with pytest.raises(IncompleteVerdicts) as unknown:
         validate_verdict_coverage(["a"], ["other"])
     assert unknown.value.unknown == ("other",)
+
+
+def test_observation_is_append_only_without_overwriting_a_verdict():
+    ledger = ExaminationLedger()
+    ledger.register(_site(), initial_state=LedgerState.NEEDS_JUDGMENT)
+    ledger.apply_verdict(Verdict(
+        site_id="X-one", decision="pass", confidence="high", judge="blind"))
+    event = ledger.record_observation(
+        "X-one", actor="production reviewer",
+        reason="the existing lane found an error",
+        evidence={"finding_id": "f-1"})
+
+    assert ledger.state("X-one") == LedgerState.MODEL_PASSED
+    assert event.event_kind == "observation"
+    assert event.state == LedgerState.MODEL_PASSED

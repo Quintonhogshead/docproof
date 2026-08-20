@@ -114,6 +114,7 @@ class LedgerEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sequence: int = Field(ge=1)
+    event_kind: Literal["transition", "observation"] = "transition"
     site_id: str = Field(min_length=1)
     state: LedgerState
     actor: str = Field(min_length=1)

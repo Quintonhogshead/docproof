@@ -50,7 +50,8 @@ _ALLOWED: dict[LedgerState, frozenset[LedgerState]] = {
         LedgerState.QUERY, LedgerState.REJECTED,
     }),
     LedgerState.MODEL_CONFIRMED: frozenset({
-        LedgerState.UNCERTAIN, LedgerState.EDIT, LedgerState.QUERY,
+        LedgerState.UNCERTAIN, LedgerState.ESCALATED, LedgerState.EDIT,
+        LedgerState.QUERY,
         LedgerState.REJECTED,
     }),
     LedgerState.UNCERTAIN: frozenset({
@@ -173,6 +174,19 @@ class ExaminationLedger:
         for verdict in verdicts:
             self.apply_verdict(verdict)
 
+    def record_observation(self, site_id: str, *, actor: str, reason: str,
+                           evidence: dict | None = None,
+                           verdict: Verdict | None = None) -> LedgerEvent:
+        """Append independent evidence without changing the state projection.
+
+        Phase 1B compares a blind site judge with the production reviewer. A
+        production finding observed after a model pass is disagreement evidence,
+        not permission to rewrite the judge's terminal state.
+        """
+        return self._append(
+            site_id, self.state(site_id), actor, reason, evidence, verdict,
+            event_kind="observation")
+
     def projection(self) -> dict[str, LedgerState]:
         return dict(self._states)
 
@@ -209,11 +223,12 @@ class ExaminationLedger:
     def _append(self, site_id: str, state: LedgerState, actor: str,
                 reason: str = "", evidence: dict | None = None,
                 verdict: Verdict | None = None,
-                site: ExaminationSite | None = None) -> LedgerEvent:
+                site: ExaminationSite | None = None,
+                event_kind: str = "transition") -> LedgerEvent:
         event = LedgerEvent(
             sequence=len(self._events) + 1, site_id=site_id, state=state,
             actor=actor, reason=reason, evidence=evidence or {},
-            verdict=verdict, site=site)
+            verdict=verdict, site=site, event_kind=event_kind)
         self._events.append(event)
         return event
 

@@ -41,6 +41,13 @@ def test_deployment_kill_switch_wins_over_shipped_and_per_run_config(
         adjudicate_candidates=[]) is None
 
 
+def test_paid_judgment_has_an_independent_deployment_kill_switch(monkeypatch):
+    monkeypatch.setenv("DOCPROOF_EXAMINATION_JUDGMENT", "off")
+    cfg = load_config("config/default.yaml")
+    assert cfg.examination_graph.enabled is True
+    assert cfg.examination_graph.judgment.enabled is False
+
+
 def test_pure_insertion_finding_becomes_a_zero_width_site():
     text = "She went the shop."
     para = ParagraphRef("body-0000", "word/document.xml", "body", text,

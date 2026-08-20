@@ -640,6 +640,27 @@ examination_graph:
   ledger_filename: examination-ledger.jsonl.gz  # compressed for Fly volume retention
   report_json_filename: examination-coverage.json
   report_filename: examination-coverage.md
+  evaluation_filename: examination-evaluation.json
+  evaluation_key_filename: examination-evaluation-key.json
+  # Phase 1B is a paid, independent second opinion over precise candidate
+  # sites. It ships OFF until an administrator opts one Run-now job into the
+  # experiment. Its verdicts never enter the manuscript path.
+  judgment:
+    enabled: false
+    primary_model: gpt-5.6-luna
+    primary_effort: low
+    escalation_model:
+    escalation_effort: high
+    batch_size: 100
+    max_output_tokens: 16000
+    max_missing_retries: 1
+    max_sites: 2000
+    max_cost_usd: 2.00
+    sample_rate: 0.10
+    eligible_generator_prefixes:
+      - deterministic.spellscan
+      - deterministic.adjudicate
+    allow_legacy_obligations: false
 
 # Ensemble review. Empty `detectors` (the default) is single-detector mode:
 # api.model runs once, nothing is merged, no verifier runs — exactly the
