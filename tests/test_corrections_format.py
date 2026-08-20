@@ -246,3 +246,26 @@ def test_a_text_edit_over_a_restyled_span_is_still_refused():
     assert outs[0].status == APPLIED
     assert outs[1].status == OVERLAPS
     assert outs[1].collides_with == ("e1",)
+
+
+def test_removing_quotes_around_an_italic_aside_leaves_no_empty_run():
+    """"Remove single quotes" spans the opening quote, an italicized aside, and the
+    closing quote. Emptying the aside's node has to take its CharacterStyleRange
+    with it — not leave a <CharacterStyleRange AppliedCharacterStyle=".../Italic">
+    holding nothing, the empty italic run that reached a finished proof at ¶235."""
+    s = _story(("I stopped. ‘", "CharacterStyle/$ID/[No character style]"),
+               ("What now", "CharacterStyle/$ID/Italic"),
+               ("’ I thought.", "CharacterStyle/$ID/[No character style]"))
+    para = s.paragraphs[0]
+    start, end = para.text.index("‘"), para.text.index("’") + 1
+    para.replace(start, end, "What now")
+
+    assert para.text == "I stopped. What now I thought."
+    csrs = list(s.root.iter("CharacterStyleRange"))
+    # No character range is left holding an empty (or whitespace-only) run…
+    stranded = [c for c in csrs
+                if not any((n.text or "") for n in c if n.tag == "Content")]
+    assert stranded == [], "an emptied character range was left in the file"
+    # …and the italic range, which held only the aside, is gone entirely.
+    assert "CharacterStyle/$ID/Italic" not in [
+        c.get("AppliedCharacterStyle") for c in csrs]

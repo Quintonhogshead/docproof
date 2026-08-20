@@ -42,6 +42,7 @@ second read must not lose the flags the first one raised.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import replace
 from typing import Callable, Literal, Sequence
 
@@ -284,6 +285,29 @@ def is_query(e: Edit) -> bool:
             and bool((e.instruction or "").strip()))
 
 
+# The styling a note asks for, read off the reviewer's own words when the model
+# left the structured `format` field empty. Roman is checked first, so a
+# "de-italicize" is not read as an italic by the "italic" inside it. This is the
+# backstop for the note that says "remove the quotes and set the thought italic"
+# but comes back with a text edit alone: without it the italic is dropped and the
+# change log still claims it was set.
+_ITALIC_NOTE = re.compile(r"\b(?:italici[sz]e[sd]?|italici[sz]ing|italics?)\b",
+                          re.IGNORECASE)
+_ROMAN_NOTE = re.compile(r"\b(?:roman|de-?italici[sz]\w*|un-?italici[sz]\w*"
+                         r"|not italic|no italics?)\b", re.IGNORECASE)
+
+
+def _note_format(text: str) -> str:
+    """FORMAT_ROMAN or FORMAT_ITALIC when the note plainly names the styling, else
+    "". Read from the reviewer's mark, which is the authority on what was asked."""
+    low = text or ""
+    if _ROMAN_NOTE.search(low):
+        return FORMAT_ROMAN
+    if _ITALIC_NOTE.search(low):
+        return FORMAT_ITALIC
+    return ""
+
+
 def _settled_edits(original: Edit, choice: dict) -> list[Edit]:
     """The concrete edit(s) one settled query makes — a text change, a companion
     format edit when the note also restyles, or both. Empty when the answer does
@@ -297,7 +321,11 @@ def _settled_edits(original: Edit, choice: dict) -> list[Edit]:
     find = (choice.get("find") or "").strip("\n")
     rep = choice.get("replace") or ""
     context = (choice.get("context") or "").strip("\n")
-    fmt = (choice.get("format") or "").strip()
+    # The model's structured styling, or — when it named the styling only in its
+    # prose and left the field empty — the styling the reviewer's own note asks
+    # for. Without the fallback a "…and italicize the thought" ships the text
+    # change alone and the log still says the italic was set.
+    fmt = (choice.get("format") or "").strip() or _note_format(original.instruction)
     note = _annotated(original.instruction, "settled", choice.get("note") or "")
     made: list[Edit] = []
     if len(find.strip()) >= MIN_FIND and rep != find:

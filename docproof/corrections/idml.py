@@ -186,9 +186,15 @@ class Paragraph:
 
         The surviving prefix and suffix are kept on the first and last touched
         nodes; the replacement text lands on the first, and any node wholly
-        inside the span is emptied. Formatting across the replaced span collapses
+        inside the span is removed. Formatting across the replaced span collapses
         to the first touched node's — the normal outcome of retyping a phrase,
-        and never a concern for the punctuation and word swaps corrections are."""
+        and never a concern for the punctuation and word swaps corrections are.
+
+        A removed interior node whose character range is left holding nothing else
+        takes the range down with it, so removing the single quotes around an
+        italicized aside does not strand an empty `<CharacterStyleRange>` where the
+        aside used to be — the defect that put an italic run with no text into a
+        finished file."""
         if start < 0 or end > len(self.text) or start > end:
             raise ValueError(f"span [{start}, {end}) outside paragraph "
                              f"of length {len(self.text)}")
@@ -216,6 +222,7 @@ class Paragraph:
             return
         first_node.text = prefix + new_text
         started = False
+        emptied: list[ET._Element] = []
         for node, n0, n1 in bounds:
             if node is first_node:
                 started = True
@@ -224,7 +231,26 @@ class Paragraph:
                 node.text = suffix
                 break
             if started:
-                node.text = ""
+                emptied.append(node)
+        self._drop_nodes(emptied)
+
+    def _drop_nodes(self, nodes: list[ET._Element]) -> None:
+        """Remove each of `nodes` from the tree and from this paragraph's node
+        list, and take down any `CharacterStyleRange` a removal leaves with no flow
+        children — so an emptied interior run never lingers as empty XML."""
+        if not nodes:
+            return
+        dropped = {id(n) for n in nodes}
+        for node in nodes:
+            parent = node.getparent()
+            if parent is None:
+                continue
+            parent.remove(node)
+            if parent.tag == CSR and not any(c.tag in FLOW for c in parent):
+                grandparent = parent.getparent()
+                if grandparent is not None:
+                    grandparent.remove(parent)
+        self.nodes = [n for n in self.nodes if id(n) not in dropped]
 
 
 def _style_range(parent: ET._Element, nodes: list[ET._Element],

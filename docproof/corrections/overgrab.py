@@ -308,10 +308,47 @@ def keep_hyphen_qualifier(find: str, replace: str, instruction: str = ""
     return find, f"{prefix}-{replace}"
 
 
+# A note that names an apostrophe and nothing lexical, and the openers a dialect
+# elision gets set with. A reviewer marking ‘on't, ‘sides, ‘round writes "drop
+# apostrophe" or just "apostrophe": the wrong-facing open single quote the PDF
+# carries is to be set as the elision apostrophe ’ it should be, and NOTHING else
+# is licensed. The failure this repairs shipped ’on't as "don't" — a model that
+# read the elision as a truncated word and completed the letter, under a note that
+# named only the mark. The straight ' and the backtick ` are the other shapes the
+# same wrong-facing opener arrives as.
+_APOSTROPHE_NOTE = re.compile(r"\bapostrophe\b", re.IGNORECASE)
+_WRONG_OPENERS = "‘'`"
+
+
+def flip_wrong_apostrophe(find: str, replace: str, instruction: str = ""
+                          ) -> tuple[str, str]:
+    """A "drop apostrophe" note whose edit changed the marked quote into a letter,
+    repaired to the pure ’ flip the note asked for.
+
+    Fires only on the exact, unambiguous shape: the note names an apostrophe, the
+    one mark the edit changes is a wrong-facing or straight open single quote, and
+    the replacement set it to something other than ’. The repair rewrites that one
+    character to ’ and leaves every other character of the run alone — so ‘on't
+    becomes ’on't, never don't. A pair already making the flip (‘sides → ’sides),
+    or one whose changed run is not a lone opener, is left untouched."""
+    if not find or not _APOSTROPHE_NOTE.search(_note_head(instruction)):
+        return find, replace
+    pre, suf = _core(find, replace)
+    old = find[pre:len(find) - suf]
+    new = replace[pre:len(replace) - suf]
+    if len(old) != 1 or old not in _WRONG_OPENERS or new == "’":
+        return find, replace               # not a lone opener, or already the flip
+    fixed = find[:pre] + "’" + find[len(find) - suf:]
+    if fixed == find or fixed == replace:
+        return find, replace               # no change to make, or already there
+    return find, fixed
+
+
 def repair_from_note(find: str, replace: str, instruction: str = ""
                      ) -> tuple[str, str]:
-    """The three note-reading repairs, composed. Returns the pair unchanged when
-    none applies."""
+    """The note-reading repairs, composed. Returns the pair unchanged when none
+    applies."""
     find, replace = enforce_removal(find, replace, instruction)
+    find, replace = flip_wrong_apostrophe(find, replace, instruction)
     find, replace = restore_literal_case(find, replace, instruction)
     return keep_hyphen_qualifier(find, replace, instruction)

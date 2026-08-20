@@ -36,7 +36,22 @@ from ..validator import fold_punct
 # its hyphen in the PDF and has none in the book, and an em dash is spaced in one
 # rendering and unspaced in the other. Dropping the character covers every one of
 # those without a special case for which is which.
-_DROP = frozenset(" \t\r\n-")
+#
+# The set is widened past the ASCII space and hyphen to the whole family a PDF
+# reader emits and `fold_punct` does not canonicalize: the narrow, thin and other
+# fixed-width spaces a justified line is set with; the zero-width joiners and the
+# BOM a reader can leave inside a word; the soft hyphen and non-breaking hyphen a
+# line break carries; the figure dash, horizontal bar and minus that stand in for
+# a dash. Any of these, carried on an anchor quoted from the proof, would
+# otherwise survive every tier and report a mark as "not found" against a book
+# that sets the same words without it. (The curly quotes, the en/em dashes and the
+# ordinary nbsp are already folded onto "/-/space by `fold_punct` upstream.)
+_DROP = frozenset(
+    " \t\r\n\f\v"
+    "            "
+    "  　"                        # fixed-width and no-break spaces
+    "​‌‍⁠﻿"            # zero-width joiners, word joiner, BOM
+    "-­‐‑‒―−")    # hyphen, soft/no-break hyphen, dashes
 
 # One-to-many rewrites applied before the drop. Folding an ellipsis to three
 # stops means an anchor typed either way matches the book either way; the offset

@@ -71,6 +71,14 @@ marked on a proof of their own book. The corrections are APPROVED — the mark i
 the instruction, and it is to be carried out. You are given each edit as an exact \
 find → replace against the line it changes, with the reviewer's note.
 
+When several corrections are listed for one line they are applied TOGETHER, and \
+the line after all of them is given to you. Judge that line by how it reads once \
+EVERY correction on it has run — never one of them in isolation. A quotation \
+whose opening mark is fixed by one correction and closing mark by another is \
+balanced, not broken; a tense fixed across two verbs by two corrections agrees, \
+not clashes. Hold an edit back only when the line is still broken after all of \
+its siblings have been applied.
+
 You are NOT judging the correction. Do not ask whether it is the change the \
 reviewer meant, whether the wording fits the book's register, whether it is an \
 anachronism, whether a dialect spelling is "wrong", or whether a different edit \
@@ -109,13 +117,75 @@ Judge only what is in front of you; do not invent problems. Return a verdict for
 every edit id, using the exact id given."""
 
 
-def _format(edits: Sequence[Edit]) -> str:
-    lines = ["Proposed corrections:", ""]
+def _line_key(e: Edit) -> str:
+    """The line an edit sits on, as the key co-located edits share. Empty when the
+    edit carries no context and no find, which makes it its own group."""
+    return (e.context or e.find or "").strip()
+
+
+def _groups(edits: Sequence[Edit]) -> list[list[Edit]]:
+    """`edits` gathered into the lines they sit on, in first-seen order. Two edits
+    on one line are the pair whose halves must be judged together, not apart —
+    which is the whole point of this grouping."""
+    groups: list[list[Edit]] = []
+    index: dict[str, int] = {}
     for e in edits:
-        line = e.context or e.find
-        lines.append(f"- id {e.id}: on the line \"{line}\"")
-        lines.append(f"    change \"{e.find}\" to \"{e.replace}\""
-                     + (f"  (note: {e.instruction})" if e.instruction else ""))
+        key = _line_key(e)
+        if key and key in index:
+            groups[index[key]].append(e)
+            continue
+        if key:
+            index[key] = len(groups)
+        groups.append([e])
+    return groups
+
+
+def _batched_groups(groups: list[list[Edit]], size: int):
+    """Groups packed into batches of at most `size` edits, never splitting a group
+    across a batch — a line's edits must reach the model in one call, or the gate
+    is judging a half of it in isolation again."""
+    batch: list[list[Edit]] = []
+    count = 0
+    for g in groups:
+        if batch and count + len(g) > size:
+            yield batch
+            batch, count = [], 0
+        batch.append(g)
+        count += len(g)
+    if batch:
+        yield batch
+
+
+def _apply_all(line: str, edits: Sequence[Edit]) -> str:
+    """`line` with every edit on it applied, left to right — the line the reader
+    will see, shown to the gate so it judges the result and not an intermediate.
+    A best-effort render: each find is replaced once, and one already consumed by
+    an earlier sibling is skipped, exactly as `apply` would leave it."""
+    out = line
+    for e in edits:
+        if e.find and e.find in out:
+            out = out.replace(e.find, e.replace, 1)
+    return out
+
+
+def _format(groups: Sequence[Sequence[Edit]]) -> str:
+    lines = ["Proposed corrections:", ""]
+    for g in groups:
+        line = g[0].context or g[0].find
+        if len(g) == 1:
+            e = g[0]
+            lines.append(f"- id {e.id}: on the line \"{line}\"")
+            lines.append(f"    change \"{e.find}\" to \"{e.replace}\""
+                         + (f"  (note: {e.instruction})" if e.instruction else ""))
+            continue
+        lines.append(f"- on the line \"{line}\", these corrections are applied "
+                     f"together:")
+        for e in g:
+            lines.append(f"    · id {e.id}: change \"{e.find}\" to \"{e.replace}\""
+                         + (f"  (note: {e.instruction})" if e.instruction else ""))
+        after = _apply_all(line, g)
+        if after != line:
+            lines.append(f"    after all of them the line reads: \"{after}\"")
     return "\n".join(lines)
 
 
@@ -136,10 +206,11 @@ def review_edits(edits: Sequence[Edit], provider: Provider, *, model: str,
     candidates = [e for e in edits if e.kind != DESIGN and e.find != e.replace]
     total = len(candidates)
     withheld: dict[str, str] = {}
-    for i in range(0, len(candidates), BATCH_SIZE):
-        batch = candidates[i:i + BATCH_SIZE]
+    done = 0
+    for batch in _batched_groups(_groups(candidates), BATCH_SIZE):
         if progress:
-            progress(i, total)
+            progress(done, total)
+        done += sum(len(g) for g in batch)
         try:
             result = provider.complete_structured(
                 model=model, system=_SYSTEM, user=_format(batch),
