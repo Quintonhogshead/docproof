@@ -423,6 +423,8 @@ def _markdown(d: dict) -> str:
             how = ("edited the line by hand" if r.get("kind") == "manual"
                    else "applied the model's suggestion"
                    if r.get("kind") == "suggestion"
+                   else f"talked it through, then: “{_preview(r['text'])}”"
+                   if r.get("kind") == "chat"
                    else f"typed: “{_preview(r['text'])}”" if r.get("text")
                    else "picked a placement")
             q = by_item.get(r.get("item_id")) or {}

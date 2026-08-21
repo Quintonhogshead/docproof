@@ -236,6 +236,16 @@ class SuggestRequest(BaseModel):
     item_id: str
 
 
+class ChatRequest(BaseModel):
+    """One turn of a per-flag conversation. A `text` message adds the designer's
+    turn and gets a reply plus, when it lands, a proposed change to accept —
+    nothing is written. `accept` writes the flag's current proposal into the
+    file and resolves it. Exactly one of the two."""
+    item_id: str
+    text: str = ""
+    accept: bool = False
+
+
 class RejudgeRequest(BaseModel):
     """Which gates to run over a finished review, and on what. Nothing else is
     re-run, so the switches here ARE the job — an empty request is refused
@@ -1600,6 +1610,106 @@ def register(app: FastAPI) -> None:
             fresh = next((q for q in updated.get("queue") or []
                           if q.get("id") == req.item_id), None)
             return {"item": fresh, "counts": counts}
+
+    @app.post("/api/jobs/{job_id}/corrections/chat")
+    def chat_correction(job_id: str, req: ChatRequest,
+                        owner: str = Depends(owner_for)) -> dict:
+        """One turn of a per-flag conversation, or the acceptance that ends it.
+
+        A `text` message adds the designer's turn to the flag's thread, re-runs
+        adjudication over the whole conversation, and — when the answer is a
+        change that lands — attaches a proposal (a highlighted before/after) to
+        the flag. Nothing is written to the file; the designer reads the
+        proposal and either refines it with another message ("no, the other one
+        — and italicise it") or accepts it. `accept` writes the flag's current
+        proposal through the same deterministic placement path a clicked option
+        uses, and resolves the flag. The thread lives in the report beside the
+        file, so it survives a reload and the change log records that the flag
+        was talked through.
+
+        This is the free-form escalation that stays inside the engine's remit:
+        the designer still decides, and the model still only transcribes and
+        places the decision — a `find`/`replace` it cannot anchor is refused,
+        never guessed."""
+        from docproof.corrections.resolve import (ResolveError, apply_option,
+                                                  converse, queue_counts,
+                                                  record_resolution,
+                                                  _write_updated)
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections or job.state != "done":
+            raise HTTPException(400, "Only a finished corrections job has "
+                                     "flags to resolve.")
+        if req.accept == bool(req.text.strip()):
+            raise HTTPException(400, "Send a message, or accept the proposed "
+                                     "change — one per call.")
+        with _resolve_lock(job_id):
+            json_path = _resolve_result(job, "corrections.json")
+            if json_path is None:
+                raise HTTPException(404, "This job has no corrections report")
+            corrected_name_ = _result_name(job, "corrected")
+            corrected = _resolve_result(job, corrected_name_)
+            if corrected is None:
+                raise HTTPException(404, f"{corrected_name_} is missing")
+            payload = json.loads(json_path.read_text("utf-8"))
+            item = next((q for q in payload.get("queue") or []
+                         if q.get("id") == req.item_id), None)
+            if item is None:
+                raise HTTPException(404, "This flag is not in the report.")
+            if item.get("resolved"):
+                raise HTTPException(409, "This flag was already resolved.")
+
+            if req.accept:
+                proposal = item.get("proposal")
+                if not proposal:
+                    raise HTTPException(
+                        409, "There is no proposed change to accept yet — send "
+                             "a message describing what to do.")
+                try:
+                    result = apply_option(corrected, proposal)
+                except ResolveError as e:
+                    raise HTTPException(422, str(e))
+                # The decisive words: the designer's last message in the thread.
+                last = next((t.get("text") for t in reversed(item.get("chat")
+                             or []) if t.get("role") == "designer"), "")
+                resolution = {"kind": "chat", "text": last,
+                              "note": proposal.get("note", ""),
+                              "thread": item.get("chat") or [], **result}
+                updated = record_resolution(json_path, req.item_id, resolution)
+                counts = queue_counts(updated)
+                app.state.store.update(
+                    job_id, applied=counts["applied"], flags=counts["flags"],
+                    unresolved=counts["unresolved"])
+                threading.Thread(
+                    target=lambda: app.state.runner.refresh_archive(
+                        job_id, [corrected_name_, "corrections.json",
+                                 "corrections_notes.md"]),
+                    name=f"docproof-archive-refresh-{job_id}",
+                    daemon=True).start()
+                fresh = next((q for q in updated.get("queue") or []
+                              if q.get("id") == req.item_id), None)
+                return {"item": fresh, "counts": counts}
+
+            # A message: add the designer's turn, answer it, attach the reply
+            # and any proposal. Nothing is written to the file.
+            chat = item.setdefault("chat", [])
+            chat.append({"role": "designer", "text": req.text.strip()})
+            provider, model = _build_resolve_provider()
+            usage = Usage()
+            try:
+                turn = converse(item, corrected, provider, model=model,
+                                usage=usage)
+            except ResolveError as e:
+                raise HTTPException(422, str(e))
+            finally:
+                _record_extract_spend(app, owner, model, usage,
+                                      filename="corrections review")
+            chat.append({"role": "model", "text": turn["reply"],
+                         "proposal": turn["proposal"]})
+            item["proposal"] = turn["proposal"]
+            _write_updated(Path(json_path), payload)
+            return {"item": item}
 
     @app.post("/api/corrections/extract-docx")
     async def extract_corrections_docx(
