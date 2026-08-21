@@ -356,9 +356,13 @@ confident you are — a reader's dialect written as dialect is not an error, and
 case above: when the reviewer named the exact fix AND the book's usage confirms \
 it, that is a proofreader's catch to carry out, not intent to decide. Absent that \
 confirmation, recommend. Then give:
-- note: what you found and what you would do, in one or two sentences, written \
-for the person who now has to decide. Name the evidence. Say plainly if your \
-recommendation is to change nothing.
+- note: the concrete correction to make, stated in as few words as possible — an \
+imperative naming the exact change, not a description of the problem. "Change \
+'affect' to 'effect'." "Add a comma after 'however'." "Delete the repeated \
+'the'." Suggest a real fix; do not merely restate the question. No preamble, no \
+reasoning — add at most a short "— " clause of evidence only when the change \
+would be unclear without it. If your recommendation is to change nothing, say \
+"Leave as is" and, in a few words, why.
 
 Never invent a change the note did not ask about. Never quote a find that is not \
 in the passage above. When you cannot tell, "recommend" is always available and \
