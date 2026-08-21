@@ -671,6 +671,39 @@ def test_the_models_suggestion_applies_in_one_click(client, monkeypatch):
         in story_text(corrected, "ue0")
 
 
+def test_applying_a_no_change_suggestion_resolves_the_flag(client, monkeypatch):
+    """When the model's suggestion is to do nothing (the text is correct as
+    set), clicking 'Apply the suggestion' must resolve the flag — not 422 — and
+    write nothing to the file."""
+    job, item = _flagged_job(client)
+    # Give the flag stored advice so the one-click 'Apply the suggestion' path
+    # runs, and script the model to decide the text is correct as set.
+    json_path = Path(job["results_dir"]) / "corrections.json"
+    payload = json.loads(json_path.read_text("utf-8"))
+    payload["queue"][0]["advice"] = "leave it — the line is fine as set"
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+    provider = FakeProvider([ProviderResult(
+        parsed={"decision": "leave", "find": "", "replace": "", "context": "",
+                "format": "", "note": "correct as set — no change needed"},
+        usage=NormalizedUsage(input_tokens=10, output_tokens=5))])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",
+                    json={"item_id": item["id"], "suggestion": True})
+    assert r.status_code == 200, r.text
+    resolved = r.json()["item"]["resolved"]
+    assert resolved and resolved["kind"] == "no_change"
+    # The flag left the awaiting pile, and nothing was applied.
+    assert r.json()["counts"]["flags"] == 0
+    # The file is untouched — the copies of "was" are still there.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    joined = " ".join(story_text(corrected, "ue0"))
+    assert "was" in joined
+    # And the report logs it as a confirmed no-change.
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    assert any(x["kind"] == "no_change" for x in report.get("resolutions") or [])
+
+
 def test_a_suggestion_click_without_advice_is_refused(client):
     job, item = _flagged_job(client)
     r = client.post(f"/api/jobs/{job['id']}/corrections/resolve",

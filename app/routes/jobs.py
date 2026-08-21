@@ -1524,16 +1524,23 @@ def register(app: FastAPI) -> None:
                     if option is None:
                         raise HTTPException(404, "No such placement for this "
                                                  "flag.")
-                    result = apply_option(corrected, option)
-                    # Accepting a placement the model suggested is recorded as
-                    # a suggestion, so the log says whose call it carried out.
-                    resolution = {"kind": ("suggestion"
-                                           if option.get("suggested")
-                                           else "option"),
-                                  "option_id": req.option_id,
-                                  "edit_id": option.get("edit_id", ""),
-                                  "note": option.get("note", ""),
-                                  **result}
+                    if option.get("no_change"):
+                        # A materialized suggestion whose verdict was "leave" —
+                        # the model found the text correct as set. Accepting it
+                        # settles the flag as a no-change, writing nothing.
+                        resolution = {"kind": "no_change",
+                                      "note": option.get("note", "")}
+                    else:
+                        result = apply_option(corrected, option)
+                        # Accepting a placement the model suggested is recorded
+                        # as a suggestion, so the log says whose call it was.
+                        resolution = {"kind": ("suggestion"
+                                               if option.get("suggested")
+                                               else "option"),
+                                      "option_id": req.option_id,
+                                      "edit_id": option.get("edit_id", ""),
+                                      "note": option.get("note", ""),
+                                      **result}
                     updated = record_resolution(json_path, req.item_id,
                                                 resolution)
                 elif req.manual is not None:
@@ -1551,19 +1558,25 @@ def register(app: FastAPI) -> None:
                     from docproof.corrections.idml import read_stories
                     provider, model = _build_resolve_provider()
                     usage = Usage()
-                    edit, note = adjudicate_instruction(
+                    edit, note, verdict = adjudicate_instruction(
                         item, text, provider, model=model, usage=usage,
                         stories=read_stories(corrected))
                     _record_extract_spend(app, owner, model, usage,
                                           filename="corrections review")
-                    if edit is None:
-                        # An answered decline, not a failure: nothing was
-                        # written, and the reason is the designer's to act on.
+                    if verdict == "leave":
+                        # The model finds the text correct as set — the right
+                        # outcome is no change. Applying "the suggestion" here
+                        # means settling the flag as a no-change, not erroring.
+                        resolution = {"kind": "no_change", "note": note}
+                    elif edit is None:
+                        # A genuine decline, not a failure: nothing was written,
+                        # and the reason is the designer's to act on.
                         raise HTTPException(422, f"Not applied — {note}")
-                    result = apply_edit_to_corrected(corrected, edit)
-                    resolution = {"kind": ("suggestion" if req.suggestion
-                                           else "typed"),
-                                  "text": text, "note": note, **result}
+                    else:
+                        result = apply_edit_to_corrected(corrected, edit)
+                        resolution = {"kind": ("suggestion" if req.suggestion
+                                               else "typed"),
+                                      "text": text, "note": note, **result}
                     updated = record_resolution(json_path, req.item_id,
                                                 resolution)
             except ResolveError as e:

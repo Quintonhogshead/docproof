@@ -148,11 +148,11 @@ def test_a_typed_answer_becomes_an_edit_and_applies(tmp_path):
                           "replace": "the room stood empty",
                           "context": "", "format": "", "note": "as asked"})
     usage = Usage()
-    edit, note = adjudicate_instruction(
+    edit, note, verdict = adjudicate_instruction(
         item, "change it to 'stood empty' in the room sentence", provider,
         model="fake-model", usage=usage,
         stories=read_stories(out.corrected_idml))
-    assert isinstance(edit, Edit) and note == "as asked"
+    assert isinstance(edit, Edit) and note == "as asked" and verdict == "apply"
     # The prompt carried the book's own text and the designer's words.
     user = provider.calls[0]["user"]
     assert "the room was empty" in user
@@ -168,12 +168,42 @@ def test_a_declined_answer_writes_nothing(tmp_path):
     provider = _scripted({"decision": "decline", "find": "", "replace": "",
                           "context": "", "format": "",
                           "note": "that is a layout request"})
-    edit, why = adjudicate_instruction(
+    edit, why, verdict = adjudicate_instruction(
         payload["queue"][0], "move it up a line", provider,
         model="fake-model", usage=Usage(),
         stories=read_stories(out.corrected_idml))
-    assert edit is None
+    assert edit is None and verdict == "decline"
     assert why == "that is a layout request"
+
+
+def test_a_leave_verdict_settles_the_flag_as_no_change(tmp_path):
+    # The model concludes the text is already correct as set — a "leave", which
+    # is a real settlement, not a refusal. adjudicate reports it as such.
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    provider = _scripted({"decision": "leave", "find": "", "replace": "",
+                          "context": "", "format": "",
+                          "note": "the open line is deliberate — leave it"})
+    edit, note, verdict = adjudicate_instruction(
+        payload["queue"][0], "should this have a period?", provider,
+        model="fake-model", usage=Usage(),
+        stories=read_stories(out.corrected_idml))
+    assert edit is None and verdict == "leave"
+    assert "deliberate" in note
+
+
+def test_an_apply_that_changes_nothing_reads_as_leave(tmp_path):
+    # The model says "apply" but its find == replace — the text is already right.
+    # That is a leave, not a failure, so the flag can still be settled.
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    provider = _scripted({"decision": "apply",
+                          "find": "the room was empty",
+                          "replace": "the room was empty",
+                          "context": "", "format": "", "note": "already fine"})
+    edit, note, verdict = adjudicate_instruction(
+        payload["queue"][0], "make sure it reads right", provider,
+        model="fake-model", usage=Usage(),
+        stories=read_stories(out.corrected_idml))
+    assert edit is None and verdict == "leave"
 
 
 def test_an_edit_that_cannot_anchor_is_refused_not_written(tmp_path):

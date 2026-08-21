@@ -5034,11 +5034,18 @@ function fixItemCard(job, data, item) {
     doneLine.textContent = '✓ Resolved — '
       + (r.kind === 'manual' ? 'you edited the line yourself'
         : r.kind === 'suggestion' ? 'you applied the model’s suggestion'
-          : r.kind === 'chat'
-            ? `you talked it through${r.text ? `: “${r.text}”` : ''}`
-            : r.kind === 'typed' ? `you typed: “${r.text}”`
-              : 'you picked a placement') + (r.note ? ` (${r.note})` : '');
+          : r.kind === 'no_change'
+            ? 'confirmed correct as set — no change needed'
+            : r.kind === 'chat'
+              ? `you talked it through${r.text ? `: “${r.text}”` : ''}`
+              : r.kind === 'typed' ? `you typed: “${r.text}”`
+                : 'you picked a placement') + (r.note ? ` (${r.note})` : '');
     card.append(doneLine);
+    // A no-change settlement rewrote nothing, so there is no redline to show.
+    if (r.kind === 'no_change') {
+      card.append(err);
+      return card;
+    }
     if (r.removed_line) {
       const rl = document.createElement('p');
       rl.className = 'rl fix-rl';
@@ -5095,6 +5102,22 @@ function fixItemCard(job, data, item) {
   (item.options || []).forEach((o) => {
     const opt = document.createElement('div');
     opt.className = 'fix-opt';
+    // A suggestion whose verdict was "leave": the model finds the text correct
+    // as set. There is nothing to place — accepting it settles the flag as a
+    // no-change, so it gets its own row, not a redline and an "Apply here".
+    if (o.no_change) {
+      const line = document.createElement('div');
+      line.className = 'fix-opt-loc';
+      line.textContent = '✨ Model’s pick · nothing to change — the text is '
+        + 'correct as set' + (o.note ? ` (${o.note})` : '');
+      const accept = document.createElement('button');
+      accept.className = 'primary';
+      accept.textContent = 'Accept — no change';
+      accept.addEventListener('click', () => resolve({ option_id: o.id }));
+      opt.append(line, accept);
+      card.append(opt);
+      return;
+    }
     const loc = document.createElement('div');
     loc.className = 'fix-opt-loc';
     loc.textContent = (o.suggested ? '✨ Model’s pick · ' : '') + fixLoc(o);
