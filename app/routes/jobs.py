@@ -1614,9 +1614,15 @@ def register(app: FastAPI) -> None:
                         raise HTTPException(422, f"Not applied — {note}")
                     else:
                         result = apply_edit_to_corrected(corrected, edit)
-                        resolution = {"kind": ("suggestion" if req.suggestion
-                                               else "typed"),
-                                      "text": text, "note": note, **result}
+                        if result.get("no_change"):
+                            # The correction is already satisfied in the file —
+                            # settle the flag as a no-change, not an error.
+                            resolution = {"kind": "no_change",
+                                          "note": result.get("note", "")}
+                        else:
+                            resolution = {"kind": ("suggestion" if req.suggestion
+                                                   else "typed"),
+                                          "text": text, "note": note, **result}
                     updated = record_resolution(json_path, req.item_id,
                                                 resolution)
             except ResolveError as e:

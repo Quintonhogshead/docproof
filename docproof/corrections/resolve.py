@@ -857,6 +857,14 @@ def apply_edit_to_corrected(corrected: str | Path, edit: Edit) -> dict:
     snapshot = {s.story_id: [p.text for p in s.paragraphs] for s in stories}
     outcomes, changed = apply_to_stories(stories, [edit])
     mine = next((o for o in outcomes if o.edit.id == edit.id), None)
+    if mine is not None and mine.status == NO_CHANGE:
+        # The change the correction asks for is already present in the file — the
+        # break a "start a new paragraph here" wants is there because the proof was
+        # marked against an earlier revision than the one being corrected. That is
+        # the request met, a settled no-change, not a failure to apply; surface it
+        # as one so the flag leaves the queue instead of showing a red error.
+        return {"no_change": True, "note": mine.detail,
+                "story_id": mine.story_id, "paragraph": mine.paragraph}
     if mine is None or not mine.applied:
         why = (mine.detail or mine.status) if mine is not None else "unknown"
         raise ResolveError(f"the change could not be applied: {why}")
