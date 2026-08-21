@@ -97,6 +97,11 @@ def test_isolating_keeps_every_applied_character_style():
     ("keep-together", "KeepAllLinesTogether", "true"),
     ("close-up-before", "SpaceBefore", "0"),
     ("close-up-after", "SpaceAfter", "0"),
+    ("align-left", "Justification", "LeftAlign"),
+    ("align-right", "Justification", "RightAlign"),
+    ("align-center", "Justification", "CenterAlign"),
+    ("justify", "Justification", "LeftJustified"),
+    ("no-indent", "FirstLineIndent", "0"),
 ])
 def test_a_paragraph_operation_lands_on_that_paragraph_alone(op, attr, value):
     story = _ue0()
@@ -117,6 +122,9 @@ def test_a_paragraph_operation_lands_on_that_paragraph_alone(op, attr, value):
     ("space-before", "SpaceBefore", "6", "6"),
     ("space-after", "SpaceAfter", "6pt", "6"),      # "6pt" is parsed to a number
     ("space-before", "SpaceBefore", "13.5", "13.5"),
+    ("first-line-indent", "FirstLineIndent", "18", "18"),
+    ("left-indent", "LeftIndent", "24pt", "24"),
+    ("right-indent", "RightIndent", "24", "24"),
 ])
 def test_a_spacing_op_writes_its_point_value_on_that_paragraph(op, attr, given,
                                                                written):
