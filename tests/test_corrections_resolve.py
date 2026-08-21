@@ -702,6 +702,28 @@ def test_the_agent_triages_a_mixed_layout_request(tmp_path):
     assert "Kirkus blurb" in md
 
 
+def test_a_transient_step_miss_is_retried_not_a_dead_end(tmp_path):
+    """A single empty/blipped model reply must not end the turn with a
+    'rephrase' message — it is retried, and the request goes through. This is
+    the failure the designer saw as the agent being 'picky' about phrasing."""
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        ProviderResult(parsed=None, stop_reason="error",
+                       error="empty response",
+                       usage=NormalizedUsage(input_tokens=5, output_tokens=0)),
+        _step({"action": "propose", "find": "the road went on forever",
+               "replace": "“the road went on forever”",
+               "why": "quotation marks"}),
+        _step({"action": "reply", "text": "Added the quotes."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="quote the blurb")
+    assert res["reply"] == "Added the quotes."
+    assert len(res["proposals"]) == 1       # the blip did not lose the work
+    assert len(provider.calls) == 3         # error, then propose, then reply
+
+
 def test_the_agent_loop_is_bounded(tmp_path):
     out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
     report = json.loads(out.report_json.read_text("utf-8"))
