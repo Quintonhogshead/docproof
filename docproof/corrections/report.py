@@ -443,21 +443,43 @@ def _markdown(d: dict) -> str:
                 L.append(f"  - and {breaks}")
         L.append("")
 
-    # The run-level agent's advisory notes — things it raised for a person while
-    # working a designer's request, that it would not change on its own. Its
-    # accepted edits are already in "Resolved in review" above (kind "agent");
-    # this is the half that stayed a person's, kept so it is not lost.
+    # What the run-level agent raised while working the designer's requests,
+    # grouped by what a person actually has to do with each. Its accepted edits
+    # are already in "Resolved in review" above (kind "agent"); this is the half
+    # that stayed a person's — the layout work it cannot do in the text (tasks),
+    # the parts blocked pending something (holds), and plain notes. A big mixed
+    # request comes back as three legible lists rather than one flat pile.
     agent = d.get("agent") or {}
     agent_flags = agent.get("flags") or []
     if agent_flags:
-        L.append(f"## The agent flagged for you — {len(agent_flags)}\n")
-        L.append("While working your requests, the agent raised these for a "
-                 "person rather than changing them on its own.\n")
-        for f in agent_flags:
-            note = _preview(f.get("note") or f.get("why") or "(no note)")
+        def _of(cat):
+            return [f for f in agent_flags if (f.get("category") or "note")
+                    == cat]
+
+        def _line(f):
+            note = _preview(f.get("note") or f.get("why") or "(no note)", 300)
             quote = _preview(f.get("quote") or "")
-            L.append(f"- “{note}”" + (f" — on “{quote}”" if quote else ""))
-        L.append("")
+            return f"- {note}" + (f" — on “{quote}”" if quote else "")
+
+        tasks, holds, notes = _of("task"), _of("hold"), _of("note")
+        if tasks:
+            L.append(f"## To do in InDesign — {len(tasks)}\n")
+            L.append("Layout work the agent cannot do in the text — page order, "
+                     "a cover, a placement that matches a design. Each is a step "
+                     "to carry out by hand.\n")
+            L.extend(_line(f) for f in tasks)
+            L.append("")
+        if holds:
+            L.append(f"## Waiting on — {len(holds)}\n")
+            L.append("Blocked pending something you have to supply or decide "
+                     "before this part can be finished.\n")
+            L.extend(_line(f) for f in holds)
+            L.append("")
+        if notes:
+            L.append(f"## The agent flagged for you — {len(notes)}\n")
+            L.append("Raised for a person rather than changed on its own.\n")
+            L.extend(_line(f) for f in notes)
+            L.append("")
 
     # The flags the designer deliberately left alone. Not applied and not
     # awaiting anyone — a decision, recorded so the printable log shows who

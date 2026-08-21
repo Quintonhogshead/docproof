@@ -4857,19 +4857,35 @@ function fixAgentPanel(job, data) {
 
     notes.textContent = '';
     const flags = a.flags || [];
-    if (flags.length) {
+    // Grouped the way the report groups them: layout the agent can't do in the
+    // text (a checklist), things blocked pending input, and plain notes.
+    const groups = [
+      ['task', 'To do in InDesign', 'Layout the agent can’t do in the text — '
+        + 'do these by hand.'],
+      ['hold', 'Waiting on', 'Blocked pending something you supply or decide.'],
+      ['note', 'The agent flagged for you', ''],
+    ];
+    groups.forEach(([cat, title, blurb]) => {
+      const items = flags.filter((f) => (f.category || 'note') === cat);
+      if (!items.length) return;
       const h = document.createElement('p');
       h.className = 'fix-agent-notes-head';
-      h.textContent = `The agent flagged for you — ${flags.length}`;
+      h.textContent = `${title} — ${items.length}`;
       notes.append(h);
-      flags.forEach((f) => {
+      if (blurb) {
+        const b = document.createElement('p');
+        b.className = 'muted fix-agent-note';
+        b.textContent = blurb;
+        notes.append(b);
+      }
+      items.forEach((f) => {
         const line = document.createElement('p');
-        line.className = 'muted fix-agent-note';
+        line.className = 'fix-agent-note';
         line.textContent = `• ${f.note || f.why || ''}`
           + (f.quote ? ` — on “${f.quote}”` : '');
         notes.append(line);
       });
-    }
+    });
   };
 
   async function post(body, busyLabel) {

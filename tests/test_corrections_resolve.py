@@ -663,6 +663,43 @@ def test_the_agent_raises_a_flag_as_advice(tmp_path):
     assert res["proposals"] == []
     assert len(res["flags"]) == 1
     assert "tense shifts" in res["flags"][0]["note"]
+    assert res["flags"][0]["category"] == "note"      # the default
+
+
+def test_the_agent_triages_a_mixed_layout_request(tmp_path):
+    """A real designer ask: reorder pages (a layout task the agent can't do in
+    the text), wait for a pending blurb (a hold), and add quotes (a text edit it
+    can propose). Each part is routed to the right place — nothing is silently
+    dropped, and nothing risky is attempted on the file."""
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        _step({"action": "flag", "category": "task",
+               "note": "Move the dedication to fall after the copyright page."}),
+        _step({"action": "flag", "category": "hold",
+               "note": "Wait for the Kirkus blurb before finalising the praise "
+                       "section."}),
+        _step({"action": "propose", "find": "the road went on forever",
+               "replace": "“the road went on forever”",
+               "why": "quotation marks around the blurb"}),
+        _step({"action": "reply", "text": "One edit proposed, one task and one "
+                                          "hold flagged."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="reorder the front matter, wait for "
+                                           "Kirkus, quote the blurbs")
+    assert len(res["proposals"]) == 1                  # the quote edit
+    cats = sorted(f["category"] for f in res["flags"])
+    assert cats == ["hold", "task"]                    # routed, not dropped
+    # And the report groups them into a worklist, a blocked list, and edits.
+    from docproof.corrections.report import _markdown
+    report["agent"] = {"chat": [], "proposals": res["proposals"],
+                       "flags": res["flags"]}
+    md = _markdown(report)
+    assert "## To do in InDesign" in md
+    assert "Move the dedication" in md
+    assert "## Waiting on" in md
+    assert "Kirkus blurb" in md
 
 
 def test_the_agent_loop_is_bounded(tmp_path):
