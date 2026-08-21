@@ -61,8 +61,9 @@ MAX_OPTIONS = 6
 
 # What the model call may spend transcribing one typed answer. Generous next to
 # the one edit it returns, because the ceiling covers reasoning tokens too and a
-# truncated structured reply parses as nothing.
-MAX_OUTPUT_TOKENS = 8000
+# truncated structured reply parses as nothing — which the designer reads as the
+# model refusing, not running out of room. Matched to the escalate tier's.
+MAX_OUTPUT_TOKENS = 16000
 
 # How much of the book to show the adjudicator: the paragraphs the item's
 # options sit in, or the ones its anchor text is found in, clipped so a queue
@@ -940,7 +941,16 @@ def converse(item: dict, corrected: str | Path, provider: Provider, *,
 # cap is hit.
 
 AGENT_MAX_STEPS = 12
-AGENT_MAX_OUTPUT_TOKENS = 8000
+# Generous, because these models bill their thinking against this ceiling and a
+# structured reply that runs past it truncates and parses as nothing — a whole
+# step lost. The escalate tier learned this the hard way (see its own ceiling);
+# 8000 was too tight and read to the designer as the agent rejecting the
+# request. One action per step keeps the actual reply small regardless.
+AGENT_MAX_OUTPUT_TOKENS = 16000
+# How many times to re-try a step that came back empty, truncated, or blipped
+# before giving up the turn. A transient miss is not the designer's phrasing, so
+# it should not end the conversation on the first attempt.
+_AGENT_STEP_RETRIES = 3
 # How much of the open-flag list and each search to show, so a book with
 # hundreds of flags still fits one bounded prompt.
 _AGENT_MAX_FLAGS = 40
@@ -1011,13 +1021,21 @@ is being waited on and what to do once it arrives.
 - reply: speak to the designer — a summary of what you proposed, flagged, and \
 what is on hold. This ends your turn, so reply only when you're done acting.
 
+Read the request generously. It arrives in a designer's own words — casual, \
+loosely worded, a little vague — and that is fine; work out what they mean and \
+act on it. Never refuse over phrasing, and never stall. If a request is genuinely \
+unclear, reply with one short clarifying question rather than doing nothing. \
+Every step must be one of the four actions — always take one; returning nothing \
+is never the answer.
+
 Rules that do not bend:
 - Propose only TEXT changes the request calls for. A request about page order, \
 the cover, or visual layout is always a "task" flag, never a proposal. When in \
 doubt, flag rather than propose. Do not "improve" prose or touch the author's \
 voice.
 - Every find is quoted from the book, verbatim. If you have not searched and \
-seen the exact text, search first.
+seen the exact text, search first. If a search finds nothing, that is an answer: \
+reply and say what you looked for and did not find, rather than stalling.
 - A big request is normal: break it into the text edits you can propose and the \
 layout tasks and holds you must flag. Handle every part — a part you cannot edit \
 you still account for, as a task or a hold. Then reply with the summary.
@@ -1120,20 +1138,54 @@ def run_agent(payload: dict, corrected: str | Path, provider: Provider, *,
     transcript: list[tuple[dict, str]] = []
     proposals: list[dict] = []
     flags: list[dict] = []
+
+    def _step_once(user: str) -> "_AgentStep | None":
+        """One model step, retried past a transient miss — a blip, a truncated
+        reasoning reply that parsed as nothing, an empty response, or a shape
+        that did not validate. None of those is the designer's phrasing, so
+        none should end the turn on the first try; a few attempts turn an
+        intermittent failure into a non-event. Returns the validated step, or
+        None only when every attempt missed."""
+        last = ""
+        for attempt in range(_AGENT_STEP_RETRIES):
+            try:
+                result = provider.complete_structured(
+                    model=model, system=_AGENT_SYSTEM, user=user, schema=schema,
+                    schema_name="agent_step",
+                    max_tokens=AGENT_MAX_OUTPUT_TOKENS)
+            except Exception as e:         # noqa: BLE001 - retried, then surfaced
+                last = str(e)
+                log.warning("Agent step call failed (attempt %d)", attempt + 1,
+                            exc_info=True)
+                continue
+            usage.add(result.usage, model=model)
+            if result.stop_reason == "ok" and result.parsed is not None:
+                try:
+                    return _AgentStep.model_validate(result.parsed)
+                except Exception as e:     # noqa: BLE001 - a near-miss shape
+                    last = f"unexpected shape: {e}"
+                    log.warning("Agent step did not validate (attempt %d): %s",
+                                attempt + 1, e)
+                    continue
+            last = result.error or result.stop_reason
+            log.warning("Agent step returned %s (attempt %d)",
+                        result.stop_reason, attempt + 1)
+        log.warning("Agent step gave up after %d attempts: %s",
+                    _AGENT_STEP_RETRIES, last)
+        return None
+
     for _ in range(max_steps):
         user = _agent_prompt(payload, history, message, transcript)
-        try:
-            result = provider.complete_structured(
-                model=model, system=_AGENT_SYSTEM, user=user, schema=schema,
-                schema_name="agent_step", max_tokens=AGENT_MAX_OUTPUT_TOKENS)
-        except Exception as e:             # noqa: BLE001 - surfaced to the screen
-            log.warning("Agent step failed", exc_info=True)
-            raise ResolveError(f"the model could not be reached: {e}")
-        usage.add(result.usage, model=model)
-        if result.stop_reason != "ok" or result.parsed is None:
-            return {"reply": "I couldn't continue that — try rephrasing the "
-                             "request.", "proposals": proposals, "flags": flags}
-        step = _AgentStep.model_validate(result.parsed)
+        step = _step_once(user)
+        if step is None:
+            # Every attempt missed. Not the request's fault — a transient model
+            # miss — so say so plainly and keep whatever was gathered, rather
+            # than implying the designer phrased it wrong.
+            reply = ("The model hit a snag mid-thought — send that again and "
+                     "it'll pick up." if not proposals and not flags else
+                     "The model hit a snag before it finished — what it worked "
+                     "out so far is above; send the request again to continue.")
+            return {"reply": reply, "proposals": proposals, "flags": flags}
         if step.action == "reply":
             return {"reply": (step.text.strip()
                               or "Done — see the proposals above."),
