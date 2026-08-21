@@ -348,6 +348,13 @@ class ReviewChange:
     # dropped as one. It is still the row a designer needs: the italics have to be
     # confirmed to have landed on the right words.
     formatting: str = ""
+    # Whether this change was a whole-paragraph LAYOUT operation — a forced break,
+    # a keep, a paragraph merged, split, inserted or removed. The engine applies
+    # these, but where text falls on the page is InDesign's to settle, so they are
+    # the changes a designer must *do something about* rather than just confirm.
+    # Set so the review can separate "changed here" (done in the file) from "needs
+    # to be done in InDesign" (reflows the page).
+    layout: bool = False
 
 
 @dataclass(frozen=True)

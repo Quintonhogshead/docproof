@@ -609,6 +609,26 @@ def test_a_chat_decline_is_a_reply_not_an_error(tmp_path):
     assert "layout call" in turn["reply"]
 
 
+def test_changes_split_text_edits_from_layout_ops(tmp_path):
+    """The 'Changes to review' section separates a change done in the file (a
+    text edit — just confirm) from a paragraph layout op that reflows the page
+    (needs to be finished in InDesign). The layout op carries the flag, and the
+    report renders the two under their own headings."""
+    out, payload = _run(tmp_path, [
+        {"find": "the room was empty", "replace": "the room was bare"},  # text
+        {"find": "A footnote with its own sentence, it also runs on.",
+         "replace": "", "paragraph": "delete-paragraph"},          # layout op
+    ])
+    changes = payload["changes"]
+    text = [c for c in changes if not c.get("layout")]
+    layout = [c for c in changes if c.get("layout")]
+    assert text and layout, changes
+    assert any("the room was bare" in c["after"] for c in text)
+    md = out.report_md.read_text("utf-8")
+    assert "### Changed here — confirm it reads right" in md
+    assert "### Needs to be done in InDesign" in md
+
+
 # --- the run-level agent -------------------------------------------------------
 
 def test_the_agent_searches_then_proposes_then_replies(tmp_path):

@@ -162,7 +162,7 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
             {"story_id": c.story_id, "paragraph": c.paragraph,
              "before": c.before, "after": c.after,
              "edit_ids": list(c.edit_ids), "instruction": c.instruction,
-             "formatting": c.formatting}
+             "formatting": c.formatting, "layout": c.layout}
             for c in verify.changes],
         # One row per reviewer comment — the ledger that makes sure none is lost.
         # `total` and `unresolved` are the honest headline: how many marks came in,
@@ -544,37 +544,56 @@ def _markdown(d: dict) -> str:
     # The applied changes, each in the line it changed, for a person to read down
     # and confirm — the designer's quick check that the corrections are right, not
     # just that they anchored. The verification section below is the complement.
+    # Split by where the designer acts: a text or formatting edit is done in the
+    # file and only needs confirming ("change here"); a paragraph layout op the
+    # engine applied reflows the page, which InDesign settles, so it is called out
+    # separately as one to finish and check there.
     changes = d.get("changes") or []
+
+    def _change_line(c):
+        where = (f"story `{c['story_id']}`"
+                 + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
+                    else ""))
+        out = [f"- {where}:"]
+        if c.get("formatting") and c["before"] == c["after"]:
+            # Formatting rewrites no text, so a before/after pair would read as a
+            # change that did not happen. Say what changed instead, and show the
+            # line so the words it landed on can be confirmed.
+            out.append(f"  - set {c['formatting']}: “{_preview(c['after'], 300)}”"
+                       + (f" — reviewer: “{_preview(c['instruction'])}”"
+                          if c.get("instruction") else ""))
+            return out
+        out.append(f"  - was: “{_preview(c['before'], 300)}”")
+        out.append(f"  - now: “{_preview(c.get('after') or '(line removed)', 300)}”"
+                   + (f" — reviewer: “{_preview(c['instruction'])}”"
+                      if c.get("instruction") else "")
+                   + (f" — also set {c['formatting']}"
+                      if c.get("formatting") else ""))
+        return out
+
     if changes:
+        here = [c for c in changes if not c.get("layout")]
+        indd = [c for c in changes if c.get("layout")]
         L.append(f"## Changes to review — {len(changes)} line(s)\n")
-        lead = (f"All {ap['applied']} applied corrections, shown in the "
-                f"{len(changes)} line(s) they changed — a line several corrections "
-                f"touched appears once"
-                if ap is not None else
-                "Every applied correction, shown in the line it changed")
-        L.append(f"{lead}. Read down and confirm each reads right. “was” is the "
-                 f"original line, “now” the corrected one.\n")
-        for c in changes:
-            where = (f"story `{c['story_id']}`"
-                     + (f", ¶ {c['paragraph']}" if c.get("paragraph", -1) >= 0
-                        else ""))
-            L.append(f"- {where}:")
-            if c.get("formatting") and c["before"] == c["after"]:
-                # Formatting rewrites no text, so a before/after pair would read as
-                # a change that did not happen. Say what changed instead, and show
-                # the line so the words it landed on can be confirmed.
-                L.append(f"  - set {c['formatting']}: "
-                         f"“{_preview(c['after'], 300)}”"
-                         + (f" — reviewer: “{_preview(c['instruction'])}”"
-                            if c.get("instruction") else ""))
-                continue
-            L.append(f"  - was: “{_preview(c['before'], 300)}”")
-            L.append(f"  - now: “{_preview(c['after'], 300)}”"
-                     + (f" — reviewer: “{_preview(c['instruction'])}”"
-                        if c.get("instruction") else "")
-                     + (f" — also set {c['formatting']}"
-                        if c.get("formatting") else ""))
-        L.append("")
+        total = (f"All {ap['applied']} applied corrections"
+                 if ap is not None else "Every applied correction")
+        L.append(f"{total}, shown in the line(s) they changed — a line several "
+                 f"touched appears once. They are split by where you act: the "
+                 f"first group is changed in the file and only needs confirming; "
+                 f"the second reflows the page, which is InDesign's to settle.\n")
+        if here:
+            L.append(f"### Changed here — confirm it reads right — {len(here)}\n")
+            for c in here:
+                L.extend(_change_line(c))
+            L.append("")
+        if indd:
+            L.append(f"### Needs to be done in InDesign — {len(indd)}\n")
+            L.append("The engine set the paragraph, but where the text now falls "
+                     "on the page is InDesign's — open the file and confirm each "
+                     "reflowed as intended.\n")
+            for c in indd:
+                L.extend(_change_line(c))
+            L.append("")
 
     checks = d.get("checks") or []
     if checks:
