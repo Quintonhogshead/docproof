@@ -4741,18 +4741,22 @@ function renderFixList(job, data) {
     list.append(det);
   }
 
-  if (done.length) {
-    const h = document.createElement('h3');
-    h.textContent = `Resolved here — ${done.length}`;
-    list.append(h);
-    done.forEach((item) => list.append(fixItemCard(job, data, item)));
-  }
-  if (aside.length) {
-    const h = document.createElement('h3');
-    h.textContent = `Set aside — ${aside.length}`;
-    list.append(h);
-    aside.forEach((item) => list.append(fixItemCard(job, data, item)));
-  }
+  // Dealt-with flags leave the working list: once resolved or set aside, a card
+  // is done being acted on, so it tucks into a collapsed drawer rather than
+  // pushing the open flags down. Each stays one click away — to review what was
+  // done, or to put a set-aside flag back.
+  const drawer = (items, label) => {
+    if (!items.length) return;
+    const det = document.createElement('details');
+    det.className = 'fix-resolved';
+    const sum = document.createElement('summary');
+    sum.textContent = `${label} — ${items.length}`;
+    det.append(sum);
+    items.forEach((item) => det.append(fixItemCard(job, data, item)));
+    list.append(det);
+  };
+  drawer(done, 'Resolved here');
+  drawer(aside, 'Set aside');
 }
 
 // Refresh only the working bar's progress line from the live queue, without
