@@ -592,3 +592,116 @@ def test_an_author_dismissal_reads_as_resolved_not_lost(tmp_path):
     assert dispositions[0].disposition == DISP_NO_OP
     assert not dispositions[0].needs_human
     assert "declined" in dispositions[0].detail
+
+
+# An author does not only accept or reject a proofreader's mark; they can overrule
+# it with their own correction ("no — change it to 'leaves'"). That correction is
+# the author's and it wins: the proofreader's mark is not applied, the author's is.
+# Where a rule can read the reply against the marked span, the override is settled
+# here, deterministically — never left to the model to weigh the two notes.
+
+
+def test_an_author_swap_overrules_the_mark_deterministically():
+    """A reply that quotes the author's own word replaces the highlighted word with
+    it — the proofreader's note is dropped, and the edit is recorded under the
+    author's reply, not the note it overruled."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="should be 'There'", anchor="Their",
+                   context="Their were mistakes", kind="highlight", id="p1-1",
+                   replies=("no — change to 'They'",))
+    rows, unresolved = edits_from_comments([c])
+    assert not unresolved                     # settled without the model
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["find"] == "Their" and row["replace"] == "They"
+    # The proofreader's "There" is nowhere; the edit carries the author's reply.
+    assert "There" not in row["replace"]
+    assert row["instruction"] == "no — change to 'They'"
+    assert row["source"] == "p1-1"
+
+
+def test_a_bare_corrected_word_the_thread_ends_on_is_an_override():
+    """The commonest author correction is a bare word written in place of the
+    marked one — "recieve" answered with "receive". It resolves here even though
+    it carries no instruction verb (`REPLY_DEFER`), because the rule is certain."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="sp?", anchor="recieve",
+                   context="I will recieve it", kind="highlight", id="p2-1",
+                   replies=("receive",))
+    rows, unresolved = edits_from_comments([c])
+    assert not unresolved
+    assert [(r["find"], r["replace"]) for r in rows] == [("recieve", "receive")]
+
+
+def test_the_swap_wording_beats_a_bare_yes_beneath_it():
+    """A thread that gives a correction and then a bare confirmation is decided by
+    the correction, not the "yes"."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="colour?", anchor="colour",
+                   context="the colour of it", kind="highlight", id="p3-1",
+                   replies=("change to 'color'", "yes"))
+    rows, _ = edits_from_comments([c])
+    assert [(r["find"], r["replace"]) for r in rows] == [("colour", "color")]
+
+
+def test_a_confirmation_is_not_an_override_and_stays_the_models():
+    """A reply that agrees with the mark ("yes, please change") is not the author
+    writing their own correction — the mark still has to be read, so it goes to the
+    model, not the rules."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="Lowercase", anchor="The",
+                   context="The river ran on", kind="highlight", id="p4-1",
+                   replies=("yes, please change",))
+    rows, unresolved = edits_from_comments([c])
+    assert not rows and unresolved == [c]
+
+
+def test_a_dissimilar_swap_on_a_phrase_falls_to_the_model():
+    """The whole-span override is held to a single highlighted token. A quoted word
+    that resembles nothing in a multi-word highlight is genuinely ambiguous — which
+    words does it replace? — so it is left for the model rather than guessed at."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="reword?", anchor="pouch of tobacco",
+                   context="a pouch of tobacco here", kind="highlight", id="p5-1",
+                   replies=("change to 'baccy'",))
+    rows, unresolved = edits_from_comments([c])
+    assert not rows and unresolved == [c]
+
+
+def test_a_note_anchored_swap_falls_to_the_model():
+    """A sticky note's anchor is the whole line it sits on, which names no target,
+    so an override cannot be placed from it deterministically — it goes to the
+    model, shown the reply, exactly as before."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    c = PdfComment(page=1, instruction="?", anchor="the grey sky at dusk",
+                   context="the grey sky at dusk", kind="note", id="p6-1",
+                   replies=("change to 'gray'",))
+    rows, unresolved = edits_from_comments([c])
+    assert not rows and unresolved == [c]
+
+
+def test_the_authors_override_applies_to_the_real_indesign_file(tmp_path):
+    """End to end: a proofreader marks "Their" and says "There"; the author
+    overrules with "They". The corrected file reads "They" — not the proofreader's
+    "There", and not the original "Their"."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    from docproof.corrections.parse import parse_edits
+    c = PdfComment(page=1, instruction="should be 'There'", anchor="Their",
+                   context="Their were several mistakes here to find.",
+                   kind="highlight", id="p1-1",
+                   replies=("no, change to 'They'",))
+    rows, unresolved = edits_from_comments([c])
+    assert not unresolved and len(rows) == 1
+    parsed = parse_edits(rows)
+    assert parsed.ok
+    out = tmp_path / "out.idml"
+    report = apply_edits(LAYOUT, out, list(parsed.edits))
+    assert report.applied == 1
+    assert story_text(out)[4] == "They were several mistakes here to find."

@@ -22,7 +22,7 @@ as before. A rule that is unsure is worth nothing, so it declines.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from difflib import SequenceMatcher
 
 from .apply import all_spans
@@ -67,13 +67,16 @@ PUNCTUATION = {
 # Openers, for the marks that come in pairs.
 _OPENERS = {"’": "‘", "”": "“"}
 # Words that make a note an instruction to carry out rather than a label to
-# substitute. "did" against "done" is a replacement; "Delete" is not.
+# substitute. "did" against "done" is a replacement; "Delete" is not. "chang"
+# covers "change"/"changed"/"changing": "change to 'leaves'" is an instruction —
+# its replacement is the quoted word, not the whole sentence — so it must not be
+# read as a bare substitution of the marked span.
 _VERBS = (
     "replace", "remove", "delete", "add", "insert", "capitalize", "capitalise",
     "lowercase", "lower case", "cap ", "italic", "de-italic", "roman",
     "hyphenate", "close up", "spell out", "enclose", "possessive", "should",
     "check", "confirm", "unsure", "confusing", "recommend", "designer",
-    "previously", "query", "au:", "comp:", "stet", "move", "delete",
+    "previously", "query", "au:", "comp:", "stet", "move", "delete", "chang",
 )
 # Sentence punctuation trimmed off a marked span to find the word inside it. The
 # quotes are NOT here: a mark on ‘Sides is pointing at the quote as much as the
@@ -405,6 +408,104 @@ def adjudicate_reply(note: str, replies: tuple[str, ...]) -> str:
     return REPLY_DEFER
 
 
+def swap_reply_text(replies: tuple[str, ...]) -> str:
+    """The reply that carries the author's own correction — the one with an
+    instruction verb, a "change to X", or a quoted run — or "" if none does.
+
+    That reply is the wording that overrules the mark; a bare "yes" beneath it
+    only confirms it, so the swap wording is preferred wherever it sits in the
+    thread. `adjudicate_reply` reads the thread the same way to return
+    `REPLY_SWAP`, so this names the reply that decision rests on."""
+    for r in replies:
+        if (r or "").strip() and (_REPLY_SWAP_HINT.search(r)
+                                  or _REPLY_QUOTE.search(r)):
+            return r.strip()
+    return ""
+
+
+# A single quoted run in a swap reply — the replacement text of `change to
+# "leaves"` / `should be 'leaves'`. The single-quote form allows an apostrophe
+# *inside* the run (a contraction like 'can't') by requiring the closing quote
+# not to be followed by a word character: the ' after "can" is followed by "t",
+# so the run reaches on to the real close. A straight-apostrophe run is set to
+# the book's curly mark afterwards by `_house_apostrophe`.
+_SWAP_LITERAL = re.compile(
+    r'"([^"]{1,60})"(?!\w)'          # "leaves"
+    r'|“([^”]{1,60})”'               # “leaves”
+    r"|'(.{1,60}?)'(?!\w)"           # 'can't'
+    r"|‘([^’]{1,60})’")              # ‘leaves’
+
+
+def _author_literal(reply: str) -> str:
+    """The replacement text an author's swap reply names in quotes, or "".
+
+    Only when the reply holds exactly one quoted run: `change to "leaves"` names
+    "leaves", and that is the author's word for the marked run. A reply quoting
+    nothing, or two things, is left for the model rather than guessed at."""
+    found = [next((g for g in m if g), "").strip()
+             for m in _SWAP_LITERAL.findall(reply or "")]
+    found = [f for f in found if f]
+    return found[0] if len(found) == 1 else ""
+
+
+def resolve_author_swap(replies, anchor: str, *, context: str = "",
+                        highlighted: bool = True):
+    """The author's own correction, read into an exact edit over the proofreader's
+    marked span. Returns `(Resolved, author_note)` — the edit and the reply it
+    came from — or None when no rule is certain of it.
+
+    The author overruled the mark, so the correction that lands is the author's
+    and the proofreader's note is never consulted: the reply is read against the
+    marked span exactly as a note of its own would be, through the same
+    conservative rules. Three readings are tried, in order: the swap wording
+    ("change to X", "lowercase", "remove"), the single quoted word it names
+    ("change to 'leaves'" → leaves), and the author's final reply on its own — the
+    bare corrected word a copy editor writes ("teh" answered with "the"). Because
+    `resolve` only returns a rule it is sure of, an unclear reply returns None and
+    falls to the model, which reads the mark and the reply together and is told
+    the author's word wins."""
+    texts = [r.strip() for r in replies if (r or "").strip()]
+    if not texts:
+        return None
+    # (text handed to the rules, text recorded on the edit). The swap wording is
+    # tried first so a "change to 'leaves'" beats a bare "yes" beneath it; the
+    # author's last word is tried last, as a correction standing on its own.
+    trials: list[tuple[str, str]] = []
+    swap = swap_reply_text(tuple(texts))
+    if swap:
+        trials.append((swap, swap))
+        lit = _author_literal(swap)
+        if lit:
+            trials.append((lit, swap))
+    last = texts[-1]
+    if last != swap:
+        trials.append((last, last))
+        lit = _author_literal(last)
+        if lit:
+            trials.append((lit, last))
+    for probe, note in trials:
+        got = resolve(probe, anchor, context=context, highlighted=highlighted)
+        if got is not None:
+            return got, note
+    # A true word swap the rules could not narrow: the author quoted a
+    # replacement ("change to 'baccy'") that resembles nothing in the marked span,
+    # so `_bare_replacement`'s similarity check declined it. When the mark is a
+    # single highlighted token, that token IS the target and the quoted word IS
+    # the answer — there is nothing to narrow and nothing to guess. Held to one
+    # token on purpose: replacing a whole highlighted *phrase* with a short word
+    # the author never said mapped to it is exactly the guess these rules avoid,
+    # so a multi-word span with no resemblance falls to the model instead.
+    find = anchor.strip(_EDGE)
+    if highlighted and find and len(anchor.split()) == 1:
+        for src in dict.fromkeys([s for s in (swap, last) if s]):
+            literal = _author_literal(src)
+            if literal and literal.lower() != find.lower():
+                got = _house_apostrophe(
+                    Resolved(find, literal, MECHANICAL, "author-swap-literal"))
+                return got, src
+    return None
+
+
 def edits_from_comments(comments, pages=None,
                         pdf_pages=None) -> tuple[list[dict], list]:
     """Split a proof's comments into the ones the rules can resolve and the ones
@@ -440,19 +541,44 @@ def edits_from_comments(comments, pages=None,
     unresolved: list = []
     made: list[tuple] = []                 # (comment, Resolved) in reading order
     for c in comments:
-        if getattr(c, "replies", ()):
+        replies = tuple(getattr(c, "replies", ()) or ())
+        if replies:
             # An author's reply is a decision on the proofreader's mark, and the
             # author's to make (`adjudicate_reply`). A plain rejection ("no",
             # "stet", "leave as is") is settled here and for free: the text stays
             # as it is, so no edit is made and no model call is spent turning a
-            # "leave it" into a change. Everything else — a confirmation, or the
-            # author's own wording in place of the mark — goes to the model, which
-            # is shown the reply beside the note and told the author's word wins.
-            # (`run` reads the same verdict to record a dismissed mark as resolved
-            # rather than as a mark nobody acted on.)
-            if adjudicate_reply(getattr(c, "instruction", "") or "",
-                                tuple(c.replies)) == REPLY_DISMISS:
+            # "leave it" into a change.
+            verdict = adjudicate_reply(getattr(c, "instruction", "") or "",
+                                       replies)
+            if verdict == REPLY_DISMISS:
                 continue
+            # An author who overrules the mark with their own correction — a swap
+            # ("change to 'leaves'"), or a bare corrected word the thread ends on
+            # ("teh" answered with "the") — has that correction applied right here,
+            # wherever a rule can read it against the marked span: the author's word
+            # in place of the proofreader's, the proofreader's note dropped. So the
+            # override is deterministic and never rides on the model reading "the
+            # reply wins" correctly. The edit is recorded under the author's reply,
+            # not the note it overruled, so nothing downstream (fidelity repair, the
+            # change log) reaches back to the instruction the author set aside. A
+            # confirmation (`REPLY_ACCEPT`) is not an override — it agrees with the
+            # note — so it is left to the model, which reads the two together.
+            if verdict in (REPLY_SWAP, REPLY_DEFER):
+                swapped = resolve_author_swap(
+                    replies, getattr(c, "anchor", "") or "",
+                    context=getattr(c, "context", "") or "",
+                    highlighted=getattr(c, "kind", "") == "highlight")
+                if swapped is not None:
+                    got, note = swapped
+                    cc = (replace(c, instruction=note)
+                          if is_dataclass(c) and not isinstance(c, type) else c)
+                    made.append((cc, got))
+                    continue
+            # A confirmation, an unclear reply, or a swap no rule could read for
+            # certain: the model reads the mark and the reply together, shown the
+            # reply beside the note and told the author's word wins. (`run` reads
+            # the same verdict to record a dismissed mark as resolved rather than
+            # as a mark nobody acted on.)
             unresolved.append(c)
             continue
         instruction = getattr(c, "instruction", "") or ""

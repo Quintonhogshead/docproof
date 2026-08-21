@@ -4755,10 +4755,42 @@ function renderFixList(job, data) {
   }
 }
 
+// Refresh only the working bar's progress line from the live queue, without
+// rebuilding the list — so resolving one flag never moves the page.
+function updateFixProgress(data) {
+  const progress = $('fix-list').querySelector('.fix-progress');
+  if (!progress) return;
+  const queue = data.queue || [];
+  const open = queue.filter((q) => !q.resolved);
+  const dealt = queue.length - open.length;
+  progress.textContent = open.length
+    ? `${dealt} of ${queue.length} dealt with · ${open.length} to go`
+    : queue.length
+      ? `All ${queue.length} dealt with — the corrected file is ready.`
+      : 'No flags — every correction below applied.';
+}
+
+// Swap one flag's card for a freshly-rendered one, in place — the queue entry is
+// already updated — and refresh the progress line, without tearing the whole list
+// down. This keeps the page where the editor left it (no jump to the top) and
+// lets several flags be resolved in rapid succession, each card working and
+// settling on its own without disturbing the others. Falls back to a full render
+// only when the card is no longer on the page.
+function replaceFixCard(job, data, item, card) {
+  const i = (data.queue || []).findIndex((q) => q.id === item.id);
+  if (!card || !card.isConnected || i < 0) {
+    renderFixList(job, data);
+    return;
+  }
+  card.replaceWith(fixItemCard(job, data, data.queue[i]));
+  updateFixProgress(data);
+}
+
 // One resolve call, shared by the card's actions and the manual editor: on
-// success the queue entry is swapped for the server's copy and the list
-// re-renders; on failure the caller shows the sentence.
-async function fixResolve(job, data, item, body, onError) {
+// success the queue entry is swapped for the server's copy and, given the card it
+// came from, that one card is re-rendered in place (see `replaceFixCard`); on
+// failure the caller shows the sentence. Without a card it re-renders the list.
+async function fixResolve(job, data, item, body, onError, card) {
   try {
     const out = await api(`/api/jobs/${job.id}/corrections/resolve`, {
       method: 'POST',
@@ -4767,7 +4799,7 @@ async function fixResolve(job, data, item, body, onError) {
     });
     const i = (data.queue || []).findIndex((q) => q.id === item.id);
     if (i >= 0 && out.item) data.queue[i] = out.item;
-    renderFixList(job, data);
+    replaceFixCard(job, data, item, card);
     return true;
   } catch (e) {
     onError(e.message);
@@ -4983,7 +5015,7 @@ function fixItemCard(job, data, item) {
       busy(false);
       err.textContent = msg;
       err.hidden = false;
-    });
+    }, card);
     return ok;
   };
 
@@ -5201,7 +5233,7 @@ function fixItemCard(job, data, item) {
         });
         const i = (data.queue || []).findIndex((q) => q.id === item.id);
         if (i >= 0 && out.item) data.queue[i] = out.item;
-        renderFixList(job, data);
+        replaceFixCard(job, data, item, card);
       } catch (e) {
         busy(false);
         suggest.textContent = 'Suggest a fix';
@@ -5234,7 +5266,7 @@ function fixItemCard(job, data, item) {
     if (e.key === 'Enter') submit();
   });
   nl.append(input, go);
-  card.append(nl, fixChatPanel(job, data, item), err);
+  card.append(nl, fixChatPanel(job, data, item, card), err);
   return card;
 }
 
@@ -5244,9 +5276,10 @@ function fixItemCard(job, data, item) {
 // was proposed before; the model answers with a highlighted proposal the
 // designer accepts or keeps refining. Nothing is written until Accept. The
 // thread lives in the report, so it survives a reload. Self-contained — it owns
-// its own busy and error state and updates itself in place, only re-rendering
-// the whole list on the terminal Accept (which moves the flag to Resolved).
-function fixChatPanel(job, data, item) {
+// its own busy and error state and updates itself in place, and on the terminal
+// Accept it re-renders only its own card (see `replaceFixCard`) so the page stays
+// where the editor left it.
+function fixChatPanel(job, data, item, card) {
   const panel = document.createElement('details');
   panel.className = 'fix-chat';
   // Open when a conversation is already under way, so a reload shows it.
@@ -5341,11 +5374,11 @@ function fixChatPanel(job, data, item) {
   async function doAccept() {
     const out = await turn({ accept: true }, 'Applying…');
     if (!out) return;
-    // The flag is resolved now and moves to "Resolved here" — a full re-render
-    // is what carries it there.
+    // The flag is resolved now — re-render just this card in place so the editor
+    // stays where they were rather than being thrown to the top of the list.
     const i = (data.queue || []).findIndex((q) => q.id === item.id);
     if (i >= 0 && out.item) data.queue[i] = out.item;
-    renderFixList(job, data);
+    replaceFixCard(job, data, item, card);
   }
 
   send.addEventListener('click', doSend);
@@ -5546,7 +5579,12 @@ async function openManualEditor(job, data, ctx) {
   const cancel = document.createElement('button');
   cancel.className = 'quiet';
   cancel.textContent = 'Cancel';
-  cancel.addEventListener('click', () => renderFixList(job, data));
+  cancel.addEventListener('click', () => {
+    // Restore the card in place (no jump to the top). A touch-up editor answers
+    // no flag, so there is no card to rebuild — fall back to a full render.
+    if (ctx.item) replaceFixCard(job, data, ctx.item, card);
+    else renderFixList(job, data);
+  });
   save.addEventListener('click', async () => {
     const parsed = parseEditor(box, state.text);
     err.hidden = true;
@@ -5569,7 +5607,7 @@ async function openManualEditor(job, data, ctx) {
       remove_break_below: !!(removeBelow && removeBelow.checked),
     };
     if (ctx.item) {
-      await fixResolve(job, data, ctx.item, { manual }, fail);
+      await fixResolve(job, data, ctx.item, { manual }, fail, card);
       return;
     }
     // A touch-up: no flag answered, so it goes through the edit route and the
