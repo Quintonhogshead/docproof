@@ -4678,9 +4678,12 @@ function renderFixList(job, data) {
         + 'aligned for this run.'
       : '';
 
-  // The working bar: how far along, and the file itself once — or while —
-  // you're at it. Downloading mid-way is fine; it simply carries what's
-  // resolved so far.
+  // The working bar sticks below the header, so make sure the header height it
+  // pins to is current — the header may have wrapped since load, and a resize
+  // event is not guaranteed to have fired.
+  updateHeaderHeight();
+  // How far along, and the file itself once — or while — you're at it.
+  // Downloading mid-way is fine; it simply carries what's resolved so far.
   const bar = document.createElement('div');
   bar.className = 'fix-bar';
   const progress = document.createElement('span');
@@ -8443,7 +8446,31 @@ function applyMode() {
   $('update-banner').hidden = true;
 }
 
+// The app header is sticky at top:0 and wraps to a taller row on narrow
+// widths, so anything that sticks below it (the fix screen's tracker bar) needs
+// its real height — not a guess. Measured into --header-h and kept current, so
+// the bar pins flush under the nav instead of colliding with it. Read straight
+// off the DOM each time rather than trusting one event to fire: it is recomputed
+// on load, on every window resize, and — belt and suspenders — whenever the fix
+// screen renders, so the bar always has the height that is true right now.
+function updateHeaderHeight() {
+  const header = document.querySelector('header');
+  if (!header) return;
+  document.documentElement.style.setProperty(
+    '--header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
+}
+
+function trackHeaderHeight() {
+  updateHeaderHeight();
+  window.addEventListener('resize', updateHeaderHeight);
+  const header = document.querySelector('header');
+  if (header && typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(updateHeaderHeight).observe(header);
+  }
+}
+
 function startApp() {
+  trackHeaderHeight();
   applyMode();
   loadFormats().catch(() => {});
   loadModels().catch(() => {});
