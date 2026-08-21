@@ -679,6 +679,62 @@ def test_a_suggestion_click_without_advice_is_refused(client):
     assert "no model suggestion" in r.json()["detail"]
 
 
+def test_a_flag_is_talked_through_then_accepted_over_http(client, monkeypatch):
+    """The conversation end to end: a message proposes a change without writing,
+    a follow-up refines it, and Accept lands it — recorded as a chat."""
+    job, item = _flagged_job(client)
+    # Two turns: the first proposal, then the refinement the designer accepts.
+    provider = FakeProvider([
+        ProviderResult(parsed={"decision": "apply",
+                               "find": "the room was empty",
+                               "replace": "the room is empty", "context": "",
+                               "format": "", "note": "first pass"},
+                       usage=NormalizedUsage(input_tokens=10, output_tokens=5)),
+        ProviderResult(parsed={"decision": "apply",
+                               "find": "the room was empty",
+                               "replace": "the room stood empty", "context": "",
+                               "format": "", "note": "as asked"},
+                       usage=NormalizedUsage(input_tokens=10, output_tokens=5)),
+    ])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    chat = f"/api/jobs/{job['id']}/corrections/chat"
+
+    first = client.post(chat, json={"item_id": item["id"],
+                                    "text": "change the room copy"})
+    assert first.status_code == 200, first.text
+    prop = first.json()["item"]["proposal"]
+    assert prop["after"] == "She opened the door, the room is empty."
+    # Nothing written yet — a proposal is a dry run.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room was empty." \
+        in story_text(corrected, "ue0")
+
+    # A follow-up: the second turn's prompt must carry the first exchange.
+    second = client.post(chat, json={"item_id": item["id"],
+                                     "text": "no, use 'stood empty'"})
+    assert second.status_code == 200, second.text
+    assert "THE CONVERSATION SO FAR" in provider.calls[1]["user"]
+    assert second.json()["item"]["proposal"]["after"] == \
+        "She opened the door, the room stood empty."
+
+    # Accept lands the current proposal and resolves the flag as a chat.
+    done = client.post(chat, json={"item_id": item["id"], "accept": True})
+    assert done.status_code == 200, done.text
+    assert done.json()["item"]["resolved"]["kind"] == "chat"
+    assert done.json()["counts"]["flags"] == 0
+    assert "She opened the door, the room stood empty." \
+        in story_text(corrected, "ue0")
+
+
+def test_accepting_with_no_proposal_yet_is_refused(client):
+    job, item = _flagged_job(client)
+    r = client.post(f"/api/jobs/{job['id']}/corrections/chat",
+                    json={"item_id": item["id"], "accept": True})
+    assert r.status_code == 409
+    assert "no proposed change" in r.json()["detail"]
+
+
 def test_the_manual_editor_reads_and_saves_a_line_over_http(client):
     job, item = _flagged_job(client)
     option = next(o for o in item["options"] if "room" in o["before"])

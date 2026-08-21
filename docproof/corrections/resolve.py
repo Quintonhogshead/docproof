@@ -582,14 +582,22 @@ for the designer's: carry out what was decided, or decline with the reason."""
 
 def adjudicate_instruction(item: dict, typed: str, provider: Provider, *,
                            model: str, usage: Usage,
-                           stories: list[Story]) -> tuple[Edit | None, str]:
+                           stories: list[Story],
+                           history: Sequence[dict] | None = None
+                           ) -> tuple[Edit | None, str]:
     """One typed answer, transcribed into the exact edit it decides.
 
     Returns `(edit, note)` when the model committed, `(None, reason)` when it
     declined — and a decline is an answer for the designer, not an error. The
     edit still has to anchor and apply like any other; nothing is written
-    here."""
-    user = _adjudicate_prompt(item, typed, stories)
+    here.
+
+    `history`, when given, is the earlier turns of a conversation about this
+    same flag (see `converse`): the designer's prior messages and the model's
+    prior replies. `typed` is then the latest message, carried out in light of
+    them, so a follow-up like "no, the other one" resolves against what was
+    proposed before."""
+    user = _adjudicate_prompt(item, typed, stories, history=history)
     try:
         result = provider.complete_structured(
             model=model, system=_ADJUDICATE_SYSTEM, user=user,
@@ -626,7 +634,8 @@ def adjudicate_instruction(item: dict, typed: str, provider: Provider, *,
     return edit, note
 
 
-def _adjudicate_prompt(item: dict, typed: str, stories: list[Story]) -> str:
+def _adjudicate_prompt(item: dict, typed: str, stories: list[Story], *,
+                       history: Sequence[dict] | None = None) -> str:
     lines = ["THE FLAGGED CORRECTION:"]
     if item.get("page"):
         lines.append(f"- marked on page {item['page']} of the proof")
@@ -656,7 +665,31 @@ def _adjudicate_prompt(item: dict, typed: str, stories: list[Story]) -> str:
             lines.append(f"{i}. [{where}] “{o.get('found', '')}” → "
                          f"“{o.get('replacement', '')}” in: "
                          f"“{(o.get('before') or '')[:300]}”")
-    lines += ["", "THE DESIGNER'S ANSWER — the decision to carry out:",
+    # The conversation so far, when this is a follow-up turn: the designer is
+    # refining across messages, and a referent like "the other one" or "also
+    # italicize it" only means anything against what was said and proposed
+    # before. The latest message is rendered separately below as the decision.
+    if history:
+        lines += ["", "THE CONVERSATION SO FAR — the designer is refining this "
+                      "over several messages; read their latest message (below) "
+                      "in light of these earlier turns:"]
+        for turn in history:
+            role = turn.get("role")
+            text = " ".join((turn.get("text") or "").split())
+            if role == "designer":
+                lines.append(f"- the designer said: “{text}”")
+            elif role == "model":
+                prop = turn.get("proposal") or {}
+                if prop.get("found") is not None and prop.get("replacement") \
+                        is not None:
+                    lines.append(f"- you proposed: “{prop.get('found', '')}” → "
+                                 f"“{prop.get('replacement', '')}”"
+                                 + (f" ({text})" if text else ""))
+                else:
+                    lines.append(f"- you replied: “{text}”")
+    lines += ["", ("THE DESIGNER'S LATEST MESSAGE — the decision to carry out:"
+                   if history else
+                   "THE DESIGNER'S ANSWER — the decision to carry out:"),
               f"“{typed.strip()}”", ""]
     passages = _context_passages(item, stories)
     if passages:
@@ -777,6 +810,62 @@ DELEGATED_INSTRUCTION = (
     "and say what is missing.")
 
 
+def _edit_to_placement(edit: Edit, stories: list[Story], *, page: int = 0,
+                       page_label: str = "", note: str = "") -> dict:
+    """Dry-run one adjudicated edit against the corrected book held in `stories`
+    and hand it back as the exact span it would change, in the same shape as a
+    queue option so the accept-a-placement path (`apply_option`) can write it.
+
+    Nothing is written to disk — `stories` is mutated in memory only, off a
+    snapshot taken first, so the caller passes freshly-read stories it then
+    discards. Raises ResolveError when the edit does not land as one clean,
+    visible span: nowhere, a whole-line removal, or a pure restyle with no
+    words changed (each of which the designer settles a different way)."""
+    snapshot = {s.story_id: [p.text for p in s.paragraphs] for s in stories}
+    outcomes, _ = apply_to_stories(stories, [edit])
+    mine = next((o for o in outcomes if o.edit.id == edit.id), None)
+    if mine is None or not mine.applied:
+        why = (mine.detail or mine.status) if mine is not None else "unknown"
+        raise ResolveError(f"the change could not be placed: {why}")
+    if any(o.applied and o.edit.id.endswith("-para") for o in outcomes):
+        raise ResolveError("that would remove a whole line — use Edit the "
+                           "line, or type the answer instead")
+    story = next(s for s in stories if s.story_id == mine.story_id)
+    lines = snapshot.get(mine.story_id) or []
+    if not 0 <= mine.paragraph < min(len(lines), len(story.paragraphs)):
+        raise ResolveError("the change could not be shown — type it as an "
+                           "answer instead")
+    before = lines[mine.paragraph]
+    after = story.paragraphs[mine.paragraph].text
+    if before == after:
+        raise ResolveError("that only re-styles the text — use Edit the line "
+                           "to set it by hand")
+    p = 0
+    while p < len(before) and p < len(after) and before[p] == after[p]:
+        p += 1
+    s = 0
+    while (s < len(before) - p and s < len(after) - p
+           and before[len(before) - 1 - s] == after[len(after) - 1 - s]):
+        s += 1
+    row = {
+        "id": "",                     # numbered into the item by the caller
+        "edit_id": "",
+        "story_id": mine.story_id,
+        "paragraph": mine.paragraph,
+        "start": p, "end": len(before) - s,
+        "found": before[p:len(before) - s],
+        "replacement": after[p:len(after) - s],
+        "before": before, "after": after,
+        "page": page,
+        "note": note,
+    }
+    # The folio the finished IDML shows for that page, exactly as every other
+    # placement row carries it — a placement's "page 43" must be the same 43.
+    if page_label:
+        row["page_label"] = page_label
+    return row
+
+
 def materialize_suggestion(item: dict, corrected: str | Path,
                            provider: Provider, *, model: str,
                            usage: Usage) -> dict:
@@ -794,50 +883,46 @@ def materialize_suggestion(item: dict, corrected: str | Path,
                                         usage=usage, stories=stories)
     if edit is None:
         raise ResolveError(f"the model declined — {note}")
-    snapshot = {s.story_id: [p.text for p in s.paragraphs] for s in stories}
-    outcomes, _ = apply_to_stories(stories, [edit])
-    mine = next((o for o in outcomes if o.edit.id == edit.id), None)
-    if mine is None or not mine.applied:
-        why = (mine.detail or mine.status) if mine is not None else "unknown"
-        raise ResolveError(f"the model's suggestion could not be placed: {why}")
-    if any(o.applied and o.edit.id.endswith("-para") for o in outcomes):
-        raise ResolveError("the model's suggestion would remove a whole line "
-                           "— use Edit the line, or type the answer instead")
-    story = next(s for s in stories if s.story_id == mine.story_id)
-    lines = snapshot.get(mine.story_id) or []
-    if not 0 <= mine.paragraph < min(len(lines), len(story.paragraphs)):
-        raise ResolveError("the model's suggestion could not be shown — type "
-                           "it as an answer instead")
-    before = lines[mine.paragraph]
-    after = story.paragraphs[mine.paragraph].text
-    if before == after:
-        raise ResolveError("the model's suggestion only re-styles the text — "
-                           "use Edit the line to set it by hand")
-    p = 0
-    while p < len(before) and p < len(after) and before[p] == after[p]:
-        p += 1
-    s = 0
-    while (s < len(before) - p and s < len(after) - p
-           and before[len(before) - 1 - s] == after[len(after) - 1 - s]):
-        s += 1
-    row = {
-        "id": "",                     # numbered into the item by the caller
-        "edit_id": "",
-        "story_id": mine.story_id,
-        "paragraph": mine.paragraph,
-        "start": p, "end": len(before) - s,
-        "found": before[p:len(before) - s],
-        "replacement": after[p:len(after) - s],
-        "before": before, "after": after,
-        "page": item.get("page") or 0,
-        "suggested": True,
-        "note": note,
-    }
-    # The folio the finished IDML shows for that page, exactly as every other
-    # placement row carries it — a suggestion's "page 43" must be the same 43.
-    if item.get("page_label"):
-        row["page_label"] = item["page_label"]
+    row = _edit_to_placement(edit, stories, page=item.get("page") or 0,
+                             page_label=item.get("page_label", ""), note=note)
+    row["suggested"] = True
     return row
+
+
+def converse(item: dict, corrected: str | Path, provider: Provider, *,
+             model: str, usage: Usage) -> dict:
+    """One turn of a per-flag conversation. Reads the whole thread off
+    `item["chat"]` — whose last entry is the designer's just-added message —
+    re-runs adjudication over it, and, when the result is a change that lands,
+    dry-runs it into a proposal the designer can accept. Returns
+    `{"reply": <the model's words>, "proposal": <placement> | None}`; writes
+    nothing. A decline, or a change that cannot be shown as one clean span, is
+    not an error here — it comes back as a reply the designer answers, so the
+    conversation continues rather than stopping."""
+    chat = item.get("chat") or []
+    if not chat or chat[-1].get("role") != "designer":
+        raise ResolveError("there is no message to answer")
+    typed = (chat[-1].get("text") or "").strip()
+    history = chat[:-1]
+    stories = read_stories(corrected)
+    edit, note = adjudicate_instruction(item, typed, provider, model=model,
+                                        usage=usage, stories=stories,
+                                        history=history)
+    if edit is None:
+        return {"reply": note or ("I couldn't turn that into a change — say it "
+                                  "differently, or name the exact words."),
+                "proposal": None}
+    try:
+        proposal = _edit_to_placement(
+            edit, stories, page=item.get("page") or 0,
+            page_label=item.get("page_label", ""), note=note)
+    except ResolveError as e:
+        return {"reply": (f"{note} " if note else "")
+                + f"But I couldn't place it here: {e}", "proposal": None}
+    proposal["from_chat"] = True
+    return {"reply": note or "Here's the change — accept it, or tell me what to "
+                             "adjust.",
+            "proposal": proposal}
 
 
 def queue_counts(payload: dict) -> dict:

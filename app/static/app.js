@@ -4843,8 +4843,10 @@ function fixItemCard(job, data, item) {
     doneLine.textContent = '✓ Resolved — '
       + (r.kind === 'manual' ? 'you edited the line yourself'
         : r.kind === 'suggestion' ? 'you applied the model’s suggestion'
-          : r.kind === 'typed' ? `you typed: “${r.text}”`
-            : 'you picked a placement') + (r.note ? ` (${r.note})` : '');
+          : r.kind === 'chat'
+            ? `you talked it through${r.text ? `: “${r.text}”` : ''}`
+            : r.kind === 'typed' ? `you typed: “${r.text}”`
+              : 'you picked a placement') + (r.note ? ` (${r.note})` : '');
     card.append(doneLine);
     if (r.removed_line) {
       const rl = document.createElement('p');
@@ -4990,8 +4992,126 @@ function fixItemCard(job, data, item) {
     if (e.key === 'Enter') submit();
   });
   nl.append(input, go);
-  card.append(nl, err);
+  card.append(nl, fixChatPanel(job, data, item), err);
   return card;
+}
+
+// A per-flag conversation with the model: the free-form escalation for a flag a
+// single typed answer can't settle. Each message re-runs adjudication with the
+// whole thread, so "no, the other one — and italicise it" resolves against what
+// was proposed before; the model answers with a highlighted proposal the
+// designer accepts or keeps refining. Nothing is written until Accept. The
+// thread lives in the report, so it survives a reload. Self-contained — it owns
+// its own busy and error state and updates itself in place, only re-rendering
+// the whole list on the terminal Accept (which moves the flag to Resolved).
+function fixChatPanel(job, data, item) {
+  const panel = document.createElement('details');
+  panel.className = 'fix-chat';
+  // Open when a conversation is already under way, so a reload shows it.
+  panel.open = !!(item.chat && item.chat.length);
+  const sum = document.createElement('summary');
+  sum.textContent = 'Talk it through with the model';
+  panel.append(sum);
+
+  const thread = document.createElement('div');
+  thread.className = 'fix-chat-thread';
+  const proposalBox = document.createElement('div');
+  proposalBox.className = 'fix-chat-proposal';
+  const err = document.createElement('p');
+  err.className = 'fix-error';
+  err.hidden = true;
+
+  const row = document.createElement('div');
+  row.className = 'fix-chat-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Say what to do — e.g. “no, the other one — and '
+    + 'italicise it”';
+  const send = document.createElement('button');
+  send.textContent = 'Send';
+  row.append(input, send);
+
+  const setBusy = (on, label) => {
+    input.disabled = on;
+    send.disabled = on;
+    proposalBox.querySelectorAll('button').forEach((b) => { b.disabled = on; });
+    send.textContent = on ? (label || 'Sending…') : 'Send';
+  };
+
+  // Redraw the transcript and the current proposal from the item, in place —
+  // no full-list re-render, so the input keeps focus across turns.
+  const rebuild = () => {
+    thread.textContent = '';
+    (item.chat || []).forEach((t) => {
+      const line = document.createElement('p');
+      line.className = t.role === 'designer'
+        ? 'fix-chat-msg is-designer' : 'fix-chat-msg is-model';
+      line.textContent = (t.role === 'designer' ? 'You: ' : 'Model: ')
+        + (t.text || '');
+      thread.append(line);
+    });
+    proposalBox.textContent = '';
+    if (item.proposal) {
+      const cap = document.createElement('p');
+      cap.className = 'muted fix-chat-cap';
+      cap.textContent = 'Proposed change'
+        + (item.proposal.note ? ` — ${item.proposal.note}` : '');
+      proposalBox.append(cap,
+        fixRedline(item.proposal.before, item.proposal.after));
+      const accept = document.createElement('button');
+      accept.className = 'primary';
+      accept.textContent = 'Accept this change';
+      accept.addEventListener('click', doAccept);
+      proposalBox.append(accept);
+    }
+  };
+
+  async function turn(body, busyLabel) {
+    err.hidden = true;
+    setBusy(true, busyLabel);
+    try {
+      const out = await api(`/api/jobs/${job.id}/corrections/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_id: item.id, ...body }),
+      });
+      return out;
+    } catch (e) {
+      setBusy(false);
+      err.textContent = e.message;
+      err.hidden = false;
+      return null;
+    }
+  }
+
+  async function doSend() {
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    const out = await turn({ text });
+    if (!out) return;
+    if (out.item) Object.assign(item, out.item);
+    input.value = '';
+    setBusy(false);
+    rebuild();
+    input.focus();
+  }
+
+  async function doAccept() {
+    const out = await turn({ accept: true }, 'Applying…');
+    if (!out) return;
+    // The flag is resolved now and moves to "Resolved here" — a full re-render
+    // is what carries it there.
+    const i = (data.queue || []).findIndex((q) => q.id === item.id);
+    if (i >= 0 && out.item) data.queue[i] = out.item;
+    renderFixList(job, data);
+  }
+
+  send.addEventListener('click', doSend);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
+
+  rebuild();
+  panel.append(thread, proposalBox, row, err);
+  return panel;
 }
 
 // One applied correction, reviewable in its line and editable — recorded as a

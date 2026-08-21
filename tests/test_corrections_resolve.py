@@ -450,7 +450,8 @@ def test_targets_fall_back_to_the_anchor_text(tmp_path):
 
 # --- relocation, touch-ups, and materialized suggestions -----------------------
 
-from docproof.corrections.resolve import (materialize_suggestion,  # noqa: E402
+from docproof.corrections.resolve import (converse,  # noqa: E402
+                                          materialize_suggestion,
                                           record_touchup)
 
 
@@ -542,3 +543,61 @@ def test_a_declined_suggestion_is_refused_with_the_reason(tmp_path):
         materialize_suggestion(payload["queue"][0], out.corrected_idml,
                                provider, model="fake-model", usage=Usage())
     assert "nothing settles which copy" in str(e.value)
+
+
+# --- the per-flag conversation -------------------------------------------------
+
+def test_a_chat_message_proposes_a_change_without_writing(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    item["chat"] = [{"role": "designer",
+                     "text": "change it to 'stood empty' in the room line"}]
+    provider = _scripted({"decision": "apply", "find": "the room was empty",
+                          "replace": "the room stood empty", "context": "",
+                          "format": "", "note": "done"})
+    turn = converse(item, out.corrected_idml, provider, model="m",
+                    usage=Usage())
+    assert turn["reply"] == "done"
+    assert turn["proposal"]["after"] == \
+        "She opened the door, the room stood empty."
+    assert turn["proposal"]["from_chat"] is True
+    # Nothing was written — the proposal is a dry run.
+    assert "She opened the door, the room was empty." \
+        in _texts(out.corrected_idml)
+
+
+def test_a_follow_up_turn_carries_the_whole_thread_into_the_prompt(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    # A prior turn proposed one thing; the designer now corrects it.
+    item["chat"] = [
+        {"role": "designer", "text": "change the room line"},
+        {"role": "model", "text": "swapped it",
+         "proposal": {"found": "the room was empty",
+                      "replacement": "the room is empty"}},
+        {"role": "designer", "text": "no, use 'stood empty' instead"},
+    ]
+    provider = _scripted({"decision": "apply", "find": "the room was empty",
+                          "replace": "the room stood empty", "context": "",
+                          "format": "", "note": "swapped"})
+    converse(item, out.corrected_idml, provider, model="m", usage=Usage())
+    user = provider.calls[0]["user"]
+    assert "THE CONVERSATION SO FAR" in user
+    assert "change the room line" in user            # an earlier designer turn
+    assert "the room is empty" in user               # the prior proposal, shown
+    # The latest message is the decision to carry out.
+    assert "no, use 'stood empty' instead" in user
+    assert "LATEST MESSAGE" in user
+
+
+def test_a_chat_decline_is_a_reply_not_an_error(tmp_path):
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = payload["queue"][0]
+    item["chat"] = [{"role": "designer", "text": "just handle it in InDesign"}]
+    provider = _scripted({"decision": "decline", "find": "", "replace": "",
+                          "context": "", "format": "",
+                          "note": "that's a layout call, not a text edit"})
+    turn = converse(item, out.corrected_idml, provider, model="m",
+                    usage=Usage())
+    assert turn["proposal"] is None
+    assert "layout call" in turn["reply"]
