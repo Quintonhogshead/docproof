@@ -4703,8 +4703,9 @@ function fixItemCard(job, data, item) {
   const where = document.createElement('b');
   // The page a designer navigates to: the InDesign folio when the run aligned
   // one, otherwise the proof's physical page — same rule as the report. The
-  // physical page rides along when the two differ, because the flag's own
-  // detail text may still speak in it ("the page 8 it was marked on").
+  // physical page rides along when the two differ, so the mark can still be
+  // found in the proof PDF (and runs archived before v0.99.9 wrote flag
+  // details in it).
   where.textContent = item.page_label
     ? `Page ${item.page_label}`
       + (item.page && String(item.page) !== item.page_label

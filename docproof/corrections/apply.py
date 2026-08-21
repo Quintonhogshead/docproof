@@ -579,8 +579,18 @@ def _pinned_candidate(edit: Edit, candidates: list, pins: dict,
     return None
 
 
+def _page_name(page: int, page_labels: dict[int, str] | None) -> str:
+    """The page as the designer's finished file numbers it — the InDesign folio
+    when the run aligned one, the proof's physical page otherwise. Every flag
+    detail that names a page goes through here, so the wording a person acts on
+    speaks the same page numbers as the IDML they open."""
+    label = (page_labels or {}).get(page)
+    return str(label) if label else str(page)
+
+
 def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
-           rebase: "_Rebase | None" = None, pins: dict | None = None):
+           rebase: "_Rebase | None" = None, pins: dict | None = None,
+           page_labels: dict[int, str] | None = None):
     """Locate the edit across all stories. Returns (story, paragraph, start, end)
     to apply, or an EditOutcome describing why it could not be applied.
 
@@ -602,11 +612,12 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
     on_page = _narrow_to_page(edit, candidates, scope)
     if on_page:
         candidates = on_page
-        where = f" on page {edit.page}"
+        where = f" on page {_page_name(edit.page, page_labels)}"
     elif edit.page and scope is not None:
-        failed.append(f"the page {edit.page} it was marked on"
+        page = _page_name(edit.page, page_labels)
+        failed.append(f"the page {page} it was marked on"
                       if scope.knows(edit.page)
-                      else f"the page {edit.page} it was marked on "
+                      else f"the page {page} it was marked on "
                            f"(which could not be placed in the book)")
 
     # An ordinal counted on a proof page says nothing about a book the page could
@@ -616,7 +627,8 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
     if edit.occurrence and edit.page and not on_page and len(candidates) > 1:
         return EditOutcome(
             edit, AMBIGUOUS, occurrences=len(candidates),
-            detail=f"the correction names the copy on page {edit.page}, and that "
+            detail=f"the correction names the copy on page "
+                   f"{_page_name(edit.page, page_labels)}, and that "
                    "page could not be placed in the book, so which copy it means "
                    "cannot be told")
 
@@ -656,7 +668,8 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
             return EditOutcome(
                 edit, OFF_PAGE, story_id=story.story_id, paragraph=para.index,
                 occurrences=1,
-                detail=f"the only place this text occurs is not on page {edit.page}, "
+                detail=f"the only place this text occurs is not on page "
+                       f"{_page_name(edit.page, page_labels)}, "
                        f"where the mark was made — applying it would land the "
                        f"correction on the wrong copy")
         return candidates[0]
@@ -1223,7 +1236,8 @@ def _destructive_deletion(edit: Edit) -> str:
 
 
 def apply_to_stories(stories: list[Story], edits: list[Edit], *,
-                     withheld: dict[str, str] | None = None, scope=None
+                     withheld: dict[str, str] | None = None, scope=None,
+                     page_labels: dict[int, str] | None = None
                      ) -> tuple[list[EditOutcome], set[str]]:
     """Apply edits to already-parsed stories, mutating them in place. Returns
     the per-edit outcomes and the set of changed story ids. The in-memory core
@@ -1233,7 +1247,9 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
     such an edit is never applied and comes back as a `WITHHELD` outcome for a
     human, so the gate's decision is surfaced, not silent. `scope` is an optional
     page map (see `pagemap`) that narrows each edit to the run of book text the
-    page it was marked on set."""
+    page it was marked on set. `page_labels` maps a proof page to the folio the
+    finished IDML shows for it, so a flag's wording names the page a designer
+    can actually turn to; matching itself never reads it."""
     outcomes: list[EditOutcome] = []
     changed: set[str] = set()
     touched = _Touched()
@@ -1261,13 +1277,13 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
         # its spelling, and an IDML can carry them.
         if edit.is_layout:
             outcomes.append(_apply_paragraph(edit, stories, cache, scope,
-                                             touched, rebase))
+                                             touched, rebase, page_labels))
             if outcomes[-1].applied:
                 changed.add(outcomes[-1].story_id)
             continue
         if edit.is_format:
             outcomes.append(_apply_format(edit, stories, cache, scope, touched,
-                                          rebase))
+                                          rebase, page_labels))
             if outcomes[-1].applied:
                 changed.add(outcomes[-1].story_id)
             continue
@@ -1275,7 +1291,8 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
             # Nothing is changed, but the note is *located* if it can be: a check a
             # designer cannot find is barely a check, and "a design request" with no
             # page was what these used to amount to.
-            placed = (_match(edit, stories, cache, scope, rebase)
+            placed = (_match(edit, stories, cache, scope, rebase,
+                             page_labels=page_labels)
                   if edit.find else None)
             if isinstance(placed, tuple):
                 story, para, _s, _e = placed
@@ -1326,7 +1343,8 @@ def apply_to_stories(stories: list[Story], edits: list[Edit], *,
             narrowed = _narrow_across_break(edit)
             if narrowed is not None:
                 edit = narrowed
-        found = _match(edit, stories, cache, scope, rebase, pins)
+        found = _match(edit, stories, cache, scope, rebase, pins,
+                       page_labels=page_labels)
         # A find the book no longer carries because this run changed it: the mark
         # was written against the page, not against the file as the corrections
         # before it left it. Looked for where it still exists — see
@@ -1507,7 +1525,8 @@ def _book_italic_style(stories: list[Story]) -> str:
 
 
 def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
-                  touched: "_Touched", rebase: "_Rebase") -> EditOutcome:
+                  touched: "_Touched", rebase: "_Rebase",
+                  page_labels: dict[int, str] | None = None) -> EditOutcome:
     """Style the span an edit names, leaving its text alone.
 
     Located exactly as a text edit is — the page it was marked on, the line, the
@@ -1530,7 +1549,7 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     `_format_attrs`. A book that sets its italics in a character style has them
     taken off the same way; a run marked with the quotation marks around it takes
     them with it, since a song title's quotes are set in whatever the title is."""
-    found = _match(edit, stories, cache, scope, rebase)
+    found = _match(edit, stories, cache, scope, rebase, page_labels=page_labels)
     if isinstance(found, EditOutcome):
         return found
     story, para, start, end = found
@@ -1552,7 +1571,8 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
 
 
 def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
-                     touched: "_Touched", rebase: "_Rebase") -> EditOutcome:
+                     touched: "_Touched", rebase: "_Rebase",
+                     page_labels: dict[int, str] | None = None) -> EditOutcome:
     """Carry out a whole-paragraph request: a forced break, a keep, a paragraph
     style, a paragraph inserted or removed.
 
@@ -1562,7 +1582,7 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
     giving it a range of its own (`Story.isolate`); a story whose shape will not
     allow that is flagged rather than styled across its neighbours."""
     breaks = edit.paragraph in (PARA_MERGE_NEXT, PARA_SPLIT_AT)
-    found = _match(edit, stories, cache, scope, rebase)
+    found = _match(edit, stories, cache, scope, rebase, page_labels=page_labels)
     if isinstance(found, EditOutcome):
         # An anchor that straddles a break is a failure for every other edit and
         # the normal case for these two: the reviewer quoted a sentence, and the
@@ -1655,18 +1675,20 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
 def apply_edits(src_idml: str | Path, dest_idml: str | Path,
                 edits: list[Edit], *,
                 withheld: dict[str, str] | None = None,
-                scope=None) -> ApplyReport:
+                scope=None,
+                page_labels: dict[int, str] | None = None) -> ApplyReport:
     """Apply every edit to a copy of `src_idml`, writing `dest_idml`.
 
     The source is never touched. Only stories that actually changed are
     rewritten; the rest of the package is copied byte for byte. `withheld` is the
     optional sanity-gate verdict — edit ids held back for a human, with a reason.
     `scope` is the optional page map that pins each edit to the page it was
-    marked on."""
+    marked on. `page_labels` maps a proof page to the finished file's folio, so
+    a flag's wording speaks the page numbers the designer's IDML shows."""
     stories = read_stories(src_idml)
     by_id = {s.story_id: s for s in stories}
     outcomes, changed = apply_to_stories(stories, edits, withheld=withheld,
-                                         scope=scope)
+                                         scope=scope, page_labels=page_labels)
     payload = {sid: by_id[sid].serialize() for sid in changed}
     rewrite_stories(src_idml, dest_idml, payload)
     return ApplyReport(outcomes=tuple(outcomes),

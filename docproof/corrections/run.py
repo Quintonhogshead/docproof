@@ -29,7 +29,7 @@ from ..providers import Provider
 from .apply import apply_edits
 from .escalate import escalate_queries
 from .fidelity import screen_edits
-from .idml import page_label_map, read_stories
+from .idml import page_label_map, read_page_folios, read_stories
 from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
@@ -37,8 +37,8 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
 from .instructions import (asks_for_a_change, enforce_note_fidelity,
                            fill_edit_occurrences, house_typography,
                            widen_edits_to_marks)
-from .pagemap import (build_page_map, page_book_text, paragraph_lookup,
-                      printed_folio_labels)
+from .pagemap import (anchored_folio_labels, build_page_map, page_book_text,
+                      paragraph_lookup, printed_folio_labels)
 from .parse import ParseResult, parse_edits
 from .report import write_report
 from .sanity import review_edits
@@ -212,6 +212,28 @@ def _checks(apply_report: ApplyReport | None) -> tuple[CheckItem, ...]:
                 why=o.edit.instruction or o.edit.paragraph,
                 edit_ids=(o.edit.id,)))
     return tuple(out)
+
+
+def _label_ladder(idml_path: str | Path, pages_total: int,
+                  page_texts) -> tuple[dict[int, str], str]:
+    """`(page_labels, source)` — the folio each 1-based proof page should be
+    shown as, and where the labels came from.
+
+    The ladder, best evidence first: the file's spreads when the page counts
+    match exactly (`spreads`); the file's spreads anchored to the proof by the
+    folios its pages print, for a proof whose count differs (`anchored`); the
+    printed folios alone, for a file whose spreads could not be read or aligned
+    (`printed`). Empty when none holds, and the physical page stands. The first
+    two label with the file's own `<Page Name>` strings, so what the report says
+    is — exactly — what the designer's finished IDML shows."""
+    labels = page_label_map(idml_path, pages_total)
+    if labels:
+        return labels, "spreads"
+    labels = anchored_folio_labels(read_page_folios(idml_path), page_texts)
+    if labels:
+        return labels, "anchored"
+    labels = printed_folio_labels(page_texts)
+    return labels, ("printed" if labels else "")
 
 
 def corrected_name(src_idml: str | Path) -> str:
@@ -426,6 +448,24 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
                       for p in cited}
         note("pagemap", pages_placed, pages_total)
 
+    # The InDesign folio each proof page should be shown as, so a mark reported on
+    # "page 7" sends the designer to the page InDesign calls 7 — not the seventh
+    # leaf of a proof whose front matter is numbered apart. The spreads' own
+    # folios lead, trusted outright when the file and the proof have the same
+    # number of pages; a proof that carries a page the file does not (a cover, a
+    # spread exported oddly) breaks that one-to-one, and the file's folios are
+    # instead *anchored* to the proof by the folios its pages print — so the
+    # labels are still the file's own names, roman front matter included. Only
+    # when neither aligns do the printed folios alone take over, and only past
+    # that does the physical page stand — and the log says which. Computed up
+    # front, before the gates and the apply, so every flag's wording already
+    # speaks in the pages the finished IDML shows.
+    label_source = ""
+    page_labels: dict[int, str] = {}
+    if pages_total:
+        page_labels, label_source = _label_ladder(src_idml, pages_total,
+                                                  page_texts)
+
     # The fidelity gate: a deterministic read of each edit against the mark it came
     # from, before anything is applied and before the model passes run. It
     # reclassifies a question the extractor answered as a concrete change back into
@@ -438,7 +478,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     fidelity_withheld: dict[str, str] = {}
     if comments:
         edits, fidelity_withheld = screen_edits(
-            edits, comments, book_pages=book_pages, pdf_pages=page_texts)
+            edits, comments, book_pages=book_pages, pdf_pages=page_texts,
+            page_labels=page_labels)
 
     # The second look runs before the sanity gate on purpose: what it settles
     # becomes an ordinary proposed edit, and the gate then reads the model's
@@ -529,7 +570,7 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     note("applying", 0, len(edits))
     corrected = out / (dest_name or corrected_name(src_idml))
     apply_report = apply_edits(src_idml, corrected, edits, withheld=withheld,
-                               scope=scope)
+                               scope=scope, page_labels=page_labels)
     # Self-check: our own output, verified against the same list (withholding the
     # same edits, so a held-back one is not read as an unaccounted change). Clean
     # by construction unless `apply` has a bug — then the report says so instead
@@ -542,26 +583,27 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     dispositions = _reconcile_comments(comments or (), edits,
                                        _apply_status_of(apply_report))
     checks = _checks(apply_report)
-    # The InDesign folio each proof page should be shown as, so a mark reported on
-    # "page 7" sends the designer to the page InDesign calls 7 — not the seventh
-    # leaf of a proof whose front matter is numbered apart. The spreads' own
-    # folios lead, trusted only when the file and the proof have the same number
-    # of pages; a proof that carries a page the file does not (a cover, a spread
-    # exported oddly) breaks that one-to-one, and the folios each page *prints* —
-    # read off the proof's own text, validated as one consistent run — take over.
-    # Only when both fail does the physical page stand, and the log says which.
-    label_source = ""
-    page_labels: dict[int, str] = {}
+    # The labels were read from the source file; the file the designer opens is
+    # `corrected`. A text edit never touches a spread (`rewrite_stories` copies
+    # everything but the changed stories byte for byte), so the two must carry
+    # identical folios — but the promise the report makes is about the finished
+    # file, so the labels are re-read from it and it wins any disagreement. This
+    # is also what keeps the labels exact through in-app resolutions: those edit
+    # `corrected`'s stories the same spread-preserving way, so the folios every
+    # page number here points at cannot drift out from under the report.
     if pages_total:
-        page_labels = page_label_map(src_idml, pages_total)
-        label_source = "spreads" if page_labels else ""
-        if not page_labels:
-            page_labels = printed_folio_labels(page_texts)
-            label_source = "printed" if page_labels else ""
+        final_labels, final_source = _label_ladder(corrected, pages_total,
+                                                   page_texts)
+        if final_labels:
+            if page_labels and final_labels != page_labels:
+                log.warning(
+                    "Page labels re-read from %s differ from the source "
+                    "file's — using the finished file's.", corrected.name)
+            page_labels, label_source = final_labels, final_source
         if not page_labels:
             log.warning(
-                "No page labels for %s: the file's folio count and the proof's "
-                "%d page(s) do not match, and no consistent printed folios "
+                "No page labels for %s: the file's folios could not be aligned "
+                "to the proof's %d page(s), and no consistent printed folios "
                 "could be read off the proof — reported pages are the proof's "
                 "physical pages.", Path(src_idml).name, pages_total)
         else:

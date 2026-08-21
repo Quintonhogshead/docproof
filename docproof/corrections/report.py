@@ -388,7 +388,10 @@ def _markdown(d: dict) -> str:
 
     # What the designer settled from the review screen — a clicked placement, or
     # a typed answer a model transcribed. Each is in the file now; each is
-    # listed so the log says who decided it.
+    # listed so the log says who decided it. The queue item behind each carries
+    # the page, so the log names it in the finished file's own folio — the same
+    # number every other section speaks in.
+    by_item = {q.get("id"): q for q in d.get("queue") or []}
     if resolutions:
         L.append(f"## Resolved in review — {len(resolutions)}\n")
         L.append("These flags were resolved on the review screen; the changes "
@@ -399,6 +402,10 @@ def _markdown(d: dict) -> str:
                    if r.get("kind") == "suggestion"
                    else f"typed: “{_preview(r['text'])}”" if r.get("text")
                    else "picked a placement")
+            q = by_item.get(r.get("item_id")) or {}
+            where = _page_where(q)
+            if where != "—":
+                how = f"**{where}** — {how}"
             L.append(f"- {how}:")
             if r.get("before"):
                 L.append(f"  - was: “{_preview(r['before'], 300)}”")
@@ -412,7 +419,6 @@ def _markdown(d: dict) -> str:
     # awaiting anyone — a decision, recorded so the printable log shows who
     # made it and what was left as set.
     if set_aside:
-        by_item = {q.get("id"): q for q in d.get("queue") or []}
         L.append(f"## Set aside in review — {len(set_aside)}\n")
         L.append("The designer chose to leave each of these as set (or to "
                  "handle it in InDesign). Nothing was changed.\n")
@@ -555,7 +561,6 @@ def _markdown(d: dict) -> str:
         # still balance. A resolution of a comment that never became an edit
         # applies a change no parsed id stands behind, so it joins the left
         # side like the other synthetic outcomes.
-        by_item = {q.get("id"): q for q in d.get("queue") or []}
         # A touch-up answers no flag and applies no correction from the list,
         # so it stands outside the equation entirely.
         no_edit = sum(1 for r in resolutions

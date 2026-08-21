@@ -518,6 +518,21 @@ def test_a_suggestion_materializes_as_a_clickable_placement(tmp_path):
     assert "Decide this one" in provider.calls[0]["user"]
 
 
+def test_a_suggestion_carries_the_folio_its_item_shows(tmp_path):
+    # The suggested placement's page must read exactly like every other row's —
+    # the folio the finished IDML shows, riding along from the item.
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    item = {**payload["queue"][0], "page": 7, "page_label": "1"}
+    provider = _scripted({"decision": "apply",
+                          "find": "the room was empty",
+                          "replace": "the room is empty",
+                          "context": "", "format": "", "note": "the room copy"})
+    option = materialize_suggestion(item, out.corrected_idml, provider,
+                                    model="fake-model", usage=Usage())
+    assert option["page"] == 7
+    assert option["page_label"] == "1"
+
+
 def test_a_declined_suggestion_is_refused_with_the_reason(tmp_path):
     out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
     provider = _scripted({"decision": "decline", "find": "", "replace": "",
