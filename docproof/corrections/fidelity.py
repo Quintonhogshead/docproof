@@ -60,12 +60,15 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
 
     `comments` is the reviewer comment list (dicts or `PdfComment`s). `book_pages`
     maps a proof page to the book's own text for it (from `pagemap.page_book_text`);
-    without it the on-page check cannot run. `pdf_pages` is unused today and reserved
-    for the offset-precise checks."""
+    without it the on-page check cannot run. `pdf_pages` is the proof's own rendered
+    text per page (1-based by position), which the on-page check consults as direct
+    evidence of what a cited page actually holds before it calls an edit a wrong
+    copy — the page map can under-cover a page, and the proof cannot."""
     by_id = _comments_by_id(comments)
     if not by_id:
         return list(edits), {}
     pages = book_pages or {}
+    proof = pdf_pages or ()
     out: list[Edit] = []
     withheld: dict[str, str] = {}
     for e in edits:
@@ -99,7 +102,7 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
             out.append(_replace(e, kind=JUDGMENT))
             continue
 
-        reason = (_off_page(e, pages)
+        reason = (_off_page(e, pages, proof)
                   or _outside_mark(e, anchor, highlighted)
                   or _note_vs_diff(e, note))
         if reason:
@@ -144,13 +147,22 @@ def _cget(comment, field: str, default=""):
 _PAGE_WINDOW = 1
 
 
-def _off_page(edit: Edit, book_pages: dict) -> str | None:
+def _off_page(edit: Edit, book_pages: dict, pdf_pages=()) -> str | None:
     """A withhold reason when the edit's text is not on the page the mark was made
     on (nor a page either side of it) yet is elsewhere in the book — the "quoted the
     wrong sentence / the identical line on another page" failure.
 
     Only fires when the cited page was placed (its text is in `book_pages`): an
-    unplaced page tells us nothing, so the check declines rather than guesses."""
+    unplaced page tells us nothing, so the check declines rather than guesses.
+
+    And only when the proof itself agrees the text is elsewhere. `book_pages` is the
+    page map's *alignment* of the cited page, which is a best-effort narrower and can
+    under-cover a page — a line near the foot, a text box, a run the artifacts around
+    it kept from aligning. The proof's own rendered page (`pdf_pages`) is the direct
+    record of what page N holds, so when the marked text is right there on the proof's
+    page N the map simply missed it, and calling it a wrong copy would let a bad
+    alignment cost a correction — which the page map is expressly never allowed to do.
+    So the proof exonerates before this flags."""
     page = edit.page
     if not page or not edit.find:
         return None
@@ -165,11 +177,29 @@ def _off_page(edit: Edit, book_pages: dict) -> str | None:
     elsewhere = any(all_spans(text, edit.find)
                     for p, text in book_pages.items()
                     if abs(p - page) > _PAGE_WINDOW)
-    if elsewhere:
-        return (f"the text this edit changes is not on page {page}, where the mark "
-                f"was made — it was found on another page, so the mark was matched "
-                f"to the wrong copy")
-    return None
+    if not elsewhere:
+        return None
+    # The alignment says elsewhere; ask the proof. If the marked text sits on the
+    # proof's own page N (or a neighbour, for a foot-of-page line the book set on the
+    # next), the page map under-covered it and this is the right copy after all.
+    if _on_proof_page(edit.find, pdf_pages, page):
+        return None
+    return (f"the text this edit changes is not on page {page}, where the mark "
+            f"was made — it was found on another page, so the mark was matched "
+            f"to the wrong copy")
+
+
+def _on_proof_page(find: str, pdf_pages, page: int) -> bool:
+    """Whether `find` appears on the proof's own rendering of `page` (or a page
+    either side). `pdf_pages` is 1-based by position; empty or out of range simply
+    yields no exoneration, so the caller falls back to the alignment's verdict."""
+    if not pdf_pages:
+        return False
+    n = len(pdf_pages)
+    here = "".join(pdf_pages[p - 1]
+                   for p in range(page - _PAGE_WINDOW, page + _PAGE_WINDOW + 1)
+                   if 1 <= p <= n)
+    return bool(here.strip()) and bool(all_spans(here, find))
 
 
 def _outside_mark(edit: Edit, anchor: str, highlighted: bool) -> str | None:

@@ -61,16 +61,28 @@ class PageMap:
     whether a candidate match lies on it. Both are cheap — the work happens once,
     in `build_page_map`."""
 
-    __slots__ = ("_ranges", "_pages")
+    __slots__ = ("_ranges", "_pages", "_proof")
 
     def __init__(self, ranges: dict[tuple[int, str, int], list[tuple[int, int]]],
-                 pages: set[int]) -> None:
+                 pages: set[int], proof: tuple[str, ...] = ()) -> None:
         self._ranges = ranges
         self._pages = pages
+        self._proof = proof
 
     def knows(self, page: int) -> bool:
         """Whether this page could be placed in the book at all."""
         return page in self._pages
+
+    def proof_text(self, page: int) -> str:
+        """The proof's own rendered text for `page` (1-based), or "" out of range.
+
+        This is what the *proof* printed on the page, independent of where the map
+        managed to align it in the book — the direct record a caller consults before
+        deciding an edit is on the wrong page. The alignment can under-cover a page;
+        the proof cannot."""
+        if 1 <= page <= len(self._proof):
+            return self._proof[page - 1]
+        return ""
 
     def contains(self, page: int, story_id: str, paragraph: int,
                  start: int, end: int) -> bool:
@@ -273,9 +285,10 @@ def build_page_map(stories: list[Story], page_texts: list[str]) -> PageMap:
     somewhere plausible."""
     if not page_texts:
         return PageMap({}, set())
+    proof = tuple(page_texts)
     stream = _Stream(stories)
     if not stream.text:
-        return PageMap({}, set())
+        return PageMap({}, set(), proof)
 
     ranges: dict[tuple[int, str, int], list[tuple[int, int]]] = {}
     placed: set[int] = set()
@@ -298,7 +311,7 @@ def build_page_map(stories: list[Story], page_texts: list[str]) -> PageMap:
         cursor = max(0, delta + len(view) - len(view) // 2)
     log.info("Page map: placed %d of %d page(s) in the book",
              len(placed), len(page_texts))
-    return PageMap(ranges, placed)
+    return PageMap(ranges, placed, proof)
 
 
 def _place(book: str, page: str, cursor: int) -> int | None:
