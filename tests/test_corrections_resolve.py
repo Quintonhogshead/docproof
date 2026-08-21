@@ -452,7 +452,13 @@ def test_targets_fall_back_to_the_anchor_text(tmp_path):
 
 from docproof.corrections.resolve import (converse,  # noqa: E402
                                           materialize_suggestion,
-                                          record_touchup)
+                                          record_agent_edit, run_agent,
+                                          apply_option, record_touchup)
+
+
+def _step(d: dict) -> ProviderResult:
+    return ProviderResult(parsed=d, usage=NormalizedUsage(input_tokens=10,
+                                                          output_tokens=5))
 
 
 def test_paragraph_state_relocates_a_renumbered_line(tmp_path):
@@ -601,3 +607,94 @@ def test_a_chat_decline_is_a_reply_not_an_error(tmp_path):
                     usage=Usage())
     assert turn["proposal"] is None
     assert "layout call" in turn["reply"]
+
+
+# --- the run-level agent -------------------------------------------------------
+
+def test_the_agent_searches_then_proposes_then_replies(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        _step({"action": "search", "query": "road"}),
+        _step({"action": "propose", "find": "the road went on forever",
+               "replace": "the lane went on forever",
+               "why": "the designer wants 'lane'"}),
+        _step({"action": "reply", "text": "Proposed one change to the road "
+                                          "line."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="change 'road' to 'lane'")
+    assert res["reply"].startswith("Proposed")
+    assert len(provider.calls) == 3          # search, propose, reply
+    assert len(res["proposals"]) == 1
+    p = res["proposals"][0]
+    assert p["after"] == "It was late, we were tired and the lane went on " \
+                         "forever."
+    assert p["from_agent"] is True and p["why"] == "the designer wants 'lane'"
+    # Nothing was written — a proposal is a dry run.
+    assert "It was late, we were tired and the road went on forever." \
+        in _texts(out.corrected_idml)
+
+
+def test_an_unplaceable_proposal_is_skipped_not_fatal(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        _step({"action": "propose", "find": "text nowhere in the book",
+               "replace": "x", "why": "won't anchor"}),
+        _step({"action": "reply", "text": "Couldn't place that one."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="try something")
+    assert res["proposals"] == []            # the bad one was dropped
+    assert res["reply"] == "Couldn't place that one."
+
+
+def test_the_agent_raises_a_flag_as_advice(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        _step({"action": "flag", "note": "the tense shifts here — an author "
+                                         "call", "quote": "the room was empty"}),
+        _step({"action": "reply", "text": "Flagged one thing for you."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="check the tenses")
+    assert res["proposals"] == []
+    assert len(res["flags"]) == 1
+    assert "tense shifts" in res["flags"][0]["note"]
+
+
+def test_the_agent_loop_is_bounded(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    # A provider that only ever searches would loop forever without the cap.
+    provider = FakeProvider([_step({"action": "search", "query": "the"})
+                             for _ in range(50)])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="loop", max_steps=5)
+    assert len(provider.calls) == 5          # stopped at the cap
+    assert res["proposals"] == [] and "for now" in res["reply"]
+
+
+def test_accepting_an_agent_proposal_writes_and_logs_it(tmp_path):
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    report = json.loads(out.report_json.read_text("utf-8"))
+    provider = FakeProvider([
+        _step({"action": "propose", "find": "the road went on forever",
+               "replace": "the lane went on forever", "why": "wants 'lane'"}),
+        _step({"action": "reply", "text": "Done."}),
+    ])
+    res = run_agent(report, out.corrected_idml, provider, model="m",
+                    usage=Usage(), message="road to lane")
+    proposal = {**res["proposals"][0], "id": "agent-1"}
+    result = apply_option(out.corrected_idml, proposal)
+    updated = record_agent_edit(out.report_json, proposal, result)
+    # The file carries the change now.
+    assert "It was late, we were tired and the lane went on forever." \
+        in _texts(out.corrected_idml)
+    # And it is logged as an agent change, with the reason.
+    agent_res = [r for r in updated["resolutions"] if r["kind"] == "agent"]
+    assert len(agent_res) == 1 and agent_res[0]["why"] == "wants 'lane'"
+    md = (out.report_json.parent / "corrections_notes.md").read_text("utf-8")
+    assert "accepted the agent's change" in md

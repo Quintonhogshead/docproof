@@ -925,6 +925,273 @@ def converse(item: dict, corrected: str | Path, provider: Provider, *,
             "proposal": proposal}
 
 
+# --- the run-level agent -------------------------------------------------------
+# A conversation not about one flag but about the whole book: the designer brings
+# a fresh list of desires ("make every 'grey' British-spelled", "the captain is
+# addressed as 'sir' — check that's consistent"), and the model works over the
+# corrected book with tools. It is a genuine agent loop, but a bounded and safe
+# one: the only thing it can DO is search the book, PROPOSE an exact edit, or
+# raise a note. Every proposal is dry-run into the same placement a clicked
+# option is, and written only when the designer accepts it — so the agent, like
+# every other tier, only ever proposes; the deterministic apply/verify places.
+# The provider exposes one primitive (structured completion), so the loop is a
+# structured-action loop: each step the model emits one action, the server
+# carries it out and feeds the result back, until the model replies or the step
+# cap is hit.
+
+AGENT_MAX_STEPS = 12
+AGENT_MAX_OUTPUT_TOKENS = 8000
+# How much of the open-flag list and each search to show, so a book with
+# hundreds of flags still fits one bounded prompt.
+_AGENT_MAX_FLAGS = 40
+_AGENT_MAX_HITS = 8
+_AGENT_SNIPPET_PAD = 48
+
+
+class _AgentStep(BaseModel):
+    action: Literal["search", "propose", "flag", "reply"]
+    # search
+    query: str = ""
+    # propose (an exact edit, copied verbatim from the book)
+    find: str = ""
+    replace: str = ""
+    context: str = ""
+    format: str = ""
+    # propose / flag: why this change or note
+    why: str = ""
+    # flag (a note for a person — the agent advises, it does not resolve)
+    note: str = ""
+    quote: str = ""
+    # reply (the message to the designer; ends the turn)
+    text: str = ""
+
+
+_AGENT_SYSTEM = """\
+You are a book designer's assistant, working over a book that has already been \
+corrected. The designer will bring you a request in plain words — a consistency \
+sweep, a spelling convention, a question about the text — and you work it out \
+against the book itself, one action at a time.
+
+You have four actions. Emit exactly one per step:
+- search: look for a word or phrase in the book. Use it to gather evidence \
+before you propose anything — the book is the authority, not your memory.
+- propose: offer one exact edit. `find` MUST be copied character for character \
+from the book's own text (from a search result), never retyped from the request \
+or from memory; `replace` is that text with the change made, in the book's own \
+marks (curly quotes, the em dash —). `context` is a longer verbatim run around \
+the find when the find could occur more than once. `format` is "italic"/"roman" \
+when the change is about how text is set. Each proposal is shown to the designer \
+as a highlighted before/after they accept or reject — you never change the file \
+yourself. `why` says what the edit does, in a short clause.
+- flag: raise a note for the designer about something you can't or shouldn't \
+change on your own (a judgment call, an authorial choice). `note` is the note, \
+`quote` the text it's about. This advises; it does not resolve anything.
+- reply: speak to the designer — an answer, a summary of what you proposed, a \
+question. This ends your turn, so reply only when you're done acting.
+
+Rules that do not bend:
+- Propose only changes the designer's request actually calls for. Do not invent \
+corrections of your own, do not "improve" the prose, do not touch the author's \
+voice. When in doubt, flag rather than propose.
+- Every find is quoted from the book, verbatim. If you have not searched and \
+seen the exact text, search first.
+- Be economical: a handful of searches and proposals, then reply. Do not loop."""
+
+
+def _agent_search(stories: list[Story], query: str, *,
+                  max_hits: int = _AGENT_MAX_HITS) -> list[str]:
+    """Every occurrence of `query` in the book, as located snippets — the agent's
+    one window into text it has not been handed. Partial-word matching, so a
+    search for a stem finds its inflections; bounded, in reading order."""
+    q = " ".join((query or "").split())
+    if len(q) < 2:
+        return []
+    cache = IndexCache()
+    hits: list[str] = []
+    for story in stories:
+        for para in story.paragraphs:
+            for a, b in all_spans(para.text, q, cache=cache, partial_words=True):
+                lo = max(0, a - _AGENT_SNIPPET_PAD)
+                hi = min(len(para.text), b + _AGENT_SNIPPET_PAD)
+                hits.append(
+                    f"[story {story.story_id} ¶{para.index}] "
+                    + ("…" if lo else "") + para.text[lo:hi].strip()
+                    + ("…" if hi < len(para.text) else ""))
+                if len(hits) >= max_hits:
+                    return hits
+    return hits
+
+
+def _agent_flags_block(payload: dict) -> list[str]:
+    """The open flags, compact — what a person still owns, so the agent's work
+    sits in the context of the run rather than beside it. Bounded; the rest are
+    a count."""
+    queue = [q for q in (payload.get("queue") or []) if not q.get("resolved")]
+    if not queue:
+        return ["(no flags are still open.)"]
+    out = []
+    for q in queue[:_AGENT_MAX_FLAGS]:
+        where = (f"page {q['page_label']}" if q.get("page_label")
+                 else f"page {q['page']}" if q.get("page") else "no page")
+        note = " ".join((q.get("instruction") or q.get("why") or "").split())
+        anchor = " ".join((q.get("anchor") or "").split())
+        out.append(f"- [{where}] “{note[:120]}”"
+                   + (f" on “{anchor[:80]}”" if anchor else ""))
+    if len(queue) > _AGENT_MAX_FLAGS:
+        out.append(f"- …and {len(queue) - _AGENT_MAX_FLAGS} more open flag(s).")
+    return out
+
+
+def _agent_prompt(payload: dict, history: Sequence[dict], message: str,
+                  transcript: Sequence[tuple[dict, str]]) -> str:
+    ap = payload.get("apply") or {}
+    lines = [f"THE BOOK: {payload.get('source_name', 'the book')}",
+             f"THE RUN SO FAR: {ap.get('applied', 0)} correction(s) applied, "
+             f"{len([o for o in ap.get('flagged') or [] if not o.get('resolved')])}"
+             " flagged for a human.", "",
+             "THE OPEN FLAGS (a person still owns these):"]
+    lines += _agent_flags_block(payload)
+    if history:
+        lines += ["", "THE CONVERSATION SO FAR:"]
+        for turn in history:
+            who = "designer" if turn.get("role") == "designer" else "you"
+            lines.append(f"- {who}: “{' '.join((turn.get('text') or '').split())}”")
+    lines += ["", "THE DESIGNER'S REQUEST — what to work on now:",
+              f"“{message.strip()}”"]
+    if transcript:
+        lines += ["", "WHAT YOU'VE DONE THIS TURN (your actions and their "
+                      "results):"]
+        for i, (step, result) in enumerate(transcript, 1):
+            act = step.get("action")
+            if act == "search":
+                lines.append(f"{i}. searched “{step.get('query', '')}” → "
+                             f"{result}")
+            elif act == "propose":
+                lines.append(f"{i}. proposed “{step.get('find', '')}” → "
+                             f"“{step.get('replace', '')}” → {result}")
+            elif act == "flag":
+                lines.append(f"{i}. flagged: {result}")
+    lines += ["", "Emit your next action. Search the book before you propose; "
+                  "reply when you are done."]
+    return "\n".join(lines)
+
+
+def run_agent(payload: dict, corrected: str | Path, provider: Provider, *,
+              model: str, usage: Usage, message: str,
+              max_steps: int = AGENT_MAX_STEPS) -> dict:
+    """Run one designer request over the whole book as a bounded agent loop.
+
+    Returns `{"reply": <the model's message>, "proposals": [<placement>...],
+    "flags": [<note>...]}`. Writes nothing: each proposal is a dry run the
+    designer accepts separately. Search reads the book; propose dry-runs an
+    edit into a placement (the same shape a clicked option is, so accepting it
+    later is the same deterministic write); flag raises an advisory note. The
+    loop ends on the model's `reply`, or when it has taken `max_steps` actions —
+    a runaway backstop, reported as a plain reply rather than an error."""
+    stories = read_stories(corrected)
+    history = (payload.get("agent") or {}).get("chat") or []
+    schema = strict_json_schema(_AgentStep)
+    transcript: list[tuple[dict, str]] = []
+    proposals: list[dict] = []
+    flags: list[dict] = []
+    for _ in range(max_steps):
+        user = _agent_prompt(payload, history, message, transcript)
+        try:
+            result = provider.complete_structured(
+                model=model, system=_AGENT_SYSTEM, user=user, schema=schema,
+                schema_name="agent_step", max_tokens=AGENT_MAX_OUTPUT_TOKENS)
+        except Exception as e:             # noqa: BLE001 - surfaced to the screen
+            log.warning("Agent step failed", exc_info=True)
+            raise ResolveError(f"the model could not be reached: {e}")
+        usage.add(result.usage, model=model)
+        if result.stop_reason != "ok" or result.parsed is None:
+            return {"reply": "I couldn't continue that — try rephrasing the "
+                             "request.", "proposals": proposals, "flags": flags}
+        step = _AgentStep.model_validate(result.parsed)
+        if step.action == "reply":
+            return {"reply": (step.text.strip()
+                              or "Done — see the proposals above."),
+                    "proposals": proposals, "flags": flags}
+        if step.action == "search":
+            hits = _agent_search(stories, step.query)
+            summary = (f"{len(hits)} hit(s): " + " | ".join(hits)) if hits \
+                else "no hits in the book."
+            transcript.append((step.model_dump(), summary))
+        elif step.action == "propose":
+            find = (step.find or "").strip("\n")
+            fmt = (step.format or "").strip().lower()
+            if fmt and fmt not in FORMATS:
+                fmt = ""
+            if len(find.strip()) < MIN_FIND:
+                transcript.append((step.model_dump(),
+                                   "rejected: the find is too short to anchor — "
+                                   "quote more of the book's exact text."))
+                continue
+            edit = Edit(id=f"agent-p{len(proposals) + 1}", find=find,
+                        replace=(step.replace if not fmt or step.replace
+                                 else find),
+                        context=(step.context or "").strip("\n"),
+                        kind=MECHANICAL, format=fmt,
+                        instruction=(step.why or "").strip())
+            try:
+                placement = _edit_to_placement(edit, read_stories(corrected),
+                                               note=(step.why or "").strip())
+            except ResolveError as e:
+                transcript.append((step.model_dump(),
+                                   f"could not place that: {e}"))
+                continue
+            placement["id"] = f"agent-p{len(proposals) + 1}"
+            placement["why"] = (step.why or "").strip()
+            placement["from_agent"] = True
+            proposals.append(placement)
+            transcript.append((step.model_dump(),
+                               f"lands as “{placement['before']}” → "
+                               f"“{placement['after']}”"))
+        elif step.action == "flag":
+            note = (step.note or step.why or "").strip()
+            if note:
+                flags.append({"note": note, "quote": (step.quote or "").strip(),
+                              "why": (step.why or "").strip()})
+            transcript.append((step.model_dump(), note or "(empty note)"))
+    return {"reply": "I've done what I can for now — take a look at what I "
+                     "proposed, and tell me if you'd like more.",
+            "proposals": proposals, "flags": flags}
+
+
+def record_agent_edit(json_path: str | Path, proposal: dict, result: dict) -> dict:
+    """Fold one accepted agent proposal into `corrections.json`. It is a new
+    change to the book the designer asked the agent for — not the resolution of
+    a run flag — so it joins the change log and the resolutions (kind "agent")
+    the way a touch-up does, moving no flag counter and staying outside the
+    verification equation, which is about the reviewer's own list."""
+    json_path = Path(json_path)
+    payload = json.loads(json_path.read_text("utf-8"))
+    resolution = {"kind": "agent", "item_id": "",
+                  "why": proposal.get("why", ""),
+                  "note": proposal.get("note", ""),
+                  "at": datetime.now(timezone.utc).isoformat(), **result}
+    payload.setdefault("resolutions", []).append(resolution)
+    payload.setdefault("changes", []).append({
+        "story_id": result.get("story_id", ""),
+        "paragraph": result.get("paragraph", -1),
+        "before": result.get("before", ""),
+        "after": result.get("after", ""),
+        "edit_ids": [],
+        "instruction": "proposed by the agent, accepted in review"
+                       + (f" — {proposal.get('why')}" if proposal.get("why")
+                          else ""),
+        "formatting": "",
+        "resolved_in_review": True,
+    })
+    # The proposal is spent — drop it from the agent's pending list so a reload
+    # does not offer it again.
+    agent = payload.setdefault("agent", {})
+    agent["proposals"] = [p for p in agent.get("proposals") or []
+                          if p.get("id") != proposal.get("id")]
+    _write_updated(json_path, payload)
+    return payload
+
+
 def queue_counts(payload: dict) -> dict:
     """The card's counters, read off the report as it now stands: edits applied
     (the run's plus every resolution), flagged edits still awaiting someone, and

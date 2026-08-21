@@ -735,6 +735,58 @@ def test_accepting_with_no_proposal_yet_is_refused(client):
     assert "no proposed change" in r.json()["detail"]
 
 
+def test_the_run_level_agent_proposes_then_accepts_over_http(client,
+                                                             monkeypatch):
+    """The whole-book agent end to end: a message runs the loop and comes back
+    with a proposal (nothing written), and Accept lands it and logs it."""
+    job, _ = _flagged_job(client)
+    provider = FakeProvider([
+        # One step: propose a change; then reply to end the turn.
+        ProviderResult(parsed={"action": "propose",
+                               "find": "the room was empty",
+                               "replace": "the room was bare",
+                               "why": "the designer wants 'bare'"},
+                       usage=NormalizedUsage(input_tokens=10, output_tokens=5)),
+        ProviderResult(parsed={"action": "reply",
+                               "text": "Proposed one change."},
+                       usage=NormalizedUsage(input_tokens=10, output_tokens=5)),
+    ])
+    monkeypatch.setattr("app.routes.jobs._build_resolve_provider",
+                        lambda: (provider, "fake-model"))
+    agent = f"/api/jobs/{job['id']}/corrections/agent"
+
+    msg = client.post(agent, json={"text": "change 'empty' to 'bare' in the "
+                                           "room line"})
+    assert msg.status_code == 200, msg.text
+    body = msg.json()
+    assert body["new_proposals"] == 1
+    pending = body["agent"]["proposals"]
+    assert len(pending) == 1 and pending[0]["after"] == \
+        "She opened the door, the room was bare."
+    # Nothing is written until Accept.
+    corrected = Path(job["results_dir"]) / "layout_corrected.idml"
+    assert "She opened the door, the room was empty." \
+        in story_text(corrected, "ue0")
+
+    acc = client.post(agent, json={"accept_id": pending[0]["id"]})
+    assert acc.status_code == 200, acc.text
+    assert acc.json()["applied"] == 1
+    assert acc.json()["agent"]["proposals"] == []      # spent
+    assert "She opened the door, the room was bare." \
+        in story_text(corrected, "ue0")
+    # Logged as an agent change in the report.
+    report = client.get(f"/api/jobs/{job['id']}/corrections").json()
+    assert any(r["kind"] == "agent" for r in report.get("resolutions") or [])
+
+
+def test_the_agent_message_and_accept_are_exclusive(client):
+    job, _ = _flagged_job(client)
+    r = client.post(f"/api/jobs/{job['id']}/corrections/agent",
+                    json={"text": "do a thing", "accept_all": True})
+    assert r.status_code == 400
+    assert "one per call" in r.json()["detail"]
+
+
 def test_the_manual_editor_reads_and_saves_a_line_over_http(client):
     job, item = _flagged_job(client)
     option = next(o for o in item["options"] if "room" in o["before"])
