@@ -95,6 +95,8 @@ def test_isolating_keeps_every_applied_character_style():
     ("page-break", "StartParagraph", "NextPage"),
     ("keep-with-next", "KeepWithNext", "1"),
     ("keep-together", "KeepAllLinesTogether", "true"),
+    ("close-up-before", "SpaceBefore", "0"),
+    ("close-up-after", "SpaceAfter", "0"),
 ])
 def test_a_paragraph_operation_lands_on_that_paragraph_alone(op, attr, value):
     story = _ue0()
@@ -107,6 +109,73 @@ def test_a_paragraph_operation_lands_on_that_paragraph_alone(op, attr, value):
                 if e.get(attr) == value]
     assert len(carrying) == 1
     assert "She opened the door" in "".join(carrying[0].itertext())
+
+
+# --- line spacing (the accepted-change requests) ------------------------------
+
+@pytest.mark.parametrize("op, attr, given, written", [
+    ("space-before", "SpaceBefore", "6", "6"),
+    ("space-after", "SpaceAfter", "6pt", "6"),      # "6pt" is parsed to a number
+    ("space-before", "SpaceBefore", "13.5", "13.5"),
+])
+def test_a_spacing_op_writes_its_point_value_on_that_paragraph(op, attr, given,
+                                                               written):
+    story = _ue0()
+    outs, changed = apply_to_stories([story], [
+        Edit(id="e1", find="She opened the door", replace="She opened the door",
+             paragraph=op, paragraph_value=given)])
+    assert outs[0].status == APPLIED and changed == {"ue0"}
+    back = parse_story(story.serialize(), "ue0")
+    carrying = [e for e in back.root.iter("ParagraphStyleRange")
+                if e.get(attr) == written]
+    assert len(carrying) == 1
+    assert "She opened the door" in "".join(carrying[0].itertext())
+
+
+def test_leading_is_written_on_every_run_of_the_paragraph():
+    """Leading is a character property, so it lands inside each run's Properties
+    as `<Leading type="unit">N</Leading>`, across the whole line."""
+    story = _ue0()
+    outs, _ = apply_to_stories([story], [
+        Edit(id="e1", find="She opened the door", replace="She opened the door",
+             paragraph="leading", paragraph_value="15")])
+    assert outs[0].status == APPLIED
+    xml = story.serialize().decode("utf-8")
+    assert '<Leading type="unit">15</Leading>' in xml
+
+
+def test_a_spacing_op_without_a_number_is_refused_not_written():
+    story = _ue0()
+    before = story.serialize().decode("utf-8")
+    outs, changed = apply_to_stories([story], [
+        Edit(id="e1", find="She opened the door", replace="She opened the door",
+             paragraph="space-before", paragraph_value="")])
+    assert outs[0].status == UNPLACEABLE and not changed
+    assert story.serialize().decode("utf-8") == before   # nothing written
+
+
+def test_a_spacing_op_round_trips_through_the_parser():
+    """The point value survives parse — an extractor or typed list can name it."""
+    result = parse_edits([{
+        "find": "She opened the door", "replace": "She opened the door",
+        "paragraph": "space-after", "paragraph_value": "9", "kind": "mechanical"}])
+    assert result.ok and len(result.edits) == 1
+    assert result.edits[0].paragraph == "space-after"
+    assert result.edits[0].paragraph_value == "9"
+
+
+def test_a_spacing_op_shows_in_the_review_as_a_layout_change(tmp_path):
+    """A spacing op changes no text, but it is still a change the designer must
+    confirm in InDesign — so it appears in the review, marked as layout, not
+    dropped as a no-op the way an unchanged text edit is."""
+    out = apply_corrections(LAYOUT, json.dumps([{
+        "find": "A third paragraph with plain text for good measure.",
+        "replace": "A third paragraph with plain text for good measure.",
+        "paragraph": "space-before", "paragraph_value": "6",
+        "instruction": "add space above"}]), tmp_path)
+    assert out.apply.applied == 1
+    layout_changes = [c for c in out.verify.changes if c.layout]
+    assert any("third paragraph" in c.before for c in layout_changes)
 
 
 def test_a_forced_break_can_be_cleared_as_well_as_set():

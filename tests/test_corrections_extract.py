@@ -543,18 +543,52 @@ def test_a_reply_to_a_reply_still_reaches_the_root_mark(tmp_path):
     assert comments[0].replies == ("Which do you mean?", "Yes. Please change")
 
 
-def test_a_threaded_mark_is_the_models_never_the_rules(tmp_path):
-    """A reply can confirm, redirect, or cancel the note it answers, and the
-    deterministic rules read only the note — so a mark carrying a reply always
-    goes to the model, which is shown the reply beside it."""
+def test_a_confirmed_threaded_mark_is_the_models_never_the_rules(tmp_path):
+    """A reply the author does not simply reject can confirm or redirect the mark,
+    and the deterministic rules read only the note — so such a mark goes to the
+    model (shown the reply), never to the rules that would apply the note alone."""
     from docproof.corrections.from_pdf import PdfComment
     from docproof.corrections.instructions import edits_from_comments
     plain = PdfComment(page=1, instruction="Lowercase", anchor="The",
                        context="The river ran on", kind="highlight", id="p1-1")
     rows, unresolved = edits_from_comments([plain])
     assert rows and not unresolved            # the rules own the bare mark
-    threaded = PdfComment(page=1, instruction="Lowercase", anchor="The",
-                          context="The river ran on", kind="highlight",
-                          id="p1-1", replies=("no, leave it",))
-    rows, unresolved = edits_from_comments([threaded])
-    assert not rows and unresolved == [threaded]
+    confirmed = PdfComment(page=1, instruction="Lowercase", anchor="The",
+                           context="The river ran on", kind="highlight",
+                           id="p1-1", replies=("Yes, please change",))
+    rows, unresolved = edits_from_comments([confirmed])
+    assert not rows and unresolved == [confirmed]
+
+
+def test_an_author_dismissal_is_settled_without_the_model(tmp_path):
+    """A reply that plainly rejects the mark ("no", "stet", "leave as is") is the
+    author leaving the text as it is — settled here, so no edit is made and no
+    model call is spent turning a refusal into a change."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import (adjudicate_reply,
+                                                   edits_from_comments,
+                                                   REPLY_DISMISS)
+    dismissed = PdfComment(page=1, instruction="delete the comma", anchor="a, b",
+                           context="a, b and c", kind="highlight", id="p1-1",
+                           replies=("no, leave it",))
+    assert adjudicate_reply(dismissed.instruction, dismissed.replies) \
+        == REPLY_DISMISS
+    rows, unresolved = edits_from_comments([dismissed])
+    assert not rows and not unresolved        # neither applied nor sent to model
+
+
+def test_an_author_dismissal_reads_as_resolved_not_lost(tmp_path):
+    """The dismissed mark is still accounted for: the change log records it as a
+    no-op the author declined, not as a mark nobody acted on (`not_extracted`,
+    which needs a human)."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.model import DISP_NO_OP
+    from docproof.corrections.run import _reconcile_comments
+    dismissed = PdfComment(page=1, instruction="delete the comma", anchor="a, b",
+                           context="a, b and c", kind="highlight", id="p1-1",
+                           replies=("stet",))
+    dispositions = _reconcile_comments([dismissed], [], lambda _id: (None, ""))
+    assert len(dispositions) == 1
+    assert dispositions[0].disposition == DISP_NO_OP
+    assert not dispositions[0].needs_human
+    assert "declined" in dispositions[0].detail

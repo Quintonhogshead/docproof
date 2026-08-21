@@ -22,8 +22,9 @@ from .model import (AMBIGUOUS, APPLIED, ApplyReport, CROSSES_PARAGRAPH, DESIGN,
                     Edit, EditOutcome, FORMAT_ITALIC, FORMAT_ROMAN, FORMATS,
                     JUDGMENT, NO_CHANGE, NO_CHARACTER_STYLE, NOT_FOUND,
                     OFF_PAGE, OVERLAPS,
-                    PARA_ATTRS, PARA_DELETE, PARA_INSERT_BEFORE,
-                    PARA_MERGE_NEXT, PARA_SPLIT_AT, ROUTED_TO_DESIGN,
+                    PARA_ATTRS, PARA_DELETE, PARA_INSERT_BEFORE, PARA_LEADING,
+                    PARA_MERGE_NEXT, PARA_SPACING, PARA_SPLIT_AT, PARA_VALUED,
+                    ROUTED_TO_DESIGN,
                     UNPLACEABLE, UNSTYLEABLE, WITHHELD, is_italic_style,
                     is_plain_style)
 from .textmatch import IndexCache, NormIndex, normalize
@@ -1582,11 +1583,28 @@ def _apply_format(edit: Edit, stories: list[Story], cache: IndexCache, scope,
                        paragraph=para.index, occurrences=1)
 
 
+def _spacing_points(value: str) -> str | None:
+    """A spacing magnitude as the IDML wants it — a bare number of points — from
+    what a note or a model wrote: "6", "6pt", "6 pt", "13.5 points". None when it
+    carries no number, so a spacing op with nothing to set is refused rather than
+    written as a broken attribute. Negative values are refused too: space and
+    leading are never negative, and a minus sign is a typo, not an amount."""
+    if value is None:
+        return None
+    m = re.search(r"\d+(?:\.\d+)?", str(value))
+    if m is None:
+        return None
+    # A trailing ".0" is dropped so the file reads "6", not "6.0", matching how
+    # InDesign writes a whole-point value.
+    num = float(m.group(0))
+    return str(int(num)) if num == int(num) else str(num)
+
+
 def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
                      touched: "_Touched", rebase: "_Rebase",
                      page_labels: dict[int, str] | None = None) -> EditOutcome:
     """Carry out a whole-paragraph request: a forced break, a keep, a paragraph
-    style, a paragraph inserted or removed.
+    style, spacing, a paragraph inserted or removed.
 
     The paragraph acted on is the one the anchor lands in, so these are located and
     refused exactly as a word swap is — a layout note that cannot be placed in the
@@ -1662,6 +1680,21 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
         ok = story.insert_paragraph(
             index, edit.replace, style=edit.paragraph_style,
             after=(edit.paragraph != PARA_INSERT_BEFORE))
+    elif edit.paragraph in PARA_VALUED:
+        # A spacing op carries its magnitude in `paragraph_value`, not the marked
+        # text — refuse a missing or non-numeric one rather than write a broken
+        # attribute into the file.
+        value = _spacing_points(edit.paragraph_value)
+        if value is None:
+            return EditOutcome(
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
+                detail=f"“{edit.paragraph_value}” is not a point value, so the "
+                       "spacing has no amount to set")
+        if edit.paragraph == PARA_LEADING:
+            ok = story.set_leading(index, value)
+        else:
+            ok = story.set_paragraph_attrs(
+                index, {PARA_SPACING[edit.paragraph]: value})
     else:
         attrs = dict(PARA_ATTRS.get(edit.paragraph, {}))
         if edit.paragraph_style:

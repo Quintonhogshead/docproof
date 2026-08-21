@@ -313,6 +313,98 @@ def _replace_punctuation_over_line(low, note, anchor, context) -> Resolved | Non
     return _focus(context, replaced, "replace-punctuation-over-line")
 
 
+# --- adjudicating an author's reply to a proofreader's mark --------------------
+# A proof often makes a second pass through the author, who answers the
+# proofreader's queries in place: a reply annotation hanging off the mark. That
+# reply is the author's decision on the mark, and there are three of them —
+#   accept:  "correct", "yes", "please change" — carry out the marked change;
+#   dismiss: "no", "stet", "leave as is"        — the text stays as it is;
+#   swap:    "change to 'leaves'", "remove"     — the author's own correction,
+#                                                 which wins over the mark.
+# Only `dismiss` is acted on deterministically, and only when the whole reply is
+# unmistakably a rejection: it settles the flag with no change and no model call.
+# accept and swap need the mark and the reply read together — which copy, in the
+# book's own spelling, with the author's word substituted — so they go to the
+# model, which is shown the reply and told the author's decision is final. The
+# verdict is still returned for all three, so the change log can say a dismissed
+# mark was declined by the author rather than lost.
+
+REPLY_ACCEPT = "accept"
+REPLY_DISMISS = "dismiss"
+REPLY_SWAP = "swap"
+REPLY_DEFER = "defer"           # unclear or mixed — the model decides
+
+# A reply is *only* one of these when, stripped of trailing punctuation, that is
+# the whole of it. "No" is a dismissal; "No, change it to 'leaves'" is not — it
+# carries a correction, so it is a swap the model reads. The phrases are matched
+# whole (not as substrings) for exactly that reason.
+_REPLY_REJECT = frozenset([
+    "no", "nope", "stet", "leave", "leave it", "leave as is", "leave as-is",
+    "leave alone", "leave it as is", "leave as it is", "as is", "as-is",
+    "keep", "keep it", "keep as is", "keep as-is", "keep it as is",
+    "keep original", "keep the original", "unchanged", "no change",
+    "no changes", "don't change", "do not change", "dont change", "ignore",
+    "disregard", "n/a", "na", "never mind", "nevermind", "skip", "no thanks",
+    "fine as is", "fine as-is", "it's fine", "its fine", "ok as is",
+])
+_REPLY_AFFIRM = frozenset([
+    "correct", "correct.", "yes", "yep", "yeah", "y", "ok", "okay", "agreed",
+    "agree", "approved", "approve", "accept", "accepted", "confirmed",
+    "confirm", "right", "good", "yes please", "please change", "change",
+    "change it", "change this", "please change it", "make the change",
+    "do it", "fix", "fix it", "please fix", "yes change", "yes, change",
+    "please change, correct", "change, correct", "correct, please change",
+])
+# Wording that means the author is giving their own correction rather than a
+# yes/no: an instruction verb, a "change to X" / "should be X", or a quoted run.
+_REPLY_SWAP_HINT = re.compile(
+    r"\b(change\s+to|changed\s+to|replace\s+with|should\s+(?:be|read)|"
+    r"instead|use\b|make\s+it|remove|delete|insert|add\b|reword|rephrase|"
+    r"lowercase|capitali[sz]e|italici[sz]e)\b", re.IGNORECASE)
+_REPLY_QUOTE = re.compile(r"[“\"'‘][^”\"'’]{1,}[”\"'’]")
+
+
+def _reply_norm(reply: str) -> str:
+    """A reply reduced for whole-phrase matching: lowercased, its outer quotes
+    and trailing sentence punctuation stripped, inner spaces collapsed."""
+    r = " ".join((reply or "").split()).strip().strip("\"'“”‘’")
+    return r.rstrip(".!").strip().lower()
+
+
+def adjudicate_reply(note: str, replies: tuple[str, ...]) -> str:
+    """The author's decision on a proofreader's mark, read off their reply.
+
+    Returns `REPLY_ACCEPT`, `REPLY_DISMISS`, `REPLY_SWAP`, or `REPLY_DEFER`. Only
+    the *last* reply is decisive — a thread ends on the author's final word — but
+    an earlier reply's wording still counts as the correction when the last is a
+    bare confirmation ("yes" under a "change to 'leaves'"). Conservative on both
+    sides: a reply that is not unmistakably one of the three is deferred to the
+    model, because guessing wrong here either applies a change the author refused
+    or drops one they asked for."""
+    texts = [r for r in replies if (r or "").strip()]
+    if not texts:
+        return REPLY_DEFER
+    last = _reply_norm(texts[-1])
+    # A swap anywhere in the thread carries its own wording, and that wording is
+    # the point of the reply even if the author then adds a bare "yes".
+    for r in texts:
+        if _REPLY_SWAP_HINT.search(r) or _REPLY_QUOTE.search(r):
+            # ...unless it is only affirming the mark's own quoted answer — but a
+            # verb like "remove"/"change to" is the author writing the edit, so
+            # the swap reading stands whenever the hint is a verb or a new quote.
+            return REPLY_SWAP
+    if last in _REPLY_REJECT:
+        return REPLY_DISMISS
+    if last in _REPLY_AFFIRM:
+        return REPLY_ACCEPT
+    # Two very common compound confirmations that are not in the set verbatim.
+    if last.startswith(("yes", "correct", "please change", "approved", "confirmed")):
+        return REPLY_ACCEPT
+    if last.startswith(("no", "leave", "keep", "stet", "ignore", "disregard")):
+        return REPLY_DISMISS
+    return REPLY_DEFER
+
+
 def edits_from_comments(comments, pages=None,
                         pdf_pages=None) -> tuple[list[dict], list]:
     """Split a proof's comments into the ones the rules can resolve and the ones
@@ -349,11 +441,18 @@ def edits_from_comments(comments, pages=None,
     made: list[tuple] = []                 # (comment, Resolved) in reading order
     for c in comments:
         if getattr(c, "replies", ()):
-            # An author's reply can confirm, redirect, or cancel the note it
-            # answers, and the rules read only the note — a rule firing on
-            # "delete the comma" whose reply says "no, leave it" would apply the
-            # very change the author refused. A threaded mark is always the
-            # model's, which is shown the reply beside the note.
+            # An author's reply is a decision on the proofreader's mark, and the
+            # author's to make (`adjudicate_reply`). A plain rejection ("no",
+            # "stet", "leave as is") is settled here and for free: the text stays
+            # as it is, so no edit is made and no model call is spent turning a
+            # "leave it" into a change. Everything else — a confirmation, or the
+            # author's own wording in place of the mark — goes to the model, which
+            # is shown the reply beside the note and told the author's word wins.
+            # (`run` reads the same verdict to record a dismissed mark as resolved
+            # rather than as a mark nobody acted on.)
+            if adjudicate_reply(getattr(c, "instruction", "") or "",
+                                tuple(c.replies)) == REPLY_DISMISS:
+                continue
             unresolved.append(c)
             continue
         instruction = getattr(c, "instruction", "") or ""

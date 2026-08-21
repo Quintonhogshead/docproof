@@ -442,12 +442,38 @@ class Story:
 
     def set_paragraph_attrs(self, index: int, attrs: dict[str, str]) -> bool:
         """Set range attributes on one paragraph — `StartParagraph`,
-        `AppliedParagraphStyle`, spacing. An attribute whose value is None is
-        removed, which is how a forced break is cleared rather than overwritten."""
+        `AppliedParagraphStyle`, `SpaceBefore`, `SpaceAfter`. An attribute whose
+        value is None is removed, which is how a forced break is cleared rather
+        than overwritten."""
         psr = self.isolate(index)
         if psr is None:
             return False
         _set_attrs(psr, attrs)
+        return True
+
+    def set_leading(self, index: int, value: str) -> bool:
+        """Set the leading — the line-to-line spacing — of one paragraph.
+
+        Leading is not a paragraph property in IDML: it lives on each character
+        run, as a `<Leading type="unit">N</Leading>` inside the run's
+        `<Properties>`. So the paragraph is given a range of its own (`isolate`,
+        which keeps every other applied style) and the value is written into every
+        character run it holds — set the whole line's leading and the paragraph
+        reads as one block, exactly as a designer setting it in the panel would.
+        False, changing nothing, when the paragraph cannot be isolated."""
+        psr = self.isolate(index)
+        if psr is None:
+            return False
+        for csr in psr.findall(CSR):
+            props = csr.find("Properties")
+            if props is None:
+                props = ET.SubElement(csr, "Properties")
+                csr.insert(0, props)       # Properties leads a character range
+            leading = props.find("Leading")
+            if leading is None:
+                leading = ET.SubElement(props, "Leading")
+            leading.set("type", "unit")
+            leading.text = value
         return True
 
     def delete_paragraph(self, index: int) -> bool:

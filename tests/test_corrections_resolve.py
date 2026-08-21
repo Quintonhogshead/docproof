@@ -163,6 +163,50 @@ def test_a_typed_answer_becomes_an_edit_and_applies(tmp_path):
         in _texts(out.corrected_idml)
 
 
+def test_an_accepted_change_can_adjust_line_spacing(tmp_path):
+    """A designer's accepted decision about the paragraph — here, space above it —
+    is carried out as a spacing op, not declined as layout."""
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    line = "A third paragraph with plain text for good measure."
+    provider = _scripted({"decision": "apply", "find": line, "replace": line,
+                          "context": "", "format": "",
+                          "paragraph": "space-before", "paragraph_value": "6",
+                          "note": "added six points above"})
+    edit, note, verdict = adjudicate_instruction(
+        payload["queue"][0], "add a little space above this paragraph", provider,
+        model="fake-model", usage=Usage(),
+        stories=read_stories(out.corrected_idml))
+    assert verdict == "apply" and edit.paragraph == "space-before"
+    assert edit.paragraph_value == "6"
+    apply_edit_to_corrected(out.corrected_idml, edit)
+    from docproof.corrections.idml import read_stories as _rs
+    xml = next(s for s in _rs(out.corrected_idml)
+               if s.story_id == "ue0").serialize().decode("utf-8")
+    assert 'SpaceBefore="6"' in xml
+
+
+def test_an_accepted_change_can_cross_a_paragraph_break(tmp_path):
+    """A break change the designer accepts (join this line with the next) applies
+    as a paragraph op rather than being refused as a cross-paragraph edit."""
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    texts = _texts(out.corrected_idml)
+    # Two consecutive body paragraphs (same style), to be joined.
+    a, b = texts[2], texts[3]
+    provider = _scripted({"decision": "apply", "find": a, "replace": a,
+                          "context": "", "format": "", "paragraph": "merge-next",
+                          "note": "joined the two lines"})
+    item = {"id": "q1", "find": a, "replace": a}
+    edit, note, verdict = adjudicate_instruction(
+        item, "run this line on into the next", provider,
+        model="fake-model", usage=Usage(),
+        stories=read_stories(out.corrected_idml))
+    assert verdict == "apply" and edit.paragraph == "merge-next"
+    apply_edit_to_corrected(out.corrected_idml, edit)
+    joined = _texts(out.corrected_idml)
+    assert len(joined) == len(texts) - 1
+    assert any(a in t and b in t for t in joined)
+
+
 def test_a_declined_answer_writes_nothing(tmp_path):
     out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
     provider = _scripted({"decision": "decline", "find": "", "replace": "",

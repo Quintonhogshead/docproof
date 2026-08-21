@@ -177,7 +177,12 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
     for sid, para in order:
         d = acc[(sid, para)]
         after = "" if d["gone"] else d["after"]
-        if d["before"] == after and not d["formats"]:
+        # A layout op — a keep, a forced break, a spacing change — leaves the
+        # paragraph's text untouched, so `before == after`; it is still a change
+        # the designer has to confirm in InDesign, so it is kept and shown in the
+        # layout list rather than dropped as a no-op the way an unchanged text
+        # edit is.
+        if d["before"] == after and not d["formats"] and not d["layout"]:
             continue
         changes.append(ReviewChange(
             story_id=sid, paragraph=para, before=d["before"], after=after,

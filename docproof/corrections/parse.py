@@ -93,6 +93,8 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "format": ("format", "formatting", "style", "character_style"),
     "paragraph": ("paragraph", "paragraph_op", "layout", "para"),
     "paragraph_style": ("paragraph_style", "para_style", "applied_style"),
+    "paragraph_value": ("paragraph_value", "para_value", "points", "amount",
+                        "value", "pt"),
 }
 
 
@@ -246,10 +248,12 @@ def _parse_entry(entry: Any, index: int):
         return ParseIssue(index, f"unknown paragraph operation {raw_para!r} "
                           f"(expected one of {', '.join(PARA_OPS)})", entry)
     para_style = "" if raw_para_style in (None, "") else str(raw_para_style).strip()
+    raw_para_value = _field(entry, "paragraph_value")
 
     fields = _assemble(find, replace, instruction, kind, occ, index, entry,
                        context=context, source=source, page=page, fmt=fmt,
-                       para_op=para_op, para_style=para_style)
+                       para_op=para_op, para_style=para_style,
+                       para_value=raw_para_value)
     if isinstance(fields, ParseIssue):
         return fields
     explicit_id = str(raw_id).strip() if raw_id not in (None, "") else None
@@ -274,7 +278,8 @@ def _parse_sequence(entry, index: int):
 
 
 def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None,
-              source=None, page=0, fmt="", para_op="", para_style=""):
+              source=None, page=0, fmt="", para_op="", para_style="",
+              para_value=""):
     """Validate the text fields common to both entry shapes and build the kwargs
     for `Edit` (no id). Returns a dict or a `ParseIssue`."""
     if find is not None and not isinstance(find, str):
@@ -335,7 +340,8 @@ def _assemble(find, replace, instruction, kind, occ, index, raw, *, context=None
     return {"find": find, "replace": replace, "instruction": instruction,
             "kind": kind, "occurrence": occ, "context": context, "source": source,
             "page": page, "format": fmt, "paragraph": para_op,
-            "paragraph_style": para_style}
+            "paragraph_style": para_style,
+            "paragraph_value": "" if para_value is None else str(para_value).strip()}
 
 
 def _field(entry: dict, canonical: str):

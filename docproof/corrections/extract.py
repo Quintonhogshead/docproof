@@ -56,7 +56,12 @@ class _ExtractedEdit(BaseModel):
     paragraph: Literal["", "recto", "verso", "page-break", "column-break",
                        "keep-with-next", "keep-together", "allow-break",
                        "no-page-break", "delete-paragraph", "insert-after",
-                       "insert-before", "merge-next", "split-at"] = ""
+                       "insert-before", "merge-next", "split-at",
+                       "close-up-before", "close-up-after",
+                       "space-before", "space-after", "leading"] = ""
+    # The point value a spacing op carries ("space-before"/"space-after"/
+    # "leading"); ignored by every other paragraph op. A bare number.
+    paragraph_value: str = ""
 
 
 class _Extracted(BaseModel):
@@ -144,9 +149,19 @@ in find ONLY the text that should START the new paragraph, e.g. find "The next \
 hour or so"; the break is made immediately in front of it. Never make find reach \
 back into the text that stays in the first paragraph.
   For both, copy find unchanged into replace. \
-Put the words that identify the paragraph in find, copy them unchanged into \
-replace, and leave kind "mechanical" — these are appliable. NEVER read one of these \
-out of a question ("should we cut this?"): that is a "judgment".
+And the line-spacing requests, which are properties of the paragraph too — a \
+proof marks these on verse constantly ("keep on same line" is "keep-together"; \
+"close up" is one of the next two):
+  "close-up-before"/"close-up-after" — remove the space above/below the \
+paragraph (drives it to zero). No value.
+  "space-before"/"space-after" — add space above/below the paragraph. Put the \
+amount in paragraph_value as a number of points ("6"). \
+  "leading" — set the line-to-line spacing within the paragraph. Put the point \
+value in paragraph_value ("13.5"). \
+For every one of these, put the words that identify the paragraph in find, copy \
+them unchanged into replace, and leave kind "mechanical" — these are appliable. \
+NEVER read one of these out of a question ("should we cut this?"): that is a \
+"judgment".
 - paragraph_style: the full style name to apply to that paragraph, e.g. \
 "ParagraphStyle/Block Quote". Only when the note names a style that the book \
 already uses; do not invent one.
