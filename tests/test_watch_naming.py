@@ -18,6 +18,7 @@ from app.watch import naming
     ("Grest - book original", "Grest - book 0"),        # case-insensitive token
     ("Grest — Book Original", "Grest - book 0"),         # em dash separator
     ("Grest – Book Original", "Grest - book 0"),         # en dash separator
+    ("Grest - Book - Original", "Grest - book 0"),       # stray dash in the token
     ("Wolves", "Wolves - book 0"),                       # no token: append
     ("Draft 3-4", "Draft 3-4 - book 0"),
 ])
@@ -53,6 +54,7 @@ def test_is_output_name_knows_the_stage_token(name, want):
     ("St Denis - Book Original.docx", "St Denis", True),  # a spaced surname
     ("Grest — Book Original.docx", "Grest", True),        # em dash separator
     ("Grest – Book Original.docx", "Grest", True),        # en dash separator
+    ("Grest - Book - Original.docx", "Grest", True),      # stray dash in the token
     # A co-author parenthetical on the record's surname is set aside, the same
     # forgiveness the HubSpot key match gives — the file carries only the first.
     ("Lichtenstein - Book Original.docx",
@@ -76,6 +78,7 @@ def test_is_source_name_matches_only_the_authors_intake_file(name, last, want):
 @pytest.mark.parametrize("name,want", [
     ("Grest - Book Original.docx", True),                 # the intake file
     ("Grest — Book Original", True),                       # em dash, no extension
+    ("Grest - Book - Original.docx", True),               # stray dash in the token
     ("grest  -  book original.docx", True),               # case & spacing drift
     ("Developmental Editorial Review 1 Johnson", False),  # a review, not the book
     ("Grest - book 0.docx", False),                       # the deliverable
