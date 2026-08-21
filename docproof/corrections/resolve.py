@@ -286,10 +286,25 @@ def apply_option(corrected: str | Path, option: dict) -> dict:
         raise ResolveError("the corrected file no longer has this story — "
                            "re-run the corrections and try again")
     index = int(option["paragraph"])
-    if not 0 <= index < len(story.paragraphs):
+    para = (story.paragraphs[index]
+            if 0 <= index < len(story.paragraphs) else None)
+    # A resolution applied since the report was built may have inserted or removed
+    # a line and renumbered everything after it, so the stored index can now point
+    # at a neighbour — or off the end of the story. When the paragraph the option
+    # was built against is elsewhere but unchanged, find it by its recorded text
+    # and use its current index. This is the same relocation the manual editor does
+    # with `expect`, and it is what keeps a still-valid option from failing with
+    # "this line has changed" only because an earlier resolution shifted the count.
+    before_expect = option.get("before")
+    if before_expect is not None and (para is None
+                                      or para.text != before_expect):
+        moved = [p for p in story.paragraphs if p.text == before_expect]
+        if len(moved) == 1:
+            para = moved[0]
+            index = para.index
+    if para is None:
         raise ResolveError("the corrected file has changed since this option "
                            "was written — reload the report and try again")
-    para = story.paragraphs[index]
     start, end = int(option["start"]), int(option["end"])
     found = option["found"]
     if para.text[start:end] != found:
