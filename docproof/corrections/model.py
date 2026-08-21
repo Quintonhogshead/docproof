@@ -84,11 +84,25 @@ PARA_ATTRS: dict[str, dict[str, str | None]] = {
     "keep-with-next": {"KeepWithNext": "1"},
     "keep-together":  {"KeepAllLinesTogether": "true"},
     "allow-break":    {"KeepAllLinesTogether": "false"},
+    # Alignment is a property of the paragraph, carried on its range as
+    # `Justification` — so "align flush left", "set this centred", "justify this"
+    # are appliable exactly as a forced break is, not a design note. "Flush left"
+    # is the common proof mark for a line set hard against the left margin.
+    "align-left":     {"Justification": "LeftAlign"},
+    "align-right":    {"Justification": "RightAlign"},
+    "align-center":   {"Justification": "CenterAlign"},
+    "justify":        {"Justification": "LeftJustified"},
     # Line spacing with no magnitude — the "close it up" a proof marks: drive the
     # space above or below a paragraph to zero. Adding space instead is a value
     # (`PARA_SPACING`) or, for a blank line between stanzas, an inserted paragraph.
     "close-up-before": {"SpaceBefore": "0"},
     "close-up-after":  {"SpaceAfter": "0"},
+    # "No indent" / "run this to the margin": drop the first-line indent to zero.
+    # A first-line indent *of* some amount carries a value (`first-line-indent`
+    # below); removing it is the fixed op a proof marks on a paragraph that should
+    # sit flush, and pairs with "align-left" for the classic "flush left, no
+    # indent" mark.
+    "no-indent":       {"FirstLineIndent": "0"},
 }
 # Line-spacing operations that carry a point value in `Edit.paragraph_value`
 # rather than a fixed attribute: "space before/after 6pt" sets that much air
@@ -101,13 +115,24 @@ PARA_ATTRS: dict[str, dict[str, str | None]] = {
 PARA_SPACE_BEFORE = "space-before"
 PARA_SPACE_AFTER = "space-after"
 PARA_LEADING = "leading"
-# Which IDML paragraph attribute each valued space op writes; leading is handled
-# apart because it is not a paragraph-range attribute.
+# Indents that carry a magnitude, in points: a first-line indent set to some
+# amount, or the left/right inset a block quotation is pulled in by. Each is a
+# paragraph-range attribute, so it applies the same way spacing does; a "no indent"
+# with no amount is the fixed `no-indent` op above.
+PARA_FIRST_LINE_INDENT = "first-line-indent"
+PARA_LEFT_INDENT = "left-indent"
+PARA_RIGHT_INDENT = "right-indent"
+# Which IDML paragraph attribute each valued space/indent op writes; leading is
+# handled apart because it is not a paragraph-range attribute.
 PARA_SPACING: dict[str, str] = {
     PARA_SPACE_BEFORE: "SpaceBefore",
     PARA_SPACE_AFTER: "SpaceAfter",
+    PARA_FIRST_LINE_INDENT: "FirstLineIndent",
+    PARA_LEFT_INDENT: "LeftIndent",
+    PARA_RIGHT_INDENT: "RightIndent",
 }
-PARA_VALUED = (PARA_SPACE_BEFORE, PARA_SPACE_AFTER, PARA_LEADING)
+PARA_VALUED = (PARA_SPACE_BEFORE, PARA_SPACE_AFTER, PARA_LEADING,
+               PARA_FIRST_LINE_INDENT, PARA_LEFT_INDENT, PARA_RIGHT_INDENT)
 # Operations that change how many paragraphs the story has. They are applied after
 # every other edit, because they move the paragraph indices under anything that has
 # not run yet — and each re-locates its own anchor by text, so running last costs

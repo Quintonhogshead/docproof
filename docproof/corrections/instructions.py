@@ -831,25 +831,16 @@ _COMPOSITION = re.compile(
     r"|line spacing|leading|too (?:much|little) space|tracking|kerning"
     r"|hyphenation|bad hyphens?|reflow|recompose|designer)\b", re.IGNORECASE)
 
-# Alignment and indentation are set on the paragraph in InDesign, not written into
-# the story — "flush left", "align right", "centre this", "no indent", "ragged
-# right". There is nothing in the text this engine can change to satisfy them and
-# nothing a file comparison could confirm, exactly as with _COMPOSITION above. Left
-# to the model, such a note is read as prose ("set X flush left as a new paragraph")
-# and mis-applied as a forced paragraph break; kept here it becomes a located check
-# the designer carries out in InDesign. Scoped to unambiguous typesetting phrasings
-# so a genuine text edit is never swallowed as a design note.
+# The typesetting notes that stay a located check because no single attribute
+# settles them — a ragged/hanging shape, or a bare "indent this" that names no
+# amount. What the engine *can* set on the paragraph, it applies: alignment and
+# "no indent" are `_paragraph_op` ops, and an indent given a point value is a
+# valued op. This net catches only what is left, so the designer still gets the
+# note located rather than handed to the model (which reads it as prose and
+# mis-applies it as a break). Kept scoped so a genuine text edit is never swallowed.
 _TYPESETTING = re.compile(
-    r"\bflush[\s-]*(?:left|right)\b"
-    r"|\b(?:align|aligned|alignment|set|range|ranged)\b[^.]{0,20}?"
-      r"\b(?:left|right|centre|center|flush|justified?)\b"
-    r"|\b(?:left|right|centre|center|fully)[\s-]?align(?:ed|ment)?\b"
-    r"|\bjustif(?:y|ied|ication)\b|\bunjustified\b"
-    r"|\bragged?\s+(?:right|left)\b"
-    r"|\bcent(?:re|er)\s+(?:this|the|it)\b"
-    r"|\b(?:no|remove|delete|suppress|without)\s+(?:the\s+)?"
-      r"(?:first[\s-]?line\s+)?indent(?:ation)?\b"
-    r"|\b(?:first[\s-]?line|hanging|full)\s+indent(?:ation)?\b"
+    r"\bragged?\s+(?:right|left)\b|\bunjustified\b"
+    r"|\bhanging\s+indent(?:ation)?\b"
     r"|\bindent\s+(?:this|the|it)\b", re.IGNORECASE)
 
 # Whole-paragraph requests a reviewer states in prose, and the operation each means.
@@ -868,6 +859,26 @@ _PARA_PHRASES = (
                       r"|(?:do not|don'?t) break this paragraph\b"),
     ("allow-break", r"\bmay break\b|\ballow this to break\b"),
     (PARA_DELETE, r"(?:delete|remove|cut) this (?:paragraph|line)\b"),
+    # Alignment. Set on the paragraph as a property, so appliable — "align flush
+    # left" is the common proof mark for a line pulled hard against the left
+    # margin. Centre and justify sit alongside it; each needs an alignment verb
+    # (align/flush/range/set) near the direction, or the compound "left-aligned",
+    # so an ordinary "left"/"right" in prose is never read as a typesetting op.
+    ("align-left", r"\bflush[\s-]*left\b|\bleft[\s-]?align(?:ed|ment)?\b"
+                   r"|\b(?:align|aligned|range|ranged|set)\b[^.]{0,15}?\bleft\b"),
+    ("align-right", r"\bflush[\s-]*right\b|\bright[\s-]?align(?:ed|ment)?\b"
+                    r"|\b(?:align|aligned|range|ranged|set)\b[^.]{0,15}?\bright\b"),
+    ("align-center", r"\bcent(?:re|er)[\s-]?align(?:ed|ment)?\b"
+                     r"|\b(?:align|aligned|set)\b[^.]{0,15}?\bcent(?:re|er)(?:d|ed)?\b"
+                     r"|\bcent(?:re|er)(?:d|ed)\b"
+                     r"|\bcent(?:re|er)\s+(?:this|the|it)\b"),
+    ("justify", r"\bfully[\s-]?justif\w*\b|\bjustif(?:y|ied|ication)\b"),
+    # Removing the first-line indent — the "no indent" / "run to the margin" mark,
+    # which has a fixed answer (drive it to zero). An indent set *to* an amount is
+    # a valued op the model emits with a point value; only the removal is a rule.
+    ("no-indent", r"\b(?:no|remove|delete|drop|kill|clear|without)\s+"
+                  r"(?:the\s+)?(?:first[\s-]?line\s+)?indent(?:ation)?\b"
+                  r"|\bunindent(?:ed)?\b|\bflush\s+to\s+(?:the\s+)?margin\b"),
 )
 _PARA_PATTERNS = tuple((op, re.compile(pat, re.IGNORECASE))
                       for op, pat in _PARA_PHRASES)

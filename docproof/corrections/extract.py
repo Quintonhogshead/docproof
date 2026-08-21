@@ -133,6 +133,12 @@ rather than its words. "recto"/"verso" to start it on a right/left-hand page, \
 "page-break" to start it on a new page, "keep-with-next" so a heading is not left \
 at the foot of a page, "keep-together" so it does not split, "delete-paragraph" to \
 remove it, "insert-after"/"insert-before" to add one (put the new text in replace). \
+Alignment is a paragraph property too, so it is appliable: "align-left" for "align \
+flush left"/"set flush left"/"range left", "align-right" for "flush right", \
+"align-center" for "centre this"/"centred", "justify" for "justify"/"justified". \
+Put the words that identify the paragraph in find, copy them unchanged into \
+replace, and leave kind "mechanical". (A bare "no indent"/"ragged right" has no \
+such attribute — leave those as kind "design".) \
 Two more are about where the breaks fall, which is what most notes on a proof of \
 poetry are asking about, because every line of verse is its own paragraph:
   "merge-next" — "delete the line break between X and Y", "let this run on as one \
@@ -158,6 +164,13 @@ paragraph (drives it to zero). No value.
 amount in paragraph_value as a number of points ("6"). \
   "leading" — set the line-to-line spacing within the paragraph. Put the point \
 value in paragraph_value ("13.5"). \
+And indentation, which is a paragraph property too: \
+  "no-indent" — remove the first-line indent (drive it to zero). No value. Use \
+this for "no indent"/"run to the margin". \
+  "first-line-indent" — set the first-line indent to an amount. Put the point \
+value in paragraph_value. \
+  "left-indent"/"right-indent" — inset the whole paragraph from the left/right, as \
+a block quotation is. Put the point value in paragraph_value. \
 For every one of these, put the words that identify the paragraph in find, copy \
 them unchanged into replace, and leave kind "mechanical" — these are appliable. \
 NEVER read one of these out of a question ("should we cut this?"): that is a \

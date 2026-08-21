@@ -189,35 +189,49 @@ def test_a_layout_request_is_a_paragraph_edit_not_a_character_one():
     assert got.find == got.replace          # the words are untouched
 
 
-from docproof.corrections.model import DESIGN
+from docproof.corrections.model import DESIGN, MECHANICAL
 
 
-@pytest.mark.parametrize("note", [
-    "Align flush left",
-    "flush left",
-    "align right",
-    "centre this",
-    "no indent",
-    "ragged right",
-    "justify this",
-    # the exact shape the model used to mis-read as a forced paragraph break
-    "Set this flush left as a new paragraph (no indent)",
+@pytest.mark.parametrize("note, op", [
+    ("Align flush left", "align-left"),
+    ("flush left", "align-left"),
+    ("left-aligned", "align-left"),
+    ("align right", "align-right"),
+    ("flush right", "align-right"),
+    ("centre this", "align-center"),
+    ("centred", "align-center"),
+    ("justify this", "justify"),
+    ("justified", "justify"),
+    ("no indent", "no-indent"),
+    ("remove the first-line indent", "no-indent"),
+    # the exact shape the model used to mis-read as a forced paragraph break — it
+    # now applies as left alignment, not a split.
+    ("Set this flush left as a new paragraph (no indent)", "align-left"),
 ])
-def test_an_alignment_mark_is_a_located_design_check_not_a_split(note):
-    """Alignment and indentation are set on the paragraph in InDesign; there is no
-    text edit to make. Left to the model, "…flush left as a new paragraph" was read
-    as a break request and applied as a `split-at`, which then failed with a
-    nonsense "the paragraph already begins here" error. It stays a located check."""
+def test_an_alignment_mark_applies_as_a_paragraph_op_not_a_split(note, op):
+    """Alignment and "no indent" are paragraph properties this engine can set, so
+    they apply as a located paragraph op — not a design note, and never the
+    `split-at` the phrasing "…as a new paragraph" used to be mis-read as (which
+    failed with a nonsense "the paragraph already begins here")."""
     got = r(note, "Dad")
     assert got is not None
-    assert got.kind == DESIGN
-    assert not got.paragraph          # never a split/merge/structural op
+    assert got.kind == MECHANICAL
+    assert got.paragraph == op
     assert got.find == got.replace    # the words are untouched
+
+
+@pytest.mark.parametrize("note", ["ragged right", "hanging indent", "indent this"])
+def test_a_typesetting_note_with_no_settable_attribute_stays_a_design_check(note):
+    """What the engine cannot set on the paragraph — a rag, a hanging shape, an
+    indent named with no amount — is still located for the designer rather than
+    handed to the model."""
+    got = r(note, "Dad")
+    assert got is not None and got.kind == DESIGN
 
 
 def test_alignment_matching_does_not_swallow_prose():
     """The typesetting vocabulary is scoped so an ordinary note is not read as a
-    design request and lost from the applied set."""
+    typesetting op and lost from the applied set."""
     assert r("the indent of his voice", "indent of his voice") is None
 
 
