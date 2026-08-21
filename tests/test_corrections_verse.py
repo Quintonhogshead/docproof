@@ -166,16 +166,16 @@ def test_two_paragraphs_in_different_styles_are_refused_not_merged():
     assert texts(story) == ["A Heading", "Body text follows."]
 
 
-def test_an_anchor_spanning_two_breaks_is_refused():
-    """One break per edit. A quote covering three lines does not say which of the
-    two breaks the reviewer wants gone."""
+def test_an_anchor_spanning_two_breaks_joins_the_whole_run():
+    """A quote that runs on across several lines is one "let this run on as one
+    paragraph" request, not a refusal: every break the anchor spans is joined, so
+    three lines become one paragraph."""
     story = _story("One line", "two line", "three line")
     edit = Edit("e1", "One line two line three line",
                 "One line two line three line", paragraph=PARA_MERGE_NEXT)
     outcomes, _ = apply_to_stories([story], [edit])
-    assert outcomes[0].status == UNPLACEABLE
-    assert "spans 2 paragraph breaks" in outcomes[0].detail
-    assert texts(story) == ["One line", "two line", "three line"]
+    assert outcomes[0].status == APPLIED
+    assert texts(story) == ["One line two line three line"]
 
 
 def test_a_merge_anchor_found_twice_is_flagged():

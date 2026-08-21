@@ -1629,16 +1629,27 @@ def _apply_paragraph(edit: Edit, stories: list[Story], cache: IndexCache, scope,
                 if spanned else "")
         story, covered = spanned[0]
         para, start, end = covered[0]
+        index = para.index
         if edit.paragraph == PARA_SPLIT_AT:
             return EditOutcome(
-                edit, UNPLACEABLE, story_id=story.story_id, paragraph=para.index,
+                edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
                 detail="the text a new paragraph should start at spans a break "
                        "already, so there is no one point to split")
-        if len(covered) != 2:
-            return EditOutcome(
-                edit, UNPLACEABLE, story_id=story.story_id, paragraph=para.index,
-                detail=f"the text spans {len(covered) - 1} paragraph breaks, and "
-                       "this joins two paragraphs at one")
+        # merge-next: the anchor may reach across more than one break — a quote
+        # run on across several lines. Join every break it spans into one
+        # paragraph rather than refusing a wider quote; `covered` is a contiguous
+        # run, so it holds len(covered) - 1 breaks. Each join folds the next
+        # paragraph into the one at `index`, which does not move.
+        for _ in range(len(covered) - 1):
+            if not story.merge_paragraph(index):
+                return EditOutcome(
+                    edit, UNPLACEABLE, story_id=story.story_id, paragraph=index,
+                    detail="this paragraph and the one after it could not be "
+                           "joined — they are set in different paragraph styles, "
+                           "or it is the last paragraph of its story")
+        rebase.forget(story.story_id)
+        return EditOutcome(edit, APPLIED, story_id=story.story_id,
+                           paragraph=index, occurrences=1)
     else:
         story, para, start, end = found
         key = (story.story_id, para.index)

@@ -157,6 +157,23 @@ def test_an_option_that_empties_the_line_removes_it(tmp_path):
     assert len(_texts(corrected)) == len(texts) - 1
 
 
+def test_a_split_whose_break_is_already_present_settles_as_no_change(tmp_path):
+    # A "start a new paragraph at X" whose X already begins a paragraph (the proof
+    # was marked against an earlier revision) is a satisfied request, not a failure
+    # — apply_edit_to_corrected reports a no-change so the flag leaves the queue
+    # rather than showing "the change could not be applied".
+    from docproof.corrections.model import Edit, PARA_SPLIT_AT
+    out, _ = _run(tmp_path, [{"find": "nowhere here", "replace": "x"}])
+    corrected = out.corrected_idml
+    before = _texts(corrected)
+    result = apply_edit_to_corrected(corrected, Edit(
+        id="sp", find="She opened the door", replace="She opened the door",
+        paragraph=PARA_SPLIT_AT))
+    assert result["no_change"] is True
+    assert "already begins here" in result["note"]
+    assert _texts(corrected) == before          # nothing was written
+
+
 # --- the typed answer ---------------------------------------------------------
 
 def _scripted(answer: dict) -> FakeProvider:
