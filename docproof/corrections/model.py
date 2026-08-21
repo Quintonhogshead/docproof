@@ -84,7 +84,30 @@ PARA_ATTRS: dict[str, dict[str, str | None]] = {
     "keep-with-next": {"KeepWithNext": "1"},
     "keep-together":  {"KeepAllLinesTogether": "true"},
     "allow-break":    {"KeepAllLinesTogether": "false"},
+    # Line spacing with no magnitude — the "close it up" a proof marks: drive the
+    # space above or below a paragraph to zero. Adding space instead is a value
+    # (`PARA_SPACING`) or, for a blank line between stanzas, an inserted paragraph.
+    "close-up-before": {"SpaceBefore": "0"},
+    "close-up-after":  {"SpaceAfter": "0"},
 }
+# Line-spacing operations that carry a point value in `Edit.paragraph_value`
+# rather than a fixed attribute: "space before/after 6pt" sets that much air
+# above or below the paragraph, "leading 13pt" sets the line-to-line spacing
+# within it. Space is a paragraph property (`SpaceBefore`/`SpaceAfter` on the
+# range); leading is a character property, so it is written across the
+# paragraph's character runs (`Story.set_leading`). These are appliable exactly
+# because they are properties of the text in the story, not geometry in a spread
+# — the same reason italics and forced breaks are.
+PARA_SPACE_BEFORE = "space-before"
+PARA_SPACE_AFTER = "space-after"
+PARA_LEADING = "leading"
+# Which IDML paragraph attribute each valued space op writes; leading is handled
+# apart because it is not a paragraph-range attribute.
+PARA_SPACING: dict[str, str] = {
+    PARA_SPACE_BEFORE: "SpaceBefore",
+    PARA_SPACE_AFTER: "SpaceAfter",
+}
+PARA_VALUED = (PARA_SPACE_BEFORE, PARA_SPACE_AFTER, PARA_LEADING)
 # Operations that change how many paragraphs the story has. They are applied after
 # every other edit, because they move the paragraph indices under anything that has
 # not run yet — and each re-locates its own anchor by text, so running last costs
@@ -103,7 +126,7 @@ PARA_MERGE_NEXT = "merge-next"
 PARA_SPLIT_AT = "split-at"
 PARA_STRUCTURAL = (PARA_DELETE, PARA_INSERT_AFTER, PARA_INSERT_BEFORE,
                    PARA_MERGE_NEXT, PARA_SPLIT_AT)
-PARA_OPS = tuple(PARA_ATTRS) + PARA_STRUCTURAL
+PARA_OPS = tuple(PARA_ATTRS) + PARA_STRUCTURAL + PARA_VALUED
 
 
 @dataclass(frozen=True)
@@ -155,6 +178,12 @@ class Edit:
     # the book already — this reassigns a paragraph to a design, it does not invent
     # one.
     paragraph_style: str = ""
+    # The magnitude a valued spacing op carries (`PARA_VALUED`): a point size as a
+    # string, e.g. "6" for six points of space or "13.5" for the leading. Ignored
+    # by every other kind of edit — space and leading are the only requests whose
+    # amount cannot be read off the marked text, so it rides here rather than in
+    # `replace`, which those ops leave empty.
+    paragraph_value: str = ""
     # What a model concluded about a query it would not answer for the reviewer —
     # the evidence and the reading, written for the person who now owns it. This
     # changes nothing about how the edit is applied: an edit carrying advice is

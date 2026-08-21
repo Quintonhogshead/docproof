@@ -44,8 +44,8 @@ from .apply import _keep_book_case, all_spans, apply_to_stories
 from .idml import Story, read_stories, rewrite_stories
 from .model import (ApplyReport, CommentDisposition, DESIGN, DISP_FLAGGED,
                     DISP_NOT_EXTRACTED, Edit, EditOutcome, FORMATS, JUDGMENT,
-                    MECHANICAL, NO_CHANGE, NO_CHARACTER_STYLE, is_italic_style,
-                    style_name)
+                    MECHANICAL, NO_CHANGE, NO_CHARACTER_STYLE, PARA_OPS,
+                    is_italic_style, style_name)
 from .secondlook import MIN_FIND
 from .textmatch import IndexCache
 
@@ -550,6 +550,14 @@ class _Answer(BaseModel):
     # "italic" / "roman" (or another FORMATS key) when the designer's answer is
     # about how the text is set, not what it says.
     format: str = ""
+    # A whole-paragraph operation (a `PARA_OPS` value) when the decision is about
+    # how the paragraph breaks, sits, or is spaced rather than about its words —
+    # now the designer has accepted the change, these apply rather than decline.
+    paragraph: str = ""
+    paragraph_style: str = ""
+    # The point value a spacing op carries ("space-before"/"space-after"/
+    # "leading"); ignored otherwise.
+    paragraph_value: str = ""
     note: str = ""
 
 
@@ -576,6 +584,23 @@ change). Leave "" otherwise.
 - note: what you did, in as few words as possible — a bare clause, no full \
 sentence, no preamble ("used the em dash", "changed the second copy").
 
+The designer has already decided, so a change to the PARAGRAPH — how it breaks, \
+where it sits, its spacing — is now yours to carry out, not to decline. Set \
+paragraph to the operation and put in find a verbatim line of the paragraph it \
+acts on (copy find into replace unchanged unless you are inserting text):
+- crossing a line break: "merge-next" joins this line with the next (find a run \
+reaching across the break, e.g. "dead people stuff: Rotting"); "split-at" starts \
+a new paragraph at find (find only the words that begin it); "insert-after"/ \
+"insert-before" add a paragraph (the new text goes in replace, or leave replace \
+empty for a blank line between stanzas).
+- keeping lines together: "keep-together" ("keep on same line"), "keep-with-next".
+- line spacing: "close-up-before"/"close-up-after" remove the space above/below; \
+"space-before"/"space-after" add space — put the points in paragraph_value ("6"); \
+"leading" sets the line-to-line spacing — put the points in paragraph_value \
+("13.5").
+- paragraph_style: the full name of a style the book already uses, to reassign \
+the paragraph to it.
+
 Leave — decision "leave", with the reason in note — when the right outcome is \
 to change nothing: the text is already correct as set, the mark asks a question \
 whose answer is "it's fine as is", or the answer explicitly says to leave the \
@@ -583,9 +608,11 @@ text alone. This is a real resolution — the flag is settled, no change needed 
 not a refusal, so use it whenever nothing should change to the text.
 
 Decline — decision "decline", with the reason in note — ONLY when the answer \
-cannot be carried out at all: it asks for page layout (breaks, spacing, where a \
-line falls, a page or cover), it names text that is not in the book text given, \
-or it does not actually say what to do ("look at this again").
+cannot be carried out in the story at all: it is about page GEOMETRY the text \
+cannot express (which page comes first, a cover, matching an example image), it \
+names text that is not in the book text given, or it does not actually say what \
+to do ("look at this again"). A break, a keep, or a spacing change is NOT this — \
+carry it out with paragraph.
 
 Never substitute your own editorial judgment for the designer's: carry out what \
 was decided, leave it if nothing should change, or decline if you cannot."""
@@ -638,9 +665,26 @@ def adjudicate_instruction(item: dict, typed: str, provider: Provider, *,
     fmt = (a.format or "").strip().lower()
     if fmt and fmt not in FORMATS:
         fmt = ""
+    para = (a.paragraph or "").strip().lower()
+    if para and para not in PARA_OPS:
+        para = ""
     if len(find.strip()) < MIN_FIND:
         return None, ("the model did not quote enough of the book's text to "
                       "anchor the change — try naming the exact words"), "decline"
+    if para:
+        # A paragraph change the designer accepted: a break, a keep, or a spacing
+        # adjustment. It anchors by `find` like any edit; `replace` carries the new
+        # text for an insert and is otherwise the find unchanged.
+        instruction = typed.strip() + (f" — designer resolution: {note}" if note
+                                       else " — designer resolution")
+        edit = Edit(id=f"{item.get('id', 'q')}-designer", find=find,
+                    replace=(a.replace.strip("\n") if a.replace else find),
+                    context=(a.context or "").strip("\n"), kind=MECHANICAL,
+                    paragraph=para,
+                    paragraph_style=(a.paragraph_style or "").strip(),
+                    paragraph_value=(a.paragraph_value or "").strip(),
+                    instruction=instruction)
+        return edit, note, "apply"
     if a.replace == find and not fmt:
         # The model committed to "apply" but its edit changes nothing — the text
         # is already right. That is a leave, not a failure: it settles the flag.

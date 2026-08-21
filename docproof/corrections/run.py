@@ -34,9 +34,9 @@ from .model import (APPLIED_EXACTLY, ApplyReport, CheckItem, CommentDisposition,
                     DISP_APPLIED, DISP_FLAGGED, DISP_NO_OP, DISP_NOT_EXTRACTED,
                     Edit, JUDGMENT, PARA_STRUCTURAL, ROUTED_TO_DESIGN,
                     VerifyReport)
-from .instructions import (asks_for_a_change, enforce_note_fidelity,
-                           fill_edit_occurrences, house_typography,
-                           widen_edits_to_marks)
+from .instructions import (REPLY_DISMISS, adjudicate_reply, asks_for_a_change,
+                           enforce_note_fidelity, fill_edit_occurrences,
+                           house_typography, widen_edits_to_marks)
 from .pagemap import (anchored_folio_labels, build_page_map, page_book_text,
                       paragraph_lookup, printed_folio_labels)
 from .parse import ParseResult, parse_edits
@@ -296,6 +296,19 @@ def _reconcile_comments(comments, edits: Sequence[Edit],
         cid, page, kind, instruction, anchor = _comment_fields(c)
         made = by_source.get(cid, [])
         if not made:
+            # A mark the author reviewed and rejected in a reply ("no", "stet",
+            # "leave as is") produced no edit on purpose — the text stays as it
+            # is. That is a resolution, not a mark nobody acted on, so it is
+            # recorded as a no-op rather than the needs-a-human "not extracted".
+            replies = tuple((c.get("replies") if isinstance(c, dict)
+                             else getattr(c, "replies", ())) or ())
+            if replies and adjudicate_reply("", replies) == REPLY_DISMISS:
+                out.append(CommentDisposition(
+                    id=cid, page=page, kind=kind, instruction=instruction,
+                    anchor=anchor, disposition=DISP_NO_OP,
+                    detail="the author reviewed this mark and declined it — the "
+                           "text is left as it is"))
+                continue
             out.append(CommentDisposition(
                 id=cid, page=page, kind=kind, instruction=instruction,
                 anchor=anchor, disposition=DISP_NOT_EXTRACTED))
