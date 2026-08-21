@@ -91,6 +91,11 @@ class CorrectionsOutputs:
     # What a person still has to look at in InDesign, because composing the page is
     # the one thing this engine cannot do and so cannot check.
     checks: tuple[CheckItem, ...] = ()
+    # The read-only InDesign walk-through of the checks and open flags — an
+    # ExtendScript the designer runs to be selected onto each in the live
+    # document. None when there was nothing to tour (a clean run), or in
+    # verify-only mode (no file was written to tour).
+    tour_jsx: Path | None = None
 
     @property
     def applied(self) -> int:
@@ -655,6 +660,21 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         pages=(pages_placed, pages_total), pages_cited=pages_cited,
         checks=checks,
         merged_away=merged_away, page_labels=page_labels, queue=queue)
+    # The InDesign check tour: a read-only script that selects the designer onto
+    # each composition check and open flag in the live document. Built from the
+    # same `checks` and `queue` the report carries, against the corrected file so
+    # its search text is the finished file's. Best-effort — a tour that cannot be
+    # built must never sink a finished run.
+    tour_jsx = None
+    try:
+        from .tour import write_tour
+        tour_jsx = write_tour(
+            out, corrected, checks, queue, page_labels,
+            dest_name=f"{Path(src_idml).stem}_checks.jsx",
+            book_name=Path(src_idml).stem)
+    except Exception:                  # noqa: BLE001 - the run stands without it
+        log.warning("Could not build the InDesign check tour", exc_info=True)
+
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "second look settled %d, re-anchored %d, merged %d; last tier "
              "resolved %d, advised %d; %d/%d page(s) placed; verify %s",
@@ -669,7 +689,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         comments=dispositions, usage=usage, settled=settled,
         reanchored=reanchored, merged=merged, merged_away=merged_away,
         resolved=resolved, advised=advised,
-        pages_placed=pages_placed, pages_total=pages_total, checks=checks)
+        pages_placed=pages_placed, pages_total=pages_total, checks=checks,
+        tour_jsx=tour_jsx)
 
 
 def _verify_status_of(verify_report: VerifyReport):

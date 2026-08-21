@@ -158,6 +158,34 @@ The manuscript's own table of contents is **not** regenerated — InDesign build
 its own from the placed styles, and prep flags the contents list for exactly
 that decision. See [prep.md](prep.md#the-manuscripts-own-table-of-contents).
 
+## Corrections: the check tour
+
+A corrections run applies what it can and proves the text is what the list asked
+for, but it cannot see the *composed* page — whether a forced break left the page
+before it short, whether a heading is stranded, whether a reviewer's "bad rag
+here" reads well now. Those go to the report's `checks` list, located but
+unconfirmed, because composing is InDesign's job.
+
+[`docproof/corrections/tour.py`](../docproof/corrections/tour.py) turns that list
+— plus the flags nobody resolved — into a **read-only ExtendScript** the designer
+runs *inside* InDesign: a modeless palette (a session `#targetengine`, so its
+Prev/Next keep working after the script returns) that, for each stop, searches
+for the text with `findGrep`, prefers the match on the stop's own folio, selects
+it and turns the page to it. It **writes nothing** — it searches, selects and
+scrolls — so none of the deterministic apply path's guarantees are in play; the
+corrected `.idml` is still the verified deliverable, and this is a guided reading
+of the part that needs eyes.
+
+It ships as `<stem>_checks.jsx` beside the corrected file (served through the same
+`/file/{which}` route as every other artifact, `which="check-tour"`), and the
+card offers it whenever a run left composition checks or open flags. Like
+[`prep/place.py`](../docproof/prep/place.py) the script is generated but never
+run here — InDesign is not on the server and ExtendScript cannot run in CI — so
+`tests/test_corrections_tour.py` covers the stops and the emitted string, and the
+one thing it cannot cover is InDesign actually opening the tour. The file is kept
+ASCII (search strings ride in as `\uXXXX`-escaped JSON) so it carries no encoding
+assumption, matching the other scripts DocProof writes.
+
 ## Testing
 
 `tests/test_place.py` covers the script docproof writes and everything it makes
