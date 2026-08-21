@@ -16,6 +16,31 @@ const api = async (path, options) => {
   return res.json();
 };
 
+// `api`, but survives a transient blip: a dropped connection ("Failed to fetch",
+// which fetch throws with no HTTP status) or a 502/503/504 from the edge while a
+// slow model call ran. Retried a few times with growing backoff; a real error —
+// a 400 on a bad batch — carries a status and is not retried, so it still
+// surfaces at once. `onRetry(attempt, max, err)` lets the caller say it's
+// waiting rather than stuck. This is what keeps one flaky batch of a long
+// marked-PDF read from aborting the whole thing with hundreds of edits already
+// read.
+const apiRetry = async (path, options, { tries = 4, onRetry } = {}) => {
+  let delay = 600;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await api(path, options);
+    } catch (e) {
+      const transient = e.status === undefined
+        || e.status === 502 || e.status === 503 || e.status === 504;
+      if (!transient || attempt >= tries) throw e;
+      if (onRetry) onRetry(attempt, tries, e);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, delay));
+      delay *= 2;
+    }
+  }
+};
+
 // selected: file id → Set of section ids the user kept. A file starts with
 // every section in it, so "do nothing" means "review the whole document".
 const state = { files: [], models: [], pollTimer: null, selected: new Map(),
@@ -297,11 +322,17 @@ let readCorrectionsList = null;
           + `batch ${i + 1} of ${batches.length} · `
           + `${edits.length} edit${plural(edits.length)} so far`);
         // Sequential on purpose: the bar climbs a batch at a time, and each
-        // small call is safe on its own. eslint-disable-next-line no-await-in-loop
-        const part = await api('/api/corrections/extract-list', {
+        // small call is safe on its own — and idempotent, so a batch that failed
+        // to fetch (a dropped connection, an edge timeout on a slow model call)
+        // is retried rather than abandoning the whole read.
+        // eslint-disable-next-line no-await-in-loop
+        const part = await apiRetry('/api/corrections/extract-list', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ text: batches[i] }),
-        });
+        }, { onRetry: (attempt, max) => show(
+          `${count} comment${plural(count)} · ${edits.length} edit`
+          + `${plural(edits.length)} so far · batch ${i + 1} of ${batches.length}`
+          + ` hit a network snag — retrying (${attempt}/${max - 1})…`) });
         edits.push(...JSON.parse(part.json));
         if (part.issues) issues.push(...part.issues);
         setEdits(edits);                      // fill live so the count is seen to grow
@@ -309,9 +340,17 @@ let readCorrectionsList = null;
       setProgress(batches.length || 1, batches.length || 1);
       summarise(edits.length, issues, `from ${count} comment${plural(count)}`);
     } catch (e) {
+      // A network failure carries no HTTP status; say so as a sentence rather
+      // than surfacing the bare "Failed to fetch", and make clear the edits
+      // already read are kept — the read can be resumed by reading the proof
+      // again, and the good edits below still apply.
+      const why = e.status === undefined
+        ? 'The connection dropped while reading the proof.' : e.message;
       const kept = edits.length
-        ? ` ${edits.length} edit${plural(edits.length)} read so far are below.` : '';
-      show(`${e.message}${kept}`, 'error');
+        ? ` The ${edits.length} edit${plural(edits.length)} read so far are `
+          + 'below and still apply; read the proof again to finish the rest.'
+        : '';
+      show(`${why}${kept}`, 'error');
       throw e;
     }
   };
