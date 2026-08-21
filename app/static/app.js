@@ -5165,8 +5165,11 @@ function editorModel(state, preApply, highlight) {
     chars.splice(start, end - start, ...insert);
     text = text.slice(0, start) + preApply.replacement + text.slice(end);
     hl = [start, start + preApply.replacement.length];
-  } else if (highlight && highlight[1] > highlight[0]
+  } else if (highlight && highlight[0] >= 0 && highlight[1] >= highlight[0]
              && highlight[1] <= text.length) {
+    // A deletion leaves a zero-width span (the removed words are gone from the
+    // after-text); it's kept and widened to the neighbouring word below, so the
+    // place the change fell still glows.
     hl = highlight;
   }
   if (hl) hl = wordSpan(text, hl);
@@ -5180,7 +5183,22 @@ function wordSpan(text, span) {
   let [s, e] = span;
   while (s > 0 && wordish(text[s - 1]) && wordish(text[s])) s -= 1;
   while (e < text.length && wordish(text[e]) && wordish(text[e - 1])) e += 1;
-  return [s, e];
+  if (e > s) return [s, e];
+  // A collapsed span — a deletion removed whole words, so the after-text has
+  // nothing at the point to mark. Glow the word just after the gap so the
+  // change still has a visible home, or the word just before it if the gap
+  // ends the line. Nothing wordish either side (an empty or all-punctuation
+  // line) leaves it collapsed, and the wrapper simply draws nothing.
+  let a = s;
+  while (a < text.length && !wordish(text[a])) a += 1;
+  let b = a;
+  while (b < text.length && wordish(text[b])) b += 1;
+  if (b > a) return [a, b];
+  b = s;
+  while (b > 0 && !wordish(text[b - 1])) b -= 1;
+  a = b;
+  while (a > 0 && wordish(text[a - 1])) a -= 1;
+  return [a, b];
 }
 
 // The paragraph rendered for the editor: its text with the book's bold/italic
