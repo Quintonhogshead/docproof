@@ -189,6 +189,38 @@ def test_a_layout_request_is_a_paragraph_edit_not_a_character_one():
     assert got.find == got.replace          # the words are untouched
 
 
+from docproof.corrections.model import DESIGN
+
+
+@pytest.mark.parametrize("note", [
+    "Align flush left",
+    "flush left",
+    "align right",
+    "centre this",
+    "no indent",
+    "ragged right",
+    "justify this",
+    # the exact shape the model used to mis-read as a forced paragraph break
+    "Set this flush left as a new paragraph (no indent)",
+])
+def test_an_alignment_mark_is_a_located_design_check_not_a_split(note):
+    """Alignment and indentation are set on the paragraph in InDesign; there is no
+    text edit to make. Left to the model, "…flush left as a new paragraph" was read
+    as a break request and applied as a `split-at`, which then failed with a
+    nonsense "the paragraph already begins here" error. It stays a located check."""
+    got = r(note, "Dad")
+    assert got is not None
+    assert got.kind == DESIGN
+    assert not got.paragraph          # never a split/merge/structural op
+    assert got.find == got.replace    # the words are untouched
+
+
+def test_alignment_matching_does_not_swallow_prose():
+    """The typesetting vocabulary is scoped so an ordinary note is not read as a
+    design request and lost from the applied set."""
+    assert r("the indent of his voice", "indent of his voice") is None
+
+
 def test_a_destructive_operation_is_never_read_out_of_a_question():
     """"Should we cut this paragraph?" names the operation and asks for it in the
     same breath. Reading that as an instruction is worst here of all."""

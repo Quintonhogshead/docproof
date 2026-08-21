@@ -522,6 +522,27 @@ def test_targets_fall_back_to_the_anchor_text(tmp_path):
     assert targets[0]["before"].startswith("It was late")
 
 
+def test_the_anchor_fallback_stays_on_the_cited_page(tmp_path):
+    # A short anchor occurs all over the book; the "Edit the line" fallback must not
+    # open a paragraph on a page the mark has nothing to do with. When a page is
+    # cited and the anchor's copy is elsewhere, no target is offered.
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    from docproof.corrections.textmatch import IndexCache
+    stories = read_stories(out.corrected_idml)
+
+    class _Scope:
+        def page_of(self, story_id, index):
+            return 7                       # every paragraph is on page 7
+
+    scope = _Scope()
+    on_page = _targets_for(None, "the road went on", [], stories, scope,
+                           IndexCache(), page=7)
+    assert len(on_page) == 1               # cited page matches — offered
+    off_page = _targets_for(None, "the road went on", [], stories, scope,
+                            IndexCache(), page=3)
+    assert off_page == []                  # anchor is on page 7, mark cited 3
+
+
 # --- relocation, touch-ups, and materialized suggestions -----------------------
 
 from docproof.corrections.resolve import (converse,  # noqa: E402

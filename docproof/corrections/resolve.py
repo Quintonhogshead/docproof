@@ -141,7 +141,7 @@ def build_queue(stories: list[Story], apply_report: ApplyReport | None,
             # marked text. Options already carry their own locations.
             "targets": _targets_for(
                 outcome, comment.anchor if comment is not None else "",
-                options, stories, scope, cache),
+                options, stories, scope, cache, page=page),
             "resolved": None,
         }
 
@@ -221,11 +221,18 @@ def _options_for(edit: Edit, stories: list[Story], scope,
 
 
 def _targets_for(outcome: EditOutcome | None, anchor: str, options: list[dict],
-                 stories: list[Story], scope, cache: IndexCache) -> list[dict]:
+                 stories: list[Story], scope, cache: IndexCache,
+                 page: int = 0) -> list[dict]:
     """The paragraphs the manual editor can open for a flag with nothing to
     click: where the outcome was located (a design note, a placed query), or
     failing that the paragraph(s) carrying the marked text. Deduplicated
-    against the options, which already carry their own locations."""
+    against the options, which already carry their own locations.
+
+    `page` is the page the mark cites. A short anchor like "Dad" occurs all over
+    the book, so an anchor fallback that opens the first copies it finds sends the
+    designer to unrelated pages; when the flag cites a page, the fallback keeps
+    only the copies on it, and offers none rather than a page that has nothing to
+    do with the mark."""
     seen = {(o["story_id"], o["paragraph"]) for o in options}
     by_story = {s.story_id: s for s in stories}
     out: list[dict] = []
@@ -248,12 +255,17 @@ def _targets_for(outcome: EditOutcome | None, anchor: str, options: list[dict],
             and outcome.paragraph >= 0):
         add(outcome.story_id, outcome.paragraph)
     if not out and len((anchor or "").strip()) >= MIN_FIND:
+        hits: list[tuple[str, int]] = []
         for s in stories:
             for p in s.paragraphs:
-                if len(out) >= 2:
-                    return out
                 if all_spans(p.text, anchor, cache=cache, partial_words=True):
-                    add(s.story_id, p.index)
+                    pg = (scope.page_of(s.story_id, p.index)
+                          if scope is not None else 0)
+                    if page and pg != page:
+                        continue          # a copy on some other page is not the mark
+                    hits.append((s.story_id, p.index))
+        for story_id, index in hits[:2]:
+            add(story_id, index)
     return out
 
 
