@@ -3220,7 +3220,14 @@ $('start').addEventListener('click', async () => {
                         && $('schedule-on').checked)
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
-          profile: ((resolveTier(state.tier) || {}).profile || ''),
+          // A profile is a review-only concept, and the server refuses one on any
+          // other kind ("review profiles can only run a review"). The tier picker
+          // is always populated — including while a corrections or prep run is
+          // being started — so a profile-bearing tier (the detector-only batch
+          // profile) would otherwise ride onto a corrections "apply" and 400 it.
+          // Send it only for a review; every other kind sends none.
+          profile: (kind() === 'review'
+            ? ((resolveTier(state.tier) || {}).profile || '') : ''),
           variant: ($('variant') || {}).value || '',
           effort: effortValue(),
           glossary_model: $('glossary-model').value,

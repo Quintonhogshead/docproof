@@ -611,8 +611,16 @@ def register(app: FastAPI) -> None:
         if req.profile and req.profile not in PROFILE_KEYS:
             raise HTTPException(
                 400, f"profile must be one of {', '.join(PROFILE_KEYS)}")
+        # A profile is a review-only concept, but corrections and prep share the
+        # review create form, whose tier picker is always populated — so an
+        # "apply corrections" started while a profile-bearing review tier is
+        # selected (the detector-only batch profile) carries that profile along.
+        # It is inert off a review, so it is dropped rather than refused: a hard
+        # 400 here blocked a designer from applying corrections whenever such a
+        # tier was live (e.g. an overnight detector-only batch). Kept durable on
+        # the server so a browser still serving cached JS is not stranded.
         if req.profile and req.kind != "review":
-            raise HTTPException(400, "review profiles can only run a review")
+            req.profile = ""
         if req.effort is not None and req.effort not in settingslib.EFFORT_LEVELS:
             raise HTTPException(
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")

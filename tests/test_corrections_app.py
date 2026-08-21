@@ -114,6 +114,21 @@ def test_the_corrected_file_and_report_are_downloadable(client):
         assert expected in r.headers["content-disposition"]
 
 
+def test_a_stray_review_profile_does_not_block_a_corrections_run(client):
+    # The review create form's tier picker is always populated, so a corrections
+    # "apply" started while a profile-bearing review tier (the detector-only
+    # batch profile) is selected carries that profile along. It is inert off a
+    # review and must be dropped, not refused — a hard 400 here once blocked a
+    # designer from applying corrections whenever such a tier was live.
+    job = run_corrections(client, upload(client, "layout.idml")["id"],
+                          [{"find": "Their were", "replace": "There were"}],
+                          profile="detector-only")
+    assert job["state"] == "done", job.get("error")
+    assert job["is_corrections"] and job["applied"] == 1
+    # The profile did not ride onto the corrections job.
+    assert not job.get("profile")
+
+
 def test_the_corrections_report_reads_back_for_the_screen(client):
     # Gates off, so this exercises the free, deterministic path the assertions
     # below describe; the model passes are on by default and have their own tests.
