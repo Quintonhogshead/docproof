@@ -245,6 +245,18 @@ class ChatRequest(BaseModel):
     accept: bool = False
 
 
+class AgentRequest(BaseModel):
+    """One interaction with the run-level agent, over the whole book. A `text`
+    message runs the agent loop and comes back with a reply, any proposed edits,
+    and any advisory notes — nothing is written. `accept_id` writes one pending
+    proposal; `accept_all` writes every pending one in order; `dismiss_id` drops
+    one. Exactly one of the four."""
+    text: str = ""
+    accept_id: str = ""
+    accept_all: bool = False
+    dismiss_id: str = ""
+
+
 class RejudgeRequest(BaseModel):
     """Which gates to run over a finished review, and on what. Nothing else is
     re-run, so the switches here ARE the job — an empty request is refused
@@ -1673,6 +1685,114 @@ def register(app: FastAPI) -> None:
             item["proposal"] = turn["proposal"]
             _write_updated(Path(json_path), payload)
             return {"item": item}
+
+    @app.post("/api/jobs/{job_id}/corrections/agent")
+    def agent_correction(job_id: str, req: AgentRequest,
+                         owner: str = Depends(owner_for)) -> dict:
+        """The run-level agent: a conversation about the whole book, not one flag.
+
+        A `text` message runs a bounded agent loop over the corrected book — the
+        model searches the book, proposes exact edits, and raises notes — and
+        comes back with a reply plus its proposals and notes. Nothing is written:
+        each proposal is a dry run shaped like a clicked placement. `accept_id`
+        writes one, `accept_all` writes them all, `dismiss_id` drops one — every
+        write going through the same deterministic apply a run uses, so the agent
+        only ever proposes and the file cannot be corrupted by it. The whole
+        conversation (thread, pending proposals, notes) lives in the report, so
+        it survives a reload and every accepted change is in the change log."""
+        from docproof.corrections.resolve import (ResolveError, apply_option,
+                                                  record_agent_edit, run_agent,
+                                                  queue_counts, _write_updated)
+        job = _owned_job(job_id, owner)
+        if job is None:
+            raise HTTPException(404, "No results for this job yet")
+        if not job.is_corrections or job.state != "done":
+            raise HTTPException(400, "Only a finished corrections job can be "
+                                     "worked on.")
+        actions = [bool(req.text.strip()), bool(req.accept_id),
+                   req.accept_all, bool(req.dismiss_id)]
+        if sum(actions) != 1:
+            raise HTTPException(400, "Send a message, accept a proposal, accept "
+                                     "all, or dismiss one — one per call.")
+        with _resolve_lock(job_id):
+            json_path = _resolve_result(job, "corrections.json")
+            if json_path is None:
+                raise HTTPException(404, "This job has no corrections report")
+            corrected_name_ = _result_name(job, "corrected")
+            corrected = _resolve_result(job, corrected_name_)
+            if corrected is None:
+                raise HTTPException(404, f"{corrected_name_} is missing")
+            payload = json.loads(json_path.read_text("utf-8"))
+            agent = payload.setdefault("agent", {"chat": [], "proposals": [],
+                                                 "flags": []})
+            agent.setdefault("chat", [])
+            agent.setdefault("proposals", [])
+            agent.setdefault("flags", [])
+
+            def _refresh():
+                threading.Thread(
+                    target=lambda: app.state.runner.refresh_archive(
+                        job_id, [corrected_name_, "corrections.json",
+                                 "corrections_notes.md"]),
+                    name=f"docproof-archive-refresh-{job_id}",
+                    daemon=True).start()
+
+            # Writing actions: apply or drop pending proposals.
+            if req.accept_id or req.accept_all or req.dismiss_id:
+                if req.dismiss_id:
+                    agent["proposals"] = [p for p in agent["proposals"]
+                                          if p.get("id") != req.dismiss_id]
+                    _write_updated(Path(json_path), payload)
+                    return {"agent": agent}
+                wanted = ([p for p in agent["proposals"]
+                           if p.get("id") == req.accept_id] if req.accept_id
+                          else list(agent["proposals"]))
+                if not wanted:
+                    raise HTTPException(404, "That proposal is no longer "
+                                             "pending — reload and try again.")
+                applied, failed = 0, []
+                for p in wanted:
+                    try:
+                        result = apply_option(corrected, p)
+                    except ResolveError as e:
+                        failed.append({"id": p.get("id"), "why": str(e)})
+                        continue
+                    # record_agent_edit re-reads and rewrites the JSON itself,
+                    # so reload the payload/agent view after each.
+                    record_agent_edit(json_path, p, result)
+                    applied += 1
+                payload = json.loads(json_path.read_text("utf-8"))
+                agent = payload.get("agent") or {"chat": [], "proposals": [],
+                                                 "flags": []}
+                if applied:
+                    _refresh()
+                return {"agent": agent, "applied": applied, "failed": failed,
+                        "counts": queue_counts(payload)}
+
+            # A message: run the agent loop and record what it produced.
+            provider, model = _build_resolve_provider()
+            usage = Usage()
+            agent["chat"].append({"role": "designer", "text": req.text.strip()})
+            try:
+                out = run_agent(payload, corrected, provider, model=model,
+                                usage=usage, message=req.text.strip())
+            except ResolveError as e:
+                raise HTTPException(422, str(e))
+            finally:
+                _record_extract_spend(app, owner, model, usage,
+                                      filename="corrections agent")
+            agent["chat"].append({"role": "model", "text": out["reply"]})
+            # Number this turn's proposals into the pending list so their ids are
+            # unique across turns, then store proposals and notes.
+            base = len(agent["proposals"])
+            for i, p in enumerate(out["proposals"], 1):
+                p["id"] = f"agent-{base + i}"
+            agent["proposals"].extend(out["proposals"])
+            agent["flags"].extend(out["flags"])
+            _write_updated(Path(json_path), payload)
+            return {"agent": agent, "reply": out["reply"],
+                    "new_proposals": len(out["proposals"]),
+                    "new_flags": len(out["flags"])}
 
     @app.post("/api/corrections/extract-docx")
     async def extract_corrections_docx(

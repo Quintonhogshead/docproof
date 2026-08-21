@@ -1571,6 +1571,31 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 .fix-chat-cap { margin: 0; font-size: 0.85rem; }
 .fix-chat-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
 .fix-chat-row input { flex: 1 1 auto; }
+
+/* The run-level agent: a whole-book conversation above the flag list. */
+.fix-agent {
+  margin: 0.5rem 0 1rem; border: 1px solid var(--accent);
+  border-radius: var(--radius); padding: 0.6rem 0.8rem;
+}
+.fix-agent > summary {
+  cursor: pointer; color: var(--accent); font-weight: 600; user-select: none;
+}
+.fix-agent-intro { margin: 0.5rem 0 0; font-size: 0.9rem; }
+.fix-agent-proposals { margin-top: 0.6rem; display: flex;
+  flex-direction: column; gap: 0.5rem; }
+.fix-agent-proposals-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.8rem; margin-top: 0.4rem;
+}
+.fix-agent-proposal {
+  border: 1px solid var(--border, rgba(128,128,128,0.3));
+  border-radius: var(--radius); padding: 0.5rem 0.6rem;
+  display: flex; flex-direction: column; gap: 0.4rem;
+}
+.fix-agent-proposal button { align-self: flex-start; }
+.fix-agent-notes { margin-top: 0.6rem; }
+.fix-agent-notes-head { font-weight: 600; margin: 0.3rem 0; font-size: 0.9rem; }
+.fix-agent-note { margin: 0.15rem 0; font-size: 0.9rem; }
 .fix-done { color: var(--ok); font-weight: 600; margin: 0.35rem 0 0.1rem; }
 .fix-advice {
   display: flex; align-items: center; gap: 0.8rem;

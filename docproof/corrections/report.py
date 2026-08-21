@@ -423,6 +423,9 @@ def _markdown(d: dict) -> str:
             how = ("edited the line by hand" if r.get("kind") == "manual"
                    else "applied the model's suggestion"
                    if r.get("kind") == "suggestion"
+                   else ("accepted the agent's change"
+                         + (f" — {_preview(r['why'])}" if r.get("why") else ""))
+                   if r.get("kind") == "agent"
                    else f"talked it through, then: “{_preview(r['text'])}”"
                    if r.get("kind") == "chat"
                    else f"typed: “{_preview(r['text'])}”" if r.get("text")
@@ -438,6 +441,22 @@ def _markdown(d: dict) -> str:
             breaks = _break_notes(r.get("breaks") or {})
             if breaks:
                 L.append(f"  - and {breaks}")
+        L.append("")
+
+    # The run-level agent's advisory notes — things it raised for a person while
+    # working a designer's request, that it would not change on its own. Its
+    # accepted edits are already in "Resolved in review" above (kind "agent");
+    # this is the half that stayed a person's, kept so it is not lost.
+    agent = d.get("agent") or {}
+    agent_flags = agent.get("flags") or []
+    if agent_flags:
+        L.append(f"## The agent flagged for you — {len(agent_flags)}\n")
+        L.append("While working your requests, the agent raised these for a "
+                 "person rather than changing them on its own.\n")
+        for f in agent_flags:
+            note = _preview(f.get("note") or f.get("why") or "(no note)")
+            quote = _preview(f.get("quote") or "")
+            L.append(f"- “{note}”" + (f" — on “{quote}”" if quote else ""))
         L.append("")
 
     # The flags the designer deliberately left alone. Not applied and not

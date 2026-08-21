@@ -4700,6 +4700,8 @@ function renderFixList(job, data) {
   bar.append(dl);
   list.append(bar, note);
 
+  list.append(fixAgentPanel(job, data));
+
   open.forEach((item) => list.append(fixItemCard(job, data, item)));
 
   // Every correction the run applied, reviewable and editable — the machine
@@ -4748,6 +4750,176 @@ async function fixResolve(job, data, item, body, onError) {
     onError(e.message);
     return false;
   }
+}
+
+// The run-level agent: a conversation about the whole book, not one flag. The
+// designer brings a fresh request ("make every 'grey' British-spelled", "check
+// the captain is always 'sir'") and the model works it out against the book —
+// searching, proposing exact edits, raising notes. Nothing is written until the
+// designer accepts a proposal, and every accept goes through the same
+// deterministic placement a clicked option does, so the agent only ever
+// proposes. The thread, its pending proposals, and its notes live in the report,
+// so a reload picks the conversation up where it was left.
+function fixAgentPanel(job, data) {
+  const panel = document.createElement('details');
+  panel.className = 'fix-agent';
+  const agent = () => (data.agent || { chat: [], proposals: [], flags: [] });
+  panel.open = !!(agent().chat && agent().chat.length);
+  const sum = document.createElement('summary');
+  sum.textContent = 'Ask the agent about the whole book';
+  panel.append(sum);
+
+  const intro = document.createElement('p');
+  intro.className = 'muted fix-agent-intro';
+  intro.textContent = 'Bring a request about the whole book — a consistency '
+    + 'sweep, a spelling convention, a question. The agent searches the book '
+    + 'and proposes exact edits you accept or reject; nothing changes until you '
+    + 'do.';
+  const thread = document.createElement('div');
+  thread.className = 'fix-chat-thread';
+  const proposals = document.createElement('div');
+  proposals.className = 'fix-agent-proposals';
+  const notes = document.createElement('div');
+  notes.className = 'fix-agent-notes';
+  const err = document.createElement('p');
+  err.className = 'fix-error';
+  err.hidden = true;
+
+  const rowEl = document.createElement('div');
+  rowEl.className = 'fix-chat-row';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'e.g. “make every ‘grey’ the British ‘grey’ (not ‘gray’)”';
+  const send = document.createElement('button');
+  send.textContent = 'Send';
+  rowEl.append(input, send);
+
+  const setBusy = (on, label) => {
+    input.disabled = on;
+    send.disabled = on;
+    panel.querySelectorAll('.fix-agent-proposals button, .fix-agent-accept-all')
+      .forEach((b) => { b.disabled = on; });
+    send.textContent = on ? (label || 'Thinking…') : 'Send';
+  };
+
+  const rebuild = () => {
+    const a = agent();
+    thread.textContent = '';
+    (a.chat || []).forEach((t) => {
+      const line = document.createElement('p');
+      line.className = t.role === 'designer'
+        ? 'fix-chat-msg is-designer' : 'fix-chat-msg is-model';
+      line.textContent = (t.role === 'designer' ? 'You: ' : 'Agent: ')
+        + (t.text || '');
+      thread.append(line);
+    });
+
+    proposals.textContent = '';
+    const pend = a.proposals || [];
+    if (pend.length) {
+      const h = document.createElement('div');
+      h.className = 'fix-agent-proposals-head';
+      const label = document.createElement('b');
+      label.textContent = `Proposed changes — ${pend.length}`;
+      h.append(label);
+      if (pend.length > 1) {
+        const all = document.createElement('button');
+        all.className = 'primary fix-agent-accept-all';
+        all.textContent = `Accept all ${pend.length}`;
+        all.addEventListener('click', () => doAccept({ accept_all: true },
+          'Applying…'));
+        h.append(all);
+      }
+      proposals.append(h);
+      pend.forEach((p) => {
+        const box = document.createElement('div');
+        box.className = 'fix-agent-proposal';
+        if (p.why) {
+          const why = document.createElement('p');
+          why.className = 'muted fix-chat-cap';
+          why.textContent = p.why;
+          box.append(why);
+        }
+        box.append(fixRedline(p.before, p.after));
+        const accept = document.createElement('button');
+        accept.className = 'primary';
+        accept.textContent = 'Accept';
+        accept.addEventListener('click', () => doAccept({ accept_id: p.id },
+          'Applying…'));
+        const drop = document.createElement('button');
+        drop.className = 'quiet';
+        drop.textContent = 'Dismiss';
+        drop.addEventListener('click', () => doAccept({ dismiss_id: p.id }));
+        box.append(accept, drop);
+        proposals.append(box);
+      });
+    }
+
+    notes.textContent = '';
+    const flags = a.flags || [];
+    if (flags.length) {
+      const h = document.createElement('p');
+      h.className = 'fix-agent-notes-head';
+      h.textContent = `The agent flagged for you — ${flags.length}`;
+      notes.append(h);
+      flags.forEach((f) => {
+        const line = document.createElement('p');
+        line.className = 'muted fix-agent-note';
+        line.textContent = `• ${f.note || f.why || ''}`
+          + (f.quote ? ` — on “${f.quote}”` : '');
+        notes.append(line);
+      });
+    }
+  };
+
+  async function post(body, busyLabel) {
+    err.hidden = true;
+    setBusy(true, busyLabel);
+    try {
+      return await api(`/api/jobs/${job.id}/corrections/agent`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      setBusy(false);
+      err.textContent = e.message;
+      err.hidden = false;
+      return null;
+    }
+  }
+
+  async function doSend() {
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    const out = await post({ text });
+    if (!out) return;
+    data.agent = out.agent;
+    input.value = '';
+    setBusy(false);
+    rebuild();
+    input.focus();
+  }
+
+  async function doAccept(body, label) {
+    const out = await post(body, label);
+    if (!out) return;
+    data.agent = out.agent;
+    setBusy(false);
+    rebuild();
+    if (out.failed && out.failed.length) {
+      err.textContent = `${out.failed.length} couldn’t be applied — the line `
+        + 'may have changed since. ' + out.failed.map((f) => f.why).join('; ');
+      err.hidden = false;
+    }
+  }
+
+  send.addEventListener('click', doSend);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') doSend(); });
+
+  rebuild();
+  panel.append(intro, thread, proposals, notes, rowEl, err);
+  return panel;
 }
 
 function fixItemCard(job, data, item) {
