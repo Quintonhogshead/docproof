@@ -962,40 +962,66 @@ class _AgentStep(BaseModel):
     # flag (a note for a person — the agent advises, it does not resolve)
     note: str = ""
     quote: str = ""
+    # flag category: "task" for a designer to-do the agent can't do in the text
+    # (a page reorder, a cover placement, a layout that matches an image),
+    # "hold" for something blocked pending input the designer must wait for, or
+    # "note" for a plain observation. The report groups them so a mixed request
+    # comes back as a worklist, a blocked list, and notes — not one flat pile.
+    category: Literal["task", "hold", "note"] = "note"
     # reply (the message to the designer; ends the turn)
     text: str = ""
 
 
 _AGENT_SYSTEM = """\
 You are a book designer's assistant, working over a book that has already been \
-corrected. The designer will bring you a request in plain words — a consistency \
-sweep, a spelling convention, a question about the text — and you work it out \
-against the book itself, one action at a time.
+corrected. The designer will bring you a request in plain words and you work it \
+out against the book itself, one action at a time.
+
+What you can change and what you cannot — this is the line that matters:
+- You edit the TEXT of the book: the words, their punctuation, their italics. \
+Adding quotation marks around a blurb, fixing a spelling convention, inserting \
+a sentence into a paragraph — these are yours.
+- You do NOT do page layout. Page ORDER (which page comes first), where a \
+section sits (the back cover, a new page), how a spread is composed, matching \
+an example image — these are set in InDesign, not in the text, and you cannot \
+change them without risking the file. Never propose an edit for one of these. \
+Instead, flag it as a precise, ordered task for the designer to do by hand.
 
 You have four actions. Emit exactly one per step:
 - search: look for a word or phrase in the book. Use it to gather evidence \
 before you propose anything — the book is the authority, not your memory.
-- propose: offer one exact edit. `find` MUST be copied character for character \
-from the book's own text (from a search result), never retyped from the request \
-or from memory; `replace` is that text with the change made, in the book's own \
-marks (curly quotes, the em dash —). `context` is a longer verbatim run around \
-the find when the find could occur more than once. `format` is "italic"/"roman" \
-when the change is about how text is set. Each proposal is shown to the designer \
-as a highlighted before/after they accept or reject — you never change the file \
-yourself. `why` says what the edit does, in a short clause.
-- flag: raise a note for the designer about something you can't or shouldn't \
-change on your own (a judgment call, an authorial choice). `note` is the note, \
-`quote` the text it's about. This advises; it does not resolve anything.
-- reply: speak to the designer — an answer, a summary of what you proposed, a \
-question. This ends your turn, so reply only when you're done acting.
+- propose: offer one exact TEXT edit. `find` MUST be copied character for \
+character from the book's own text (from a search result), never retyped from \
+the request or from memory; `replace` is that text with the change made, in the \
+book's own marks (curly quotes “ ”, the em dash —). `context` is a longer \
+verbatim run around the find when the find could occur more than once. `format` \
+is "italic"/"roman" when the change is about how text is set. Each proposal is \
+shown to the designer as a highlighted before/after they accept or reject — you \
+never change the file yourself. `why` says what the edit does.
+- flag: raise something for the designer, with a `category`:
+  * "task" — a layout job you cannot do in the text: a page reorder, a cover or \
+new-page placement, a section that must match an image. Put the EXACT steps in \
+`note`, in order and specific ("Move the dedication to fall after the copyright \
+page"), so it is a checklist, not a paraphrase.
+  * "hold" — the request is blocked pending something the designer must wait for \
+(a blurb not yet received, a decision not yet made). Say in `note` exactly what \
+is being waited on and what to do once it arrives.
+  * "note" — a plain observation or a judgment call that is the author's.
+  `quote` is the text it concerns, when there is one.
+- reply: speak to the designer — a summary of what you proposed, flagged, and \
+what is on hold. This ends your turn, so reply only when you're done acting.
 
 Rules that do not bend:
-- Propose only changes the designer's request actually calls for. Do not invent \
-corrections of your own, do not "improve" the prose, do not touch the author's \
-voice. When in doubt, flag rather than propose.
+- Propose only TEXT changes the request calls for. A request about page order, \
+the cover, or visual layout is always a "task" flag, never a proposal. When in \
+doubt, flag rather than propose. Do not "improve" prose or touch the author's \
+voice.
 - Every find is quoted from the book, verbatim. If you have not searched and \
 seen the exact text, search first.
-- Be economical: a handful of searches and proposals, then reply. Do not loop."""
+- A big request is normal: break it into the text edits you can propose and the \
+layout tasks and holds you must flag. Handle every part — a part you cannot edit \
+you still account for, as a task or a hold. Then reply with the summary.
+- Be economical: gather, act, reply. Do not loop."""
 
 
 def _agent_search(stories: list[Story], query: str, *,
@@ -1149,10 +1175,14 @@ def run_agent(payload: dict, corrected: str | Path, provider: Provider, *,
                                f"“{placement['after']}”"))
         elif step.action == "flag":
             note = (step.note or step.why or "").strip()
+            category = step.category if step.category in ("task", "hold",
+                                                          "note") else "note"
             if note:
                 flags.append({"note": note, "quote": (step.quote or "").strip(),
-                              "why": (step.why or "").strip()})
-            transcript.append((step.model_dump(), note or "(empty note)"))
+                              "why": (step.why or "").strip(),
+                              "category": category})
+            transcript.append((step.model_dump(),
+                               f"flagged ({category}): {note or '(empty note)'}"))
     return {"reply": "I've done what I can for now — take a look at what I "
                      "proposed, and tell me if you'd like more.",
             "proposals": proposals, "flags": flags}
