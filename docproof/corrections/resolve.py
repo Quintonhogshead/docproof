@@ -539,7 +539,11 @@ def apply_manual(corrected: str | Path, spec: dict) -> dict:
 # --- applying a typed answer ---------------------------------------------------
 
 class _Answer(BaseModel):
-    decision: Literal["apply", "decline"]
+    # apply: carry out a text edit. leave: the text is correct as set, so the
+    # right outcome is no change — a real resolution, not a refusal. decline:
+    # the answer cannot be carried out as a text edit at all (it needs layout,
+    # names text not present, or does not say what to do).
+    decision: Literal["apply", "leave", "decline"]
     find: str = ""
     replace: str = ""
     context: str = ""
@@ -572,25 +576,36 @@ change). Leave "" otherwise.
 - note: a short clause naming what you did ("used the em dash", "changed the \
 second copy, as asked").
 
+Leave — decision "leave", with the reason in note — when the right outcome is \
+to change nothing: the text is already correct as set, the mark asks a question \
+whose answer is "it's fine as is", or the answer explicitly says to leave the \
+text alone. This is a real resolution — the flag is settled, no change needed — \
+not a refusal, so use it whenever nothing should change to the text.
+
 Decline — decision "decline", with the reason in note — ONLY when the answer \
-cannot be carried out as a text edit: it asks for page layout (breaks, \
-spacing, where a line falls), it names text that is not in the book text \
-given, or it does not actually say what to do ("look at this again"). \
-An answer that says to leave the text alone or handle it in InDesign is also \
-a decline — say so in the note. Never substitute your own editorial judgment \
-for the designer's: carry out what was decided, or decline with the reason."""
+cannot be carried out at all: it asks for page layout (breaks, spacing, where a \
+line falls, a page or cover), it names text that is not in the book text given, \
+or it does not actually say what to do ("look at this again").
+
+Never substitute your own editorial judgment for the designer's: carry out what \
+was decided, leave it if nothing should change, or decline if you cannot."""
 
 
 def adjudicate_instruction(item: dict, typed: str, provider: Provider, *,
                            model: str, usage: Usage,
                            stories: list[Story],
                            history: Sequence[dict] | None = None
-                           ) -> tuple[Edit | None, str]:
-    """One typed answer, transcribed into the exact edit it decides.
+                           ) -> tuple[Edit | None, str, str]:
+    """One typed answer, transcribed into the edit it decides.
 
-    Returns `(edit, note)` when the model committed, `(None, reason)` when it
-    declined — and a decline is an answer for the designer, not an error. The
-    edit still has to anchor and apply like any other; nothing is written
+    Returns `(edit, note, verdict)`. `verdict` is one of:
+      * "apply"   — `edit` is the change to carry out;
+      * "leave"   — the text is correct as set, so the right outcome is no
+                    change: `edit` is None and this settles the flag, it is not
+                    a refusal;
+      * "decline" — it cannot be carried out as a text edit (`edit` is None),
+                    and the flag stays a person's.
+    The edit still has to anchor and apply like any other; nothing is written
     here.
 
     `history`, when given, is the earlier turns of a conversation about this
@@ -613,26 +628,31 @@ def adjudicate_instruction(item: dict, typed: str, provider: Provider, *,
                            "or say it differently")
     a = _Answer.model_validate(result.parsed)
     note = " ".join((a.note or "").split())
+    if a.decision == "leave":
+        return None, (note or "the text is correct as set — no change needed"), \
+            "leave"
     if a.decision != "apply":
         return None, (note or "the model could not carry that out as a text "
-                              "edit")
+                              "edit"), "decline"
     find = (a.find or "").strip("\n")
     fmt = (a.format or "").strip().lower()
     if fmt and fmt not in FORMATS:
         fmt = ""
     if len(find.strip()) < MIN_FIND:
         return None, ("the model did not quote enough of the book's text to "
-                      "anchor the change — try naming the exact words")
+                      "anchor the change — try naming the exact words"), "decline"
     if a.replace == find and not fmt:
-        return None, ("the model read that as no change at all — if the text "
-                      "is already right, it can be left as it is")
+        # The model committed to "apply" but its edit changes nothing — the text
+        # is already right. That is a leave, not a failure: it settles the flag.
+        return None, (note or "the text is already correct as set — no change "
+                              "needed"), "leave"
     instruction = typed.strip() + (f" — designer resolution: {note}" if note
                                    else " — designer resolution")
     edit = Edit(id=f"{item.get('id', 'q')}-designer", find=find,
                 replace=(a.replace if not fmt or a.replace else find),
                 context=(a.context or "").strip("\n"), kind=MECHANICAL,
                 format=fmt, instruction=instruction)
-    return edit, note
+    return edit, note, "apply"
 
 
 def _adjudicate_prompt(item: dict, typed: str, stories: list[Story], *,
@@ -875,13 +895,24 @@ def materialize_suggestion(item: dict, corrected: str | Path,
     dry-run against the corrected book in memory, and handed back as the exact
     span it would change, in the same shape as a queue option. Nothing is
     written; the designer accepts it by clicking, exactly like any other
-    placement. A decline, or a suggestion that cannot be shown as one clean
-    span, is refused with the reason."""
+    placement. A suggestion whose verdict is "leave" (the text is correct as
+    set) comes back as a no-change placement — no span, `no_change` True — so
+    accepting it resolves the flag rather than erroring. Only a genuine decline,
+    or a change that cannot be shown as one clean span, is refused."""
     typed = (suggestion_instruction(item) if item.get("advice")
              else DELEGATED_INSTRUCTION)
     stories = read_stories(corrected)
-    edit, note = adjudicate_instruction(item, typed, provider, model=model,
-                                        usage=usage, stories=stories)
+    edit, note, verdict = adjudicate_instruction(
+        item, typed, provider, model=model, usage=usage, stories=stories)
+    if verdict == "leave":
+        # The model finds the text correct as set. Hand back a no-change
+        # placement the designer accepts to settle the flag — the point of
+        # "Apply the suggestion" is to act on the model's call, and its call is
+        # that nothing should change.
+        return {"id": "", "no_change": True, "note": note, "suggested": True,
+                "page": item.get("page") or 0,
+                **({"page_label": item["page_label"]}
+                   if item.get("page_label") else {})}
     if edit is None:
         raise ResolveError(f"the model declined — {note}")
     row = _edit_to_placement(edit, stories, page=item.get("page") or 0,
@@ -906,9 +937,14 @@ def converse(item: dict, corrected: str | Path, provider: Provider, *,
     typed = (chat[-1].get("text") or "").strip()
     history = chat[:-1]
     stories = read_stories(corrected)
-    edit, note = adjudicate_instruction(item, typed, provider, model=model,
-                                        usage=usage, stories=stories,
-                                        history=history)
+    edit, note, verdict = adjudicate_instruction(
+        item, typed, provider, model=model, usage=usage, stories=stories,
+        history=history)
+    if verdict == "leave":
+        return {"reply": note or ("The text is already correct as set — nothing "
+                                  "to change. Use Ignore to close this, or tell "
+                                  "me what to change instead."),
+                "proposal": None}
     if edit is None:
         return {"reply": note or ("I couldn't turn that into a change — say it "
                                   "differently, or name the exact words."),
@@ -1310,6 +1346,12 @@ def record_resolution(json_path: str | Path, item_id: str,
     resolution["at"] = datetime.now(timezone.utc).isoformat()
     item["resolved"] = resolution
     dismissed = resolution.get("kind") == "dismissed"
+    # A "no change needed" settlement: the model (or the designer) determined the
+    # text is correct as set. Nothing is written and nothing is "applied", but
+    # the flag IS settled — so its edits leave the awaiting pile like a resolved
+    # one, not the set-aside bucket a dismiss uses. Its comment is resolved, not
+    # dismissed. It is off everyone's list by a decision, recorded, not hidden.
+    no_change = resolution.get("kind") == "no_change"
 
     ap = payload.get("apply")
     if ap is not None and dismissed:
@@ -1319,6 +1361,12 @@ def record_resolution(json_path: str | Path, item_id: str,
         for o in ap.get("flagged") or []:
             if o["id"] in (item.get("edit_ids") or []):
                 o["dismissed"] = True
+    elif ap is not None and no_change:
+        # No change is coming for any of this item's edits, so all of them
+        # leave the awaiting pile — resolved, not applied, not set aside.
+        for o in ap.get("flagged") or []:
+            if o["id"] in (item.get("edit_ids") or []):
+                o["resolved"] = True
     elif ap is not None:
         ap["applied"] = int(ap.get("applied") or 0) + 1
         # One resolution applies one change, so it retires exactly one flagged
@@ -1337,7 +1385,10 @@ def record_resolution(json_path: str | Path, item_id: str,
             if c["id"] == item["comment_id"]:
                 c["dismissed" if dismissed else "resolved"] = True
         _recount_unresolved(com)
-    if not dismissed:
+    # A no-change settlement rewrites nothing, so it adds no line to the change
+    # log — it is recorded only in the resolutions below, as the confirmed
+    # "correct as set" call it is. A dismiss likewise writes no change line.
+    if not dismissed and not no_change:
         note = ("resolved in review by the designer"
                 + (f" — “{resolution['text']}”" if resolution.get("text")
                    else ""))

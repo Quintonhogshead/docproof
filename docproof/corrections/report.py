@@ -420,6 +420,15 @@ def _markdown(d: dict) -> str:
         L.append("These flags were resolved on the review screen; the changes "
                  "are in the corrected file.\n")
         for r in resolutions:
+            q = by_item.get(r.get("item_id")) or {}
+            where = _page_where(q)
+            # A no-change settlement changed nothing, so it has no was/now line —
+            # only the confirmation that the text is correct as set, and why.
+            if r.get("kind") == "no_change":
+                how = ("confirmed correct as set — no change needed"
+                       + (f": {_preview(r['note'])}" if r.get("note") else ""))
+                L.append(f"- {f'**{where}** — ' if where != '—' else ''}{how}")
+                continue
             how = ("edited the line by hand" if r.get("kind") == "manual"
                    else "applied the model's suggestion"
                    if r.get("kind") == "suggestion"
@@ -430,8 +439,6 @@ def _markdown(d: dict) -> str:
                    if r.get("kind") == "chat"
                    else f"typed: “{_preview(r['text'])}”" if r.get("text")
                    else "picked a placement")
-            q = by_item.get(r.get("item_id")) or {}
-            where = _page_where(q)
             if where != "—":
                 how = f"**{where}** — {how}"
             L.append(f"- {how}:")
