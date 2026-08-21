@@ -17,8 +17,9 @@ def _comment(cid, anchor, note, kind="highlight", offset=0):
             "offset": offset, "page": int(cid.split("-")[0][1:])}
 
 
-def _screen(edit, comment, book_pages=None):
-    out, withheld = screen_edits([edit], [comment], book_pages=book_pages or {})
+def _screen(edit, comment, book_pages=None, pdf_pages=None):
+    out, withheld = screen_edits([edit], [comment], book_pages=book_pages or {},
+                                 pdf_pages=pdf_pages)
     return out[0], withheld
 
 
@@ -35,6 +36,29 @@ def test_an_edit_on_the_wrong_page_is_withheld():
     _out, withheld = _screen(e, _comment("p157-1", "she", "Replace comma with "
                                          "period and capitalize \"she\""), book)
     assert "c1" in withheld and "not on page 157" in withheld["c1"]
+
+
+def test_the_proof_exonerates_a_page_the_map_under_covered():
+    """The map's alignment of page 175 dropped the marked line, and the same words
+    recur on a page it cites elsewhere — so `book_pages` alone reads it as the wrong
+    copy. But the proof's own page 175 sets the line plainly, so the map simply missed
+    it and the edit must not be flagged: a bad alignment may cost precision, never a
+    correction."""
+    e = Edit(id="c1", find="the harbour lights", replace="the harbor lights",
+             page=175, source="p175-1", instruction="US spelling")
+    # The map aligned only the head of 175 and swallowed the marked line into 204's
+    # alignment (an identical phrase recurs there); neither 175 nor its neighbours
+    # carry it in the book text.
+    book = {174: "close of the chapter before.",
+            175: "a paragraph that aligned but not the marked line.",
+            176: "the chapter that follows opens here.",
+            204: "far away, the harbour lights came on one by one."}
+    # The proof, though, printed the marked line on page 175.
+    pdf = [""] * 174 + ["they watched the harbour lights from the pier."]
+    _out, withheld = _screen(
+        e, _comment("p175-1", "harbour lights", "US spelling"),
+        book, pdf_pages=pdf)
+    assert "c1" not in withheld
 
 
 def test_a_change_outside_the_highlight_is_withheld():

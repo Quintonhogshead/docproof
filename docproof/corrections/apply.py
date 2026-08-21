@@ -511,6 +511,24 @@ def _narrow_to_page(edit: Edit, candidates: list, scope) -> list:
             if scope.contains(edit.page, c[0].story_id, c[1].index, c[2], c[3])]
 
 
+# How far from the cited page the proof is read when exonerating a wrong-copy call.
+# One either side, matching the fidelity gate: a mark near the foot of a page quotes
+# a line the book set on the next one.
+_PROOF_WINDOW = 1
+
+
+def _on_proof_page(find: str, scope, page: int) -> bool:
+    """Whether `find` appears on the proof's own rendering of `page` (or a page
+    either side of it). The proof is the direct record of what a page holds, so this
+    exonerates a candidate the map's alignment failed to place on its page. No scope,
+    no proof text, or no match yields False, and the caller keeps the map's verdict."""
+    if scope is None or not find:
+        return False
+    here = "".join(scope.proof_text(p)
+                   for p in range(page - _PROOF_WINDOW, page + _PROOF_WINDOW + 1))
+    return bool(here.strip()) and bool(all_spans(here, find))
+
+
 def _pin_occurrences(stories: list[Story], edits: list[Edit], cache: IndexCache,
                      scope) -> dict[str, tuple[str, int, int, int]]:
     """Where each ordinal names, measured on the book before this run changes it.
@@ -626,8 +644,14 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
         # exactly how a mark for page 157 landed on the identical wording of page
         # 181. A lone match on the wrong page is a wrong copy, not an answer: refuse
         # it. (An unplaced page tells us nothing, so it still applies.)
+        #
+        # Unless the proof itself sets this text on the cited page: `on_page` is the
+        # map's *alignment*, which can under-cover a page and drop the very run a mark
+        # sits on, and this is the only copy in the book — so if the proof's own page
+        # carries it, the map missed it and refusing would let a bad alignment cost
+        # the one correction, which the map is never allowed to do.
         if (edit.page and scope is not None and scope.knows(edit.page)
-                and not on_page):
+                and not on_page and not _on_proof_page(edit.find, scope, edit.page)):
             story, para, _s, _e = candidates[0]
             return EditOutcome(
                 edit, OFF_PAGE, story_id=story.story_id, paragraph=para.index,

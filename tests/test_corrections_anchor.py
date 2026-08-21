@@ -173,6 +173,27 @@ def test_a_lone_match_on_the_wrong_placed_page_is_refused():
     assert s.paragraphs[0].text == BOOK_PAGES[0]     # page 1 untouched
 
 
+def test_the_proof_exonerates_a_lone_match_the_map_mis_placed():
+    """The counterpart to the refusal above: the map placed the cited page but its
+    alignment did not cover the marked line, and the line's one copy in the book sits
+    outside it — so on the alignment alone this reads as the wrong copy. But the
+    proof's own cited page prints the line, so the map simply missed it, and refusing
+    would let a bad alignment cost the only correction. It applies."""
+    s = _three_page_story()
+    # Page 3 is placed, but its proof text also prints "listening" — a line the
+    # alignment (which pins page 3 to its own paragraph) does not cover, and whose
+    # single book copy lives back on page 1.
+    proof = list(BOOK_PAGES)
+    proof[2] = BOOK_PAGES[2] + " She was still listening."
+    scope = build_page_map([s], proof)
+    assert scope.knows(3)
+    outs, _ = apply_to_stories([s], [Edit(id="e1", find="listening",
+                                          replace="waiting", page=3)],
+                               scope=scope)
+    assert outs[0].status == APPLIED
+    assert s.paragraphs[0].text == "She waited by the door, waiting. The house was quiet."
+
+
 def test_the_page_map_survives_a_pdf_rendering_of_the_page():
     """The page text comes from the PDF reader, so it carries the same artifacts
     the anchors do. The map has to align through them."""
