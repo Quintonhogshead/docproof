@@ -12,7 +12,8 @@ that lost it (a duplicate, or one re-uploaded out of Downloads).
 
 Recognition is deliberately forgiving of the drift a real filename picks up on
 its way through Word and Google Docs — the " - " separator autocorrected into an
-en or em dash, case, doubled spaces, a co-author parenthetical on the surname —
+en or em dash, a stray dash between "Book" and "Original", case, doubled spaces,
+a co-author parenthetical on the surname —
 because the alternative is a real "<surname> - Book Original" silently passed
 over, or a draft beside it prepared by mistake. What it does *not* forgive is a
 wrong surname or a missing token: a "Developmental Editorial Review" is not the
@@ -47,10 +48,18 @@ INDESIGN_SUFFIX = " - indesign"
 _DASH_CHARS = "-‐‑‒–—―−"
 _DASH_RE = re.compile(f"[{_DASH_CHARS}]")
 
+# What separates the source-stage words from each other. A space is the house
+# spelling, but "Book - Original" (a stray dash a typist or an autocorrect put
+# between them) is the same token, so any dash variant or whitespace run counts.
+# `_SOURCE_RE` runs on a folded stem (dashes already hyphens) and
+# `_SOURCE_TOKEN_RE` on a raw one (any dash), and this class covers both.
+_STAGE_SEP = rf"\s*[{_DASH_CHARS}\s]\s*"
+
 # The source stage words, spelled once so the two regexes below cannot drift
-# from the constant. Flexible whitespace, because "Book  Original" (doubled
-# space) is the same token; matched case-insensitively by the callers.
-_SOURCE_WORDS = r"\s+".join(map(re.escape, SOURCE_STAGE.casefold().split()))
+# from the constant. Flexible inner separator, because "Book  Original" (doubled
+# space) and "Book - Original" (stray dash) are the same token; matched
+# case-insensitively by the callers.
+_SOURCE_WORDS = _STAGE_SEP.join(map(re.escape, SOURCE_STAGE.casefold().split()))
 
 # The whole stem is "<surname> - Book Original", nothing after: the strict intake
 # recognizer, run against an already-folded stem. A trailing draft/notes word is
