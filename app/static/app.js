@@ -3168,6 +3168,30 @@ $('start').addEventListener('click', async () => {
         button.textContent = 'Applying…';
       }
     }
+    // A marked-PDF read attaches the proof's page texts (and its comments)
+    // beside the list, but they live only on this page — a reload discards
+    // them while the list itself can be re-supplied. Running a page-citing
+    // list without them silently loses every mark's page narrowing, so a
+    // repeated find can only be flagged — the flood that buried one run in
+    // hundreds of ambiguous comma flags. Asked about, never assumed.
+    if (isCorrections()) {
+      const ta = $('corrections-input');
+      let edits = [];
+      try { edits = JSON.parse((ta || {}).value || '[]'); } catch (_) { /* gated below by the server */ }
+      let pages = [];
+      try { pages = JSON.parse(((ta || {}).dataset || {}).pages || '[]'); } catch (_) { /* as missing */ }
+      const cites = Array.isArray(edits) && edits.some((e) => e && e.page);
+      const attached = Array.isArray(pages) && pages.length > 0;
+      if (cites && !attached && !confirm(
+        'This list cites proof pages, but the proof’s page texts aren’t '
+        + 'attached. They’re captured when the marked PDF is read, and a page '
+        + 'reload discards them.\n\nWithout them, marks lose their page '
+        + 'narrowing — a correction to repeated text can only be flagged, not '
+        + 'applied.\n\nOK runs without them anyway. Cancel to go back — '
+        + 're-read the marked proof to attach its pages.')) {
+        return;
+      }
+    }
     // Promo is its own pipeline with its own page: the same dropped files, sent
     // to /api/promo/run, and the Promo tab shows them being written.
     const promoRun = isPromo();
@@ -4602,13 +4626,21 @@ function renderFixList(job, data) {
   const aside = queue.filter((q) => q.resolved
     && q.resolved.kind === 'dismissed');
 
-  // Which page numbers this screen speaks in, said once.
+  // Which page numbers this screen speaks in, said once. A run that cited
+  // pages but carried none at all gets the loud version — the flags below are
+  // mostly the *consequence* of that, and the fix is a re-read, not a
+  // click-through.
   const paged = queue.some((q) => q.page);
   const labeled = queue.some((q) => q.page_label);
-  $('fix-sub').textContent = (paged && !labeled)
-    ? 'Page numbers are the proof PDF’s own — the book’s folios could not be '
-      + 'aligned for this run.'
-    : '';
+  const pgs = data.pages || {};
+  $('fix-sub').textContent = (!pgs.total && pgs.cited)
+    ? 'No proof pages accompanied this run — marks lost their page narrowing, '
+      + 'which is why repeated text flagged. Re-reading the marked proof '
+      + 'attaches its pages.'
+    : (paged && !labeled)
+      ? 'Page numbers are the proof PDF’s own — the book’s folios could not be '
+        + 'aligned for this run.'
+      : '';
 
   // The working bar: how far along, and the file itself once — or while —
   // you're at it. Downloading mid-way is fine; it simply carries what's
@@ -5458,13 +5490,22 @@ function correctionsReportHTML(d) {
 
   // Which page numbers this report speaks in: the file's own folios when the
   // run aligned them, otherwise the proof's physical pages — said out loud so a
-  // designer is not hunting for a page InDesign numbers differently.
+  // designer is not hunting for a page InDesign numbers differently. A run
+  // that cited pages but carried none at all gets the loud version: the marks
+  // lost their page narrowing entirely, which is why repeated text flagged.
   const pg = d.pages || {};
-  const pagesNote = (pg.total && !pg.labeled)
-    ? '<p class="blurb">Page numbers here are the proof PDF’s physical pages — '
-      + 'the file’s own folios could not be aligned to the proof for this '
-      + 'run.</p>'
-    : '';
+  const pagesNote = (!pg.total && pg.cited)
+    ? '<p class="headline" style="background:#fbeae2"><b>No proof pages '
+      + 'accompanied this run.</b> '
+      + `${num(pg.cited)} correction(s) cite a proof page, but the proof’s `
+      + 'page texts were not attached — every mark had the whole book to '
+      + 'match against, so repeated text could only be flagged. Re-reading '
+      + 'the marked proof attaches its pages.</p>'
+    : (pg.total && !pg.labeled)
+      ? '<p class="blurb">Page numbers here are the proof PDF’s physical pages — '
+        + 'the file’s own folios could not be aligned to the proof for this '
+        + 'run.</p>'
+      : '';
 
   const issuesHTML = issues.length
     ? `<h2>Corrections that could not be read — ${num(issues.length)}</h2>`

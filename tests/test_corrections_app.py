@@ -526,7 +526,8 @@ def test_a_corrections_job_carries_the_page_texts_into_the_run(client):
         corrections_pages=json.dumps([book[4]]))
     assert job["state"] == "done", job.get("error")
     report = client.get(f"/api/jobs/{job['id']}/corrections").json()
-    assert report["pages"] == {"placed": 1, "total": 1, "labeled": 1}
+    assert report["pages"] == {"placed": 1, "total": 1, "labeled": 1,
+                               "cited": 1}
 
 
 # --- resolving flags from the review screen ------------------------------------

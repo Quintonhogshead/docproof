@@ -346,7 +346,9 @@ def test_an_ordinal_counted_on_a_page_that_cannot_be_placed_is_refused():
     edit = Edit("e1", "the word", "the phrase", occurrence=2, page=111)
     outcomes, _ = apply_to_stories([story], [edit])          # no page map
     assert outcomes[0].status == AMBIGUOUS
-    assert "could not be placed" in outcomes[0].detail
+    # With no page map at all, the wording blames the missing pages — not a
+    # placement the run never attempted.
+    assert "no proof pages accompanied this run" in outcomes[0].detail
     assert [p.text for p in story.paragraphs] == ["the word here.",
                                                   "the word there."]
 
