@@ -5176,13 +5176,26 @@ function editorModel(state, preApply, highlight) {
   return { text, chars, hl };
 }
 
-// A highlight widened to whole words — “There” glows, not the “re” a minimal
-// character diff leaves inside it. Visual only; the save reads none of this.
+// A highlight snapped to whole words — “There” glows, not the “re” a minimal
+// character diff leaves inside it, and one marked word glows as just that word,
+// not with the space the diff left hanging off it. Visual only; the save reads
+// none of this.
 function wordSpan(text, span) {
   const wordish = (ch) => !!ch && /[\p{L}\p{N}'’]/u.test(ch);
   let [s, e] = span;
   while (s > 0 && wordish(text[s - 1]) && wordish(text[s])) s -= 1;
   while (e < text.length && wordish(text[e]) && wordish(text[e - 1])) e += 1;
+  // Any word inside: glow exactly the word(s), trimming the spaces or
+  // punctuation a minimal diff can leave clinging to either end.
+  let hasWord = false;
+  for (let i = s; i < e; i += 1) { if (wordish(text[i])) { hasWord = true; break; } }
+  if (hasWord) {
+    while (s < e && !wordish(text[s])) s += 1;
+    while (e > s && !wordish(text[e - 1])) e -= 1;
+    return [s, e];
+  }
+  // No word inside, but a real span — a punctuation- or space-only change, e.g.
+  // a comma moved. Glow it as it is.
   if (e > s) return [s, e];
   // A collapsed span — a deletion removed whole words, so the after-text has
   // nothing at the point to mark. Glow the word just after the gap so the
