@@ -1609,7 +1609,14 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
 .fix-expandable:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 3px; }
 .fix-done-aside { margin: 0.35rem 0 0.3rem; }
 .fix-bar {
-  position: sticky; top: 0; z-index: 5;
+  /* Sticks just below the app header, not at top:0 — the header is itself
+     sticky at top:0 (z-index 5) and wraps to a taller row on narrow widths, so
+     pinning here at top:0 too made the two collide and the bar ride over the
+     nav on scroll. --header-h is measured from the real header in JS (it
+     changes when the header wraps); the fallback matches its unwrapped height.
+     z-index below the header, so if a resize outruns the measurement the bar
+     tucks under the nav rather than over it. */
+  position: sticky; top: var(--header-h, 4.6rem); z-index: 4;
   display: flex; align-items: center; gap: 0.8rem;
   padding: 0.55rem 0.2rem; margin: 0 0 0.6rem;
   background: var(--bg); border-bottom: 1px solid var(--line);
