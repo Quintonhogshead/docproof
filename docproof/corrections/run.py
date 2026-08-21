@@ -414,6 +414,20 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
     note("reading")
     parsed = parse_edits(corrections, id_prefix=id_prefix)
     edits = list(parsed.edits)
+    # How many corrections cite a proof page. When they do and no page texts
+    # came along — a marked-PDF list re-supplied after a reload lost its
+    # sidecars, or a typed list with a page column — every one of them loses
+    # its page narrowing and a repeated find can only be flagged. That is a
+    # run-level degradation, so it is counted here and said out loud in the
+    # log and the report rather than left to be inferred from a flood of
+    # ambiguous flags.
+    pages_cited = sum(1 for e in edits if e.page)
+    if pages_cited and not page_texts:
+        log.warning(
+            "%d correction(s) cite proof pages but no page texts accompanied "
+            "the run — marks lose their page narrowing and repeated text can "
+            "only be flagged. Re-reading the marked proof attaches its pages.",
+            pages_cited)
 
     usage = (Usage() if any(p is not None
                             for p in (sanity, second_look, escalate)) else None)
@@ -638,7 +652,8 @@ def apply_corrections(src_idml: str | Path, corrections, out_dir: str | Path, *,
         apply=apply_report, verify=verify_report, comments=dispositions,
         deterministic=(sanity is None and second_look is None
                        and escalate is None),
-        pages=(pages_placed, pages_total), checks=checks,
+        pages=(pages_placed, pages_total), pages_cited=pages_cited,
+        checks=checks,
         merged_away=merged_away, page_labels=page_labels, queue=queue)
     log.info("Corrections applied to %s: %s; %d comment(s), %d unresolved; "
              "second look settled %d, re-anchored %d, merged %d; last tier "

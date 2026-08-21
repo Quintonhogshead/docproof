@@ -58,7 +58,7 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
                  apply: ApplyReport | None, verify: VerifyReport,
                  comments: tuple[CommentDisposition, ...] = (),
                  deterministic: bool = True,
-                 pages: tuple[int, int] = (0, 0),
+                 pages: tuple[int, int] = (0, 0), pages_cited: int = 0,
                  checks: tuple = (), merged_away: int = 0,
                  page_labels: dict[int, str] | None = None,
                  queue: list[dict] | None = None) -> tuple[Path, Path]:
@@ -67,14 +67,19 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
     (the sanity gate, or the second look over the extractor's queries), so the
     report does not over-claim being model-free. `pages` is
     `(placed, total)` from the page map, reported so a run whose page narrowing
-    silently did not happen says so. `page_labels` maps a proof page to the
+    silently did not happen says so. `pages_cited` is how many corrections cite
+    a proof page — with a zero page total it means the marks lost their page
+    narrowing entirely, which the report says in so many words rather than
+    leaving a flood of ambiguous flags to imply it. `page_labels` maps a proof
+    page to the
     InDesign folio it should be shown as (see `idml.page_label_map`), so every
     page a reviewer or designer reads here is the page InDesign shows. `queue` is
     the review screen's list of unresolved flags with their clickable resolutions
     (see `resolve`)."""
     payload = _payload(source_path=source_path, after_path=after_path,
                        parse=parse, apply=apply, verify=verify, comments=comments,
-                       deterministic=deterministic, pages=pages, checks=checks,
+                       deterministic=deterministic, pages=pages,
+                       pages_cited=pages_cited, checks=checks,
                        merged_away=merged_away, page_labels=page_labels or {},
                        queue=queue)
     json_path = out_dir / "corrections.json"
@@ -87,8 +92,8 @@ def write_report(out_dir: Path, *, source_path, after_path, parse: ParseResult,
 
 
 def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
-             deterministic=True, pages=(0, 0), checks=(), merged_away=0,
-             page_labels=None, queue=None) -> dict:
+             deterministic=True, pages=(0, 0), pages_cited=0, checks=(),
+             merged_away=0, page_labels=None, queue=None) -> dict:
     needs_human = [c for c in comments if c.needs_human]
     placed, total = pages
     page_labels = page_labels or {}
@@ -175,7 +180,12 @@ def _payload(*, source_path, after_path, parse, apply, verify, comments=(),
                   # How many proof pages could be shown as the file's own folio.
                   # 0 with a nonzero total means every reported page is the
                   # proof's physical page — worth the report saying out loud.
-                  "labeled": len(page_labels)},
+                  "labeled": len(page_labels),
+                  # How many corrections cite a proof page. Nonzero with a zero
+                  # total means the marks lost their page narrowing entirely —
+                  # the proof's pages never reached the run — and the report
+                  # warns in so many words.
+                  "cited": pages_cited},
         # The designer's list: what needs InDesign open, located. Composition is the
         # one thing this engine cannot do, so it is the one thing it does not claim.
         "checks": [_with_label(dataclasses.asdict(c), page_labels) for c in checks],
@@ -317,6 +327,19 @@ def _markdown(d: dict) -> str:
                      f"above are the reviewer's marks, one to a comment.*\n")
 
     pages = d.get("pages") or {"placed": 0, "total": 0}
+    if not pages["total"] and pages.get("cited"):
+        # The run had page-citing corrections and no proof pages at all — the
+        # sidecar a marked-PDF read attaches was lost (a reload discards it),
+        # or a typed list carried a page column. Every mark then has the whole
+        # book to match against, so a repeated find can only be flagged. Said
+        # first and plainly, because the alternative is a designer reading a
+        # flood of ambiguous flags one by one.
+        L.append(f"**No proof pages accompanied this run.** "
+                 f"{pages['cited']} correction(s) cite a proof page, but the "
+                 f"proof's page texts were not attached, so every mark had the "
+                 f"whole book to match against — repeated text could only be "
+                 f"flagged, and page numbers here are the list's own. "
+                 f"Re-reading the marked proof attaches its pages.\n")
     if pages["total"]:
         if pages["placed"] == pages["total"]:
             L.append(f"Every one of the {pages['total']} proof pages was located "

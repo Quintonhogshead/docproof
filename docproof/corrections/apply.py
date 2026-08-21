@@ -625,12 +625,24 @@ def _match(edit: Edit, stories: list[Story], cache: IndexCache, scope=None,
     # the novel", and reading it as one would apply a correction to whichever copy
     # happened to come second. So it is refused rather than reinterpreted.
     if edit.occurrence and edit.page and not on_page and len(candidates) > 1:
+        # Say which of the three failures actually happened: the run had no
+        # proof pages at all (the sidecar was lost, or a typed list), the map
+        # could not place this page, or it placed the page but its aligned text
+        # does not hold this find. The first is a run-level problem the report
+        # warns about; blaming the page for it sent people hunting a page map
+        # that never existed.
+        if scope is None:
+            why = ("no proof pages accompanied this run, so the page could "
+                   "not narrow it")
+        elif scope.knows(edit.page):
+            why = "the page's aligned text does not hold this text"
+        else:
+            why = "that page could not be placed in the book"
         return EditOutcome(
             edit, AMBIGUOUS, occurrences=len(candidates),
             detail=f"the correction names the copy on page "
-                   f"{_page_name(edit.page, page_labels)}, and that "
-                   "page could not be placed in the book, so which copy it means "
-                   "cannot be told")
+                   f"{_page_name(edit.page, page_labels)}, and {why}, "
+                   "so which copy it means cannot be told")
 
     if edit.context:
         # In one paragraph first, then across breaks. The order matters: a context

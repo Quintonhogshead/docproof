@@ -306,6 +306,38 @@ def test_a_resolution_in_the_notes_names_its_page():
     assert "**page 1** — picked a placement" in md
 
 
+def test_a_pageless_run_of_a_page_citing_list_warns_loudly(tmp_path):
+    """A marked-PDF list re-supplied without its sidecar pages (a reload
+    discards them) loses every mark's page narrowing — a repeated find can
+    only be flagged. The report must say that up front, count the citing
+    edits, and the flag wording must blame the missing pages, not a page map
+    that never existed."""
+    edits = [{"find": "was", "replace": "is", "page": 3, "occurrence": 2,
+              "instruction": "Add comma after"}]
+    got = apply_corrections(LAYOUT, json.dumps(edits), tmp_path)   # no pages
+    report = json.loads(got.report_json.read_text(encoding="utf-8"))
+    assert report["pages"] == {"placed": 0, "total": 0, "labeled": 0,
+                               "cited": 1}
+    detail = report["apply"]["flagged"][0]["detail"]
+    assert "no proof pages accompanied this run" in detail
+    assert "could not be placed" not in detail
+    md = got.report_md.read_text(encoding="utf-8")
+    assert "No proof pages accompanied this run." in md
+    assert "1 correction(s) cite a proof page" in md
+
+
+def test_a_pageless_list_that_cites_no_pages_stays_quiet(tmp_path):
+    # A typed list with no page column is the ordinary free path — no warning.
+    got = apply_corrections(LAYOUT,
+                            json.dumps([{"find": "Their were",
+                                         "replace": "There were"}]),
+                            tmp_path)
+    report = json.loads(got.report_json.read_text(encoding="utf-8"))
+    assert report["pages"]["cited"] == 0
+    assert "No proof pages accompanied" not in \
+        got.report_md.read_text(encoding="utf-8")
+
+
 def test_queue_options_carry_the_folio_too(tmp_path):
     """The fix screen's clickable placements name the page a designer navigates
     to, so each option is stamped with the folio, not just its item."""
