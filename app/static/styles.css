@@ -1643,7 +1643,7 @@ button.pill.setup.actionable:focus-visible { outline: 2px solid var(--warn); out
   border-radius: 2px;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 35%, transparent);
 }
-.fix-applied { margin: 0.9rem 0; }
-.fix-applied > summary {
+.fix-applied, .fix-resolved { margin: 0.9rem 0; }
+.fix-applied > summary, .fix-resolved > summary {
   cursor: pointer; font-weight: 600; padding: 0.3rem 0;
 }
