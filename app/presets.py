@@ -1,10 +1,10 @@
-"""The effort-tier ladder: four named bundles of per-run controls.
+"""The effort-tier ladder: named bundles of per-run controls.
 
 A tier is a CLIENT-SIDE MACRO. Selecting one pre-fills the review panel's
 existing controls (reviewer model, effort, glossary picker, rounds, judge /
 meaning / fix pickers, the pass checkboxes) with a bundle's values; the body
-POST /api/jobs receives is unchanged in shape. Any later deviation from the
-selected tier's resolved bundle is the implicit fifth state, "Custom".
+POST /api/jobs receives those resolved controls. Any later deviation from the
+selected tier's bundle is the implicit additional state, "Custom".
 
 Every feature id below is a real FeatureSpec id (app/features.FEATURES_BY_ID);
 every model id is a real catalog id (docproof.providers.catalog). The pytest in
@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+
+from docproof.profiles import DETECTOR_ONLY
 
 # The reviewer is fixed across the whole ladder by product decision.
 REVIEWER = "gpt-5.6-luna"
@@ -45,6 +47,7 @@ class TierPreset:
     glossary_model: str               # -> JobRequest.glossary_model (catalog id or "off")
     rounds: int                       # -> JobRequest.rounds  (1..4)
     min_confidence: str = "medium"    # -> JobRequest.min_confidence
+    profile: str = ""                 # -> JobRequest.profile
     judge_model: str | None = None    # -> JobRequest.judge_model  (only vetted when rounds>1)
     meaning_model: str | None = None  # -> JobRequest.meaning_model (None => server default)
     fix_model: str | None = None      # -> JobRequest.fix_model     (None => server default)
@@ -64,19 +67,29 @@ class TierPreset:
     # "always"   runs it unconditionally; a keyless run skips it gracefully
     #            (SaplingConfig) and the tier card shows the missing-key note.
     sapling: SaplingPolicy = "off"
+    # Additional switches for a purpose-built profile. Ordinary effort tiers
+    # govern only the seven ladder toggles; detector-only must also make every
+    # output and safety state visible in the panel so its promise is obvious.
+    extra_features: tuple[tuple[str, bool], ...] = ()
 
-    def features(self, sapling_keyed: bool) -> dict[str, bool]:
-        """The {feature_id: bool} map, Sapling resolved against live key state."""
-        sap = self.sapling == "always" or (self.sapling == "if_keyed" and sapling_keyed)
-        return {
+    def feature_controls(self) -> dict[str, bool]:
+        values = {
             "storysheet": self.storysheet,
             "continuity": self.continuity,
             "rewrite": self.rewrite,
             "languagetool": self.languagetool,
-            "sapling": sap,
             "meaning_check": self.meaning_check,
             "fix_check": self.fix_check,
         }
+        values.update(dict(self.extra_features))
+        return values
+
+    def features(self, sapling_keyed: bool) -> dict[str, bool]:
+        """The {feature_id: bool} map, Sapling resolved against live key state."""
+        sap = self.sapling == "always" or (self.sapling == "if_keyed" and sapling_keyed)
+        values = self.feature_controls()
+        values["sapling"] = sap
+        return values
 
     def to_payload(self, *, sapling_keyed: bool) -> dict:
         """The subset of the POST /api/jobs body this tier pins. The client
@@ -92,6 +105,7 @@ class TierPreset:
             "meaning_model": self.meaning_model,
             "fix_model": self.fix_model,
             "min_confidence": self.min_confidence,
+            "profile": self.profile,
             "features": self.features(sapling_keyed),
         }
 
@@ -113,17 +127,37 @@ class TierPreset:
                 "meaning_model": self.meaning_model,
                 "fix_model": self.fix_model,
                 "min_confidence": self.min_confidence,
+                "profile": self.profile,
             },
-            "features": {
-                "storysheet": self.storysheet,
-                "continuity": self.continuity,
-                "rewrite": self.rewrite,
-                "languagetool": self.languagetool,
-                "meaning_check": self.meaning_check,
-                "fix_check": self.fix_check,
-            },
+            "features": self.feature_controls(),
             "sapling": self.sapling,
         }
+
+
+DETECTOR_ONLY_PRESET = TierPreset(
+    id="detector",
+    name="Detector only",
+    blurb="The core detector adds Word tracked changes. No comments, silent "
+          "normalization, or extra passes; defaults to overnight batch pricing.",
+    model=REVIEWER,
+    effort="low",
+    glossary_model="off",
+    rounds=1,
+    min_confidence="medium",
+    profile=DETECTOR_ONLY,
+    extra_features=(
+        ("factcheck", False), ("chapter_continuity", False),
+        ("adjudicate", False), ("consistency", False),
+        ("spellcheck", False), ("heading_case", False),
+        ("residuals", False), ("smoothing", False),
+        ("comments", False), ("sapling_comments", False),
+        ("query_comments", False), ("not_applied_comments", False),
+        ("change_log", False), ("report_explanations", False),
+        ("normalize_quotes", False), ("normalize_spaces", False),
+        ("edit_guard", True), ("audit", True),
+        ("examination_graph", True), ("examination_judgment", False),
+    ),
+)
 
 
 LIGHT_TOUCH = TierPreset(
@@ -201,5 +235,6 @@ THE_HAMMER = TierPreset(
     sapling="always",                 # unconditional; keyless run skips it gracefully
 )
 
-TIERS: tuple[TierPreset, ...] = (LIGHT_TOUCH, STANDARD, HARD, THE_HAMMER)
+TIERS: tuple[TierPreset, ...] = (
+    DETECTOR_ONLY_PRESET, LIGHT_TOUCH, STANDARD, HARD, THE_HAMMER)
 TIERS_BY_ID: dict[str, TierPreset] = {t.id: t for t in TIERS}

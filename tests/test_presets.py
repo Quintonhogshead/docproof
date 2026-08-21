@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from app.features import FEATURES_BY_ID
 from app.presets import (TIERS, TIERS_BY_ID, DEFAULT_TIER_ID,
-                         LADDER_FEATURE_IDS, LIGHT_TOUCH, STANDARD, HARD,
-                         THE_HAMMER, REVIEWER)
+                         LADDER_FEATURE_IDS, DETECTOR_ONLY_PRESET, LIGHT_TOUCH,
+                         STANDARD, HARD, THE_HAMMER, REVIEWER)
 from app.settings import Settings, EFFORT_LEVELS, CONFIG_PATH
 from docproof.config import load_config
 from docproof.providers.catalog import lookup
@@ -13,10 +13,12 @@ from docproof.providers.catalog import lookup
 CONFIDENCE = {"low", "medium", "high"}
 
 
-def test_four_tiers_present_with_exact_names():
-    assert [t.id for t in TIERS] == ["light", "standard", "hard", "hammer"]
+def test_five_tiers_present_with_exact_names():
+    assert [t.id for t in TIERS] == [
+        "detector", "light", "standard", "hard", "hammer"]
     assert {t.id: t.name for t in TIERS} == {
-        "light": "Light touch", "standard": "Standard",
+        "detector": "Detector only", "light": "Light touch",
+        "standard": "Standard",
         "hard": "Hard", "hammer": "The hammer"}
     assert DEFAULT_TIER_ID == "standard" and "standard" in TIERS_BY_ID
 
@@ -31,8 +33,9 @@ def test_every_feature_key_is_a_real_feature_id():
         for keyed in (False, True):
             for fid in t.features(keyed):
                 assert fid in FEATURES_BY_ID
-            # the map is exactly the seven ladder ids, nothing more
-            assert set(t.features(keyed)) == set(LADDER_FEATURE_IDS)
+            if t is not DETECTOR_ONLY_PRESET:
+                # Ordinary effort tiers govern exactly the seven ladder ids.
+                assert set(t.features(keyed)) == set(LADDER_FEATURE_IDS)
 
 
 def test_every_model_id_is_in_the_catalog():
@@ -77,6 +80,21 @@ def test_light_touch_turns_everything_off_at_low_effort():
     p = LIGHT_TOUCH.to_payload(sapling_keyed=True)   # even keyed, sapling stays off
     assert p["effort"] == "low"
     assert all(v is False for v in p["features"].values())
+
+
+def test_detector_only_is_an_explicit_tracked_changes_profile():
+    p = DETECTOR_ONLY_PRESET.to_payload(sapling_keyed=True)
+    assert p["profile"] == "detector-only"
+    assert p["effort"] == "low" and p["rounds"] == 1
+    assert p["glossary_model"] == "off"
+    for fid in ("comments", "query_comments", "not_applied_comments",
+                "change_log", "report_explanations", "normalize_quotes",
+                "normalize_spaces", "adjudicate", "spellcheck", "sapling"):
+        assert p["features"][fid] is False
+    assert p["features"]["edit_guard"] is True
+    assert p["features"]["audit"] is True
+    assert p["features"]["examination_graph"] is True
+    assert p["features"]["examination_judgment"] is False
 
 
 def test_hard_bundle():
@@ -127,11 +145,11 @@ def test_endpoint_shape(tmp_path):
         body = client.get("/api/presets").json()
     assert body["default"] == "standard"
     ids = [t["id"] for t in body["tiers"]]
-    assert ids == ["light", "standard", "hard", "hammer"]
+    assert ids == ["detector", "light", "standard", "hard", "hammer"]
     for t in body["tiers"]:
-        assert set(t["features"]) <= set(FEATURES_BY_ID)  # six real ids
+        assert set(t["features"]) <= set(FEATURES_BY_ID)
         assert t["sapling"] in ("off", "if_keyed", "always")
         assert set(t["controls"]) == {
             "model", "effort", "glossary_model", "rounds", "judge_model",
-            "meaning_model", "fix_model", "min_confidence"}
+            "meaning_model", "fix_model", "min_confidence", "profile"}
     assert sum(t["default"] for t in body["tiers"]) == 1

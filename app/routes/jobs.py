@@ -22,6 +22,7 @@ from docproof.config import (SmoothingConfig, examination_graph_killed,
 from docproof.formats import get_format
 from docproof.models import Usage
 from docproof.providers import build_provider, cost_of_usage, estimate_cost, lookup
+from docproof.profiles import DETECTOR_ONLY, PROFILE_KEYS
 from docproof.variants import VARIANT_KEYS
 
 from . import common
@@ -54,6 +55,9 @@ class JobRequest(BaseModel):
     mode: str = "batch"                       # "now" | "batch"
     schedule_at: str | None = None            # "HH:MM" local
     min_confidence: str = "medium"
+    # A named server-enforced run boundary. Unlike `preset` (a display label),
+    # this is applied to the resolved Config and frozen into batch manifests.
+    profile: str = ""
     # Which English this manuscript is written in. Empty keeps the config's own
     # variant, so an older page that doesn't send it — and the watcher, which
     # never does — behaves exactly as before.
@@ -604,6 +608,11 @@ def register(app: FastAPI) -> None:
         if req.kind not in ("review", "prep", "corrections"):
             raise HTTPException(
                 400, "kind must be 'review', 'prep' or 'corrections'")
+        if req.profile and req.profile not in PROFILE_KEYS:
+            raise HTTPException(
+                400, f"profile must be one of {', '.join(PROFILE_KEYS)}")
+        if req.profile and req.kind != "review":
+            raise HTTPException(400, "review profiles can only run a review")
         if req.effort is not None and req.effort not in settingslib.EFFORT_LEVELS:
             raise HTTPException(
                 400, f"effort must be one of {', '.join(settingslib.EFFORT_LEVELS)}")
@@ -678,6 +687,11 @@ def register(app: FastAPI) -> None:
             rounds = 1
         if not 1 <= rounds <= 4:
             raise HTTPException(400, "rounds must be between 1 and 4")
+        if req.profile == DETECTOR_ONLY and (
+                rounds != 1 or req.continuity_only):
+            raise HTTPException(
+                400, "detector-only requires one review round and cannot be "
+                     "combined with continuity-only")
         # Phase 1B is deliberately a narrow experiment on Fly: an administrator
         # may run it synchronously over one ordinary review. It never enters the
         # batch collector (whose checkpoint lifecycle is different), prep, or a
@@ -853,6 +867,7 @@ def register(app: FastAPI) -> None:
                 group_id=group_id,
                 schedule_at=req.schedule_at if mode == "batch" else None,
                 min_confidence=req.min_confidence,
+                profile=req.profile,
                 variant=req.variant,
                 effort=effort,
                 glossary_model=req.glossary_model or app.state.settings.glossary_model,

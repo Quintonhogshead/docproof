@@ -1252,7 +1252,7 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 .sap-para { color: var(--muted); font-size: 0.8rem; }
 
 /* ── review effort tiers (simple view) ─────────────────────────────────────
-   The four cards that stand in for the whole options panel on a normal run.
+   The cards that stand in for the whole options panel on a normal run.
    Uses only the existing tokens, so the light/dark swap (top of this file)
    covers them the way it covers .card / .tile / .tab. */
 .tier-picker { text-align: left; }
@@ -1298,6 +1298,7 @@ details.advanced > .field { margin: 0 0 1.1rem; }
 
 /* Standard is the house recommendation — a badge and a quiet accent edge. */
 .tier-card.is-recommended { border-color: var(--accent); }
+.tier-card.is-detector { border-color: var(--ok); }
 .tier-badge {
   position: absolute;
   top: -0.6rem;
@@ -1311,6 +1312,7 @@ details.advanced > .field { margin: 0 0 1.1rem; }
   border-radius: 999px;
   padding: 0.08rem 0.5rem;
 }
+.tier-badge-ok { background: var(--ok); color: var(--bg); }
 /* The Hammer's missing-key note. Warm, not alarming — same tone as .error. */
 .tier-note { margin: 0.2rem 0 0; font-size: 0.8rem; color: var(--warn); }
 

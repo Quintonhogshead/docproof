@@ -2419,7 +2419,10 @@ function priceReview(bundle, files) {
 
   files.forEach((f) => {
     const kept = f.kept;
-    const passes = f.passes || 1;
+    // The staged-file preflight counts the shipped categories. Detector-only
+    // removes the terminal-mark query category, leaving seven edit-capable
+    // focused reads. Price the card for what the server profile will run.
+    const passes = bundle.profile === 'detector-only' ? 7 : (f.passes || 1);
     const chunks = f.chunks || [];
     let keptTok = 0, keptCount = 0;
     chunks.forEach((c) => {
@@ -2540,6 +2543,7 @@ function priceReview(bundle, files) {
 // Read the live controls into a priceReview bundle. renderCost uses this for the
 // current-controls (Custom) price; the tier chips build their own bundles.
 function bundleFromControls() {
+  const active = resolveTier(state.tier);
   return {
     model: modelById($('model').value),
     effort: effortValue(),
@@ -2553,6 +2557,7 @@ function bundleFromControls() {
     continuity_only: !!(($('continuity-only') || {}).checked),
     min_confidence: ($('confidence') || {}).value,
     mode: mode(),
+    profile: (active && active.profile) || '',
   };
 }
 
@@ -2572,9 +2577,10 @@ function stagedReviewFiles() {
 // The reviewer is gpt-5.6-luna at every tier by product decision: depth comes
 // from effort, rounds and passes, never a dearer detector.
 const REVIEWER = 'gpt-5.6-luna';
-const TIER_ORDER = ['light', 'standard', 'hard', 'hammer'];
+const TIER_ORDER = ['detector', 'light', 'standard', 'hard', 'hammer'];
 // Display names for the job-card badge (a review carries the tier it ran at).
-const TIER_LABELS = { light: 'Light touch', standard: 'Standard', hard: 'Hard',
+const TIER_LABELS = { detector: 'Detector only', light: 'Light touch',
+                      standard: 'Standard', hard: 'Hard',
                       hammer: 'The Hammer', custom: 'Custom' };
 
 // A model the picker can actually use — in the catalog and keyed.
@@ -2622,6 +2628,7 @@ function resolveTier(tierId) {
     meaning_model: c.meaning_model || null,   // null => server default (frontier)
     fix_model: c.fix_model || null,
     min_confidence: c.min_confidence || 'medium',
+    profile: c.profile || '',
     features: Object.assign({}, p.features, { sapling }),
     subs,
     saplingMissing,
@@ -2645,6 +2652,7 @@ function priceBundle(resolved) {
     continuity_only: false,
     min_confidence: resolved.min_confidence,
     mode: mode(),
+    profile: resolved.profile || '',
   };
 }
 
@@ -2673,6 +2681,15 @@ function applyPreset(tierId) {
   if (b.judge_model && $('judge-model')) $('judge-model').value = b.judge_model;
   if ($('confidence')) $('confidence').value = b.min_confidence;
   applyPresetSwitches(tierId);
+  // The obvious full-novel path is overnight batch pricing. A small smoke test
+  // may still be switched back to Run now after the card is selected.
+  if (b.profile === 'detector-only') {
+    const batch = document.querySelector('input[name="mode"][value="batch"]');
+    if (batch && !batch.disabled) {
+      batch.checked = true;
+      $('schedule-wrap').hidden = false;
+    }
+  }
   syncExaminationJudgment();
   state.tier = tierId;
   renderCost();
@@ -3203,6 +3220,7 @@ $('start').addEventListener('click', async () => {
                         && $('schedule-on').checked)
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
+          profile: ((resolveTier(state.tier) || {}).profile || ''),
           variant: ($('variant') || {}).value || '',
           effort: effortValue(),
           glossary_model: $('glossary-model').value,

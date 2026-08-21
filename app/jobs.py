@@ -39,6 +39,7 @@ from docproof.prep.verify import VerificationFailed
 from docproof.promo import PromoError, PromoTooLarge
 from docproof.providers import ProviderError, build_provider, cost_of_usage, \
     lookup, provider_for
+from docproof.profiles import apply_profile
 from docproof.utils.files import write_atomic
 
 from . import features
@@ -242,6 +243,10 @@ class Job:
     warnings: list[str] = field(default_factory=list)
     results_dir: str | None = None
     min_confidence: str = "medium"
+    # A server-enforced review boundary (currently detector-only). It is
+    # distinct from `preset`, which is only the card label shown to the user.
+    # Empty on old jobs and ordinary reviews.
+    profile: str = ""
     # Which English this manuscript is written in: "us" | "uk" | "ca" | "au".
     # Empty means whatever config/default.yaml says, which is what the watcher
     # submits and what every job recorded before this field existed meant. It
@@ -986,6 +991,10 @@ class JobRunner:
             cfg.examination_graph.judgment.enabled = False
             cfg.continuity.enabled = True
             cfg.chapter_continuity.enabled = True
+        # Profiles land last and therefore win over stale browser switches or
+        # changed house defaults. This exact resolved Config is what a batch
+        # manifest freezes until collection.
+        apply_profile(cfg, job.profile)
         # Prompts the user has edited win over the shipped ones, per key.
         cfg.error_type_override_dir = str(self.store.paths.prompts)
         if job.is_prep:

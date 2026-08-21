@@ -640,6 +640,37 @@ def test_a_job_with_an_unknown_feature_is_refused(client):
     assert "bogus" in resp.json()["detail"]
 
 
+def test_detector_only_profile_is_visible_and_persisted_for_a_batch(client):
+    page = client.get("/").text
+    assert "Detector only" in page
+    assert "Tracked changes only" in page
+    staged = _upload(client)
+    job = _run(client, staged["id"], mode="batch",
+               profile="detector-only", preset="detector", rounds=1)
+    assert job["profile"] == "detector-only"
+    assert job["preset"] == "detector"
+    client.app_state.runner.wait_idle()
+    stored = client.app_state.store.get(job["id"])
+    assert stored is not None and stored.mode == "batch"
+    cfg = client.app_state.runner.config_for(stored)
+    assert cfg.comments is False and cfg.change_log is False
+    assert cfg.examination_graph.production_verdicts is True
+
+
+def test_unknown_or_incompatible_review_profile_is_refused(client):
+    staged = _upload(client)
+    unknown = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-sonnet-5",
+        "mode": "batch", "profile": "mystery"})
+    assert unknown.status_code == 400 and "profile" in unknown.json()["detail"]
+
+    incompatible = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-sonnet-5",
+        "mode": "batch", "profile": "detector-only", "rounds": 2})
+    assert incompatible.status_code == 400
+    assert "one review round" in incompatible.json()["detail"]
+
+
 def test_a_features_map_is_stored_on_the_job(client):
     staged = _upload(client)
     job = _run(client, staged["id"], features={"storysheet": True})

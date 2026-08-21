@@ -161,6 +161,18 @@
              role="radiogroup" aria-label="How thorough should this review be?">
           <span>How thorough should this review be?</span>
           <div class="tier-cards">
+            <button type="button" class="tier-card is-detector"
+                    data-tier="detector" role="radio" aria-checked="false"
+                    tabindex="-1">
+              <span class="tier-badge tier-badge-ok">Tracked changes only</span>
+              <span class="tier-mark" aria-hidden="true">✍️</span>
+              <span class="tier-name">Detector only</span>
+              <span class="tier-blurb">Adds corrections as Word tracked
+                changes. No comments, silent cleanup, or extra passes. Selects
+                overnight batch pricing.</span>
+              <span class="tier-price" data-tier-price></span>
+            </button>
+
             <button type="button" class="tier-card" data-tier="light"
                     role="radio" aria-checked="false" tabindex="-1">
               <span class="tier-mark" aria-hidden="true">🪶</span>

@@ -91,6 +91,22 @@ def test_per_run_features_reach_the_run_config(runner):
     assert cfg.rewrite.enabled is True
 
 
+def test_detector_only_profile_wins_over_stale_job_switches(runner):
+    """The server, not the card's JavaScript, owns the tracked-changes-only
+    promise. Even a stale or hand-written job cannot turn an add-on back on."""
+    store, r = runner
+    cfg = r.config_for(_job(
+        store, profile="detector-only", mode="batch", rounds=1,
+        features={"comments": True, "storysheet": True,
+                  "examination_judgment": True}))
+    assert cfg.api.model == "gpt-5.6-luna" and cfg.api.effort == "low"
+    assert cfg.comments is False and cfg.storysheet.enabled is False
+    assert cfg.examination_graph.judgment.enabled is False
+    assert cfg.examination_graph.production_verdicts is True
+    assert cfg.change_log is False and cfg.audit == "strict"
+    assert len(cfg.error_type_groups) == 7
+
+
 def test_per_run_category_knobs_reach_the_run_config(runner):
     """A per-category passes / chunk-size dialed on the panel reaches the run's
     error_type_specs, the way the smoothing dials reach cfg.smoothing."""
