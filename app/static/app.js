@@ -5003,7 +5003,15 @@ function fixItemCard(job, data, item) {
   head.append(where);
   const why = document.createElement('span');
   why.className = 'muted';
-  why.textContent = ` — ${FIX_STATUS[item.status] || item.status || 'flagged'}`;
+  // "No concrete change was proposed" is only true when the card offers none. If a
+  // model suggestion or a clickable placement is sitting right below, the header
+  // must not contradict it — call it a suggestion to review instead.
+  const hasSuggestion = !!item.advice
+    || (item.options || []).some((o) => !o.no_change);
+  const statusText = (item.status === 'no_change' && hasSuggestion)
+    ? 'a suggestion to review'
+    : (FIX_STATUS[item.status] || item.status || 'flagged');
+  why.textContent = ` — ${statusText}`;
   head.append(why);
   if (!item.resolved) {
     const ignore = document.createElement('button');

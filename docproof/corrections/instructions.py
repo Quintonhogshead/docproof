@@ -705,6 +705,27 @@ _COMPOSITION = re.compile(
     r"|line spacing|leading|too (?:much|little) space|tracking|kerning"
     r"|hyphenation|bad hyphens?|reflow|recompose|designer)\b", re.IGNORECASE)
 
+# Alignment and indentation are set on the paragraph in InDesign, not written into
+# the story — "flush left", "align right", "centre this", "no indent", "ragged
+# right". There is nothing in the text this engine can change to satisfy them and
+# nothing a file comparison could confirm, exactly as with _COMPOSITION above. Left
+# to the model, such a note is read as prose ("set X flush left as a new paragraph")
+# and mis-applied as a forced paragraph break; kept here it becomes a located check
+# the designer carries out in InDesign. Scoped to unambiguous typesetting phrasings
+# so a genuine text edit is never swallowed as a design note.
+_TYPESETTING = re.compile(
+    r"\bflush[\s-]*(?:left|right)\b"
+    r"|\b(?:align|aligned|alignment|set|range|ranged)\b[^.]{0,20}?"
+      r"\b(?:left|right|centre|center|flush|justified?)\b"
+    r"|\b(?:left|right|centre|center|fully)[\s-]?align(?:ed|ment)?\b"
+    r"|\bjustif(?:y|ied|ication)\b|\bunjustified\b"
+    r"|\bragged?\s+(?:right|left)\b"
+    r"|\bcent(?:re|er)\s+(?:this|the|it)\b"
+    r"|\b(?:no|remove|delete|suppress|without)\s+(?:the\s+)?"
+      r"(?:first[\s-]?line\s+)?indent(?:ation)?\b"
+    r"|\b(?:first[\s-]?line|hanging|full)\s+indent(?:ation)?\b"
+    r"|\bindent\s+(?:this|the|it)\b", re.IGNORECASE)
+
 # Whole-paragraph requests a reviewer states in prose, and the operation each means.
 # Ordered longest first so "start on a new page" is not read as "new page" applied
 # to something else.
@@ -739,7 +760,7 @@ def _composition_check(low, note, anchor, highlighted) -> Resolved | None:
     Runs last, so a note that *is* appliable — "hyphenate after Lime", "start this
     chapter on a recto" — is applied by the rule that can, and only what is left
     becomes a check."""
-    if not _COMPOSITION.search(note):
+    if not (_COMPOSITION.search(note) or _TYPESETTING.search(note)):
         return None
     find = anchor.strip(_EDGE)
     if not find:
