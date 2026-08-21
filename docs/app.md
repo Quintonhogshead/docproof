@@ -348,6 +348,13 @@ From the terminal:
 ```bash
 docproof inventory draft.docx              # lists section ids
 docproof review draft.docx --only chunk-003,chunk-007
+
+# Isolated detector test: the same exact profile works live or in the provider
+# batch. The batch manifest freezes it until collection, even if defaults change.
+docproof inventory draft.docx --profile detector-only
+docproof submit draft.docx --profile detector-only --workspace jobs
+docproof status <job-id> --workspace jobs
+docproof collect <job-id> --workspace jobs
 docproof submit draft.docx --only chunk-003
 ```
 

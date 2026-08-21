@@ -15,6 +15,7 @@ from .ingest import IngestError
 from .logging_setup import setup_logging
 from .models import CoverageLedger, Usage
 from .pipeline import chunk_outline, finish, prepare, run_sync
+from .profiles import DETECTOR_ONLY, PROFILE_KEYS, apply_profile
 from .providers import ProviderError, build_provider, estimate_cost
 from .variants import VARIANT_KEYS
 
@@ -37,6 +38,7 @@ def main(argv=None) -> int:
     inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
+    _profile_arg(inv)
 
     rev = sub.add_parser("review", help="run the full pipeline now")
     _common(rev)
@@ -217,6 +219,15 @@ def _common(p: argparse.ArgumentParser) -> None:
                         "extension, for the spell scan. Only needed when the "
                         "variant's dictionary is not bundled — spylls ships "
                         "en_US alone (default: config spellcheck.dictionary)")
+    _profile_arg(p)
+
+
+def _profile_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--profile", choices=list(PROFILE_KEYS),
+        help="apply a reproducible review profile; 'detector-only' runs one "
+             "low-effort production detector pass with Phase 2 receipts and "
+             "writes tracked changes only")
 
 
 def _selection(args) -> list[str] | None:
@@ -228,8 +239,6 @@ def _selection(args) -> list[str] | None:
 
 def _configure(args):
     cfg = load_config(args.config)
-    if getattr(args, "model", None):
-        cfg.api.model = args.model
     if getattr(args, "error_types", None):
         cfg.error_types = [[k.strip() for k in group.split("+") if k.strip()]
                            for group in args.error_types.split(",")
@@ -244,6 +253,12 @@ def _configure(args):
         cfg.comments = False
     if getattr(args, "out", None):
         cfg.output_dir = args.out
+    # A profile is a strict boundary, so it lands after general config knobs.
+    # The reviewer model is the one deliberate exception: experiments may hold
+    # the profile constant while comparing detectors with --model.
+    apply_profile(cfg, getattr(args, "profile", None))
+    if getattr(args, "model", None):
+        cfg.api.model = args.model
     error_dir = Path(args.config).parent / "error_types"
     return cfg, error_dir
 
@@ -342,6 +357,18 @@ def cmd_review(args) -> int:
     out = Path(cfg.output_dir)
     setup_logging(out)
 
+    if getattr(args, "profile", None) == DETECTOR_ONLY:
+        incompatible = []
+        if args.rounds not in (None, 1):
+            incompatible.append("--rounds")
+        if args.meaning_check or args.meaning_model:
+            incompatible.append("--meaning-check/--meaning-model")
+        if args.fix_check or args.fix_model:
+            incompatible.append("--fix-check/--fix-model")
+        if incompatible:
+            print("error: detector-only cannot be combined with "
+                  + ", ".join(incompatible), file=sys.stderr)
+            return 2
     if args.rounds is not None:
         cfg.rounds.count = args.rounds
     # The gate is a flag rather than a tri-state: absent leaves whatever the
