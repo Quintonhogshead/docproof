@@ -1,0 +1,29 @@
+key: dialogue_tag_punctuation
+name: Dialogue-tag boundary punctuation
+version: 1
+
+detection_prompt: |
+  Check punctuation where quoted speech is followed by a genuine dialogue tag.
+  A continuing tag normally takes a comma inside the closing quotation mark;
+  a terminal period before “he said,” “she asked,” or an equivalent speech
+  attribution is an error. Do not treat an action beat as a dialogue tag.
+
+  Do NOT flag an action beat, punctuation already correct for a tag, or a
+  terminal mark before a new independent sentence.
+
+fix_guidance: |
+  Make only the punctuation replacement or insertion at the quotation boundary.
+  Do not rewrite the speech or the attribution.
+
+confidence_guidance: |
+  high — the following words are unambiguously a speech attribution.
+  medium — the construction could be either a tag or an action beat.
+  low — speaker intent or sentence structure is unclear.
+
+examples:
+  - text: '“Wait.” he said.'
+    finding:
+      original_text: '“Wait.” he said.'
+      corrected_text: '“Wait,” he said.'
+      explanation: A continuing dialogue tag takes a comma.
+      confidence: high

@@ -664,6 +664,41 @@ examination_graph:
       - deterministic.adjudicate
     allow_legacy_obligations: false
 
+# Explicit candidate generation and screening. Local generators create
+# auditable potential error sites, strong local rules settle the inexpensive
+# tail, and a compact model judge handles the ambiguous remainder. The shipped
+# mode is off. The review UI selects `apply`, which admits only correction-
+# validated error verdicts to the ordinary validator and tracked-change writer;
+# `shadow` remains available for evaluation without document changes.
+candidate_screening:
+  mode: "off"                  # off | shadow | apply
+  candidate_types:
+    - dialogue_tag_punctuation
+    - quote_balance
+    - introductory_comma
+    - direct_address_comma
+    - number_style
+    - currency_style
+    - repeated_word
+    - word_echo
+    - heading_sequence
+    - list_punctuation
+  max_candidates: 200000
+  batch_size: 100
+  judgment_enabled: true
+  model: gpt-5.6-luna
+  effort: low
+  escalation_model:
+  escalation_effort: high
+  max_output_tokens: 16000
+  max_missing_retries: 1
+  max_cost_usd: 2.00
+  write_ledger: true
+  write_report: true
+  ledger_filename: candidate-screening-ledger.jsonl.gz
+  report_json_filename: candidate-screening-report.json
+  report_filename: candidate-screening-report.md
+
 # Ensemble review. Empty `detectors` (the default) is single-detector mode:
 # api.model runs once, nothing is merged, no verifier runs — exactly the
 # behaviour that shipped before. List two or more detectors to fan out: each

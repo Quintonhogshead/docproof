@@ -17,12 +17,13 @@ from pydantic import BaseModel, Field
 from typing import get_args
 
 from docproof import batch as batchlib
-from docproof.config import (SmoothingConfig, examination_graph_killed,
+from docproof.config import (SmoothingConfig, candidate_screening_killed,
+                             examination_graph_killed,
                              examination_judgment_killed, load_config)
 from docproof.formats import get_format
 from docproof.models import Usage
 from docproof.providers import build_provider, cost_of_usage, estimate_cost, lookup
-from docproof.profiles import DETECTOR_ONLY, PROFILE_KEYS
+from docproof.profiles import CANDIDATE_ONLY, DETECTOR_ONLY, PROFILE_KEYS
 from docproof.variants import VARIANT_KEYS
 
 from . import common
@@ -695,10 +696,10 @@ def register(app: FastAPI) -> None:
             rounds = 1
         if not 1 <= rounds <= 4:
             raise HTTPException(400, "rounds must be between 1 and 4")
-        if req.profile == DETECTOR_ONLY and (
+        if req.profile in (DETECTOR_ONLY, CANDIDATE_ONLY) and (
                 rounds != 1 or req.continuity_only):
             raise HTTPException(
-                400, "detector-only requires one review round and cannot be "
+                400, f"{req.profile} requires one review round and cannot be "
                      "combined with continuity-only")
         # Phase 1B is deliberately a narrow experiment on Fly: an administrator
         # may run it synchronously over one ordinary review. It never enters the
@@ -748,6 +749,42 @@ def register(app: FastAPI) -> None:
                     raise HTTPException(
                         400, f"No API key saved for {jinfo.display} (the {role} "
                              "examination model). Add one in Settings first.")
+        # Candidate screening is a user-facing production detector. Its model is
+        # configured centrally rather than picked in the panel, so vet that
+        # hidden dependency before accepting either the combined switch or the
+        # candidate-only profile. A killed requested detector must fail loudly;
+        # silently returning an unchanged candidate-only manuscript is unsafe.
+        candidate_asked = (req.features or {}).get("candidate_screening")
+        if req.profile == CANDIDATE_ONLY:
+            candidate_on = True
+        elif candidate_asked is None:
+            _house = _house or load_config(CONFIG_PATH)
+            candidate_on = _house.candidate_screening.mode != "off"
+        else:
+            candidate_on = bool(candidate_asked)
+        if candidate_on:
+            if candidate_screening_killed():
+                raise HTTPException(
+                    409, "The candidate detector is disabled by the deployment "
+                         "kill switch.")
+            _house = _house or load_config(CONFIG_PATH)
+            candidate_cfg = _house.candidate_screening
+            for role, model_id in (("primary", candidate_cfg.model),
+                                   ("escalation",
+                                    candidate_cfg.escalation_model)):
+                if not model_id:
+                    continue
+                cinfo = lookup(model_id)
+                if cinfo is None:
+                    raise HTTPException(
+                        400, f"Unknown {role} candidate detector model "
+                             f"{model_id!r}")
+                if (candidate_cfg.judgment_enabled
+                        and not settingslib.get_api_key(cinfo.provider)):
+                    raise HTTPException(
+                        400, f"No API key saved for {cinfo.display} (the {role} "
+                             "candidate detector model). Add one in Settings "
+                             "first.")
         # The judge only runs with 2+ rounds, so only vet its model then: it must
         # be a real catalog model and its vendor must have a key on file.
         if req.judge_model and rounds > 1:

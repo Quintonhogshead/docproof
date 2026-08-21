@@ -1,0 +1,30 @@
+key: quote_balance
+name: Quotation-mark balance
+version: 1
+channel: query
+
+detection_prompt: |
+  Identify an unmatched opening or closing quotation mark only after accounting
+  for multi-paragraph dialogue and the surrounding paragraphs. Ask about the
+  site; do not invent or delete a quotation mark when authorial intent is not
+  explicit.
+
+  Do NOT flag correctly balanced quotation marks, conventional multi-paragraph
+  dialogue, or an intentional fragment whose quotation boundary is explicit.
+
+fix_guidance: |
+  This type is query-only. Repeat the quoted text unchanged and explain which
+  opening or closing mark appears unmatched.
+
+confidence_guidance: |
+  high — the surrounding dialogue structure rules out a multi-paragraph quote.
+  medium — a mark is plausibly missing but the dialogue structure is ambiguous.
+  low — the passage may be intentionally fragmentary or stylized.
+
+examples:
+  - text: '“Wait here.'
+    finding:
+      original_text: '“Wait here.'
+      corrected_text: '“Wait here.'
+      explanation: Is a closing quotation mark missing here?
+      confidence: medium

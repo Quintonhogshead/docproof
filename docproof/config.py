@@ -1020,6 +1020,60 @@ class ExaminationGraphConfig(BaseModel):
         return self
 
 
+class CandidateScreeningConfig(BaseModel):
+    """Explicit candidate generation, screening, and guarded application.
+
+    ``mode`` is the single operator-facing switch: ``off`` removes the lane,
+    ``shadow`` records verdicts without creating findings, and ``apply`` sends
+    only correction-validated error verdicts through the ordinary Finding ->
+    validator -> tracked-change path. Generation and deterministic screening
+    are local; ``judgment_enabled`` controls the paid ambiguous tail.
+    """
+    mode: Literal["off", "shadow", "apply"] = "off"
+    candidate_types: tuple[str, ...] = (
+        "dialogue_tag_punctuation", "quote_balance", "introductory_comma",
+        "direct_address_comma", "number_style", "currency_style",
+        "repeated_word", "word_echo", "heading_sequence",
+        "list_punctuation",
+    )
+    max_candidates: int = Field(default=200_000, ge=1)
+    batch_size: int = Field(default=100, ge=1, le=200)
+    judgment_enabled: bool = True
+    model: str = "gpt-5.6-luna"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
+    escalation_model: str | None = None
+    escalation_effort: Literal[
+        "low", "medium", "high", "xhigh", "max"] | None = "high"
+    max_output_tokens: int = Field(default=16_000, ge=1)
+    max_missing_retries: int = Field(default=1, ge=0, le=3)
+    max_cost_usd: float = Field(default=2.0, gt=0)
+    write_ledger: bool = True
+    write_report: bool = True
+    ledger_filename: str = "candidate-screening-ledger.jsonl.gz"
+    report_json_filename: str = "candidate-screening-report.json"
+    report_filename: str = "candidate-screening-report.md"
+
+    @field_validator("candidate_types")
+    @classmethod
+    def _known_candidate_types(cls, value):
+        from .candidate_generators import INITIAL_CANDIDATE_TYPES
+        unknown = set(value) - set(INITIAL_CANDIDATE_TYPES)
+        if unknown:
+            raise ValueError(f"unknown candidate type(s): {sorted(unknown)}")
+        if len(set(value)) != len(value):
+            raise ValueError("candidate_types contains duplicates")
+        return value
+
+    @field_validator("ledger_filename", "report_json_filename",
+                     "report_filename")
+    @classmethod
+    def _plain_candidate_filename(cls, value):
+        if not value or Path(value).name != value or value in {".", ".."}:
+            raise ValueError(
+                "candidate screening artifact names must be plain filenames")
+        return value
+
+
 class EnsembleConfig(BaseModel):
     """Several detectors reviewing each chunk, their findings merged by
     agreement, then a stronger verifier adjudicating before anything reaches the
@@ -1337,6 +1391,8 @@ class Config(BaseModel):
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
     examination_graph: ExaminationGraphConfig = Field(
         default_factory=ExaminationGraphConfig)
+    candidate_screening: CandidateScreeningConfig = Field(
+        default_factory=CandidateScreeningConfig)
     ensemble: EnsembleConfig = Field(default_factory=EnsembleConfig)
     rounds: RoundsConfig = Field(default_factory=RoundsConfig)
     low_confidence: LowConfidenceConfig = Field(default_factory=LowConfidenceConfig)
@@ -1545,6 +1601,7 @@ EXAMINATION_GRAPH_ENV = "DOCPROOF_EXAMINATION_GRAPH"
 EXAMINATION_JUDGMENT_ENV = "DOCPROOF_EXAMINATION_JUDGMENT"
 EXAMINATION_PRODUCTION_VERDICTS_ENV = \
     "DOCPROOF_EXAMINATION_PRODUCTION_VERDICTS"
+CANDIDATE_SCREENING_ENV = "DOCPROOF_CANDIDATE_SCREENING"
 
 
 def examination_graph_killed() -> bool:
@@ -1578,6 +1635,18 @@ def examination_production_verdicts_enabled(cfg) -> bool:
         graph.enabled and graph.production_verdicts
         and not examination_graph_killed()
         and not examination_production_verdicts_killed())
+
+
+def candidate_screening_killed() -> bool:
+    """Deployment-wide brake for the candidate screening lane."""
+    value = os.environ.get(CANDIDATE_SCREENING_ENV, "").strip().lower()
+    return value in {"0", "false", "off", "no", "disabled"}
+
+
+def candidate_screening_enabled(cfg) -> bool:
+    """Effective switch for loaded configuration and stored jobs."""
+    candidate_cfg = getattr(cfg, "candidate_screening", cfg)
+    return bool(candidate_cfg.mode != "off" and not candidate_screening_killed())
 
 
 def default_cache_dir() -> str | None:

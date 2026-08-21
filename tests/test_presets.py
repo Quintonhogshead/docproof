@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from app.features import FEATURES_BY_ID
 from app.presets import (TIERS, TIERS_BY_ID, DEFAULT_TIER_ID,
-                         LADDER_FEATURE_IDS, DETECTOR_ONLY_PRESET, LIGHT_TOUCH,
-                         STANDARD, HARD, THE_HAMMER, REVIEWER)
+                         LADDER_FEATURE_IDS, CANDIDATE_ONLY_PRESET,
+                         DETECTOR_ONLY_PRESET, LIGHT_TOUCH, STANDARD, HARD,
+                         THE_HAMMER, REVIEWER)
 from app.settings import Settings, EFFORT_LEVELS, CONFIG_PATH
 from docproof.config import load_config
 from docproof.providers.catalog import lookup
@@ -13,11 +14,12 @@ from docproof.providers.catalog import lookup
 CONFIDENCE = {"low", "medium", "high"}
 
 
-def test_five_tiers_present_with_exact_names():
+def test_six_tiers_present_with_exact_names():
     assert [t.id for t in TIERS] == [
-        "detector", "light", "standard", "hard", "hammer"]
+        "detector", "candidate", "light", "standard", "hard", "hammer"]
     assert {t.id: t.name for t in TIERS} == {
-        "detector": "Detector only", "light": "Light touch",
+        "detector": "Detector only", "candidate": "Candidate detector",
+        "light": "Light touch",
         "standard": "Standard",
         "hard": "Hard", "hammer": "The hammer"}
     assert DEFAULT_TIER_ID == "standard" and "standard" in TIERS_BY_ID
@@ -33,8 +35,8 @@ def test_every_feature_key_is_a_real_feature_id():
         for keyed in (False, True):
             for fid in t.features(keyed):
                 assert fid in FEATURES_BY_ID
-            if t is not DETECTOR_ONLY_PRESET:
-                # Ordinary effort tiers govern exactly the seven ladder ids.
+            if t not in (DETECTOR_ONLY_PRESET, CANDIDATE_ONLY_PRESET):
+                # Ordinary effort tiers govern exactly the ladder ids.
                 assert set(t.features(keyed)) == set(LADDER_FEATURE_IDS)
 
 
@@ -68,7 +70,7 @@ def test_standard_is_shipped_defaults_plus_languagetool():
     assert p["meaning_model"] is None and p["fix_model"] is None
     # every pass is at its shipped-off default EXCEPT languagetool, which
     # Standard lifts to on — the single delta from the shipped baseline
-    for fid in ("storysheet", "continuity", "rewrite", "sapling",
+    for fid in ("candidate_screening", "storysheet", "continuity", "rewrite", "sapling",
                 "meaning_check", "fix_check"):
         assert FEATURES_BY_ID[fid].read(cfg) is False   # shipped default: off
         assert p["features"][fid] is False
@@ -95,6 +97,19 @@ def test_detector_only_is_an_explicit_tracked_changes_profile():
     assert p["features"]["audit"] is True
     assert p["features"]["examination_graph"] is True
     assert p["features"]["examination_judgment"] is False
+
+
+def test_candidate_detector_is_an_explicit_standalone_profile():
+    p = CANDIDATE_ONLY_PRESET.to_payload(sapling_keyed=True)
+    assert p["profile"] == "candidate-only"
+    assert p["features"]["candidate_screening"] is True
+    assert p["effort"] == "low" and p["rounds"] == 1
+    for fid in ("storysheet", "continuity", "rewrite", "languagetool",
+                "sapling", "meaning_check", "fix_check", "comments",
+                "examination_graph"):
+        assert p["features"][fid] is False
+    assert p["features"]["edit_guard"] is True
+    assert p["features"]["audit"] is True
 
 
 def test_hard_bundle():
@@ -145,7 +160,8 @@ def test_endpoint_shape(tmp_path):
         body = client.get("/api/presets").json()
     assert body["default"] == "standard"
     ids = [t["id"] for t in body["tiers"]]
-    assert ids == ["detector", "light", "standard", "hard", "hammer"]
+    assert ids == [
+        "detector", "candidate", "light", "standard", "hard", "hammer"]
     for t in body["tiers"]:
         assert set(t["features"]) <= set(FEATURES_BY_ID)
         assert t["sapling"] in ("off", "if_keyed", "always")

@@ -13,7 +13,8 @@ from .config import (Config, examination_graph_killed,
 
 
 DETECTOR_ONLY = "detector-only"
-PROFILE_KEYS = (DETECTOR_ONLY,)
+CANDIDATE_ONLY = "candidate-only"
+PROFILE_KEYS = (DETECTOR_ONLY, CANDIDATE_ONLY)
 
 # These detector types intentionally produce questions instead of edits.  The
 # detector-only profile promises a manuscript containing tracked revisions and
@@ -27,11 +28,13 @@ def apply_profile(cfg: Config, profile: str | None) -> Config:
     """Apply ``profile`` in place and return ``cfg`` for convenient chaining."""
     if not profile:
         return cfg
-    if profile != DETECTOR_ONLY:
-        raise ValueError(
-            f"Unknown review profile {profile!r}; choose from "
-            f"{', '.join(PROFILE_KEYS)}")
-    return apply_detector_only(cfg)
+    if profile == DETECTOR_ONLY:
+        return apply_detector_only(cfg)
+    if profile == CANDIDATE_ONLY:
+        return apply_candidate_only(cfg)
+    raise ValueError(
+        f"Unknown review profile {profile!r}; choose from "
+        f"{', '.join(PROFILE_KEYS)}")
 
 
 def apply_detector_only(cfg: Config) -> Config:
@@ -90,4 +93,51 @@ def apply_detector_only(cfg: Config) -> Config:
     cfg.examination_graph.production_verdicts = receipts_on
     cfg.examination_graph.spell_sites = False
     cfg.examination_graph.judgment.enabled = False
+    cfg.candidate_screening.mode = "off"
+    return cfg
+
+
+def apply_candidate_only(cfg: Config) -> Config:
+    """Run only candidate generation/screening and emit guarded tracked edits.
+
+    No ordinary detector, sweep, normalization, whole-book pass, or comment
+    source can contribute to the result. Confirmed candidate corrections still
+    enter the shared validator, overstep guard, tracked-change writer, and
+    reject-all audit; the candidate ledger/report stay beside the manuscript.
+    """
+    cfg.api.model = "gpt-5.6-luna"
+    cfg.api.effort = "low"
+
+    cfg.normalize.quotes = False
+    cfg.normalize.spaces = False
+    cfg.style.unclosed_quote_queries = False
+    cfg.style.heading_title_case = False
+    cfg.comments = False
+    cfg.query_comments = False
+    cfg.not_applied_comments = False
+    cfg.excluded_words_comment = False
+    cfg.change_log = False
+    cfg.report_explanations = False
+
+    for stage in (
+        cfg.spellcheck, cfg.consistency, cfg.glossary, cfg.storysheet,
+        cfg.continuity, cfg.chapter_continuity, cfg.adjudicate, cfg.rewrite,
+        cfg.languagetool, cfg.sapling, cfg.smoothing, cfg.factcheck,
+        cfg.residuals, cfg.meaning_check, cfg.fix_check,
+    ):
+        stage.enabled = False
+    cfg.error_types = []
+    cfg.sweeps = []
+    cfg.low_confidence.confirm = False
+    cfg.ensemble.detectors = []
+    cfg.ensemble.verifier_model = None
+    cfg.rounds.count = 1
+
+    cfg.examination_graph.enabled = False
+    cfg.examination_graph.judgment.enabled = False
+    cfg.candidate_screening.mode = "apply"
+    cfg.candidate_screening.judgment_enabled = True
+
+    cfg.edit_guard.enabled = True
+    cfg.audit = "strict"
     return cfg

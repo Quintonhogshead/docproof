@@ -1,0 +1,27 @@
+key: list_punctuation
+name: List-item punctuation consistency
+version: 1
+
+detection_prompt: |
+  Within one contiguous list, check whether comparable items use inconsistent
+  terminal punctuation. Flag only a clear outlier against a stable list pattern;
+  do not force unlike items into one style.
+
+  Do NOT flag a uniform list, a deliberate mix of complete sentences and
+  fragments, or an item whose internal grammar requires a different mark.
+
+fix_guidance: |
+  Change only the outlying terminal mark. Do not rewrite the list item.
+
+confidence_guidance: |
+  high — one item is the sole punctuation outlier in a uniform parallel list.
+  medium — a majority pattern exists but item grammar differs.
+  low — the items mix complete sentences and fragments or the list boundary is unclear.
+
+examples:
+  - text: Second item
+    finding:
+      original_text: Second item
+      corrected_text: Second item.
+      explanation: The surrounding parallel list items end with periods.
+      confidence: high

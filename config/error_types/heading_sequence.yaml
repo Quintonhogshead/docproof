@@ -1,0 +1,29 @@
+key: heading_sequence
+name: Heading sequence or level break
+version: 1
+channel: query
+
+detection_prompt: |
+  Compare adjacent headings for a skipped explicit number or an unexpected jump
+  in heading level. Ask about a plausible sequence break; structural numbering
+  and hierarchy may be intentional and must not be silently rewritten.
+
+  Do NOT flag an unnumbered heading, an intentional part boundary, or a level
+  change that follows the document's established hierarchy.
+
+fix_guidance: |
+  This type is query-only. Repeat the heading unchanged and identify the prior
+  heading, number, or level that makes the sequence look discontinuous.
+
+confidence_guidance: |
+  high — an explicit numbered sequence skips one value.
+  medium — the hierarchy jumps a level without an obvious structural reason.
+  low — front matter or a deliberate part boundary may explain the change.
+
+examples:
+  - text: Chapter 3
+    finding:
+      original_text: Chapter 3
+      corrected_text: Chapter 3
+      explanation: The previous numbered heading is Chapter 1 — is Chapter 2 missing?
+      confidence: medium

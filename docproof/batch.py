@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from .config import (Config, cache_dir_for,
+from .config import (Config, cache_dir_for, candidate_screening_enabled,
                      examination_production_verdicts_enabled)
 from .models import CoverageLedger, Usage
 from .pipeline import (Outputs, Prepared, analyze_with_retry, build_analyzers,
@@ -277,7 +277,8 @@ def submit(cfg: Config, input_path: str | Path, error_dir: str | Path,
                        selection=selection)
     requests = build_requests(cfg, prepared)
     cc_requests = continuity_batch_requests(cfg, prepared)
-    if not requests and not cc_requests:
+    if (not requests and not cc_requests
+            and not candidate_screening_enabled(cfg)):
         raise BatchError(
             f"{Path(input_path).name} has no reviewable paragraphs.")
 
@@ -662,6 +663,36 @@ def collect_findings(job: Job, provider: Provider,
     from .providers import build_provider
     findings += continuity_findings(cfg, prepared, ids, usage, build_provider,
                                     on_phase=on_phase, coverage=coverage)
+
+    # Candidate-only is valid overnight work even when there was no ordinary
+    # provider batch to submit. Its compact judgment packets run synchronously
+    # at collection, then safe corrections enter the same raw Finding stream as
+    # every other source. Shadow mode records the ledger without adding them.
+    if (prepared.candidate_screening is not None
+            and candidate_screening_enabled(cfg)):
+        from .checkpoint import add_usage
+        if cfg.candidate_screening.judgment_enabled:
+            if on_phase:
+                on_phase("candidate_screening")
+            try:
+                candidate_usage = prepared.candidate_screening.screen(
+                    cfg, provider_factory=build_provider)
+                add_usage(usage, asdict(candidate_usage))
+            except Exception as exc:
+                prepared.candidate_screening.record_failure("judgment", exc)
+                add_usage(usage, asdict(
+                    prepared.candidate_screening.usage))
+                log.exception("Candidate screening judgment failed during "
+                              "batch collection; other sources are unchanged.")
+        if cfg.candidate_screening.mode == "apply":
+            try:
+                findings.extend(
+                    prepared.candidate_screening.production_findings())
+            except Exception as exc:
+                prepared.candidate_screening.record_failure(
+                    "finding_conversion", exc)
+                log.exception("Candidate correction conversion failed closed "
+                              "during batch collection.")
 
     coverage.record_windows(window_losses)
 

@@ -508,6 +508,11 @@ def _round_config(cfg, k: int, reuse: bool):
         return rcfg
     rcfg = cfg.model_copy(deep=True)
     rcfg.chapter_continuity.enabled = False
+    # Candidate generation/screens the book once in round 1. Its admitted
+    # Findings are folded into the working text like every other correction;
+    # rerunning the same recall lane in later rounds would rebill it while the
+    # final candidate ledger can represent only one source-coordinate draft.
+    rcfg.candidate_screening.mode = "off"
     rcfg.normalize.quotes = False
     rcfg.normalize.spaces = False
     if reuse:

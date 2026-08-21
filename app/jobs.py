@@ -243,7 +243,7 @@ class Job:
     warnings: list[str] = field(default_factory=list)
     results_dir: str | None = None
     min_confidence: str = "medium"
-    # A server-enforced review boundary (currently detector-only). It is
+    # A server-enforced review boundary (detector-only or candidate-only). It is
     # distinct from `preset`, which is only the card label shown to the user.
     # Empty on old jobs and ordinary reviews.
     profile: str = ""
@@ -984,6 +984,7 @@ class JobRunner:
         if job.continuity_only:
             cfg.error_types = []
             cfg.sweeps = []
+            cfg.candidate_screening.mode = "off"
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
                           "sapling", "smoothing", "consistency", "spellcheck",
                           "meaning_check", "fix_check"):

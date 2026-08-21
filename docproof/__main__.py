@@ -15,7 +15,7 @@ from .ingest import IngestError
 from .logging_setup import setup_logging
 from .models import CoverageLedger, Usage
 from .pipeline import chunk_outline, finish, prepare, run_sync
-from .profiles import DETECTOR_ONLY, PROFILE_KEYS, apply_profile
+from .profiles import CANDIDATE_ONLY, DETECTOR_ONLY, PROFILE_KEYS, apply_profile
 from .providers import ProviderError, build_provider, estimate_cost
 from .variants import VARIANT_KEYS
 
@@ -227,7 +227,8 @@ def _profile_arg(p: argparse.ArgumentParser) -> None:
         "--profile", choices=list(PROFILE_KEYS),
         help="apply a reproducible review profile; 'detector-only' runs one "
              "low-effort production detector pass with Phase 2 receipts and "
-             "writes tracked changes only")
+             "writes tracked changes only; 'candidate-only' runs the explicit "
+             "candidate detector alone through the guarded tracked-change path")
 
 
 def _selection(args) -> list[str] | None:
@@ -357,7 +358,8 @@ def cmd_review(args) -> int:
     out = Path(cfg.output_dir)
     setup_logging(out)
 
-    if getattr(args, "profile", None) == DETECTOR_ONLY:
+    profile = getattr(args, "profile", None)
+    if profile in (DETECTOR_ONLY, CANDIDATE_ONLY):
         incompatible = []
         if args.rounds not in (None, 1):
             incompatible.append("--rounds")
@@ -366,7 +368,7 @@ def cmd_review(args) -> int:
         if args.fix_check or args.fix_model:
             incompatible.append("--fix-check/--fix-model")
         if incompatible:
-            print("error: detector-only cannot be combined with "
+            print(f"error: {profile} cannot be combined with "
                   + ", ".join(incompatible), file=sys.stderr)
             return 2
     if args.rounds is not None:
@@ -887,6 +889,11 @@ def _run_mock(cfg, prepared, canned):
         for chunk in prun.chunks:
             found, _ = analyzer.analyze_chunk(chunk, usage)
             findings.extend(found)
+    # Mock mode makes no candidate judge calls, but deterministic candidate
+    # errors still exercise the same production bridge and downstream guards.
+    if (prepared.candidate_screening is not None
+            and cfg.candidate_screening.mode == "apply"):
+        findings.extend(prepared.candidate_screening.production_findings())
     return findings, usage
 
 

@@ -16,7 +16,7 @@ from typing import Sequence
 
 from .analyzer import Analyzer
 from .chunker import _SENTENCE_SPLIT, chunk_document
-from .config import (Config, cache_dir_for,
+from .config import (Config, cache_dir_for, candidate_screening_enabled,
                      examination_production_verdicts_enabled)
 from .consistency import (CONSISTENCY_KEY, ConsistencyReport,
                           find_inconsistencies, to_findings)
@@ -110,6 +110,10 @@ class Prepared:
     # Optional phase-one examination ledger. It observes the existing pipeline
     # in shadow mode and is never consulted by validation or edit application.
     examination: object | None = None
+    # The explicit candidate lane is independently feature-gated. Shadow mode
+    # observes only; apply mode emits a narrowly validated Finding stream into
+    # the ordinary validator/writer path.
+    candidate_screening: object | None = None
 
     @property
     def effective_pass_plan(self) -> tuple["PassRun", ...]:
@@ -212,6 +216,8 @@ class Outputs:
     warnings: list[str] = field(default_factory=list)
     examination_ledger: Path | None = None
     examination_report: Path | None = None
+    candidate_screening_ledger: Path | None = None
+    candidate_screening_report: Path | None = None
 
 
 def content_hash(doc: DocumentModel) -> str:
@@ -600,6 +606,25 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             consistency_findings=consistency_findings, spell=spell,
             adjudicate_candidates=adjudicate_candidates)
 
+    candidate_screening = None
+    if analyses and candidate_screening_enabled(cfg):
+        from .candidate_ledger import CandidateLedger
+        from .candidate_screening import (
+            CandidateScreeningRun, prepare_candidate_screening)
+        try:
+            candidate_screening = prepare_candidate_screening(
+                cfg, doc, paragraphs=swept,
+                sweep_findings=sweep_findings)
+        except Exception as exc:
+            # Preserve the normal review and carry the failure into its own
+            # artifact/warning instead of losing the diagnosis. In apply mode
+            # this fails closed: an empty candidate run emits no findings.
+            candidate_screening = CandidateScreeningRun(
+                CandidateLedger(), doc, mode=cfg.candidate_screening.mode)
+            candidate_screening.record_failure("prepare", exc)
+            log.exception("Candidate screening preparation failed; the normal "
+                          "review is unchanged.")
+
     return Prepared(pkg=pkg, doc=doc, chunks=chunks, groups=groups,
                     pass_plan=pass_plan, fmt=fmt,
                     sweep_findings=sweep_findings, sweep_reports=sweep_reports,
@@ -610,7 +635,8 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     story_sheet=story_sheet,
                     whole_document=whole,
                     n_detectors=len(cfg.ensemble.detectors) or 1,
-                    examination=examination)
+                    examination=examination,
+                    candidate_screening=candidate_screening)
 
 
 def chunk_outline(prepared: Prepared) -> list[dict]:
@@ -1092,6 +1118,42 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 prepared.examination.record_failure("judgment", exc)
                 log.exception("Examination judgment failed outside a packet; "
                               "the production review is unchanged.")
+
+    # Candidate screening keeps its own auditable ledger. In shadow mode it is
+    # observation-only. In apply mode, the narrow bridge immediately below
+    # converts only correction-validated error verdicts into ordinary Findings;
+    # they still face the shared validator, edit guard, overlap arbitration,
+    # judge gates, tracked-change writer, and reject-all audit.
+    if (prepared.candidate_screening is not None
+            and candidate_screening_enabled(cfg)
+            and cfg.candidate_screening.judgment_enabled):
+        from .checkpoint import add_usage
+        from .candidate_screening import CandidateScreeningCancelled
+        try:
+            candidate_usage = prepared.candidate_screening.screen(
+                cfg, provider_factory=provider_factory,
+                should_cancel=should_cancel)
+            add_usage(usage, dataclasses.asdict(candidate_usage))
+        except CandidateScreeningCancelled:
+            raise JobCancelled()
+        except Exception as exc:
+            prepared.candidate_screening.record_failure("judgment", exc)
+            # Preserve any usage incurred before an unexpected orchestration
+            # failure. Packet-level failures are already caught and accounted.
+            add_usage(usage, dataclasses.asdict(
+                prepared.candidate_screening.usage))
+            log.exception("Candidate screening judgment failed; other review "
+                          "sources are unchanged.")
+
+    if (prepared.candidate_screening is not None
+            and candidate_screening_enabled(cfg)
+            and cfg.candidate_screening.mode == "apply"):
+        try:
+            findings.extend(prepared.candidate_screening.production_findings())
+        except Exception as exc:
+            prepared.candidate_screening.record_failure("finding_conversion", exc)
+            log.exception("Candidate correction conversion failed closed; no "
+                          "candidate findings were added.")
 
     return findings, usage
 
@@ -2074,6 +2136,23 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
             log.exception("Examination graph shadow reporting failed; the "
                           "reviewed manuscript path is unchanged.")
 
+    candidate_screening_ledger_path = None
+    candidate_screening_report_path = None
+    if (prepared.candidate_screening is not None
+            and candidate_screening_enabled(cfg)):
+        try:
+            prepared.candidate_screening.observe_findings(
+                validated, applied_ids=stats.applied)
+            (_candidate_report, candidate_screening_ledger_path,
+             candidate_screening_report_path) = \
+                prepared.candidate_screening.write(
+                    out, cfg.candidate_screening,
+                    source=prepared.doc.source_path)
+        except Exception as exc:
+            prepared.candidate_screening.record_failure("reporting", exc)
+            log.exception("Candidate screening reporting failed; the reviewed "
+                          "manuscript path is unchanged.")
+
     audit_report = AuditReport()
     if cfg.audit != "off" and fmt.snapshot and prepared.baseline:
         audit_report = run_audit(prepared.baseline,
@@ -2130,6 +2209,8 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                 if coverage is not None else [])
     if prepared.examination is not None:
         warnings += prepared.examination.failure_warnings()
+    if prepared.candidate_screening is not None:
+        warnings += prepared.candidate_screening.failure_warnings()
     return Outputs(reviewed_path=reviewed, summary_md=out / "summary.md",
                    findings_json=out / "findings.json",
                    applied=len(stats.applied), findings=len(validated),
@@ -2138,4 +2219,6 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                    judge_held=held_count,
                    examination_ledger=examination_ledger_path,
                    examination_report=examination_report_path,
+                   candidate_screening_ledger=candidate_screening_ledger_path,
+                   candidate_screening_report=candidate_screening_report_path,
                    warnings=warnings)

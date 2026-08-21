@@ -19,15 +19,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from docproof.profiles import DETECTOR_ONLY
+from docproof.profiles import CANDIDATE_ONLY, DETECTOR_ONLY
 
 # The reviewer is fixed across the whole ladder by product decision.
 REVIEWER = "gpt-5.6-luna"
 
 # The seven ladder-controlled FEATURES ids, in ladder order. Each MUST be in
 # app.features.FEATURES_BY_ID (asserted in tests).
-LADDER_FEATURE_IDS = ("storysheet", "continuity", "rewrite", "languagetool",
-                      "sapling", "meaning_check", "fix_check")
+LADDER_FEATURE_IDS = ("candidate_screening", "storysheet", "continuity",
+                      "rewrite", "languagetool", "sapling", "meaning_check",
+                      "fix_check")
 
 # The picker opens here — the house default.
 DEFAULT_TIER_ID = "standard"
@@ -59,6 +60,7 @@ class TierPreset:
     languagetool: bool = False
     meaning_check: bool = False
     fix_check: bool = False
+    candidate_screening: bool = False
 
     # --- the one key-dependent toggle ---
     # "off"      never runs Sapling.
@@ -68,12 +70,13 @@ class TierPreset:
     #            (SaplingConfig) and the tier card shows the missing-key note.
     sapling: SaplingPolicy = "off"
     # Additional switches for a purpose-built profile. Ordinary effort tiers
-    # govern only the seven ladder toggles; detector-only must also make every
-    # output and safety state visible in the panel so its promise is obvious.
+    # govern only the ladder toggles; isolated profiles also make every output
+    # and safety state visible in the panel so their promise is obvious.
     extra_features: tuple[tuple[str, bool], ...] = ()
 
     def feature_controls(self) -> dict[str, bool]:
         values = {
+            "candidate_screening": self.candidate_screening,
             "storysheet": self.storysheet,
             "continuity": self.continuity,
             "rewrite": self.rewrite,
@@ -160,6 +163,33 @@ DETECTOR_ONLY_PRESET = TierPreset(
 )
 
 
+CANDIDATE_ONLY_PRESET = TierPreset(
+    id="candidate",
+    name="Candidate detector",
+    blurb="The generate-and-screen detector runs alone, applying only "
+          "correction-validated errors as guarded Word tracked changes.",
+    model=REVIEWER,
+    effort="low",
+    glossary_model="off",
+    rounds=1,
+    min_confidence="medium",
+    profile=CANDIDATE_ONLY,
+    candidate_screening=True,
+    extra_features=(
+        ("factcheck", False), ("chapter_continuity", False),
+        ("adjudicate", False), ("consistency", False),
+        ("spellcheck", False), ("heading_case", False),
+        ("residuals", False), ("smoothing", False),
+        ("comments", False), ("sapling_comments", False),
+        ("query_comments", False), ("not_applied_comments", False),
+        ("change_log", False), ("report_explanations", False),
+        ("normalize_quotes", False), ("normalize_spaces", False),
+        ("edit_guard", True), ("audit", True),
+        ("examination_graph", False), ("examination_judgment", False),
+    ),
+)
+
+
 LIGHT_TOUCH = TierPreset(
     id="light",
     name="Light touch",
@@ -226,6 +256,7 @@ THE_HAMMER = TierPreset(
     meaning_model="claude-fable-5",   # both gates pinned to a frontier judge explicitly;
     fix_model="claude-fable-5",       # the server default is now gpt-5.6-luna
     min_confidence="medium",
+    candidate_screening=True,
     storysheet=True,
     continuity=True,
     rewrite=True,
@@ -236,5 +267,6 @@ THE_HAMMER = TierPreset(
 )
 
 TIERS: tuple[TierPreset, ...] = (
-    DETECTOR_ONLY_PRESET, LIGHT_TOUCH, STANDARD, HARD, THE_HAMMER)
+    DETECTOR_ONLY_PRESET, CANDIDATE_ONLY_PRESET, LIGHT_TOUCH, STANDARD, HARD,
+    THE_HAMMER)
 TIERS_BY_ID: dict[str, TierPreset] = {t.id: t for t in TIERS}

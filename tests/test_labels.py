@@ -44,6 +44,7 @@ OPAQUE = {
     "docproof/analyzer.py: (Literal[keys], ...)",
     "docproof/analyzer.py: error_type",
     "docproof/analyzer.py: rf.error_type",
+    "docproof/candidate_screening.py: candidate.candidate_type",
     "docproof/editlayer.py: e.contributions[0].error_type",
     "docproof/eval/corpus.py: etype",
     "docproof/rewrite.py: error_type",

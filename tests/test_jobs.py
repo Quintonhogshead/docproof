@@ -91,6 +91,30 @@ def test_per_run_features_reach_the_run_config(runner):
     assert cfg.rewrite.enabled is True
 
 
+def test_candidate_detector_switch_combines_with_a_regular_review(runner):
+    store, r = runner
+    cfg = r.config_for(_job(
+        store, features={"candidate_screening": True,
+                         "languagetool": True}))
+    assert cfg.candidate_screening.mode == "apply"
+    assert cfg.languagetool.enabled is True
+    assert cfg.error_types
+
+
+def test_candidate_only_profile_wins_over_stale_review_switches(runner):
+    store, r = runner
+    cfg = r.config_for(_job(
+        store, profile="candidate-only", rounds=1,
+        features={"candidate_screening": False, "storysheet": True,
+                  "comments": True}))
+    assert cfg.candidate_screening.mode == "apply"
+    assert cfg.candidate_screening.judgment_enabled is True
+    assert cfg.error_types == [] and cfg.sweeps == []
+    assert cfg.storysheet.enabled is False and cfg.comments is False
+    assert cfg.examination_graph.enabled is False
+    assert cfg.edit_guard.enabled is True and cfg.audit == "strict"
+
+
 def test_detector_only_profile_wins_over_stale_job_switches(runner):
     """The server, not the card's JavaScript, owns the tracked-changes-only
     promise. Even a stale or hand-written job cannot turn an add-on back on."""
@@ -160,8 +184,10 @@ def test_continuity_only_strips_every_other_pass_including_sapling(runner):
     edits and no contradiction-read anything."""
     store, r = runner
     cfg = r.config_for(_job(store, continuity_only=True,
-                            features={"sapling": True}))
+                            features={"sapling": True,
+                                      "candidate_screening": True}))
     assert cfg.sapling.enabled is False
+    assert cfg.candidate_screening.mode == "off"
     assert cfg.error_types == [] and cfg.sweeps == []
     assert cfg.continuity.enabled is True
 

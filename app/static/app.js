@@ -2422,7 +2422,8 @@ function priceReview(bundle, files) {
     // The staged-file preflight counts the shipped categories. Detector-only
     // removes the terminal-mark query category, leaving seven edit-capable
     // focused reads. Price the card for what the server profile will run.
-    const passes = bundle.profile === 'detector-only' ? 7 : (f.passes || 1);
+    const passes = bundle.profile === 'candidate-only' ? 0
+      : (bundle.profile === 'detector-only' ? 7 : (f.passes || 1));
     const chunks = f.chunks || [];
     let keptTok = 0, keptCount = 0;
     chunks.forEach((c) => {
@@ -2443,21 +2444,22 @@ function priceReview(bundle, files) {
     // text into more requests (more output). Priced against each category's
     // shipped default, so an untouched category — and the whole default panel —
     // adds exactly nothing.
-    batched += categoryKnobCost(bundle.category_knobs, keptTok, keptCount,
-                                m, bundle.effort, outFactor);
+    if (passes > 0) {
+      batched += categoryKnobCost(bundle.category_knobs, keptTok, keptCount,
+                                  m, bundle.effort, outFactor);
+    }
     reviewedIn += keptTok;   // one read's worth — the judge base, knobs aside
 
-    // Phase 1B stops before this ceiling, but exact eligible-site counts are
-    // known only after the manuscript has been examined. Show the defensible
-    // worst case in the preflight price: one cap per submitted manuscript.
-    if (feats.examination_judgment === true) {
-      const spec = state.features.find((s) => s.id === 'examination_judgment');
-      if (spec && spec.cost && spec.cost.kind === 'budget_cap') {
-        flat += Number(spec.cost.max_usd || 0);
-        approx = true;
-        any = true;
-      }
-    }
+    // Packet judges stop before their configured ceilings, but exact eligible
+    // site counts are known only after the manuscript has been examined. Show
+    // the defensible worst case: one cap per enabled detector per manuscript.
+    state.features.forEach((spec) => {
+      if (feats[spec.id] !== true || !spec.cost
+          || spec.cost.kind !== 'budget_cap') return;
+      flat += Number(spec.cost.max_usd || 0);
+      approx = true;
+      any = true;
+    });
 
     // The meaning/fix gates are priced before the whole-document guard below,
     // because unlike those passes they read whatever changes a run produces —
@@ -2577,9 +2579,10 @@ function stagedReviewFiles() {
 // The reviewer is gpt-5.6-luna at every tier by product decision: depth comes
 // from effort, rounds and passes, never a dearer detector.
 const REVIEWER = 'gpt-5.6-luna';
-const TIER_ORDER = ['detector', 'light', 'standard', 'hard', 'hammer'];
+const TIER_ORDER = ['detector', 'candidate', 'light', 'standard', 'hard', 'hammer'];
 // Display names for the job-card badge (a review carries the tier it ran at).
-const TIER_LABELS = { detector: 'Detector only', light: 'Light touch',
+const TIER_LABELS = { detector: 'Detector only', candidate: 'Candidate detector',
+                      light: 'Light touch',
                       standard: 'Standard', hard: 'Hard',
                       hammer: 'The Hammer', custom: 'Custom' };
 

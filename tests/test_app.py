@@ -628,6 +628,10 @@ def test_features_endpoint_lists_switches_at_their_current_defaults(client):
     assert by_id["examination_judgment"]["default"] is False
     assert by_id["examination_judgment"]["cost"] == {
         "kind": "budget_cap", "model": "gpt-5.6-luna", "max_usd": 2.0}
+    assert by_id["candidate_screening"]["admin_only"] is False
+    assert by_id["candidate_screening"]["default"] is False
+    assert by_id["candidate_screening"]["cost"] == {
+        "kind": "budget_cap", "model": "gpt-5.6-luna", "max_usd": 2.0}
 
 
 def test_a_job_with_an_unknown_feature_is_refused(client):
@@ -643,6 +647,7 @@ def test_a_job_with_an_unknown_feature_is_refused(client):
 def test_detector_only_profile_is_visible_and_persisted_for_a_batch(client):
     page = client.get("/").text
     assert "Detector only" in page
+    assert "Candidate detector" in page
     assert "Tracked changes only" in page
     staged = _upload(client)
     job = _run(client, staged["id"], mode="batch",
@@ -655,6 +660,31 @@ def test_detector_only_profile_is_visible_and_persisted_for_a_batch(client):
     cfg = client.app_state.runner.config_for(stored)
     assert cfg.comments is False and cfg.change_log is False
     assert cfg.examination_graph.production_verdicts is True
+
+
+def test_candidate_detector_profile_is_accepted_from_the_ui(client):
+    staged = _upload(client)
+    job = _run(client, staged["id"], profile="candidate-only",
+               preset="candidate", rounds=1)
+    assert job["profile"] == "candidate-only"
+    assert job["preset"] == "candidate"
+    client.app_state.runner.wait_idle()
+    stored = client.app_state.store.get(job["id"])
+    assert stored is not None
+    cfg = client.app_state.runner.config_for(stored)
+    assert cfg.candidate_screening.mode == "apply"
+    assert cfg.comments is False and cfg.audit == "strict"
+
+
+def test_requested_candidate_detector_honours_the_kill_switch(
+        client, monkeypatch):
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_SCREENING", "0")
+    staged = _upload(client)
+    response = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-sonnet-5",
+        "mode": "now", "features": {"candidate_screening": True}})
+    assert response.status_code == 409
+    assert "candidate detector" in response.json()["detail"].lower()
 
 
 def test_unknown_or_incompatible_review_profile_is_refused(client):
@@ -670,11 +700,19 @@ def test_unknown_or_incompatible_review_profile_is_refused(client):
     assert incompatible.status_code == 400
     assert "one review round" in incompatible.json()["detail"]
 
+    candidate_incompatible = client.post("/api/jobs", json={
+        "file_ids": [staged["id"]], "model": "claude-sonnet-5",
+        "mode": "batch", "profile": "candidate-only", "rounds": 2})
+    assert candidate_incompatible.status_code == 400
+    assert "one review round" in candidate_incompatible.json()["detail"]
+
 
 def test_a_features_map_is_stored_on_the_job(client):
     staged = _upload(client)
-    job = _run(client, staged["id"], features={"storysheet": True})
-    assert job["features"] == {"storysheet": True}
+    job = _run(client, staged["id"], features={
+        "storysheet": True, "candidate_screening": True})
+    assert job["features"] == {
+        "storysheet": True, "candidate_screening": True}
 
 
 def test_a_job_with_an_unknown_variant_is_refused(client):
