@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import tempfile
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Sequence
@@ -268,6 +269,14 @@ def apply_option(corrected: str | Path, option: dict) -> dict:
     unique, is refused with a sentence rather than guessed at. Returns the
     resolution record: where it landed and the line before and after."""
     corrected = Path(corrected)
+    if option.get("spans_break"):
+        # A change that crosses a paragraph break — a merge, a split, a paragraph
+        # inserted or removed, a spacing or keep set — cannot be written as one
+        # in-paragraph replacement. It carries the edit it stands for; re-apply
+        # that through the same engine the preview dry-ran, so accepting is the
+        # dry run made permanent.
+        edit = Edit(**option["edit"])
+        return apply_edit_to_corrected(corrected, edit)
     stories = read_stories(corrected)
     story = next((s for s in stories if s.story_id == option["story_id"]), None)
     if story is None:
@@ -892,6 +901,15 @@ def _edit_to_placement(edit: Edit, stories: list[Story], *, page: int = 0,
     if mine is None or not mine.applied:
         why = (mine.detail or mine.status) if mine is not None else "unknown"
         raise ResolveError(f"the change could not be placed: {why}")
+    if edit.is_layout:
+        # A whole-paragraph op — a break joined or made, a paragraph inserted or
+        # removed, spacing or a keep set. It reaches across a paragraph break (or
+        # is about the paragraph, not a span within it), so it cannot be shown or
+        # written as one in-paragraph replacement. Carry it as a spans-break
+        # placement: the affected lines before and after for the preview, and the
+        # edit itself so accepting it re-applies through this same engine.
+        return _spans_break_placement(edit, stories, snapshot, mine, note,
+                                      page, page_label)
     if any(o.applied and o.edit.id.endswith("-para") for o in outcomes):
         raise ResolveError("that would remove a whole line — use Edit the "
                            "line, or type the answer instead")
@@ -926,6 +944,58 @@ def _edit_to_placement(edit: Edit, stories: list[Story], *, page: int = 0,
     }
     # The folio the finished IDML shows for that page, exactly as every other
     # placement row carries it — a placement's "page 43" must be the same 43.
+    if page_label:
+        row["page_label"] = page_label
+    return row
+
+
+def _spans_break_placement(edit: Edit, stories: list[Story],
+                           snapshot: dict[str, list[str]], mine: EditOutcome,
+                           note: str, page: int, page_label: str) -> dict:
+    """A layout edit the dry run applied, handed back as a placement the designer
+    accepts by clicking — like any other, but for a change that reaches across a
+    paragraph break (a merge or split) or is about the paragraph itself (a keep,
+    a spacing, an inserted or removed line) rather than a span within it.
+
+    The affected lines are found by diffing the story before and after the dry
+    run — the run of paragraphs that changed, joined for one before/after the
+    preview redlines. `found`/`replacement` are left empty: there is no in-line
+    span to highlight. The edit rides along whole (`spans_break`, `edit`) so
+    accepting it re-applies through the same engine, against the file as it then
+    is — the accept is the dry run made permanent, not a second guess at it."""
+    story = next((s for s in stories if s.story_id == mine.story_id), None)
+    old = snapshot.get(mine.story_id) or []
+    new = [p.text for p in story.paragraphs] if story is not None else []
+    # The contiguous run of paragraphs that changed: common head and tail off,
+    # what is left is the merge, split, or inserted/removed line. A paragraph op
+    # that only sets an attribute (a keep, a forced break) changes no text, so
+    # the run is empty and the anchor line stands in as the before and after.
+    head = 0
+    while head < len(old) and head < len(new) and old[head] == new[head]:
+        head += 1
+    tail = 0
+    while (tail < len(old) - head and tail < len(new) - head
+           and old[-1 - tail] == new[-1 - tail]):
+        tail += 1
+    before = "\n".join(old[head:len(old) - tail])
+    after = "\n".join(new[head:len(new) - tail])
+    index = head if before or after else mine.paragraph
+    if not before and not after and 0 <= mine.paragraph < len(new):
+        # An attribute-only op: no line changed, so show the paragraph it acts on
+        # unchanged — the note carries what the op does.
+        before = after = new[mine.paragraph]
+    row = {
+        "id": "",
+        "edit_id": edit.id,
+        "story_id": mine.story_id,
+        "paragraph": index,
+        "spans_break": True,
+        "edit": asdict(edit),
+        "found": "", "replacement": "",
+        "before": before, "after": after,
+        "page": page,
+        "note": note,
+    }
     if page_label:
         row["page_label"] = page_label
     return row
