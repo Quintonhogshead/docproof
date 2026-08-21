@@ -4480,6 +4480,23 @@ function correctionsActions(job) {
   actions.append(openButton(job, 'corrections-notes',
     WEB ? 'Download the report (Markdown)' : 'Open the report notes', note,
     { quiet: true }));
+  // The read-only InDesign check tour: a script that walks the designer to each
+  // composition check and open flag in the live document — the one thing no file
+  // comparison can settle. Offered only when the run left something to walk to.
+  // A plain hand-over: WEB downloads the .jsx, desktop reveals it so it can be
+  // installed into the Scripts panel and run with the corrected file open.
+  const tourItems = (job.checks || 0)
+    + ((job.total_comments ? job.unresolved : job.flags) || 0);
+  if (tourItems > 0) {
+    const tour = openButton(job, 'check-tour',
+      WEB ? 'Download the InDesign check tour (JSX)'
+          : 'Show the InDesign check tour in Finder', note,
+      { quiet: true, reveal: !WEB });
+    tour.title = 'A read-only InDesign script: run it with the corrected file '
+      + 'open and it selects you onto each composition check and open flag in '
+      + 'turn. It changes nothing.';
+    actions.append(tour);
+  }
   if (!WEB) {
     actions.append(
       openButton(job, 'corrected', 'Show in Finder', note, { reveal: true }));

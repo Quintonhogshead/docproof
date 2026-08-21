@@ -302,6 +302,9 @@ def _result_name(job: Job, which: str) -> str | None:
         "corrected": f"{stem}_corrected.idml",
         "corrections-notes": "corrections_notes.md",
         "corrections": "corrections.json",
+        # The read-only InDesign check tour — an ExtendScript the designer runs to
+        # be walked to each composition check and open flag in the live document.
+        "check-tour": f"{stem}_checks.jsx",
     }
     if job.is_corrections and which in ("document", "docx"):
         # One "open it" button gives back the corrected file, whatever the

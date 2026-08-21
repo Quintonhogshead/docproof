@@ -435,6 +435,10 @@ class Job:
     total_comments: int | None = None
     applied_comments: int | None = None
     unresolved: int | None = None
+    # Corrections only: how many things the run handed over for a person to look
+    # at in InDesign — the composition checks a file comparison cannot settle.
+    # Drives whether the card offers the check-tour script; None on other kinds.
+    checks: int | None = None
     # Promo only: how many capitalised terms in the copy appear nowhere in the
     # manuscript — the grounding check's count, surfaced so a card can flag it.
     unverified: int | None = None
@@ -1837,6 +1841,7 @@ class JobRunner:
             total_comments=outputs.total_comments,
             applied_comments=outputs.applied_comments,
             unresolved=outputs.unresolved,
+            checks=outputs.to_check,
             verified=outputs.clean, cost=cost)
         self._finish(job_id)
 
