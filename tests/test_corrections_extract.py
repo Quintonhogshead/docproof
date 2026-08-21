@@ -97,6 +97,9 @@ def make_commented_pdf(path: Path, lines: list[tuple[float, float, str]],
         if "quad" in spec:
             d[NameObject("/QuadPoints")] = ArrayObject(
                 [FloatObject(v) for v in spec["quad"]])
+        if "reply_to" in spec:
+            # A reply thread: /IRT ("in reply to") points at an earlier annot.
+            d[NameObject("/IRT")] = arr[spec["reply_to"]]
         arr.append(w._add_object(d))
     page[NameObject("/Annots")] = arr
     with path.open("wb") as fh:
@@ -496,3 +499,62 @@ def test_a_highlight_does_not_reach_into_the_line_above_it(tmp_path):
     anchor = read_pdf_comments(pdf)[0].anchor
     assert anchor == "did"
     assert "Hopefully" not in anchor and "\n" not in anchor
+
+
+# --- the author's replies on a mark --------------------------------------------
+# A proof often makes a second pass through the author, who answers the
+# proofreader's queries in place — a reply annotation ("correct", "stet",
+# "please change to 'leaves'") hung off the mark via /IRT. The reply is the
+# author's decision on the mark, so it rides with it instead of arriving as an
+# unanchored mark of its own.
+
+
+def test_a_reply_rides_its_mark_instead_of_becoming_one(tmp_path):
+    from docproof.corrections.from_pdf import comments_source, read_pdf_comments
+    pdf = make_commented_pdf(tmp_path / "p.pdf",
+        lines=[(72, 700, "he carried a pouch of tobacco here")],
+        annots=[
+            {"subtype": "/Text", "rect": [72, 697, 90, 715],
+             "contents": "Should this be tabacco?"},
+            {"subtype": "/Text", "rect": [95, 697, 113, 715],
+             "contents": "Correct", "reply_to": 0}])
+    comments = read_pdf_comments(pdf)
+    assert len(comments) == 1
+    assert comments[0].instruction == "Should this be tabacco?"
+    assert comments[0].replies == ("Correct",)
+    src = comments_source(comments)
+    assert 'the author\'s reply: "Correct"' in src
+    assert "the author's decision" in src        # the framing the model reads
+
+
+def test_a_reply_to_a_reply_still_reaches_the_root_mark(tmp_path):
+    from docproof.corrections.from_pdf import read_pdf_comments
+    pdf = make_commented_pdf(tmp_path / "p.pdf",
+        lines=[(72, 700, "he carried a pouch of tobacco here")],
+        annots=[
+            {"subtype": "/Text", "rect": [72, 697, 90, 715],
+             "contents": "Should this be tabacco?"},
+            {"subtype": "/Text", "rect": [95, 697, 113, 715],
+             "contents": "Which do you mean?", "reply_to": 0},
+            {"subtype": "/Text", "rect": [118, 697, 136, 715],
+             "contents": "Yes. Please change", "reply_to": 1}])
+    comments = read_pdf_comments(pdf)
+    assert len(comments) == 1
+    assert comments[0].replies == ("Which do you mean?", "Yes. Please change")
+
+
+def test_a_threaded_mark_is_the_models_never_the_rules(tmp_path):
+    """A reply can confirm, redirect, or cancel the note it answers, and the
+    deterministic rules read only the note — so a mark carrying a reply always
+    goes to the model, which is shown the reply beside it."""
+    from docproof.corrections.from_pdf import PdfComment
+    from docproof.corrections.instructions import edits_from_comments
+    plain = PdfComment(page=1, instruction="Lowercase", anchor="The",
+                       context="The river ran on", kind="highlight", id="p1-1")
+    rows, unresolved = edits_from_comments([plain])
+    assert rows and not unresolved            # the rules own the bare mark
+    threaded = PdfComment(page=1, instruction="Lowercase", anchor="The",
+                          context="The river ran on", kind="highlight",
+                          id="p1-1", replies=("no, leave it",))
+    rows, unresolved = edits_from_comments([threaded])
+    assert not rows and unresolved == [threaded]

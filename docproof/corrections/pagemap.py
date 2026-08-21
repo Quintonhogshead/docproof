@@ -51,6 +51,12 @@ MIN_VOTES = 2
 # How far apart two votes may be and still be believed to describe the same page.
 # Pages disagree by the length of a running head or a folio, not by paragraphs.
 VOTE_SPREAD = 400
+# How far past its placed neighbours a bracketed page may reach (see
+# `_place_bracketed`). Sized to the artifacts that blur a neighbour's edge — a
+# folio and a running head, a few dozen normalized characters — and deliberately
+# no wider, because the pad is inside the bracket's evidence: every character of
+# it re-admits copies the bracket exists to rule out.
+_BRACKET_SLACK = 32
 
 
 class PageMap:
@@ -309,8 +315,16 @@ def anchored_folio_labels(folios: list[str], page_texts) -> dict[int, str]:
 
 def _normalized_with_map(text: str) -> tuple[str, list[int]]:
     """`textmatch.normalize` applied to one paragraph, plus the real offset each
-    surviving character came from."""
-    idx = NormIndex(text)
+    surviving character came from.
+
+    Case-folded, because the proof renders the *styled* text and the book stores
+    the logical text: a part divider set in an all-caps face prints "PART 2:
+    DEPRESSION" over a story that spells it "Part 2: Depression". Read literally,
+    the page's only match was the table of contents — which types its entries in
+    caps — and the page map placed a mid-book divider in the front matter, taking
+    every mark on it along. Case carries no placement signal across the two
+    renderings; the offsets the map answers with are untouched by the fold."""
+    idx = NormIndex(text, fold_case=True)
     return idx.view, idx.sources
 
 
@@ -330,28 +344,95 @@ def build_page_map(stories: list[Story], page_texts: list[str]) -> PageMap:
     if not stream.text:
         return PageMap({}, set(), proof)
 
-    ranges: dict[tuple[int, str, int], list[tuple[int, int]]] = {}
-    placed: set[int] = set()
+    views = [normalize(raw, fold_case=True) for raw in page_texts]
+    spans: dict[int, tuple[int, int]] = {}   # page -> [start, end) of the stream
     cursor = 0
-    for i, raw in enumerate(page_texts):
+    for i, view in enumerate(views):
         page = i + 1
-        view = normalize(raw)
         if len(view) < MIN_PROBE:
             continue
         delta = _place(stream.text, view, cursor)
         if delta is None:
             continue
-        placed.add(page)
-        for (sid, para), spans in stream.ranges(delta, delta + len(view)).items():
-            for span in spans:
-                ranges.setdefault((page, sid, para), []).append(span)
+        spans[page] = (delta, delta + len(view))
         # Pages run in order, so the next one starts around where this one ended.
         # Backing off by a page's length keeps a mis-set cursor from stranding the
         # rest of the book, and `_place` falls back to a full scan anyway.
         cursor = max(0, delta + len(view) - len(view) // 2)
+
+    _place_bracketed(stream.text, views, spans)
+    _clamp_overruns(spans)
+
+    ranges: dict[tuple[int, str, int], list[tuple[int, int]]] = {}
+    for page, (lo, hi) in spans.items():
+        for (sid, para), runs in stream.ranges(lo, hi).items():
+            for span in runs:
+                ranges.setdefault((page, sid, para), []).append(span)
     log.info("Page map: placed %d of %d page(s) in the book",
-             len(placed), len(page_texts))
-    return PageMap(ranges, placed, proof)
+             len(spans), len(page_texts))
+    return PageMap(ranges, set(spans), proof)
+
+
+def _place_bracketed(book: str, views: list[str],
+                     spans: dict[int, tuple[int, int]]) -> None:
+    """Place the pages the open search refused, using the neighbours that did
+    place. Mutates `spans`.
+
+    A section divider's whole text can occur twice in a book — the divider and
+    the table of contents entry that names it — so `_place_unique` rightly
+    refuses it: over the whole book, two matches decide nothing. But pages run in
+    order, so the pages around it that *did* place bracket where it has to sit,
+    and a run that occurs exactly once inside that bracket is as unambiguous as
+    one that occurs once anywhere. This is the page a mark most needs placed —
+    the mark on a divider is about the one line the divider holds.
+
+    The bracket is padded by `_BRACKET_SLACK` on both sides because the
+    neighbours' edges are measured off proof text that carries folios and
+    running heads the book lacks: the page before genuinely overruns its true
+    end by a few characters (see `_clamp_overruns`), and the page after starts
+    early by the length of whatever heads its own proof text — so an unpadded
+    bracket can exclude the very text it is looking for. The pad covers those
+    artifacts and nothing more: a wide pad would re-admit the distant copies the
+    bracket exists to shut out. Pages are walked in order so one rescued divider
+    can bracket the epigraph page after it. A page whose neighbours sit out of
+    stream order gets no bracket — front matter stories can live anywhere in an
+    IDML, and a bracket that is not really a bracket proves nothing."""
+    for i, view in enumerate(views):
+        page = i + 1
+        if page in spans or len(view) < MIN_PROBE:
+            continue
+        prev = max((p for p in spans if p < page), default=None)
+        nxt = min((p for p in spans if p > page), default=None)
+        lo = spans[prev][1] if prev is not None else 0
+        hi = spans[nxt][0] if nxt is not None else len(book)
+        if hi < lo:
+            continue
+        lo = max(0, lo - _BRACKET_SLACK)
+        hi = min(len(book), hi + _BRACKET_SLACK)
+        delta = _place_unique_within(book, view, min(PROBE, len(view)), lo, hi)
+        if delta is not None:
+            spans[page] = (delta, delta + len(view))
+
+
+def _clamp_overruns(spans: dict[int, tuple[int, int]]) -> None:
+    """Trim each page's run where the next placed page begins. Mutates `spans`.
+
+    A page's aligned length is the length of its *proof* text, which carries
+    folios and running heads the book does not — so a page's run ends a few
+    characters past where the page truly does, spilling onto whatever paragraph
+    comes next. Mostly harmless, but when the pages between are blank (the verso
+    before a part divider), the spill is what answers `page_of` for the next
+    paragraph — and a divider was reported on the page the *previous poem* ended
+    on. A character is typeset on exactly one page, and the next page's start is
+    the voted, more trustworthy boundary, so the overrun yields to it. Only pages
+    running in stream order clamp each other: a neighbour placed in a different
+    story (front matter, a TOC) shares no boundary with this one."""
+    pages = sorted(spans)
+    for a, b in zip(pages, pages[1:]):
+        lo_a, hi_a = spans[a]
+        lo_b, _ = spans[b]
+        if lo_a < lo_b < hi_a:
+            spans[a] = (lo_a, lo_b)
 
 
 def _place(book: str, page: str, cursor: int) -> int | None:
@@ -403,6 +484,40 @@ def _votes(book: str, page: str, from_offset: int, probe_len: int) -> list[int]:
         if len(votes) >= PROBES_PER_PAGE:
             break
     return votes
+
+
+def _place_unique_within(book: str, page: str, probe_len: int,
+                         lo: int, hi: int) -> int | None:
+    """`_place_unique`, with uniqueness judged inside `[lo, hi)` instead of over
+    the whole book: the start the page would have is what must fall in the
+    bracket, and copies outside it do not count against the one inside.
+
+    Probes are windows across the page, so a hit at `i` for the window starting
+    at `at` puts the page at `i - at` — it is that derived start the bracket
+    filters, not the hit. Exactly one qualifying start places the page; two
+    qualifying starts is the same coin toss as ever and places nothing."""
+    n = len(page)
+    windows: list[tuple[int, int]] = []
+    if MIN_PROBE <= n <= PROBE:
+        windows.append((0, n))                 # the whole short page, whole
+    length = min(PROBE, n)
+    if length >= MIN_PROBE:
+        step = max(1, (n - length) // max(1, PROBES_PER_PAGE - 1))
+        windows += [(at, length) for at in range(0, n - length + 1, step)]
+    for at, length in windows:
+        probe = page[at:at + length]
+        starts: list[int] = []
+        i = book.find(probe)
+        while i != -1:
+            start = i - at
+            if lo <= start < hi and start not in starts:
+                starts.append(start)
+                if len(starts) > 1:
+                    break
+            i = book.find(probe, i + 1)
+        if len(starts) == 1:
+            return starts[0]
+    return None
 
 
 def _place_unique(book: str, page: str, probe_len: int) -> int | None:

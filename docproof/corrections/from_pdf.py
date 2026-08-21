@@ -33,7 +33,7 @@ here and is reported as such rather than guessed at.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 log = logging.getLogger("docproof.corrections.from_pdf")
@@ -70,6 +70,14 @@ class PdfComment:
     # a run of book text, so this is how far into that run the mark sat — the
     # closest thing a page-anchored correction has to an exact address.
     offset: int = -1
+    # What the author wrote back on this mark, in order. A proof often makes a
+    # second pass through the author, who answers the proofreader's queries in
+    # place — a reply annotation saying "correct", "stet", or "please change to
+    # 'leaves'". The reply is the author's decision on the mark it hangs off, so
+    # it rides with the mark instead of arriving as a mark of its own — an
+    # unanchored "correct" floating beside its question was a comment the model
+    # could only guess at.
+    replies: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -256,6 +264,9 @@ def read_pdf(path: str | Path) -> PdfProof:
 
     reader = pypdf.PdfReader(str(path))
     comments: list[PdfComment] = []
+    # Which comment each annotation object became, by object number — how a
+    # reply annotation (`/IRT`, "in reply to") finds the mark it answers.
+    by_ref: dict[int, int] = {}
     page_texts: list[str] = []
     with pdfplumber.open(str(path)) as plumber:
         for pi, plumber_page in enumerate(plumber.pages):
@@ -279,10 +290,20 @@ def read_pdf(path: str | Path) -> PdfProof:
             annots = reader.pages[pi].get("/Annots")
             if not annots or layout is None:
                 continue
+            # Replies after the marks they answer: a reply's parent is on the
+            # same page (the thread renders there), so by the second pass it has
+            # a comment to be folded into.
+            replies = []
             for ref in annots:
+                if ref.get_object().get("/IRT") is not None:
+                    replies.append(ref)
+                    continue
                 comment = _read_annot(ref, layout, page_no, len(comments))
                 if comment is not None:
+                    by_ref[_obj_id(ref)] = len(comments)
                     comments.append(comment)
+            for ref in replies:
+                _fold_reply(ref, comments, by_ref, layout, page_no)
     log.info("Read %d comment(s) over %d page(s) from %s",
              len(comments), len(page_texts), Path(path).name)
     return PdfProof(comments=tuple(comments), page_texts=tuple(page_texts))
@@ -331,6 +352,46 @@ def _read_annot(ref, layout: _Page, page_no: int, seen: int) -> PdfComment | Non
     return PdfComment(page=page_no, instruction=instruction,
                       anchor=_norm(anchor), context=_norm(context), kind=kind,
                       id=f"p{page_no}-{n}", offset=offset)
+
+
+def _obj_id(ref) -> int:
+    """The PDF object number behind an annotation reference — the identity a
+    reply's `/IRT` points back at. -1 for an object pypdf handed over already
+    resolved with no reference to give."""
+    idnum = getattr(ref, "idnum", None)
+    if idnum is None:
+        idnum = getattr(getattr(ref, "indirect_reference", None), "idnum", None)
+    return -1 if idnum is None else int(idnum)
+
+
+def _fold_reply(ref, comments: list[PdfComment], by_ref: dict[int, int],
+                layout: _Page, page_no: int) -> None:
+    """Attach one reply annotation to the comment it answers.
+
+    The chain is followed to its root — an author replying to a proofreader's
+    reply is still answering the original mark. A reply whose root never became a
+    comment (a bare drawing, a subtype this reader skips) falls back to being
+    read as a mark of its own, anchored to the line it sits on: worse than a
+    thread, better than losing what the author said."""
+    obj = ref.get_object()
+    text = str(obj.get("/Contents") or "").strip()
+    if not text:
+        return
+    parent, root = obj.get("/IRT"), None
+    for _ in range(8):                     # bounded — a cycle proves nothing
+        if parent is None:
+            break
+        root = parent
+        parent = parent.get_object().get("/IRT")
+    at = by_ref.get(_obj_id(root)) if root is not None else None
+    if at is None:
+        comment = _read_annot(ref, layout, page_no, len(comments))
+        if comment is not None:
+            by_ref[_obj_id(ref)] = len(comments)
+            comments.append(comment)
+        return
+    comments[at] = replace(comments[at],
+                           replies=comments[at].replies + (text,))
 
 
 def _quad_boxes(quad: list[float]) -> list[tuple[float, float, float, float]]:
@@ -407,10 +468,24 @@ def comments_source(comments: list[PdfComment],
                 lines.append(pages[page])
                 lines.append("")
         lines.append("--- the reviewer's comments ---")
+    if any(c.replies for c in comments):
+        lines += [
+            "",
+            "Some comments carry the author's reply — the author's decision on "
+            "the reviewer's note, and it is final. A confirmation (\"correct\", "
+            "\"yes\", \"please change\") means make the change the note "
+            "describes, as an exact edit, even where the note alone was only a "
+            "question. A reply that gives wording or its own instruction is the "
+            "one to follow. A rejection (\"no\", \"stet\", \"leave as is\", "
+            "\"keep\") means change nothing: emit the edit with `replace` equal "
+            "to `find`, so the mark is recorded as resolved without a change.",
+        ]
     lines.append("")
     for i, c in enumerate(comments, 1):
         cid = c.id or f"c{i}"
         lines.append(f"{i}. (id {cid}) [page {c.page}] comment: \"{c.instruction}\"")
+        for reply in c.replies:
+            lines.append(f"   the author's reply: \"{reply}\"")
         if c.kind == "highlight" and c.anchor:
             lines.append(f"   highlighted text: \"{c.anchor}\"")
         if c.context and c.context != c.anchor:
