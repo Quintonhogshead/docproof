@@ -475,10 +475,13 @@ def comments_source(comments: list[PdfComment],
             "the reviewer's note, and it is final. A confirmation (\"correct\", "
             "\"yes\", \"please change\") means make the change the note "
             "describes, as an exact edit, even where the note alone was only a "
-            "question. A reply that gives wording or its own instruction is the "
-            "one to follow. A rejection (\"no\", \"stet\", \"leave as is\", "
-            "\"keep\") means change nothing: emit the edit with `replace` equal "
-            "to `find`, so the mark is recorded as resolved without a change.",
+            "question. A reply that gives its own wording or instruction "
+            "OVERRULES the note: carry out the author's correction and do NOT "
+            "apply the reviewer's — the note is only there to show which text the "
+            "author is correcting. A rejection (\"no\", \"stet\", \"leave as "
+            "is\", \"keep\") means change nothing: emit the edit with `replace` "
+            "equal to `find`, so the mark is recorded as resolved without a "
+            "change.",
         ]
     lines.append("")
     for i, c in enumerate(comments, 1):
