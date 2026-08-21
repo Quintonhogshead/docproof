@@ -5211,10 +5211,15 @@ function fixItemCard(job, data, item) {
     apply.textContent = 'Apply here';
     if (o.suggested) apply.className = 'primary';
     apply.addEventListener('click', () => resolve({ option_id: o.id }));
-    opt.append(apply, editButton(o, {
-      start: o.start, end: o.end, found: o.found,
-      replacement: o.replacement,
-    }));
+    opt.append(apply);
+    // A change that crosses a paragraph break (a merge, a split, a paragraph
+    // op) is not a span the single-line editor can open — accept it or don't.
+    if (!o.spans_break) {
+      opt.append(editButton(o, {
+        start: o.start, end: o.end, found: o.found,
+        replacement: o.replacement,
+      }));
+    }
     card.append(opt);
   });
 
