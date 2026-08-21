@@ -573,8 +573,8 @@ exactly once, whenever the find could appear more than once in the book.
 - format: "italic" or "roman" when the answer is about how the text is set; \
 the find/replace then carry the words to style (identical when no words \
 change). Leave "" otherwise.
-- note: a short clause naming what you did ("used the em dash", "changed the \
-second copy, as asked").
+- note: what you did, in as few words as possible — a bare clause, no full \
+sentence, no preamble ("used the em dash", "changed the second copy").
 
 Leave — decision "leave", with the reason in note — when the right outcome is \
 to change nothing: the text is already correct as set, the mark asks a question \
