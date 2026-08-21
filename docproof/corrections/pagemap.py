@@ -267,6 +267,46 @@ def printed_folio_labels(page_texts) -> dict[int, str]:
     return {p: str(p + offset) for p in range(lo, hi + 1)}
 
 
+def anchored_folio_labels(folios: list[str], page_texts) -> dict[int, str]:
+    """Every proof page labelled with the file's *own* folio, anchored by the
+    folios the proof prints — the alignment for a proof whose page count does not
+    match the file's (a cover the file does not carry, a flattened spread).
+
+    `folios` is the file's page names in reading order (`idml.read_page_folios`).
+    Each proof page that prints a number nominates every position in that list
+    holding the same name, and each nomination votes on one proof-to-file shift.
+    The shift needs the same consensus `printed_folio_labels` demands, and once it
+    carries, every proof page in range is labelled with the file's own name —
+    roman front matter and unnumbered chapter openers included, which the printed
+    read alone can never label. A proof page outside the file (the cover that
+    caused the mismatch) gets no label rather than a wrong one."""
+    if not folios or not page_texts:
+        return {}
+    reads: dict[int, str] = {}
+    for i, text in enumerate(page_texts, 1):
+        n = _printed_number(text)
+        if n is not None:
+            reads[i] = str(n)
+    if len(reads) < _MIN_READS:
+        return {}
+    where: dict[str, list[int]] = {}
+    for i, name in enumerate(folios):
+        where.setdefault(name, []).append(i)
+    votes: dict[int, int] = {}
+    for page, name in reads.items():
+        for i in where.get(name, ()):
+            shift = i - (page - 1)
+            votes[shift] = votes.get(shift, 0) + 1
+    if not votes:
+        return {}
+    shift, count = max(votes.items(), key=lambda kv: kv[1])
+    if count < max(_MIN_READS, (len(reads) + 1) // 2):
+        return {}
+    return {p: folios[p - 1 + shift]
+            for p in range(1, len(page_texts) + 1)
+            if 0 <= p - 1 + shift < len(folios)}
+
+
 def _normalized_with_map(text: str) -> tuple[str, list[int]]:
     """`textmatch.normalize` applied to one paragraph, plus the real offset each
     surviving character came from."""

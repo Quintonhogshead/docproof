@@ -820,7 +820,7 @@ def materialize_suggestion(item: dict, corrected: str | Path,
     while (s < len(before) - p and s < len(after) - p
            and before[len(before) - 1 - s] == after[len(after) - 1 - s]):
         s += 1
-    return {
+    row = {
         "id": "",                     # numbered into the item by the caller
         "edit_id": "",
         "story_id": mine.story_id,
@@ -833,6 +833,11 @@ def materialize_suggestion(item: dict, corrected: str | Path,
         "suggested": True,
         "note": note,
     }
+    # The folio the finished IDML shows for that page, exactly as every other
+    # placement row carries it — a suggestion's "page 43" must be the same 43.
+    if item.get("page_label"):
+        row["page_label"] = item["page_label"]
+    return row
 
 
 def queue_counts(payload: dict) -> dict:

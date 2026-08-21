@@ -215,6 +215,97 @@ def test_the_fallback_labels_a_mismatched_proof_end_to_end(tmp_path):
     assert report["pages"]["labeled"] == 9
 
 
+# --- the file's own folios anchored to a mismatched proof ----------------------
+
+from docproof.corrections.pagemap import anchored_folio_labels  # noqa: E402
+from docproof.corrections.run import _label_ladder  # noqa: E402
+
+
+def _cover_proof():
+    """A 13-page proof of a 12-page file: a cover the file does not carry, two
+    unnumbered front-matter leaves, then a body printing folios 1–10."""
+    return (["COVER"] + ["HALF TITLE", "FULL TITLE"]
+            + [f"Body text of the book, leaf {p}.\n{p - 3}"
+               for p in range(4, 14)])
+
+
+def test_anchored_labels_are_the_files_own_names(tmp_path):
+    folios = ["i", "ii"] + [str(n) for n in range(1, 11)]
+    labels = anchored_folio_labels(folios, _cover_proof())
+    # The printed arabic folios anchor the shift; the labels handed out are the
+    # file's own names — the roman front matter included, which no printed read
+    # could ever produce — and the cover, a page the file does not carry, gets
+    # no label rather than a wrong one.
+    assert 1 not in labels
+    assert labels[2] == "i" and labels[3] == "ii"
+    assert labels[4] == "1" and labels[13] == "10"
+
+
+def test_anchored_labels_refuse_without_consensus():
+    # One page printing one number is no anchor at all.
+    assert anchored_folio_labels(["1"], ["Body.\n1"]) == {}
+    # And a file with no folios can anchor nothing.
+    assert anchored_folio_labels([], _cover_proof()) == {}
+
+
+def test_the_ladder_prefers_spreads_then_anchoring_then_printed(tmp_path):
+    idml = _idml(tmp_path, [["i", "ii"], [str(n) for n in range(1, 11)]])
+    proof = _cover_proof()
+    # Counts match (12 == 12): the spreads map holds outright.
+    labels, source = _label_ladder(idml, 12, proof[1:])
+    assert source == "spreads" and labels[1] == "i"
+    # A cover breaks the one-to-one: the file's folios are anchored instead.
+    labels, source = _label_ladder(idml, 13, proof)
+    assert source == "anchored"
+    assert labels[2] == "i" and labels[4] == "1"
+    # No spreads to anchor: the printed folios alone are left.
+    bare = _idml(tmp_path, [], master=False)
+    labels, source = _label_ladder(bare, 13, proof)
+    assert source == "printed"
+    assert 2 not in labels and labels[4] == "1"
+
+
+def test_flag_wording_speaks_the_folio_not_the_proof_page(tmp_path):
+    """A flag's detail is read by the person who opens the finished IDML, so the
+    page it names must be the page that file shows. Proof page 8 is folio "3"
+    here (a 14-page proof of a 1-page file, printed-folio fallback), and the
+    ambiguous-edit detail must say 3, not 8."""
+    edits = [{"find": "was", "replace": "is", "page": 8}]
+    page_texts = (["COVER"] + [f"Front matter leaf {i}" for i in range(2, 6)]
+                  + [f"Body text of the book, leaf {i}.\n{i - 5}"
+                     for i in range(6, 15)])
+    got = apply_corrections(LAYOUT, json.dumps(edits), tmp_path,
+                            page_texts=page_texts)
+    report = json.loads(got.report_json.read_text(encoding="utf-8"))
+    detail = report["apply"]["flagged"][0]["detail"]
+    assert "page 3" in detail
+    assert "page 8" not in detail
+
+
+def test_the_corrected_file_carries_the_folios_the_labels_promise(tmp_path):
+    """The invariant the whole labelling rests on: applying text edits never
+    touches a spread, so the finished IDML's folios are the source's — and the
+    labels the report speaks in are, literally, the downloaded file's."""
+    from docproof.corrections.idml import read_page_folios as folios_of
+    got = apply_corrections(LAYOUT,
+                            json.dumps([{"find": "Their were",
+                                         "replace": "There were"}]),
+                            tmp_path)
+    assert folios_of(got.corrected_idml) == folios_of(LAYOUT) == ["1"]
+
+
+def test_a_resolution_in_the_notes_names_its_page():
+    from docproof.corrections.report import _markdown
+    payload = _bare_payload((), {})
+    payload["queue"] = [{"id": "q1", "page": 7, "page_label": "1",
+                         "instruction": "fix this", "anchor": "a word",
+                         "options": [], "targets": [], "resolved": True}]
+    payload["resolutions"] = [{"item_id": "q1", "kind": "picked",
+                               "after": "the corrected line"}]
+    md = _markdown(payload)
+    assert "**page 1** — picked a placement" in md
+
+
 def test_queue_options_carry_the_folio_too(tmp_path):
     """The fix screen's clickable placements name the page a designer navigates
     to, so each option is stamped with the folio, not just its item."""

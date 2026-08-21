@@ -49,8 +49,8 @@ _STYLING_NOTE = re.compile(r"\b(?:italic|roman|de-?italic|un-?italic|enclos"
                            r"|in quotes|in quotation)\w*", re.IGNORECASE)
 
 
-def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
-                 ) -> tuple[list[Edit], dict[str, str]]:
+def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None,
+                 page_labels=None) -> tuple[list[Edit], dict[str, str]]:
     """`(edits, withheld)` after the fidelity checks.
 
     `edits` comes back with any question-note edit reclassified to a judgment; the
@@ -63,7 +63,9 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
     without it the on-page check cannot run. `pdf_pages` is the proof's own rendered
     text per page (1-based by position), which the on-page check consults as direct
     evidence of what a cited page actually holds before it calls an edit a wrong
-    copy — the page map can under-cover a page, and the proof cannot."""
+    copy — the page map can under-cover a page, and the proof cannot. `page_labels`
+    maps a proof page to the finished file's folio, so a withhold reason names the
+    page the designer's IDML shows; the checks themselves never read it."""
     by_id = _comments_by_id(comments)
     if not by_id:
         return list(edits), {}
@@ -102,7 +104,7 @@ def screen_edits(edits, comments, *, book_pages=None, pdf_pages=None
             out.append(_replace(e, kind=JUDGMENT))
             continue
 
-        reason = (_off_page(e, pages, proof)
+        reason = (_off_page(e, pages, proof, page_labels)
                   or _outside_mark(e, anchor, highlighted)
                   or _note_vs_diff(e, note))
         if reason:
@@ -147,7 +149,8 @@ def _cget(comment, field: str, default=""):
 _PAGE_WINDOW = 1
 
 
-def _off_page(edit: Edit, book_pages: dict, pdf_pages=()) -> str | None:
+def _off_page(edit: Edit, book_pages: dict, pdf_pages=(),
+              page_labels=None) -> str | None:
     """A withhold reason when the edit's text is not on the page the mark was made
     on (nor a page either side of it) yet is elsewhere in the book — the "quoted the
     wrong sentence / the identical line on another page" failure.
@@ -184,7 +187,8 @@ def _off_page(edit: Edit, book_pages: dict, pdf_pages=()) -> str | None:
     # next), the page map under-covered it and this is the right copy after all.
     if _on_proof_page(edit.find, pdf_pages, page):
         return None
-    return (f"the text this edit changes is not on page {page}, where the mark "
+    shown = (page_labels or {}).get(page) or page
+    return (f"the text this edit changes is not on page {shown}, where the mark "
             f"was made — it was found on another page, so the mark was matched "
             f"to the wrong copy")
 
