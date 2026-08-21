@@ -249,14 +249,29 @@ def corrected_name(src_idml: str | Path) -> str:
 
 def _comment_fields(c) -> tuple[str, int, str, str, str]:
     """(id, page, kind, instruction, anchor) from a `PdfComment` or a plain dict,
-    so the ledger reads the comment list however it arrived."""
+    so the ledger reads the comment list however it arrived. An author's replies
+    ride inside the instruction — the ledger is where a person checks what became
+    of a mark, and "correct" from the author is half of what the mark said."""
     if isinstance(c, dict):
+        replies = tuple(c.get("replies") or ())
+        instruction = str(c.get("instruction") or "")
+        anchor = str(c.get("anchor") or c.get("context") or "")
         return (str(c.get("id") or ""), int(c.get("page") or 0),
-                str(c.get("kind") or ""), str(c.get("instruction") or ""),
-                str(c.get("anchor") or c.get("context") or ""))
+                str(c.get("kind") or ""),
+                _with_replies(instruction, replies), anchor)
     return (getattr(c, "id", "") or "", getattr(c, "page", 0) or 0,
-            getattr(c, "kind", "") or "", getattr(c, "instruction", "") or "",
+            getattr(c, "kind", "") or "",
+            _with_replies(getattr(c, "instruction", "") or "",
+                          tuple(getattr(c, "replies", ()) or ())),
             getattr(c, "anchor", "") or getattr(c, "context", "") or "")
+
+
+def _with_replies(instruction: str, replies: tuple[str, ...]) -> str:
+    """The comment's note with the author's replies folded on, for the ledger."""
+    if not replies:
+        return instruction
+    folded = " — ".join(f'the author replied: "{r}"' for r in replies)
+    return f"{instruction} — {folded}" if instruction else folded
 
 
 def _reconcile_comments(comments, edits: Sequence[Edit],

@@ -542,3 +542,49 @@ def test_a_soft_hyphen_anchor_lands_on_the_book_word():
     assert all(o.applied for o in outcomes)
     assert story.paragraphs[0].text == \
         "In my hand was the plaque for the tournament."
+
+
+# --- placing the pages the open search cannot ----------------------------------
+# A part divider prints a line or two, in the styled (often all-caps) face; the
+# story spells it in mixed case, and the table of contents repeats it. These are
+# the pages a mark most needs placed — the mark on a divider is about the one
+# line the divider holds.
+
+_OPENER = ("The first poem ran long past the meadow and into the dark water "
+           "where nothing else moved at all.")
+_CLOSER = ("The next poem began with thunder and a kettle left on, and it "
+           "carried on for a good while after.")
+
+
+def test_an_all_caps_divider_aligns_to_its_mixed_case_paragraph():
+    """The proof renders the styled text; the book stores the logical text. A
+    divider set in an all-caps face must still place on the story's mixed-case
+    spelling of the same words."""
+    s = _story(_OPENER, "Part 2: Depression", _CLOSER)
+    scope = build_page_map([s], [_OPENER, "PART 2:\nDEPRESSION", _CLOSER])
+    assert scope.knows(2)
+    assert scope.contains(2, "s1", 1, 0, len("Part 2: Depression"))
+
+
+def test_a_divider_the_contents_page_repeats_is_bracketed_to_its_own_copy():
+    """The divider's whole text occurs twice — the divider and the TOC entry that
+    names it — so over the whole book it places nothing. The placed pages around
+    it bracket where it has to sit, and the copy inside the bracket is the one."""
+    main = _story(_OPENER, "Part 2: Depression", _CLOSER)
+    toc = _story("Contents", "PART 2: DEPRESSION", story_id="toc")
+    scope = build_page_map([main, toc],
+                           [_OPENER, "PART 2:\nDEPRESSION", _CLOSER])
+    assert scope.knows(2)
+    # The divider's own paragraph, not the TOC's copy.
+    assert scope.contains(2, "s1", 1, 0, len("Part 2: Depression"))
+    assert not scope.contains(2, "toc", 1, 0, len("PART 2: DEPRESSION"))
+
+
+def test_a_pages_overrun_yields_to_the_next_placed_page():
+    """A page's proof text carries a folio the book lacks, so its aligned run
+    ends a few characters past where the page truly does — spilling onto the next
+    page's first paragraph, which then answered `page_of` with the wrong page."""
+    s = _story(_OPENER, _CLOSER)
+    scope = build_page_map([s], [_OPENER + "\n34", _CLOSER])
+    assert scope.knows(1) and scope.knows(2)
+    assert scope.page_of("s1", 1) == 2

@@ -348,6 +348,14 @@ def edits_from_comments(comments, pages=None,
     unresolved: list = []
     made: list[tuple] = []                 # (comment, Resolved) in reading order
     for c in comments:
+        if getattr(c, "replies", ()):
+            # An author's reply can confirm, redirect, or cancel the note it
+            # answers, and the rules read only the note — a rule firing on
+            # "delete the comma" whose reply says "no, leave it" would apply the
+            # very change the author refused. A threaded mark is always the
+            # model's, which is shown the reply beside the note.
+            unresolved.append(c)
+            continue
         instruction = getattr(c, "instruction", "") or ""
         anchor = getattr(c, "anchor", "") or ""
         context = getattr(c, "context", "") or ""

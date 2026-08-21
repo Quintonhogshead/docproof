@@ -6042,8 +6042,46 @@ function correctionsReportHTML(d) {
         ? `<div class="caveat">reviewer: “${esc(c.instruction)}”</div>` : '')
       + '</div>';
   };
+  // A text or formatting edit is done in the file (just confirm it reads right);
+  // a paragraph layout op reflows the page, which is InDesign's to settle. The
+  // two are different work for the designer, so they get their own tabs — and
+  // when only one kind is present there is nothing to tab between, so it renders
+  // as a plain section. `panel-h` is the heading each tab hides on screen (the
+  // tab label serves it there) and print restores, so a printed report — where
+  // both panels show at once — still names each list.
   const here = changes.filter((c) => !c.layout);
   const inddChanges = changes.filter((c) => c.layout);
+  const textPanel = (h) =>
+    `<h3 class="panel-h">Text changes — ${num(here.length)}</h3>`
+    + (h ? '' : '<p class="blurb">Confirm each reads right — the change is '
+      + 'already in the file.</p>')
+    + here.map(changeCard).join('');
+  const layoutPanel = (h) =>
+    `<h3 class="panel-h">Layout changes — ${num(inddChanges.length)}</h3>`
+    + '<p class="blurb">The engine set the paragraph, but where the text now '
+    + 'falls on the page is InDesign’s — open the file and confirm each reflowed '
+    + 'as intended.</p>'
+    + inddChanges.map(changeCard).join('');
+  const changesBody = (here.length && inddChanges.length)
+    ? '<div class="tabs">'
+      + '<input type="radio" name="chgtab" id="chgtab-text" checked>'
+      + '<input type="radio" name="chgtab" id="chgtab-layout">'
+      + '<div class="tabbar">'
+      + `<label for="chgtab-text">Text — ${num(here.length)}</label>`
+      + `<label for="chgtab-layout">Layout — ${num(inddChanges.length)}</label>`
+      + '</div>'
+      + `<section class="tabpanel panel-text">${textPanel(true)}</section>`
+      + `<section class="tabpanel panel-layout">${layoutPanel(true)}</section>`
+      + '</div>'
+    : (here.length
+        ? `<h3>Changed here — confirm it reads right — ${num(here.length)}</h3>`
+          + here.map(changeCard).join('') : '')
+      + (inddChanges.length
+        ? `<h3>Needs to be done in InDesign — ${num(inddChanges.length)}</h3>`
+          + '<p class="blurb">The engine set the paragraph, but where the text '
+          + 'now falls on the page is InDesign’s — open the file and confirm each '
+          + 'reflowed as intended.</p>'
+          + inddChanges.map(changeCard).join('') : '');
   const changesHTML = changes.length
     ? `<h2>Changes to review — ${num(changes.length)} `
       + `line${changes.length === 1 ? '' : 's'}</h2>`
@@ -6053,17 +6091,12 @@ function correctionsReportHTML(d) {
           + `${num(changes.length)} line${changes.length === 1 ? '' : 's'} they `
           + 'changed — a line several corrections touched appears once. '
         : 'Every applied correction in the line it changed. ')
-      + 'Split by where you act. <del>struck</del> was removed, '
-      + '<ins>added</ins> is underlined.</p>'
-      + (here.length
-        ? `<h3>Changed here — confirm it reads right — ${num(here.length)}</h3>`
-          + here.map(changeCard).join('') : '')
-      + (inddChanges.length
-        ? `<h3>Needs to be done in InDesign — ${num(inddChanges.length)}</h3>`
-          + '<p class="blurb">The engine set the paragraph, but where the text '
-          + 'now falls on the page is InDesign’s — open the file and confirm each '
-          + 'reflowed as intended.</p>'
-          + inddChanges.map(changeCard).join('') : '')
+      + (here.length && inddChanges.length
+        ? 'Text edits are done in the file; layout changes reflow the page in '
+          + 'InDesign — one tab each. '
+        : 'Split by where you act. ')
+      + '<del>struck</del> was removed, <ins>added</ins> is underlined.</p>'
+      + changesBody
     : '';
 
   const checks = d.checks || [];
@@ -6120,7 +6153,28 @@ function correctionsReportHTML(d) {
     + '.rl del{color:#c0392b;text-decoration:line-through;'
     + 'text-decoration-thickness:1px}'
     + '.rl ins{color:#1e7d34;text-decoration:none;background:#e6f4ea;'
-    + 'border-radius:2px;padding:0 .1em}</style></head><body>'
+    + 'border-radius:2px;padding:0 .1em}'
+    // CSS-only tabs for "Changes to review": the radios hold the state and the
+    // labels are the tab strip, so the report stays a single self-contained file
+    // with no script. Print shows both panels (a hidden tab would not print) and
+    // restores each panel's own heading.
+    + '.tabs>input{position:absolute;width:0;height:0;opacity:0}'
+    + '.tabbar{display:flex;gap:.4em;border-bottom:1px solid var(--line);'
+    + 'margin:.2em 0 .9em}'
+    + '.tabbar label{padding:.45em .95em;cursor:pointer;font-size:.82rem;'
+    + 'font-weight:600;letter-spacing:.02em;color:var(--muted);'
+    + 'border-bottom:2px solid transparent;margin-bottom:-1px}'
+    + '.tabbar label:hover{color:var(--accent)}'
+    + '#chgtab-text:checked~.tabbar label[for=chgtab-text],'
+    + '#chgtab-layout:checked~.tabbar label[for=chgtab-layout]'
+    + '{color:var(--accent);border-bottom-color:var(--accent)}'
+    + '.tabpanel{display:none}'
+    + '#chgtab-text:checked~.panel-text,'
+    + '#chgtab-layout:checked~.panel-layout{display:block}'
+    + '.tabpanel .panel-h{display:none}'
+    + '@media print{.tabbar{display:none}.tabpanel{display:block!important}'
+    + '.tabpanel .panel-h{display:block;font:600 1rem/1.3 "Iowan Old Style",'
+    + 'Palatino,Georgia,serif;margin:26px 0 4px}}</style></head><body>'
     + '<div class="wrap"><header class="rep"><span class="brand">DocProof</span>'
     + `<h1>${esc(title)}</h1>`
     + '<p class="sub">'

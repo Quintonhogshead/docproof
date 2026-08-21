@@ -2002,7 +2002,7 @@ def register(app: FastAPI) -> None:
         # the model's edits at apply time from the mark's own position.
         items = [{"id": c.id, "page": c.page, "kind": c.kind,
                   "instruction": c.instruction, "anchor": c.anchor,
-                  "offset": c.offset}
+                  "offset": c.offset, "replies": list(c.replies)}
                  for c in comments]
         return {"count": len(comments), "batches": batches, "comments": items,
                 "pages": list(proof.page_texts),
@@ -2043,7 +2043,7 @@ def register(app: FastAPI) -> None:
         response["comments"] = [
             {"id": c.id, "page": c.page, "kind": c.kind,
              "instruction": c.instruction, "anchor": c.anchor,
-             "offset": c.offset} for c in comments]
+             "offset": c.offset, "replies": list(c.replies)} for c in comments]
         response["pages"] = list(proof.page_texts)
         return response
 
