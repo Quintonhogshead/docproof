@@ -5977,8 +5977,27 @@ function correctionsReportHTML(d) {
 
   // The applied changes, each in the line it changed, as a redline — the
   // designer's quick check that the corrections read right, not just that they
-  // anchored. The unaccounted-changes table below is the complement: this is what
-  // did change; that is proof nothing else did.
+  // anchored. Split by where the designer acts: a text or formatting edit is done
+  // in the file ("changed here", just confirm); a paragraph layout op reflows the
+  // page, which is InDesign's to settle ("needs to be done in InDesign"). The
+  // unaccounted-changes table below is the complement: this is what did change.
+  const changeCard = (c) => {
+    const where = `story ${esc(c.story_id)}`
+      + (c.paragraph >= 0 ? `, ¶ ${num(c.paragraph)}` : '');
+    const only = c.formatting && c.before === c.after;
+    const body = only
+      ? `<p class="rl">${esc(c.after)}</p>`
+        + `<div class="loc">set ${esc(c.formatting)}</div>`
+      : `<p class="rl">${wordDiff(c.before, c.after)}</p>`
+        + (c.formatting
+          ? `<div class="loc">also set ${esc(c.formatting)}</div>` : '');
+    return '<div class="chg"><div class="loc">' + where + '</div>' + body
+      + (c.instruction
+        ? `<div class="caveat">reviewer: “${esc(c.instruction)}”</div>` : '')
+      + '</div>';
+  };
+  const here = changes.filter((c) => !c.layout);
+  const inddChanges = changes.filter((c) => c.layout);
   const changesHTML = changes.length
     ? `<h2>Changes to review — ${num(changes.length)} `
       + `line${changes.length === 1 ? '' : 's'}</h2>`
@@ -5988,26 +6007,17 @@ function correctionsReportHTML(d) {
           + `${num(changes.length)} line${changes.length === 1 ? '' : 's'} they `
           + 'changed — a line several corrections touched appears once. '
         : 'Every applied correction in the line it changed. ')
-      + 'Read down and confirm each reads right. <del>struck</del> was removed, '
+      + 'Split by where you act. <del>struck</del> was removed, '
       + '<ins>added</ins> is underlined.</p>'
-      + changes.map((c) => {
-        const where = `story ${esc(c.story_id)}`
-          + (c.paragraph >= 0 ? `, ¶ ${num(c.paragraph)}` : '');
-        // Formatting rewrites no text, so a redline of it is empty. Say what was
-        // set and show the line, which is what has to be confirmed: that the
-        // italics landed on the right words.
-        const only = c.formatting && c.before === c.after;
-        const body = only
-          ? `<p class="rl">${esc(c.after)}</p>`
-            + `<div class="loc">set ${esc(c.formatting)}</div>`
-          : `<p class="rl">${wordDiff(c.before, c.after)}</p>`
-            + (c.formatting
-              ? `<div class="loc">also set ${esc(c.formatting)}</div>` : '');
-        return '<div class="chg"><div class="loc">' + where + '</div>' + body
-          + (c.instruction
-            ? `<div class="caveat">reviewer: “${esc(c.instruction)}”</div>` : '')
-          + '</div>';
-      }).join('')
+      + (here.length
+        ? `<h3>Changed here — confirm it reads right — ${num(here.length)}</h3>`
+          + here.map(changeCard).join('') : '')
+      + (inddChanges.length
+        ? `<h3>Needs to be done in InDesign — ${num(inddChanges.length)}</h3>`
+          + '<p class="blurb">The engine set the paragraph, but where the text '
+          + 'now falls on the page is InDesign’s — open the file and confirm each '
+          + 'reflowed as intended.</p>'
+          + inddChanges.map(changeCard).join('') : '')
     : '';
 
   const checks = d.checks || [];

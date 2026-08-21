@@ -150,9 +150,16 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
             elif o.edit.paragraph == PARA_SPLIT_AT:
                 after_text = _joined(act, a_index)
             acc[key] = {"before": before_text, "after": after_text,
-                        "ids": [], "notes": [], "formats": [], "gone": False}
+                        "ids": [], "notes": [], "formats": [], "gone": False,
+                        "layout": False}
             order.append(key)
         acc[key]["ids"].append(o.edit.id)
+        # A whole-paragraph layout operation (a forced break, a keep, a merge,
+        # split, insert or remove) reflows the page, which is InDesign's to
+        # settle — so the line is marked as one a designer must act on, not just
+        # confirm. One such outcome on the line is enough to mark it.
+        if o.edit.is_layout or o.edit.is_structural:
+            acc[key]["layout"] = True
         if o.edit.paragraph == PARA_DELETE:
             # The index now holds the *next* paragraph, so reading it as this
             # one's "now" shows the line being replaced by its neighbour. What
@@ -175,7 +182,7 @@ def _review_changes(outcomes, before_by_id, actual_by_id) -> list[ReviewChange]:
         changes.append(ReviewChange(
             story_id=sid, paragraph=para, before=d["before"], after=after,
             edit_ids=tuple(d["ids"]), instruction=" · ".join(d["notes"]),
-            formatting=", ".join(d["formats"])))
+            formatting=", ".join(d["formats"]), layout=d["layout"]))
     return changes
 
 
