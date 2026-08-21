@@ -106,6 +106,30 @@ def test_a_shifted_span_is_relocated_within_its_paragraph(tmp_path):
     assert result["after"] == "She opened the door, the room is empty."
 
 
+def test_an_option_applies_after_an_earlier_resolution_renumbered_the_lines(
+        tmp_path):
+    # A resolution can insert or remove a line and renumber everything after it.
+    # A later option still carries the index it had when the report was built, so
+    # that index now points at the wrong paragraph — the case that used to fail
+    # with "this line has changed since the report was written". The option
+    # relocates by the paragraph text it recorded and still applies.
+    out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
+    corrected = out.corrected_idml
+    room = dict(next(o for o in payload["queue"][0]["options"]
+                     if "room" in o["before"]))          # built at index 2
+    # Remove the line above it, shifting the room line from index 2 to index 1.
+    gone = "It was late, we were tired and the road went on forever."
+    apply_option(corrected, {"story_id": "ue0", "paragraph": 1, "start": 0,
+                             "end": len(gone), "found": gone, "replacement": "",
+                             "before": gone, "after": ""})
+    assert gone not in _texts(corrected)
+    # The stale index the room option carries now holds a different paragraph.
+    assert "was" not in _texts(corrected)[room["paragraph"]]
+    result = apply_option(corrected, room)               # relocates and applies
+    assert result["after"] == "She opened the door, the room is empty."
+    assert "She opened the door, the room is empty." in _texts(corrected)
+
+
 def test_an_option_whose_text_is_gone_is_refused(tmp_path):
     out, payload = _run(tmp_path, [{"find": "was", "replace": "is"}])
     option = dict(next(o for o in payload["queue"][0]["options"]
