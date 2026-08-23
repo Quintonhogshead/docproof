@@ -487,6 +487,16 @@ class Job:
     # what is missing rather than a second copy of it. Empty until first tried.
     drive_folder_id: str = ""
     drive_files: dict[str, str] = field(default_factory=dict)
+    # Galley only: the practitioner tier (T0–T3) the governor's caps come from,
+    # and the dollar budget it allocates across waves. `galley_wave` is the wave
+    # the loop is on (or the last one it closed), so the card can show progress
+    # while a whole wave rides a batch for hours; spend rides the shared `cost`
+    # field, shown against `budget_usd`. All zero/empty on every other kind and on
+    # older records. See galley.orchestrator.run_galley.
+    tier: str = ""
+    budget_usd: float = 0.0
+    galley_wave: int = 0
+    galley_waves_total: int = 0
 
     @property
     def is_prep(self) -> bool:
@@ -499,6 +509,10 @@ class Job:
     @property
     def is_promo(self) -> bool:
         return self.kind == "promo"
+
+    @property
+    def is_galley(self) -> bool:
+        return self.kind == "galley"
 
     @property
     def is_plan(self) -> bool:
@@ -550,6 +564,7 @@ class Job:
         d["is_promo"] = self.is_promo
         d["is_plan"] = self.is_plan
         d["is_corrections"] = self.is_corrections
+        d["is_galley"] = self.is_galley
         # Whether the proof carried page texts, which is what decides whether the
         # run takes the page-matching step at all. A boolean, so the card can
         # promise that step (or not) without the texts themselves riding on
@@ -1413,6 +1428,8 @@ class JobRunner:
             self._run_prep(job_id)
         elif job.is_corrections:
             self._run_corrections(job_id)
+        elif job.is_galley:
+            self._run_galley(job_id)
         elif job.is_promo:
             self._run_promo(job_id)
         elif job.rounds > 1:
@@ -1927,6 +1944,125 @@ class JobRunner:
             log.warning("Could not build the corrections last tier; skipping",
                         exc_info=True)
             return None
+
+    # -- galley ---------------------------------------------------------------
+
+    def _manuscript_from_source(self, job: Job, cfg: Config):
+        """Ingest the source into a galley Manuscript (paragraphs + chapters).
+
+        Built from DocProof's own ingest, so paragraph ids match the ones the
+        ladder adapter anchors its findings against. (The ladder normalizes text
+        inside its own prepare(); this Manuscript is used for scope resolution,
+        which keys on paragraph ids, so it needs no separate normalization pass.)
+        """
+        from docproof.ingest import build_document_model, preflight
+
+        from galley.contracts import Chapter, Manuscript
+
+        pkg = preflight(job.source_path, cfg.tracked_changes_policy)
+        doc = build_document_model(pkg, cfg)
+        paragraphs = {p.para_id: p.text for p in doc.paragraphs}
+        order = tuple(p.para_id for p in doc.paragraphs)
+        chapters: tuple = ()
+        try:
+            from docproof.continuity import chapters as chapter_units
+            from docproof.continuity import looks_like_chapter_heading
+            units = chapter_units(doc.paragraphs, looks_like_chapter_heading)
+            chapters = tuple(
+                Chapter(u.index, u.title, tuple(p.para_id for p in u.paragraphs))
+                for u in units
+            )
+        except Exception:                     # noqa: BLE001 - chapters are best-effort
+            log.debug("Could not derive galley chapters", exc_info=True)
+        return Manuscript(paragraphs=paragraphs, order=order, chapters=chapters)
+
+    def _galley_adapters(self, job: Job, cfg: Config) -> dict:
+        """Build the detector adapters for a galley run.
+
+        A seam: tests patch this to inject FakeDetectors and never touch a model.
+        Wave one is the full ladder; the single-pass adapter is the targeted
+        re-read primitive later waves use. Both hold one shared provider.
+        """
+        from galley.adapters.docproof_ladder import DocproofLadderAdapter
+        from galley.adapters.single_pass import SinglePassAdapter
+
+        provider = self._provider(cfg)
+        return {
+            "docproof_ladder": DocproofLadderAdapter(
+                source_path=job.source_path, cfg=cfg, provider=provider
+            ),
+            "single_pass": SinglePassAdapter(
+                source_path=job.source_path, cfg=cfg, provider=provider
+            ),
+        }
+
+    def _run_galley(self, job_id: str) -> None:
+        """Run a galley job: the practitioner wave loop over the case file.
+
+        Follows the corrections runner's shape — CAS to running, honour a pending
+        cancel, claim a results folder — then hands off to the orchestrator, which
+        owns the wave loop, the governor's budget, and the durable case file. The
+        run's spend rides the shared `cost` field (shown against `budget_usd`), and
+        each wave's coverage notes land in `warnings` so a 'done' galley job that
+        left a hole does not read as a clean one.
+        """
+        from galley.orchestrator import run_galley
+
+        job = self.store.get(job_id)
+        if job is None or job.state not in ("queued", "running"):
+            return
+        if self.store.update_if(job_id, expect=job.state, state="running",
+                                done=0, total=0, stage="reading") is None:
+            return
+        if self._cancel_pending(job_id):
+            self._abort(job_id)
+            return
+
+        cfg = self.config_for(job)
+        tier = job.tier or "T2"
+        budget = float(job.budget_usd or 0.0)
+        out = self._claim_results_dir(job)
+
+        try:
+            ms = self._manuscript_from_source(job, cfg)
+            adapters = self._galley_adapters(job, cfg)
+        except (ProviderError, ValueError, OSError, IngestError) as e:
+            self._release_results_dir(job_id)
+            self.store.update_if(job_id, expect="running", state="failed",
+                                 error=str(e), stage="")
+            return
+
+        def notify(kind: str, payload: dict) -> None:
+            try:
+                self.store.update(
+                    job_id,
+                    galley_wave=int(payload.get("wave", 0)),
+                    stage=f"wave {payload.get('wave', 0)}",
+                    cost=float(payload.get("total_spent_usd", 0.0)),
+                )
+            except Exception:                 # noqa: BLE001 - progress is not the job
+                log.debug("Could not record galley wave progress", exc_info=True)
+
+        try:
+            cf = run_galley(ms, tier, budget, out, adapters=adapters,
+                            notify=notify, book=job.filename)
+        except Exception:                     # noqa: BLE001 - re-raised below
+            self._release_results_dir(job_id)
+            raise
+
+        warnings: list[str] = []
+        for wave in cf.waves:
+            for action in wave.actions:
+                if isinstance(action, dict):
+                    warnings.extend(action.get("coverage_notes", []))
+
+        self.store.update(
+            job_id, state="done", results_dir=str(out), error=None, stage="",
+            cost=cf.budget.spent_usd, applied=len(cf.findings),
+            galley_wave=(cf.waves[-1].index if cf.waves else 0),
+            galley_waves_total=len(cf.waves),
+            budget_usd=budget, warnings=warnings)
+        self._finish(job_id)
 
     # -- promo ----------------------------------------------------------------
 
