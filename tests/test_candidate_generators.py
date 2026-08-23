@@ -155,6 +155,75 @@ def test_consistent_list_endings_pass():
     assert cands and _decisions(cands) == {"pass"}
 
 
+# --- homophone / confusable signals ------------------------------------------
+
+def test_confusable_fires_only_on_misuse_signals():
+    from docproof.candidate_generators import _homophone_candidates
+
+    # Misuse patterns fire...
+    for text, word in [
+        ("They left there bags on the platform.", "there"),
+        ("Your going to be late again.", "Your"),
+        ("The dog wagged it's tail happily.", "it's"),
+        ("She is taller then him by a foot.", "then"),
+        ("It was to late for apologies.", "to"),
+        ("He walked passed the old chapel.", "passed"),
+        ("It came form the cellar below.", "form"),
+    ]:
+        cands = _homophone_candidates(_p(text))
+        assert any(c.observed_text == word for c in cands), text
+        # A signal is a question for the judge, never a local edit.
+        assert all(c.candidate_correction is None for c in cands)
+
+    # ...and correct usage generates nothing at all (the Johnson canary judged
+    # 5,214 unsignaled homophones for ~zero errors).
+    for text in [
+        "They went there today, but their bags stayed.",
+        "You're going to make it in time.",
+        "The dog wagged its tail happily.",
+        "She is taller than him by a foot.",
+        "It was too late for apologies.",
+        "He walked past the old chapel.",
+        "It came from the cellar below.",
+    ]:
+        assert _homophone_candidates(_p(text)) == [], text
+
+
+# --- compound_sentence_comma --------------------------------------------------
+
+def test_compound_join_missing_comma_is_flagged_for_judgment():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    text = "The rain hammered the windows all night and she watched it fall."
+    cands = _compound_comma_candidates(_p(text))
+    flagged = [c for c in cands
+               if c.evidence["local_screening"]["decision"]
+               == "needs_model_judgment"]
+    assert flagged and flagged[0].candidate_correction == ","
+    a = flagged[0].anchors[0]
+    spliced = text[:a.start_offset] + "," + text[a.end_offset:]
+    assert "night, and she watched" in spliced
+
+
+def test_compound_join_with_comma_passes():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    text = "The rain hammered the windows all night, and she watched it fall."
+    cands = _compound_comma_candidates(_p(text))
+    assert cands and all(
+        c.evidence["local_screening"]["decision"] == "pass" for c in cands)
+
+
+def test_compound_join_ignores_lists_and_short_fragments():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    # "bread and butter" — no pronoun subject after the conjunction.
+    assert _compound_comma_candidates(
+        _p("She bought the bread and butter at the market stall.")) == []
+    # Short first fragment — not a clause worth setting off.
+    assert _compound_comma_candidates(_p("He waved and she smiled.")) == []
+
+
 # --- cross-generator invariant ----------------------------------------------
 
 def test_no_generator_ever_proposes_a_splice_with_duplicate_punctuation():

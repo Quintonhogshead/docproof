@@ -128,11 +128,17 @@ def judge_screening_packet(
             validate_candidate_verdict_coverage(
                 remaining.candidate_ids, returned)
         except IncompleteCandidateVerdicts as exc:
-            if exc.duplicate or exc.unknown:
-                raise
+            # A duplicate is a real candidate answered ambiguously; an unknown
+            # is a hallucinated ID that maps to no candidate. Neither is
+            # grounds to abandon the whole packet: drop the unknowns, treat the
+            # duplicated candidates as unanswered, and retry the focused
+            # remainder alongside any missing IDs. (Previously this raised,
+            # losing every candidate in the packet to one judge slip.)
             missing.update(exc.missing)
+            missing.update(exc.duplicate)
+        known = set(remaining.candidate_ids)
         invalid = _invalid_decision_ids(body, remaining)
-        unresolved = missing | invalid
+        unresolved = (missing | invalid) & known
         if unresolved:
             if attempts >= max_missing_retries:
                 if invalid:

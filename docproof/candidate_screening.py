@@ -681,10 +681,14 @@ class CandidateScreeningRun:
         ]
 
 
-# Punctuation sweeps whose candidate type is not already covered by a
-# per-paragraph regex generator; reused as candidate sources (P2-04).
+# Punctuation sweeps reused as candidate sources (P2-04) — ERROR sweeps only.
+# The ellipsis and dash sweeps are deliberately absent: they are house-style
+# normalization, and routing them through the candidate lane buried the real
+# catches under hundreds of restyling edits (the Johnson canary was ~90% dash
+# spacing). Style stays with the ordinary sweep/normalizer channel; this lane
+# exists to catch the errors the other passes miss.
 _REUSE_SWEEP_KEYS = (
-    "sweep_ellipsis", "sweep_dash", "sweep_stacked_punctuation",
+    "sweep_stacked_punctuation",
     "sweep_terminal_period", "sweep_quote_punctuation", "sweep_nested_quote",
 )
 
