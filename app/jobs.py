@@ -94,6 +94,14 @@ STAGE_STATE = {
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",
+    # The frontier chapter sweep: a second, looser proofread over chapter-sized
+    # windows on a strong model, complementary to the typed section pass. Whole-
+    # window work with no per-call count, so — like the passes below — it names
+    # the step rather than leaving a stale section count on the card.
+    "chapter_sweep": "Reading each chapter again, start to finish",
+    # Batch only: the judgment screen that weighs the raw candidate findings
+    # before they become tracked changes.
+    "candidate_screening": "Weighing the candidate findings",
     "continuity": "Reading the whole book for continuity",
     # Multi-round only: the between-rounds judge that rules on each round's
     # corrections before the next round reads the corrected text.

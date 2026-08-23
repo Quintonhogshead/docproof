@@ -387,7 +387,10 @@ chapter_sweep:
                             # note, when the vendor key is missing)
   effort: xhigh
   window_chars: 48000       # ~a long chapter per request
-  max_output_tokens: 32000  # the sweep reply (findings list + thinking)
+  max_output_tokens: 64000  # the sweep reply (findings list + thinking). 32k
+                            # truncated 2 of 6 windows on Redding (2026-08-23);
+                            # clean windows stop at 3k–25k, so the headroom
+                            # costs nothing unless it saves a window.
   batch_size: 40            # candidates per confirm request
   edit_confidence: high     # bar an affirmed edit clears; softer = margin query
   confirm_model:            # unset = api.model (the detector's)
@@ -507,8 +510,10 @@ meaning_check:
   # A frontier model at effort high that always thinks, so this ceiling is
   # mostly reasoning. The gates batch per PARAGRAPH (a few changes per call),
   # which is what kept 4,000 workable — but a heavily corrected paragraph is
-  # not rare, and a truncated gate applies every change in it unread.
-  max_output_tokens: 12000
+  # not rare, and a truncated gate applies every change in it unread: 12k did
+  # exactly that on a 7-change paragraph (2026-08-23). A clean reply stops far
+  # short, so the raise only spends on calls that would otherwise truncate.
+  max_output_tokens: 24000
   prompt: ""                # empty = built-in default (editable in the review panel)
 
 # Is the replacement the CORRECT fix? Same wiring, same knobs, different
@@ -520,7 +525,7 @@ fix_check:
   effort: high
   scope: model_sources
   flag_unsure: true
-  max_output_tokens: 12000   # as meaning_check above
+  max_output_tokens: 24000   # as meaning_check above
   prompt: ""
 
 # Each entry is ONE API pass over the whole document. A bare key runs alone;

@@ -761,7 +761,14 @@ class ChapterSweepConfig(BaseModel):
     # buy context and lose retry granularity; a failed window is skipped and
     # reported, never fatal.
     window_chars: int = Field(default=48_000, ge=4_000)
-    max_output_tokens: int = Field(default=32_000, ge=1)
+    # The ceiling covers THINKING too (xhigh on a frontier model), and a
+    # truncated structured reply parses as nothing — the 2026-08-23 Redding run
+    # lost 2 of 6 windows (a third of the book unswept) at 32k. 64k does not
+    # raise the cost of a clean window: output is billed as generated and clean
+    # windows stop well short (3k–25k on that run). Only a window that would
+    # have truncated spends more, bounded by the extra headroom — and 32k of
+    # that spend was already being burned for nothing.
+    max_output_tokens: int = Field(default=64_000, ge=1)
     # Confirm-valve sizing, mirroring Sapling/LanguageTool. The sweep model
     # proposes; the confirm judge disposes. Unset confirm_model = api.model.
     batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
@@ -1338,7 +1345,13 @@ class JudgeGateConfig(BaseModel):
     # stop a silent change, and a judge that cannot vouch for one has not vouched
     # for it. Off applies anything not positively flagged.
     flag_unsure: bool = True
-    max_output_tokens: int = Field(default=12000, ge=1)
+    # Mostly reasoning tokens (frontier judge at effort high). At 12k the
+    # 2026-08-23 Redding run truncated on one heavily corrected paragraph and
+    # its 7 changes were applied UNREAD — the fail-open worst case. The judge
+    # models here are cheap relative to the detectors, and a clean reply stops
+    # far short of the ceiling, so the raise costs only on calls that would
+    # otherwise have truncated.
+    max_output_tokens: int = Field(default=24000, ge=1)
     # The judge's instructions, meant to be edited per job in the review panel.
     # Empty uses the built-in default (docproof.judges.default_prompt(key)), so
     # clearing the field reverts to it.
