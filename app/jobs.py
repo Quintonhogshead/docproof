@@ -1966,8 +1966,11 @@ class JobRunner:
         chapters: tuple = ()
         try:
             from docproof.continuity import chapters as chapter_units
-            from docproof.continuity import looks_like_chapter_heading
-            units = chapter_units(doc.paragraphs, looks_like_chapter_heading)
+            # is_heading takes a STYLE string; chapters() applies the text-based
+            # looks_like_chapter_heading itself, so a style predicate is all we owe
+            # it (the pipeline passes cfg.skip.is_sweep_only — the same one).
+            is_heading = getattr(cfg.skip, "is_sweep_only", lambda _s: False)
+            units = chapter_units(doc.paragraphs, is_heading)
             chapters = tuple(
                 Chapter(u.index, u.title, tuple(p.para_id for p in u.paragraphs))
                 for u in units
