@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 from docproof.models import Usage
 
@@ -28,6 +28,18 @@ from galley.contracts import GFinding, Hypothesis, Manuscript, WaveRecord
 from galley.governor import Caps, Governor, WaveLimitError
 
 LADDER_ADAPTER = "docproof_ladder"
+
+# Alarm classes the loop raises the moment they happen — the failure modes a
+# person needs to hear about mid-run, not at the end (see E4). A digest is the
+# routine per-wave summary; an alarm is an interruption.
+ALARM_DEGRADED = "degraded_pass"
+ALARM_ZERO_COST = "zero_cost_detector"
+ALARM_TRUNCATION = "truncation_streak"
+ALARM_BUDGET_CAP = "budget_cap_hit"
+TRUNCATION_STREAK_LIMIT = 3
+# Detectors that legitimately bill nothing, so a $0 charge from them is not the
+# silent-no-run failure the zero-cost alarm exists to catch.
+FREE_ADAPTERS = frozenset({"spellscan", "languagetool"})
 
 # When marginal $/validated-finding reaches this, the governor stops. A wave that
 # adds nothing has infinite marginal cost, so it always trips the stop.
@@ -200,6 +212,7 @@ def run_galley(
     stop_threshold: float = DEFAULT_STOP_THRESHOLD,
     clock: Clock = _utc_now,
     casefile_path: str | Path | None = None,
+    free_adapters: frozenset[str] = FREE_ADAPTERS,
 ) -> CaseFile:
     """Run the wave loop to convergence or budget, returning the case file.
 
@@ -234,10 +247,19 @@ def run_galley(
             break
 
     usage = Usage()
+    streak = {"n": 0}  # consecutive waves that lost windows to truncation
 
     def _save() -> None:
         cf.budget = gov.ledger
         cf.save(cf_path)
+
+    def _after_wave(rec: WaveRecord) -> None:
+        """Emit this wave's alarms (immediate) then its routine digest."""
+        if not notify:
+            return
+        for alarm in _wave_alarms(rec, gov, streak=streak, free_adapters=free_adapters):
+            notify("alarm", alarm)
+        notify("wave", _wave_digest(cf, rec))
 
     # Wave one: the full ladder. Skipped on resume (cf.waves already populated).
     if not cf.waves:
@@ -254,8 +276,7 @@ def run_galley(
         )
         append_wave(cf, rec)
         _save()
-        if notify:
-            notify("wave", _wave_digest(cf, rec))
+        _after_wave(rec)
         last = rec
     else:
         last = cf.waves[-1]
@@ -289,8 +310,7 @@ def run_galley(
         )
         append_wave(cf, rec)
         _save()
-        if notify:
-            notify("wave", _wave_digest(cf, rec))
+        _after_wave(rec)
         last = rec
 
     _save()
@@ -298,7 +318,7 @@ def run_galley(
 
 
 def _wave_digest(cf: CaseFile, rec: WaveRecord) -> dict[str, Any]:
-    """A small per-wave digest for the notify hook (E4 formalizes the channel)."""
+    """A small per-wave digest for the notify hook."""
     notes: list[str] = []
     for action in rec.actions:
         notes.extend(action.get("coverage_notes", []) if isinstance(action, dict) else [])
@@ -312,9 +332,123 @@ def _wave_digest(cf: CaseFile, rec: WaveRecord) -> dict[str, Any]:
     }
 
 
+def _wave_alarms(
+    rec: WaveRecord,
+    gov: Governor,
+    *,
+    streak: dict[str, int],
+    free_adapters: frozenset[str],
+) -> list[dict[str, Any]]:
+    """The alarms one wave's outcome raises, if any.
+
+    * degraded pass — a coverage note reports a whole pass fell open;
+    * zero-cost detector — a paid adapter ran but billed nothing (the silent
+      no-run, Sapling's classic failure);
+    * truncation streak — ``TRUNCATION_STREAK_LIMIT`` consecutive waves lost
+      windows to a token ceiling;
+    * budget cap hit — a dispatch was skipped for budget, or the total floor is
+      reached.
+
+    ``streak`` is carried across waves by the caller so the truncation run counts.
+    """
+
+    notes: list[str] = []
+    zero_cost: list[str] = []
+    over_budget = False
+    for action in rec.actions:
+        if not isinstance(action, dict):
+            continue
+        notes.extend(action.get("coverage_notes", []))
+        if action.get("skipped") in ("over budget", "budget exhausted"):
+            over_budget = True
+        ran = "skipped" not in action
+        adapter = action.get("adapter", "")
+        if (ran and action.get("cost_usd") == 0.0
+                and adapter not in free_adapters):
+            zero_cost.append(adapter)
+
+    low = " ".join(notes).lower()
+    alarms: list[dict[str, Any]] = []
+    if "degrad" in low:
+        alarms.append({"alarm": ALARM_DEGRADED, "wave": rec.index, "detail": notes})
+    for adapter in zero_cost:
+        alarms.append(
+            {"alarm": ALARM_ZERO_COST, "wave": rec.index, "detail": adapter}
+        )
+
+    truncated = "truncat" in low or "unruled" in low
+    streak["n"] = streak["n"] + 1 if truncated else 0
+    if streak["n"] >= TRUNCATION_STREAK_LIMIT:
+        alarms.append(
+            {"alarm": ALARM_TRUNCATION, "wave": rec.index, "detail": streak["n"]}
+        )
+
+    if over_budget or gov.remaining_usd <= 0:
+        alarms.append(
+            {"alarm": ALARM_BUDGET_CAP, "wave": rec.index,
+             "detail": round(gov.remaining_usd, 4)}
+        )
+    return alarms
+
+
+class Transport(Protocol):
+    """A pluggable delivery channel for digests and alarms.
+
+    One method, so email today and Twilio/Pushover later add a transport without
+    touching the orchestrator or the notifier. ``kind`` is ``"wave"`` or
+    ``"alarm"``.
+    """
+
+    def send(self, kind: str, subject: str, body: str) -> None: ...
+
+
+def make_notifier(transport: Transport, *, book: str = "") -> Notify:
+    """Turn a :class:`Transport` into the orchestrator's ``notify`` callable.
+
+    Formats a per-wave digest and each alarm into a subject/body and hands them to
+    the transport. Call sites stay transport-agnostic: swapping the transport
+    changes where the message goes, not how the loop emits it.
+    """
+
+    tag = f"[{book}] " if book else ""
+
+    def notify(kind: str, payload: dict[str, Any]) -> None:
+        if kind == "alarm":
+            name = payload.get("alarm", "alarm")
+            subject = f"{tag}Galley alarm: {name} (wave {payload.get('wave', 0)})"
+            body = f"{name}: {payload.get('detail', '')}"
+            transport.send("alarm", subject, body)
+            return
+        subject = (
+            f"{tag}Galley wave {payload.get('wave', 0)} — "
+            f"${payload.get('total_spent_usd', 0.0):.2f} spent, "
+            f"{payload.get('findings_total', 0)} findings"
+        )
+        lines = [
+            f"Wave {payload.get('wave', 0)}",
+            f"Spent this wave: ${payload.get('spend_usd', 0.0):.2f}",
+            f"Total spent: ${payload.get('total_spent_usd', 0.0):.2f}",
+            f"Findings added: {payload.get('findings_added', 0)}",
+            f"Findings total: {payload.get('findings_total', 0)}",
+        ]
+        notes = payload.get("coverage_notes") or []
+        if notes:
+            lines.append("Coverage notes:")
+            lines.extend(f"  - {n}" for n in notes)
+        transport.send("wave", subject, "\n".join(lines))
+
+    return notify
+
+
 __all__ = [
+    "ALARM_BUDGET_CAP",
+    "ALARM_DEGRADED",
+    "ALARM_TRUNCATION",
+    "ALARM_ZERO_COST",
     "Dispatch",
     "LADDER_ADAPTER",
+    "Transport",
     "caps_for_tier",
+    "make_notifier",
     "run_galley",
 ]
