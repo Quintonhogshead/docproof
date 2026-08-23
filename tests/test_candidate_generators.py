@@ -39,6 +39,25 @@ def test_dialogue_tag_with_comma_is_not_an_error():
     assert not _errors(_dialogue_candidates(_p('"I am here," she said.')))
 
 
+def test_action_beat_keeps_its_period():
+    # "continued his search" is narration, not a speech tag — the period stays.
+    cands = _dialogue_candidates(
+        _p('“When he does.” Tannithan continued his search.'))
+    assert cands and not _errors(cands)
+    assert _decisions(cands) == {"pass"}
+
+
+def test_dual_use_verb_without_object_is_judged_not_auto_corrected():
+    cands = _dialogue_candidates(
+        _p('“Wait.” he continued, scanning the room.'))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
+
+
+def test_core_speech_verb_period_is_still_an_error():
+    assert _errors(_dialogue_candidates(_p('“Stop.” she said.')))
+
+
 # --- quote_balance -----------------------------------------------------------
 
 def test_unbalanced_quotes_are_flagged_for_judgment():

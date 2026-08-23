@@ -54,15 +54,28 @@ _CURRENCY = re.compile(
     r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?!\w)",
     re.IGNORECASE)
 
-_SPEECH_VERBS = (
+# Verbs that almost always report speech: a period before the closing quote is
+# reliably a mispunctuated continuing tag.
+_CORE_SPEECH_VERBS = (
     "said", "asked", "answered", "replied", "whispered", "shouted",
-    "yelled", "murmured", "cried", "called", "added", "continued",
-    "remarked", "observed", "began", "stammered", "muttered",
+    "yelled", "murmured", "cried", "stammered", "muttered",
 )
+# Verbs that report speech OR narrate an action ("Tannithan continued his
+# search", "she added a log"). After a period these are ambiguous, so they are
+# never auto-corrected; a following direct object marks a clear action beat.
+_DUAL_USE_VERBS = (
+    "called", "added", "continued", "remarked", "observed", "began",
+)
+_SPEECH_VERBS = _CORE_SPEECH_VERBS + _DUAL_USE_VERBS
 _DIALOGUE_TAG = re.compile(
     r"(?P<punct>[,.!?]?)(?P<quote>[”\"])(?P<space>\s+)"
     r"(?P<subject>he|she|they|we|i|[A-Z][a-z]+)\s+"
     rf"(?P<verb>{'|'.join(_SPEECH_VERBS)})\b")
+# A determiner/possessive right after the verb ("continued HIS search") is the
+# tell of an action beat rather than a speech tag.
+_ACTION_OBJECT = re.compile(
+    r"\s+(?:his|her|its|their|my|our|your|the|a|an|another|toward|towards|"
+    r"into|onto|across|down|up|over|through|past)\b", re.IGNORECASE)
 
 # Transitional adverbs that reliably take a comma when they open a sentence.
 _STRONG_INTRO = re.compile(
@@ -281,17 +294,45 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
     for match in _DIALOGUE_TAG.finditer(para.text):
         punct = match.group("punct")
         quote_start = match.start("quote")
+        verb = match.group("verb").lower()
+        dual = verb in _DUAL_USE_VERBS
+        # An action beat: a dual-use verb taking a direct object ("continued his
+        # search") is narration, not a speech tag — the period is correct.
+        action_beat = dual and bool(
+            _ACTION_OBJECT.match(para.text, match.end("verb")))
+        channel = "edit"
         if punct == ".":
-            decision, correction = "error", ","
-            reason = "period_before_dialogue_tag"
-            explanation = "A continuing dialogue tag takes a comma here."
             start, end, observed = match.start("punct"), match.end("punct"), punct
+            if action_beat:
+                decision, correction = "pass", None
+                reason = "dialogue_action_beat_keeps_period"
+                explanation = ("A dual-use verb with a direct object is an "
+                               "action beat; the period is correct.")
+            elif dual:
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_dialogue_or_action_beat"
+                explanation = ("This verb can report speech or narrate an "
+                               "action; whether the period should be a comma "
+                               "depends on the sentence.")
+            else:
+                decision, correction = "error", ","
+                reason = "period_before_dialogue_tag"
+                explanation = "A continuing dialogue tag takes a comma here."
         elif not punct:
-            decision, correction = "error", ","
-            reason = "missing_punctuation_before_dialogue_tag"
-            explanation = "The dialogue tag needs punctuation before the closing quote."
             start = end = quote_start
             observed = ""
+            if dual:
+                # Could be a missing comma (speech tag) or a missing period
+                # (dialogue then action beat) — let the judge choose the mark.
+                decision, correction = "needs_model_judgment", ","
+                reason = "missing_punctuation_before_dialogue_or_beat"
+                explanation = ("Punctuation is missing before the closing "
+                               "quote; the mark depends on whether an action "
+                               "beat or a speech tag follows.")
+            else:
+                decision, correction = "error", ","
+                reason = "missing_punctuation_before_dialogue_tag"
+                explanation = "The dialogue tag needs punctuation before the closing quote."
         else:
             decision, correction = "pass", None
             reason = "valid_dialogue_tag_boundary"
@@ -303,9 +344,9 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
             correction=correction, decision=decision, reason_code=reason,
             explanation=explanation,
             evidence={"tag_subject": match.group("subject"),
-                      "speech_verb": match.group("verb")},
+                      "speech_verb": verb, "action_beat": action_beat},
             risk_prior=0.8 if decision == "error" else 0.1,
-            channel="edit"))
+            channel=channel))
     return out
 
 
