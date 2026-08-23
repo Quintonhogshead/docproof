@@ -98,6 +98,17 @@ def test_no_generator_splice_produces_adjacent_duplicate_punctuation():
                 f"{candidate.candidate_type} splice created {pair!r}: {result!r}")
 
 
+def test_insertion_guard_rejects_comma_against_terminal_punctuation():
+    # The Johnson run produced "No,." and "Tannithan—," — a comma jammed
+    # against a period or dash. The universal guard must reject these while
+    # leaving a legitimate comma insertion alone.
+    from docproof.candidate_screening import text_invariant_violation
+    assert text_invariant_violation("No. There", "No,. There")
+    assert text_invariant_violation("him— He shouted", "him—, He shouted")
+    assert text_invariant_violation("gone… away", "gone,… away")
+    assert text_invariant_violation("all night and she", "all night, and she") is None
+
+
 @pytest.mark.skipif(not FIXTURE.exists(), reason="fixture not built")
 def test_apply_path_over_fixture_never_writes_a_double_comma(tmp_path, monkeypatch):
     monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")

@@ -62,6 +62,29 @@ def test_strong_intro_with_comma_passes():
     assert not _errors(_introductory_candidates(_p("However, he left.")))
 
 
+@pytest.mark.parametrize("text", [
+    "No matter how many times I asked.",
+    "No one dons a Masque and escapes.",
+    "No longer will they wait.",
+    "Instead of forcing it, I waited.",
+    "First base was empty.",
+])
+def test_determiner_and_phrase_openers_are_not_comma_errors(text):
+    # The Johnson run applied "No, matter", "No, servant girl", "Instead, of" as
+    # hard errors. These openers must never auto-insert; the clear phrase traps
+    # generate nothing at all.
+    cands = _introductory_candidates(_p(text))
+    assert not _errors(cands)
+
+
+def test_interjection_opener_is_judged_not_auto_inserted():
+    # "No servant girl" — determiner, but not in the excluded phrase list — must
+    # go to the judge with the sentence, never straight to an edit.
+    cands = _introductory_candidates(_p("No servant girl is worth the city."))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
+
+
 # --- direct_address_comma ----------------------------------------------------
 
 def test_direct_address_missing_comma_is_an_error():

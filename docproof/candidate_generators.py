@@ -64,10 +64,28 @@ _DIALOGUE_TAG = re.compile(
     r"(?P<subject>he|she|they|we|i|[A-Z][a-z]+)\s+"
     rf"(?P<verb>{'|'.join(_SPEECH_VERBS)})\b")
 
+# Transitional adverbs that reliably take a comma when they open a sentence.
 _STRONG_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
-    r"(?P<phrase>However|Therefore|Meanwhile|Instead|Finally|"
-    r"First|Second|Third|Yes|No|Well|Of course|For example|In fact)\b",
+    r"(?P<phrase>However|Therefore|Meanwhile|Finally|"
+    r"Of course|For example|In fact)\b",
+    re.IGNORECASE)
+# Words that OPEN a sentence sometimes as an interjection/ordinal wanting a
+# comma ("No, I won't"; "First, we eat") and sometimes as a determiner or the
+# head of a phrase that must NOT be split ("No matter", "No one", "Instead of",
+# "First base"). A local generator cannot tell which, so these are always sent
+# to the judge — never auto-inserted — and the clearest phrase traps are
+# excluded outright so the judge is not even asked. (The Johnson canary applied
+# "No, matter", "No, servant girl", and "Instead, of" as hard errors.)
+_AMBIGUOUS_INTRO = re.compile(
+    r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
+    r"(?P<phrase>Yes"
+    r"|No(?!\s+(?:matter|one|longer|more|doubt|sign|way|such)\b)"
+    r"|Well(?!\s+(?:done|enough)\b)"
+    r"|Instead(?!\s+of\b)"
+    r"|First(?!\s+(?:base|class|aid|place|time|floor|name)\b)"
+    r"|Second(?!\s+(?:base|class|hand|floor|time|nature)\b)"
+    r"|Third(?!\s+(?:base|class|floor|time|party)\b))\b",
     re.IGNORECASE)
 _CLAUSE_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
@@ -331,7 +349,9 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
     if "list" in style or "bullet" in style or style.startswith("heading"):
         return []
     out = []
-    for regex, strong in ((_STRONG_INTRO, True), (_CLAUSE_INTRO, False)):
+    for regex, mode in ((_STRONG_INTRO, "strong"),
+                        (_AMBIGUOUS_INTRO, "ambiguous"),
+                        (_CLAUSE_INTRO, "clause")):
         for match in regex.finditer(para.text):
             boundary = match.end("phrase")
             rest = para.text[boundary:boundary + 90]
@@ -345,15 +365,26 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
                 reason = "introductory_boundary_has_comma"
                 explanation = "The introductory expression is set off locally."
                 start, end, observed = boundary, boundary + 1, ","
-            elif strong:
-                # A strong single-word transitional adverb ("However", "Then")
-                # takes its comma immediately after the word, so the boundary is
-                # a safe insertion point.
+            elif mode == "strong":
+                # A reliable transitional adverb ("However", "Therefore") takes
+                # its comma immediately after the word — a safe insertion.
                 decision, correction = "error", ","
                 reason = "strong_introductory_expression_missing_comma"
                 explanation = "This introductory expression conventionally takes a comma."
                 start = end = boundary
                 observed = ""
+            elif mode == "ambiguous":
+                # An opener that takes a comma as an interjection/ordinal but not
+                # as a determiner or phrase head ("No, I won't" vs "No matter").
+                # Never auto-insert — hand it to the judge with the sentence.
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_introductory_expression"
+                explanation = ("This opener is set off with a comma only as an "
+                               "interjection or ordinal, not as a determiner or "
+                               "the head of a phrase; the sentence decides.")
+                start = end = boundary
+                observed = ""
+                channel = "edit"
             elif comma:
                 # The introductory clause already carries a comma within its
                 # span. Anchor that existing comma and pass — inserting another
