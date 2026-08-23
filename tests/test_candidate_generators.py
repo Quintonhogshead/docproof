@@ -39,6 +39,25 @@ def test_dialogue_tag_with_comma_is_not_an_error():
     assert not _errors(_dialogue_candidates(_p('"I am here," she said.')))
 
 
+def test_action_beat_keeps_its_period():
+    # "continued his search" is narration, not a speech tag — the period stays.
+    cands = _dialogue_candidates(
+        _p('“When he does.” Tannithan continued his search.'))
+    assert cands and not _errors(cands)
+    assert _decisions(cands) == {"pass"}
+
+
+def test_dual_use_verb_without_object_is_judged_not_auto_corrected():
+    cands = _dialogue_candidates(
+        _p('“Wait.” he continued, scanning the room.'))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
+
+
+def test_core_speech_verb_period_is_still_an_error():
+    assert _errors(_dialogue_candidates(_p('“Stop.” she said.')))
+
+
 # --- quote_balance -----------------------------------------------------------
 
 def test_unbalanced_quotes_are_flagged_for_judgment():
@@ -60,6 +79,29 @@ def test_strong_intro_missing_comma_is_an_error():
 
 def test_strong_intro_with_comma_passes():
     assert not _errors(_introductory_candidates(_p("However, he left.")))
+
+
+@pytest.mark.parametrize("text", [
+    "No matter how many times I asked.",
+    "No one dons a Masque and escapes.",
+    "No longer will they wait.",
+    "Instead of forcing it, I waited.",
+    "First base was empty.",
+])
+def test_determiner_and_phrase_openers_are_not_comma_errors(text):
+    # The Johnson run applied "No, matter", "No, servant girl", "Instead, of" as
+    # hard errors. These openers must never auto-insert; the clear phrase traps
+    # generate nothing at all.
+    cands = _introductory_candidates(_p(text))
+    assert not _errors(cands)
+
+
+def test_interjection_opener_is_judged_not_auto_inserted():
+    # "No servant girl" — determiner, but not in the excluded phrase list — must
+    # go to the judge with the sentence, never straight to an edit.
+    cands = _introductory_candidates(_p("No servant girl is worth the city."))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
 
 
 # --- direct_address_comma ----------------------------------------------------

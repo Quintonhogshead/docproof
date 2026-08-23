@@ -835,6 +835,11 @@ def validate_candidate_anchor(candidate: Candidate,
 
 _DUP_GUARD_MARKS = (",", ";", ":")
 _SPACE_BEFORE_PUNCT = re.compile(r"\s[,;:]")
+# A comma/semicolon/colon must never sit directly against a sentence terminal,
+# an ellipsis, or a dash — "No,.", "word,…", "Tannithan—," are all wrong. The
+# Johnson run produced these when an opener before a full stop or an interrupted
+# line was flagged as an intro/compound comma.
+_COMMA_ABUTS_TERMINAL = re.compile(r"[,;:]\s*[.!?…—–]|[.!?…—–]\s*[,;:]")
 
 
 def new_adjacent_duplicate_punctuation(original: str, corrected: str
@@ -867,6 +872,9 @@ def text_invariant_violation(original: str, corrected: str) -> str | None:
     duplicate = new_adjacent_duplicate_punctuation(original, corrected)
     if duplicate is not None:
         return f"would create duplicate punctuation {duplicate!r}"
+    if (len(_COMMA_ABUTS_TERMINAL.findall(corrected))
+            > len(_COMMA_ABUTS_TERMINAL.findall(original))):
+        return "would place a comma against a period, ellipsis, or dash"
     if "  " in corrected and corrected.count("  ") > original.count("  "):
         return "would create a doubled space"
     if (len(_SPACE_BEFORE_PUNCT.findall(corrected))

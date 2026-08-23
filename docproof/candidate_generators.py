@@ -54,20 +54,51 @@ _CURRENCY = re.compile(
     r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?!\w)",
     re.IGNORECASE)
 
-_SPEECH_VERBS = (
+# Verbs that almost always report speech: a period before the closing quote is
+# reliably a mispunctuated continuing tag.
+_CORE_SPEECH_VERBS = (
     "said", "asked", "answered", "replied", "whispered", "shouted",
-    "yelled", "murmured", "cried", "called", "added", "continued",
-    "remarked", "observed", "began", "stammered", "muttered",
+    "yelled", "murmured", "cried", "stammered", "muttered",
 )
+# Verbs that report speech OR narrate an action ("Tannithan continued his
+# search", "she added a log"). After a period these are ambiguous, so they are
+# never auto-corrected; a following direct object marks a clear action beat.
+_DUAL_USE_VERBS = (
+    "called", "added", "continued", "remarked", "observed", "began",
+)
+_SPEECH_VERBS = _CORE_SPEECH_VERBS + _DUAL_USE_VERBS
 _DIALOGUE_TAG = re.compile(
     r"(?P<punct>[,.!?]?)(?P<quote>[”\"])(?P<space>\s+)"
     r"(?P<subject>he|she|they|we|i|[A-Z][a-z]+)\s+"
     rf"(?P<verb>{'|'.join(_SPEECH_VERBS)})\b")
+# A determiner/possessive right after the verb ("continued HIS search") is the
+# tell of an action beat rather than a speech tag.
+_ACTION_OBJECT = re.compile(
+    r"\s+(?:his|her|its|their|my|our|your|the|a|an|another|toward|towards|"
+    r"into|onto|across|down|up|over|through|past)\b", re.IGNORECASE)
 
+# Transitional adverbs that reliably take a comma when they open a sentence.
 _STRONG_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
-    r"(?P<phrase>However|Therefore|Meanwhile|Instead|Finally|"
-    r"First|Second|Third|Yes|No|Well|Of course|For example|In fact)\b",
+    r"(?P<phrase>However|Therefore|Meanwhile|Finally|"
+    r"Of course|For example|In fact)\b",
+    re.IGNORECASE)
+# Words that OPEN a sentence sometimes as an interjection/ordinal wanting a
+# comma ("No, I won't"; "First, we eat") and sometimes as a determiner or the
+# head of a phrase that must NOT be split ("No matter", "No one", "Instead of",
+# "First base"). A local generator cannot tell which, so these are always sent
+# to the judge — never auto-inserted — and the clearest phrase traps are
+# excluded outright so the judge is not even asked. (The Johnson canary applied
+# "No, matter", "No, servant girl", and "Instead, of" as hard errors.)
+_AMBIGUOUS_INTRO = re.compile(
+    r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
+    r"(?P<phrase>Yes"
+    r"|No(?!\s+(?:matter|one|longer|more|doubt|sign|way|such)\b)"
+    r"|Well(?!\s+(?:done|enough)\b)"
+    r"|Instead(?!\s+of\b)"
+    r"|First(?!\s+(?:base|class|aid|place|time|floor|name)\b)"
+    r"|Second(?!\s+(?:base|class|hand|floor|time|nature)\b)"
+    r"|Third(?!\s+(?:base|class|floor|time|party)\b))\b",
     re.IGNORECASE)
 _CLAUSE_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
@@ -263,17 +294,45 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
     for match in _DIALOGUE_TAG.finditer(para.text):
         punct = match.group("punct")
         quote_start = match.start("quote")
+        verb = match.group("verb").lower()
+        dual = verb in _DUAL_USE_VERBS
+        # An action beat: a dual-use verb taking a direct object ("continued his
+        # search") is narration, not a speech tag — the period is correct.
+        action_beat = dual and bool(
+            _ACTION_OBJECT.match(para.text, match.end("verb")))
+        channel = "edit"
         if punct == ".":
-            decision, correction = "error", ","
-            reason = "period_before_dialogue_tag"
-            explanation = "A continuing dialogue tag takes a comma here."
             start, end, observed = match.start("punct"), match.end("punct"), punct
+            if action_beat:
+                decision, correction = "pass", None
+                reason = "dialogue_action_beat_keeps_period"
+                explanation = ("A dual-use verb with a direct object is an "
+                               "action beat; the period is correct.")
+            elif dual:
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_dialogue_or_action_beat"
+                explanation = ("This verb can report speech or narrate an "
+                               "action; whether the period should be a comma "
+                               "depends on the sentence.")
+            else:
+                decision, correction = "error", ","
+                reason = "period_before_dialogue_tag"
+                explanation = "A continuing dialogue tag takes a comma here."
         elif not punct:
-            decision, correction = "error", ","
-            reason = "missing_punctuation_before_dialogue_tag"
-            explanation = "The dialogue tag needs punctuation before the closing quote."
             start = end = quote_start
             observed = ""
+            if dual:
+                # Could be a missing comma (speech tag) or a missing period
+                # (dialogue then action beat) — let the judge choose the mark.
+                decision, correction = "needs_model_judgment", ","
+                reason = "missing_punctuation_before_dialogue_or_beat"
+                explanation = ("Punctuation is missing before the closing "
+                               "quote; the mark depends on whether an action "
+                               "beat or a speech tag follows.")
+            else:
+                decision, correction = "error", ","
+                reason = "missing_punctuation_before_dialogue_tag"
+                explanation = "The dialogue tag needs punctuation before the closing quote."
         else:
             decision, correction = "pass", None
             reason = "valid_dialogue_tag_boundary"
@@ -285,9 +344,9 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
             correction=correction, decision=decision, reason_code=reason,
             explanation=explanation,
             evidence={"tag_subject": match.group("subject"),
-                      "speech_verb": match.group("verb")},
+                      "speech_verb": verb, "action_beat": action_beat},
             risk_prior=0.8 if decision == "error" else 0.1,
-            channel="edit"))
+            channel=channel))
     return out
 
 
@@ -331,7 +390,9 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
     if "list" in style or "bullet" in style or style.startswith("heading"):
         return []
     out = []
-    for regex, strong in ((_STRONG_INTRO, True), (_CLAUSE_INTRO, False)):
+    for regex, mode in ((_STRONG_INTRO, "strong"),
+                        (_AMBIGUOUS_INTRO, "ambiguous"),
+                        (_CLAUSE_INTRO, "clause")):
         for match in regex.finditer(para.text):
             boundary = match.end("phrase")
             rest = para.text[boundary:boundary + 90]
@@ -345,15 +406,26 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
                 reason = "introductory_boundary_has_comma"
                 explanation = "The introductory expression is set off locally."
                 start, end, observed = boundary, boundary + 1, ","
-            elif strong:
-                # A strong single-word transitional adverb ("However", "Then")
-                # takes its comma immediately after the word, so the boundary is
-                # a safe insertion point.
+            elif mode == "strong":
+                # A reliable transitional adverb ("However", "Therefore") takes
+                # its comma immediately after the word — a safe insertion.
                 decision, correction = "error", ","
                 reason = "strong_introductory_expression_missing_comma"
                 explanation = "This introductory expression conventionally takes a comma."
                 start = end = boundary
                 observed = ""
+            elif mode == "ambiguous":
+                # An opener that takes a comma as an interjection/ordinal but not
+                # as a determiner or phrase head ("No, I won't" vs "No matter").
+                # Never auto-insert — hand it to the judge with the sentence.
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_introductory_expression"
+                explanation = ("This opener is set off with a comma only as an "
+                               "interjection or ordinal, not as a determiner or "
+                               "the head of a phrase; the sentence decides.")
+                start = end = boundary
+                observed = ""
+                channel = "edit"
             elif comma:
                 # The introductory clause already carries a comma within its
                 # span. Anchor that existing comma and pass — inserting another
