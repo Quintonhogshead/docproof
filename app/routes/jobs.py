@@ -286,6 +286,10 @@ def _result_name(job: Job, which: str) -> str | None:
         "changes": get_format(job.filename).change_log_name(job.filename),
         "summary": "summary.md",
         "findings": "findings.json",
+        # The original manuscript as uploaded, archived as "source - <name>".
+        # Lets a finished job be re-run under different settings without a
+        # re-upload (resolved from the Drive archive when the local copy is gone).
+        "source": f"source - {job.filename}",
         "examination": "examination-coverage.md",
         "examination-json": "examination-coverage.json",
         "examination-ledger": "examination-ledger.jsonl.gz",
