@@ -1,0 +1,25 @@
+error_type: punctuation_style
+
+cases:
+  # Seeded: a space before a comma/semicolon/colon/terminal mark — a safe
+  # deletion.
+  - id: ps-001
+    text: "She paused , then spoke to the crowd."
+    expect: { span: " ,", correction: ",", confidence: high }
+  - id: ps-002
+    text: "He counted them all ; none were missing."
+    expect: { span: " ;", correction: ";", confidence: high }
+  - id: ps-003
+    text: "Wait for the signal : it comes at noon."
+    expect: { span: " :", correction: ":", confidence: high }
+
+  # Clean traps: correctly spaced punctuation, and a legitimate em dash / colon.
+  - id: ps-101
+    text: "She paused, then spoke to the crowd."
+    expect: clean
+  - id: ps-102
+    text: "He counted them all; none were missing."
+    expect: clean
+  - id: ps-103
+    text: "The rule is simple: arrive on time."
+    expect: clean

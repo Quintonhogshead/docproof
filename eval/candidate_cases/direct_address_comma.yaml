@@ -1,0 +1,17 @@
+error_type: direct_address_comma
+
+cases:
+  - id: da-001
+    text: "Hello John how are you this morning?"
+    expect: { span: "Hello John", correction: "Hello, John", confidence: high }
+  - id: da-002
+    text: "Goodbye Sarah see you next week."
+    expect: { span: "Goodbye Sarah", correction: "Goodbye, Sarah", confidence: high }
+
+  # Clean traps: comma present, and a lowercase word that is not a name.
+  - id: da-101
+    text: "Hello, John how are you this morning?"
+    expect: clean
+  - id: da-102
+    text: "Please wait here until the doctor calls you."
+    expect: clean

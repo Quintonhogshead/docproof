@@ -1,0 +1,35 @@
+error_type: introductory_comma
+
+# Generation fixtures for the introductory-comma generator. The clean cases are
+# the double-comma adversarial traps: a correctly punctuated introductory clause
+# must never draw an edit candidate (see the P0-02 incident fixture).
+cases:
+  # Seeded: a strong single-word introductory adverb missing its comma. The
+  # comma belongs immediately after the word, so this is a safe edit.
+  - id: ic-001
+    text: "However he never arrived at the station."
+    expect: { span: "However", correction: "However,", confidence: high }
+  - id: ic-002
+    text: "Therefore the plan was abandoned before dawn."
+    expect: { span: "Therefore", correction: "Therefore,", confidence: high }
+  - id: ic-003
+    text: "Meanwhile the kettle boiled over on the stove."
+    expect: { span: "Meanwhile", correction: "Meanwhile,", confidence: high }
+
+  # Clean traps: already-correct clauses. An edit candidate here is the
+  # double-comma failure.
+  - id: ic-101
+    text: "After the war, the men returned home to the village."
+    expect: clean
+  - id: ic-102
+    text: "Although she was tired, she kept walking through the night."
+    expect: clean
+  - id: ic-103
+    text: "Because it rained, the match was cancelled without appeal."
+    expect: clean
+  - id: ic-104
+    text: "Meanwhile, the kettle boiled over on the stove."
+    expect: clean
+  - id: ic-105
+    text: "However, he never arrived at the station."
+    expect: clean

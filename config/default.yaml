@@ -667,11 +667,14 @@ examination_graph:
 # Explicit candidate generation and screening. Local generators create
 # auditable potential error sites, strong local rules settle the inexpensive
 # tail, and a compact model judge handles the ambiguous remainder. The shipped
-# mode is off. The review UI selects `apply`, which admits only correction-
-# validated error verdicts to the ordinary validator and tracked-change writer;
-# `shadow` remains available for evaluation without document changes.
+# mode is off. `shadow` generates, screens, and writes a ledger/report without
+# ever changing the document. `apply` would admit correction-validated error
+# verdicts to the ordinary validator and tracked-change writer — but it is
+# release-gated (P0-01): until the validation gates pass, any requested `apply`
+# is contained to `shadow` (see docproof.config.resolve_candidate_mode / the
+# CANDIDATE_APPLY_RELEASED gate and DOCPROOF_CANDIDATE_APPLY opt-in).
 candidate_screening:
-  mode: "off"                  # off | shadow | apply
+  mode: "off"                  # off | shadow | apply (apply gated to shadow)
   candidate_types:
     - dialogue_tag_punctuation
     - quote_balance
@@ -683,6 +686,12 @@ candidate_screening:
     - word_echo
     - heading_sequence
     - list_punctuation
+    - punctuation_style     # semicolon/colon/bracket + adapted punctuation sweeps
+    - homophone             # commonly confused words, judged in context
+    - term_consistency      # document-wide term/spelling drift (reused scan)
+    - grammar               # LanguageTool mechanical floor (reused, opt-in)
+  reuse_local_analyzers: true   # feed sweeps/quote/consistency scans as candidates
+  languagetool_floor: false     # also run LanguageTool (heavy JVM); opt-in
   max_candidates: 200000
   batch_size: 100
   judgment_enabled: true

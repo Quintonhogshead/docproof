@@ -1,0 +1,17 @@
+error_type: repeated_word
+
+cases:
+  - id: rw-001
+    text: "This is is wrong and needs a fix."
+    expect: { span: "is is", correction: "is", confidence: high }
+  - id: rw-002
+    text: "They went to the the market at dawn."
+    expect: { span: "the the", correction: "the", confidence: high }
+
+  # Clean traps: no accidental doubling, and a legitimate repeat.
+  - id: rw-101
+    text: "This is perfectly fine as written."
+    expect: clean
+  - id: rw-102
+    text: "What had had happened was never explained."   # 'had had' can be grammatical
+    expect: clean

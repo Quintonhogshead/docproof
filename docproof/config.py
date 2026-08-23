@@ -1034,8 +1034,17 @@ class CandidateScreeningConfig(BaseModel):
         "dialogue_tag_punctuation", "quote_balance", "introductory_comma",
         "direct_address_comma", "number_style", "currency_style",
         "repeated_word", "word_echo", "heading_sequence",
-        "list_punctuation",
+        "list_punctuation", "punctuation_style", "homophone",
+        "term_consistency", "grammar",
     )
+    # P2-01/02: reuse the free local analyzers (sweeps, unbalanced-quote and
+    # term-consistency scans) as candidate sources so standalone candidate mode
+    # is not limited to the per-paragraph regex generators. Everything they find
+    # still flows through the ledger as candidates, never straight to the output.
+    reuse_local_analyzers: bool = True
+    # LanguageTool's mechanical floor is a strong grammar source but spins up an
+    # ~850MB JVM; keep it opt-in so a small box is never surprised by it.
+    languagetool_floor: bool = False
     max_candidates: int = Field(default=200_000, ge=1)
     batch_size: int = Field(default=100, ge=1, le=200)
     judgment_enabled: bool = True
@@ -1602,6 +1611,15 @@ EXAMINATION_JUDGMENT_ENV = "DOCPROOF_EXAMINATION_JUDGMENT"
 EXAMINATION_PRODUCTION_VERDICTS_ENV = \
     "DOCPROOF_EXAMINATION_PRODUCTION_VERDICTS"
 CANDIDATE_SCREENING_ENV = "DOCPROOF_CANDIDATE_SCREENING"
+CANDIDATE_APPLY_ENV = "DOCPROOF_CANDIDATE_APPLY"
+
+# Release gate for candidate-screening Apply mode (P0-01 containment).
+# While the subsystem's validation gates (P4-04) have not been cleared, Apply is
+# not a released capability: any request for it is contained to Shadow so the
+# lane can generate, screen, and record a ledger without ever mutating a
+# document. Flip this to True (or set DOCPROOF_CANDIDATE_APPLY=1 for a single
+# deployment) only after the release gates pass and the change is approved.
+CANDIDATE_APPLY_RELEASED = False
 
 
 def examination_graph_killed() -> bool:
@@ -1647,6 +1665,31 @@ def candidate_screening_enabled(cfg) -> bool:
     """Effective switch for loaded configuration and stored jobs."""
     candidate_cfg = getattr(cfg, "candidate_screening", cfg)
     return bool(candidate_cfg.mode != "off" and not candidate_screening_killed())
+
+
+def candidate_apply_released() -> bool:
+    """Whether candidate-screening Apply is a released, document-mutating mode.
+
+    Defaults to the module gate; a single deployment can override with the
+    environment variable only to *enable* it (a truthy value), never to force it
+    off — the gate itself is the conservative floor.
+    """
+    if CANDIDATE_APPLY_RELEASED:
+        return True
+    value = os.environ.get(CANDIDATE_APPLY_ENV, "").strip().lower()
+    return value in {"1", "true", "on", "yes", "enabled", "released"}
+
+
+def resolve_candidate_mode(mode: str) -> str:
+    """Clamp a requested candidate-screening mode to what is released (P0-01).
+
+    ``apply`` is downgraded to ``shadow`` until the release gate opens, so no
+    configuration, profile, or UI selection can mutate a document while the
+    subsystem is unvalidated. ``off`` and ``shadow`` pass through unchanged.
+    """
+    if mode == "apply" and not candidate_apply_released():
+        return "shadow"
+    return mode
 
 
 def default_cache_dir() -> str | None:
