@@ -739,6 +739,50 @@ class SaplingConfig(BaseModel):
         return self
 
 
+class ChapterSweepConfig(BaseModel):
+    """The frontier chapter sweep: one loose proofread instruction over
+    chapter-sized windows, on a strong model, as a second detector.
+
+    Complementary to the typed passes by construction — no error-type taxonomy
+    (so no taxonomy blind spots) and chapter-scale context (so cross-sentence
+    slips are visible). The 2026-08-23 Redding pilot found it catches the
+    judgment-call band (lay/lie, everyday/every day, parallelism, suspended
+    hyphens, counterfactual tense) the chunked passes glide past, while the
+    sweeps keep the mechanical floor. Proposals are verbatim quote->correction
+    pairs anchored fail-closed, then ruled on by the SHARED rewrite.confirm
+    valve — only an affirmed error becomes a tracked change, a softer
+    affirmation asks in the margin, and the ordinary validator/audit stand
+    behind everything. Off by default: it is a frontier-priced read of the
+    whole manuscript. Whole-document only. See docproof/chaptersweep.py."""
+    enabled: bool = False
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "xhigh"
+    # Window sizing: ~48k chars ≈ a long chapter per request. Bigger windows
+    # buy context and lose retry granularity; a failed window is skipped and
+    # reported, never fatal.
+    window_chars: int = Field(default=48_000, ge=4_000)
+    max_output_tokens: int = Field(default=32_000, ge=1)
+    # Confirm-valve sizing, mirroring Sapling/LanguageTool. The sweep model
+    # proposes; the confirm judge disposes. Unset confirm_model = api.model.
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"chapter_sweep.model '{self.model}' is not in the catalog")
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"chapter_sweep.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class SmoothingConfig(BaseModel):
     """The line-editing pass: the half of a proofreader's job DocProof otherwise
     refuses. A line editor reads the manuscript and proposes small smoothings —
@@ -746,12 +790,15 @@ class SmoothingConfig(BaseModel):
     awkward coordination, a tense that reads rough, an ambiguous pronoun — and a
     skeptical taste judge culls them before any of them reach the author.
 
-    Query-only by design, and unconditionally so: a mechanical error has a
-    verifiable right answer and may be a tracked change, but a smoothing has no
-    right answer, only a better one, and which is better is the author's call.
-    Every finding this pass emits is force_query'd, so it can only ever be a
-    margin comment. That is the invariant the whole pass is built around — it is
-    not a confidence threshold that a high-confidence judgement could clear.
+    Query-only by default: a mechanical error has a verifiable right answer
+    and may be a tracked change, but a smoothing has no right answer, only a
+    better one, and which is better is the author's call — so the shipped
+    behaviour force_query's every finding into the margin. The ``edits``
+    switch below is the explicit, per-run exception: with it on, a smoothing
+    the judge affirms at HIGH confidence is applied as an ordinary tracked
+    change (the author accepts or rejects it in Word) and softer affirmations
+    still ask. Chosen for presses drowning in margin queries; the default
+    stays ask-first.
 
     Voice risk is what the knobs defend against: dialogue is excluded by default
     (a character's diction is not the pipeline's to smooth), author coinages are
@@ -769,6 +816,15 @@ class SmoothingConfig(BaseModel):
     judge, and it is the one pass whose output is taste rather than correctness.
     Whole-document only. See docproof/smoothing.py."""
     enabled: bool = False
+    # How an affirmed smoothing reaches the author. False (the shipped
+    # default): every finding is force_query'd — a margin comment, never an
+    # edit, because a smoothing has no verifiable right answer. True: an
+    # affirmation the judge holds at HIGH confidence is applied as an ordinary
+    # tracked change (still through the shared validator/audit), and anything
+    # softer keeps asking in the margin. An explicit per-run choice for presses
+    # that would rather accept/reject in Word than answer a margin full of
+    # questions — it trades the query pile for edits the author can reject.
+    edits: bool = False
     # The proposing reader. Unset = api.model (the detector's). Restraint is
     # most of the job, so this is not the place to economize hard — but the
     # judge below is the one that decides what survives.
@@ -1398,6 +1454,7 @@ class Config(BaseModel):
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
+    chapter_sweep: ChapterSweepConfig = Field(default_factory=ChapterSweepConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)

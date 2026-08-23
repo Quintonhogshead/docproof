@@ -1077,6 +1077,12 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
         finally:
             lt_shutdown()
 
+    # Frontier chapter sweep. Shared with the batch collector — see
+    # chapter_sweep_findings.
+    findings.extend(chapter_sweep_findings(
+        cfg, prepared, ids, usage, provider_factory, on_phase=on_phase,
+        coverage=coverage, loss_sink=window_losses))
+
     # Whole-book continuity read. Shared with the batch collector rather than
     # written out here, so the two paths cannot drift apart — see
     # continuity_findings.
@@ -1160,6 +1166,93 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                           "candidate findings were added.")
 
     return findings, usage
+
+
+def chapter_sweep_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
+                           provider_factory, *, on_phase=None, coverage=None,
+                           loss_sink=None) -> list[Finding]:
+    """The frontier chapter sweep's findings, or [] when the pass is off.
+
+    A second detector with a deliberately different shape: one loose proofread
+    instruction over chapter-sized windows on a strong model, no error-type
+    taxonomy, verbatim quote->correction proposals anchored fail-closed, and
+    every proposal ruled on by the SHARED rewrite.confirm valve before it can
+    become a tracked change. Complementary to the typed passes (the 2026-08-23
+    Redding pilot: it catches the judgment-call band they glide past, they keep
+    the mechanical floor it skips). See docproof/chaptersweep.py.
+
+    A function rather than a block inside run_sync for the same reason as
+    continuity_findings: the sweep is synchronous whole-window work on its own
+    model, so a batch review must make it at collect time, and one shared
+    implementation cannot drift between the two paths. Additive and fail-open:
+    a sweep that cannot run (no vendor key, a failed window) is a coverage
+    note, never a failed review."""
+    if not (cfg.chapter_sweep.enabled and prepared.whole_document):
+        return []
+    if on_phase:
+        on_phase("chapter_sweep")
+    from .chaptersweep import propose as sweep_propose
+    from .rewrite import confirm as sweep_confirm
+
+    scfg = cfg.model_copy(deep=True)
+    scfg.api.model = cfg.chapter_sweep.model
+    scfg.api.effort = cfg.chapter_sweep.effort
+    try:
+        sweep_provider = provider_factory(scfg)
+    except Exception as exc:
+        # The classic case: the pass is on but that vendor's key is not set.
+        log.warning("Chapter sweep is on but its provider could not be built "
+                    "(%s); skipping it.", exc)
+        if coverage is not None:
+            coverage.note("Chapter sweep",
+                          f"the pass is enabled but its model provider could "
+                          f"not be built ({exc}), so the loose whole-chapter "
+                          f"proofread did not run", "skipped")
+        return []
+    try:
+        stats: dict = {}
+        candidates = sweep_propose(
+            prepared.doc.paragraphs, sweep_provider,
+            model=cfg.chapter_sweep.model,
+            max_output_tokens=cfg.chapter_sweep.max_output_tokens,
+            usage=usage, window_chars=cfg.chapter_sweep.window_chars,
+            # The same whole-book sections the typed detectors read: the
+            # vocabulary (coinages are not typos), the variant conventions,
+            # and the story sheet (tense/POV/pronouns) when that pass is on.
+            context="\n\n".join(x for x in (
+                prepared.vocabulary, prepared.conventions,
+                prepared.story_sheet) if x),
+            coverage=coverage, stats=stats)
+        log.info("Chapter sweep proposed %d candidate(s) over %d window(s) "
+                 "(dropped: unlocated=%d, noop=%d).",
+                 stats.get("candidates", 0), stats.get("windows", 0),
+                 stats.get("unlocated", 0), stats.get("noop", 0))
+        if not candidates:
+            return []
+        ccfg = cfg.model_copy(deep=True)
+        if cfg.chapter_sweep.confirm_model:
+            ccfg.api.model = cfg.chapter_sweep.confirm_model
+            ccfg.api.effort = cfg.chapter_sweep.confirm_effort
+        confirm_provider = provider_factory(ccfg)
+        return sweep_confirm(
+            candidates, prepared.doc.paragraphs, confirm_provider,
+            model=ccfg.api.model,
+            # Confirm replies are short verdict rows; 16k matches the other
+            # valve users (chapter_sweep.max_output_tokens sizes the SWEEP).
+            max_tokens=16_000, usage=usage, ids=ids,
+            batch_size=cfg.chapter_sweep.batch_size,
+            edit_confidence=cfg.chapter_sweep.edit_confidence,
+            error_type="chapter_sweep", chunk_id="chapter_sweep",
+            id_prefix="cw", loss_sink=loss_sink,
+            concurrency=cfg.concurrency_for(ccfg.api.model))
+    except Exception as exc:
+        log.exception("Chapter sweep failed; continuing without it.")
+        if coverage is not None:
+            coverage.note("Chapter sweep",
+                          f"the loose whole-chapter proofread failed ({exc}) "
+                          f"and its findings are missing from this review",
+                          "failed")
+        return []
 
 
 def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
@@ -1494,7 +1587,11 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
         batch_size=sm.batch_size, reject_sink=rejected,
         error_type="smoothing", chunk_id="smoothing", id_prefix="sm",
         concurrency=cfg.concurrency_for(sm.judge_model),
-        system=system, mode="suggestion")
+        # smoothing.edits flips the valve from ask to apply: in "correction"
+        # mode an affirmation at high confidence becomes an ordinary tracked
+        # change (softer ones still query); "suggestion" is the shipped
+        # query-only behaviour.
+        system=system, mode="correction" if sm.edits else "suggestion")
 
     # Every candidate should come back either affirmed or in the reject log. Any
     # that did neither were in a batch the judge failed to answer — a truncated

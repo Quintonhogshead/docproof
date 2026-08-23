@@ -64,7 +64,7 @@ def apply_detector_only(cfg: Config) -> Config:
     for stage in (
         cfg.spellcheck, cfg.consistency, cfg.glossary, cfg.storysheet,
         cfg.continuity, cfg.chapter_continuity, cfg.adjudicate, cfg.rewrite,
-        cfg.languagetool, cfg.sapling, cfg.smoothing, cfg.factcheck,
+        cfg.languagetool, cfg.sapling, cfg.chapter_sweep, cfg.smoothing, cfg.factcheck,
         cfg.residuals, cfg.meaning_check, cfg.fix_check,
     ):
         stage.enabled = False
@@ -122,7 +122,7 @@ def apply_candidate_only(cfg: Config) -> Config:
     for stage in (
         cfg.spellcheck, cfg.consistency, cfg.glossary, cfg.storysheet,
         cfg.continuity, cfg.chapter_continuity, cfg.adjudicate, cfg.rewrite,
-        cfg.languagetool, cfg.sapling, cfg.smoothing, cfg.factcheck,
+        cfg.languagetool, cfg.sapling, cfg.chapter_sweep, cfg.smoothing, cfg.factcheck,
         cfg.residuals, cfg.meaning_check, cfg.fix_check,
     ):
         stage.enabled = False

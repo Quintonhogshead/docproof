@@ -893,3 +893,40 @@ def test_every_lever_off_by_default_leaves_the_shipped_pass_untouched():
     # and the chosen constants are the shipped ones (referenced so a rename here
     # can't quietly drift the defaults away from what the pass ships)
     assert PROPOSE_SYSTEM and JUDGE_SYSTEM
+
+
+# --- the edits switch ---------------------------------------------------------
+
+def test_edits_switch_applies_high_confidence_smoothings_as_tracked_changes(
+        monkeypatch):
+    """smoothing.edits flips the valve from ask to apply: a judge affirmation
+    held at HIGH confidence becomes an ordinary edit finding the author
+    accepts or rejects in Word."""
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    findings, _report, _prov = _run(
+        monkeypatch, _cfg(edits=True), _prepared(p), [
+            _suggest(_s("body-0", "in a very quiet way", "quietly")),
+            _verdicts({"index": 1, "is_error": True, "confidence": "high"}),
+        ])
+    assert len(findings) == 1
+    assert findings[0].force_query is False
+    assert "quietly" in findings[0].corrected_text
+
+
+def test_edits_switch_still_queries_below_high_confidence(monkeypatch):
+    p = _para("body-0", "She walked over to the door in a very quiet way.")
+    findings, _report, _prov = _run(
+        monkeypatch, _cfg(edits=True), _prepared(p), [
+            _suggest(_s("body-0", "in a very quiet way", "quietly")),
+            _verdicts({"index": 1, "is_error": True, "confidence": "medium"}),
+        ])
+    assert len(findings) == 1
+    assert findings[0].force_query is True
+
+
+def test_edits_defaults_off_and_has_a_feature_switch():
+    from app.features import FEATURES_BY_ID
+    from docproof.config import Config
+    assert Config().smoothing.edits is False
+    spec = FEATURES_BY_ID["smoothing_edits"]
+    assert spec.path == ("smoothing", "edits")

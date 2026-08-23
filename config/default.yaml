@@ -371,13 +371,36 @@ sapling:
   comments: true            # false = apply Sapling edits silently, no margin comment
   cost_per_1k_chars: 0.025  # $ per 1,000 chars — for the pre-run estimate only
 
+# Frontier chapter sweep: a strong model reads chapter-sized windows under ONE
+# loose instruction — find spelling and grammar errors — and proposes verbatim
+# quote->correction pairs. No error-type taxonomy (no taxonomy blind spots),
+# chapter-scale context (cross-sentence slips visible). Proposals are anchored
+# fail-closed and ruled on by the SHARED rewrite.confirm valve, so only an
+# affirmed error becomes a tracked change and a softer affirmation asks in the
+# margin. Complementary to the typed passes by measurement (Redding pilot,
+# 2026-08-23): it catches the judgment-call band they miss; they keep the
+# mechanical floor it skips. OFF by default — a frontier-priced read of the
+# whole book. Whole-document only. See docproof/chaptersweep.py.
+chapter_sweep:
+  enabled: false
+  model: claude-fable-5     # needs ANTHROPIC_API_KEY (skipped, with a coverage
+                            # note, when the vendor key is missing)
+  effort: xhigh
+  window_chars: 48000       # ~a long chapter per request
+  max_output_tokens: 32000  # the sweep reply (findings list + thinking)
+  batch_size: 40            # candidates per confirm request
+  edit_confidence: high     # bar an affirmed edit clears; softer = margin query
+  confirm_model:            # unset = api.model (the detector's)
+  confirm_effort: medium
+
 # Line-editing pass: the half of a proofreader's job the other passes refuse. A
 # reader proposes small smoothings — a word doing no work, an unidiomatic
 # preposition, an awkward coordination, a rough tense, an ambiguous pronoun —
-# and a skeptical taste judge culls them. QUERY-ONLY and unconditionally so:
-# every finding is a margin comment, never a tracked change, because a smoothing
-# has no right answer, only a better one, and which is better is the author's
-# call. Dialogue is excluded by default and author coinages are filtered out
+# and a skeptical taste judge culls them. Query-only by DEFAULT: every finding
+# is a margin comment, because a smoothing has no right answer, only a better
+# one, and which is better is the author's call. The `edits` switch is the
+# explicit exception — judge-affirmed-at-HIGH smoothings apply as tracked
+# changes the author accepts/rejects in Word, and softer ones still ask. Dialogue is excluded by default and author coinages are filtered out
 # before the judge sees them — voice risk is what these knobs defend. Volume is
 # capped per 1,000 words; anything dropped by the cap is COUNTED in summary.md.
 # Echo is deliberately not a category here: `word_echo` owns it in the taxonomy.
@@ -386,6 +409,9 @@ sapling:
 # See docproof/smoothing.py.
 smoothing:
   enabled: false
+  edits: false              # true = judge-affirmed-at-HIGH smoothings apply as
+                            # tracked changes (softer ones still ask); false =
+                            # every smoothing is a margin comment
   model:                    # unset = api.model (the detector's)
   effort: medium
   judge_model: gpt-5.6-luna  # taste is the hard part, but the house default keeps this
