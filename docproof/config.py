@@ -790,12 +790,15 @@ class SmoothingConfig(BaseModel):
     awkward coordination, a tense that reads rough, an ambiguous pronoun — and a
     skeptical taste judge culls them before any of them reach the author.
 
-    Query-only by design, and unconditionally so: a mechanical error has a
-    verifiable right answer and may be a tracked change, but a smoothing has no
-    right answer, only a better one, and which is better is the author's call.
-    Every finding this pass emits is force_query'd, so it can only ever be a
-    margin comment. That is the invariant the whole pass is built around — it is
-    not a confidence threshold that a high-confidence judgement could clear.
+    Query-only by default: a mechanical error has a verifiable right answer
+    and may be a tracked change, but a smoothing has no right answer, only a
+    better one, and which is better is the author's call — so the shipped
+    behaviour force_query's every finding into the margin. The ``edits``
+    switch below is the explicit, per-run exception: with it on, a smoothing
+    the judge affirms at HIGH confidence is applied as an ordinary tracked
+    change (the author accepts or rejects it in Word) and softer affirmations
+    still ask. Chosen for presses drowning in margin queries; the default
+    stays ask-first.
 
     Voice risk is what the knobs defend against: dialogue is excluded by default
     (a character's diction is not the pipeline's to smooth), author coinages are
@@ -813,6 +816,15 @@ class SmoothingConfig(BaseModel):
     judge, and it is the one pass whose output is taste rather than correctness.
     Whole-document only. See docproof/smoothing.py."""
     enabled: bool = False
+    # How an affirmed smoothing reaches the author. False (the shipped
+    # default): every finding is force_query'd — a margin comment, never an
+    # edit, because a smoothing has no verifiable right answer. True: an
+    # affirmation the judge holds at HIGH confidence is applied as an ordinary
+    # tracked change (still through the shared validator/audit), and anything
+    # softer keeps asking in the margin. An explicit per-run choice for presses
+    # that would rather accept/reject in Word than answer a margin full of
+    # questions — it trades the query pile for edits the author can reject.
+    edits: bool = False
     # The proposing reader. Unset = api.model (the detector's). Restraint is
     # most of the job, so this is not the place to economize hard — but the
     # judge below is the one that decides what survives.

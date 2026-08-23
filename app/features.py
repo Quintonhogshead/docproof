@@ -114,6 +114,14 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "pass", ("candidate_screening", "mode"), heavy=True,
         on_value="shadow", off_value="off"),
     FeatureSpec(
+        "smoothing_edits", "Tracked changes for smoothing",
+        "Off, every smoothing the taste judge affirms is a margin comment the "
+        "author answers. On, the ones the judge holds at high confidence are "
+        "applied as ordinary tracked changes instead — accept or reject in "
+        "Word rather than a margin full of questions — and softer suggestions "
+        "still ask. Only matters when the smoothing pass itself is on.",
+        "pass", ("smoothing", "edits")),
+    FeatureSpec(
         "chapter_sweep", "Frontier chapter sweep — loose second read",
         "A frontier model reads the manuscript a chapter at a time with one "
         "loose instruction — find spelling and grammar errors — and proposes "

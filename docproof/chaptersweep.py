@@ -112,15 +112,24 @@ def _locate(text: str, quote: str) -> tuple[int, int] | None:
 
 def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
             max_output_tokens: int, usage: Usage, window_chars: int,
-            coverage=None, progress=None,
+            context: str = "", coverage=None, progress=None,
             stats: dict | None = None) -> list[RewriteCandidate]:
     """Sweep the manuscript window by window and return anchored candidates.
+
+    ``context`` carries the same whole-book prompt sections the typed
+    detectors get — the vocabulary (author coinages are not misspellings), the
+    variant conventions, and the story sheet (tense, POV, character pronouns)
+    — so the loose read judges against the book's own rules instead of
+    "correcting" intentional voice.
 
     A window whose call fails is reported to ``coverage`` and skipped — the
     sweep is additive and must never take the review down with it. Findings
     whose quote cannot be located verbatim in their paragraph are dropped for
     cause and counted, never guessed onto the page.
     """
+    system = SWEEP_SYSTEM
+    if context.strip():
+        system = f"{SWEEP_SYSTEM}\n\n{context.strip()}"
     packed = windows(paragraphs, max_chars=window_chars)
     by_number: dict[int, ParagraphRef] = {
         n: p for rows in packed for n, p in rows}
@@ -128,7 +137,7 @@ def propose(paragraphs: Sequence[ParagraphRef], provider, *, model: str,
     dropped = {"window_failed": 0, "unlocated": 0, "noop": 0, "unknown_para": 0}
     for index, rows in enumerate(packed):
         result = provider.complete_structured(
-            model=model, system=SWEEP_SYSTEM, user=_payload(rows),
+            model=model, system=system, user=_payload(rows),
             schema=SWEEP_SCHEMA, schema_name="chapter_sweep_findings",
             max_tokens=max_output_tokens)
         if result.usage is not None:

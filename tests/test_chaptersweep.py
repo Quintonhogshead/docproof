@@ -17,10 +17,12 @@ class _SweepProvider:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = []
+        self.systems = []
 
     def complete_structured(self, *, model, system, user, schema, schema_name,
                             max_tokens):
         self.calls.append(user)
+        self.systems.append(system)
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             return ProviderResult(stop_reason="error", error=str(reply))
@@ -81,6 +83,25 @@ def test_failed_window_is_skipped_not_fatal():
                     usage=Usage(), window_chars=2_000, stats=stats)
     assert stats["windows"] == 2 and stats["window_failed"] == 1
     assert len(cands) == 1 and cands[0].para_id == "p2"
+
+
+def test_story_sheet_and_vocabulary_ride_the_system_prompt():
+    # The sweep judges against the book's own rules: the same whole-book
+    # sections the typed detectors get are appended to its system prompt.
+    paras = [_para("p1", "Bodhi walked to the harbor.")]
+    provider = _SweepProvider([{"findings": []}])
+    sheet = "## This manuscript's story\nNarration: first person, present tense."
+    propose(paras, provider, model="m", max_output_tokens=100, usage=Usage(),
+            window_chars=48_000, context=sheet)
+    assert sheet in provider.systems[0]
+    assert provider.systems[0].startswith("You are a professional proofreader")
+
+    # And with no context the prompt is unchanged — no stray separator.
+    provider2 = _SweepProvider([{"findings": []}])
+    propose(paras, provider2, model="m", max_output_tokens=100, usage=Usage(),
+            window_chars=48_000)
+    assert "\n\n\n" not in provider2.systems[0]
+    assert not provider2.systems[0].endswith("\n")
 
 
 def test_schema_is_strict():

@@ -1216,6 +1216,12 @@ def chapter_sweep_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
             model=cfg.chapter_sweep.model,
             max_output_tokens=cfg.chapter_sweep.max_output_tokens,
             usage=usage, window_chars=cfg.chapter_sweep.window_chars,
+            # The same whole-book sections the typed detectors read: the
+            # vocabulary (coinages are not typos), the variant conventions,
+            # and the story sheet (tense/POV/pronouns) when that pass is on.
+            context="\n\n".join(x for x in (
+                prepared.vocabulary, prepared.conventions,
+                prepared.story_sheet) if x),
             coverage=coverage, stats=stats)
         log.info("Chapter sweep proposed %d candidate(s) over %d window(s) "
                  "(dropped: unlocated=%d, noop=%d).",
@@ -1581,7 +1587,11 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
         batch_size=sm.batch_size, reject_sink=rejected,
         error_type="smoothing", chunk_id="smoothing", id_prefix="sm",
         concurrency=cfg.concurrency_for(sm.judge_model),
-        system=system, mode="suggestion")
+        # smoothing.edits flips the valve from ask to apply: in "correction"
+        # mode an affirmation at high confidence becomes an ordinary tracked
+        # change (softer ones still query); "suggestion" is the shipped
+        # query-only behaviour.
+        system=system, mode="correction" if sm.edits else "suggestion")
 
     # Every candidate should come back either affirmed or in the reject log. Any
     # that did neither were in a batch the judge failed to answer — a truncated

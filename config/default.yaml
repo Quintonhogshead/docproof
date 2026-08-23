@@ -396,10 +396,11 @@ chapter_sweep:
 # Line-editing pass: the half of a proofreader's job the other passes refuse. A
 # reader proposes small smoothings — a word doing no work, an unidiomatic
 # preposition, an awkward coordination, a rough tense, an ambiguous pronoun —
-# and a skeptical taste judge culls them. QUERY-ONLY and unconditionally so:
-# every finding is a margin comment, never a tracked change, because a smoothing
-# has no right answer, only a better one, and which is better is the author's
-# call. Dialogue is excluded by default and author coinages are filtered out
+# and a skeptical taste judge culls them. Query-only by DEFAULT: every finding
+# is a margin comment, because a smoothing has no right answer, only a better
+# one, and which is better is the author's call. The `edits` switch is the
+# explicit exception — judge-affirmed-at-HIGH smoothings apply as tracked
+# changes the author accepts/rejects in Word, and softer ones still ask. Dialogue is excluded by default and author coinages are filtered out
 # before the judge sees them — voice risk is what these knobs defend. Volume is
 # capped per 1,000 words; anything dropped by the cap is COUNTED in summary.md.
 # Echo is deliberately not a category here: `word_echo` owns it in the taxonomy.
@@ -408,6 +409,9 @@ chapter_sweep:
 # See docproof/smoothing.py.
 smoothing:
   enabled: false
+  edits: false              # true = judge-affirmed-at-HIGH smoothings apply as
+                            # tracked changes (softer ones still ask); false =
+                            # every smoothing is a margin comment
   model:                    # unset = api.model (the detector's)
   effort: medium
   judge_model: gpt-5.6-luna  # taste is the hard part, but the house default keeps this
