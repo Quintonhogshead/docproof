@@ -739,6 +739,50 @@ class SaplingConfig(BaseModel):
         return self
 
 
+class ChapterSweepConfig(BaseModel):
+    """The frontier chapter sweep: one loose proofread instruction over
+    chapter-sized windows, on a strong model, as a second detector.
+
+    Complementary to the typed passes by construction — no error-type taxonomy
+    (so no taxonomy blind spots) and chapter-scale context (so cross-sentence
+    slips are visible). The 2026-08-23 Redding pilot found it catches the
+    judgment-call band (lay/lie, everyday/every day, parallelism, suspended
+    hyphens, counterfactual tense) the chunked passes glide past, while the
+    sweeps keep the mechanical floor. Proposals are verbatim quote->correction
+    pairs anchored fail-closed, then ruled on by the SHARED rewrite.confirm
+    valve — only an affirmed error becomes a tracked change, a softer
+    affirmation asks in the margin, and the ordinary validator/audit stand
+    behind everything. Off by default: it is a frontier-priced read of the
+    whole manuscript. Whole-document only. See docproof/chaptersweep.py."""
+    enabled: bool = False
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "xhigh"
+    # Window sizing: ~48k chars ≈ a long chapter per request. Bigger windows
+    # buy context and lose retry granularity; a failed window is skipped and
+    # reported, never fatal.
+    window_chars: int = Field(default=48_000, ge=4_000)
+    max_output_tokens: int = Field(default=32_000, ge=1)
+    # Confirm-valve sizing, mirroring Sapling/LanguageTool. The sweep model
+    # proposes; the confirm judge disposes. Unset confirm_model = api.model.
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"chapter_sweep.model '{self.model}' is not in the catalog")
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"chapter_sweep.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class SmoothingConfig(BaseModel):
     """The line-editing pass: the half of a proofreader's job DocProof otherwise
     refuses. A line editor reads the manuscript and proposes small smoothings —
@@ -1398,6 +1442,7 @@ class Config(BaseModel):
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
+    chapter_sweep: ChapterSweepConfig = Field(default_factory=ChapterSweepConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)

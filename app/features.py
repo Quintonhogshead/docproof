@@ -114,6 +114,17 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "pass", ("candidate_screening", "mode"), heavy=True,
         on_value="shadow", off_value="off"),
     FeatureSpec(
+        "chapter_sweep", "Frontier chapter sweep — loose second read",
+        "A frontier model reads the manuscript a chapter at a time with one "
+        "loose instruction — find spelling and grammar errors — and proposes "
+        "verbatim quote-and-correction pairs. No error-type list, so no "
+        "taxonomy blind spots; chapter-scale context catches cross-sentence "
+        "slips. Every proposal is ruled on by the same skeptical confirm "
+        "valve as Sapling and LanguageTool before it can become a tracked "
+        "change. Frontier-priced: roughly a Fable-rate read of the whole "
+        "book on top of the review.",
+        "pass", ("chapter_sweep", "enabled"), heavy=True),
+    FeatureSpec(
         "languagetool", "LanguageTool mechanical floor",
         "A local rules checker (commas, missing words, compound-modifier "
         "hyphenation) whose suggestions the confirm step vets in context. No "
@@ -327,6 +338,11 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
                 "samples": cfg.rewrite.samples}
     if fid == "languagetool":
         return {"kind": "confirm", "model": cfg.languagetool.confirm_model}
+    if fid == "chapter_sweep":
+        # One whole-book read on the sweep model, input-dominated (the reply is
+        # a findings list); the confirm calls ride the same "confirm" scaling as
+        # LanguageTool but the read is the cost that matters here.
+        return {"kind": "read", "model": cfg.chapter_sweep.model}
     if fid == "sapling":
         return {"kind": "grammar", "rate_per_1k": cfg.sapling.cost_per_1k_chars}
     if fid == "meaning_check":
