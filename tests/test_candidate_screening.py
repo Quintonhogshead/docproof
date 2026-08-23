@@ -96,7 +96,8 @@ def test_initial_rollout_generates_every_locally_generatable_type():
         _para("body-0000", (
             '“Wait.” he said. However we stayed. Hello John. '
             'This is is 5 and the lantern shone while the lantern dimmed. $5. '
-            'They went there ; the ( unclosed paragraph.')),
+            'They took there bags ; the ( stayed open all evening and '
+            'it never closed again.')),
         _para("body-0001", "Chapter 1", "Heading1", False),
         _para("body-0002", "Chapter 3", "Heading1", False),
         _para("body-0003", "First item", "ListParagraph", False),
@@ -309,17 +310,17 @@ def test_standalone_mode_reuses_local_analyzers_as_candidates():
     paras = tuple(
         ParagraphRef(f"body-{i:04d}", "word/document.xml", "body", t, "Normal", True)
         for i, t in enumerate([
-            "He said . . . nothing at all -- then left; the ( never closed.",
-            "They went there today, but their bags stayed.",
+            "He slammed the door and left the room!!",
+            "She took there bags from the hall table.",
         ]))
     doc = DocumentModel("book.docx", paras)
     cfg = apply_profile(load_config("config/default.yaml"), CANDIDATE_ONLY)
     run = prepare_candidate_screening(cfg, doc, paragraphs=list(paras))
     generators = {c.generator_id for c in run.ledger.candidates}
     types = {c.candidate_type for c in run.ledger.candidates}
-    # Reused deterministic sweeps became candidates (not direct findings)...
+    # Reused deterministic ERROR sweeps became candidates (not direct findings)...
     assert any(g.startswith("candidate.adapter.sweep_") for g in generators)
-    # ...alongside the new lexical/punctuation generators.
+    # ...alongside the signal-gated lexical/punctuation generators.
     assert {"homophone", "punctuation_style"} <= types
     # Containment still holds: standalone apply is clamped to shadow.
     assert run.mode == "shadow"

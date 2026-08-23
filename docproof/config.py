@@ -1035,7 +1035,7 @@ class CandidateScreeningConfig(BaseModel):
         "direct_address_comma", "number_style", "currency_style",
         "repeated_word", "word_echo", "heading_sequence",
         "list_punctuation", "punctuation_style", "homophone",
-        "term_consistency", "grammar",
+        "compound_sentence_comma", "term_consistency", "grammar",
     )
     # P2-01/02: reuse the free local analyzers (sweeps, unbalanced-quote and
     # term-consistency scans) as candidate sources so standalone candidate mode
@@ -1046,7 +1046,10 @@ class CandidateScreeningConfig(BaseModel):
     # ~850MB JVM; keep it opt-in so a small box is never surprised by it.
     languagetool_floor: bool = False
     max_candidates: int = Field(default=200_000, ge=1)
-    batch_size: int = Field(default=100, ge=1, le=200)
+    # 40 candidates per judge request, like every other pass: the Johnson canary
+    # showed 100-candidate packets invite ID slips (duplicate/hallucinated IDs)
+    # and make each retry expensive.
+    batch_size: int = Field(default=40, ge=1, le=200)
     judgment_enabled: bool = True
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"

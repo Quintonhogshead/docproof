@@ -26,8 +26,11 @@ INITIAL_CANDIDATE_TYPES = (
     "heading_sequence",
     "list_punctuation",
     # P2-04 punctuation across more boundaries (semicolon, colon, parenthesis
-    # balance) plus the adapted deterministic punctuation sweeps.
+    # balance) plus the adapted deterministic punctuation ERROR sweeps.
     "punctuation_style",
+    # The top documented detector gap: the comma before a coordinating
+    # conjunction joining two independent clauses.
+    "compound_sentence_comma",
     # P2-03 lexical: commonly confused homophones/near-homophones.
     "homophone",
     # P2-03 lexical: document-wide term/spelling inconsistency (adapted from the
@@ -76,22 +79,85 @@ _DIRECT_ADDRESS = re.compile(
     r"come on|thank you|thanks))(?P<gap>\s+)(?P<name>[A-Z][a-z]+)\b",
     re.IGNORECASE)
 
-# P2-03: classic confusable pairs. A local generator cannot know which member
-# is correct, so every occurrence is a candidate the judge rules on in context.
-_HOMOPHONES = frozenset({
-    "their", "there", "they're", "your", "you're", "its", "it's",
-    "to", "too", "then", "than", "affect", "effect", "who's", "whose",
-    "lose", "loose", "led", "lead", "past", "passed", "principal",
-    "principle", "stationary", "stationery", "complement", "compliment",
-    "discreet", "discrete", "elicit", "illicit", "peace", "piece",
-    "weather", "whether", "bear", "bare", "break", "brake", "cite",
-    "site", "sight", "council", "counsel", "desert", "dessert",
-})
-_HOMOPHONE_WORD = re.compile(r"\b[A-Za-z][A-Za-z']*\b")
+# P2-03: confusable words, signal-gated. Flagging every there/their/its for
+# judgment burned real money confirming correct usage (the Johnson canary
+# judged 5,214 of them for ~zero errors). Instead, each pattern below fires
+# only when the surrounding words suggest the WRONG member of the pair — the
+# small-word slips a chunked model read glides straight past. Unsignaled
+# occurrences generate nothing: correct usage is the overwhelming case and is
+# not this lane's question.
+_CONFUSABLE_SIGNALS: tuple[tuple[str, str], ...] = (
+    # there/their/they're
+    (r"\btheir\s+(?:is|are|was|were|will|might|may|seems?|comes?|goes?)\b",
+     "their_used_as_there"),
+    (r"\b(?:left|put|took|grabbed|packed|forgot|lost|placed|dropped|brought|"
+     r"found|raised|shook|wagged|held|carried)\s+(?P<w>there)\s+[a-z]+",
+     "there_used_as_their"),
+    (r"\b(?P<w>there)\s+own\b", "there_used_as_their"),
+    # your/you're
+    (r"\b(?P<w>[Yy]our)\s+(?:\w+ing|a|an|the|not|so|too|very|welcome|right|"
+     r"wrong|sure|done|going)\b", "your_used_as_youre"),
+    (r"\b(?P<w>[Yy]ou're)\s+own\b", "youre_used_as_your"),
+    # its/it's
+    (r"\b(?P<w>[Ii]ts)\s+(?:a|an|the|been|not|no|so|too|very|just|only|all|"
+     r"time|what|how|because)\b", "its_used_as_its_contraction"),
+    (r"\b(?P<w>[Ii]t's)\s+own\b", "its_contraction_used_as_possessive"),
+    (r"\b(?P<w>[Ii]t's)\s+(?!a\b|an\b|the\b|been\b|not\b|no\b|so\b|too\b|"
+     r"very\b|just\b|only\b|all\b|what\b|how\b|why\b|where\b|who\b|when\b|"
+     r"like\b|time\b|because\b|as\b|if\b|still\b|already\b|never\b|always\b|"
+     r"almost\b|about\b|over\b|done\b|okay\b|ok\b|fine\b|true\b|hard\b|"
+     r"easy\b|good\b|bad\b|better\b|worse\b|more\b|less\b|such\b|quite\b|"
+     r"really\b|probably\b|certainly\b|clearly\b|me\b|you\b|him\b|her\b|"
+     r"them\b|us\b|\w+ing\b|\w+ed\b|\w+ly\b)(?:[a-z]+)\b",
+     "its_contraction_used_as_possessive"),
+    # then/than
+    (r"\b(?:more|less|rather|other|\w+er)\s+(?P<w>then)\b",
+     "then_used_as_than"),
+    (r"\b(?P<w>than)\s+(?:I|he|she|we|they|it)\s+(?:went|came|said|left|"
+     r"turned|walked|ran)\b", "than_used_as_then"),
+    # to/too
+    (r"\b(?P<w>too)\s+(?:the|a|an|my|his|her|their|our|your|him|them|us|me)\b",
+     "too_used_as_to"),
+    (r"\b(?P<w>to)\s+(?:much|many|late|soon|far|long|often|big|small|hard|"
+     r"easy|hot|cold|old|young|fast|slow|heavy|light|expensive|dangerous)\b",
+     "to_used_as_too"),
+    # loose/lose
+    (r"\b(?P<w>loose)\s+(?:the|my|his|her|their|our|your|it|him|them|us|"
+     r"track|sight|count|interest|control|touch|hope|weight|money)\b",
+     "loose_used_as_lose"),
+    # affect/effect
+    (r"\b(?:an|the)\s+(?P<w>affect)s?\s+(?:of|on|was|is)\b",
+     "affect_used_as_effect"),
+    # passed/past
+    (r"\b(?:walked|drove|ran|went|flew|moved|rushed|hurried|strolled|"
+     r"marched|sailed|rode|slipped|brushed)\s+(?P<w>passed)\b",
+     "passed_used_as_past"),
+    (r"\bin\s+the\s+(?P<w>passed)\b", "passed_used_as_past"),
+    # form/from (typo pair, same mechanism)
+    (r"\b(?P<w>form)\s+(?:the|a|an|my|his|her|their|our|your|here|there|now|"
+     r"him|them|us|me|it|this|that|these|those|where|which|what|whom|whose)\b",
+     "form_used_as_from"),
+    (r"\b(?P<w>from)\s+of\b", "from_used_as_form"),
+)
+_COMPILED_CONFUSABLES = tuple(
+    (re.compile(pattern, re.IGNORECASE), reason)
+    for pattern, reason in _CONFUSABLE_SIGNALS)
 
 # P2-04: space before a comma/semicolon/colon/terminal mark is a deterministic
 # error (period excluded — ellipsis and abbreviations make it ambiguous).
 _SPACE_BEFORE_PUNCT = re.compile(r"(?P<span>\s+(?P<mark>[,;:!?]))")
+
+# Compound sentences: two independent clauses joined by a coordinating
+# conjunction conventionally take a comma before the conjunction. This is the
+# comma class the chunked model passes demonstrably miss (the Redding analysis
+# put it at the top of the detector gaps, and the shipped
+# ``compound_sentence_comma`` error type has been inert). Pronoun subjects only
+# — the high-precision core; "bread and butter" lists never fire.
+_COMPOUND_JOIN = re.compile(
+    r"(?P<pre>\w)(?P<comma>,)?(?P<sp>\s+)"
+    r"(?P<conj>and|but|or|yet|so)\s+"
+    r"(?P<subj>I|he|she|we|they|you|it)\s+(?P<verb>[a-z]\w+)\b")
+_SENTENCE_TERMINAL = re.compile(r"[.!?]")
 
 _ECHO_STOP = frozenset({
     "about", "after", "again", "also", "because", "before", "being",
@@ -140,6 +206,7 @@ def generate_initial_candidates(
         "word_echo": _word_echo_candidates,
         "homophone": _homophone_candidates,
         "punctuation_style": _punctuation_style_candidates,
+        "compound_sentence_comma": _compound_comma_candidates,
     }
     for candidate_type, generator in per_paragraph.items():
         if candidate_type in enabled:
@@ -423,11 +490,13 @@ def _word_echo_candidates(para: ParagraphRef) -> list[Candidate]:
     out = []
     for index, (word, start, end) in enumerate(tokens):
         key = word.lower().replace("’", "'")
-        if len(key) < 4 or key in _ECHO_STOP:
+        # ≥6 chars and a tight window: the wide net judged ~1,100 echoes on one
+        # novel and surfaced almost nothing — short common words echo naturally.
+        if len(key) < 6 or key in _ECHO_STOP:
             continue
         previous = recent.get(key)
         recent[key] = (index, start, end)
-        if previous is None or not 2 <= index - previous[0] <= 12:
+        if previous is None or not 2 <= index - previous[0] <= 8:
             continue
         first = CandidateAnchor(
             document_part=para.part, paragraph_id=para.para_id,
@@ -446,19 +515,65 @@ def _word_echo_candidates(para: ParagraphRef) -> list[Candidate]:
 
 def _homophone_candidates(para: ParagraphRef) -> list[Candidate]:
     out = []
-    for match in _HOMOPHONE_WORD.finditer(para.text):
-        word = match.group(0)
-        if word.lower() not in _HOMOPHONES:
+    seen: set[tuple[int, int]] = set()
+    for regex, reason in _COMPILED_CONFUSABLES:
+        for match in regex.finditer(para.text):
+            group = "w" if "w" in (regex.groupindex or {}) else 0
+            start, end = match.start(group), match.end(group)
+            if (start, end) in seen:
+                continue
+            seen.add((start, end))
+            word = para.text[start:end]
+            out.append(_candidate(
+                "homophone", para, start, end,
+                generator="candidate.confusable_signal", observed=word,
+                correction=None, decision="needs_model_judgment",
+                reason_code="confusable_misuse_signal",
+                explanation="The surrounding words suggest this may be the "
+                            "wrong member of a commonly confused pair.",
+                evidence={"word": word, "signal": reason,
+                          "signal_window": para.text[max(0, start - 30):end + 30]},
+                risk_prior=0.6, meaning_change_risk="medium", channel="either"))
+    return out
+
+
+def _compound_comma_candidates(para: ParagraphRef) -> list[Candidate]:
+    out = []
+    for match in _COMPOUND_JOIN.finditer(para.text):
+        # The first clause must be a clause, not a fragment: require some
+        # distance back to the previous sentence terminal (or paragraph start).
+        terminals = [m.end() for m in _SENTENCE_TERMINAL.finditer(
+            para.text, 0, match.start())]
+        clause_start = terminals[-1] if terminals else 0
+        if match.start("sp") - clause_start < 20:
             continue
-        out.append(_candidate(
-            "homophone", para, match.start(), match.end(),
-            generator="candidate.homophone", observed=word,
-            correction=None, decision="needs_model_judgment",
-            reason_code="confusable_word_needs_context",
-            explanation="This word is easily confused with a homophone; the "
-                        "correct choice depends on the sentence.",
-            evidence={"word": word},
-            risk_prior=0.3, meaning_change_risk="medium", channel="either"))
+        if match.group("comma"):
+            start = match.start("comma")
+            out.append(_candidate(
+                "compound_sentence_comma", para, start, start + 1,
+                generator="candidate.compound_join", observed=",",
+                correction=None, decision="pass",
+                reason_code="compound_join_has_comma",
+                explanation="The compound sentence is set off before its "
+                            "conjunction.",
+                evidence={"conjunction": match.group("conj"),
+                          "subject": match.group("subj")},
+                risk_prior=0.1, channel="edit"))
+        else:
+            insert_at = match.start("sp")
+            out.append(_candidate(
+                "compound_sentence_comma", para, insert_at, insert_at,
+                generator="candidate.compound_join", observed="",
+                correction=",", decision="needs_model_judgment",
+                reason_code="compound_join_missing_comma",
+                explanation="Two clauses joined by a coordinating conjunction "
+                            "conventionally take a comma; whether both sides "
+                            "are independent needs the sentence.",
+                evidence={"conjunction": match.group("conj"),
+                          "subject": match.group("subj"),
+                          "join_window": para.text[
+                              max(0, insert_at - 40):insert_at + 40]},
+                risk_prior=0.55, channel="edit"))
     return out
 
 
@@ -622,10 +737,9 @@ _SWEEP_CANDIDATE_TYPES = {
     "sweep_compound_number": "number_style",
     "sweep_century": "number_style",
     "unclosed_quote": "quote_balance",
-    # P2-04: the remaining deterministic punctuation sweeps become candidates
-    # instead of bypassing the ledger.
-    "sweep_ellipsis": "punctuation_style",
-    "sweep_dash": "punctuation_style",
+    # P2-04: the deterministic punctuation ERROR sweeps become candidates
+    # instead of bypassing the ledger. The ellipsis/dash sweeps are style
+    # normalization and stay out of this lane on purpose.
     "sweep_stacked_punctuation": "punctuation_style",
     "sweep_terminal_period": "punctuation_style",
     "sweep_quote_punctuation": "punctuation_style",

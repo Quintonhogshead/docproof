@@ -686,14 +686,15 @@ candidate_screening:
     - word_echo
     - heading_sequence
     - list_punctuation
-    - punctuation_style     # semicolon/colon/bracket + adapted punctuation sweeps
-    - homophone             # commonly confused words, judged in context
+    - punctuation_style     # semicolon/colon/bracket + adapted punctuation ERROR sweeps
+    - homophone             # confusables, SIGNAL-GATED (misuse patterns only)
+    - compound_sentence_comma  # comma before a two-clause coordinating join
     - term_consistency      # document-wide term/spelling drift (reused scan)
     - grammar               # LanguageTool mechanical floor (reused, opt-in)
   reuse_local_analyzers: true   # feed sweeps/quote/consistency scans as candidates
   languagetool_floor: false     # also run LanguageTool (heavy JVM); opt-in
   max_candidates: 200000
-  batch_size: 100
+  batch_size: 40            # candidates per judge request; 100 invited ID slips
   judgment_enabled: true
   model: gpt-5.6-luna
   effort: low
