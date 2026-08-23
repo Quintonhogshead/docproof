@@ -1150,6 +1150,10 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             and cfg.candidate_screening.mode == "apply"):
         try:
             findings.extend(prepared.candidate_screening.production_findings())
+            # Queries never become edits (P3-05): as force_query findings they
+            # ride the ordinary comment channel when comments are enabled.
+            if cfg.query_comments or cfg.comments:
+                findings.extend(prepared.candidate_screening.production_queries())
         except Exception as exc:
             prepared.candidate_screening.record_failure("finding_conversion", exc)
             log.exception("Candidate correction conversion failed closed; no "

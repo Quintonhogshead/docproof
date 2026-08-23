@@ -88,21 +88,39 @@ def test_verdict_coverage_requires_an_exact_partition():
     assert unknown.value.unknown == ("other",)
 
 
-def test_initial_rollout_generates_every_configured_type_locally():
+def test_initial_rollout_generates_every_locally_generatable_type():
+    # term_consistency and grammar are analyzer-sourced (fed via finding_sources
+    # from the reused deterministic scans), not produced from raw paragraphs.
+    analyzer_sourced = {"term_consistency", "grammar"}
     paragraphs = (
         _para("body-0000", (
             '“Wait.” he said. However we stayed. Hello John. '
-            'This is is 5 and the lantern shone while the lantern dimmed. $5.')),
+            'This is is 5 and the lantern shone while the lantern dimmed. $5. '
+            'They went there ; the ( unclosed paragraph.')),
         _para("body-0001", "Chapter 1", "Heading1", False),
         _para("body-0002", "Chapter 3", "Heading1", False),
         _para("body-0003", "First item", "ListParagraph", False),
         _para("body-0004", "Second item.", "ListParagraph", False),
     )
     candidates = generate_initial_candidates(_doc(*paragraphs), paragraphs)
-    assert set(INITIAL_CANDIDATE_TYPES) <= {
-        candidate.candidate_type for candidate in candidates}
+    produced = {candidate.candidate_type for candidate in candidates}
+    assert (set(INITIAL_CANDIDATE_TYPES) - analyzer_sourced) <= produced
     assert all(candidate.candidate_id.startswith("C-")
                for candidate in candidates)
+
+
+def test_analyzer_sourced_types_arrive_through_finding_sources():
+    from docproof.models import Finding
+    paras = (_para("body-0000", "He drank the the potion."),)
+    doc = _doc(*paras)
+    finding = Finding(
+        finding_id="c-0001", chunk_id="consistency", para_id="body-0000",
+        error_type="term_consistency", original_text="He drank the the potion.",
+        occurrence=1, corrected_text="He drank the the potion.",
+        explanation="Written more than one way.", confidence="high")
+    candidates = generate_initial_candidates(
+        doc, paras, finding_sources={"term_consistency": [finding]})
+    assert any(c.candidate_type == "term_consistency" for c in candidates)
 
 
 def test_direct_address_generator_does_not_treat_please_wait_as_a_name():
@@ -172,9 +190,11 @@ def test_prepare_resolves_strong_local_cases_and_keeps_ambiguity_explicit(
     assert stored["accounting"]["generated_candidates"] == len(run.ledger)
 
 
-def test_apply_mode_emits_only_safe_errors_through_the_shared_validator():
+def test_apply_mode_emits_only_safe_errors_through_the_shared_validator(
+        monkeypatch):
     from docproof.validator import validate_findings
 
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")
     para = _para("body-0000", "This is is wrong.")
     doc = _doc(para)
     cfg = Config(candidate_screening={
@@ -197,6 +217,156 @@ def test_apply_mode_emits_only_safe_errors_through_the_shared_validator():
     report = run.report(cfg.candidate_screening, source=doc.source_path)
     assert report["scope"]["may_modify_documents"] is True
     assert report["application"]["applied_tracked_changes"] == 1
+
+
+def test_report_surfaces_generation_coverage(tmp_path):
+    from docproof.candidate_screening import _markdown_report
+    para = _para("body-0000", "However he left. This is is wrong.")
+    doc = _doc(para)
+    cfg = Config(candidate_screening={"mode": "shadow"})
+    run = prepare_candidate_screening(cfg, doc, paragraphs=[para])
+    report = run.report(cfg.candidate_screening, source=doc.source_path)
+    assert "coverage" in report
+    assert set(report["coverage"]["counts"]) == {"covered", "partial", "gap"}
+    markdown = _markdown_report(report)
+    assert "Generation coverage" in markdown
+
+
+def test_queries_become_comments_not_edits(monkeypatch):
+    # P3-05: an uncertain candidate becomes a force_query comment (never an edit)
+    # once Apply is released, and nothing when it is not.
+    import docproof.candidate_screening as cs
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")
+    para = _para("body-0000", "They went there today.")
+    doc = _doc(para)
+    run = cs.CandidateScreeningRun(cs.CandidateLedger(), doc, mode="apply")
+    cand = Candidate(
+        candidate_id="C-q", candidate_type="homophone",
+        generator_id="candidate.homophone",
+        anchors=(CandidateAnchor(
+            document_part="word/document.xml", paragraph_id="body-0000",
+            start_offset=10, end_offset=15),),
+        observed_text="there", channel_preference="either")
+    run.ledger.register(cand)
+    run.ledger.apply_verdict(Verdict(
+        candidate_id="C-q", decision="uncertain", confidence="low",
+        reason_code="confusable_word_needs_context",
+        explanation="Confusable with 'their'.", judge_id="test"),
+        stage="test")
+
+    queries = run.production_queries()
+    assert len(queries) == 1
+    assert queries[0].force_query is True
+    assert queries[0].corrected_text == queries[0].original_text  # not an edit
+    assert run.production_findings() == []  # an uncertain is never an edit
+
+    monkeypatch.delenv("DOCPROOF_CANDIDATE_APPLY", raising=False)
+    run2 = cs.CandidateScreeningRun(cs.CandidateLedger(), doc, mode="apply")
+    run2.ledger.register(cand)
+    run2.ledger.apply_verdict(Verdict(
+        candidate_id="C-q", decision="uncertain", confidence="low",
+        reason_code="x", explanation="y", judge_id="t"), stage="test")
+    assert run2.production_queries() == []  # contained until release
+
+
+def test_insufficient_context_defers_instead_of_judging(monkeypatch):
+    # P3-02: a candidate whose recipe needs context ContextService cannot build
+    # is deferred with an explicit reason, never packaged and judged on partial
+    # context.
+    import docproof.candidate_screening as cs
+    from docproof.context_service import unsupported_recipes
+
+    assert unsupported_recipes(("current paragraph",)) == ()
+    assert unsupported_recipes(("scene summary", "current paragraph")) == (
+        "scene summary",)
+
+    para = _para("body-0000", "The entity moved.")
+    doc = _doc(para)
+    needy = Candidate(
+        candidate_id="C-needy", candidate_type="number_style",
+        generator_id="test.generator",
+        anchors=(CandidateAnchor(
+            document_part="word/document.xml", paragraph_id="body-0000",
+            start_offset=0, end_offset=3),),
+        observed_text="The", evidence={"source": "test"},
+        context_recipe=("scene summary",),
+        status=CandidateStatus.GENERATED)
+    monkeypatch.setattr(cs, "generate_initial_candidates",
+                        lambda *a, **k: [needy])
+    cfg = Config(candidate_screening={"mode": "shadow"}).candidate_screening
+    run = cs.CandidateScreeningRun.prepare(cfg, doc, paragraphs=[para])
+    assert run.ledger.status("C-needy") == CandidateStatus.DEFERRED
+    events = [e for e in run.ledger.events if e.candidate_id == "C-needy"]
+    assert any(e.reason_code == "insufficient_context" for e in events)
+    assert not run.packets
+
+
+def test_standalone_mode_reuses_local_analyzers_as_candidates():
+    # P2-01/02: the candidate-only profile must not fall back to the regex
+    # generators alone — the free deterministic sweeps feed the ledger too.
+    from docproof.profiles import CANDIDATE_ONLY, apply_profile
+
+    paras = tuple(
+        ParagraphRef(f"body-{i:04d}", "word/document.xml", "body", t, "Normal", True)
+        for i, t in enumerate([
+            "He said . . . nothing at all -- then left; the ( never closed.",
+            "They went there today, but their bags stayed.",
+        ]))
+    doc = DocumentModel("book.docx", paras)
+    cfg = apply_profile(load_config("config/default.yaml"), CANDIDATE_ONLY)
+    run = prepare_candidate_screening(cfg, doc, paragraphs=list(paras))
+    generators = {c.generator_id for c in run.ledger.candidates}
+    types = {c.candidate_type for c in run.ledger.candidates}
+    # Reused deterministic sweeps became candidates (not direct findings)...
+    assert any(g.startswith("candidate.adapter.sweep_") for g in generators)
+    # ...alongside the new lexical/punctuation generators.
+    assert {"homophone", "punctuation_style"} <= types
+    # Containment still holds: standalone apply is clamped to shadow.
+    assert run.mode == "shadow"
+
+
+def test_reuse_local_analyzers_can_be_disabled():
+    from docproof.profiles import CANDIDATE_ONLY, apply_profile
+
+    paras = (ParagraphRef("body-0000", "word/document.xml", "body",
+                          "He said . . . nothing -- then left.", "Normal", True),)
+    doc = DocumentModel("book.docx", paras)
+    cfg = apply_profile(load_config("config/default.yaml"), CANDIDATE_ONLY)
+    cfg.candidate_screening.reuse_local_analyzers = False
+    run = prepare_candidate_screening(cfg, doc, paragraphs=list(paras))
+    generators = {c.generator_id for c in run.ledger.candidates}
+    assert not any(g.startswith("candidate.adapter.sweep_") for g in generators)
+
+
+def test_apply_is_contained_to_shadow_until_the_release_gate_opens(monkeypatch):
+    # P0-01: without the release gate, a requested apply mode must not be able to
+    # modify a document. It is clamped to shadow, the run reports itself as
+    # non-mutating, and no production findings are emitted.
+    monkeypatch.delenv("DOCPROOF_CANDIDATE_APPLY", raising=False)
+    para = _para("body-0000", "This is is wrong.")
+    doc = _doc(para)
+    cfg = Config(candidate_screening={
+        "mode": "apply", "candidate_types": ["repeated_word"],
+        "judgment_enabled": False,
+    })
+    run = prepare_candidate_screening(cfg, doc, paragraphs=[para])
+    assert run.mode == "shadow"
+    assert run.production_findings() == []
+    report = run.report(cfg.candidate_screening, source=doc.source_path)
+    assert report["scope"]["may_modify_documents"] is False
+
+
+def test_release_gate_env_opt_in_restores_apply(monkeypatch):
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")
+    para = _para("body-0000", "This is is wrong.")
+    doc = _doc(para)
+    cfg = Config(candidate_screening={
+        "mode": "apply", "candidate_types": ["repeated_word"],
+        "judgment_enabled": False,
+    })
+    run = prepare_candidate_screening(cfg, doc, paragraphs=[para])
+    assert run.mode == "apply"
+    assert len(run.production_findings()) == 1
 
 
 def test_model_packet_retries_only_missing_candidate_ids():
@@ -345,7 +515,8 @@ def test_prepare_and_finish_write_shadow_artifacts_without_adding_findings(
     assert report["scope"]["may_create_findings"] is False
 
 
-def test_candidate_only_profile_writes_a_guarded_tracked_change(tmp_path):
+def test_candidate_only_profile_writes_a_guarded_tracked_change(
+        tmp_path, monkeypatch):
     from docx import Document
     from zipfile import ZipFile
 
@@ -354,6 +525,7 @@ def test_candidate_only_profile_writes_a_guarded_tracked_change(tmp_path):
     from docproof.profiles import CANDIDATE_ONLY, apply_profile
     from .test_error_types import ERROR_DIR
 
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")
     source = tmp_path / "candidate-only.docx"
     document = Document()
     document.add_paragraph("This is is wrong.")
@@ -375,7 +547,8 @@ def test_candidate_only_profile_writes_a_guarded_tracked_change(tmp_path):
     assert report["application"]["applied_tracked_changes"] == 1
 
 
-def test_candidate_only_is_valid_batch_work_without_detector_requests(tmp_path):
+def test_candidate_only_is_valid_batch_work_without_detector_requests(
+        tmp_path, monkeypatch):
     from docx import Document
 
     from docproof import batch
@@ -383,6 +556,7 @@ def test_candidate_only_is_valid_batch_work_without_detector_requests(tmp_path):
     from .fakes import FakeProvider
     from .test_error_types import ERROR_DIR
 
+    monkeypatch.setenv("DOCPROOF_CANDIDATE_APPLY", "1")
     source = tmp_path / "candidate-batch.docx"
     document = Document()
     document.add_paragraph("This is is wrong.")

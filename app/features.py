@@ -104,15 +104,15 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "strong recall lever — but roughly a second full pass in cost.",
         "pass", ("rewrite", "enabled"), heavy=True),
     FeatureSpec(
-        "candidate_screening", "Candidate detector — generate, screen & correct",
-        "Generate explicit likely error sites with local rules, screen the "
-        "ambiguous tail with a compact independent judge, and send only "
-        "correction-validated errors through the same validator, overstep "
-        "guard, reject-all audit, and Word tracked-change writer as the regular "
-        "review. Can be combined with a regular review; choose the Candidate "
-        "detector tier to run it alone.",
+        "candidate_screening", "Candidate detector — generate & screen (shadow)",
+        "Generate explicit likely error sites with local rules and screen the "
+        "ambiguous tail with a compact independent judge, recording an auditable "
+        "ledger and report of what it would change — WITHOUT touching the "
+        "document. Apply mode (writing tracked changes) is release-gated and "
+        "unavailable until the detector's validation gates pass. Can be combined "
+        "with a regular review; choose the Candidate detector tier to run it alone.",
         "pass", ("candidate_screening", "mode"), heavy=True,
-        on_value="apply", off_value="off"),
+        on_value="shadow", off_value="off"),
     FeatureSpec(
         "languagetool", "LanguageTool mechanical floor",
         "A local rules checker (commas, missing words, compound-modifier "

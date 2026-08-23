@@ -96,7 +96,10 @@ def test_candidate_detector_switch_combines_with_a_regular_review(runner):
     cfg = r.config_for(_job(
         store, features={"candidate_screening": True,
                          "languagetool": True}))
-    assert cfg.candidate_screening.mode == "apply"
+    # The combined switch runs candidate screening in shadow (records a ledger,
+    # changes nothing); Apply is reachable only via the standalone tier profile
+    # and is itself release-gated. See app/features.py.
+    assert cfg.candidate_screening.mode == "shadow"
     assert cfg.languagetool.enabled is True
     assert cfg.error_types
 

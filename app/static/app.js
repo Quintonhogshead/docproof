@@ -3913,6 +3913,12 @@ function renderJobs(jobs) {
         actions.append(openButton(job, 'examination-evaluation',
           'Download blind examination sample', note, { quiet: true }));
       }
+      // The candidate detector's coverage/verdict/omission report; every change
+      // it made traces back to the ledger beside it.
+      if (job.has_candidate_report) {
+        actions.append(openButton(job, 'candidate-report',
+          'Download candidate detector report', note, { quiet: true }));
+      }
       // "Show in Finder" only means something on the Mac the file lives on.
       if (!WEB) {
         actions.append(

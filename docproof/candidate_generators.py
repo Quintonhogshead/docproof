@@ -25,6 +25,16 @@ INITIAL_CANDIDATE_TYPES = (
     "word_echo",
     "heading_sequence",
     "list_punctuation",
+    # P2-04 punctuation across more boundaries (semicolon, colon, parenthesis
+    # balance) plus the adapted deterministic punctuation sweeps.
+    "punctuation_style",
+    # P2-03 lexical: commonly confused homophones/near-homophones.
+    "homophone",
+    # P2-03 lexical: document-wide term/spelling inconsistency (adapted from the
+    # existing consistency scan).
+    "term_consistency",
+    # P2-05 grammar: LanguageTool / parser-backed mechanical floor (adapted).
+    "grammar",
 )
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’\-]*")
@@ -66,6 +76,23 @@ _DIRECT_ADDRESS = re.compile(
     r"come on|thank you|thanks))(?P<gap>\s+)(?P<name>[A-Z][a-z]+)\b",
     re.IGNORECASE)
 
+# P2-03: classic confusable pairs. A local generator cannot know which member
+# is correct, so every occurrence is a candidate the judge rules on in context.
+_HOMOPHONES = frozenset({
+    "their", "there", "they're", "your", "you're", "its", "it's",
+    "to", "too", "then", "than", "affect", "effect", "who's", "whose",
+    "lose", "loose", "led", "lead", "past", "passed", "principal",
+    "principle", "stationary", "stationery", "complement", "compliment",
+    "discreet", "discrete", "elicit", "illicit", "peace", "piece",
+    "weather", "whether", "bear", "bare", "break", "brake", "cite",
+    "site", "sight", "council", "counsel", "desert", "dessert",
+})
+_HOMOPHONE_WORD = re.compile(r"\b[A-Za-z][A-Za-z']*\b")
+
+# P2-04: space before a comma/semicolon/colon/terminal mark is a deterministic
+# error (period excluded — ellipsis and abbreviations make it ambiguous).
+_SPACE_BEFORE_PUNCT = re.compile(r"(?P<span>\s+(?P<mark>[,;:!?]))")
+
 _ECHO_STOP = frozenset({
     "about", "after", "again", "also", "because", "before", "being",
     "could", "every", "first", "from", "have", "into", "just", "like",
@@ -87,9 +114,15 @@ _WRITTEN_NUMBERS = {
 def generate_initial_candidates(
         doc: DocumentModel, paragraphs: Sequence[ParagraphRef] | None = None,
         *, candidate_types: Iterable[str] = INITIAL_CANDIDATE_TYPES,
-        sweep_findings: Sequence[Finding] = ()
+        sweep_findings: Sequence[Finding] = (),
+        finding_sources: "dict[str, Sequence[Finding]] | None" = None
         ) -> list[Candidate]:
-    """Generate the initial rollout's candidates with no paid calls."""
+    """Generate the initial rollout's candidates with no paid calls.
+
+    ``finding_sources`` maps a candidate type to Findings from a reused
+    deterministic analyzer (P2-01/02); each is adapted into a screened candidate
+    of that type.
+    """
     enabled = set(candidate_types)
     unknown = enabled - set(INITIAL_CANDIDATE_TYPES)
     if unknown:
@@ -105,6 +138,8 @@ def generate_initial_candidates(
         "currency_style": _currency_candidates,
         "repeated_word": _repeated_word_candidates,
         "word_echo": _word_echo_candidates,
+        "homophone": _homophone_candidates,
+        "punctuation_style": _punctuation_style_candidates,
     }
     for candidate_type, generator in per_paragraph.items():
         if candidate_type in enabled:
@@ -116,6 +151,9 @@ def generate_initial_candidates(
         out.extend(_list_candidates(rows))
     out.extend(_candidates_from_existing_sweeps(
         doc, sweep_findings, enabled))
+    for candidate_type, findings in (finding_sources or {}).items():
+        out.extend(candidates_from_findings(
+            doc, findings, candidate_type, enabled))
     return out
 
 
@@ -232,23 +270,47 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
             rest = para.text[boundary:boundary + 90]
             comma = re.search(",", rest)
             immediate = para.text[boundary:boundary + 1] == ","
+            channel = "edit"
             if immediate:
+                # A comma sits directly at the boundary — anchor it as observed
+                # text and pass. Never propose inserting a second one.
                 decision, correction = "pass", None
                 reason = "introductory_boundary_has_comma"
                 explanation = "The introductory expression is set off locally."
                 start, end, observed = boundary, boundary + 1, ","
             elif strong:
+                # A strong single-word transitional adverb ("However", "Then")
+                # takes its comma immediately after the word, so the boundary is
+                # a safe insertion point.
                 decision, correction = "error", ","
                 reason = "strong_introductory_expression_missing_comma"
                 explanation = "This introductory expression conventionally takes a comma."
                 start = end = boundary
                 observed = ""
+            elif comma:
+                # The introductory clause already carries a comma within its
+                # span. Anchor that existing comma and pass — inserting another
+                # produced the reported double-comma failure. We cannot prove it
+                # is *this* clause's terminator without a parser, but a comma
+                # present is sufficient local evidence not to add one.
+                decision, correction = "pass", None
+                reason = "introductory_clause_already_punctuated"
+                explanation = "The introductory clause already has a comma; no insertion."
+                comma_pos = boundary + comma.start()
+                start, end, observed = comma_pos, comma_pos + 1, ","
             else:
-                decision, correction = "needs_model_judgment", ","
-                reason = "introductory_clause_boundary_ambiguous"
-                explanation = "Clause length and attachment determine whether a comma is needed."
-                start = end = (boundary + comma.start()) if comma else boundary
+                # No comma anywhere in the clause region: the true clause
+                # boundary needs syntactic parsing to locate. Fail closed —
+                # surface a non-editing query, never a wrong-location comma
+                # after the conjunction. A parser-backed generator (P2-05) may
+                # later place the edit.
+                decision, correction = "needs_model_judgment", None
+                reason = "introductory_clause_boundary_needs_parse"
+                explanation = ("A possible missing introductory-clause comma; "
+                               "the boundary needs parsing to place safely.")
+                start = end = boundary
                 observed = ""
+                channel = "query"
             out.append(_candidate(
                 "introductory_comma", para, start, end,
                 generator="candidate.introductory_boundary", observed=observed,
@@ -256,8 +318,10 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
                 explanation=explanation,
                 evidence={"introductory_expression": match.group("phrase"),
                           "comma_within_90_chars": bool(comma)},
-                risk_prior=0.75 if decision == "error" else 0.45,
-                channel="edit"))
+                risk_prior=(0.75 if decision == "error"
+                            else 0.4 if channel == "query" else 0.1),
+                meaning_change_risk="medium" if channel == "query" else "low",
+                channel=channel))
     return out
 
 
@@ -377,6 +441,57 @@ def _word_echo_candidates(para: ParagraphRef) -> list[Candidate]:
             evidence={"word": word, "token_distance": index - previous[0]},
             risk_prior=0.35, meaning_change_risk="medium", channel="query",
             extra_anchors=(first,)))
+    return out
+
+
+def _homophone_candidates(para: ParagraphRef) -> list[Candidate]:
+    out = []
+    for match in _HOMOPHONE_WORD.finditer(para.text):
+        word = match.group(0)
+        if word.lower() not in _HOMOPHONES:
+            continue
+        out.append(_candidate(
+            "homophone", para, match.start(), match.end(),
+            generator="candidate.homophone", observed=word,
+            correction=None, decision="needs_model_judgment",
+            reason_code="confusable_word_needs_context",
+            explanation="This word is easily confused with a homophone; the "
+                        "correct choice depends on the sentence.",
+            evidence={"word": word},
+            risk_prior=0.3, meaning_change_risk="medium", channel="either"))
+    return out
+
+
+def _punctuation_style_candidates(para: ParagraphRef) -> list[Candidate]:
+    out = []
+    # Space before a comma/semicolon/colon/terminal mark — a safe deletion.
+    for match in _SPACE_BEFORE_PUNCT.finditer(para.text):
+        mark = match.group("mark")
+        out.append(_candidate(
+            "punctuation_style", para, match.start("span"), match.end("span"),
+            generator="candidate.space_before_punctuation",
+            observed=match.group("span"), correction=mark, decision="error",
+            reason_code="space_before_punctuation",
+            explanation="A space precedes this punctuation mark.",
+            evidence={"mark": mark}, risk_prior=0.9, channel="edit"))
+    # Parenthesis / bracket balance — a query anchored at the lone mark.
+    for opener, closer, name in (("(", ")", "parenthesis"),
+                                 ("[", "]", "bracket")):
+        opens = [m.start() for m in re.finditer(re.escape(opener), para.text)]
+        closes = [m.start() for m in re.finditer(re.escape(closer), para.text)]
+        if len(opens) == len(closes):
+            continue
+        lone = (opens + closes)
+        at = min(lone) if len(opens) > len(closes) else max(lone)
+        out.append(_candidate(
+            "punctuation_style", para, at, at + 1,
+            generator="candidate.bracket_balance",
+            observed=para.text[at:at + 1], correction=None,
+            decision="needs_model_judgment",
+            reason_code=f"unbalanced_{name}",
+            explanation=f"The {name}es in this paragraph are unbalanced.",
+            evidence={"opens": len(opens), "closes": len(closes)},
+            risk_prior=0.7, meaning_change_risk="medium", channel="query"))
     return out
 
 
@@ -507,50 +622,87 @@ _SWEEP_CANDIDATE_TYPES = {
     "sweep_compound_number": "number_style",
     "sweep_century": "number_style",
     "unclosed_quote": "quote_balance",
+    # P2-04: the remaining deterministic punctuation sweeps become candidates
+    # instead of bypassing the ledger.
+    "sweep_ellipsis": "punctuation_style",
+    "sweep_dash": "punctuation_style",
+    "sweep_stacked_punctuation": "punctuation_style",
+    "sweep_terminal_period": "punctuation_style",
+    "sweep_quote_punctuation": "punctuation_style",
+    "sweep_nested_quote": "punctuation_style",
 }
+
+
+def _candidate_from_finding(finding: Finding, doc: DocumentModel,
+                            candidate_type: str, by_id) -> Candidate | None:
+    """Convert one deterministic Finding into a screened candidate, preserving
+    provenance. A confirmed edit becomes an ``error`` with the shrunk minimal
+    correction; a query becomes ``needs_model_judgment``."""
+    from .site_generators import site_from_finding
+    from .validator import shrink
+
+    site = site_from_finding(finding, doc)
+    para = by_id.get(finding.para_id)
+    if site is None or para is None:
+        return None
+    anchor = site.anchors[0]
+    if anchor.start_offset is None or anchor.end_offset is None:
+        return None
+    observed = para.text[anchor.start_offset:anchor.end_offset]
+    correction = None
+    decision = "needs_model_judgment"
+    reason = "existing_check_query_requires_context"
+    explanation = "An existing deterministic check raised a reviewer query."
+    if finding.corrected_text != finding.original_text and not finding.force_query:
+        _prefix, _deleted, correction = shrink(
+            finding.original_text, finding.corrected_text)
+        decision = "error"
+        reason = "existing_check_confirmed_error"
+        explanation = "An existing deterministic check confirmed this exact change."
+    return _candidate(
+        candidate_type, para, anchor.start_offset, anchor.end_offset,
+        generator=f"candidate.adapter.{finding.error_type}",
+        observed=observed, correction=correction,
+        decision=decision, reason_code=reason, explanation=explanation,
+        evidence={"finding_id": finding.finding_id,
+                  "source": finding.error_type,
+                  "legacy_explanation": finding.explanation},
+        risk_prior=0.99 if decision == "error" else 0.7,
+        meaning_change_risk=(
+            "medium" if candidate_type in {"quote_balance", "term_consistency"}
+            else "low"),
+        channel=("query" if finding.force_query or correction is None
+                 else "edit"))
 
 
 def _candidates_from_existing_sweeps(
         doc: DocumentModel, findings: Sequence[Finding], enabled: set[str]
         ) -> list[Candidate]:
     """Expose mature sweep hits as candidates without changing sweep output."""
-    from .site_generators import site_from_finding
-    from .validator import shrink
-
     by_id = index_paragraphs(doc)
     out = []
     for finding in findings:
         candidate_type = _SWEEP_CANDIDATE_TYPES.get(finding.error_type)
-        if candidate_type not in enabled:
+        if candidate_type is None or candidate_type not in enabled:
             continue
-        site = site_from_finding(finding, doc)
-        para = by_id.get(finding.para_id)
-        if site is None or para is None:
-            continue
-        anchor = site.anchors[0]
-        if anchor.start_offset is None or anchor.end_offset is None:
-            continue
-        observed = para.text[anchor.start_offset:anchor.end_offset]
-        correction = None
-        decision = "needs_model_judgment"
-        reason = "existing_sweep_query_requires_context"
-        explanation = "An existing deterministic check raised a reviewer query."
-        if finding.corrected_text != finding.original_text:
-            _prefix, _deleted, correction = shrink(
-                finding.original_text, finding.corrected_text)
-            decision = "error"
-            reason = "existing_sweep_confirmed_error"
-            explanation = "An existing deterministic sweep confirmed this exact change."
-        out.append(_candidate(
-            candidate_type, para, anchor.start_offset, anchor.end_offset,
-            generator=f"candidate.adapter.{finding.error_type}",
-            observed=observed, correction=correction,
-            decision=decision, reason_code=reason, explanation=explanation,
-            evidence={"finding_id": finding.finding_id,
-                      "sweep": finding.error_type,
-                      "legacy_explanation": finding.explanation},
-            risk_prior=0.99 if decision == "error" else 0.7,
-            meaning_change_risk=("medium" if candidate_type == "quote_balance"
-                                 else "low"),
-            channel=("query" if finding.force_query else "edit")))
+        candidate = _candidate_from_finding(finding, doc, candidate_type, by_id)
+        if candidate is not None:
+            out.append(candidate)
+    return out
+
+
+def candidates_from_findings(
+        doc: DocumentModel, findings: Sequence[Finding], candidate_type: str,
+        enabled: set[str]) -> list[Candidate]:
+    """Adapt an analyzer's Findings into candidates of one explicit type
+    (P2-01/02): the analyzer output is screened through the ledger rather than
+    emitted straight to the document."""
+    if candidate_type not in enabled:
+        return []
+    by_id = index_paragraphs(doc)
+    out = []
+    for finding in findings:
+        candidate = _candidate_from_finding(finding, doc, candidate_type, by_id)
+        if candidate is not None:
+            out.append(candidate)
     return out

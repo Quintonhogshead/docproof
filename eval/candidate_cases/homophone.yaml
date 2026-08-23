@@ -1,0 +1,25 @@
+error_type: homophone
+
+# The homophone generator flags every confusable occurrence as a query for the
+# judge to rule on in context — it cannot know locally which is wrong. So
+# "detection" means a candidate is raised at the word; a query on a correctly
+# used homophone is not a false positive (only an edit would be).
+cases:
+  - id: hm-001
+    text: "They left there bags on the platform."       # should be "their"
+    expect: { span: "there", confidence: medium }
+  - id: hm-002
+    text: "Your going to miss the last train home."      # should be "You're"
+    expect: { span: "Your", confidence: medium }
+  - id: hm-003
+    text: "The dog wagged it's tail happily."            # should be "its"
+    expect: { span: "it's", confidence: medium }
+
+  # Clean traps: correctly used homophones. A query here is acceptable (deferred
+  # to the judge); an edit would be the failure.
+  - id: hm-101
+    text: "They left their bags on the platform."
+    expect: clean
+  - id: hm-102
+    text: "You're going to miss the last train home."
+    expect: clean

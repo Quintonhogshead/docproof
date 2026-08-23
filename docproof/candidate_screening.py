@@ -5,6 +5,7 @@ import dataclasses
 import json
 import logging
 import math
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,8 +18,9 @@ from .candidate_ledger import CandidateLedger
 from .candidate_models import (
     Candidate, CandidateAnchor, CandidateStatus, ScreeningPacket, Verdict,
     deterministic_candidate_id)
+from .candidate_coverage import coverage_summary as _coverage_summary
 from .candidate_packet import build_screening_packets
-from .context_service import ContextService
+from .context_service import ContextService, unsupported_recipes
 from .models import DocumentModel, Finding, Usage, index_paragraphs
 from .providers import cost_of_usage, estimate_cost
 from .utils.tokens import estimate_tokens
@@ -77,12 +79,16 @@ class CandidateScreeningRun:
     usage: Usage = field(default_factory=Usage)
 
     @classmethod
-    def prepare(cls, cfg, doc: DocumentModel, *, paragraphs, sweep_findings=()
-                ) -> "CandidateScreeningRun":
-        run = cls(CandidateLedger(), doc, mode=cfg.mode)
+    def prepare(cls, cfg, doc: DocumentModel, *, paragraphs, sweep_findings=(),
+                finding_sources=None) -> "CandidateScreeningRun":
+        from .config import resolve_candidate_mode
+        # P0-01 containment: a requested ``apply`` is clamped to ``shadow`` until
+        # the release gate opens, so no path (config, profile, or UI) can mutate
+        # a document while the subsystem is unvalidated.
+        run = cls(CandidateLedger(), doc, mode=resolve_candidate_mode(cfg.mode))
         generated = generate_initial_candidates(
             doc, paragraphs, candidate_types=cfg.candidate_types,
-            sweep_findings=sweep_findings)
+            sweep_findings=sweep_findings, finding_sources=finding_sources)
         for candidate in generated:
             if len(run.ledger) >= cfg.max_candidates:
                 run.generation_omissions[
@@ -111,14 +117,33 @@ class CandidateScreeningRun:
         unresolved = [candidate for candidate in run.ledger.candidates
                       if run.ledger.status(candidate.candidate_id)
                       == CandidateStatus.NEEDS_MODEL_JUDGMENT]
-        if unresolved:
+        # P3-02: a candidate whose recipe asks for context ContextService cannot
+        # assemble is deferred with an explicit reason, not packaged and judged
+        # on partial context as if it were complete.
+        ready = []
+        for candidate in unresolved:
+            missing = unsupported_recipes(candidate.context_recipe)
+            if missing:
+                run.ledger.transition(
+                    candidate.candidate_id, CandidateStatus.DEFERRED,
+                    stage="context_assembly",
+                    judge_id="candidate.context_service",
+                    reason_code="insufficient_context",
+                    explanation="Required context is not available: "
+                                + ", ".join(missing) + ".",
+                    input_record={"context_recipe": list(candidate.context_recipe),
+                                  "unavailable": list(missing)},
+                    output_record={"deferred": True})
+            else:
+                ready.append(candidate)
+        if ready:
             run.packets = build_screening_packets(
-                unresolved, ContextService(doc), batch_size=cfg.batch_size)
+                ready, ContextService(doc), batch_size=cfg.batch_size)
             packet_by_id = {
                 candidate_id: packet.packet_id
                 for packet in run.packets for candidate_id in packet.candidate_ids
             }
-            for candidate in unresolved:
+            for candidate in ready:
                 run.ledger.transition(
                     candidate.candidate_id, CandidateStatus.PACKET_READY,
                     stage="context_assembly", judge_id="candidate.context_service",
@@ -343,7 +368,8 @@ class CandidateScreeningRun:
         The shared validator then shrinks, arbitrates overlaps, enforces the
         confidence/edit guards, and the ordinary writer applies tracked changes.
         """
-        if self.mode != "apply":
+        from .config import candidate_apply_released
+        if self.mode != "apply" or not candidate_apply_released():
             return []
         by_id = index_paragraphs(self.doc)
         findings: list[Finding] = []
@@ -371,6 +397,21 @@ class CandidateScreeningRun:
                          + original[anchor.end_offset:])
             if corrected == original:
                 continue
+            # Defense-in-depth universal insertion guard (P1-02/P1-04): even
+            # though validate_correction already rejected invariant-violating
+            # verdicts before they reached ERROR, withhold any correction that
+            # would still create duplicate punctuation or malformed spacing, and
+            # leave the rejection visible in the ledger.
+            violation = text_invariant_violation(original, corrected)
+            if violation is not None:
+                self.ledger.observe(
+                    candidate.candidate_id, stage="insertion_guard",
+                    judge_id="candidate.insertion_guard",
+                    reason_code="text_invariant_violation",
+                    explanation=f"Correction withheld from the document: it {violation}.",
+                    input_record={"original": original, "corrected": corrected},
+                    output_record={"applied": False})
+                continue
             finding_id = f"cs-{candidate.candidate_id.removeprefix('C-')}"
             explanation = ((verdict.explanation if verdict is not None else "")
                            or "Candidate screening confirmed this correction.")
@@ -382,6 +423,46 @@ class CandidateScreeningRun:
                 corrected_text=corrected,
                 explanation=f"{explanation} [candidate {candidate.candidate_id}]",
                 confidence=confidence))
+            self.candidate_finding_ids[finding_id] = candidate.candidate_id
+            self.emitted_candidate_ids.add(candidate.candidate_id)
+        return findings
+
+    def production_queries(self) -> list[Finding]:
+        """Candidate queries as force_query margin comments (P3-05).
+
+        Every finding here is ``force_query``: the writer renders a comment, so a
+        query can modify the document (by annotating it) but can never silently
+        become an edit. Absent in shadow mode and until Apply is released.
+        """
+        from .config import candidate_apply_released
+        if self.mode != "apply" or not candidate_apply_released():
+            return []
+        by_id = index_paragraphs(self.doc)
+        query_states = {CandidateStatus.UNCERTAIN, CandidateStatus.DEFERRED}
+        findings: list[Finding] = []
+        for candidate in self.ledger.candidates:
+            if self.ledger.status(candidate.candidate_id) not in query_states:
+                continue
+            anchor = candidate.anchors[0]
+            if (anchor.virtual_location or anchor.paragraph_id is None
+                    or anchor.start_offset is None):
+                continue
+            para = by_id.get(anchor.paragraph_id)
+            if para is None or validate_candidate_anchor(candidate, self.doc):
+                continue
+            verdict = next((event.verdict for event in reversed(self.ledger.events)
+                            if event.candidate_id == candidate.candidate_id
+                            and event.verdict is not None), None)
+            explanation = ((verdict.explanation if verdict is not None else "")
+                           or "Candidate screening raised a query here.")
+            finding_id = f"csq-{candidate.candidate_id.removeprefix('C-')}"
+            findings.append(Finding(
+                finding_id=finding_id, chunk_id="candidate-screening-query",
+                para_id=para.para_id, error_type=candidate.candidate_type,
+                original_text=para.text, occurrence=1,
+                corrected_text=para.text,
+                explanation=f"{explanation} [candidate {candidate.candidate_id}]",
+                confidence="low", force_query=True))
             self.candidate_finding_ids[finding_id] = candidate.candidate_id
             self.emitted_candidate_ids.add(candidate.candidate_id)
         return findings
@@ -521,6 +602,7 @@ class CandidateScreeningRun:
             },
             "states": states,
             "candidate_types": dict(sorted(by_type.items())),
+            "coverage": _coverage_summary(set(by_type)),
             "generation_omissions": dict(sorted(self.generation_omissions.items())),
             "screening": {
                 "resolved_locally": len(self.local_resolved_ids),
@@ -599,6 +681,83 @@ class CandidateScreeningRun:
         ]
 
 
+# Punctuation sweeps whose candidate type is not already covered by a
+# per-paragraph regex generator; reused as candidate sources (P2-04).
+_REUSE_SWEEP_KEYS = (
+    "sweep_ellipsis", "sweep_dash", "sweep_stacked_punctuation",
+    "sweep_terminal_period", "sweep_quote_punctuation", "sweep_nested_quote",
+)
+
+
+def _grammar_findings(cfg, doc: DocumentModel, rows) -> list[Finding]:
+    """LanguageTool proposals as Findings for the grammar candidate adapter."""
+    try:
+        from .languagetool import propose
+    except Exception:  # pragma: no cover - optional dependency
+        return []
+    variant = _load_variant(cfg)
+    dictionary = (cfg.spellcheck.dictionary or getattr(variant, "dictionary", None)
+                  or "en-US")
+    cands = propose(rows, dictionary=dictionary)
+    by_id = index_paragraphs(doc)
+    findings: list[Finding] = []
+    for index, rc in enumerate(cands):
+        para = by_id.get(rc.para_id)
+        if para is None:
+            continue
+        corrected = para.text[:rc.start] + rc.replacement + para.text[rc.end:]
+        findings.append(Finding(
+            # The transient Finding carries LanguageTool's own label for
+            # provenance; the candidate it becomes is typed "grammar".
+            finding_id=f"lt-{index:04d}", chunk_id="languagetool",
+            para_id=rc.para_id, error_type="languagetool",
+            original_text=para.text, occurrence=1, corrected_text=corrected,
+            explanation=rc.note or "LanguageTool flagged a mechanical issue.",
+            confidence="medium"))
+    return findings
+
+
+def _load_variant(cfg):
+    from .variants import load_variant
+    return load_variant(getattr(cfg, "variant", None))
+
+
+def _local_analyzer_sources(cfg, doc: DocumentModel, paragraphs, *,
+                            existing_sweeps=()):
+    """Run the free local analyzers and return (sweep_findings, finding_sources)
+    so standalone candidate mode reuses them as ledger candidates (P2-01/02)."""
+    from .consistency import find_inconsistencies, to_findings
+    from .sweeps import run_sweeps, unclosed_quote_findings
+
+    rows = list(paragraphs) if paragraphs is not None else list(doc.paragraphs)
+    variant = _load_variant(cfg)
+    sweep_findings = list(existing_sweeps)
+    if not sweep_findings:
+        found, _reports = run_sweeps(
+            rows, _REUSE_SWEEP_KEYS, variant,
+            ellipsis_style=cfg.style.ellipsis)
+        sweep_findings = found + unclosed_quote_findings(rows, variant)
+
+    finding_sources: dict[str, list[Finding]] = {}
+    report = find_inconsistencies(
+        # Forced on for reuse: in standalone candidate mode the scan feeds the
+        # ledger as candidates, so it runs even when the normal stage is off.
+        doc.paragraphs, enabled=True,
+        min_length=cfg.consistency.min_length,
+        min_dominance=cfg.consistency.min_dominance,
+        names=cfg.consistency.names,
+        name_dominance=cfg.consistency.name_dominance,
+        name_min_count=cfg.consistency.name_min_count)
+    consistency_findings = to_findings(report, doc.paragraphs)
+    if consistency_findings:
+        finding_sources["term_consistency"] = consistency_findings
+    if cfg.candidate_screening.languagetool_floor:
+        grammar = _grammar_findings(cfg, doc, rows)
+        if grammar:
+            finding_sources["grammar"] = grammar
+    return sweep_findings, finding_sources
+
+
 def prepare_candidate_screening(cfg, doc: DocumentModel, *, paragraphs,
                                 sweep_findings=()
                                 ) -> CandidateScreeningRun | None:
@@ -606,9 +765,18 @@ def prepare_candidate_screening(cfg, doc: DocumentModel, *, paragraphs,
     screen_cfg = cfg.candidate_screening
     if candidate_screening_killed() or screen_cfg.mode == "off":
         return None
+    finding_sources = None
+    # Standalone candidate mode: no ordinary detector or ensemble is running, so
+    # reused analyzer output cannot double up with the normal review — route it
+    # through the ledger as candidates (P2-01/02).
+    standalone = (not getattr(cfg, "error_types", None)
+                  and not cfg.ensemble.detectors)
+    if screen_cfg.reuse_local_analyzers and standalone:
+        sweep_findings, finding_sources = _local_analyzer_sources(
+            cfg, doc, paragraphs, existing_sweeps=sweep_findings)
     return CandidateScreeningRun.prepare(
         screen_cfg, doc, paragraphs=paragraphs,
-        sweep_findings=sweep_findings)
+        sweep_findings=sweep_findings, finding_sources=finding_sources)
 
 
 def validate_candidate_anchor(candidate: Candidate,
@@ -636,12 +804,88 @@ def validate_candidate_anchor(candidate: Candidate,
         if not (0 <= anchor.start_offset <= anchor.end_offset <= len(para.text)):
             return _invalid(candidate, "offset_out_of_bounds",
                             "The candidate offsets are outside the paragraph.")
-        if index == 0 and candidate.observed_text is not None:
+        if index == 0:
+            # P1-03: distinguish a replacement span from a zero-width insertion
+            # and fail closed on ambiguity. A replacement must name the
+            # non-empty text it replaces and match it exactly; an insertion
+            # cannot claim observed text (an empty observed span validates at
+            # every offset, so it carries no positional evidence — the insertion
+            # guard, not the anchor, is what keeps it safe).
+            zero_width = anchor.start_offset == anchor.end_offset
             actual = para.text[anchor.start_offset:anchor.end_offset]
-            if actual != candidate.observed_text:
-                return _invalid(candidate, "anchored_text_mismatch",
-                                "The observed text no longer matches the source anchor.")
+            if not zero_width:
+                if not candidate.observed_text:
+                    return _invalid(
+                        candidate, "missing_observed_span",
+                        "A replacement anchor must record the non-empty text it replaces.")
+                if actual != candidate.observed_text:
+                    return _invalid(
+                        candidate, "anchored_text_mismatch",
+                        "The observed text no longer matches the source anchor.")
+            elif candidate.observed_text:
+                return _invalid(
+                    candidate, "insertion_observed_mismatch",
+                    "A zero-width insertion anchor cannot claim observed text.")
     return None
+
+
+_DUP_GUARD_MARKS = (",", ";", ":")
+_SPACE_BEFORE_PUNCT = re.compile(r"\s[,;:]")
+
+
+def new_adjacent_duplicate_punctuation(original: str, corrected: str
+                                       ) -> str | None:
+    """Return the offending mark pair if ``corrected`` introduces an adjacent
+    duplicate of a comma/semicolon/colon that was not present in ``original``.
+
+    This is the universal insertion guard (P1-02): it catches the reported
+    double-comma failure regardless of which generator or judge produced the
+    correction. Legitimate runs already in the source (``!!``, ``--``, ``...``,
+    or a pre-existing ``,,``) are not flagged because the count must strictly
+    increase.
+    """
+    for mark in _DUP_GUARD_MARKS:
+        pair = mark * 2
+        if corrected.count(pair) > original.count(pair):
+            return pair
+    return None
+
+
+def text_invariant_violation(original: str, corrected: str) -> str | None:
+    """Final-document invariant for a single correction (P1-02, P1-04).
+
+    Rejects a correction that would create adjacent duplicate punctuation, a new
+    doubled space, or a new space before a comma/semicolon/colon. Lost text,
+    formatting damage, and reject-all recoverability are enforced downstream by
+    the shared validator and the strict reopen-and-diff audit; this guard closes
+    the punctuation/spacing gap those do not cover for candidate insertions.
+    """
+    duplicate = new_adjacent_duplicate_punctuation(original, corrected)
+    if duplicate is not None:
+        return f"would create duplicate punctuation {duplicate!r}"
+    if "  " in corrected and corrected.count("  ") > original.count("  "):
+        return "would create a doubled space"
+    if (len(_SPACE_BEFORE_PUNCT.findall(corrected))
+            > len(_SPACE_BEFORE_PUNCT.findall(original))):
+        return "would create a space before punctuation"
+    return None
+
+
+def _correction_preview(candidate: Candidate, correction: str,
+                        doc: DocumentModel) -> tuple[str, str] | None:
+    """The (original, corrected) paragraph text a correction would produce, or
+    None when the first anchor is not a concrete in-paragraph text span."""
+    anchor = candidate.anchors[0]
+    if (anchor.virtual_location or anchor.paragraph_id is None
+            or anchor.start_offset is None or anchor.end_offset is None):
+        return None
+    para = index_paragraphs(doc).get(anchor.paragraph_id)
+    if para is None:
+        return None
+    original = para.text
+    corrected = (original[:anchor.start_offset] + correction
+                 + original[anchor.end_offset:])
+    return original, corrected
 
 
 def validate_correction(candidate: Candidate, verdict: Verdict,
@@ -670,6 +914,15 @@ def validate_correction(candidate: Candidate, verdict: Verdict,
             "decision": "uncertain", "reason_code": "excessive_rewrite",
             "explanation": "The proposed correction is larger than a minimal proofread.",
             "confidence": "low"})
+    preview = _correction_preview(candidate, correction, doc)
+    if preview is not None:
+        violation = text_invariant_violation(*preview)
+        if violation is not None:
+            return verdict.model_copy(update={
+                "decision": "uncertain",
+                "reason_code": "text_invariant_violation",
+                "explanation": f"Correction withheld: it {violation}.",
+                "confidence": "low"})
     if (candidate.meaning_change_risk == "high"
             and candidate.channel_preference == "query"):
         return verdict.model_copy(update={
@@ -822,6 +1075,23 @@ def _markdown_report(report: dict) -> str:
               "|---|---:|"]
     for candidate_type, count in report["candidate_types"].items():
         lines.append(f"| `{candidate_type}` | {count:,} |")
+    coverage = report.get("coverage")
+    if coverage:
+        counts = coverage["counts"]
+        lines += [
+            "", "## Generation coverage", "",
+            f"Families — covered: **{counts['covered']}**, partial: "
+            f"**{counts['partial']}**, gap: **{counts['gap']}**. A low-recall or "
+            "incomplete run is visible here as families that produced nothing.",
+            "", "| Family | Status | Produced this run |", "|---|---|---|"]
+        for fam in coverage["families"]:
+            produced = fam.get("produced_this_run")
+            mark = ("—" if produced is None else "yes" if produced else "no")
+            lines.append(f"| {fam['title']} | `{fam['status']}` | {mark} |")
+    if report.get("generation_omissions"):
+        lines += ["", "## Omissions (capped generation)", ""]
+        for key, count in report["generation_omissions"].items():
+            lines.append(f"- `{key}`: {count:,} candidate(s) dropped at the cap")
     if applying:
         lines += [
             "", "## Application", "",

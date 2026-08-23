@@ -290,6 +290,11 @@ def _result_name(job: Job, which: str) -> str | None:
         "examination-json": "examination-coverage.json",
         "examination-ledger": "examination-ledger.jsonl.gz",
         "examination-evaluation": "examination-evaluation.json",
+        # Candidate detector: the human-readable coverage/verdict/omission report,
+        # its JSON, and the full auditable ledger every change traces back to.
+        "candidate-report": "candidate-screening-report.md",
+        "candidate-report-json": "candidate-screening-report.json",
+        "candidate-ledger": "candidate-screening-ledger.jsonl.gz",
         "book": f"book_{stem}.docx",
         # The InDesign deliverable is now an IDML the designer opens directly —
         # no Place step. (Kept name "indesign" so existing buttons/routing work.)

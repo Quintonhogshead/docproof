@@ -590,6 +590,14 @@ class Job:
                   and (Path(self.results_dir)
                        / "examination-evaluation.json").is_file())
                  or "examination-evaluation.json" in self.drive_files))
+        # The candidate detector's report/ledger, when this review ran it. The
+        # card offers the download and the ledger every change traces back to.
+        d["has_candidate_report"] = bool(
+            self.kind == "review" and self.state == "done"
+            and ((self.results_dir
+                  and (Path(self.results_dir)
+                       / "candidate-screening-report.md").is_file())
+                 or "candidate-screening-report.md" in self.drive_files))
         # A click-through to this job's folder in the Drive archive, once it has
         # one. The card shows "In Drive" when archived, so the deliverable is one
         # link away even after the local copy is recycled on a redeploy.
