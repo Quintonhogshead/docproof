@@ -658,6 +658,16 @@ class LanguageToolConfig(BaseModel):
     only. See docproof/languagetool.py."""
     enabled: bool = False
     dictionary: str = "en-US"           # LanguageTool language code
+    # Picky level: LanguageTool's stricter rule set (extra typography, register,
+    # and hyphenation rules that the default level holds back). Measured on a
+    # real literary manuscript it added almost nothing past the style advice the
+    # pass already filters (1 candidate on 44k words), because most picky rules
+    # ARE the style class dropped at DEFAULT_DISABLED_ISSUE_TYPES. Off by
+    # default; flip it on for a manuscript whose mechanical tail (spaced
+    # abbreviations, en/em dashes, hyphenation) the standard level misses. The
+    # extra candidates still route through the confirm valve, so picky never
+    # edits blind — it only offers more for the valve to rule on.
+    picky: bool = False
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)

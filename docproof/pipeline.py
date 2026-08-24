@@ -1067,6 +1067,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             lt_cands = lt_propose(
                 prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
                 dictionary=cfg.languagetool.dictionary,
+                picky=cfg.languagetool.picky,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
                 workers=cfg.languagetool.workers,
                 scan_chars=cfg.languagetool.scan_chars, progress=progress,
@@ -2097,6 +2098,12 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
             context=context, max_tokens=gate.max_output_tokens,
             concurrency=cfg.concurrency_for(gate.model),
             flag_unsure=gate.flag_unsure,
+            # The meaning gate — and only it — skips punctuation/case-only edits
+            # deterministically: they carry no proposition to weigh, and judging
+            # them only risks a wrong hold on a correct comma or capital (the
+            # single largest source of wrongly-demoted fixes in field review).
+            # fix_check still sees them: a comma can be the wrong repair.
+            bypass_trivial=(spec.key == "meaning"),
             usage=usage)
         for pos, f in zip(report.positions, report.withheld):
             validated[where[pos]] = to_query(f, prepared.doc)

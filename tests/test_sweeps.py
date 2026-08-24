@@ -263,6 +263,90 @@ def test_dialogue_tag_never_lowercases_the_pronoun_I():
     assert "i said" not in swept("sweep_dialogue_tag", "“Wait here.” I said, quietly.")
 
 
+def test_dialogue_tag_leaves_an_action_beat_gerund_alone():
+    # A reporting verb run straight into a present participle is an action beat,
+    # not a tag: "She continued typing". The period is a sentence break and must
+    # not become a comma (the real regression on a manuscript).
+    for text in ("“…behind this.” She continued typing, entering commands.",
+                 "“Not now.” He kept reading."):
+        assert unchanged("sweep_dialogue_tag", text)
+
+
+# --- times of day ------------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("It was 3:40AM.", "It was 3:40 a.m."),
+    ("at 4:15PM.", "at 4:15 p.m."),
+    ("reached the tree at 1:53AM.", "reached the tree at 1:53 a.m."),
+    ("meet at 2:00 AM tonight", "meet at 2:00 a.m. tonight"),
+    ("by 2 PM sharp", "by 2 p.m. sharp"),
+])
+def test_time_of_day_meridiem(before, after):
+    assert swept("sweep_time_of_day", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "already 3:40 a.m. now",          # correct: left alone
+    "I AM here and you are not.",     # "AM" not attached to a digit
+    "listening to AM radio",
+])
+def test_time_of_day_leaves_these_alone(text):
+    assert unchanged("sweep_time_of_day", text)
+
+
+# --- the deity capital -------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("Oh my god, no!", "Oh my God, no!"),
+    ("“Oh my god,” she said.", "“Oh my God,” she said."),
+    ("thank god for that", "thank God for that"),
+    ("Good god, what now!", "Good God, what now!"),
+])
+def test_deity_capital(before, after):
+    assert swept("sweep_deity_capital", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "a good god of war",              # common noun: article + "of"
+    "the god smiled down",            # article: common noun
+    "the gods were angry",            # plural
+    "a godforsaken place",            # not a whole word
+    "It felt like a godsend.",
+    "god damn it",                    # a consistency question, not a cap fix
+    "“Oh my God,” she said.",         # already correct: no hit
+])
+def test_deity_leaves_these_alone(text):
+    assert unchanged("sweep_deity_capital", text)
+
+
+# --- dialogue splice ---------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    # a tag after a sentence-final quote, joined to the next quote by a comma
+    ('“Of course!” Raymond said, “Anything for you.”',
+     '“Of course!” Raymond said. “Anything for you.”'),
+    ('“This is amazing!” she continued, “I called in.”',
+     '“This is amazing!” she continued. “I called in.”'),
+    ('“Do you?” he asked angrily, “Do you understand?”',
+     '“Do you?” he asked angrily. “Do you understand?”'),
+    # a physical-action beat mistaken for a tag
+    ('“At this point,” Raymond smiled.', '“At this point.” Raymond smiled.'),
+    ('“Yeah,” she nodded.', '“Yeah.” She nodded.'),
+])
+def test_dialogue_splice(before, after):
+    assert swept("sweep_dialogue_splice", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "“I know,” she said, “it just doesn't add up.”",   # continuation: comma right
+    "“Yes,” she said.",                                # real tag: leave it
+    "“Wait!” he said, hoping she would stop.",         # verb not before a quote
+    "“Really?” she asked, tilting her head.",          # tag + participial, not a quote
+])
+def test_dialogue_splice_leaves_these_alone(text):
+    assert unchanged("sweep_dialogue_splice", text)
+
+
 # --- the engine --------------------------------------------------------------
 
 def _doc(*texts: str) -> tuple[DocumentModel, list[ParagraphRef]]:

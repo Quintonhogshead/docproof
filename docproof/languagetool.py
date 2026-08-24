@@ -185,6 +185,7 @@ def _scan(tool, texts: Sequence[str]) -> list[list]:
 def propose(paragraphs: Sequence[ParagraphRef], *,
             lexicon: Sequence[str] = (),
             dictionary: str = "en-US",
+            picky: bool = False,
             disabled_rules: frozenset[str] = DEFAULT_DISABLED_RULES,
             disabled_issue_types: frozenset[str] = DEFAULT_DISABLED_ISSUE_TYPES,
             workers: int = 0,
@@ -223,6 +224,12 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
         return []
     lex = {w.strip("'’\".,").lower() for w in lexicon}
     tool = _get_tool(dictionary)
+    # `picky` toggles LanguageTool's stricter rule level (adds level=picky to
+    # each request). The server is long-lived and shared, so set it per call —
+    # a run that leaves it True would leak the level into a later non-picky run
+    # against the same cached server.
+    if hasattr(tool, "picky"):
+        tool.picky = picky
 
     reviewable = [p for p in paragraphs if getattr(p, "reviewable", True)]
     texts = [p.text for p in reviewable]
