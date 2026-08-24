@@ -662,11 +662,10 @@ class LanguageToolConfig(BaseModel):
     # and hyphenation rules that the default level holds back). Measured on a
     # real literary manuscript it added almost nothing past the style advice the
     # pass already filters (1 candidate on 44k words), because most picky rules
-    # ARE the style class dropped at DEFAULT_DISABLED_ISSUE_TYPES. Off by
-    # default; flip it on for a manuscript whose mechanical tail (spaced
-    # abbreviations, en/em dashes, hyphenation) the standard level misses. The
-    # extra candidates still route through the confirm valve, so picky never
-    # edits blind — it only offers more for the valve to rule on.
+    # ARE the style class dropped at DEFAULT_DISABLED_ISSUE_TYPES. The extra
+    # candidates still route through the confirm valve, so picky never edits
+    # blind — it only offers more for the valve to rule on. default.yaml turns
+    # it on so every LanguageTool job runs at the strict level.
     picky: bool = False
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
@@ -1246,6 +1245,18 @@ class CandidateScreeningConfig(BaseModel):
     # and make each retry expensive.
     batch_size: int = Field(default=40, ge=1, le=200)
     judgment_enabled: bool = True
+    # Send the primary judgment as one vendor batch (50% cheaper) instead of a
+    # packet-at-a-time synchronous sweep. The lane block-polls the batch to
+    # completion inside its screen() call, then re-judges any packet the batch
+    # could not resolve on the synchronous focused-retry path. Escalation stays
+    # synchronous (it is small and can only be built once primary verdicts are
+    # in). Off by default: the synchronous path is unchanged.
+    batch: bool = False
+    # How the block-poll waits on the primary batch. Poll every interval; give
+    # up after max_wait and drop every unresolved packet to the synchronous
+    # path (never a silent loss). 24h matches the vendor completion window.
+    batch_poll_interval_seconds: float = Field(default=20.0, gt=0)
+    batch_max_wait_seconds: float = Field(default=86_400.0, gt=0)
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
     escalation_model: str | None = None

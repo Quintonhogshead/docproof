@@ -74,8 +74,11 @@ def test_standard_is_shipped_defaults_plus_languagetool():
                 "meaning_check", "fix_check"):
         assert FEATURES_BY_ID[fid].read(cfg) is False   # shipped default: off
         assert p["features"][fid] is False
-    assert FEATURES_BY_ID["languagetool"].read(cfg) is False  # shipped: off
+    assert FEATURES_BY_ID["languagetool"].read(cfg) is False  # base config: off
     assert p["features"]["languagetool"] is True             # Standard: on
+    # and when it runs, it runs at max — picky is on in the base config, so
+    # every LanguageTool job (Standard and up) gets the strict rule level.
+    assert cfg.languagetool.picky is True
 
 
 def test_light_touch_turns_everything_off_at_low_effort():
