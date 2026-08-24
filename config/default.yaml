@@ -661,6 +661,19 @@ residuals:
   enabled: true
   max_per_rule: 150         # overflow is logged loudly, never silently dropped
 
+# Recurrence propagation: a free deterministic post-pass over the validated set.
+# Every validated edit that swaps one verbatim word/short phrase for another is
+# searched across the whole book, and each OTHER occurrence of the original
+# surface is re-emitted as a finding proposing the same swap — a typo fixed in
+# chapter 2 but missed in chapter 9 is now fixed in both. A surface the edits
+# disagree about is dropped as ambiguous, a real dictionary word recurs as a
+# margin query (not a silent edit), a non-word typo propagates as a tracked edit,
+# and the protected lexicon is never swept. Whole-document only, no API call.
+# See docproof/adjudicate.py (propagate_recurrences).
+recurrence:
+  enabled: true
+  max_sites_per_surface: 200  # per surface; overflow logged, never silently dropped
+
 # Phase-one examination graph. It observes the existing review and writes an
 # append-only site ledger plus coverage reports; it CANNOT create edits in
 # shadow mode. Roll back immediately by changing only `enabled` to false — the

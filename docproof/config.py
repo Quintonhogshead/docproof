@@ -1027,6 +1027,29 @@ class ResidualsConfig(BaseModel):
     max_per_rule: int = Field(default=150, ge=1)
 
 
+class RecurrenceConfig(BaseModel):
+    """After validation, a free deterministic post-pass that closes the
+    catch-it-here-miss-it-there gap: every validated edit that swaps one verbatim
+    word or short phrase for another is searched across the whole document, and
+    each *other* occurrence of the original surface is re-emitted as a finding
+    proposing the same swap. A typo fixed in chapter 2 but missed in chapter 9 is
+    now fixed in both, and every detector's reach becomes the whole book at once.
+
+    Safety is deterministic and layered (see docproof/adjudicate.py):
+    only whole-word/short-phrase alphabetic swaps propagate; a surface the
+    validated edits disagree about (changed to X here, Y there — the effect/affect
+    case) is dropped as ambiguous; a real dictionary word is context-dependent so
+    its recurrences are raised as margin QUERIES, while a genuine non-word typo or
+    proper-name misspelling propagates as a tracked edit; sites the run already
+    edits are skipped and the output is re-validated, so the validator dedups any
+    span; and the spell scan's protected lexicon is never swept. Whole-document
+    only — a partial run must not edit text it was not asked to read."""
+    enabled: bool = True
+    # A bound per surface, so one very common word cannot flood the document.
+    # The overflow is logged, never silently dropped.
+    max_sites_per_surface: int = Field(default=200, ge=1)
+
+
 class ExaminationJudgmentConfig(BaseModel):
     """Optional paid judgment over precise examination sites.
 
@@ -1490,6 +1513,7 @@ class Config(BaseModel):
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
+    recurrence: RecurrenceConfig = Field(default_factory=RecurrenceConfig)
     examination_graph: ExaminationGraphConfig = Field(
         default_factory=ExaminationGraphConfig)
     candidate_screening: CandidateScreeningConfig = Field(
