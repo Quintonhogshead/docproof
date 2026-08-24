@@ -583,3 +583,58 @@ def test_multi_round_reviews_run_candidate_generation_once():
     cfg = Config(candidate_screening={"mode": "apply"})
     assert _round_config(cfg, 1, True).candidate_screening.mode == "apply"
     assert _round_config(cfg, 2, True).candidate_screening.mode == "off"
+
+
+def test_languagetool_floor_suppresses_lexicon_words(monkeypatch):
+    # The languagetool_floor path must thread the spell scan's lexicon and the
+    # config's disabled-rules extras through to propose(), the same as the two
+    # main call sites (pipeline.py / batch.py) — otherwise a misspelling flag on
+    # an author's own name/coinage, LanguageTool's largest false-positive
+    # source, isn't suppressed here the way it is everywhere else.
+    from .test_languagetool import _install, _match
+
+    #        0         1
+    #        0123456789012345
+    text = "aaaa bbbb Dddd."   # a 0:4  b 5:9  Dddd 10:14
+    matches = [
+        _match("R_OK", "grammar", 5, 4, ["BB"], "bbbb"),                    # KEEP
+        _match("MORFOLOGIK_RULE", "misspelling", 10, 4, ["dude"], "Dddd"),  # drop: in lexicon
+    ]
+    _install(monkeypatch, {text: matches})
+
+    para = _para("body-0000", text)
+    doc = _doc(para)
+    cfg = Config(candidate_screening={"mode": "shadow", "languagetool_floor": True})
+
+    from docproof.candidate_screening import _local_analyzer_sources
+
+    _sweeps, sources = _local_analyzer_sources(
+        cfg, doc, [para], lexicon=["Dddd"])
+    grammar = sources.get("grammar", [])
+    assert len(grammar) == 1
+    assert grammar[0].corrected_text == "aaaa BB Dddd."
+
+    # Without the lexicon, the misspelling flag on "Dddd" survives too.
+    _sweeps, sources_no_lexicon = _local_analyzer_sources(
+        cfg, doc, [para])
+    assert len(sources_no_lexicon.get("grammar", [])) == 2
+
+
+def test_prepare_candidate_screening_passes_lexicon_to_the_grammar_floor(
+        monkeypatch):
+    from .test_languagetool import _install, _match
+
+    text = "Dddd is here."
+    matches = [
+        _match("MORFOLOGIK_RULE", "misspelling", 0, 4, ["dude"], "Dddd"),
+    ]
+    _install(monkeypatch, {text: matches})
+
+    para = _para("body-0000", text)
+    doc = _doc(para)
+    cfg = Config(candidate_screening={"mode": "shadow", "languagetool_floor": True})
+
+    run = prepare_candidate_screening(
+        cfg, doc, paragraphs=[para], lexicon=["Dddd"])
+    assert not any(
+        c.candidate_type == "grammar" for c in run.ledger.candidates)

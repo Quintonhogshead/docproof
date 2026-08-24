@@ -9,6 +9,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
 
 from .candidate_generators import generate_initial_candidates
 from .candidate_judge import (
@@ -693,16 +694,18 @@ _REUSE_SWEEP_KEYS = (
 )
 
 
-def _grammar_findings(cfg, doc: DocumentModel, rows) -> list[Finding]:
+def _grammar_findings(cfg, doc: DocumentModel, rows,
+                      lexicon: Sequence[str] = ()) -> list[Finding]:
     """LanguageTool proposals as Findings for the grammar candidate adapter."""
     try:
-        from .languagetool import propose
+        from .languagetool import all_disabled_rules, propose
     except Exception:  # pragma: no cover - optional dependency
         return []
     variant = _load_variant(cfg)
     dictionary = (cfg.spellcheck.dictionary or getattr(variant, "dictionary", None)
                   or "en-US")
-    cands = propose(rows, dictionary=dictionary)
+    cands = propose(rows, lexicon=lexicon, dictionary=dictionary,
+                    disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules))
     by_id = index_paragraphs(doc)
     findings: list[Finding] = []
     for index, rc in enumerate(cands):
@@ -727,7 +730,7 @@ def _load_variant(cfg):
 
 
 def _local_analyzer_sources(cfg, doc: DocumentModel, paragraphs, *,
-                            existing_sweeps=()):
+                            existing_sweeps=(), lexicon: Sequence[str] = ()):
     """Run the free local analyzers and return (sweep_findings, finding_sources)
     so standalone candidate mode reuses them as ledger candidates (P2-01/02)."""
     from .consistency import find_inconsistencies, to_findings
@@ -756,14 +759,14 @@ def _local_analyzer_sources(cfg, doc: DocumentModel, paragraphs, *,
     if consistency_findings:
         finding_sources["term_consistency"] = consistency_findings
     if cfg.candidate_screening.languagetool_floor:
-        grammar = _grammar_findings(cfg, doc, rows)
+        grammar = _grammar_findings(cfg, doc, rows, lexicon=lexicon)
         if grammar:
             finding_sources["grammar"] = grammar
     return sweep_findings, finding_sources
 
 
 def prepare_candidate_screening(cfg, doc: DocumentModel, *, paragraphs,
-                                sweep_findings=()
+                                sweep_findings=(), lexicon: Sequence[str] = ()
                                 ) -> CandidateScreeningRun | None:
     from .config import candidate_screening_killed
     screen_cfg = cfg.candidate_screening
@@ -777,7 +780,7 @@ def prepare_candidate_screening(cfg, doc: DocumentModel, *, paragraphs,
                   and not cfg.ensemble.detectors)
     if screen_cfg.reuse_local_analyzers and standalone:
         sweep_findings, finding_sources = _local_analyzer_sources(
-            cfg, doc, paragraphs, existing_sweeps=sweep_findings)
+            cfg, doc, paragraphs, existing_sweeps=sweep_findings, lexicon=lexicon)
     return CandidateScreeningRun.prepare(
         screen_cfg, doc, paragraphs=paragraphs,
         sweep_findings=sweep_findings, finding_sources=finding_sources)
