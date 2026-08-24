@@ -3898,6 +3898,8 @@ function renderJobs(jobs) {
       li.append(prepActions(job));
     } else if (job.ready && job.is_corrections) {
       li.append(correctionsActions(job));
+    } else if (job.ready && job.is_galley) {
+      li.append(galleyActions(job));
     } else if (job.ready) {
       const actions = document.createElement('div');
       actions.className = 'job-actions';
@@ -4389,6 +4391,22 @@ function driveActions(actions, note, job) {
     });
     actions.append(retryArchive);
   }
+}
+
+// A galley job's results card: the wave count and spend against budget. Warnings
+// (coverage holes a wave left) ride the same warning channel every job card uses.
+function galleyActions(job) {
+  const wrap = document.createElement('div');
+  const summary = document.createElement('p');
+  summary.className = 'job-substat';
+  const spend = (typeof job.cost === 'number') ? job.cost.toFixed(2) : '0.00';
+  const budget = (typeof job.budget_usd === 'number')
+    ? job.budget_usd.toFixed(2) : '0.00';
+  const waves = job.galley_waves_total || job.galley_wave || 0;
+  summary.textContent =
+    `${waves} wave${waves === 1 ? '' : 's'} · $${spend} of $${budget} budget`;
+  wrap.append(summary);
+  return wrap;
 }
 
 function prepActions(job) {

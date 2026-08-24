@@ -75,7 +75,12 @@ class JobRequest(BaseModel):
     # What to do with these documents: review them for errors, prepare them for
     # the house InDesign template, or apply a corrections list to an exported
     # InDesign file.
-    kind: str = "review"                      # "review" | "prep" | "corrections"
+    kind: str = "review"          # "review" | "prep" | "corrections" | "galley"
+    # Galley only: the practitioner tier (T0–T3) whose caps the governor uses, and
+    # the dollar budget it allocates across waves. budget_usd None falls back to
+    # the tier's default budget. Ignored on every other kind.
+    tier: str = ""
+    budget_usd: float | None = None
     # Corrections only: the corrections list, as the JSON the parser accepts
     # (a list of {find, replace, …}, or [find, replace] pairs). Empty on every
     # other kind. The IDML it edits is the single uploaded file.
@@ -436,6 +441,57 @@ def _create_corrections(req: JobRequest, owner: str, paths: Paths,
     return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
 
 
+# The practitioner tiers Galley offers, and the dollar budget each defaults to
+# when the request names a tier but no budget (per-100k-words estimates from the
+# Galley plan; the spending ledger calibrates them). T4 is the ceiling.
+GALLEY_TIERS = ("T0", "T1", "T2", "T3", "T4")
+GALLEY_DEFAULT_BUDGET = {"T0": 15.0, "T1": 30.0, "T2": 60.0, "T3": 150.0,
+                         "T4": 300.0}
+
+
+def _create_galley(req: JobRequest, owner: str, paths: Paths,
+                   runner: JobRunner) -> dict:
+    """Create a galley job: one manuscript, a tier, and a dollar budget.
+
+    Galley reviews one manuscript at a time — the case file, style sheet, and
+    per-book budget are specific to it. The tier sets the governor's caps; the
+    budget is what it allocates across waves, defaulting to the tier's estimate
+    when the request leaves it blank."""
+    if len(req.file_ids) != 1:
+        raise HTTPException(
+            400, "Galley reviews one manuscript at a time — its budget and case "
+                 "file are specific to the book.")
+    source = common.resolve_upload(paths, req.file_ids[0], owner)
+    if source is None:
+        raise HTTPException(404, f"Uploaded file {req.file_ids[0]!r} is gone")
+
+    tier = req.tier or "T2"
+    if tier not in GALLEY_TIERS:
+        raise HTTPException(
+            400, f"tier must be one of {', '.join(GALLEY_TIERS)}")
+    budget = req.budget_usd if req.budget_usd is not None \
+        else GALLEY_DEFAULT_BUDGET[tier]
+    if budget <= 0:
+        raise HTTPException(400, "budget_usd must be greater than zero.")
+
+    group_id = datetime.now(timezone.utc).strftime("g%Y%m%d%H%M%S")
+    job = Job(
+        id=batchlib.new_job_id(source.name),
+        filename=source.name,
+        source_path=str(source),
+        model="",                             # the tier/adapters pick models
+        mode="now",                           # the orchestrator owns wave batching
+        group_id=group_id,
+        kind="galley",
+        tier=tier,
+        budget_usd=float(budget),
+        variant=req.variant or "",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        owner_id=owner,
+    )
+    return {"jobs": [runner.enqueue(job).to_api()], "group_id": group_id}
+
+
 def _edits_to_corrections_json(edits) -> str:
     """Serialize an extracted `Edit` list back into the corrections JSON the
     textarea holds, so a person reviews and edits it before anything is applied.
@@ -640,9 +696,9 @@ def register(app: FastAPI) -> None:
         runner: JobRunner = app.state.runner
         if req.mode not in ("now", "batch"):
             raise HTTPException(400, "mode must be 'now' or 'batch'")
-        if req.kind not in ("review", "prep", "corrections"):
+        if req.kind not in ("review", "prep", "corrections", "galley"):
             raise HTTPException(
-                400, "kind must be 'review', 'prep' or 'corrections'")
+                400, "kind must be 'review', 'prep', 'corrections' or 'galley'")
         if req.profile and req.profile not in PROFILE_KEYS:
             raise HTTPException(
                 400, f"profile must be one of {', '.join(PROFILE_KEYS)}")
@@ -669,6 +725,8 @@ def register(app: FastAPI) -> None:
         if req.kind == "corrections":
             effort = req.effort or app.state.settings.effort
             return _create_corrections(req, owner, paths, runner, effort=effort)
+        if req.kind == "galley":
+            return _create_galley(req, owner, paths, runner)
         if req.prep_output not in ("book", "indesign", "tracked", "both", "all"):
             raise HTTPException(
                 400, "prep_output must be 'book', 'indesign', 'tracked', "

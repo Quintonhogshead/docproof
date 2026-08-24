@@ -1,0 +1,44 @@
+[
+  {
+    "id": "E1-repeated-word",
+    "error_type": "repeated_word",
+    "chapter": 1,
+    "quote": "She walked to the the window and looked out at the rain",
+    "correction": "She walked to the window and looked out at the rain"
+  },
+  {
+    "id": "E2-comma-splice",
+    "error_type": "comma_splice",
+    "chapter": 1,
+    "quote": "The manuscript was finished, nobody wanted to read it.",
+    "correction": "The manuscript was finished. Nobody wanted to read it."
+  },
+  {
+    "id": "E3-serial-comma",
+    "error_type": "serial_comma",
+    "chapter": 2,
+    "quote": "He packed his boots, a lantern and a knife for the journey",
+    "correction": "He packed his boots, a lantern, and a knife for the journey"
+  },
+  {
+    "id": "E4-homophone-its",
+    "error_type": "homophone",
+    "chapter": 2,
+    "quote": "The town had lost it's charm over the long winter",
+    "correction": "The town had lost its charm over the long winter"
+  },
+  {
+    "id": "E5-name-drift",
+    "error_type": "name_drift",
+    "chapter": 3,
+    "quote": "Katherine smiled at the memory of that first morning",
+    "correction": "Kathryn smiled at the memory of that first morning"
+  },
+  {
+    "id": "E6-spelling-teh",
+    "error_type": "spelling",
+    "chapter": 3,
+    "quote": "He opened teh door and stepped into the cold",
+    "correction": "He opened the door and stepped into the cold"
+  }
+]

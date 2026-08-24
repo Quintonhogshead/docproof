@@ -564,6 +564,46 @@ def send_job_completion(watch_home, job, *, get_key=None,
         return False
 
 
+class GalleyEmailTransport:
+    """Deliver Galley's mid-run wave digests and alarms over DocWatch's own Gmail.
+
+    Satisfies galley.orchestrator.Transport (one ``send(kind, subject, body)``
+    method), so the orchestrator stays transport-agnostic — a Twilio or Pushover
+    transport slots in later without touching the loop. Reuses the shared notify
+    settings and Google sign-in, like send_job_completion, and is the same quiet
+    no-op when any of them is missing: a mid-run alert that cannot send must never
+    sink the run it is reporting on."""
+
+    def __init__(self, watch_home, *, get_key=None, opener=drive._open_url):
+        self.watch_home = watch_home
+        self._get_key = get_key
+        self._opener = opener
+
+    def send(self, kind: str, subject: str, body: str) -> None:
+        from app.settings import get_api_key
+
+        from .settings import GOOGLE_KEY, WatchSettings
+        try:
+            ws = WatchSettings.load(self.watch_home)
+            if not (ws.notify_on_complete and ws.notify_email):
+                return
+            if not (ws.client_id and ws.client_secret):
+                return
+            refresh = (self._get_key or get_api_key)(GOOGLE_KEY)
+            if not refresh:
+                return
+            token = drive.refresh_access_token(
+                ws.client_id, ws.client_secret, refresh, opener=self._opener)
+            tagged = f"{ALERT_TAGS} {subject}" if kind == "alarm" else subject
+            send(token, ws.notify_email, tagged, body, opener=self._opener)
+        except DriveError as e:
+            log.warning("Galley %s alert could not be emailed (%s): %s",
+                        kind, e, subject)
+        except Exception:                     # noqa: BLE001 - an alert must not sink the run
+            log.warning("Galley %s alert failed to send: %s", kind, subject,
+                        exc_info=True)
+
+
 def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:
     """Send a sample alert to the configured notify address, to prove the pipe
     end to end — no pass, no formatting, no cost.
