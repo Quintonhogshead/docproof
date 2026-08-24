@@ -687,6 +687,35 @@ def test_a_declined_suggestion_is_refused_with_the_reason(tmp_path):
     assert "nothing settles which copy" in str(e.value)
 
 
+def test_a_suggestion_can_span_a_paragraph_break(tmp_path):
+    """A model suggestion whose change crosses a paragraph break (join this line
+    with the next) materializes as a clickable placement — carrying the edit, not
+    an in-line span — and accepting it applies the merge through the engine."""
+    out, _ = _run(tmp_path, [{"find": "Their were", "replace": "There were"}])
+    texts = _texts(out.corrected_idml)
+    a, b = texts[2], texts[3]                # two consecutive body paragraphs
+    provider = _scripted({"decision": "apply", "find": a, "replace": a,
+                          "context": "", "format": "", "paragraph": "merge-next",
+                          "note": "joined the two lines"})
+    item = {"id": "q1", "find": a, "replace": a,
+            "advice": "run this line on into the next"}
+    option = materialize_suggestion(item, out.corrected_idml, provider,
+                                    model="fake-model", usage=Usage())
+    assert option["spans_break"] is True and option["suggested"] is True
+    assert option["found"] == "" and option["replacement"] == ""
+    # The preview shows the two lines becoming one.
+    assert option["before"] == f"{a}\n{b}" and option["after"] == f"{a} {b}"
+    assert option["edit"]["paragraph"] == "merge-next"
+    # Nothing was written by the dry run.
+    assert a in _texts(out.corrected_idml) and b in _texts(out.corrected_idml)
+    # Accepting it applies the merge: one fewer paragraph, the two lines joined.
+    result = apply_option(out.corrected_idml, {**option, "id": "q1-s1"})
+    joined = _texts(out.corrected_idml)
+    assert len(joined) == len(texts) - 1
+    assert any(a in t and b in t for t in joined)
+    assert a in result["before"]
+
+
 # --- the per-flag conversation -------------------------------------------------
 
 def test_a_chat_message_proposes_a_change_without_writing(tmp_path):
