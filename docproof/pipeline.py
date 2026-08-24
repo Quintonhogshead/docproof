@@ -614,7 +614,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         try:
             candidate_screening = prepare_candidate_screening(
                 cfg, doc, paragraphs=swept,
-                sweep_findings=sweep_findings)
+                sweep_findings=sweep_findings, lexicon=spell.lexicon)
         except Exception as exc:
             # Preserve the normal review and carry the failure into its own
             # artifact/warning instead of losing the diagnosis. In apply mode
