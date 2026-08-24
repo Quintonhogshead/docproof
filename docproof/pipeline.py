@@ -1267,6 +1267,103 @@ def chapter_sweep_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
         return []
 
 
+def _repair_findings(cfg: Config, prepared: Prepared, usage: Usage, *,
+                     trigger_findings: list[Finding],
+                     out_dir: str | Path | None = None,
+                     loss_sink: list | None = None,
+                     coverage=None) -> list[Finding]:
+    """The repair channel's member findings, or [] when the pass is off.
+
+    Triggered by the other passes' output: a sentence in which `trigger_findings`
+    carry at least `repair.error_threshold` separate corrections is routed to a
+    strong model for one minimal repair, which is diffed into a cluster of member
+    edits sharing a cluster_id and ruled on as a whole by a skeptical judge before
+    any member can write. The members reach `finish()`'s arbitration EARLY, so a
+    confirmed repair supersedes the scattered token edits that triggered it; their
+    atomicity is enforced after the judge gates by
+    `repair.enforce_cluster_atomicity`, and they are guard-exempt in the validator
+    because the judge's meaning check, not a character count, is their fabrication
+    defence. Additive and fail-open like the chapter sweep and Sapling: a pass
+    that cannot run (no key, a failed call) is a coverage note, never a failed
+    review. Runs in `finish`, once per review, so it covers both the sync and
+    batch paths from one call site. See docproof/repair.py."""
+    if not (cfg.repair.enabled and prepared.whole_document):
+        return []
+    from itertools import count
+
+    from . import repair as repair_mod
+    from .providers import build_provider
+
+    sites = repair_mod.triggered_sentences(
+        trigger_findings, prepared.doc.paragraphs,
+        threshold=cfg.repair.error_threshold)
+    if not sites:
+        return []
+
+    rcfg = cfg.model_copy(deep=True)
+    rcfg.api.model = cfg.repair.model
+    rcfg.api.effort = cfg.repair.effort
+    try:
+        repair_provider = build_provider(rcfg)
+    except Exception as exc:
+        log.warning("Repair is on but its provider could not be built (%s); "
+                    "skipping it.", exc)
+        if coverage is not None:
+            coverage.note("Repair", f"the pass is enabled but its model provider "
+                          f"could not be built ({exc}), so {len(sites)} "
+                          f"error-dense sentence(s) were not repaired", "skipped")
+        return []
+    try:
+        stats: dict = {}
+        clusters = repair_mod.repair_sites(
+            sites, repair_provider, model=cfg.repair.model,
+            max_output_tokens=cfg.repair.max_output_tokens, usage=usage,
+            context="\n\n".join(x for x in (
+                prepared.vocabulary, prepared.conventions,
+                prepared.story_sheet) if x),
+            max_added=cfg.repair.max_added_chars,
+            max_members=cfg.repair.max_members,
+            batch_size=cfg.repair.batch_size,
+            system=cfg.repair.repair_prompt or None,
+            concurrency=cfg.concurrency_for(cfg.repair.model),
+            loss_sink=loss_sink, stats=stats)
+        if not clusters:
+            return []
+        confirm_model = cfg.repair.confirm_model or cfg.api.model
+        ccfg = cfg.model_copy(deep=True)
+        ccfg.api.model = confirm_model
+        ccfg.api.effort = cfg.repair.confirm_effort
+        confirm_provider = build_provider(ccfg)
+        rejected: list = []
+        findings = repair_mod.confirm(
+            clusters, confirm_provider, model=confirm_model,
+            max_tokens=cfg.repair.max_output_tokens, usage=usage, ids=count(1),
+            batch_size=cfg.repair.batch_size,
+            edit_confidence=cfg.repair.edit_confidence,
+            system=cfg.repair.judge_prompt or None,
+            reject_sink=rejected, loss_sink=loss_sink,
+            concurrency=cfg.concurrency_for(confirm_model))
+        # The judge's rejections are where a real repair can die — persist them
+        # so a compare can measure triggered sentences -> survivors, as the other
+        # valves do with their reject logs.
+        if out_dir is not None and rejected:
+            import json
+            try:
+                Path(out_dir, "repair_rejected.json").write_text(
+                    json.dumps(rejected, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+            except OSError as e:                     # debug artifact, never fatal
+                log.warning("Repair: could not write reject log: %s", e)
+        return findings
+    except Exception as exc:
+        log.exception("Repair failed; continuing without it.")
+        if coverage is not None:
+            coverage.note("Repair", f"the sentence-repair pass failed ({exc}) "
+                          f"and its repairs are missing from this review",
+                          "failed")
+        return []
+
+
 def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
                         provider_factory, *, on_phase=None,
                         coverage=None) -> list[Finding]:
@@ -2115,6 +2212,23 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out,
                                          loss_sink=window_losses,
                                          coverage=coverage)
+    # The repair channel: sentences the other passes flagged with several errors
+    # are routed to a strong model and repaired as atomic clusters. It is TRIGGERED
+    # by those passes' output — the sweeps, consistency, Sapling, and the model
+    # edits gathered so far — so it runs here, after they are in hand. Its members
+    # sit EARLY in `proposed` (right after the deterministic sweeps and
+    # consistency, ahead of Sapling and the model) so the coherent repair claims
+    # its spans first and the scattered token edits that triggered it are dropped
+    # as overlapping. enforce_cluster_atomicity below keeps a repair from ever
+    # shipping by halves. Whole-document only. See docproof/repair.py.
+    if on_phase and cfg.repair.enabled and prepared.whole_document:
+        on_phase("repair")
+    repair_findings = _repair_findings(
+        cfg, prepared, usage, out_dir=out, loss_sink=window_losses,
+        coverage=coverage,
+        trigger_findings=(list(prepared.sweep_findings)
+                          + list(prepared.consistency_findings)
+                          + sapling_findings + model_findings))
     # Below-gate model edits get one more chance to become a tracked change: the
     # confirm valve re-rules each in literary context, so a real dialogue-
     # mechanics catch the type prompts marked "low" is promoted rather than left
@@ -2157,6 +2271,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                      batch_reads=chapter_batch_reads)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
+                + repair_findings
                 + sapling_findings
                 + model_findings
                 + promoted
@@ -2167,7 +2282,13 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         return validate_findings(findings, prepared.doc, cfg.min_confidence,
                                  query_types=prepared.query_types,
                                  format_types=prepared.format_types,
-                                 edit_guard=cfg.edit_guard)
+                                 edit_guard=cfg.edit_guard,
+                                 # A sentence repair legitimately inserts a
+                                 # dropped word or clause the 16-char growth cap
+                                 # would refuse; its fabrication defence is the
+                                 # cluster judge's meaning ruling, not a char
+                                 # count. See docproof/repair.py.
+                                 guard_exempt=frozenset({"repair"}))
 
     validated = _validate(proposed)
     # Recurrence propagation: a free deterministic post-pass over the arbitrated
@@ -2181,7 +2302,14 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         from .adjudicate import propagate_recurrences
         covered_ids = {p.para_id for c in prepared.chunks for p in c.paragraphs}
         recurrences = propagate_recurrences(
-            validated,
+            # Repair-cluster members are excluded as a propagation source: a
+            # single member swap propagated to another identical sentence lands
+            # there with no cluster_id and so no atomicity guarantee — a partial
+            # repair at the far site, the one thing this channel must never
+            # produce. A broken sentence is repaired where it is read; if it
+            # recurs verbatim, it is a broken sentence there too and the pass
+            # reads it there. (v1 decision — see docproof/repair.py.)
+            [f for f in validated if not f.cluster_id],
             [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
             dictionary=cfg.spellcheck.dictionary or prepared.variant.dictionary,
             protected=prepared.spell.lexicon,
@@ -2207,6 +2335,15 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held,
         on_phase=on_phase, coverage=coverage)
+    # Repair atomicity, AFTER the gates so it sees every partial failure at once:
+    # a member dropped at validation for overlapping a surer edit, and a member a
+    # judge gate just withdrew. If any member of a repair cluster is no longer a
+    # clean tracked change, the rest are withdrawn to the margin with it, so the
+    # run never writes half a broken-sentence repair. Uses the same span-
+    # preserving to_query the gates use, so nothing else in the run moves.
+    if cfg.repair.enabled and prepared.whole_document:
+        from .repair import enforce_cluster_atomicity
+        enforce_cluster_atomicity(validated, prepared.doc)
     # Residual coverage, after every gate has settled what is actually being
     # edited: number-rule trigger sites no surviving edit touched become
     # margin queries, so a rule the model applied to most-but-not-all matches

@@ -403,6 +403,44 @@ chapter_sweep:
   confirm_model:            # unset = api.model (the detector's)
   confirm_effort: medium
 
+# Repair channel: route error-dense sentences to a strong model, fix each as one
+# ATOMIC cluster. Where every other correcting pass emits an atomic token edit,
+# this one repairs a broken sentence whole — and it is TRIGGERED by the other
+# passes: a sentence in which the detectors flag at least `error_threshold`
+# separate corrections is probably broken as a whole, so it is routed to a strong
+# model (Fable) for one minimal repair. The diff becomes a cluster of co-dependent
+# member edits sharing a cluster_id; a skeptical judge rules on the WHOLE cluster
+# (broken, minimally fixed, meaning-preserved), an affirmation at edit_confidence
+# writes, a softer one asks. The members sit early in arbitration so the coherent
+# repair supersedes the scattered token edits that triggered it, and they ship as
+# separate tracked changes but stand or fall together — if any member does not
+# survive, the whole cluster is withdrawn, so a repair is never shipped by halves.
+# The judge's meaning ruling, not a character count, is the fabrication defence,
+# so repair edits are exempt from the edit guard; a deterministic size cap still
+# drops a "repair" that rewrote more than it fixed. OFF by default and the
+# highest-risk pass — meant to be measured in shadow mode before it is trusted to
+# write. Whole-document only. See docproof/repair.py and docs/repair.md.
+repair:
+  enabled: false
+  error_threshold: 3        # THE TRIGGER: a sentence with this many separate
+                            # flagged corrections is routed to the repair model
+                            # (the judge still declines any that is only stylistic)
+  model: claude-fable-5     # the repair read; needs ANTHROPIC_API_KEY (skipped,
+                            # with a coverage note, if the key is unset)
+  effort: high
+  max_output_tokens: 16000  # the repair reply (repaired sentences + thinking);
+                            # a truncated window is halved and re-asked
+  confirm_model:            # the judge; unset = api.model (the detector's)
+  confirm_effort: high
+  batch_size: 20            # triggered sentences per request
+  edit_confidence: high     # bar a repair clears to WRITE; softer = margin query
+  max_added_chars: 120      # a "repair" adding more net text than this is a
+                            # rewrite, dropped before the judge (the deterministic
+                            # half of the fabrication defence)
+  max_members: 12           # ...or touching more spans than this
+  repair_prompt: ""         # empty = built-in contract (see docproof/repair.py)
+  judge_prompt: ""          # empty = built-in judge (see docproof/repair.py)
+
 # Line-editing pass: the half of a proofreader's job the other passes refuse. A
 # reader proposes small smoothings — a word doing no work, an unidiomatic
 # preposition, an awkward coordination, a rough tense, an ambiguous pronoun —

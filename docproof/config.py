@@ -809,6 +809,86 @@ class ChapterSweepConfig(BaseModel):
         return self
 
 
+class RepairConfig(BaseModel):
+    """The repair channel: route error-dense sentences to a strong model and fix
+    each as one atomic cluster.
+
+    Where every other correcting pass emits an atomic token edit, this one
+    repairs a broken sentence as a whole — and it is triggered by the other
+    passes' own output. A sentence in which the ordinary detectors flag at least
+    ``error_threshold`` separate corrections is probably broken as a whole, so
+    it is routed to a strong model (Fable by default) for one minimal repair. The
+    diff becomes a cluster of co-dependent member edits sharing one cluster_id; a
+    skeptical judge rules on the whole cluster — broken, minimally fixed,
+    meaning-preserved — and only an affirmation at ``edit_confidence`` writes, a
+    softer one asks in the margin. The members sit early in arbitration so the
+    coherent repair supersedes the scattered token edits that triggered it, and
+    they ship as separate tracked changes but stand or fall together:
+    ``repair.enforce_cluster_atomicity`` withdraws the whole cluster if any
+    member does not survive, so the run never ships half a repair.
+
+    OFF by default and the highest-risk pass in the pipeline — judgment edits
+    that write were the corrections engine's QA failure class — so it ships
+    behind the trigger threshold, the judge, the meaning gate, and the atomicity
+    enforcement, and is meant to be measured in shadow mode before it is trusted
+    to write. Whole-document only. See docproof/repair.py and docs/repair.md."""
+    enabled: bool = False
+    # THE TRIGGER. A sentence in which the ordinary detectors flag at least this
+    # many separate corrections is routed to the repair model. 3 is deliberately
+    # conservative — a sentence needing three separate fixes is likely broken as
+    # a whole, not merely dotted with isolated slips — and the judge still
+    # declines any flagged sentence that turns out only stylistic. Lower to cast
+    # a wider net (more sentences routed, more model cost, the judge the backstop);
+    # a sentence under the threshold keeps its individual token edits as before.
+    error_threshold: int = Field(default=3, ge=2)
+    # The repair reader. A repair is a judgment call on the whole sentence, so it
+    # defaults to the strongest model; the read is cheap because it is scoped to
+    # only the triggered sentences, not the whole book.
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # The ceiling covers THINKING too on a reasoning model, and a truncated
+    # structured reply parses as nothing; a window that truncates is halved and
+    # re-asked, and anything still unruled is counted, never taken for "left
+    # unchanged".
+    max_output_tokens: int = Field(default=16_000, ge=1)
+    batch_size: int = Field(default=20, ge=1)   # triggered sentences per request
+    # The judge that disposes. Defaults to the house reviewer so the pass needs
+    # no key beyond the reader's; a stronger judge is a cheap per-run pick since
+    # its verdicts are short. Unset confirm_model = api.model.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # Only a repair affirmed at this confidence writes; softer affirmations
+    # become one margin question carrying the whole repair. High by default: a
+    # repair that writes is the riskiest edit the tool makes.
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The deterministic half of the fabrication defence (the judge's
+    # meaning-preserved ruling is the other half). A "repair" that added more
+    # than this many net characters, or touched more than this many spans, is a
+    # rewrite rather than a repair and is dropped before the judge — so a
+    # paraphrase cannot ride in under the validator's guard exemption that repair
+    # findings get. A dropped clause is a legitimate repair, hence a cap well
+    # above the ordinary 16-char edit-guard growth limit.
+    max_added_chars: int = Field(default=120, ge=1)
+    max_members: int = Field(default=12, ge=1)
+    # Both prompts, editable per job like the smoothing and round judges'. Empty
+    # uses the built-in contract in repair.py; a non-empty value replaces it.
+    repair_prompt: str = ""
+    judge_prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"repair.model '{self.model}' is not in the catalog")
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"repair.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class SmoothingConfig(BaseModel):
     """The line-editing pass: the half of a proofreader's job DocProof otherwise
     refuses. A line editor reads the manuscript and proposes small smoothings —
@@ -1510,6 +1590,7 @@ class Config(BaseModel):
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
     chapter_sweep: ChapterSweepConfig = Field(default_factory=ChapterSweepConfig)
+    repair: RepairConfig = Field(default_factory=RepairConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
