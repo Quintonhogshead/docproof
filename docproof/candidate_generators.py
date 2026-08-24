@@ -38,6 +38,11 @@ INITIAL_CANDIDATE_TYPES = (
     "term_consistency",
     # P2-05 grammar: LanguageTool / parser-backed mechanical floor (adapted).
     "grammar",
+    # Exhaustive comma-boundary sweep: every comma-eligible seam becomes a
+    # question — clause joins in both directions (missing AND removable),
+    # every remaining comma, fronted-opener seams, bare nonrestrictive
+    # who/which. Deliberately low-precision; the judge buys the precision.
+    "comma_boundary",
 )
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’\-]*")
@@ -238,6 +243,7 @@ def generate_initial_candidates(
         "homophone": _homophone_candidates,
         "punctuation_style": _punctuation_style_candidates,
         "compound_sentence_comma": _compound_comma_candidates,
+        "comma_boundary": _comma_boundary_candidates,
     }
     for candidate_type, generator in per_paragraph.items():
         if candidate_type in enabled:
@@ -646,6 +652,179 @@ def _compound_comma_candidates(para: ParagraphRef) -> list[Candidate]:
                           "join_window": para.text[
                               max(0, insert_at - 40):insert_at + 40]},
                 risk_prior=0.55, channel="edit"))
+    return out
+
+
+# Every comma-eligible seam, exhaustively. The Redding miss inventory is 73%
+# comma-class edits, and the clever generators above locate only a sliver of
+# them; this sweep trades rule precision for notice and hands the judge the
+# whole decision. Four seam families, all needs_model_judgment:
+#   join_missing  — clause join (FANBOYS or subordinator) with no comma before
+#   join_present  — clause join WITH a comma (the removal direction)
+#   loose_comma   — any other comma in running prose (removal direction)
+#   opener_seam   — fronted opener with no comma before the likely main-clause
+#                   subject; bare nonrestrictive who/which
+_CB_CONJ = re.compile(
+    r"(?P<pre>[\w’'])(?P<comma>,)?(?P<sp>\s+)"
+    r"(?P<conj>and|but|or|nor|for|so|yet|as|because|when|if|after|before|"
+    r"while|since|though|although|until|unless|whereas)\s+[\w“‘\"']",
+    re.IGNORECASE)
+_CB_RELATIVE = re.compile(r"(?P<pre>[\w’'])(?P<sp>\s+)(?P<rel>who|which)\s+\w")
+_CB_OPENER = frozenset({
+    "as", "because", "when", "if", "after", "before", "while", "since",
+    "though", "although", "until", "unless", "whereas", "in", "at", "on",
+    "with", "during", "despite", "throughout", "over", "under", "through",
+    "from", "by", "for", "to", "once", "yes", "no", "well", "oh", "now",
+    "so", "first", "second", "finally", "however", "instead", "sometimes",
+    "often", "usually", "eventually", "someday", "today", "tomorrow",
+    "yesterday", "growing", "being", "having", "looking", "trying",
+})
+_CB_SUBJECT = frozenset({
+    "i", "you", "he", "she", "it", "we", "they", "there", "the", "a", "an",
+    "my", "your", "his", "her", "our", "their", "this", "these", "those",
+})
+_CB_PRONOUN = frozenset({"i", "he", "she", "we", "they", "there", "you", "it",
+               "that", "this"})
+# Predecessors after which a pronoun is routinely an object or a licensed
+# clause continuation, not a bare seam: conjunctions and subordinators (the
+# join seams own those), complementizers, and the verbs/prepositions that most
+# commonly take a pronoun straight after them.
+_CB_NO_SEAM = frozenset({
+    "and", "but", "or", "nor", "for", "so", "yet", "as", "because", "when",
+    "if", "after", "before", "while", "since", "though", "although", "until",
+    "unless", "whereas", "that", "which", "who", "whom", "than", "whether",
+    "where", "why", "how", "what", "to", "of", "with", "at", "on", "in",
+    "by", "from", "about", "like", "let", "lets", "make", "makes", "made",
+    "making", "give", "gave", "gives", "giving", "tell", "told", "tells",
+    "telling", "say", "said", "says", "saying", "ask", "asked", "asks",
+    "want", "wants", "wanted", "need", "needs", "needed", "love", "loves",
+    "loved", "thank", "think", "thought", "know", "knew", "knows", "believe",
+    "hope", "wish", "mean", "means", "meant", "help", "helps", "helped",
+    "watch", "watched", "see", "saw", "hear", "heard", "do", "did", "does",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+})
+_CB_WINDOW = 32
+
+
+def _cb_window(text: str, start: int, end: int) -> str:
+    return text[max(0, start - _CB_WINDOW):end + _CB_WINDOW]
+
+
+def _comma_boundary_candidates(para: ParagraphRef) -> list[Candidate]:
+    text = para.text
+    out: list[Candidate] = []
+    claimed_commas: set[int] = set()
+
+    def seam(kind: str, start: int, end: int, *, observed, correction,
+             reason: str, explanation: str, extra: dict) -> None:
+        evidence = dict(extra)
+        evidence["seam"] = kind
+        evidence["window"] = _cb_window(text, start, end)
+        out.append(_candidate(
+            "comma_boundary", para, start, end,
+            generator="candidate.comma_boundary", observed=observed,
+            correction=correction, decision="needs_model_judgment",
+            reason_code=reason, explanation=explanation, evidence=evidence,
+            risk_prior=0.4, channel="edit"))
+
+    sentence_starts = [0] + [m.end() for m in _SENTENCE_TERMINAL.finditer(text)]
+
+    for match in _CB_CONJ.finditer(text):
+        conj = match.group("conj").lower()
+        # Mid-sentence only: a couple of words must precede the join.
+        clause_start = max(s for s in sentence_starts if s <= match.start())
+        if match.start("sp") - clause_start < 8:
+            continue
+        if match.group("comma"):
+            comma_at = match.start("comma")
+            claimed_commas.add(comma_at)
+            seam("join_present", comma_at, comma_at + 1, observed=",",
+                 correction=None, reason="comma_present_at_clause_join",
+                 explanation="A comma sits before this conjunction; whether "
+                             "the join earns one needs the sentence.",
+                 extra={"conjunction": conj})
+        else:
+            insert_at = match.start("sp")
+            seam("join_missing", insert_at, insert_at, observed="",
+                 correction=",", reason="no_comma_at_clause_join",
+                 explanation="No comma before this conjunction; whether the "
+                             "join needs one depends on the clauses.",
+                 extra={"conjunction": conj})
+
+    for match in _CB_RELATIVE.finditer(text):
+        insert_at = match.start("sp")
+        seam("opener_seam", insert_at, insert_at, observed="",
+             correction=",", reason="bare_relative_clause",
+             explanation="A who/which clause with no comma; nonrestrictive "
+                         "readings take one.",
+             extra={"relative": match.group("rel").lower()})
+
+    # Fronted opener: sentence starts on an opener cue, carries no comma yet,
+    # and a plausible main-clause subject appears a few words in — the seam at
+    # the right edge of the word before that subject is a comma question (the
+    # comma lands on the preceding word, so the anchor must too). One per
+    # sentence, plus the transition/interjection comma straight after a
+    # single-word opener.
+    for index, s_start in enumerate(sentence_starts):
+        s_end = (sentence_starts[index + 1]
+                 if index + 1 < len(sentence_starts) else len(text))
+        tokens = [(m.group(0), m.start(), m.end())
+                  for m in _WORD.finditer(text, s_start, s_end)]
+        if len(tokens) < 4:
+            continue
+        first = tokens[0][0].lower()
+        opener = first in _CB_OPENER or first.endswith(("ly", "ing"))
+        if opener:
+            seam("opener_seam", tokens[0][2], tokens[0][2], observed="",
+                 correction=",", reason="transition_opener_no_comma",
+                 explanation="A transition or interjection opener often takes "
+                             "a comma straight after it.",
+                 extra={"opener": first})
+            for word, w_start, w_end in tokens[2:10]:
+                if "," in text[s_start:w_start]:
+                    break
+                if word.lower() in _CB_SUBJECT:
+                    seam("opener_seam", w_start - 1, w_start - 1, observed="",
+                         correction=",", reason="fronted_opener_no_comma",
+                         explanation="The sentence opens on fronted matter "
+                                     "with no comma before the likely main "
+                                     "clause.",
+                         extra={"opener": first, "subject": word.lower()})
+                    break
+        # Mid-sentence bare-clause seam: a subject pronoun with no comma or
+        # conjunction in front of it deep in the sentence is where a clause
+        # boundary may want a comma ("I had a good friend they would move").
+        for word, w_start, w_end in tokens[3:]:
+            if word.lower() not in _CB_PRONOUN:
+                continue
+            gap = text[max(s_start, w_start - 24):w_start]
+            if "," in gap:
+                continue
+            prev = re.findall(r"[\w’']+", gap)
+            if not prev or prev[-1].lower() in _CB_NO_SEAM:
+                continue
+            seam("clause_seam", w_start - 1, w_start - 1, observed="",
+                 correction=",", reason="bare_pronoun_clause_seam",
+                 explanation="A pronoun opens what may be a new clause with "
+                             "no comma before it.",
+                 extra={"subject": word.lower()})
+
+    # Every remaining comma in running prose is a removal question.
+    for pos, char in enumerate(text):
+        if char != "," or pos in claimed_commas:
+            continue
+        # Skip list-like environments the list/number generators own: a comma
+        # directly between digits, and a comma before a closing quote.
+        before = text[pos - 1] if pos else ""
+        after = text[pos + 1:pos + 2]
+        if before.isdigit() and text[pos + 1:pos + 4].strip()[:1].isdigit():
+            continue
+        if after in "”’\"'":
+            continue
+        seam("loose_comma", pos, pos + 1, observed=",", correction=None,
+             reason="comma_in_running_prose",
+             explanation="Whether this comma belongs is the judge's call.",
+             extra={})
     return out
 
 

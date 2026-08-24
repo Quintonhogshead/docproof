@@ -10,7 +10,9 @@ from .candidate_ledger import (
 from .candidate_models import ScreeningPacket, Verdict
 from .models import Usage
 from .providers import Provider
-from .providers.base import strict_json_schema
+from .providers.base import BatchRequest, ProviderResult, strict_json_schema
+
+SCHEMA_NAME = "candidate_screening_verdicts"
 
 
 class _Decision(BaseModel):
@@ -72,6 +74,46 @@ def parse_candidate_judgments(packet: ScreeningPacket, parsed: dict, *,
                     for row in body.deferred)
     by_id = {verdict.candidate_id: verdict for verdict in verdicts}
     return [by_id[candidate_id] for candidate_id in packet.candidate_ids]
+
+
+def screening_batch_request(packet: ScreeningPacket) -> BatchRequest:
+    """One batch unit for a packet: same prompt, schema, and custom_id the
+    synchronous path uses, so a batched verdict is byte-identical to a sync one.
+    The packet_id round-trips as the custom_id and matches results back."""
+    return BatchRequest(
+        custom_id=packet.packet_id, system=_SYSTEM,
+        user=packet.prompt_payload(),
+        schema=strict_json_schema(_Judgments), schema_name=SCHEMA_NAME)
+
+
+def verdicts_from_batch_result(
+        packet: ScreeningPacket, result: ProviderResult | None, *,
+        judge_id: str) -> list[Verdict] | None:
+    """Verdicts for a completed batch result, or None to re-judge synchronously.
+
+    A batch request gets exactly one shot — there is no in-batch focused retry —
+    so anything short of a complete, valid partition (a refusal, a truncation,
+    a coverage gap, a hallucinated ID, or an ill-formed decision row) returns
+    None. The caller then re-judges just that packet on the synchronous path,
+    where the focused-retry loop lives. This is the batch analogue of the
+    review pass recovering a dropped request with one synchronous call."""
+    if result is None or result.parsed is None or result.stop_reason != "ok":
+        return None
+    try:
+        body = _Judgments.model_validate(result.parsed)
+    except Exception:
+        return None
+    returned = (list(body.pass_ids)
+                + [row.candidate_id for row in body.errors]
+                + [row.candidate_id for row in body.uncertain]
+                + [row.candidate_id for row in body.deferred])
+    try:
+        validate_candidate_verdict_coverage(packet.candidate_ids, returned)
+    except IncompleteCandidateVerdicts:
+        return None
+    if _invalid_decision_ids(body, packet):
+        return None
+    return parse_candidate_judgments(packet, result.parsed, judge_id=judge_id)
 
 
 def judge_screening_packet(

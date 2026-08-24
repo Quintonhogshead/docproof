@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,7 +15,8 @@ from typing import Sequence
 from .candidate_generators import generate_initial_candidates
 from .candidate_judge import (
     candidate_judgment_fingerprint, candidate_judgment_prompt,
-    judge_screening_packet)
+    judge_screening_packet, screening_batch_request,
+    verdicts_from_batch_result)
 from .candidate_ledger import CandidateLedger
 from .candidate_models import (
     Candidate, CandidateAnchor, CandidateStatus, ScreeningPacket, Verdict,
@@ -198,7 +200,9 @@ class CandidateScreeningRun:
         cfg = root_cfg.candidate_screening
         if not cfg.judgment_enabled or not self.packets:
             return Usage()
-        primary = self._judge_packets(
+        judge = (self._judge_packets_batched if cfg.batch
+                 else self._judge_packets)
+        primary = judge(
             self.packets, stage="batched_primary_judgment",
             model=cfg.model, effort=cfg.effort, root_cfg=root_cfg,
             provider_factory=provider_factory, should_cancel=should_cancel)
@@ -270,6 +274,143 @@ class CandidateScreeningRun:
                     explanation="No complete escalation verdict was returned.")
         self.ledger.assert_accounted()
         return self.usage
+
+    def _await_batch(self, provider, batch_id, cfg, *, should_cancel=None
+                     ) -> dict:
+        """Block until the batch is terminal, then collect. An empty dict means
+        the batch did not complete (timed out, failed, expired, cancelled) — the
+        caller reads that as "resolve every packet synchronously," never a loss."""
+        deadline = time.monotonic() + cfg.batch_max_wait_seconds
+        while True:
+            if should_cancel and should_cancel():
+                raise CandidateScreeningCancelled()
+            status = provider.poll_batch(batch_id)
+            if status.terminal:
+                break
+            if time.monotonic() >= deadline:
+                log.warning("Candidate batch %s did not complete within %ss; "
+                            "falling back to synchronous judgment.",
+                            batch_id, cfg.batch_max_wait_seconds)
+                return {}
+            time.sleep(cfg.batch_poll_interval_seconds)
+        if status.state != "completed":
+            log.warning("Candidate batch %s ended %s; falling back to "
+                        "synchronous judgment.", batch_id, status.state)
+            return {}
+        return provider.collect_batch(batch_id)
+
+    def _judge_packets_batched(
+            self, packets: list[ScreeningPacket], *, stage: str, model: str,
+            effort: str | None, root_cfg, provider_factory,
+            should_cancel=None) -> list[Verdict]:
+        """Judge packets as one vendor batch, re-judging the tail synchronously.
+
+        Every packet goes out in a single batch at the 50% batch rate; the lane
+        block-polls to completion and applies each clean verdict. Any packet the
+        batch could not resolve — or the whole set, if the batch never completes
+        — falls through to :meth:`_judge_packets`, where the focused-retry loop
+        lives. Batching is therefore a cheaper fast path only: it never adds a
+        way to lose a candidate the synchronous path would have kept."""
+        cfg = root_cfg.candidate_screening
+        if not packets:
+            return []
+
+        # Whole-batch cost ceiling at the batch rate. Over it, defer every
+        # candidate exactly as the synchronous per-packet guard does.
+        estimates = [_packet_estimate(packet, model, cfg.max_output_tokens,
+                                      effort, batch=True) for packet in packets]
+        prior = cost_of_usage(self.usage, fallback_model=model, batch=True) or 0.0
+        if any(estimate is None for estimate in estimates) or (
+                prior + sum(e for e in estimates if e) > cfg.max_cost_usd):
+            total = sum(e for e in estimates if e)
+            for packet in packets:
+                self.budget_omissions.update(packet.candidate_ids)
+                self.packet_records.append({
+                    "packet_id": packet.packet_id, "stage": stage,
+                    "model": model, "submitted_ids": list(packet.candidate_ids),
+                    "returned_ids": [], "batched": True,
+                    "failure": "configured_cost_ceiling",
+                    "estimated_cost_usd": total})
+                for candidate_id in packet.candidate_ids:
+                    self.ledger.observe(
+                        candidate_id, stage=stage,
+                        judge_id="candidate.cost_guard",
+                        reason_code="cost_ceiling_deferred",
+                        explanation="The batch did not fit under the configured model budget.",
+                        evidence={"estimated_cost_usd": total,
+                                  "max_cost_usd": cfg.max_cost_usd})
+            return []
+
+        try:
+            model_cfg = root_cfg.model_copy(deep=True)
+            model_cfg.api.model = model
+            model_cfg.api.effort = effort
+            provider = provider_factory(model_cfg)
+            requests = [screening_batch_request(packet) for packet in packets]
+            batch_id = provider.submit_batch(
+                model=model, requests=requests,
+                max_tokens=cfg.max_output_tokens)
+            results = self._await_batch(
+                provider, batch_id, cfg, should_cancel=should_cancel)
+        except CandidateScreeningCancelled:
+            raise
+        except Exception as exc:
+            # The batch never produced results (submit/collect error): nothing
+            # was applied and nothing billed here, so re-judge the whole set
+            # synchronously rather than lose it.
+            log.warning("Candidate batch submit/collect failed (%s); re-judging "
+                        "%d packet(s) synchronously.", exc, len(packets))
+            return self._judge_packets(
+                packets, stage=stage, model=model, effort=effort,
+                root_cfg=root_cfg, provider_factory=provider_factory,
+                should_cancel=should_cancel)
+
+        rows: list[Verdict] = []
+        fallback: list[ScreeningPacket] = []
+        for packet in packets:
+            result = results.get(packet.packet_id)
+            verdicts = verdicts_from_batch_result(
+                packet, result, judge_id=model)
+            record = {
+                "packet_id": packet.packet_id, "stage": stage, "model": model,
+                "submitted_ids": list(packet.candidate_ids),
+                "returned_ids": [], "batched": True}
+            if verdicts is None:
+                # Missing, refused, truncated, or ill-formed — hand this packet
+                # to the synchronous focused-retry path. Not observed as
+                # submitted here; _judge_packets records its own provenance.
+                record["failure"] = "batch_unresolved_fell_back_to_sync"
+                self.packet_records.append(record)
+                fallback.append(packet)
+                continue
+            for candidate_id in packet.candidate_ids:
+                self.ledger.observe(
+                    candidate_id, stage=stage, judge_id=model,
+                    reason_code="packet_submitted",
+                    explanation="Candidate was judged in a batched shared-context packet.",
+                    input_record={"packet_id": packet.packet_id,
+                                  "batched": True})
+            self.usage.add(result.usage, model=model)
+            packet_cost = estimate_cost(
+                model, input_tokens=result.usage.input_tokens,
+                output_tokens=result.usage.output_tokens, batch=True) or 0.0
+            record["returned_ids"] = [v.candidate_id for v in verdicts]
+            record["complete"] = True
+            record["actual_cost_usd"] = round(packet_cost, 8)
+            per_candidate = packet_cost / len(verdicts) if verdicts else 0.0
+            for verdict in verdicts:
+                self.verdict_costs[(stage, verdict.candidate_id)] = per_candidate
+            self.packet_records.append(record)
+            rows.extend(verdicts)
+
+        if fallback:
+            log.info("Candidate batch: %d/%d packet(s) unresolved by the batch; "
+                     "re-judging synchronously.", len(fallback), len(packets))
+            rows.extend(self._judge_packets(
+                fallback, stage=stage, model=model, effort=effort,
+                root_cfg=root_cfg, provider_factory=provider_factory,
+                should_cancel=should_cancel))
+        return rows
 
     def _judge_packets(self, packets: list[ScreeningPacket], *, stage: str,
                        model: str, effort: str | None, root_cfg,
@@ -580,8 +721,12 @@ class CandidateScreeningRun:
         incomplete = sum(not row.get("complete", False)
                          and row.get("failure") != "configured_cost_ceiling"
                          for row in self.packet_records)
+        # Price at the rate the primary judgment actually paid. The by-model
+        # breakdown does not record which calls were batched, so a batch run's
+        # small synchronous tail (fallback + escalation) is priced at the batch
+        # rate too — a minor over-discount, dwarfed by the primary batch.
         cost = cost_of_usage(
-            self.usage, fallback_model=cfg.model, batch=False) or 0.0
+            self.usage, fallback_model=cfg.model, batch=cfg.batch) or 0.0
         return {
             "schema_version": 1,
             "mode": self.mode,
@@ -705,7 +850,8 @@ def _grammar_findings(cfg, doc: DocumentModel, rows,
     dictionary = (cfg.spellcheck.dictionary or getattr(variant, "dictionary", None)
                   or "en-US")
     cands = propose(rows, lexicon=lexicon, dictionary=dictionary,
-                    disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules))
+                    disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
+                    picky=cfg.languagetool.picky)
     by_id = index_paragraphs(doc)
     findings: list[Finding] = []
     for index, rc in enumerate(cands):
@@ -963,12 +1109,12 @@ def _invalid(candidate: Candidate, reason: str, explanation: str) -> Verdict:
 
 
 def _packet_estimate(packet: ScreeningPacket, model: str, max_tokens: int,
-                     effort: str | None) -> float | None:
+                     effort: str | None, *, batch: bool = False) -> float | None:
     input_tokens = estimate_tokens(
         candidate_judgment_prompt() + packet.prompt_payload())
     return estimate_cost(
         model, input_tokens=math.ceil(input_tokens * 1.2),
-        output_tokens=max_tokens, effort=effort)
+        output_tokens=max_tokens, effort=effort, batch=batch)
 
 
 def _overlapping_error_ids(verdicts: list[Verdict], ledger: CandidateLedger

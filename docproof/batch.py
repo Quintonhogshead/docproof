@@ -637,6 +637,7 @@ def collect_findings(job: Job, provider: Provider,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
                 workers=cfg.languagetool.workers,
                 scan_chars=cfg.languagetool.scan_chars,
+                picky=cfg.languagetool.picky,
                 coverage=coverage)
             lt_provider, lt_model = provider, cfg.api.model
             if cfg.languagetool.confirm_model:

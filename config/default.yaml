@@ -337,7 +337,16 @@ rewrite:
 # LanguageTool jar (auto-downloaded, cached), so OFF by default. Whole-document
 # only. See docproof/languagetool.py.
 languagetool:
+  # enabled is driven by the app tier (Standard and up turn it on); the base
+  # config leaves it off so a raw-config or checkpoint path does not silently
+  # boot the ~850MB JVM. When it DOES run, it runs at the picky level below.
   enabled: false
+  picky: true               # LanguageTool's strict level: its extra higher-FP
+                            # rules run too (more comma/hyphen/style catches +
+                            # more noise). The denylist and rewrite.confirm valve
+                            # still filter every match, so the extra noise costs
+                            # confirm-valve LLM calls, not blind edits. N-grams
+                            # are NOT enabled (they need multi-GB data files).
   dictionary: en-US         # LanguageTool language code (en-US | en-GB | …)
   disabled_rules: []        # extra rule ids to drop, atop the built-in
                             # artifact/style denylist (unpaired-quote, caps-start,
@@ -639,6 +648,13 @@ error_types:
   # Its own pass so the judgment stays isolated and easy to toggle off. Query
   # channel: asks whether a period should be a question mark, never edits.
   - terminal_mark
+  # the one comma rule that DELETES rather than adds: an unpaired comma the
+  # sentence cannot defend (subject|verb, verb|object, correlative halves, or a
+  # defining clause). Every other comma type here ADDS the commas house style
+  # wants, so this is the only counterweight — kept in its own pass because a
+  # deletion is higher-risk than an insertion and, like terminal_mark, its LLM
+  # precision is unproven; isolate it so it stays easy to toggle and measure.
+  - unnecessary_comma
 # House-style conventions the sweeps enforce where the right answer is the
 # press's choice, not a rule. Not in config/variants/ because none of it flips
 # on US/UK — a house sets it once for every manuscript.
@@ -783,11 +799,20 @@ candidate_screening:
     - compound_sentence_comma  # comma before a two-clause coordinating join
     - term_consistency      # document-wide term/spelling drift (reused scan)
     - grammar               # LanguageTool mechanical floor (reused, opt-in)
+    # - comma_boundary      # EXHAUSTIVE comma seams (low precision; judge prunes
+    #                         the FPs). ~10x the candidate volume; opt in only
+    #                         with batch: true and a house-style-aware judge.
   reuse_local_analyzers: true   # feed sweeps/quote/consistency scans as candidates
   languagetool_floor: false     # also run LanguageTool (heavy JVM); opt-in
   max_candidates: 200000
   batch_size: 40            # candidates per judge request; 100 invited ID slips
   judgment_enabled: true
+  # Send the primary judgment as one vendor batch (50% cheaper). The lane
+  # block-polls it to completion, then re-judges any unresolved packet on the
+  # synchronous focused-retry path. Escalation stays synchronous.
+  batch: false
+  batch_poll_interval_seconds: 20
+  batch_max_wait_seconds: 86400   # 24h vendor window; then drop to synchronous
   model: gpt-5.6-luna
   effort: low
   escalation_model:
