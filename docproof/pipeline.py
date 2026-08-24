@@ -2158,6 +2158,23 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                  edit_guard=cfg.edit_guard)
 
     validated = _validate(proposed)
+    # Recurrence propagation: a free deterministic post-pass over the arbitrated
+    # set. Every validated word/phrase swap is searched across the whole book and
+    # re-emitted at its other occurrences, so a typo fixed here but missed there
+    # is fixed in both. Its findings are re-validated (the validator dedups any
+    # span an existing finding already holds) and appended BEFORE the judge gates,
+    # so a propagated edit faces the same meaning/fix screens as any other change.
+    # See docproof/adjudicate.propagate_recurrences.
+    if cfg.recurrence.enabled and prepared.whole_document:
+        from .adjudicate import propagate_recurrences
+        covered_ids = {p.para_id for c in prepared.chunks for p in c.paragraphs}
+        recurrences = propagate_recurrences(
+            validated,
+            [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
+            dictionary=cfg.spellcheck.dictionary or prepared.variant.dictionary,
+            protected=prepared.spell.lexicon,
+            max_sites_per_surface=cfg.recurrence.max_sites_per_surface)
+        validated += _validate(recurrences)
     # The judge gates: the last read before the manuscript is written. They run
     # AFTER validation on purpose — by now the survivors are exactly the changes
     # that would reach the author, so a judge reads each one once, and never one

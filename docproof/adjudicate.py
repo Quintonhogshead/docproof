@@ -35,6 +35,7 @@ from .models import Finding, ParagraphRef, Usage
 from .providers import Provider
 from .providers.base import strict_json_schema
 from .spellscan import _WORD, _dictionary
+from .sweeps import sentence_window
 from .windowing import WindowReport, log_report, resolve_window
 
 log = logging.getLogger("docproof.adjudicate")
@@ -316,6 +317,167 @@ def site_word_candidates(words: Mapping[str, str],
                     para_id=p.para_id, word=m.group(0), start=m.start(),
                     end=m.end(), suggestion=suggestion, kind=kind))
     return cands
+
+
+# --- recurrence propagation ---------------------------------------------------
+
+# The verbatim surface of a validated edit worth repeating across the book: one
+# alphabetic word, or a short run of them joined by single spaces, hyphens or
+# apostrophes. This scopes propagation to spelling, word-choice and proper-name
+# fixes — the class of error that reads the same at every site — and leaves
+# punctuation, spacing, digit and grammar edits (context-specific, and wrong to
+# repeat blindly) out of it: a comma inserted in one sentence has no business
+# being copied to every other sentence that happens to share its words.
+_PROPAGATABLE_SURFACE = re.compile(r"[A-Za-z]+(?:[’'\- ][A-Za-z]+)*\Z")
+
+
+def _propagatable(delete_text: str, insert_text: str) -> bool:
+    """Whether a validated edit's minimal diff is a whole-word/short-phrase swap
+    that means the same thing wherever the surface appears."""
+    return (bool(delete_text)
+            and delete_text == delete_text.strip()
+            and bool(_PROPAGATABLE_SURFACE.match(delete_text))
+            and delete_text.lower() != insert_text.strip().lower())
+
+
+def _word_bounded(surface: str) -> "re.Pattern[str]":
+    """A case-insensitive, word-bounded match for a surface — the same boundary
+    `site_word_candidates` uses, so a fix never lands inside a longer word."""
+    return re.compile(r"(?<![A-Za-z’'])" + re.escape(surface)
+                      + r"(?![A-Za-z’'])", re.IGNORECASE)
+
+
+def propagate_recurrences(validated: Sequence[Finding],
+                          paragraphs: Sequence[ParagraphRef], *,
+                          dictionary: str = "en_US",
+                          protected: Sequence[str] = (),
+                          max_sites_per_surface: int = 200,
+                          id_prefix: str = "rp") -> list[Finding]:
+    """Re-emit every validated word/phrase swap at its other occurrences.
+
+    A deterministic post-pass, generalizing `site_word_candidates`: it reads the
+    already-arbitrated `validated` set, collects each edit that swaps one verbatim
+    surface for another, and searches the whole document (case-folded, word-
+    bounded) for the same surface elsewhere. Each fresh site becomes an ordinary
+    Finding the caller re-validates — so the validator dedups any span two sources
+    both reach — which closes the catch-it-here-miss-it-there gap outright and
+    lifts every detector's reach to the whole book for free.
+
+    Safety is deterministic and layered:
+      * Only whole-word/short-phrase alphabetic swaps propagate (`_propagatable`),
+        so a comma or a spacing fix never sweeps the book.
+      * A surface the validated edits themselves disagree about — changed to X in
+        one place and Y in another — is ambiguous by evidence and is dropped
+        entirely. This is exactly the effect/affect case: a word that is right in
+        some sentences and wrong in others carries conflicting fixes, so nothing
+        is swept from it.
+      * A surface that is a real dictionary word is context-dependent, so its
+        recurrences are raised as margin QUERIES, never silent edits; a genuine
+        non-word typo (or a proper-name misspelling) propagates as a tracked
+        edit, since the same non-word wants the same fix wherever it appears.
+      * Sites the run already speaks for (a validated edit, or an anchored query)
+        are skipped, so propagation never fights an existing finding for a span.
+      * `protected` (the spell scan's lexicon) is honoured: a coined word the
+        author owns is never swept, even if one site happened to be ruled an edit.
+    """
+    if not validated or not paragraphs:
+        return []
+    protected_l = {w.lower() for w in protected}
+    rank = {"low": 0, "medium": 1, "high": 2}
+
+    # Sites the run already speaks for, per paragraph: a validated edit is fixing
+    # the site, and an anchored query has already raised it — propagating onto
+    # either would double-edit or second-guess a question already on the record.
+    claimed: dict[str, list[tuple[int, int]]] = {}
+    for f in validated:
+        if f.status in ("validated", "query") and f.anchor is not None:
+            claimed.setdefault(f.para_id, []).append(
+                (f.anchor.start, f.anchor.end))
+
+    # Seeds: each propagatable surface, and the set of distinct fixes the
+    # validated edits proposed for it. A surface with more than one distinct fix
+    # is context-dependent and dropped below.
+    fixes: dict[str, set[str]] = {}
+    base: dict[str, str] = {}     # a fix in its natural casing, for _match_case
+    for f in validated:
+        if (f.status != "validated" or f.anchor is None or f.format
+                or f.force_query):
+            continue
+        d, ins = f.anchor.delete_text, f.anchor.insert_text
+        if not _propagatable(d, ins):
+            continue
+        key = d.lower()
+        if key in protected_l:
+            continue
+        ins = ins.strip()
+        fixes.setdefault(key, set()).add(ins.lower())
+        base.setdefault(key, ins)
+
+    surfaces = {k: base[k] for k, fs in fixes.items() if len(fs) == 1}
+    if not surfaces:
+        return []
+
+    dic = _dictionary(dictionary)
+    findings: list[Finding] = []
+    dropped: dict[str, int] = {}
+    n = 0
+    for key in sorted(surfaces):
+        fix_base = surfaces[key]
+        # A real dictionary word can be correct as written at another site, so
+        # its recurrences are asked about rather than silently changed; a non-word
+        # (a typo, a misspelled name) wants the same fix wherever it appears.
+        ask = _known(dic, key)
+        pat = _word_bounded(key)
+        emitted = 0
+        for p in paragraphs:
+            for m in pat.finditer(p.text):
+                start, end = m.start(), m.end()
+                if any(s < end and start < e
+                       for s, e in claimed.get(p.para_id, ())):
+                    continue                         # a finding already has it
+                surface = m.group(0)
+                fix = _match_case(surface, fix_base)
+                if fix == surface:
+                    continue                         # a no-op at this casing
+                if emitted >= max_sites_per_surface:
+                    dropped[key] = dropped.get(key, 0) + 1
+                    continue
+                window, lo, occurrence = sentence_window(p.text, start, end)
+                corrected = (window[:start - lo] + fix + window[end - lo:])
+                n += 1
+                emitted += 1
+                if ask:
+                    explanation = (
+                        f'"{surface}" was changed to "{fix}" elsewhere in the '
+                        f'manuscript; here it may be correct as written, so this '
+                        f'is flagged for review rather than changed.')
+                else:
+                    explanation = (
+                        f'"{surface}" was corrected to "{fix}" elsewhere in the '
+                        f'manuscript; the same spelling here takes the same fix.')
+                findings.append(Finding(
+                    finding_id=f"{id_prefix}-{n:04d}",
+                    chunk_id="recurrence",
+                    para_id=p.para_id,
+                    error_type="spelling",
+                    original_text=window,
+                    occurrence=occurrence,
+                    corrected_text=corrected,
+                    explanation=explanation,
+                    # A verbatim recurrence of an already-validated fix is a
+                    # high-confidence edit; a real-word site is asked instead.
+                    confidence="medium" if ask else "high",
+                    force_query=ask))
+    for key, lost in sorted(dropped.items()):
+        # Never a silent cap: a truncated sweep that says nothing reads as
+        # "covered everything", the exact failure the pass exists to prevent.
+        log.warning('Recurrence propagation: "%s" hit the %d-site cap; %d '
+                    'further occurrence(s) were not propagated.',
+                    key, max_sites_per_surface, lost)
+    if findings:
+        log.info("Recurrence propagation: %d finding(s) from %d surface(s).",
+                 len(findings), len(surfaces))
+    return findings
 
 
 def merge_candidates(*groups: Sequence[Candidate]) -> list[Candidate]:
