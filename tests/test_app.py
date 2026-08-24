@@ -615,8 +615,10 @@ def test_features_endpoint_lists_switches_at_their_current_defaults(client):
     assert by_id["storysheet"]["default"] is False
     assert by_id["rewrite"]["default"] is False
     assert by_id["adjudicate"]["default"] is True
-    # ensemble is not a switch, so it must not appear.
-    assert "ensemble" not in by_id
+    # ensemble is an administrator switch: it writes the ensemble.detectors list
+    # (diverse pair on, empty off), so it reads off by default and is admin-only.
+    assert by_id["ensemble"]["admin_only"] is True
+    assert by_id["ensemble"]["default"] is False
     # Heavy passes carry a pricing hint so the estimate can move with them; the
     # rest carry none.
     assert by_id["storysheet"]["cost"]["kind"] == "read"

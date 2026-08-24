@@ -836,7 +836,11 @@ candidate_screening:
 # review over again, so this multiplies spend — the cost preview shows it.
 ensemble:
   detectors: []             # e.g. [{model: gpt-5.6-luna}, {model: claude-haiku-4-5}]
-  verifier_model:           # null = no verifier; a stronger model when set
+                            # the "Ensemble review" UI switch turns this into a
+                            # diverse pair; empty = single-detector mode
+  verifier_model: gpt-5.6-luna  # adjudicates disputed findings for precision;
+                            # only runs while detectors is non-empty, so this
+                            # default is inert until the ensemble switch is on
   verifier_effort: high
   verify_policy: disputed   # disputed (only where detectors disagree) | all | none
   consensus_confidence_bump: false
