@@ -117,6 +117,15 @@ one question, and only this one:
 
     Does the corrected sentence still mean what the original meant?
 
+Read that question as one about authorial intent, not textual identity. A \
+change only reaches you because the original was judged an error, and for many \
+of these the original's literal parse was never the reading the author was \
+going for. The corrected sentence differing in referent, tense, or addressee \
+from what the erroneous original technically said is not itself a withhold — \
+that difference can be exactly what the correction was for. The test is \
+whether the corrected sentence gives the reading the author was actually going \
+for, not whether it matches the flawed original word-sense for word-sense.
+
 For each change you get the paragraph it sits in, the sentence as the author \
 wrote it, and the sentence as it would read after the change.
 
@@ -136,9 +145,19 @@ comma or clause boundary that changes who did what to whom.
 Read those examples as descriptions of a SHIFT, not of a category of edit. \
 Correcting a verb to agree with the subject the author already wrote, or a \
 pronoun to match the antecedent already named, or a tense to match the one the \
-passage is already in, changes the form and leaves the sense where it was — keep \
-those. Withhold only when the corrected sentence points at a different referent, \
-a different time, or a different degree of certainty than the original did.
+passage is already in — including a present-tense slip inside otherwise \
+past-tense narration, "asks" corrected to "asked" — changes the form and \
+leaves the sense where it was; keep those. A comma inserted before a name, \
+title, or endearment that dialogue is already being spoken to — direct \
+address, as in "I know Molly" corrected to "I know, Molly," where Molly is \
+plainly being spoken to and not described — is the same kind of fix: who is \
+addressed does not change, only whether the punctuation admits it; keep those \
+too. So is squaring a false dialogue tag: a verb of manner or expression \
+(smiled, laughed, nodded, shrugged) cannot itself carry words, so closing the \
+quotation before it with a period instead of a comma does not touch what was \
+said — it only fixes which sentence the verb belongs to. Withhold only when \
+the corrected sentence points at a different referent, a different time, or a \
+different degree of certainty than the one the author was actually going for.
 
 Judge the SENSE, not the style. A correction can be blunt, plain, or not how you \
 would have phrased it and still preserve meaning exactly. Do not withhold a \
