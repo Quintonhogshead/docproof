@@ -26,8 +26,11 @@ INITIAL_CANDIDATE_TYPES = (
     "heading_sequence",
     "list_punctuation",
     # P2-04 punctuation across more boundaries (semicolon, colon, parenthesis
-    # balance) plus the adapted deterministic punctuation sweeps.
+    # balance) plus the adapted deterministic punctuation ERROR sweeps.
     "punctuation_style",
+    # The top documented detector gap: the comma before a coordinating
+    # conjunction joining two independent clauses.
+    "compound_sentence_comma",
     # P2-03 lexical: commonly confused homophones/near-homophones.
     "homophone",
     # P2-03 lexical: document-wide term/spelling inconsistency (adapted from the
@@ -35,6 +38,11 @@ INITIAL_CANDIDATE_TYPES = (
     "term_consistency",
     # P2-05 grammar: LanguageTool / parser-backed mechanical floor (adapted).
     "grammar",
+    # Exhaustive comma-boundary sweep: every comma-eligible seam becomes a
+    # question — clause joins in both directions (missing AND removable),
+    # every remaining comma, fronted-opener seams, bare nonrestrictive
+    # who/which. Deliberately low-precision; the judge buys the precision.
+    "comma_boundary",
 )
 
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’\-]*")
@@ -51,20 +59,51 @@ _CURRENCY = re.compile(
     r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?!\w)",
     re.IGNORECASE)
 
-_SPEECH_VERBS = (
+# Verbs that almost always report speech: a period before the closing quote is
+# reliably a mispunctuated continuing tag.
+_CORE_SPEECH_VERBS = (
     "said", "asked", "answered", "replied", "whispered", "shouted",
-    "yelled", "murmured", "cried", "called", "added", "continued",
-    "remarked", "observed", "began", "stammered", "muttered",
+    "yelled", "murmured", "cried", "stammered", "muttered",
 )
+# Verbs that report speech OR narrate an action ("Tannithan continued his
+# search", "she added a log"). After a period these are ambiguous, so they are
+# never auto-corrected; a following direct object marks a clear action beat.
+_DUAL_USE_VERBS = (
+    "called", "added", "continued", "remarked", "observed", "began",
+)
+_SPEECH_VERBS = _CORE_SPEECH_VERBS + _DUAL_USE_VERBS
 _DIALOGUE_TAG = re.compile(
     r"(?P<punct>[,.!?]?)(?P<quote>[”\"])(?P<space>\s+)"
     r"(?P<subject>he|she|they|we|i|[A-Z][a-z]+)\s+"
     rf"(?P<verb>{'|'.join(_SPEECH_VERBS)})\b")
+# A determiner/possessive right after the verb ("continued HIS search") is the
+# tell of an action beat rather than a speech tag.
+_ACTION_OBJECT = re.compile(
+    r"\s+(?:his|her|its|their|my|our|your|the|a|an|another|toward|towards|"
+    r"into|onto|across|down|up|over|through|past)\b", re.IGNORECASE)
 
+# Transitional adverbs that reliably take a comma when they open a sentence.
 _STRONG_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
-    r"(?P<phrase>However|Therefore|Meanwhile|Instead|Finally|"
-    r"First|Second|Third|Yes|No|Well|Of course|For example|In fact)\b",
+    r"(?P<phrase>However|Therefore|Meanwhile|Finally|"
+    r"Of course|For example|In fact)\b",
+    re.IGNORECASE)
+# Words that OPEN a sentence sometimes as an interjection/ordinal wanting a
+# comma ("No, I won't"; "First, we eat") and sometimes as a determiner or the
+# head of a phrase that must NOT be split ("No matter", "No one", "Instead of",
+# "First base"). A local generator cannot tell which, so these are always sent
+# to the judge — never auto-inserted — and the clearest phrase traps are
+# excluded outright so the judge is not even asked. (The Johnson canary applied
+# "No, matter", "No, servant girl", and "Instead, of" as hard errors.)
+_AMBIGUOUS_INTRO = re.compile(
+    r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
+    r"(?P<phrase>Yes"
+    r"|No(?!\s+(?:matter|one|longer|more|doubt|sign|way|such)\b)"
+    r"|Well(?!\s+(?:done|enough)\b)"
+    r"|Instead(?!\s+of\b)"
+    r"|First(?!\s+(?:base|class|aid|place|time|floor|name)\b)"
+    r"|Second(?!\s+(?:base|class|hand|floor|time|nature)\b)"
+    r"|Third(?!\s+(?:base|class|floor|time|party)\b))\b",
     re.IGNORECASE)
 _CLAUSE_INTRO = re.compile(
     r"(?P<prefix>(?:^|(?<=[.!?]\s)))"
@@ -76,22 +115,85 @@ _DIRECT_ADDRESS = re.compile(
     r"come on|thank you|thanks))(?P<gap>\s+)(?P<name>[A-Z][a-z]+)\b",
     re.IGNORECASE)
 
-# P2-03: classic confusable pairs. A local generator cannot know which member
-# is correct, so every occurrence is a candidate the judge rules on in context.
-_HOMOPHONES = frozenset({
-    "their", "there", "they're", "your", "you're", "its", "it's",
-    "to", "too", "then", "than", "affect", "effect", "who's", "whose",
-    "lose", "loose", "led", "lead", "past", "passed", "principal",
-    "principle", "stationary", "stationery", "complement", "compliment",
-    "discreet", "discrete", "elicit", "illicit", "peace", "piece",
-    "weather", "whether", "bear", "bare", "break", "brake", "cite",
-    "site", "sight", "council", "counsel", "desert", "dessert",
-})
-_HOMOPHONE_WORD = re.compile(r"\b[A-Za-z][A-Za-z']*\b")
+# P2-03: confusable words, signal-gated. Flagging every there/their/its for
+# judgment burned real money confirming correct usage (the Johnson canary
+# judged 5,214 of them for ~zero errors). Instead, each pattern below fires
+# only when the surrounding words suggest the WRONG member of the pair — the
+# small-word slips a chunked model read glides straight past. Unsignaled
+# occurrences generate nothing: correct usage is the overwhelming case and is
+# not this lane's question.
+_CONFUSABLE_SIGNALS: tuple[tuple[str, str], ...] = (
+    # there/their/they're
+    (r"\btheir\s+(?:is|are|was|were|will|might|may|seems?|comes?|goes?)\b",
+     "their_used_as_there"),
+    (r"\b(?:left|put|took|grabbed|packed|forgot|lost|placed|dropped|brought|"
+     r"found|raised|shook|wagged|held|carried)\s+(?P<w>there)\s+[a-z]+",
+     "there_used_as_their"),
+    (r"\b(?P<w>there)\s+own\b", "there_used_as_their"),
+    # your/you're
+    (r"\b(?P<w>[Yy]our)\s+(?:\w+ing|a|an|the|not|so|too|very|welcome|right|"
+     r"wrong|sure|done|going)\b", "your_used_as_youre"),
+    (r"\b(?P<w>[Yy]ou're)\s+own\b", "youre_used_as_your"),
+    # its/it's
+    (r"\b(?P<w>[Ii]ts)\s+(?:a|an|the|been|not|no|so|too|very|just|only|all|"
+     r"time|what|how|because)\b", "its_used_as_its_contraction"),
+    (r"\b(?P<w>[Ii]t's)\s+own\b", "its_contraction_used_as_possessive"),
+    (r"\b(?P<w>[Ii]t's)\s+(?!a\b|an\b|the\b|been\b|not\b|no\b|so\b|too\b|"
+     r"very\b|just\b|only\b|all\b|what\b|how\b|why\b|where\b|who\b|when\b|"
+     r"like\b|time\b|because\b|as\b|if\b|still\b|already\b|never\b|always\b|"
+     r"almost\b|about\b|over\b|done\b|okay\b|ok\b|fine\b|true\b|hard\b|"
+     r"easy\b|good\b|bad\b|better\b|worse\b|more\b|less\b|such\b|quite\b|"
+     r"really\b|probably\b|certainly\b|clearly\b|me\b|you\b|him\b|her\b|"
+     r"them\b|us\b|\w+ing\b|\w+ed\b|\w+ly\b)(?:[a-z]+)\b",
+     "its_contraction_used_as_possessive"),
+    # then/than
+    (r"\b(?:more|less|rather|other|\w+er)\s+(?P<w>then)\b",
+     "then_used_as_than"),
+    (r"\b(?P<w>than)\s+(?:I|he|she|we|they|it)\s+(?:went|came|said|left|"
+     r"turned|walked|ran)\b", "than_used_as_then"),
+    # to/too
+    (r"\b(?P<w>too)\s+(?:the|a|an|my|his|her|their|our|your|him|them|us|me)\b",
+     "too_used_as_to"),
+    (r"\b(?P<w>to)\s+(?:much|many|late|soon|far|long|often|big|small|hard|"
+     r"easy|hot|cold|old|young|fast|slow|heavy|light|expensive|dangerous)\b",
+     "to_used_as_too"),
+    # loose/lose
+    (r"\b(?P<w>loose)\s+(?:the|my|his|her|their|our|your|it|him|them|us|"
+     r"track|sight|count|interest|control|touch|hope|weight|money)\b",
+     "loose_used_as_lose"),
+    # affect/effect
+    (r"\b(?:an|the)\s+(?P<w>affect)s?\s+(?:of|on|was|is)\b",
+     "affect_used_as_effect"),
+    # passed/past
+    (r"\b(?:walked|drove|ran|went|flew|moved|rushed|hurried|strolled|"
+     r"marched|sailed|rode|slipped|brushed)\s+(?P<w>passed)\b",
+     "passed_used_as_past"),
+    (r"\bin\s+the\s+(?P<w>passed)\b", "passed_used_as_past"),
+    # form/from (typo pair, same mechanism)
+    (r"\b(?P<w>form)\s+(?:the|a|an|my|his|her|their|our|your|here|there|now|"
+     r"him|them|us|me|it|this|that|these|those|where|which|what|whom|whose)\b",
+     "form_used_as_from"),
+    (r"\b(?P<w>from)\s+of\b", "from_used_as_form"),
+)
+_COMPILED_CONFUSABLES = tuple(
+    (re.compile(pattern, re.IGNORECASE), reason)
+    for pattern, reason in _CONFUSABLE_SIGNALS)
 
 # P2-04: space before a comma/semicolon/colon/terminal mark is a deterministic
 # error (period excluded — ellipsis and abbreviations make it ambiguous).
 _SPACE_BEFORE_PUNCT = re.compile(r"(?P<span>\s+(?P<mark>[,;:!?]))")
+
+# Compound sentences: two independent clauses joined by a coordinating
+# conjunction conventionally take a comma before the conjunction. This is the
+# comma class the chunked model passes demonstrably miss (the Redding analysis
+# put it at the top of the detector gaps, and the shipped
+# ``compound_sentence_comma`` error type has been inert). Pronoun subjects only
+# — the high-precision core; "bread and butter" lists never fire.
+_COMPOUND_JOIN = re.compile(
+    r"(?P<pre>\w)(?P<comma>,)?(?P<sp>\s+)"
+    r"(?P<conj>and|but|or|yet|so)\s+"
+    r"(?P<subj>I|he|she|we|they|you|it)\s+(?P<verb>[a-z]\w+)\b")
+_SENTENCE_TERMINAL = re.compile(r"[.!?]")
 
 _ECHO_STOP = frozenset({
     "about", "after", "again", "also", "because", "before", "being",
@@ -140,6 +242,8 @@ def generate_initial_candidates(
         "word_echo": _word_echo_candidates,
         "homophone": _homophone_candidates,
         "punctuation_style": _punctuation_style_candidates,
+        "compound_sentence_comma": _compound_comma_candidates,
+        "comma_boundary": _comma_boundary_candidates,
     }
     for candidate_type, generator in per_paragraph.items():
         if candidate_type in enabled:
@@ -196,17 +300,45 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
     for match in _DIALOGUE_TAG.finditer(para.text):
         punct = match.group("punct")
         quote_start = match.start("quote")
+        verb = match.group("verb").lower()
+        dual = verb in _DUAL_USE_VERBS
+        # An action beat: a dual-use verb taking a direct object ("continued his
+        # search") is narration, not a speech tag — the period is correct.
+        action_beat = dual and bool(
+            _ACTION_OBJECT.match(para.text, match.end("verb")))
+        channel = "edit"
         if punct == ".":
-            decision, correction = "error", ","
-            reason = "period_before_dialogue_tag"
-            explanation = "A continuing dialogue tag takes a comma here."
             start, end, observed = match.start("punct"), match.end("punct"), punct
+            if action_beat:
+                decision, correction = "pass", None
+                reason = "dialogue_action_beat_keeps_period"
+                explanation = ("A dual-use verb with a direct object is an "
+                               "action beat; the period is correct.")
+            elif dual:
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_dialogue_or_action_beat"
+                explanation = ("This verb can report speech or narrate an "
+                               "action; whether the period should be a comma "
+                               "depends on the sentence.")
+            else:
+                decision, correction = "error", ","
+                reason = "period_before_dialogue_tag"
+                explanation = "A continuing dialogue tag takes a comma here."
         elif not punct:
-            decision, correction = "error", ","
-            reason = "missing_punctuation_before_dialogue_tag"
-            explanation = "The dialogue tag needs punctuation before the closing quote."
             start = end = quote_start
             observed = ""
+            if dual:
+                # Could be a missing comma (speech tag) or a missing period
+                # (dialogue then action beat) — let the judge choose the mark.
+                decision, correction = "needs_model_judgment", ","
+                reason = "missing_punctuation_before_dialogue_or_beat"
+                explanation = ("Punctuation is missing before the closing "
+                               "quote; the mark depends on whether an action "
+                               "beat or a speech tag follows.")
+            else:
+                decision, correction = "error", ","
+                reason = "missing_punctuation_before_dialogue_tag"
+                explanation = "The dialogue tag needs punctuation before the closing quote."
         else:
             decision, correction = "pass", None
             reason = "valid_dialogue_tag_boundary"
@@ -218,9 +350,9 @@ def _dialogue_candidates(para: ParagraphRef) -> list[Candidate]:
             correction=correction, decision=decision, reason_code=reason,
             explanation=explanation,
             evidence={"tag_subject": match.group("subject"),
-                      "speech_verb": match.group("verb")},
+                      "speech_verb": verb, "action_beat": action_beat},
             risk_prior=0.8 if decision == "error" else 0.1,
-            channel="edit"))
+            channel=channel))
     return out
 
 
@@ -264,7 +396,9 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
     if "list" in style or "bullet" in style or style.startswith("heading"):
         return []
     out = []
-    for regex, strong in ((_STRONG_INTRO, True), (_CLAUSE_INTRO, False)):
+    for regex, mode in ((_STRONG_INTRO, "strong"),
+                        (_AMBIGUOUS_INTRO, "ambiguous"),
+                        (_CLAUSE_INTRO, "clause")):
         for match in regex.finditer(para.text):
             boundary = match.end("phrase")
             rest = para.text[boundary:boundary + 90]
@@ -278,15 +412,26 @@ def _introductory_candidates(para: ParagraphRef) -> list[Candidate]:
                 reason = "introductory_boundary_has_comma"
                 explanation = "The introductory expression is set off locally."
                 start, end, observed = boundary, boundary + 1, ","
-            elif strong:
-                # A strong single-word transitional adverb ("However", "Then")
-                # takes its comma immediately after the word, so the boundary is
-                # a safe insertion point.
+            elif mode == "strong":
+                # A reliable transitional adverb ("However", "Therefore") takes
+                # its comma immediately after the word — a safe insertion.
                 decision, correction = "error", ","
                 reason = "strong_introductory_expression_missing_comma"
                 explanation = "This introductory expression conventionally takes a comma."
                 start = end = boundary
                 observed = ""
+            elif mode == "ambiguous":
+                # An opener that takes a comma as an interjection/ordinal but not
+                # as a determiner or phrase head ("No, I won't" vs "No matter").
+                # Never auto-insert — hand it to the judge with the sentence.
+                decision, correction = "needs_model_judgment", ","
+                reason = "ambiguous_introductory_expression"
+                explanation = ("This opener is set off with a comma only as an "
+                               "interjection or ordinal, not as a determiner or "
+                               "the head of a phrase; the sentence decides.")
+                start = end = boundary
+                observed = ""
+                channel = "edit"
             elif comma:
                 # The introductory clause already carries a comma within its
                 # span. Anchor that existing comma and pass — inserting another
@@ -423,11 +568,13 @@ def _word_echo_candidates(para: ParagraphRef) -> list[Candidate]:
     out = []
     for index, (word, start, end) in enumerate(tokens):
         key = word.lower().replace("’", "'")
-        if len(key) < 4 or key in _ECHO_STOP:
+        # ≥6 chars and a tight window: the wide net judged ~1,100 echoes on one
+        # novel and surfaced almost nothing — short common words echo naturally.
+        if len(key) < 6 or key in _ECHO_STOP:
             continue
         previous = recent.get(key)
         recent[key] = (index, start, end)
-        if previous is None or not 2 <= index - previous[0] <= 12:
+        if previous is None or not 2 <= index - previous[0] <= 8:
             continue
         first = CandidateAnchor(
             document_part=para.part, paragraph_id=para.para_id,
@@ -446,19 +593,238 @@ def _word_echo_candidates(para: ParagraphRef) -> list[Candidate]:
 
 def _homophone_candidates(para: ParagraphRef) -> list[Candidate]:
     out = []
-    for match in _HOMOPHONE_WORD.finditer(para.text):
-        word = match.group(0)
-        if word.lower() not in _HOMOPHONES:
+    seen: set[tuple[int, int]] = set()
+    for regex, reason in _COMPILED_CONFUSABLES:
+        for match in regex.finditer(para.text):
+            group = "w" if "w" in (regex.groupindex or {}) else 0
+            start, end = match.start(group), match.end(group)
+            if (start, end) in seen:
+                continue
+            seen.add((start, end))
+            word = para.text[start:end]
+            out.append(_candidate(
+                "homophone", para, start, end,
+                generator="candidate.confusable_signal", observed=word,
+                correction=None, decision="needs_model_judgment",
+                reason_code="confusable_misuse_signal",
+                explanation="The surrounding words suggest this may be the "
+                            "wrong member of a commonly confused pair.",
+                evidence={"word": word, "signal": reason,
+                          "signal_window": para.text[max(0, start - 30):end + 30]},
+                risk_prior=0.6, meaning_change_risk="medium", channel="either"))
+    return out
+
+
+def _compound_comma_candidates(para: ParagraphRef) -> list[Candidate]:
+    out = []
+    for match in _COMPOUND_JOIN.finditer(para.text):
+        # The first clause must be a clause, not a fragment: require some
+        # distance back to the previous sentence terminal (or paragraph start).
+        terminals = [m.end() for m in _SENTENCE_TERMINAL.finditer(
+            para.text, 0, match.start())]
+        clause_start = terminals[-1] if terminals else 0
+        if match.start("sp") - clause_start < 20:
             continue
+        if match.group("comma"):
+            start = match.start("comma")
+            out.append(_candidate(
+                "compound_sentence_comma", para, start, start + 1,
+                generator="candidate.compound_join", observed=",",
+                correction=None, decision="pass",
+                reason_code="compound_join_has_comma",
+                explanation="The compound sentence is set off before its "
+                            "conjunction.",
+                evidence={"conjunction": match.group("conj"),
+                          "subject": match.group("subj")},
+                risk_prior=0.1, channel="edit"))
+        else:
+            insert_at = match.start("sp")
+            out.append(_candidate(
+                "compound_sentence_comma", para, insert_at, insert_at,
+                generator="candidate.compound_join", observed="",
+                correction=",", decision="needs_model_judgment",
+                reason_code="compound_join_missing_comma",
+                explanation="Two clauses joined by a coordinating conjunction "
+                            "conventionally take a comma; whether both sides "
+                            "are independent needs the sentence.",
+                evidence={"conjunction": match.group("conj"),
+                          "subject": match.group("subj"),
+                          "join_window": para.text[
+                              max(0, insert_at - 40):insert_at + 40]},
+                risk_prior=0.55, channel="edit"))
+    return out
+
+
+# Every comma-eligible seam, exhaustively. The Redding miss inventory is 73%
+# comma-class edits, and the clever generators above locate only a sliver of
+# them; this sweep trades rule precision for notice and hands the judge the
+# whole decision. Four seam families, all needs_model_judgment:
+#   join_missing  — clause join (FANBOYS or subordinator) with no comma before
+#   join_present  — clause join WITH a comma (the removal direction)
+#   loose_comma   — any other comma in running prose (removal direction)
+#   opener_seam   — fronted opener with no comma before the likely main-clause
+#                   subject; bare nonrestrictive who/which
+_CB_CONJ = re.compile(
+    r"(?P<pre>[\w’'])(?P<comma>,)?(?P<sp>\s+)"
+    r"(?P<conj>and|but|or|nor|for|so|yet|as|because|when|if|after|before|"
+    r"while|since|though|although|until|unless|whereas)\s+[\w“‘\"']",
+    re.IGNORECASE)
+_CB_RELATIVE = re.compile(r"(?P<pre>[\w’'])(?P<sp>\s+)(?P<rel>who|which)\s+\w")
+_CB_OPENER = frozenset({
+    "as", "because", "when", "if", "after", "before", "while", "since",
+    "though", "although", "until", "unless", "whereas", "in", "at", "on",
+    "with", "during", "despite", "throughout", "over", "under", "through",
+    "from", "by", "for", "to", "once", "yes", "no", "well", "oh", "now",
+    "so", "first", "second", "finally", "however", "instead", "sometimes",
+    "often", "usually", "eventually", "someday", "today", "tomorrow",
+    "yesterday", "growing", "being", "having", "looking", "trying",
+})
+_CB_SUBJECT = frozenset({
+    "i", "you", "he", "she", "it", "we", "they", "there", "the", "a", "an",
+    "my", "your", "his", "her", "our", "their", "this", "these", "those",
+})
+_CB_PRONOUN = frozenset({"i", "he", "she", "we", "they", "there", "you", "it",
+               "that", "this"})
+# Predecessors after which a pronoun is routinely an object or a licensed
+# clause continuation, not a bare seam: conjunctions and subordinators (the
+# join seams own those), complementizers, and the verbs/prepositions that most
+# commonly take a pronoun straight after them.
+_CB_NO_SEAM = frozenset({
+    "and", "but", "or", "nor", "for", "so", "yet", "as", "because", "when",
+    "if", "after", "before", "while", "since", "though", "although", "until",
+    "unless", "whereas", "that", "which", "who", "whom", "than", "whether",
+    "where", "why", "how", "what", "to", "of", "with", "at", "on", "in",
+    "by", "from", "about", "like", "let", "lets", "make", "makes", "made",
+    "making", "give", "gave", "gives", "giving", "tell", "told", "tells",
+    "telling", "say", "said", "says", "saying", "ask", "asked", "asks",
+    "want", "wants", "wanted", "need", "needs", "needed", "love", "loves",
+    "loved", "thank", "think", "thought", "know", "knew", "knows", "believe",
+    "hope", "wish", "mean", "means", "meant", "help", "helps", "helped",
+    "watch", "watched", "see", "saw", "hear", "heard", "do", "did", "does",
+    "am", "is", "are", "was", "were", "be", "been", "being",
+})
+_CB_WINDOW = 32
+
+
+def _cb_window(text: str, start: int, end: int) -> str:
+    return text[max(0, start - _CB_WINDOW):end + _CB_WINDOW]
+
+
+def _comma_boundary_candidates(para: ParagraphRef) -> list[Candidate]:
+    text = para.text
+    out: list[Candidate] = []
+    claimed_commas: set[int] = set()
+
+    def seam(kind: str, start: int, end: int, *, observed, correction,
+             reason: str, explanation: str, extra: dict) -> None:
+        evidence = dict(extra)
+        evidence["seam"] = kind
+        evidence["window"] = _cb_window(text, start, end)
         out.append(_candidate(
-            "homophone", para, match.start(), match.end(),
-            generator="candidate.homophone", observed=word,
-            correction=None, decision="needs_model_judgment",
-            reason_code="confusable_word_needs_context",
-            explanation="This word is easily confused with a homophone; the "
-                        "correct choice depends on the sentence.",
-            evidence={"word": word},
-            risk_prior=0.3, meaning_change_risk="medium", channel="either"))
+            "comma_boundary", para, start, end,
+            generator="candidate.comma_boundary", observed=observed,
+            correction=correction, decision="needs_model_judgment",
+            reason_code=reason, explanation=explanation, evidence=evidence,
+            risk_prior=0.4, channel="edit"))
+
+    sentence_starts = [0] + [m.end() for m in _SENTENCE_TERMINAL.finditer(text)]
+
+    for match in _CB_CONJ.finditer(text):
+        conj = match.group("conj").lower()
+        # Mid-sentence only: a couple of words must precede the join.
+        clause_start = max(s for s in sentence_starts if s <= match.start())
+        if match.start("sp") - clause_start < 8:
+            continue
+        if match.group("comma"):
+            comma_at = match.start("comma")
+            claimed_commas.add(comma_at)
+            seam("join_present", comma_at, comma_at + 1, observed=",",
+                 correction=None, reason="comma_present_at_clause_join",
+                 explanation="A comma sits before this conjunction; whether "
+                             "the join earns one needs the sentence.",
+                 extra={"conjunction": conj})
+        else:
+            insert_at = match.start("sp")
+            seam("join_missing", insert_at, insert_at, observed="",
+                 correction=",", reason="no_comma_at_clause_join",
+                 explanation="No comma before this conjunction; whether the "
+                             "join needs one depends on the clauses.",
+                 extra={"conjunction": conj})
+
+    for match in _CB_RELATIVE.finditer(text):
+        insert_at = match.start("sp")
+        seam("opener_seam", insert_at, insert_at, observed="",
+             correction=",", reason="bare_relative_clause",
+             explanation="A who/which clause with no comma; nonrestrictive "
+                         "readings take one.",
+             extra={"relative": match.group("rel").lower()})
+
+    # Fronted opener: sentence starts on an opener cue, carries no comma yet,
+    # and a plausible main-clause subject appears a few words in — the seam at
+    # the right edge of the word before that subject is a comma question (the
+    # comma lands on the preceding word, so the anchor must too). One per
+    # sentence, plus the transition/interjection comma straight after a
+    # single-word opener.
+    for index, s_start in enumerate(sentence_starts):
+        s_end = (sentence_starts[index + 1]
+                 if index + 1 < len(sentence_starts) else len(text))
+        tokens = [(m.group(0), m.start(), m.end())
+                  for m in _WORD.finditer(text, s_start, s_end)]
+        if len(tokens) < 4:
+            continue
+        first = tokens[0][0].lower()
+        opener = first in _CB_OPENER or first.endswith(("ly", "ing"))
+        if opener:
+            seam("opener_seam", tokens[0][2], tokens[0][2], observed="",
+                 correction=",", reason="transition_opener_no_comma",
+                 explanation="A transition or interjection opener often takes "
+                             "a comma straight after it.",
+                 extra={"opener": first})
+            for word, w_start, w_end in tokens[2:10]:
+                if "," in text[s_start:w_start]:
+                    break
+                if word.lower() in _CB_SUBJECT:
+                    seam("opener_seam", w_start - 1, w_start - 1, observed="",
+                         correction=",", reason="fronted_opener_no_comma",
+                         explanation="The sentence opens on fronted matter "
+                                     "with no comma before the likely main "
+                                     "clause.",
+                         extra={"opener": first, "subject": word.lower()})
+                    break
+        # Mid-sentence bare-clause seam: a subject pronoun with no comma or
+        # conjunction in front of it deep in the sentence is where a clause
+        # boundary may want a comma ("I had a good friend they would move").
+        for word, w_start, w_end in tokens[3:]:
+            if word.lower() not in _CB_PRONOUN:
+                continue
+            gap = text[max(s_start, w_start - 24):w_start]
+            if "," in gap:
+                continue
+            prev = re.findall(r"[\w’']+", gap)
+            if not prev or prev[-1].lower() in _CB_NO_SEAM:
+                continue
+            seam("clause_seam", w_start - 1, w_start - 1, observed="",
+                 correction=",", reason="bare_pronoun_clause_seam",
+                 explanation="A pronoun opens what may be a new clause with "
+                             "no comma before it.",
+                 extra={"subject": word.lower()})
+
+    # Every remaining comma in running prose is a removal question.
+    for pos, char in enumerate(text):
+        if char != "," or pos in claimed_commas:
+            continue
+        # Skip list-like environments the list/number generators own: a comma
+        # directly between digits, and a comma before a closing quote.
+        before = text[pos - 1] if pos else ""
+        after = text[pos + 1:pos + 2]
+        if before.isdigit() and text[pos + 1:pos + 4].strip()[:1].isdigit():
+            continue
+        if after in "”’\"'":
+            continue
+        seam("loose_comma", pos, pos + 1, observed=",", correction=None,
+             reason="comma_in_running_prose",
+             explanation="Whether this comma belongs is the judge's call.",
+             extra={})
     return out
 
 
@@ -622,10 +988,9 @@ _SWEEP_CANDIDATE_TYPES = {
     "sweep_compound_number": "number_style",
     "sweep_century": "number_style",
     "unclosed_quote": "quote_balance",
-    # P2-04: the remaining deterministic punctuation sweeps become candidates
-    # instead of bypassing the ledger.
-    "sweep_ellipsis": "punctuation_style",
-    "sweep_dash": "punctuation_style",
+    # P2-04: the deterministic punctuation ERROR sweeps become candidates
+    # instead of bypassing the ledger. The ellipsis/dash sweeps are style
+    # normalization and stay out of this lane on purpose.
     "sweep_stacked_punctuation": "punctuation_style",
     "sweep_terminal_period": "punctuation_style",
     "sweep_quote_punctuation": "punctuation_style",

@@ -117,6 +117,15 @@ one question, and only this one:
 
     Does the corrected sentence still mean what the original meant?
 
+Read that question as one about authorial intent, not textual identity. A \
+change only reaches you because the original was judged an error, and for many \
+of these the original's literal parse was never the reading the author was \
+going for. The corrected sentence differing in referent, tense, or addressee \
+from what the erroneous original technically said is not itself a withhold — \
+that difference can be exactly what the correction was for. The test is \
+whether the corrected sentence gives the reading the author was actually going \
+for, not whether it matches the flawed original word-sense for word-sense.
+
 For each change you get the paragraph it sits in, the sentence as the author \
 wrote it, and the sentence as it would read after the change.
 
@@ -136,9 +145,19 @@ comma or clause boundary that changes who did what to whom.
 Read those examples as descriptions of a SHIFT, not of a category of edit. \
 Correcting a verb to agree with the subject the author already wrote, or a \
 pronoun to match the antecedent already named, or a tense to match the one the \
-passage is already in, changes the form and leaves the sense where it was — keep \
-those. Withhold only when the corrected sentence points at a different referent, \
-a different time, or a different degree of certainty than the original did.
+passage is already in — including a present-tense slip inside otherwise \
+past-tense narration, "asks" corrected to "asked" — changes the form and \
+leaves the sense where it was; keep those. A comma inserted before a name, \
+title, or endearment that dialogue is already being spoken to — direct \
+address, as in "I know Molly" corrected to "I know, Molly," where Molly is \
+plainly being spoken to and not described — is the same kind of fix: who is \
+addressed does not change, only whether the punctuation admits it; keep those \
+too. So is squaring a false dialogue tag: a verb of manner or expression \
+(smiled, laughed, nodded, shrugged) cannot itself carry words, so closing the \
+quotation before it with a period instead of a comma does not touch what was \
+said — it only fixes which sentence the verb belongs to. Withhold only when \
+the corrected sentence points at a different referent, a different time, or a \
+different degree of certainty than the one the author was actually going for.
 
 Judge the SENSE, not the style. A correction can be blunt, plain, or not how you \
 would have phrased it and still preserve meaning exactly. Do not withhold a \
@@ -403,6 +422,38 @@ def _own_change(f: Finding) -> str:
            f"{(a.insert_text if a else f.corrected_text)!r}"
 
 
+def _meaning_trivial(f: Finding) -> bool:
+    """Whether a change cannot alter what a sentence MEANS, so the meaning gate
+    has nothing to weigh and should not see it.
+
+    Two shapes qualify, both provable from the minimal diff alone:
+      * punctuation / whitespace only — a comma set off a name in direct
+        address, a period closing an action beat, a semicolon for a splice.
+        Grouping and pause, never proposition.
+      * case only — "But" -> "but" resuming interrupted dialogue, "god" -> "God"
+        as the deity's name. The same letters.
+
+    This is the meaning gate's blind spot, not the fix gate's: a comma CAN be
+    the wrong repair (a splice wanting a semicolon), which is fix_check's
+    question — so only the meaning gate bypasses these. Anything with a changed
+    alphanumeric run (an inserted word, a swapped or reinflected verb) is NOT
+    trivial and is judged as before."""
+    a = f.anchor
+    if a is not None:
+        delete_text, insert_text = a.delete_text, a.insert_text
+    else:
+        # No anchor yet (a caller screening raw findings): reduce to the same
+        # minimal diff the validator would, so a whole-sentence quote that
+        # differs by one comma is read as the comma, not as two sentences.
+        from .validator import shrink
+        _pre, delete_text, insert_text = shrink(f.original_text, f.corrected_text)
+    if delete_text == insert_text:                  # nothing changes
+        return False
+    if all(not c.isalnum() for c in delete_text + insert_text):
+        return True                                 # punctuation / whitespace
+    return delete_text.casefold() == insert_text.casefold()   # case only
+
+
 def _is_flagged(verdict: dict | None, flag_unsure: bool) -> bool:
     """Whether a verdict withholds the change. One definition, shared by the
     per-paragraph loop and the final fold, so the two can never disagree about
@@ -559,6 +610,7 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
            provider: Provider, *, spec: JudgeSpec, model: str,
            instructions: str = "", context: str = "", max_tokens: int = 4000,
            concurrency: int = 8, flag_unsure: bool = True,
+           bypass_trivial: bool = False,
            usage: Usage) -> JudgeReport:
     """Put every change in `findings` to one judge and return the ones it will
     not vouch for.
@@ -576,9 +628,19 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
     # Findings are grouped by paragraph but tracked by position, so a verdict
     # always lands back on the finding that was judged.
     by_para: dict[str, list[tuple[int, Finding]]] = {}
+    bypassed = 0
     for i, f in enumerate(findings):
+        if bypass_trivial and _meaning_trivial(f):
+            # A punctuation- or case-only change carries no proposition for the
+            # meaning gate to weigh; judging it only risks a wrong hold on a
+            # correct comma or capital. Kept as an edit, never sent to the judge.
+            bypassed += 1
+            continue
         if f.para_id in para_text:              # no paragraph -> nothing to read
             by_para.setdefault(f.para_id, []).append((i, f))
+    if bypassed:
+        log.info("%s: %d punctuation/case-only change(s) bypassed the gate "
+                 "deterministically.", spec.label, bypassed)
     if not by_para:
         return JudgeReport(spec, [], (), 0, 0)
 

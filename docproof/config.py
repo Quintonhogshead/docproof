@@ -324,6 +324,25 @@ class ConsistencyConfig(BaseModel):
     names: bool = True
     name_dominance: int = Field(default=5, ge=2)
     name_min_count: int = Field(default=20, ge=2)
+    # The three mechanical scans a compound-word key scan structurally cannot do,
+    # each a whole-document query pass that changes nothing:
+    #   spelling_variants — different-letter spellings of one word via the VarCon
+    #     table (grey/gray, toward/towards); enforced forms (the variant respell
+    #     map) and author-owned words (the spell-scan lexicon) are left out.
+    #   abbreviations — dotted vs undotted, dotted-lowercase vs caps (U.S./US,
+    #     a.m./AM).
+    #   acronym_case — an initialism in capitals in one place, title-cased in
+    #     another (NASA/Nasa); needs the dictionary to tell an acronym from a word.
+    spelling_variants: bool = True
+    abbreviations: bool = True
+    acronym_case: bool = True
+    # Add the Merriam-Webster/Chicago preference to a spelling-variant query.
+    # A press proofreading in British English can turn this off.
+    chicago_notes: bool = True
+    # Each mechanical scan emits one query per group; this bounds how many, so a
+    # dialect-mixed manuscript cannot flood the query channel. The cap is logged
+    # when it bites — coverage is never silently truncated.
+    max_queries_per_kind: int = Field(default=40, ge=1)
 
 
 class AdjudicateConfig(BaseModel):
@@ -639,6 +658,15 @@ class LanguageToolConfig(BaseModel):
     only. See docproof/languagetool.py."""
     enabled: bool = False
     dictionary: str = "en-US"           # LanguageTool language code
+    # Picky level: LanguageTool's stricter rule set (extra typography, register,
+    # and hyphenation rules that the default level holds back). Measured on a
+    # real literary manuscript it added almost nothing past the style advice the
+    # pass already filters (1 candidate on 44k words), because most picky rules
+    # ARE the style class dropped at DEFAULT_DISABLED_ISSUE_TYPES. The extra
+    # candidates still route through the confirm valve, so picky never edits
+    # blind — it only offers more for the valve to rule on. default.yaml turns
+    # it on so every LanguageTool job runs at the strict level.
+    picky: bool = False
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)
@@ -739,6 +767,137 @@ class SaplingConfig(BaseModel):
         return self
 
 
+class ChapterSweepConfig(BaseModel):
+    """The frontier chapter sweep: one loose proofread instruction over
+    chapter-sized windows, on a strong model, as a second detector.
+
+    Complementary to the typed passes by construction — no error-type taxonomy
+    (so no taxonomy blind spots) and chapter-scale context (so cross-sentence
+    slips are visible). The 2026-08-23 Redding pilot found it catches the
+    judgment-call band (lay/lie, everyday/every day, parallelism, suspended
+    hyphens, counterfactual tense) the chunked passes glide past, while the
+    sweeps keep the mechanical floor. Proposals are verbatim quote->correction
+    pairs anchored fail-closed, then ruled on by the SHARED rewrite.confirm
+    valve — only an affirmed error becomes a tracked change, a softer
+    affirmation asks in the margin, and the ordinary validator/audit stand
+    behind everything. Off by default: it is a frontier-priced read of the
+    whole manuscript. Whole-document only. See docproof/chaptersweep.py."""
+    enabled: bool = False
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "xhigh"
+    # Window sizing: ~48k chars ≈ a long chapter per request. Bigger windows
+    # buy context and lose retry granularity; a failed window is skipped and
+    # reported, never fatal.
+    window_chars: int = Field(default=48_000, ge=4_000)
+    # The ceiling covers THINKING too (xhigh on a frontier model), and a
+    # truncated structured reply parses as nothing — the 2026-08-23 Redding run
+    # lost 2 of 6 windows (a third of the book unswept) at 32k. 64k does not
+    # raise the cost of a clean window: output is billed as generated and clean
+    # windows stop well short (3k–25k on that run). Only a window that would
+    # have truncated spends more, bounded by the extra headroom — and 32k of
+    # that spend was already being burned for nothing.
+    max_output_tokens: int = Field(default=64_000, ge=1)
+    # Confirm-valve sizing, mirroring Sapling/LanguageTool. The sweep model
+    # proposes; the confirm judge disposes. Unset confirm_model = api.model.
+    batch_size: int = Field(default=40, ge=1)     # candidates per confirm request
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"chapter_sweep.model '{self.model}' is not in the catalog")
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"chapter_sweep.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
+class RepairConfig(BaseModel):
+    """The repair channel: route error-dense sentences to a strong model and fix
+    each as one atomic cluster.
+
+    Where every other correcting pass emits an atomic token edit, this one
+    repairs a broken sentence as a whole — and it is triggered by the other
+    passes' own output. A sentence in which the ordinary detectors flag at least
+    ``error_threshold`` separate corrections is probably broken as a whole, so
+    it is routed to a strong model (Fable by default) for one minimal repair. The
+    diff becomes a cluster of co-dependent member edits sharing one cluster_id; a
+    skeptical judge rules on the whole cluster — broken, minimally fixed,
+    meaning-preserved — and only an affirmation at ``edit_confidence`` writes, a
+    softer one asks in the margin. The members sit early in arbitration so the
+    coherent repair supersedes the scattered token edits that triggered it, and
+    they ship as separate tracked changes but stand or fall together:
+    ``repair.enforce_cluster_atomicity`` withdraws the whole cluster if any
+    member does not survive, so the run never ships half a repair.
+
+    OFF by default and the highest-risk pass in the pipeline — judgment edits
+    that write were the corrections engine's QA failure class — so it ships
+    behind the trigger threshold, the judge, the meaning gate, and the atomicity
+    enforcement, and is meant to be measured in shadow mode before it is trusted
+    to write. Whole-document only. See docproof/repair.py and docs/repair.md."""
+    enabled: bool = False
+    # THE TRIGGER. A sentence in which the ordinary detectors flag at least this
+    # many separate corrections is routed to the repair model. 3 is deliberately
+    # conservative — a sentence needing three separate fixes is likely broken as
+    # a whole, not merely dotted with isolated slips — and the judge still
+    # declines any flagged sentence that turns out only stylistic. Lower to cast
+    # a wider net (more sentences routed, more model cost, the judge the backstop);
+    # a sentence under the threshold keeps its individual token edits as before.
+    error_threshold: int = Field(default=3, ge=2)
+    # The repair reader. A repair is a judgment call on the whole sentence, so it
+    # defaults to the strongest model; the read is cheap because it is scoped to
+    # only the triggered sentences, not the whole book.
+    model: str = "claude-fable-5"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # The ceiling covers THINKING too on a reasoning model, and a truncated
+    # structured reply parses as nothing; a window that truncates is halved and
+    # re-asked, and anything still unruled is counted, never taken for "left
+    # unchanged".
+    max_output_tokens: int = Field(default=16_000, ge=1)
+    batch_size: int = Field(default=20, ge=1)   # triggered sentences per request
+    # The judge that disposes. Defaults to the house reviewer so the pass needs
+    # no key beyond the reader's; a stronger judge is a cheap per-run pick since
+    # its verdicts are short. Unset confirm_model = api.model.
+    confirm_model: str | None = None
+    confirm_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "high"
+    # Only a repair affirmed at this confidence writes; softer affirmations
+    # become one margin question carrying the whole repair. High by default: a
+    # repair that writes is the riskiest edit the tool makes.
+    edit_confidence: Literal["low", "medium", "high"] = "high"
+    # The deterministic half of the fabrication defence (the judge's
+    # meaning-preserved ruling is the other half). A "repair" that added more
+    # than this many net characters, or touched more than this many spans, is a
+    # rewrite rather than a repair and is dropped before the judge — so a
+    # paraphrase cannot ride in under the validator's guard exemption that repair
+    # findings get. A dropped clause is a legitimate repair, hence a cap well
+    # above the ordinary 16-char edit-guard growth limit.
+    max_added_chars: int = Field(default=120, ge=1)
+    max_members: int = Field(default=12, ge=1)
+    # Both prompts, editable per job like the smoothing and round judges'. Empty
+    # uses the built-in contract in repair.py; a non-empty value replaces it.
+    repair_prompt: str = ""
+    judge_prompt: str = ""
+
+    @model_validator(mode="after")
+    def _known_models(self):
+        from .providers.catalog import lookup
+        if self.enabled and lookup(self.model) is None:
+            raise ValueError(
+                f"repair.model '{self.model}' is not in the catalog")
+        if self.enabled and self.confirm_model is not None and \
+                lookup(self.confirm_model) is None:
+            raise ValueError(
+                f"repair.confirm_model '{self.confirm_model}' "
+                "is not in the catalog")
+        return self
+
+
 class SmoothingConfig(BaseModel):
     """The line-editing pass: the half of a proofreader's job DocProof otherwise
     refuses. A line editor reads the manuscript and proposes small smoothings —
@@ -746,12 +905,15 @@ class SmoothingConfig(BaseModel):
     awkward coordination, a tense that reads rough, an ambiguous pronoun — and a
     skeptical taste judge culls them before any of them reach the author.
 
-    Query-only by design, and unconditionally so: a mechanical error has a
-    verifiable right answer and may be a tracked change, but a smoothing has no
-    right answer, only a better one, and which is better is the author's call.
-    Every finding this pass emits is force_query'd, so it can only ever be a
-    margin comment. That is the invariant the whole pass is built around — it is
-    not a confidence threshold that a high-confidence judgement could clear.
+    Query-only by default: a mechanical error has a verifiable right answer
+    and may be a tracked change, but a smoothing has no right answer, only a
+    better one, and which is better is the author's call — so the shipped
+    behaviour force_query's every finding into the margin. The ``edits``
+    switch below is the explicit, per-run exception: with it on, a smoothing
+    the judge affirms at HIGH confidence is applied as an ordinary tracked
+    change (the author accepts or rejects it in Word) and softer affirmations
+    still ask. Chosen for presses drowning in margin queries; the default
+    stays ask-first.
 
     Voice risk is what the knobs defend against: dialogue is excluded by default
     (a character's diction is not the pipeline's to smooth), author coinages are
@@ -769,6 +931,15 @@ class SmoothingConfig(BaseModel):
     judge, and it is the one pass whose output is taste rather than correctness.
     Whole-document only. See docproof/smoothing.py."""
     enabled: bool = False
+    # How an affirmed smoothing reaches the author. False (the shipped
+    # default): every finding is force_query'd — a margin comment, never an
+    # edit, because a smoothing has no verifiable right answer. True: an
+    # affirmation the judge holds at HIGH confidence is applied as an ordinary
+    # tracked change (still through the shared validator/audit), and anything
+    # softer keeps asking in the margin. An explicit per-run choice for presses
+    # that would rather accept/reject in Word than answer a margin full of
+    # questions — it trades the query pile for edits the author can reject.
+    edits: bool = False
     # The proposing reader. Unset = api.model (the detector's). Restraint is
     # most of the job, so this is not the place to economize hard — but the
     # judge below is the one that decides what survives.
@@ -945,6 +1116,29 @@ class ResidualsConfig(BaseModel):
     max_per_rule: int = Field(default=150, ge=1)
 
 
+class RecurrenceConfig(BaseModel):
+    """After validation, a free deterministic post-pass that closes the
+    catch-it-here-miss-it-there gap: every validated edit that swaps one verbatim
+    word or short phrase for another is searched across the whole document, and
+    each *other* occurrence of the original surface is re-emitted as a finding
+    proposing the same swap. A typo fixed in chapter 2 but missed in chapter 9 is
+    now fixed in both, and every detector's reach becomes the whole book at once.
+
+    Safety is deterministic and layered (see docproof/adjudicate.py):
+    only whole-word/short-phrase alphabetic swaps propagate; a surface the
+    validated edits disagree about (changed to X here, Y there — the effect/affect
+    case) is dropped as ambiguous; a real dictionary word is context-dependent so
+    its recurrences are raised as margin QUERIES, while a genuine non-word typo or
+    proper-name misspelling propagates as a tracked edit; sites the run already
+    edits are skipped and the output is re-validated, so the validator dedups any
+    span; and the spell scan's protected lexicon is never swept. Whole-document
+    only — a partial run must not edit text it was not asked to read."""
+    enabled: bool = True
+    # A bound per surface, so one very common word cannot flood the document.
+    # The overflow is logged, never silently dropped.
+    max_sites_per_surface: int = Field(default=200, ge=1)
+
+
 class ExaminationJudgmentConfig(BaseModel):
     """Optional paid judgment over precise examination sites.
 
@@ -1035,7 +1229,7 @@ class CandidateScreeningConfig(BaseModel):
         "direct_address_comma", "number_style", "currency_style",
         "repeated_word", "word_echo", "heading_sequence",
         "list_punctuation", "punctuation_style", "homophone",
-        "term_consistency", "grammar",
+        "compound_sentence_comma", "term_consistency", "grammar",
     )
     # P2-01/02: reuse the free local analyzers (sweeps, unbalanced-quote and
     # term-consistency scans) as candidate sources so standalone candidate mode
@@ -1046,8 +1240,23 @@ class CandidateScreeningConfig(BaseModel):
     # ~850MB JVM; keep it opt-in so a small box is never surprised by it.
     languagetool_floor: bool = False
     max_candidates: int = Field(default=200_000, ge=1)
-    batch_size: int = Field(default=100, ge=1, le=200)
+    # 40 candidates per judge request, like every other pass: the Johnson canary
+    # showed 100-candidate packets invite ID slips (duplicate/hallucinated IDs)
+    # and make each retry expensive.
+    batch_size: int = Field(default=40, ge=1, le=200)
     judgment_enabled: bool = True
+    # Send the primary judgment as one vendor batch (50% cheaper) instead of a
+    # packet-at-a-time synchronous sweep. The lane block-polls the batch to
+    # completion inside its screen() call, then re-judges any packet the batch
+    # could not resolve on the synchronous focused-retry path. Escalation stays
+    # synchronous (it is small and can only be built once primary verdicts are
+    # in). Off by default: the synchronous path is unchanged.
+    batch: bool = False
+    # How the block-poll waits on the primary batch. Poll every interval; give
+    # up after max_wait and drop every unresolved packet to the synchronous
+    # path (never a silent loss). 24h matches the vendor completion window.
+    batch_poll_interval_seconds: float = Field(default=20.0, gt=0)
+    batch_max_wait_seconds: float = Field(default=86_400.0, gt=0)
     model: str = "gpt-5.6-luna"
     effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "low"
     escalation_model: str | None = None
@@ -1279,7 +1488,13 @@ class JudgeGateConfig(BaseModel):
     # stop a silent change, and a judge that cannot vouch for one has not vouched
     # for it. Off applies anything not positively flagged.
     flag_unsure: bool = True
-    max_output_tokens: int = Field(default=12000, ge=1)
+    # Mostly reasoning tokens (frontier judge at effort high). At 12k the
+    # 2026-08-23 Redding run truncated on one heavily corrected paragraph and
+    # its 7 changes were applied UNREAD — the fail-open worst case. The judge
+    # models here are cheap relative to the detectors, and a clean reply stops
+    # far short of the ceiling, so the raise costs only on calls that would
+    # otherwise have truncated.
+    max_output_tokens: int = Field(default=24000, ge=1)
     # The judge's instructions, meant to be edited per job in the review panel.
     # Empty uses the built-in default (docproof.judges.default_prompt(key)), so
     # clearing the field reverts to it.
@@ -1395,9 +1610,12 @@ class Config(BaseModel):
     rewrite: RewriteConfig = Field(default_factory=RewriteConfig)
     languagetool: LanguageToolConfig = Field(default_factory=LanguageToolConfig)
     sapling: SaplingConfig = Field(default_factory=SaplingConfig)
+    chapter_sweep: ChapterSweepConfig = Field(default_factory=ChapterSweepConfig)
+    repair: RepairConfig = Field(default_factory=RepairConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
+    recurrence: RecurrenceConfig = Field(default_factory=RecurrenceConfig)
     examination_graph: ExaminationGraphConfig = Field(
         default_factory=ExaminationGraphConfig)
     candidate_screening: CandidateScreeningConfig = Field(

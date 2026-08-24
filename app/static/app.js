@@ -3535,6 +3535,19 @@ const STAGE_FLOW = [
   { id: 'languagetool', label: 'Mechanical check', optional: true,
     quip: 'A rules-based sweep for the commas, hyphens, and dropped words the '
         + 'model tends to shrug at.' },
+  // Batch only: the judgment screen weighs the raw candidate findings before any
+  // becomes a tracked change. No feature switch backs it (it rides the batch
+  // path), so like verify/round_judge it surfaces only while it is running.
+  { id: 'candidate_screening', label: 'Screening the candidates', optional: true,
+    quip: 'A judgment model reads each raw catch and keeps only the ones it can '
+        + 'vouch for before any of them touch your book.' },
+  // The frontier chapter sweep: a second, looser read over chapter-sized windows
+  // on a strong model, catching the judgment-call band the section-by-section
+  // pass glides past. Config-backed, no per-job switch, so it shows while current.
+  { id: 'chapter_sweep', label: 'Chapter sweep', optional: true,
+    quip: 'A second, looser read straight through each chapter on a strong '
+        + 'model — the kind of catch that only shows when a whole chapter is '
+        + 'read at once, not section by section.' },
   { id: 'continuity', label: 'Continuity read', optional: true,
     quip: 'Reading cover to cover for facts the book contradicts about itself — '
         + 'ages, dates, eye colours, the day of the week.' },
@@ -5216,10 +5229,15 @@ function fixItemCard(job, data, item) {
     apply.textContent = 'Apply here';
     if (o.suggested) apply.className = 'primary';
     apply.addEventListener('click', () => resolve({ option_id: o.id }));
-    opt.append(apply, editButton(o, {
-      start: o.start, end: o.end, found: o.found,
-      replacement: o.replacement,
-    }));
+    opt.append(apply);
+    // A change that crosses a paragraph break (a merge, a split, a paragraph
+    // op) is not a span the single-line editor can open — accept it or don't.
+    if (!o.spans_break) {
+      opt.append(editButton(o, {
+        start: o.start, end: o.end, found: o.found,
+        replacement: o.replacement,
+      }));
+    }
     card.append(opt);
   });
 

@@ -538,7 +538,19 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             min_dominance=cfg.consistency.min_dominance,
             names=cfg.consistency.names,
             name_dominance=cfg.consistency.name_dominance,
-            name_min_count=cfg.consistency.name_min_count)
+            name_min_count=cfg.consistency.name_min_count,
+            spelling_variants=cfg.consistency.spelling_variants,
+            abbreviations=cfg.consistency.abbreviations,
+            acronym_case=cfg.consistency.acronym_case,
+            chicago_notes=cfg.consistency.chicago_notes,
+            max_queries_per_kind=cfg.consistency.max_queries_per_kind,
+            # The variant's respell map (grey->gray on a U.S. run) and the spell
+            # scan's lexicon feed the guards, so a form already enforced or owned
+            # by the author is not also asked about. The dictionary is the acronym
+            # scan's — an explicit one wins, else the variant's.
+            respell=variant.respell_map,
+            protected=spell.lexicon,
+            dictionary=cfg.spellcheck.dictionary or variant.dictionary)
         consistency_findings = to_findings(consistency, doc.paragraphs)
         # Near-identical protected names too close to call ride the same
         # deterministic prefix as the consistency queries: one question per
@@ -614,7 +626,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         try:
             candidate_screening = prepare_candidate_screening(
                 cfg, doc, paragraphs=swept,
-                sweep_findings=sweep_findings)
+                sweep_findings=sweep_findings, lexicon=spell.lexicon)
         except Exception as exc:
             # Preserve the normal review and carry the failure into its own
             # artifact/warning instead of losing the diagnosis. In apply mode
@@ -1055,6 +1067,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             lt_cands = lt_propose(
                 prepared.doc.paragraphs, lexicon=prepared.spell.lexicon,
                 dictionary=cfg.languagetool.dictionary,
+                picky=cfg.languagetool.picky,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
                 workers=cfg.languagetool.workers,
                 scan_chars=cfg.languagetool.scan_chars, progress=progress,
@@ -1076,6 +1089,12 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 concurrency=cfg.concurrency_for(lt_model)))
         finally:
             lt_shutdown()
+
+    # Frontier chapter sweep. Shared with the batch collector — see
+    # chapter_sweep_findings.
+    findings.extend(chapter_sweep_findings(
+        cfg, prepared, ids, usage, provider_factory, on_phase=on_phase,
+        coverage=coverage, loss_sink=window_losses))
 
     # Whole-book continuity read. Shared with the batch collector rather than
     # written out here, so the two paths cannot drift apart — see
@@ -1160,6 +1179,190 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                           "candidate findings were added.")
 
     return findings, usage
+
+
+def chapter_sweep_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
+                           provider_factory, *, on_phase=None, coverage=None,
+                           loss_sink=None) -> list[Finding]:
+    """The frontier chapter sweep's findings, or [] when the pass is off.
+
+    A second detector with a deliberately different shape: one loose proofread
+    instruction over chapter-sized windows on a strong model, no error-type
+    taxonomy, verbatim quote->correction proposals anchored fail-closed, and
+    every proposal ruled on by the SHARED rewrite.confirm valve before it can
+    become a tracked change. Complementary to the typed passes (the 2026-08-23
+    Redding pilot: it catches the judgment-call band they glide past, they keep
+    the mechanical floor it skips). See docproof/chaptersweep.py.
+
+    A function rather than a block inside run_sync for the same reason as
+    continuity_findings: the sweep is synchronous whole-window work on its own
+    model, so a batch review must make it at collect time, and one shared
+    implementation cannot drift between the two paths. Additive and fail-open:
+    a sweep that cannot run (no vendor key, a failed window) is a coverage
+    note, never a failed review."""
+    if not (cfg.chapter_sweep.enabled and prepared.whole_document):
+        return []
+    if on_phase:
+        on_phase("chapter_sweep")
+    from .chaptersweep import propose as sweep_propose
+    from .rewrite import confirm as sweep_confirm
+
+    scfg = cfg.model_copy(deep=True)
+    scfg.api.model = cfg.chapter_sweep.model
+    scfg.api.effort = cfg.chapter_sweep.effort
+    try:
+        sweep_provider = provider_factory(scfg)
+    except Exception as exc:
+        # The classic case: the pass is on but that vendor's key is not set.
+        log.warning("Chapter sweep is on but its provider could not be built "
+                    "(%s); skipping it.", exc)
+        if coverage is not None:
+            coverage.note("Chapter sweep",
+                          f"the pass is enabled but its model provider could "
+                          f"not be built ({exc}), so the loose whole-chapter "
+                          f"proofread did not run", "skipped")
+        return []
+    try:
+        stats: dict = {}
+        candidates = sweep_propose(
+            prepared.doc.paragraphs, sweep_provider,
+            model=cfg.chapter_sweep.model,
+            max_output_tokens=cfg.chapter_sweep.max_output_tokens,
+            usage=usage, window_chars=cfg.chapter_sweep.window_chars,
+            # The same whole-book sections the typed detectors read: the
+            # vocabulary (coinages are not typos), the variant conventions,
+            # and the story sheet (tense/POV/pronouns) when that pass is on.
+            context="\n\n".join(x for x in (
+                prepared.vocabulary, prepared.conventions,
+                prepared.story_sheet) if x),
+            coverage=coverage, stats=stats)
+        log.info("Chapter sweep proposed %d candidate(s) over %d window(s) "
+                 "(dropped: unlocated=%d, noop=%d).",
+                 stats.get("candidates", 0), stats.get("windows", 0),
+                 stats.get("unlocated", 0), stats.get("noop", 0))
+        if not candidates:
+            return []
+        ccfg = cfg.model_copy(deep=True)
+        if cfg.chapter_sweep.confirm_model:
+            ccfg.api.model = cfg.chapter_sweep.confirm_model
+            ccfg.api.effort = cfg.chapter_sweep.confirm_effort
+        confirm_provider = provider_factory(ccfg)
+        return sweep_confirm(
+            candidates, prepared.doc.paragraphs, confirm_provider,
+            model=ccfg.api.model,
+            # Confirm replies are short verdict rows; 16k matches the other
+            # valve users (chapter_sweep.max_output_tokens sizes the SWEEP).
+            max_tokens=16_000, usage=usage, ids=ids,
+            batch_size=cfg.chapter_sweep.batch_size,
+            edit_confidence=cfg.chapter_sweep.edit_confidence,
+            error_type="chapter_sweep", chunk_id="chapter_sweep",
+            id_prefix="cw", loss_sink=loss_sink,
+            concurrency=cfg.concurrency_for(ccfg.api.model))
+    except Exception as exc:
+        log.exception("Chapter sweep failed; continuing without it.")
+        if coverage is not None:
+            coverage.note("Chapter sweep",
+                          f"the loose whole-chapter proofread failed ({exc}) "
+                          f"and its findings are missing from this review",
+                          "failed")
+        return []
+
+
+def _repair_findings(cfg: Config, prepared: Prepared, usage: Usage, *,
+                     trigger_findings: list[Finding],
+                     out_dir: str | Path | None = None,
+                     loss_sink: list | None = None,
+                     coverage=None) -> list[Finding]:
+    """The repair channel's member findings, or [] when the pass is off.
+
+    Triggered by the other passes' output: a sentence in which `trigger_findings`
+    carry at least `repair.error_threshold` separate corrections is routed to a
+    strong model for one minimal repair, which is diffed into a cluster of member
+    edits sharing a cluster_id and ruled on as a whole by a skeptical judge before
+    any member can write. The members reach `finish()`'s arbitration EARLY, so a
+    confirmed repair supersedes the scattered token edits that triggered it; their
+    atomicity is enforced after the judge gates by
+    `repair.enforce_cluster_atomicity`, and they are guard-exempt in the validator
+    because the judge's meaning check, not a character count, is their fabrication
+    defence. Additive and fail-open like the chapter sweep and Sapling: a pass
+    that cannot run (no key, a failed call) is a coverage note, never a failed
+    review. Runs in `finish`, once per review, so it covers both the sync and
+    batch paths from one call site. See docproof/repair.py."""
+    if not (cfg.repair.enabled and prepared.whole_document):
+        return []
+    from itertools import count
+
+    from . import repair as repair_mod
+    from .providers import build_provider
+
+    sites = repair_mod.triggered_sentences(
+        trigger_findings, prepared.doc.paragraphs,
+        threshold=cfg.repair.error_threshold)
+    if not sites:
+        return []
+
+    rcfg = cfg.model_copy(deep=True)
+    rcfg.api.model = cfg.repair.model
+    rcfg.api.effort = cfg.repair.effort
+    try:
+        repair_provider = build_provider(rcfg)
+    except Exception as exc:
+        log.warning("Repair is on but its provider could not be built (%s); "
+                    "skipping it.", exc)
+        if coverage is not None:
+            coverage.note("Repair", f"the pass is enabled but its model provider "
+                          f"could not be built ({exc}), so {len(sites)} "
+                          f"error-dense sentence(s) were not repaired", "skipped")
+        return []
+    try:
+        stats: dict = {}
+        clusters = repair_mod.repair_sites(
+            sites, repair_provider, model=cfg.repair.model,
+            max_output_tokens=cfg.repair.max_output_tokens, usage=usage,
+            context="\n\n".join(x for x in (
+                prepared.vocabulary, prepared.conventions,
+                prepared.story_sheet) if x),
+            max_added=cfg.repair.max_added_chars,
+            max_members=cfg.repair.max_members,
+            batch_size=cfg.repair.batch_size,
+            system=cfg.repair.repair_prompt or None,
+            concurrency=cfg.concurrency_for(cfg.repair.model),
+            loss_sink=loss_sink, stats=stats)
+        if not clusters:
+            return []
+        confirm_model = cfg.repair.confirm_model or cfg.api.model
+        ccfg = cfg.model_copy(deep=True)
+        ccfg.api.model = confirm_model
+        ccfg.api.effort = cfg.repair.confirm_effort
+        confirm_provider = build_provider(ccfg)
+        rejected: list = []
+        findings = repair_mod.confirm(
+            clusters, confirm_provider, model=confirm_model,
+            max_tokens=cfg.repair.max_output_tokens, usage=usage, ids=count(1),
+            batch_size=cfg.repair.batch_size,
+            edit_confidence=cfg.repair.edit_confidence,
+            system=cfg.repair.judge_prompt or None,
+            reject_sink=rejected, loss_sink=loss_sink,
+            concurrency=cfg.concurrency_for(confirm_model))
+        # The judge's rejections are where a real repair can die — persist them
+        # so a compare can measure triggered sentences -> survivors, as the other
+        # valves do with their reject logs.
+        if out_dir is not None and rejected:
+            import json
+            try:
+                Path(out_dir, "repair_rejected.json").write_text(
+                    json.dumps(rejected, ensure_ascii=False, indent=2),
+                    encoding="utf-8")
+            except OSError as e:                     # debug artifact, never fatal
+                log.warning("Repair: could not write reject log: %s", e)
+        return findings
+    except Exception as exc:
+        log.exception("Repair failed; continuing without it.")
+        if coverage is not None:
+            coverage.note("Repair", f"the sentence-repair pass failed ({exc}) "
+                          f"and its repairs are missing from this review",
+                          "failed")
+        return []
 
 
 def continuity_findings(cfg: Config, prepared: Prepared, ids, usage: Usage,
@@ -1494,7 +1697,11 @@ def _smoothing_findings(cfg: Config, prepared: Prepared,
         batch_size=sm.batch_size, reject_sink=rejected,
         error_type="smoothing", chunk_id="smoothing", id_prefix="sm",
         concurrency=cfg.concurrency_for(sm.judge_model),
-        system=system, mode="suggestion")
+        # smoothing.edits flips the valve from ask to apply: in "correction"
+        # mode an affirmation at high confidence becomes an ordinary tracked
+        # change (softer ones still query); "suggestion" is the shipped
+        # query-only behaviour.
+        system=system, mode="correction" if sm.edits else "suggestion")
 
     # Every candidate should come back either affirmed or in the reject log. Any
     # that did neither were in a batch the judge failed to answer — a truncated
@@ -1891,6 +2098,12 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
             context=context, max_tokens=gate.max_output_tokens,
             concurrency=cfg.concurrency_for(gate.model),
             flag_unsure=gate.flag_unsure,
+            # The meaning gate — and only it — skips punctuation/case-only edits
+            # deterministically: they carry no proposition to weigh, and judging
+            # them only risks a wrong hold on a correct comma or capital (the
+            # single largest source of wrongly-demoted fixes in field review).
+            # fix_check still sees them: a comma can be the wrong repair.
+            bypass_trivial=(spec.key == "meaning"),
             usage=usage)
         for pos, f in zip(report.positions, report.withheld):
             validated[where[pos]] = to_query(f, prepared.doc)
@@ -2006,6 +2219,23 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     sapling_findings = _sapling_findings(cfg, prepared, usage, out_dir=out,
                                          loss_sink=window_losses,
                                          coverage=coverage)
+    # The repair channel: sentences the other passes flagged with several errors
+    # are routed to a strong model and repaired as atomic clusters. It is TRIGGERED
+    # by those passes' output — the sweeps, consistency, Sapling, and the model
+    # edits gathered so far — so it runs here, after they are in hand. Its members
+    # sit EARLY in `proposed` (right after the deterministic sweeps and
+    # consistency, ahead of Sapling and the model) so the coherent repair claims
+    # its spans first and the scattered token edits that triggered it are dropped
+    # as overlapping. enforce_cluster_atomicity below keeps a repair from ever
+    # shipping by halves. Whole-document only. See docproof/repair.py.
+    if on_phase and cfg.repair.enabled and prepared.whole_document:
+        on_phase("repair")
+    repair_findings = _repair_findings(
+        cfg, prepared, usage, out_dir=out, loss_sink=window_losses,
+        coverage=coverage,
+        trigger_findings=(list(prepared.sweep_findings)
+                          + list(prepared.consistency_findings)
+                          + sapling_findings + model_findings))
     # Below-gate model edits get one more chance to become a tracked change: the
     # confirm valve re-rules each in literary context, so a real dialogue-
     # mechanics catch the type prompts marked "low" is promoted rather than left
@@ -2048,6 +2278,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                      batch_reads=chapter_batch_reads)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
+                + repair_findings
                 + sapling_findings
                 + model_findings
                 + promoted
@@ -2058,9 +2289,39 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
         return validate_findings(findings, prepared.doc, cfg.min_confidence,
                                  query_types=prepared.query_types,
                                  format_types=prepared.format_types,
-                                 edit_guard=cfg.edit_guard)
+                                 edit_guard=cfg.edit_guard,
+                                 # A sentence repair legitimately inserts a
+                                 # dropped word or clause the 16-char growth cap
+                                 # would refuse; its fabrication defence is the
+                                 # cluster judge's meaning ruling, not a char
+                                 # count. See docproof/repair.py.
+                                 guard_exempt=frozenset({"repair"}))
 
     validated = _validate(proposed)
+    # Recurrence propagation: a free deterministic post-pass over the arbitrated
+    # set. Every validated word/phrase swap is searched across the whole book and
+    # re-emitted at its other occurrences, so a typo fixed here but missed there
+    # is fixed in both. Its findings are re-validated (the validator dedups any
+    # span an existing finding already holds) and appended BEFORE the judge gates,
+    # so a propagated edit faces the same meaning/fix screens as any other change.
+    # See docproof/adjudicate.propagate_recurrences.
+    if cfg.recurrence.enabled and prepared.whole_document:
+        from .adjudicate import propagate_recurrences
+        covered_ids = {p.para_id for c in prepared.chunks for p in c.paragraphs}
+        recurrences = propagate_recurrences(
+            # Repair-cluster members are excluded as a propagation source: a
+            # single member swap propagated to another identical sentence lands
+            # there with no cluster_id and so no atomicity guarantee — a partial
+            # repair at the far site, the one thing this channel must never
+            # produce. A broken sentence is repaired where it is read; if it
+            # recurs verbatim, it is a broken sentence there too and the pass
+            # reads it there. (v1 decision — see docproof/repair.py.)
+            [f for f in validated if not f.cluster_id],
+            [p for p in prepared.doc.paragraphs if p.para_id in covered_ids],
+            dictionary=cfg.spellcheck.dictionary or prepared.variant.dictionary,
+            protected=prepared.spell.lexicon,
+            max_sites_per_surface=cfg.recurrence.max_sites_per_surface)
+        validated += _validate(recurrences)
     # The judge gates: the last read before the manuscript is written. They run
     # AFTER validation on purpose — by now the survivors are exactly the changes
     # that would reach the author, so a judge reads each one once, and never one
@@ -2081,6 +2342,15 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     judge_reports, held_count = _run_judge_gates(
         cfg, prepared, validated, usage, out_dir=out, replay=judge_held,
         on_phase=on_phase, coverage=coverage)
+    # Repair atomicity, AFTER the gates so it sees every partial failure at once:
+    # a member dropped at validation for overlapping a surer edit, and a member a
+    # judge gate just withdrew. If any member of a repair cluster is no longer a
+    # clean tracked change, the rest are withdrawn to the margin with it, so the
+    # run never writes half a broken-sentence repair. Uses the same span-
+    # preserving to_query the gates use, so nothing else in the run moves.
+    if cfg.repair.enabled and prepared.whole_document:
+        from .repair import enforce_cluster_atomicity
+        enforce_cluster_atomicity(validated, prepared.doc)
     # Residual coverage, after every gate has settled what is actually being
     # edited: number-rule trigger sites no surviving edit touched become
     # margin queries, so a rule the model applied to most-but-not-all matches

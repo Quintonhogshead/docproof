@@ -1,0 +1,26 @@
+error_type: compound_sentence_comma
+
+# The top documented detector gap (Redding miss analysis): the comma before a
+# coordinating conjunction joining two independent clauses. Seeded errors are
+# judged (needs_model_judgment), so detection = a candidate covering the join.
+cases:
+  - id: cc-001
+    text: "The rain hammered the windows all night and she watched it fall."
+    expect: { span: "night and she", correction: "night, and she", confidence: medium }
+  - id: cc-002
+    text: "The verdict came down before noon but they never heard the bell."
+    expect: { span: "noon but they", correction: "noon, but they", confidence: medium }
+  - id: cc-003
+    text: "He checked the locks a second time and it still felt unsafe."
+    expect: { span: "time and it", correction: "time, and it", confidence: medium }
+
+  # Clean traps -----------------------------------------------------------
+  - id: cc-101
+    text: "The rain hammered the windows all night, and she watched it fall."
+    expect: clean
+  - id: cc-102
+    text: "She bought the bread and butter at the market stall."
+    expect: clean          # a list, not a clause join
+  - id: cc-103
+    text: "He waved and she smiled."
+    expect: clean          # too short to demand the comma

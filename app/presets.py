@@ -215,6 +215,7 @@ STANDARD = TierPreset(
     rounds=1,
     min_confidence="medium",
     languagetool=True,                # the only lift over the shipped defaults
+                                      # (runs at the picky level; see default.yaml)
     storysheet=False, continuity=False, rewrite=False,
     meaning_check=False, fix_check=False, sapling="off",
 )

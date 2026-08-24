@@ -114,6 +114,39 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "pass", ("candidate_screening", "mode"), heavy=True,
         on_value="shadow", off_value="off"),
     FeatureSpec(
+        "smoothing_edits", "Tracked changes for smoothing",
+        "Off, every smoothing the taste judge affirms is a margin comment the "
+        "author answers. On, the ones the judge holds at high confidence are "
+        "applied as ordinary tracked changes instead — accept or reject in "
+        "Word rather than a margin full of questions — and softer suggestions "
+        "still ask. Only matters when the smoothing pass itself is on.",
+        "pass", ("smoothing", "edits")),
+    FeatureSpec(
+        "chapter_sweep", "Frontier chapter sweep — loose second read",
+        "A frontier model reads the manuscript a chapter at a time with one "
+        "loose instruction — find spelling and grammar errors — and proposes "
+        "verbatim quote-and-correction pairs. No error-type list, so no "
+        "taxonomy blind spots; chapter-scale context catches cross-sentence "
+        "slips. Every proposal is ruled on by the same skeptical confirm "
+        "valve as Sapling and LanguageTool before it can become a tracked "
+        "change. Frontier-priced: roughly a Fable-rate read of the whole "
+        "book on top of the review.",
+        "pass", ("chapter_sweep", "enabled"), heavy=True),
+    FeatureSpec(
+        "repair", "Broken-sentence repair (atomic)",
+        "Sentences the other checks flag with several errors are routed to a "
+        "strong model (Fable) and repaired as ONE unit: the insert, the "
+        "punctuation, and the knock-on capitals travel together, so the fix "
+        "that turns a fragment into a sentence lands whole or not at all. A "
+        "skeptical judge rules on each repair before it can write, and one it is "
+        "unsure of becomes a margin question instead. This reaches the "
+        "sentence-level work a token-by-token check cannot; it is also the "
+        "highest-risk pass, so it is off by default and every repair passes the "
+        "meaning check before it ships. Priced on only the flagged sentences, "
+        "not the whole book — a strong-model read of the dense sentences plus a "
+        "judge, on top of the review.",
+        "pass", ("repair", "enabled"), heavy=True),
+    FeatureSpec(
         "languagetool", "LanguageTool mechanical floor",
         "A local rules checker (commas, missing words, compound-modifier "
         "hyphenation) whose suggestions the confirm step vets in context. No "
@@ -327,6 +360,16 @@ def _cost_meta(fid: str, cfg: Config) -> dict | None:
                 "samples": cfg.rewrite.samples}
     if fid == "languagetool":
         return {"kind": "confirm", "model": cfg.languagetool.confirm_model}
+    if fid == "chapter_sweep":
+        # One whole-book read on the sweep model, input-dominated (the reply is
+        # a findings list); the confirm calls ride the same "confirm" scaling as
+        # LanguageTool but the read is the cost that matters here.
+        return {"kind": "read", "model": cfg.chapter_sweep.model}
+    if fid == "repair":
+        # Scoped to only the error-dense sentences the trigger routes, not the
+        # whole book, so it rides the same "confirm"-style scaling as the other
+        # valves rather than a full read. The cluster judge is cheaper still.
+        return {"kind": "confirm", "model": cfg.repair.model}
     if fid == "sapling":
         return {"kind": "grammar", "rate_per_1k": cfg.sapling.cost_per_1k_chars}
     if fid == "meaning_check":

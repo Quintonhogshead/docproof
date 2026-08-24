@@ -39,6 +39,25 @@ def test_dialogue_tag_with_comma_is_not_an_error():
     assert not _errors(_dialogue_candidates(_p('"I am here," she said.')))
 
 
+def test_action_beat_keeps_its_period():
+    # "continued his search" is narration, not a speech tag — the period stays.
+    cands = _dialogue_candidates(
+        _p('“When he does.” Tannithan continued his search.'))
+    assert cands and not _errors(cands)
+    assert _decisions(cands) == {"pass"}
+
+
+def test_dual_use_verb_without_object_is_judged_not_auto_corrected():
+    cands = _dialogue_candidates(
+        _p('“Wait.” he continued, scanning the room.'))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
+
+
+def test_core_speech_verb_period_is_still_an_error():
+    assert _errors(_dialogue_candidates(_p('“Stop.” she said.')))
+
+
 # --- quote_balance -----------------------------------------------------------
 
 def test_unbalanced_quotes_are_flagged_for_judgment():
@@ -60,6 +79,29 @@ def test_strong_intro_missing_comma_is_an_error():
 
 def test_strong_intro_with_comma_passes():
     assert not _errors(_introductory_candidates(_p("However, he left.")))
+
+
+@pytest.mark.parametrize("text", [
+    "No matter how many times I asked.",
+    "No one dons a Masque and escapes.",
+    "No longer will they wait.",
+    "Instead of forcing it, I waited.",
+    "First base was empty.",
+])
+def test_determiner_and_phrase_openers_are_not_comma_errors(text):
+    # The Johnson run applied "No, matter", "No, servant girl", "Instead, of" as
+    # hard errors. These openers must never auto-insert; the clear phrase traps
+    # generate nothing at all.
+    cands = _introductory_candidates(_p(text))
+    assert not _errors(cands)
+
+
+def test_interjection_opener_is_judged_not_auto_inserted():
+    # "No servant girl" — determiner, but not in the excluded phrase list — must
+    # go to the judge with the sentence, never straight to an edit.
+    cands = _introductory_candidates(_p("No servant girl is worth the city."))
+    assert cands and _decisions(cands) == {"needs_model_judgment"}
+    assert not _errors(cands)
 
 
 # --- direct_address_comma ----------------------------------------------------
@@ -153,6 +195,75 @@ def test_consistent_list_endings_pass():
              _p("- second item.", "List Bullet", "l-1")]
     cands = _list_candidates(paras)
     assert cands and _decisions(cands) == {"pass"}
+
+
+# --- homophone / confusable signals ------------------------------------------
+
+def test_confusable_fires_only_on_misuse_signals():
+    from docproof.candidate_generators import _homophone_candidates
+
+    # Misuse patterns fire...
+    for text, word in [
+        ("They left there bags on the platform.", "there"),
+        ("Your going to be late again.", "Your"),
+        ("The dog wagged it's tail happily.", "it's"),
+        ("She is taller then him by a foot.", "then"),
+        ("It was to late for apologies.", "to"),
+        ("He walked passed the old chapel.", "passed"),
+        ("It came form the cellar below.", "form"),
+    ]:
+        cands = _homophone_candidates(_p(text))
+        assert any(c.observed_text == word for c in cands), text
+        # A signal is a question for the judge, never a local edit.
+        assert all(c.candidate_correction is None for c in cands)
+
+    # ...and correct usage generates nothing at all (the Johnson canary judged
+    # 5,214 unsignaled homophones for ~zero errors).
+    for text in [
+        "They went there today, but their bags stayed.",
+        "You're going to make it in time.",
+        "The dog wagged its tail happily.",
+        "She is taller than him by a foot.",
+        "It was too late for apologies.",
+        "He walked past the old chapel.",
+        "It came from the cellar below.",
+    ]:
+        assert _homophone_candidates(_p(text)) == [], text
+
+
+# --- compound_sentence_comma --------------------------------------------------
+
+def test_compound_join_missing_comma_is_flagged_for_judgment():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    text = "The rain hammered the windows all night and she watched it fall."
+    cands = _compound_comma_candidates(_p(text))
+    flagged = [c for c in cands
+               if c.evidence["local_screening"]["decision"]
+               == "needs_model_judgment"]
+    assert flagged and flagged[0].candidate_correction == ","
+    a = flagged[0].anchors[0]
+    spliced = text[:a.start_offset] + "," + text[a.end_offset:]
+    assert "night, and she watched" in spliced
+
+
+def test_compound_join_with_comma_passes():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    text = "The rain hammered the windows all night, and she watched it fall."
+    cands = _compound_comma_candidates(_p(text))
+    assert cands and all(
+        c.evidence["local_screening"]["decision"] == "pass" for c in cands)
+
+
+def test_compound_join_ignores_lists_and_short_fragments():
+    from docproof.candidate_generators import _compound_comma_candidates
+
+    # "bread and butter" — no pronoun subject after the conjunction.
+    assert _compound_comma_candidates(
+        _p("She bought the bread and butter at the market stall.")) == []
+    # Short first fragment — not a clause worth setting off.
+    assert _compound_comma_candidates(_p("He waved and she smiled.")) == []
 
 
 # --- cross-generator invariant ----------------------------------------------

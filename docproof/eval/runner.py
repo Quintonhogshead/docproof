@@ -56,6 +56,7 @@ def _eval_config(cfg: Config) -> Config:
     # not silently start counting taste against a mechanical trap set.
     cfg.smoothing.enabled = False
     cfg.chapter_continuity.enabled = False   # finish()-resident too; same reason
+    cfg.repair.enabled = False               # finish()-resident too; same reason
     cfg.audit = "off"
     cfg.change_log = False
     return cfg

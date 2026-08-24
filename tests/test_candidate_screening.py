@@ -17,7 +17,7 @@ from docproof.candidate_screening import (
 from docproof.config import Config, load_config
 from docproof.context_service import ContextService
 from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
-from docproof.providers import ProviderResult
+from docproof.providers import BatchStatus, ProviderResult
 
 from .fakes import FakeProvider, USAGE
 
@@ -96,7 +96,8 @@ def test_initial_rollout_generates_every_locally_generatable_type():
         _para("body-0000", (
             '“Wait.” he said. However we stayed. Hello John. '
             'This is is 5 and the lantern shone while the lantern dimmed. $5. '
-            'They went there ; the ( unclosed paragraph.')),
+            'They took there bags ; the ( stayed open all evening and '
+            'it never closed again.')),
         _para("body-0001", "Chapter 1", "Heading1", False),
         _para("body-0002", "Chapter 3", "Heading1", False),
         _para("body-0003", "First item", "ListParagraph", False),
@@ -309,17 +310,17 @@ def test_standalone_mode_reuses_local_analyzers_as_candidates():
     paras = tuple(
         ParagraphRef(f"body-{i:04d}", "word/document.xml", "body", t, "Normal", True)
         for i, t in enumerate([
-            "He said . . . nothing at all -- then left; the ( never closed.",
-            "They went there today, but their bags stayed.",
+            "He slammed the door and left the room!!",
+            "She took there bags from the hall table.",
         ]))
     doc = DocumentModel("book.docx", paras)
     cfg = apply_profile(load_config("config/default.yaml"), CANDIDATE_ONLY)
     run = prepare_candidate_screening(cfg, doc, paragraphs=list(paras))
     generators = {c.generator_id for c in run.ledger.candidates}
     types = {c.candidate_type for c in run.ledger.candidates}
-    # Reused deterministic sweeps became candidates (not direct findings)...
+    # Reused deterministic ERROR sweeps became candidates (not direct findings)...
     assert any(g.startswith("candidate.adapter.sweep_") for g in generators)
-    # ...alongside the new lexical/punctuation generators.
+    # ...alongside the signal-gated lexical/punctuation generators.
     assert {"homophone", "punctuation_style"} <= types
     # Containment still holds: standalone apply is clamped to shadow.
     assert run.mode == "shadow"
@@ -430,6 +431,111 @@ def test_model_packet_retries_an_invalid_correction_only():
     assert [row.decision for row in verdicts] == ["pass", "pass"]
     assert '"candidate_id":"C-a"' not in provider.calls[1]["user"]
     assert '"candidate_id":"C-b"' in provider.calls[1]["user"]
+
+
+class _BatchJudge:
+    """A provider whose batch returns a scripted parsed body per packet_id, and
+    whose synchronous path passes every candidate. `bad` packet_ids come back
+    from the batch with one id dropped (a coverage gap) so the lane must re-judge
+    that packet synchronously. `never_complete` keeps every poll in progress."""
+
+    name = "batch-judge"
+
+    def __init__(self, *, bad=(), never_complete=False):
+        self.bad = set(bad)
+        self.never_complete = never_complete
+        self.batch_ids: list[str] = []
+        self.sync_calls: list[str] = []
+        self._reqs: list = []
+
+    @staticmethod
+    def _ids(user):
+        return [row["candidate_id"] for row in json.loads(user)["candidates"]]
+
+    def submit_batch(self, *, model, requests, max_tokens):
+        self._reqs = list(requests)
+        return "batch-0001"
+
+    def poll_batch(self, batch_id):
+        n = len(self._reqs)
+        if self.never_complete:
+            return BatchStatus(state="in_progress", total=n)
+        return BatchStatus(state="completed", total=n, succeeded=n)
+
+    def collect_batch(self, batch_id):
+        out = {}
+        for req in self._reqs:
+            ids = self._ids(req.user)
+            passed = ids[1:] if req.custom_id in self.bad else ids
+            out[req.custom_id] = ProviderResult(parsed={
+                "pass_ids": passed, "errors": [], "uncertain": [],
+                "deferred": []}, usage=USAGE)
+        return out
+
+    def complete_structured(self, *, user, **kwargs):
+        ids = self._ids(user)
+        self.sync_calls.append(ids)
+        return ProviderResult(parsed={
+            "pass_ids": ids, "errors": [], "uncertain": [],
+            "deferred": []}, usage=USAGE)
+
+
+def _batch_run():
+    para = _para("body-0000",
+                 "I went to the store and I bought milk but she stayed home.")
+    doc = _doc(para)
+    cfg = Config(candidate_screening={
+        "mode": "shadow", "candidate_types": ["comma_boundary"],
+        "judgment_enabled": True, "batch": True, "batch_size": 1,
+        "batch_poll_interval_seconds": 0.001, "batch_max_wait_seconds": 0.05})
+    run = prepare_candidate_screening(cfg, doc, paragraphs=[para])
+    return run, cfg
+
+
+def test_batch_primary_judgment_resolves_every_candidate_without_sync_calls():
+    run, cfg = _batch_run()
+    assert run.packets, "the fixture must generate at least one packet"
+    provider = _BatchJudge()
+
+    run.screen(cfg, provider_factory=lambda _cfg: provider)
+
+    run.ledger.assert_accounted()
+    assert provider.sync_calls == []          # clean batch: no sync fallback
+    ids = [cid for packet in run.packets for cid in packet.candidate_ids]
+    assert all(run.ledger.status(cid) == CandidateStatus.PASS for cid in ids)
+    assert all(record.get("batched") for record in run.packet_records)
+
+
+def test_batch_unresolved_packet_falls_back_to_synchronous_judgment():
+    run, cfg = _batch_run()
+    assert len(run.packets) >= 2, "need >=2 packets to leave one clean"
+    bad_packet = run.packets[0].packet_id
+    provider = _BatchJudge(bad=[bad_packet])
+
+    run.screen(cfg, provider_factory=lambda _cfg: provider)
+
+    run.ledger.assert_accounted()
+    # Exactly the dropped packet was re-judged synchronously; every candidate
+    # still reached a terminal verdict.
+    assert len(provider.sync_calls) == 1
+    ids = [cid for packet in run.packets for cid in packet.candidate_ids]
+    assert all(run.ledger.status(cid) == CandidateStatus.PASS for cid in ids)
+    fell_back = [r for r in run.packet_records
+                 if r.get("failure") == "batch_unresolved_fell_back_to_sync"]
+    assert len(fell_back) == 1
+
+
+def test_batch_that_never_completes_falls_back_to_full_synchronous_sweep():
+    run, cfg = _batch_run()
+    provider = _BatchJudge(never_complete=True)
+
+    run.screen(cfg, provider_factory=lambda _cfg: provider)
+
+    run.ledger.assert_accounted()
+    # The timeout drops every packet to the synchronous path.
+    assert len(provider.sync_calls) == len(run.packets)
+    ids = [cid for packet in run.packets for cid in packet.candidate_ids]
+    assert all(run.ledger.status(cid) == CandidateStatus.PASS for cid in ids)
 
 
 def test_model_screening_is_ledger_only_and_records_packet_ids():
@@ -582,3 +688,58 @@ def test_multi_round_reviews_run_candidate_generation_once():
     cfg = Config(candidate_screening={"mode": "apply"})
     assert _round_config(cfg, 1, True).candidate_screening.mode == "apply"
     assert _round_config(cfg, 2, True).candidate_screening.mode == "off"
+
+
+def test_languagetool_floor_suppresses_lexicon_words(monkeypatch):
+    # The languagetool_floor path must thread the spell scan's lexicon and the
+    # config's disabled-rules extras through to propose(), the same as the two
+    # main call sites (pipeline.py / batch.py) — otherwise a misspelling flag on
+    # an author's own name/coinage, LanguageTool's largest false-positive
+    # source, isn't suppressed here the way it is everywhere else.
+    from .test_languagetool import _install, _match
+
+    #        0         1
+    #        0123456789012345
+    text = "aaaa bbbb Dddd."   # a 0:4  b 5:9  Dddd 10:14
+    matches = [
+        _match("R_OK", "grammar", 5, 4, ["BB"], "bbbb"),                    # KEEP
+        _match("MORFOLOGIK_RULE", "misspelling", 10, 4, ["dude"], "Dddd"),  # drop: in lexicon
+    ]
+    _install(monkeypatch, {text: matches})
+
+    para = _para("body-0000", text)
+    doc = _doc(para)
+    cfg = Config(candidate_screening={"mode": "shadow", "languagetool_floor": True})
+
+    from docproof.candidate_screening import _local_analyzer_sources
+
+    _sweeps, sources = _local_analyzer_sources(
+        cfg, doc, [para], lexicon=["Dddd"])
+    grammar = sources.get("grammar", [])
+    assert len(grammar) == 1
+    assert grammar[0].corrected_text == "aaaa BB Dddd."
+
+    # Without the lexicon, the misspelling flag on "Dddd" survives too.
+    _sweeps, sources_no_lexicon = _local_analyzer_sources(
+        cfg, doc, [para])
+    assert len(sources_no_lexicon.get("grammar", [])) == 2
+
+
+def test_prepare_candidate_screening_passes_lexicon_to_the_grammar_floor(
+        monkeypatch):
+    from .test_languagetool import _install, _match
+
+    text = "Dddd is here."
+    matches = [
+        _match("MORFOLOGIK_RULE", "misspelling", 0, 4, ["dude"], "Dddd"),
+    ]
+    _install(monkeypatch, {text: matches})
+
+    para = _para("body-0000", text)
+    doc = _doc(para)
+    cfg = Config(candidate_screening={"mode": "shadow", "languagetool_floor": True})
+
+    run = prepare_candidate_screening(
+        cfg, doc, paragraphs=[para], lexicon=["Dddd"])
+    assert not any(
+        c.candidate_type == "grammar" for c in run.ledger.candidates)

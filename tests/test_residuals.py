@@ -105,6 +105,17 @@ def test_headings_keep_their_numerals():
     assert q([para("Chapter 10", reviewable=False)]) == []
 
 
+def test_page_furniture_numerals_are_left_alone():
+    # A folio in a footer ("2") and a running head are typesetting, not prose:
+    # the number rules must not query them, even though the paragraph is
+    # reviewable. (A footer page number was the residual pass's one false query.)
+    footer = ParagraphRef("footer3-p0", "word/footer3.xml", "footer", "2",
+                          "Normal", reviewable=True)
+    header = ParagraphRef("header2-p0", "word/header2.xml", "header",
+                          "Chapter 3", "Normal", reviewable=True)
+    assert q([footer, header]) == []
+
+
 def test_the_query_cap_is_loud_not_silent(caplog):
     import logging
     caplog.set_level(logging.WARNING, logger="docproof.residuals")

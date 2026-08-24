@@ -637,6 +637,7 @@ def collect_findings(job: Job, provider: Provider,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
                 workers=cfg.languagetool.workers,
                 scan_chars=cfg.languagetool.scan_chars,
+                picky=cfg.languagetool.picky,
                 coverage=coverage)
             lt_provider, lt_model = provider, cfg.api.model
             if cfg.languagetool.confirm_model:
@@ -655,12 +656,19 @@ def collect_findings(job: Job, provider: Provider,
         finally:
             lt_shutdown()
 
+    # Frontier chapter sweep: synchronous whole-window calls on its own model,
+    # so like continuity it runs here at collect. Same helper as the sync path.
+    from .pipeline import chapter_sweep_findings
+    from .providers import build_provider
+    findings += chapter_sweep_findings(cfg, prepared, ids, usage, build_provider,
+                                       on_phase=on_phase, coverage=coverage,
+                                       loss_sink=window_losses)
+
     # Whole-book continuity read: like the glossary above it is one synchronous
     # whole-book call on its own model, so it cannot ride the batch — it runs
     # here at collect. Without this the app's default submission mode would do no
     # continuity reads at all while summary.md (and the pre-run estimate) both
     # said it had. Same helper the synchronous path uses, so they stay in step.
-    from .providers import build_provider
     findings += continuity_findings(cfg, prepared, ids, usage, build_provider,
                                     on_phase=on_phase, coverage=coverage)
 

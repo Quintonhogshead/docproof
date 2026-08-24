@@ -133,6 +133,13 @@ consistency:
   names: true               # proper-name diacritic scan (Rian -> Rían)
   name_dominance: 5         # majority lead before a stray is corrected, not asked
   name_min_count: 20        # how established the dominant spelling must be
+  # The three mechanical scans a compound-word scan cannot do — all query-only,
+  # whole-document, deterministic. See docproof/consistency.py.
+  spelling_variants: true   # grey/gray, toward/towards (VarCon + Chicago table)
+  abbreviations: true       # U.S./US, a.m./AM
+  acronym_case: true        # NASA/Nasa (needs the spell dictionary)
+  chicago_notes: true       # add the Merriam-Webster preference to the query
+  max_queries_per_kind: 40  # per-scan cap, logged when it bites (no silent loss)
 
 # A strong model reads the whole manuscript once, before the detector passes,
 # and returns the book's proper nouns (canonical casing) + suspected
@@ -330,7 +337,16 @@ rewrite:
 # LanguageTool jar (auto-downloaded, cached), so OFF by default. Whole-document
 # only. See docproof/languagetool.py.
 languagetool:
+  # enabled is driven by the app tier (Standard and up turn it on); the base
+  # config leaves it off so a raw-config or checkpoint path does not silently
+  # boot the ~850MB JVM. When it DOES run, it runs at the picky level below.
   enabled: false
+  picky: true               # LanguageTool's strict level: its extra higher-FP
+                            # rules run too (more comma/hyphen/style catches +
+                            # more noise). The denylist and rewrite.confirm valve
+                            # still filter every match, so the extra noise costs
+                            # confirm-valve LLM calls, not blind edits. N-grams
+                            # are NOT enabled (they need multi-GB data files).
   dictionary: en-US         # LanguageTool language code (en-US | en-GB | …)
   disabled_rules: []        # extra rule ids to drop, atop the built-in
                             # artifact/style denylist (unpaired-quote, caps-start,
@@ -371,13 +387,77 @@ sapling:
   comments: true            # false = apply Sapling edits silently, no margin comment
   cost_per_1k_chars: 0.025  # $ per 1,000 chars — for the pre-run estimate only
 
+# Frontier chapter sweep: a strong model reads chapter-sized windows under ONE
+# loose instruction — find spelling and grammar errors — and proposes verbatim
+# quote->correction pairs. No error-type taxonomy (no taxonomy blind spots),
+# chapter-scale context (cross-sentence slips visible). Proposals are anchored
+# fail-closed and ruled on by the SHARED rewrite.confirm valve, so only an
+# affirmed error becomes a tracked change and a softer affirmation asks in the
+# margin. Complementary to the typed passes by measurement (Redding pilot,
+# 2026-08-23): it catches the judgment-call band they miss; they keep the
+# mechanical floor it skips. OFF by default — a frontier-priced read of the
+# whole book. Whole-document only. See docproof/chaptersweep.py.
+chapter_sweep:
+  enabled: false
+  model: claude-fable-5     # needs ANTHROPIC_API_KEY (skipped, with a coverage
+                            # note, when the vendor key is missing)
+  effort: xhigh
+  window_chars: 48000       # ~a long chapter per request
+  max_output_tokens: 64000  # the sweep reply (findings list + thinking). 32k
+                            # truncated 2 of 6 windows on Redding (2026-08-23);
+                            # clean windows stop at 3k–25k, so the headroom
+                            # costs nothing unless it saves a window.
+  batch_size: 40            # candidates per confirm request
+  edit_confidence: high     # bar an affirmed edit clears; softer = margin query
+  confirm_model:            # unset = api.model (the detector's)
+  confirm_effort: medium
+
+# Repair channel: route error-dense sentences to a strong model, fix each as one
+# ATOMIC cluster. Where every other correcting pass emits an atomic token edit,
+# this one repairs a broken sentence whole — and it is TRIGGERED by the other
+# passes: a sentence in which the detectors flag at least `error_threshold`
+# separate corrections is probably broken as a whole, so it is routed to a strong
+# model (Fable) for one minimal repair. The diff becomes a cluster of co-dependent
+# member edits sharing a cluster_id; a skeptical judge rules on the WHOLE cluster
+# (broken, minimally fixed, meaning-preserved), an affirmation at edit_confidence
+# writes, a softer one asks. The members sit early in arbitration so the coherent
+# repair supersedes the scattered token edits that triggered it, and they ship as
+# separate tracked changes but stand or fall together — if any member does not
+# survive, the whole cluster is withdrawn, so a repair is never shipped by halves.
+# The judge's meaning ruling, not a character count, is the fabrication defence,
+# so repair edits are exempt from the edit guard; a deterministic size cap still
+# drops a "repair" that rewrote more than it fixed. OFF by default and the
+# highest-risk pass — meant to be measured in shadow mode before it is trusted to
+# write. Whole-document only. See docproof/repair.py and docs/repair.md.
+repair:
+  enabled: false
+  error_threshold: 3        # THE TRIGGER: a sentence with this many separate
+                            # flagged corrections is routed to the repair model
+                            # (the judge still declines any that is only stylistic)
+  model: claude-fable-5     # the repair read; needs ANTHROPIC_API_KEY (skipped,
+                            # with a coverage note, if the key is unset)
+  effort: high
+  max_output_tokens: 16000  # the repair reply (repaired sentences + thinking);
+                            # a truncated window is halved and re-asked
+  confirm_model:            # the judge; unset = api.model (the detector's)
+  confirm_effort: high
+  batch_size: 20            # triggered sentences per request
+  edit_confidence: high     # bar a repair clears to WRITE; softer = margin query
+  max_added_chars: 120      # a "repair" adding more net text than this is a
+                            # rewrite, dropped before the judge (the deterministic
+                            # half of the fabrication defence)
+  max_members: 12           # ...or touching more spans than this
+  repair_prompt: ""         # empty = built-in contract (see docproof/repair.py)
+  judge_prompt: ""          # empty = built-in judge (see docproof/repair.py)
+
 # Line-editing pass: the half of a proofreader's job the other passes refuse. A
 # reader proposes small smoothings — a word doing no work, an unidiomatic
 # preposition, an awkward coordination, a rough tense, an ambiguous pronoun —
-# and a skeptical taste judge culls them. QUERY-ONLY and unconditionally so:
-# every finding is a margin comment, never a tracked change, because a smoothing
-# has no right answer, only a better one, and which is better is the author's
-# call. Dialogue is excluded by default and author coinages are filtered out
+# and a skeptical taste judge culls them. Query-only by DEFAULT: every finding
+# is a margin comment, because a smoothing has no right answer, only a better
+# one, and which is better is the author's call. The `edits` switch is the
+# explicit exception — judge-affirmed-at-HIGH smoothings apply as tracked
+# changes the author accepts/rejects in Word, and softer ones still ask. Dialogue is excluded by default and author coinages are filtered out
 # before the judge sees them — voice risk is what these knobs defend. Volume is
 # capped per 1,000 words; anything dropped by the cap is COUNTED in summary.md.
 # Echo is deliberately not a category here: `word_echo` owns it in the taxonomy.
@@ -386,6 +466,9 @@ sapling:
 # See docproof/smoothing.py.
 smoothing:
   enabled: false
+  edits: false              # true = judge-affirmed-at-HIGH smoothings apply as
+                            # tracked changes (softer ones still ask); false =
+                            # every smoothing is a margin comment
   model:                    # unset = api.model (the detector's)
   effort: medium
   judge_model: gpt-5.6-luna  # taste is the hard part, but the house default keeps this
@@ -481,8 +564,10 @@ meaning_check:
   # A frontier model at effort high that always thinks, so this ceiling is
   # mostly reasoning. The gates batch per PARAGRAPH (a few changes per call),
   # which is what kept 4,000 workable — but a heavily corrected paragraph is
-  # not rare, and a truncated gate applies every change in it unread.
-  max_output_tokens: 12000
+  # not rare, and a truncated gate applies every change in it unread: 12k did
+  # exactly that on a 7-change paragraph (2026-08-23). A clean reply stops far
+  # short, so the raise only spends on calls that would otherwise truncate.
+  max_output_tokens: 24000
   prompt: ""                # empty = built-in default (editable in the review panel)
 
 # Is the replacement the CORRECT fix? Same wiring, same knobs, different
@@ -494,7 +579,7 @@ fix_check:
   effort: high
   scope: model_sources
   flag_unsure: true
-  max_output_tokens: 12000   # as meaning_check above
+  max_output_tokens: 24000   # as meaning_check above
   prompt: ""
 
 # Each entry is ONE API pass over the whole document. A bare key runs alone;
@@ -563,6 +648,13 @@ error_types:
   # Its own pass so the judgment stays isolated and easy to toggle off. Query
   # channel: asks whether a period should be a question mark, never edits.
   - terminal_mark
+  # the one comma rule that DELETES rather than adds: an unpaired comma the
+  # sentence cannot defend (subject|verb, verb|object, correlative halves, or a
+  # defining clause). Every other comma type here ADDS the commas house style
+  # wants, so this is the only counterweight — kept in its own pass because a
+  # deletion is higher-risk than an insertion and, like terminal_mark, its LLM
+  # precision is unproven; isolate it so it stays easy to toggle and measure.
+  - unnecessary_comma
 # House-style conventions the sweeps enforce where the right answer is the
 # press's choice, not a rule. Not in config/variants/ because none of it flips
 # on US/UK — a house sets it once for every manuscript.
@@ -612,6 +704,9 @@ sweeps:
   - sweep_terminal_period
   - sweep_quote_punctuation   # . and , inside a closing double quote (US)
   - sweep_nested_quote        # doubles inside dialogue demote to singles
+  - sweep_time_of_day         # 3:40AM -> 3:40 a.m.
+  - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
+  - sweep_dialogue_splice     # comma splices around a dialogue tag
 
 # After every gate has settled which edits stand, re-scan the reviewed text
 # for number-rule trigger sites no edit touched — bare numerals to one
@@ -622,6 +717,19 @@ sweeps:
 residuals:
   enabled: true
   max_per_rule: 150         # overflow is logged loudly, never silently dropped
+
+# Recurrence propagation: a free deterministic post-pass over the validated set.
+# Every validated edit that swaps one verbatim word/short phrase for another is
+# searched across the whole book, and each OTHER occurrence of the original
+# surface is re-emitted as a finding proposing the same swap — a typo fixed in
+# chapter 2 but missed in chapter 9 is now fixed in both. A surface the edits
+# disagree about is dropped as ambiguous, a real dictionary word recurs as a
+# margin query (not a silent edit), a non-word typo propagates as a tracked edit,
+# and the protected lexicon is never swept. Whole-document only, no API call.
+# See docproof/adjudicate.py (propagate_recurrences).
+recurrence:
+  enabled: true
+  max_sites_per_surface: 200  # per surface; overflow logged, never silently dropped
 
 # Phase-one examination graph. It observes the existing review and writes an
 # append-only site ledger plus coverage reports; it CANNOT create edits in
@@ -686,15 +794,25 @@ candidate_screening:
     - word_echo
     - heading_sequence
     - list_punctuation
-    - punctuation_style     # semicolon/colon/bracket + adapted punctuation sweeps
-    - homophone             # commonly confused words, judged in context
+    - punctuation_style     # semicolon/colon/bracket + adapted punctuation ERROR sweeps
+    - homophone             # confusables, SIGNAL-GATED (misuse patterns only)
+    - compound_sentence_comma  # comma before a two-clause coordinating join
     - term_consistency      # document-wide term/spelling drift (reused scan)
     - grammar               # LanguageTool mechanical floor (reused, opt-in)
+    # - comma_boundary      # EXHAUSTIVE comma seams (low precision; judge prunes
+    #                         the FPs). ~10x the candidate volume; opt in only
+    #                         with batch: true and a house-style-aware judge.
   reuse_local_analyzers: true   # feed sweeps/quote/consistency scans as candidates
   languagetool_floor: false     # also run LanguageTool (heavy JVM); opt-in
   max_candidates: 200000
-  batch_size: 100
+  batch_size: 40            # candidates per judge request; 100 invited ID slips
   judgment_enabled: true
+  # Send the primary judgment as one vendor batch (50% cheaper). The lane
+  # block-polls it to completion, then re-judges any unresolved packet on the
+  # synchronous focused-retry path. Escalation stays synchronous.
+  batch: false
+  batch_poll_interval_seconds: 20
+  batch_max_wait_seconds: 86400   # 24h vendor window; then drop to synchronous
   model: gpt-5.6-luna
   effort: low
   escalation_model:

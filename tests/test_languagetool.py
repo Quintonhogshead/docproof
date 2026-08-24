@@ -62,7 +62,7 @@ class _FakeTool:
 
 def _install(monkeypatch, by_text):
     monkeypatch.setattr(lt, "AVAILABLE", True)
-    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: _FakeTool(by_text))
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary, picky=False: _FakeTool(by_text))
 
 
 def _verdicts(*items) -> ProviderResult:
@@ -84,6 +84,19 @@ def test_all_disabled_rules_merges_defaults_and_config_extras():
 def test_propose_returns_nothing_when_languagetool_is_absent(monkeypatch):
     monkeypatch.setattr(lt, "AVAILABLE", False)
     assert lt.propose([_para("body-0", "anything at all")]) == []
+
+
+def test_propose_sets_picky_on_the_server_per_call(monkeypatch):
+    # The server is long-lived and shared, so propose() must set the picky level
+    # every call — a stale True would leak into a later non-picky run.
+    tool = _FakeTool({})
+    tool.picky = False
+    monkeypatch.setattr(lt, "AVAILABLE", True)
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: tool)
+    lt.propose([_para("body-0", "text")], picky=True)
+    assert tool.picky is True
+    lt.propose([_para("body-0", "text")], picky=False)
+    assert tool.picky is False
 
 
 def test_propose_keeps_a_real_fix_and_drops_every_kind_of_noise(monkeypatch):
@@ -160,7 +173,7 @@ def test_a_match_that_straddles_a_batch_join_is_dropped(monkeypatch):
             pass
 
     monkeypatch.setattr(lt, "AVAILABLE", True)
-    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: _StraddlingTool())
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary, picky=False: _StraddlingTool())
     assert lt.propose([a, b], scan_chars=20000) == []
 
 
@@ -180,7 +193,7 @@ def test_propose_survives_a_failing_check_and_keeps_the_rest(monkeypatch):
             pass
 
     monkeypatch.setattr(lt, "AVAILABLE", True)
-    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: _FlakyTool())
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary, picky=False: _FlakyTool())
 
     notes = []
     coverage = SimpleNamespace(note=lambda *a: notes.append(a))

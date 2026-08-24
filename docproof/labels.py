@@ -48,6 +48,8 @@ FREE_FORM: frozenset[str] = frozenset({
     "continuity",         # continuity.py — the whole-book contradiction read
     "chapter_continuity", # continuity.py — the chapter-scoped in-scene break read
     "smoothing",          # pipeline.py — the opt-in line-editing pass
+    "chapter_sweep",      # pipeline.py — the frontier loose-prompt chapter read
+    "repair",             # repair.py — the atomic broken-sentence repair channel
     "term_consistency",   # consistency.py CONSISTENCY_KEY
     "name_consistency",   # consistency.py NAME_KEY
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
@@ -77,6 +79,7 @@ _SWITCH: dict[str, str] = {
     "continuity": "continuity",
     "chapter_continuity": "chapter_continuity",
     "smoothing": "smoothing",
+    "repair": "repair",
     "term_consistency": "consistency",
     "name_consistency": "consistency",
     # The pair queries ride the spell scan's hygiene pass, so the spell scan's

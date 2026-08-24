@@ -49,6 +49,45 @@ def _screen(findings, para_text, provider, **kw):
     return screen(findings, para_text, provider, **kw)
 
 
+# --- deterministic meaning-gate bypass ---------------------------------------
+
+def test_meaning_gate_bypasses_punctuation_and_case_only_edits():
+    # A vocative comma and a resumed-dialogue lowercase carry no proposition for
+    # the meaning gate to weigh. With bypass_trivial they never reach the judge,
+    # so a judge that would wrongly hold them cannot: the provider is empty and
+    # would raise if it were called.
+    p = _para(text="I know Molly and I trust her, but she resumed.")
+    comma = _edit("f-1", "I know Molly", "I know, Molly")
+    case = _edit("f-2", "but she resumed", "But she resumed")
+    report = _screen([comma, case], _text(p), FakeProvider([]),
+                     bypass_trivial=True)
+    assert report.withheld == []          # both kept as edits
+    assert report.checked == 0            # neither was judged
+
+
+def test_fix_gate_still_judges_punctuation_edits():
+    # The bypass is the meaning gate's alone: a comma can be the WRONG repair,
+    # which is fix_check's question, so it must still be judged there.
+    p = _para(text="I know Molly and I trust her.")
+    comma = _edit("f-1", "I know Molly", "I know, Molly")
+    provider = FakeProvider([_verdicts({"item": 1, "verdict": "keep", "reason": ""})])
+    report = _screen([comma], _text(p), provider, spec=FIX, bypass_trivial=False)
+    assert report.checked == 1
+    assert report.calls == 1
+
+
+def test_meaning_gate_still_judges_word_and_homophone_changes():
+    # A changed alphanumeric run — an inserted word, a homophone swap — is NOT
+    # trivial and is judged even with bypass_trivial on.
+    p = _para(text="It affected their heart deeply.")
+    homophone = _edit("f-1", "their heart", "there heart")
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "wrong homophone"})])
+    report = _screen([homophone], _text(p), provider, bypass_trivial=True)
+    assert report.checked == 1
+    assert len(report.withheld) == 1
+
+
 # --- verdict routing ---------------------------------------------------------
 
 def test_preserved_change_is_left_alone():
@@ -207,6 +246,103 @@ def test_the_prompt_and_the_wire_protocol_do_not_drift():
         assert "item" in wire              # the numbering the parser keys on
         for verdict in ("keep", "withhold", "unsure"):
             assert verdict in wire
+
+
+# --- the meaning prompt's disambiguation carve-outs ---------------------------
+#
+# A live run held back several objectively correct fixes as margin questions
+# because each one exists to resolve a small ambiguity — direct address, tense
+# agreement with its narration, a false dialogue tag — and the judge read "does
+# this still mean what the original meant" as textual identity rather than
+# authorial intent, so the very act of disambiguating tripped it. These lock
+# the prompt language that fixes that reading so it cannot silently regress.
+
+def test_meaning_prompt_frames_the_test_as_intent_not_identity():
+    assert "authorial intent" in MEANING.prompt
+    assert "not textual identity" in MEANING.prompt
+
+
+def test_meaning_prompt_keeps_a_direct_address_comma():
+    """'"I know Molly," he said.' -> '"I know, Molly," he said.' is the comma
+    that turns an object into a vocative. The fix's entire point is the small
+    semantic disambiguation that used to get it vetoed."""
+    assert "direct address" in MEANING.prompt
+    assert '"I know Molly"' in MEANING.prompt
+    assert '"I know, Molly,"' in MEANING.prompt
+
+
+def test_meaning_prompt_keeps_a_tense_normalized_to_its_narration():
+    """'Tyson asks' -> 'Tyson asked' inside past-tense narration was held with
+    "changes the tense" — true, and beside the point: that is the fix."""
+    assert '"asks"' in MEANING.prompt
+    assert '"asked"' in MEANING.prompt
+
+
+def test_meaning_prompt_keeps_a_false_dialogue_tag_squared_into_an_action_beat():
+    """'"...at this point," Raymond smiled.' -> a period before "Raymond
+    smiled": a verb of manner cannot carry words, so this is grammar, not
+    sense."""
+    assert "smiled" in MEANING.prompt
+    assert "cannot itself carry words" in MEANING.prompt
+
+
+def test_a_vocative_comma_fix_ships_when_the_judge_keeps_it():
+    p = _para(text='"I know Molly," he said.')
+    f = _edit("f-1", '"I know Molly," he said.', '"I know, Molly," he said.')
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""})])
+    assert _screen([f], _text(p), provider).withheld == []
+
+
+def test_a_tense_normalized_to_its_narration_ships_when_the_judge_keeps_it():
+    p = _para(text="Tyson asks if she wants to play another.")
+    f = _edit("f-1", "Tyson asks if she wants to play another.",
+              "Tyson asked if she wants to play another.")
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""})])
+    assert _screen([f], _text(p), provider).withheld == []
+
+
+def test_a_false_dialogue_tag_squared_into_an_action_beat_ships_when_kept():
+    p = _para(text='"...at this point," Raymond smiled.')
+    f = _edit("f-1", '"...at this point," Raymond smiled.',
+              '"...at this point." Raymond smiled.')
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "keep", "reason": ""})])
+    assert _screen([f], _text(p), provider).withheld == []
+
+
+def test_a_genuinely_ambiguous_appositive_comma_is_still_withheld():
+    """The carve-out is for direct address, not for commas in general: this
+    hands the judge a comma that actually does split one person into two, to
+    prove the fix is not a blanket pass for every comma-shaped edit."""
+    p = _para(text="He introduced his brother Marcus to the room.")
+    f = _edit("f-1", "He introduced his brother Marcus to the room.",
+              "He introduced his brother, Marcus, to the room.")
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "withhold",
+         "reason": "Turns his one named brother into two people."})])
+    report = _screen([f], _text(p), provider)
+    assert len(report.withheld) == 1
+
+
+def test_the_appositive_comma_survives_the_deterministic_bypass_too():
+    """`bypass_trivial` (above) skips the judge outright for a punctuation-only
+    minimal diff. This one LOOKS comma-shaped but its minimal diff is not
+    punctuation-only — "Marcus" sits between the two inserted commas, so
+    shrink() can't isolate the change to punctuation alone — and it must still
+    reach the judge even with the deterministic bypass turned on. If the two
+    fixes ever disagreed here, this is the case that would go straight to the
+    manuscript unread."""
+    p = _para(text="He introduced his brother Marcus to the room.")
+    f = _edit("f-1", "He introduced his brother Marcus to the room.",
+              "He introduced his brother, Marcus, to the room.")
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "withhold",
+         "reason": "Turns his one named brother into two people."})])
+    report = _screen([f], _text(p), provider, bypass_trivial=True)
+    assert report.checked == 1                # reached the judge, not bypassed
+    assert len(report.withheld) == 1
 
 
 def test_the_rendered_batch_numbers_items_and_withholds_the_rule():

@@ -32,15 +32,20 @@ COVERAGE: tuple[FamilyCoverage, ...] = (
     FamilyCoverage(
         "punctuation", "Punctuation & clause boundaries", "covered",
         ("introductory_comma", "direct_address_comma", "dialogue_tag_punctuation",
-         "list_punctuation", "quote_balance", "punctuation_style"),
-        "Comma, dialogue-tag, list, quote-balance, semicolon/colon spacing, "
-        "bracket balance, and the adapted dash/ellipsis/terminal/quote sweeps."),
+         "list_punctuation", "quote_balance", "punctuation_style",
+         "compound_sentence_comma"),
+        "Comma (introductory, direct-address, compound-sentence), dialogue-tag, "
+        "list, quote-balance, spacing-before-punctuation, bracket balance, and "
+        "the adapted punctuation ERROR sweeps. Style normalization (dash, "
+        "ellipsis) is deliberately excluded — it belongs to the sweep channel."),
     FamilyCoverage(
         "lexical", "Lexical (typos, confusables, consistency)", "partial",
         ("homophone", "repeated_word", "word_echo", "term_consistency"),
-        "Confusable homophones, doubled words, nearby echoes, and reused "
-        "term-consistency. GAP: dictionary spell-scan and edit-distance typos "
-        "are not yet routed as candidates; no phonetic near-miss family."),
+        "Signal-gated confusables (misuse patterns for there/their, your/you're, "
+        "its/it's, then/than, to/too, passed/past, form/from…), doubled words, "
+        "nearby echoes, and reused term-consistency. Unsignaled confusable "
+        "occurrences are not judged. GAP: dictionary spell-scan and "
+        "edit-distance typos are not yet routed as candidates."),
     FamilyCoverage(
         "grammar", "Grammar (agreement, fragments, run-ons)", "partial",
         ("grammar",),

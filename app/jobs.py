@@ -94,6 +94,14 @@ STAGE_STATE = {
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",
+    # The frontier chapter sweep: a second, looser proofread over chapter-sized
+    # windows on a strong model, complementary to the typed section pass. Whole-
+    # window work with no per-call count, so — like the passes below — it names
+    # the step rather than leaving a stale section count on the card.
+    "chapter_sweep": "Reading each chapter again, start to finish",
+    # Batch only: the judgment screen that weighs the raw candidate findings
+    # before they become tracked changes.
+    "candidate_screening": "Weighing the candidate findings",
     "continuity": "Reading the whole book for continuity",
     # Multi-round only: the between-rounds judge that rules on each round's
     # corrections before the next round reads the corrected text.
@@ -105,6 +113,7 @@ STAGE_STATE = {
     "sapling": "Running the Sapling grammar check",
     "low_confidence": "Second look at the softer catches",
     "smoothing": "Reading for line-editing suggestions",
+    "repair": "Repairing broken sentences",
     "chapter_continuity": "Reading each chapter for continuity",
     "meaning_check": "Checking every change keeps your meaning",
     "fix_check": "Checking every fix is the right fix",
@@ -196,6 +205,7 @@ def _free_finish(cfg: Config) -> None:
     cfg.fix_check.enabled = False           # the fix check's judge
     cfg.sapling.enabled = False             # per-character bill + confirm valve
     cfg.smoothing.enabled = False           # a whole-book read plus a judge
+    cfg.repair.enabled = False              # a whole-book read plus a judge
     cfg.chapter_continuity.enabled = False  # per-chapter read plus a judge
     cfg.low_confidence.confirm = False      # the below-gate promotion valve
     cfg.ensemble.verifier_model = None      # the overseer-verifier
@@ -1013,8 +1023,8 @@ class JobRunner:
             cfg.sweeps = []
             cfg.candidate_screening.mode = "off"
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
-                          "sapling", "smoothing", "consistency", "spellcheck",
-                          "meaning_check", "fix_check"):
+                          "sapling", "smoothing", "repair", "consistency",
+                          "spellcheck", "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.examination_graph.judgment.enabled = False
             cfg.continuity.enabled = True

@@ -131,7 +131,7 @@ def test_detector_only_profile_wins_over_stale_job_switches(runner):
     assert cfg.examination_graph.judgment.enabled is False
     assert cfg.examination_graph.production_verdicts is True
     assert cfg.change_log is False and cfg.audit == "strict"
-    assert len(cfg.error_type_groups) == 7
+    assert len(cfg.error_type_groups) == 8
 
 
 def test_per_run_category_knobs_reach_the_run_config(runner):
