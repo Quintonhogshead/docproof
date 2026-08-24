@@ -1263,6 +1263,151 @@ def test_flat_mode_without_the_label_switch_is_unchanged(tmp_path, provider):
                                       "Some Other Draft.docx"]
 
 
+def _outputs(opener) -> list[dict]:
+    """The files DocProof wrote, by their live Drive entry — so two books that
+    share the deliverable name "<surname> - book 0.docx" are still two rows, not
+    one key collapsed by name."""
+    return [entry for entry in opener.files.values()
+            if entry.get("appProperties", {}).get(OUTPUT_PROP)]
+
+
+def test_a_multi_book_author_has_each_nested_book_prepared_in_place(tmp_path,
+                                                                    provider):
+    """A multi-book author keeps each book one level down: author folder -> book
+    folder -> book original. Each book folder is a book of its own; both are
+    prepared and each deliverable lands back in its own book folder, never the
+    author folder, the parent, or the other book's folder. Both books carry the
+    same "<surname> - Book Original" name, which is exactly why the folders keep
+    them apart."""
+    ws = sub_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "bf-1": author_folder("Wolves of the Yard", parent=SUB),
+        "bf-2": author_folder("Ravens at Dawn", parent=SUB),
+        "m-1": in_sub("Johnson - Book Original.docx", sub="bf-1"),
+        "m-2": in_sub("Johnson - Book Original.docx", sub="bf-2"),
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok
+    assert report.prepped == ["Johnson - Book Original.docx",
+                              "Johnson - Book Original.docx"]
+    outs = _outputs(opener)
+    assert outs and all(e["parents"][0] in {"bf-1", "bf-2"} for e in outs)
+    assert {e["parents"][0] for e in outs} == {"bf-1", "bf-2"}
+    assert not any(e["parents"][0] in {SUB, FOLDER} for e in outs)
+
+    state = WatchState.load(tmp_path / "state.json")
+    for mid, bf in (("m-1", "bf-1"), ("m-2", "bf-2")):
+        rec = state.get(mid)
+        assert rec.subfolder_id == bf and rec.hubspot_id == "hs-Johnson"
+        assert rec.subfolder_name == "Quinton Johnson"
+    assert hs_props(opener, "Johnson")["docproof"] == "Formatting Complete"
+
+
+def test_a_single_book_author_folder_is_read_flat_not_descended(tmp_path,
+                                                                provider):
+    """The Book Original sitting directly in the author folder is prepared there,
+    exactly as before — the descent only happens when the author folder holds no
+    manuscript of its own, so a book folder beside it is never listed."""
+    ws = sub_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original.docx"),
+        # A stray subfolder that must not be descended into or prepared.
+        "bf-1": author_folder("Old drafts", parent=SUB),
+        "d-1": in_sub("Johnson - Book Original.docx", sub="bf-1"),
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Johnson - Book Original.docx"]
+    outs = _outputs(opener)
+    assert {e["parents"][0] for e in outs} == {SUB}    # never bf-1
+
+
+def test_a_nested_book_folder_with_two_manuscripts_is_left_for_a_person(
+        tmp_path, provider):
+    """One book folder holding two new manuscripts is nobody's to guess, so it
+    is left for a person — without stopping the author's other book, which is
+    prepared as normal."""
+    ws = sub_ws()
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "bf-1": author_folder("Wolves of the Yard", parent=SUB),
+        "bf-2": author_folder("Ravens at Dawn", parent=SUB),
+        "m-1": in_sub("Johnson - Book Original.docx", sub="bf-1"),
+        "m-2": in_sub("Johnson - Second Draft.docx", sub="bf-1"),
+        "m-3": in_sub("Johnson - Book Original.docx", sub="bf-2"),
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == ["Johnson - Book Original.docx"]   # only bf-2
+    assert report.needs_human
+    assert "Wolves of the Yard" in report.needs_human[0][0]
+    assert {e["parents"][0] for e in _outputs(opener)} == {"bf-2"}
+
+
+def test_a_multi_book_author_with_no_book_original_is_flagged_missing(
+        tmp_path, provider):
+    """Ready, and its book folders are there, but not one holds a
+    "<surname> - Book Original": the author is reported missing its Book Original,
+    the same as an empty author folder, so a person uploads or renames it."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "bf-1": author_folder("Wolves of the Yard", parent=SUB),
+        "m-1": in_sub("Johnson - Second Draft.docx", sub="bf-1"),
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.prepped == [] and not uploads_in(opener)
+    assert [a for a, _ in report.missing_source] == ["Quinton Johnson"]
+
+
+def test_nested_require_source_label_picks_the_book_original(tmp_path, provider):
+    """With the label required, a draft beside the Book Original inside a book
+    folder is left alone rather than making the folder too ambiguous to touch."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "bf-1": author_folder("Wolves of the Yard", parent=SUB),
+        "m-1": in_sub("Johnson - Book Original.docx", sub="bf-1"),
+        "m-2": in_sub("Johnson - Second Draft.docx", sub="bf-1"),
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson - Book Original.docx"]
+    assert not report.needs_human
+
+
+def test_an_extensionless_book_original_is_prepared_end_to_end(tmp_path,
+                                                               provider):
+    """A "<surname> - Book Original" whose ".docx" was dropped is read, prepared
+    and handed back all the same — the extension is restored on the way in, so
+    prep never refuses a file that has no suffix."""
+    ws = sub_ws(require_source_label=True)
+    opener = fake_drive({
+        SUB: author_folder("Quinton Johnson"),
+        "m-1": in_sub("Johnson - Book Original"),      # no extension at all
+    }, docx=MANUSCRIPT,
+       hubspot={"Johnson": ready_author("Quinton", "Johnson")})
+
+    report = run(tmp_path, ws, opener)
+
+    assert report.ok and report.prepped == ["Johnson - Book Original"]
+    assert "Johnson - book 0.docx" in uploads_in(opener)
+
+
 def test_a_dry_run_in_subfolder_mode_writes_no_state(tmp_path, provider):
     ws = sub_ws()
     opener = fake_drive({SUB: author_folder("Quinton Johnson"),

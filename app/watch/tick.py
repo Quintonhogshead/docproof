@@ -823,6 +823,21 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
 
     contents = drive.list_folder(token, subfolder_id, opener=opener)
     manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+
+    # A multi-book author keeps each book in its own folder one level down —
+    # author folder -> book folder -> book original — so an author's several
+    # books do not pile into one folder and get read as "which of these is the
+    # one?". Only when the author folder holds no manuscript of its own does the
+    # pass descend: a single-book author's folder is read exactly as before, and
+    # the extra Drive listing is paid only for authors who actually nest.
+    if not manuscripts:
+        book_folders = [f for f in contents if f.is_folder]
+        if book_folders:
+            _discover_nested(token, ws, record, first, last, author,
+                             book_folders, state, listing, routes,
+                             opener=opener, report=report, dry_run=dry_run)
+            return
+
     # Is the author's intake file in the folder at all — a new one to prepare, or
     # an already-formatted one still sitting there (marked done, so out of
     # `manuscripts`)? This is the real question behind "is the Book Original
@@ -910,6 +925,69 @@ def _discover_ready(token: str, ws: WatchSettings, record, state: WatchState,
     listing.extend(f for f in contents if f.id == book.id
                    or classify(f) is not Stage.NEW_MANUSCRIPT)
     routes[book.id] = subfolder_id
+
+
+def _discover_nested(token: str, ws: WatchSettings, record, first: str,
+                     last: str, author: str, book_folders: list[DriveFile],
+                     state: WatchState, listing: list[DriveFile],
+                     routes: dict[str, str], *, opener, report: TickReport,
+                     dry_run: bool) -> None:
+    """A multi-book author, whose books sit one level down: author folder ->
+    book folder -> book original. Prepare the one book in each book folder and
+    route its outputs back into that same folder, so an author with several
+    books ready has each done in place and none confused for another.
+
+    One book folder is one book. The same gates the flat author folder uses
+    apply per folder: the house label picks the intake when it is required, and
+    a folder holding two new manuscripts is nobody's to guess — it is left for a
+    person, without stopping the author's other books. If not one book folder
+    yields a book, the ready author is reported as missing its Book Original, the
+    same as an empty author folder is."""
+    queued = 0
+    flagged = 0
+    for folder in book_folders:
+        contents = drive.list_folder(token, folder.id, opener=opener)
+        manuscripts = [f for f in contents if classify(f) is Stage.NEW_MANUSCRIPT]
+        if ws.require_source_label:
+            manuscripts = [f for f in manuscripts
+                           if naming.is_source_name(f.name, last)]
+        if not manuscripts:
+            continue
+        if len(manuscripts) > 1:
+            reason = (f"{len(manuscripts)} new manuscripts are in {author}'s "
+                      f"'{folder.name}' folder, so DocProof cannot tell which is "
+                      f"the book to do.")
+            log.warning("Needs a person: %s (%s)", author, reason)
+            report.needs_human.append((f"{author} / {folder.name}", reason))
+            report.waiting += 1
+            flagged += 1
+            continue
+        book = manuscripts[0]
+        if not dry_run:
+            rec = state.get(book.id)
+            rec.name = book.name
+            rec.hubspot_id = record.id        # written before prep, never after
+            rec.author_first = first
+            rec.author_last = last
+            rec.subfolder_id = folder.id      # its outputs, and its resume, here
+            rec.subfolder_name = author
+            state.record(rec)
+        # As in the flat path: only the chosen book rides along, and everything
+        # that is not a new manuscript (its outputs) stays so orphan and OUTPUT
+        # logic still works.
+        listing.extend(f for f in contents if f.id == book.id
+                       or classify(f) is not Stage.NEW_MANUSCRIPT)
+        routes[book.id] = folder.id
+        queued += 1
+
+    if queued or flagged:
+        return
+    ready = ws.hubspot_format_ready_value
+    detail = (f"none of its {len(book_folders)} book folder(s) holds a "
+              f"'{last} - {naming.SOURCE_STAGE}'")
+    log.info("Waiting: %s is flagged ready but %s.", author, detail)
+    report.missing_source.append((author, f"flagged '{ready}' but {detail}."))
+    report.waiting += 1
 
 
 def _adopt(token: str, subfolder_id: str, listing: list[DriveFile],

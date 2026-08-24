@@ -70,7 +70,16 @@ def local_name(file: DriveFile) -> str:
     A native Doc has a title rather than a filename, and a title may contain
     the one character a filename may not."""
     safe = file.name.replace("/", "-").replace(":", "-").strip() or "manuscript"
-    return f"{safe}.docx" if file.is_google_doc else safe
+    if file.is_google_doc:
+        return f"{safe}.docx"
+    # A Word file whose extension was dropped — a "<surname> - Book Original"
+    # someone renamed — still holds .docx bytes; give the extension back so
+    # `ensure_docx` reads it rather than refusing a file that has no suffix.
+    # `classify` only lets an extensionless file through when it carries the
+    # house label, so anything reaching here is a manuscript, not a stray.
+    if not Path(safe).suffix:
+        return f"{safe}.docx"
+    return safe
 
 
 def fetch(token: str, file: DriveFile, dest_dir: str | Path, *,
