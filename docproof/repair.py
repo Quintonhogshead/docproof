@@ -220,9 +220,13 @@ def triggered_sentences(findings: Sequence[Finding],
         if s == -1:
             continue
         pre, deleted, _inserted = shrink(f.original_text, f.corrected_text)
-        pos = s + pre
-        _quote, lo, _occ = sentence_window(text, pos, max(pos + 1,
-                                                          pos + len(deleted)))
+        # An edit at the very end of the paragraph (a terminal period, a closing
+        # quote) yields pos at — or an end just past — len(text); clamp both into
+        # the text so the site lands in the trailing sentence instead of asking
+        # sentence_window for a span the text does not contain.
+        pos = min(s + pre, len(text) - 1)
+        end = min(max(pos + 1, pos + len(deleted)), len(text))
+        _quote, lo, _occ = sentence_window(text, pos, end)
         # Re-derive the sentence span in a stable way (sentence_window returns the
         # trimmed sentence and its start; hi is start + its length).
         hi = lo + len(_quote)

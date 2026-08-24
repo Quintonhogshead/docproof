@@ -66,6 +66,22 @@ def test_threshold_routes_only_error_dense_sentences():
     assert triggered_sentences(findings, [para], threshold=4) == []
 
 
+def test_end_of_paragraph_insertion_does_not_crash_the_trigger():
+    # An edit that only ADDS at the very end of the paragraph (a terminal
+    # period, a closing quote) shrinks to an empty deletion at pos == len(text);
+    # the derived sentence span must clamp into the text, not raise (this
+    # crashed a full run in finish() — ValueError from sentence_window).
+    para = _para("p1", "He run to teh stor")
+    s = "He run to teh stor"
+    findings = [
+        _edit("p1", s, "He ran to teh stor"),        # run->ran
+        _edit("p1", s, "He run to the stor"),         # teh->the
+        _edit("p1", s, "He run to teh stor."),        # append "." at the end
+    ]
+    sites = triggered_sentences(findings, [para], threshold=3)
+    assert len(sites) == 1 and sites[0].sentence == s
+
+
 def test_queries_and_repair_findings_do_not_count():
     para = _para("p1", "He run to teh stor now.")
     s = "He run to teh stor now."

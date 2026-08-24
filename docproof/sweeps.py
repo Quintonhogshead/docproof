@@ -102,6 +102,10 @@ def sentence_window(text: str, start: int, end: int) -> tuple[str, int, int]:
     Findings quote a sentence rather than the whole paragraph for the same
     reason the model is told to: it is what a person reads in the report, and
     it is short enough to anchor unambiguously."""
+    # An out-of-range span (an end-of-text insertion computed as pos+1) must
+    # degrade to the trailing sentence, not crash the run at write time.
+    start = max(0, min(start, len(text)))
+    end = max(start, min(end, len(text)))
     bounds = [0] + [m.end() for m in _SENTENCE_END.finditer(text)] + [len(text)]
     lo = max(b for b in bounds if b <= start)
     hi = min(b for b in bounds if b >= end)
