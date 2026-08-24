@@ -532,16 +532,29 @@ class ShadowExamination:
 
     def _confirm_site(self, site_id: str, finding: Finding) -> None:
         state = self.ledger.state(site_id)
+        if state not in {LedgerState.GENERATED, LedgerState.NEEDS_JUDGMENT}:
+            return
         local = finding.chunk_id in {
             "sweep", "consistency", "residual", "calendar"}
-        target = (LedgerState.LOCALLY_CONFIRMED if local
-                  else LedgerState.MODEL_CONFIRMED)
-        if state in {LedgerState.GENERATED, LedgerState.NEEDS_JUDGMENT}:
-            self.ledger.transition(
-                site_id, target, actor=finding.chunk_id,
-                reason=f"legacy finding {finding.finding_id} confirmed this site",
-                evidence={"finding_id": finding.finding_id,
-                          "confidence": finding.confidence})
+        # The local/model split only picks the confirmation tier a *generated*
+        # site enters for the first time. A site already routed to
+        # `needs_judgment` sits downstream of `locally_confirmed`; the ledger has
+        # no edge back to it, by design (reopening a decision starts a new site,
+        # it does not rewrite history). A legacy finding arriving on such a site
+        # is the production review confirming the awaited error, so it resolves
+        # forward to the model-confirmed tier regardless of which detector lane
+        # produced it — the sanctioned `needs_judgment -> model_confirmed -> edit
+        # -> applied` path. Provenance stays honest via the actor and reason.
+        if state == LedgerState.NEEDS_JUDGMENT:
+            target = LedgerState.MODEL_CONFIRMED
+        else:
+            target = (LedgerState.LOCALLY_CONFIRMED if local
+                      else LedgerState.MODEL_CONFIRMED)
+        self.ledger.transition(
+            site_id, target, actor=finding.chunk_id,
+            reason=f"legacy finding {finding.finding_id} confirmed this site",
+            evidence={"finding_id": finding.finding_id,
+                      "confidence": finding.confidence})
 
     def _record_outcome(self, site_id: str, finding: Finding,
                         applied: set[str]) -> None:

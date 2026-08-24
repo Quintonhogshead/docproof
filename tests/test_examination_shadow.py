@@ -1,10 +1,11 @@
 import dataclasses
 import json
 
+from docproof.adjudicate import Candidate
 from docproof.config import Config, load_config
 from docproof.examination import prepare_shadow
 from docproof.models import Anchor, DocumentModel, Finding, ParagraphRef
-from docproof.site_generators import site_from_finding
+from docproof.site_generators import site_from_candidate, site_from_finding
 from docproof.site_models import LedgerState
 from docproof.spellscan import SpellScan
 
@@ -149,3 +150,96 @@ def test_model_obligation_aggregates_multiple_outcomes_without_reopening_state(
         == LedgerState.APPLIED
     run.write(tmp_path, cfg.examination_graph, source=doc.source_path)
     assert (tmp_path / "examination-coverage.md").is_file()
+
+
+def test_local_finding_confirms_a_needs_judgment_obligation_without_crashing(
+        tmp_path):
+    """A local (deterministic) finding matching a `needs_judgment` obligation.
+
+    The v0.115.0 shadow run (examination graph on, candidate screening judgment
+    on) crashed exactly here: a paragraph/category obligation sat in
+    ``needs_judgment``, then a validated local finding (``chunk_id`` in the
+    sweep/consistency/residual/calendar set) matched it. ``_confirm_site`` chose
+    ``locally_confirmed`` as the target, but that state sits *upstream* of
+    ``needs_judgment`` and the ledger has no edge back to it, so
+    ``needs_judgment -> locally_confirmed`` raised ``LedgerInvariantError`` and
+    the whole examination reporting pass died (leaving Phase 2 receipts
+    incomplete). The obligation must instead resolve forward down the sanctioned
+    ``needs_judgment -> model_confirmed -> edit -> applied`` path.
+    """
+    text = "The teh cat sat."
+    para = ParagraphRef("body-0000", "word/document.xml", "body", text,
+                        "Normal")
+    doc = DocumentModel("book.docx", (para,))
+    cfg = Config(error_types=[["spelling"]], sweeps=[],
+                 examination_graph={"enabled": True})
+    run = prepare_shadow(
+        cfg, doc, paragraphs=[para], sweep_findings=[],
+        consistency_findings=[], spell=SpellScan(available=False),
+        adjudicate_candidates=[])
+    assert run is not None
+
+    obligation_id = run.model_obligations[(para.para_id, "spelling")]
+    assert run.ledger.state(obligation_id) == LedgerState.NEEDS_JUDGMENT
+
+    # A validated consistency finding (a local lane) at "teh" -> "the".
+    local = _finding("f-consistency", "consistency", "spelling", text,
+                     "The the cat sat.", start=4, end=7)
+    run.observe_findings([local], doc, applied_ids=(local.finding_id,))
+
+    # Resolved forward, and never through the illegal backward edge.
+    assert run.ledger.state(obligation_id) == LedgerState.APPLIED
+    obligation_states = [event.state.value for event in run.ledger.events
+                         if event.site_id == obligation_id]
+    assert "locally_confirmed" not in obligation_states
+    assert "model_confirmed" in obligation_states
+
+    # Reporting completes on the input that used to crash.
+    report, ledger_path, markdown_path = run.write(
+        tmp_path, cfg.examination_graph, source=doc.source_path)
+    assert ledger_path.is_file()
+    assert markdown_path.is_file()
+    assert report["accounting"]["all_sites_have_state"] is True
+
+
+def test_local_finding_confirms_a_screened_candidate_without_crashing(tmp_path):
+    """The same crash reached through the precise `_observe_target` lane.
+
+    A screening candidate is registered directly in ``needs_judgment``. When a
+    validated local finding lands on the identical span (site ids are keyed on
+    location, not generator, so the finding folds onto the candidate site rather
+    than creating a second one), ``_confirm_site`` again tried the illegal
+    ``needs_judgment -> locally_confirmed`` transition. It must resolve forward.
+    """
+    text = "The teh cat sat."
+    para = ParagraphRef("body-0000", "word/document.xml", "body", text,
+                        "Normal")
+    doc = DocumentModel("book.docx", (para,))
+    cfg = Config(error_types=[["spelling"]], sweeps=[],
+                 examination_graph={"enabled": True})
+    candidate = Candidate(para_id=para.para_id, word="teh", start=4, end=7,
+                          suggestion="the", kind="near_miss")
+    run = prepare_shadow(
+        cfg, doc, paragraphs=[para], sweep_findings=[],
+        consistency_findings=[], spell=SpellScan(available=False),
+        adjudicate_candidates=[candidate])
+    assert run is not None
+
+    candidate_site = site_from_candidate(candidate, doc)
+    assert run.ledger.state(candidate_site.site_id) == LedgerState.NEEDS_JUDGMENT
+
+    local = _finding("f-consistency", "consistency", "spelling", text,
+                     "The the cat sat.", start=4, end=7)
+    # The finding folds onto the candidate site rather than registering a new one.
+    assert site_from_finding(local, doc).site_id == candidate_site.site_id
+    run.observe_findings([local], doc, applied_ids=(local.finding_id,))
+
+    assert run.ledger.state(candidate_site.site_id) == LedgerState.APPLIED
+    states = [event.state.value for event in run.ledger.events
+              if event.site_id == candidate_site.site_id]
+    assert "locally_confirmed" not in states
+    assert "model_confirmed" in states
+
+    report, _, _ = run.write(
+        tmp_path, cfg.examination_graph, source=doc.source_path)
+    assert report["accounting"]["all_sites_have_state"] is True
