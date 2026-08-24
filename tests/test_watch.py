@@ -53,6 +53,29 @@ def test_things_that_are_not_manuscripts_are_left_alone():
     assert classify(drive_file("Contracts", mime=FOLDER_MIME)) is Stage.SKIP
 
 
+def test_an_extensionless_book_original_is_a_new_manuscript():
+    """A Word or Google doc renamed to "<surname> - Book Original" with the
+    ".docx" dropped still carries the house intake label, so it is the book to
+    prepare — not skipped until a person re-adds the extension by hand."""
+    assert classify(drive_file("Johnson - Book Original")) is Stage.NEW_MANUSCRIPT
+    # Case and dash drift is forgiven here as everywhere else.
+    assert classify(drive_file("Johnson — book original")) is Stage.NEW_MANUSCRIPT
+
+
+def test_an_extensionless_file_without_the_label_is_left_alone():
+    """The label is what earns the exception: a bare name without it is not a
+    manuscript, so a stray note or a cover with no extension is still skipped."""
+    assert classify(drive_file("cover")) is Stage.SKIP
+    assert classify(drive_file("Johnson - Draft Two")) is Stage.SKIP
+
+
+def test_a_folder_named_like_a_book_original_is_still_skipped():
+    """A book folder that happens to be named like the intake is a folder, not
+    the book — the folder check wins before the label ever gets a look."""
+    folder = drive_file("Johnson - Book Original", mime=FOLDER_MIME)
+    assert classify(folder) is Stage.SKIP
+
+
 def test_a_folder_is_skipped_even_when_it_is_named_like_a_manuscript():
     folder = drive_file("Draft.docx", mime=FOLDER_MIME)
     assert classify(folder) is Stage.SKIP

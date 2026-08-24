@@ -20,7 +20,7 @@ from docproof.formats.base import DocumentFormat
 from docproof.prep.convert import CONVERTIBLE
 
 from .drive import DriveFile, GOOGLE_DOC_MIME
-from .naming import is_output_name
+from .naming import has_source_label, is_output_name
 
 # What prep can read: Word, plus everything LibreOffice converts for it. Taken
 # from prep itself so the two cannot drift — a format added there is watched
@@ -156,4 +156,13 @@ def _looks_like_output(name: str) -> bool:
 
 
 def _is_manuscript(name: str) -> bool:
-    return Path(name).suffix.lower() in MANUSCRIPT_SUFFIXES
+    if Path(name).suffix.lower() in MANUSCRIPT_SUFFIXES:
+        return True
+    # A file that arrives with no extension at all — a Word doc or a Google Doc
+    # someone renamed to "<surname> - Book Original" and dropped the ".docx" —
+    # is still the intake manuscript when it carries the house label. The token
+    # is specific enough to trust on its own: an output is "- book 0", never
+    # "- Book Original", and `classify` has already ruled outputs out before it
+    # asks this. Without it such a file was silently skipped until a person
+    # re-added the extension by hand.
+    return not Path(name).suffix and has_source_label(name)
