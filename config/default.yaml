@@ -133,6 +133,13 @@ consistency:
   names: true               # proper-name diacritic scan (Rian -> Rían)
   name_dominance: 5         # majority lead before a stray is corrected, not asked
   name_min_count: 20        # how established the dominant spelling must be
+  # The three mechanical scans a compound-word scan cannot do — all query-only,
+  # whole-document, deterministic. See docproof/consistency.py.
+  spelling_variants: true   # grey/gray, toward/towards (VarCon + Chicago table)
+  abbreviations: true       # U.S./US, a.m./AM
+  acronym_case: true        # NASA/Nasa (needs the spell dictionary)
+  chicago_notes: true       # add the Merriam-Webster preference to the query
+  max_queries_per_kind: 40  # per-scan cap, logged when it bites (no silent loss)
 
 # A strong model reads the whole manuscript once, before the detector passes,
 # and returns the book's proper nouns (canonical casing) + suspected

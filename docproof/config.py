@@ -324,6 +324,25 @@ class ConsistencyConfig(BaseModel):
     names: bool = True
     name_dominance: int = Field(default=5, ge=2)
     name_min_count: int = Field(default=20, ge=2)
+    # The three mechanical scans a compound-word key scan structurally cannot do,
+    # each a whole-document query pass that changes nothing:
+    #   spelling_variants — different-letter spellings of one word via the VarCon
+    #     table (grey/gray, toward/towards); enforced forms (the variant respell
+    #     map) and author-owned words (the spell-scan lexicon) are left out.
+    #   abbreviations — dotted vs undotted, dotted-lowercase vs caps (U.S./US,
+    #     a.m./AM).
+    #   acronym_case — an initialism in capitals in one place, title-cased in
+    #     another (NASA/Nasa); needs the dictionary to tell an acronym from a word.
+    spelling_variants: bool = True
+    abbreviations: bool = True
+    acronym_case: bool = True
+    # Add the Merriam-Webster/Chicago preference to a spelling-variant query.
+    # A press proofreading in British English can turn this off.
+    chicago_notes: bool = True
+    # Each mechanical scan emits one query per group; this bounds how many, so a
+    # dialect-mixed manuscript cannot flood the query channel. The cap is logged
+    # when it bites — coverage is never silently truncated.
+    max_queries_per_kind: int = Field(default=40, ge=1)
 
 
 class AdjudicateConfig(BaseModel):

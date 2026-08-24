@@ -39,12 +39,20 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Sequence
+from functools import lru_cache
+from pathlib import Path
+from typing import Mapping, Sequence
 
 from .models import Finding, ParagraphRef
+from .spellscan import _dictionary, _sentence_initial
 from .sweeps import sentence_window
 
 log = logging.getLogger("docproof.consistency")
+
+# The shipped data the mechanical scans read: the spelling-variant equivalence
+# table and the Chicago/Merriam-Webster preference notes. Resolved next to the
+# package the way the variant files are, so a pip-installed server finds them.
+_CONSISTENCY_DIR = Path(__file__).resolve().parent.parent / "config" / "consistency"
 
 # The key this type's findings carry. It is not an error type — nothing in
 # config/error_types defines it — because there is no prompt to write: the
@@ -129,15 +137,54 @@ class NameDrift:
 
 
 @dataclass(frozen=True)
+class VariantGroup:
+    """One word/abbreviation/acronym the manuscript writes more than one way,
+    found by a deterministic table or casing scan rather than the compound-word
+    key scan. Unlike the term scan this emits ONE query per group, anchored at
+    the first minority occurrence: a spelling variant can recur on every page,
+    and a margin comment per occurrence would bury the channel it lives in.
+
+    `kind` is "spelling" | "abbreviation" | "acronym_case". `counts` maps the
+    surface forms the book actually uses to their occurrence counts. `dominant`
+    is the form the book uses most (the recommendation); `has_majority` is
+    whether it leads the others decisively — when it does not, the query asks
+    which form to settle on rather than naming a slip. `note` is the
+    Chicago/Merriam-Webster preference phrasing, or "" ."""
+    kind: str
+    key: str
+    counts: Counter                       # surface form -> times seen
+    dominant: str
+    has_majority: bool
+    site: Occurrence                      # where the single query anchors
+    minority_total: int
+    note: str = ""
+
+    @property
+    def forms(self) -> list[tuple[str, int]]:
+        """Surface forms with counts, most-used first — deterministic on ties."""
+        return sorted(self.counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+@dataclass(frozen=True)
 class ConsistencyReport:
     ran: bool = False
     terms: tuple[Inconsistency, ...] = ()
     names: tuple[NameDrift, ...] = ()
+    variants: tuple[VariantGroup, ...] = ()        # spelling variants (VarCon)
+    abbreviations: tuple[VariantGroup, ...] = ()   # U.S. vs US, a.m. vs AM
+    casings: tuple[VariantGroup, ...] = ()         # NASA vs Nasa
+
+    @property
+    def _mechanical(self) -> tuple[VariantGroup, ...]:
+        return self.variants + self.abbreviations + self.casings
 
     @property
     def flagged(self) -> int:
+        # Terms and non-enforced names are per-occurrence; the mechanical scans
+        # are one query per group.
         return (sum(len(t.outliers) for t in self.terms)
-                + sum(len(n.outliers) for n in self.names if not n.enforce))
+                + sum(len(n.outliers) for n in self.names if not n.enforce)
+                + len(self._mechanical))
 
     @property
     def corrected(self) -> int:
@@ -294,11 +341,334 @@ def _share_a_sentence(outliers: Sequence[Occurrence],
     return False
 
 
+# --- mechanical variant scans (spelling / abbreviation / acronym case) --------
+#
+# These three are what a key-folding compound scan structurally cannot do:
+# grey/gray differ by a letter, not by hyphenation, so _key never groups them;
+# U.S./US differ by punctuation the word tokenizer discards; NASA/Nasa differ by
+# a capital that _structure deliberately folds away. Each reads the whole book,
+# counts every spelling of one thing, and — like the term scan — only ASKS,
+# never corrects: which variant a book uses is the author's to settle.
+
+
+@lru_cache(maxsize=1)
+def _load_varcon() -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """(form -> cluster id, cluster id -> members). The cluster id is the
+    American spelling (the table's first column). Returns empty maps, and warns
+    once, if the table is missing — the scan then simply finds nothing."""
+    forms: dict[str, str] = {}
+    members: dict[str, tuple[str, ...]] = {}
+    try:
+        text = (_CONSISTENCY_DIR / "varcon.tsv").read_text(encoding="utf-8")
+    except OSError:
+        log.warning("No varcon.tsv found at %s; the spelling-variant scan is "
+                    "skipped. Run tools/build_varcon.py to generate it.",
+                    _CONSISTENCY_DIR)
+        return {}, {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        cluster = tuple(f.lower() for f in line.split("\t") if f)
+        if len(cluster) < 2:
+            continue
+        cid = cluster[0]
+        members[cid] = cluster
+        for f in cluster:
+            forms.setdefault(f, cid)
+    return forms, members
+
+
+@lru_cache(maxsize=1)
+def _load_chicago() -> tuple[dict, dict]:
+    """(class notes, per-form notes) from chicago.yaml, or empty maps."""
+    try:
+        import yaml
+        data = yaml.safe_load(
+            (_CONSISTENCY_DIR / "chicago.yaml").read_text(encoding="utf-8"))
+    except Exception:                             # missing or malformed: not fatal
+        return {}, {}
+    data = data or {}
+    return (data.get("classes") or {}), (data.get("forms") or {})
+
+
+def _variant_class(american: str, british: str) -> str:
+    """Which regular British/American family a two-spelling cluster belongs to,
+    inferred from the spellings themselves so no class tag has to be stored.
+    "" for the irregular one-off pairs, which carry their note in chicago.yaml's
+    `forms` map instead."""
+    a, b = american, british
+    if a.endswith("or") and b == a[:-2] + "our":
+        return "our"
+    if a.endswith("ize") and b == a[:-3] + "ise":
+        return "ize"
+    if a.endswith("yze") and b == a[:-3] + "yse":
+        return "yze"
+    if a.endswith("se") and b == a[:-2] + "ce":
+        return "ce"
+    if a.endswith("er") and b == a[:-2] + "re":
+        return "re"
+    if b == a + "ue":
+        return "ogue"
+    if len(b) == len(a) + 1:                      # single-l vs doubled-l
+        i = 0
+        while i < len(a) and a[i] == b[i]:
+            i += 1
+        if b[i:i + 1] == "l" and b[i + 1:] == a[i:]:
+            return "ll"
+    return ""
+
+
+def _chicago_note(cid: str, members: tuple[str, ...]) -> str:
+    classes, forms = _load_chicago()
+    if cid in forms:
+        return forms[cid]
+    other = next((m for m in members if m != cid), "")
+    return classes.get(_variant_class(cid, other), "")
+
+
+def _skip_caps_context(para: ParagraphRef) -> bool:
+    """A paragraph whose capitals are styling, not spelling: a heading, or a
+    line set mostly in capitals. An all-caps token here says nothing about how
+    the author capitalizes the word in running prose."""
+    style = (para.style or "").lower()
+    if "head" in style or "title" in style:
+        return True
+    letters = [c for c in para.text if c.isalpha()]
+    if letters and sum(1 for c in letters if c.isupper()) / len(letters) > 0.6:
+        return True
+    return False
+
+
+def _pick_dominant(counts: Mapping[str, int], *, prefer: str = "") -> str:
+    """The most-used key, ties broken toward `prefer` then alphabetically, so
+    the recommendation is deterministic run to run."""
+    return max(counts, key=lambda k: (counts[k], k == prefer, k))
+
+
+def _has_majority(counts: Mapping[str, int], dom: str, min_dominance: int) -> bool:
+    return all(counts[dom] >= n * min_dominance
+               for k, n in counts.items() if k != dom)
+
+
+def _cap(groups: list[VariantGroup], kind: str, limit: int) -> list[VariantGroup]:
+    if limit and len(groups) > limit:
+        log.info("Consistency %s queries capped at %d (%d found); raise "
+                 "consistency.max_queries_per_kind to see the rest.",
+                 kind, limit, len(groups))
+        return groups[:limit]
+    return groups
+
+
+def find_spelling_variants(paragraphs: Sequence[ParagraphRef], *,
+                           min_dominance: int = 2,
+                           respell: Mapping[str, str] | None = None,
+                           protected: Sequence[str] = (),
+                           chicago: bool = True,
+                           max_queries: int = 40) -> tuple[VariantGroup, ...]:
+    """Different-letter spellings of one word (grey/gray, toward/towards),
+    grouped through the VarCon table.
+
+    A cluster whose forms the active variant already enforces (its respell map
+    converts, e.g. grey->gray on a U.S. run) is skipped: that site is the
+    adjudication pass's to correct, and asking about it too would be a question
+    beside a change. An occurrence the spell scan protected as the author's own
+    word is skipped, and a form capitalized mid-sentence is treated as a name
+    (Mr. Grey, Earl Grey), not a spelling of the common word."""
+    forms_map, members_map = _load_varcon()
+    if not forms_map:
+        return ()
+    respell_keys = {k.lower() for k in (respell or {})}
+    protected_l = {w.lower() for w in protected}
+
+    by_cluster: dict[str, dict] = {}
+    for para in paragraphs:
+        for m in _WORD.finditer(para.text):
+            raw = m.group(0)
+            w = raw.lower().strip("’'")
+            cid = forms_map.get(w)
+            if cid is None:
+                continue
+            g = by_cluster.setdefault(
+                cid, {"counts": Counter(), "sites": [], "skip": False})
+            if w in respell_keys:
+                g["skip"] = True
+            if w in protected_l:
+                continue
+            if raw[:1].isupper() and not _sentence_initial(para.text, m.start()):
+                continue
+            g["counts"][w] += 1
+            g["sites"].append(
+                Occurrence(para.para_id, m.start(), m.start() + len(raw), raw))
+
+    out: list[VariantGroup] = []
+    for cid in sorted(by_cluster):
+        g = by_cluster[cid]
+        counts: Counter = g["counts"]
+        if g["skip"] or len(counts) < 2:
+            continue
+        dom = _pick_dominant(counts, prefer=cid)
+        minority = {f for f in counts if f != dom}
+        site = next((o for o in g["sites"]
+                     if o.form.lower().strip("’'") in minority), g["sites"][0])
+        note = _chicago_note(cid, members_map.get(cid, ())) if chicago else ""
+        out.append(VariantGroup(
+            "spelling", cid, Counter(counts), dom,
+            _has_majority(counts, dom, min_dominance), site,
+            sum(counts[f] for f in minority), note))
+    return tuple(_cap(out, "spelling-variant", max_queries))
+
+
+# A run of letter-then-dot (U.S., a.m., Ph.D.) with no spaces between the units,
+# so spaced personal initials ("J. R. R.") never match as one token.
+_DOTTED = re.compile(r"(?:[A-Za-z]\.){2,}")
+# An undotted all-caps token, optionally pluralized (US, NASA, URLs). Lowercase
+# is excluded on purpose, so the pronoun "us" and the verb "am" never join an
+# abbreviation group.
+_CAPS = re.compile(r"\b[A-Z]{2,6}s?\b")
+
+
+def _abbr_key(form: str) -> str:
+    letters = re.sub(r"[^A-Za-z]", "", form).lower()
+    return letters[:-1] if len(letters) > 2 and letters.endswith("s") else letters
+
+
+def find_abbreviation_variants(paragraphs: Sequence[ParagraphRef], *,
+                               min_dominance: int = 2,
+                               protected: Sequence[str] = (),
+                               max_queries: int = 40) -> tuple[VariantGroup, ...]:
+    """One abbreviation set two ways — dotted against undotted (U.S. / US),
+    dotted-lowercase against capitals (a.m. / AM). A group is raised only when
+    BOTH a dotted and an undotted spelling of the same letters occur, so a book
+    that only ever writes "US" is left alone; the minority style is the query."""
+    protected_l = {w.lower() for w in protected}
+    groups: dict[str, dict] = {}
+    for para in paragraphs:
+        shout = _skip_caps_context(para)
+        for pat, structure in ((_DOTTED, "dotted"), (_CAPS, "caps")):
+            if structure == "caps" and shout:
+                continue
+            for m in pat.finditer(para.text):
+                raw = m.group(0)
+                key = _abbr_key(raw)
+                if len(key) < 2:
+                    continue
+                g = groups.setdefault(
+                    key, {"struct": defaultdict(Counter),
+                          "sites": defaultdict(list)})
+                g["struct"][structure][raw] += 1
+                g["sites"][structure].append(
+                    Occurrence(para.para_id, m.start(),
+                               m.start() + len(raw), raw))
+
+    out: list[VariantGroup] = []
+    for key in sorted(groups):
+        if key in protected_l:                    # the author's own term
+            continue
+        struct = groups[key]["struct"]
+        if len(struct) < 2:                       # needs both dotted and caps
+            continue
+        totals = {s: sum(c.values()) for s, c in struct.items()}
+        dom_struct = _pick_dominant(totals)
+        minority_structs = {s for s in struct if s != dom_struct}
+        counts = Counter({_rep(struct[s]): totals[s] for s in struct})
+        dom_form = _rep(struct[dom_struct])
+        site = groups[key]["sites"][min(minority_structs)][0]
+        out.append(VariantGroup(
+            "abbreviation", key, counts, dom_form,
+            _has_majority(totals, dom_struct, min_dominance), site,
+            sum(totals[s] for s in minority_structs)))
+    return tuple(_cap(out, "abbreviation", max_queries))
+
+
+def _rep(surfaces: Counter) -> str:
+    """The most common surface spelling of one structure, for display."""
+    return max(surfaces, key=lambda s: (surfaces[s], s))
+
+
+_CAPS_TOKEN = re.compile(r"\b[A-Z]{2,6}\b")           # NASA
+_TITLE_TOKEN = re.compile(r"\b[A-Z][a-z]{1,5}\b")     # Nasa
+_LOWER_TOKEN = re.compile(r"\b[a-z]{2,6}\b")
+
+
+def find_acronym_case(paragraphs: Sequence[ParagraphRef], *,
+                      min_dominance: int = 2, dictionary: str = "en_US",
+                      protected: Sequence[str] = (),
+                      max_queries: int = 40) -> tuple[VariantGroup, ...]:
+    """An initialism set in capitals in one place and as a title-cased word in
+    another (NASA / Nasa). Safe to detect deterministically because the two
+    spellings differ PAST the first letter — sentence position explains only the
+    first capital, which is exactly why the term scan's case-fold hides this.
+
+    The dictionary decides what is an acronym rather than a word: a key whose
+    lowercasing is an ordinary English word (AIDS/aids, MASS/Mass) is left alone,
+    because its title case may be that word at a sentence start. The scan needs
+    the dictionary for that judgment, so with none loadable it declines."""
+    dic = _dictionary(dictionary)
+    if dic is None:
+        return ()
+    protected_l = {w.lower() for w in protected}
+
+    caps: dict[str, Counter] = defaultdict(Counter)
+    titles: dict[str, Counter] = defaultdict(Counter)
+    lowers: set[str] = set()
+    sites: dict[str, dict] = defaultdict(lambda: {"caps": [], "title": []})
+    for para in paragraphs:
+        shout = _skip_caps_context(para)
+        for m in _LOWER_TOKEN.finditer(para.text):
+            lowers.add(m.group(0))
+        for m in _TITLE_TOKEN.finditer(para.text):
+            key = m.group(0).lower()
+            titles[key][m.group(0)] += 1
+            sites[key]["title"].append(
+                Occurrence(para.para_id, m.start(),
+                           m.start() + len(m.group(0)), m.group(0)))
+        if shout:
+            continue
+        for m in _CAPS_TOKEN.finditer(para.text):
+            key = m.group(0).lower()
+            caps[key][m.group(0)] += 1
+            sites[key]["caps"].append(
+                Occurrence(para.para_id, m.start(),
+                           m.start() + len(m.group(0)), m.group(0)))
+
+    out: list[VariantGroup] = []
+    for key in sorted(caps):
+        cap_total = sum(caps[key].values())
+        title_total = sum(titles.get(key, {}).values())
+        if cap_total < 2 or title_total < 1:
+            continue
+        if key in protected_l:                    # a name the spell scan owns
+            continue
+        if key in lowers or dic.lookup(key) or dic.lookup(key.capitalize()):
+            continue                              # an ordinary word, not an acronym
+        totals = {"caps": cap_total, "title": title_total}
+        dom_struct = _pick_dominant(totals, prefer="caps")
+        counts = Counter({_rep(caps[key]): cap_total,
+                          _rep(titles[key]): title_total})
+        dom_form = _rep(caps[key] if dom_struct == "caps" else titles[key])
+        minority = "title" if dom_struct == "caps" else "caps"
+        site = sites[key][minority][0]
+        out.append(VariantGroup(
+            "acronym_case", key, counts, dom_form,
+            _has_majority(totals, dom_struct, min_dominance), site,
+            totals[minority]))
+    return tuple(_cap(out, "acronym-case", max_queries))
+
+
 def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          enabled: bool = True, min_length: int = 7,
                          min_dominance: int = 2, names: bool = True,
                          name_dominance: int = 5,
-                         name_min_count: int = 20) -> ConsistencyReport:
+                         name_min_count: int = 20,
+                         spelling_variants: bool = True,
+                         abbreviations: bool = True,
+                         acronym_case: bool = True,
+                         chicago_notes: bool = True,
+                         respell: Mapping[str, str] | None = None,
+                         protected: Sequence[str] = (),
+                         dictionary: str = "en_US",
+                         max_queries_per_kind: int = 40) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
     `min_length` keeps short words out — the shorter the key, the more likely
@@ -309,6 +679,13 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     `names` also runs the proper-name diacritic scan; `name_dominance` and
     `name_min_count` set its bar for correcting rather than asking. See
     ``find_name_drift``.
+
+    `spelling_variants`, `abbreviations` and `acronym_case` run the three
+    mechanical scans a key-folding compound scan cannot (grey/gray, U.S./US,
+    NASA/Nasa). `respell` and `protected` come from the run's variant and spell
+    scan, so an enforced or author-owned form is not also asked about; `chicago_notes`
+    adds the Merriam-Webster preference phrasing; `max_queries_per_kind` bounds
+    each scan's output so a dialect-mixed book cannot flood the query channel.
     """
     if not enabled:
         return ConsistencyReport(ran=False)
@@ -373,11 +750,25 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
 
     drift = (find_name_drift(paragraphs, min_dominance=name_dominance,
                              min_count=name_min_count) if names else ())
-    report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift)
-    log.info("Consistency scan: %d term(s) written more than one way and "
-             "%d name(s) with diacritic drift — %d occurrence(s) to correct, "
-             "%d to ask about", len(terms), len(drift), report.corrected,
-             report.flagged)
+    variants = (find_spelling_variants(
+        paragraphs, min_dominance=min_dominance, respell=respell,
+        protected=protected, chicago=chicago_notes,
+        max_queries=max_queries_per_kind) if spelling_variants else ())
+    abbrevs = (find_abbreviation_variants(
+        paragraphs, min_dominance=min_dominance, protected=protected,
+        max_queries=max_queries_per_kind) if abbreviations else ())
+    cases = (find_acronym_case(
+        paragraphs, min_dominance=min_dominance, dictionary=dictionary,
+        protected=protected,
+        max_queries=max_queries_per_kind) if acronym_case else ())
+    report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift,
+                               variants=variants, abbreviations=abbrevs,
+                               casings=cases)
+    log.info("Consistency scan: %d term(s), %d spelling-variant(s), "
+             "%d abbreviation(s), %d acronym-case(s), and %d name(s) with "
+             "diacritic drift — %d occurrence(s) to correct, %d to ask about",
+             len(terms), len(variants), len(abbrevs), len(cases), len(drift),
+             report.corrected, report.flagged)
     return report
 
 
@@ -477,4 +868,38 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                     confidence="high",
                 ))
                 n += 1
+
+    # The mechanical scans: one query per group, at the first minority site.
+    for vg in report._mechanical:
+        para = by_id.get(vg.site.para_id)
+        if para is None:
+            continue
+        window, _, occurrence = sentence_window(
+            para.text, vg.site.start, vg.site.end)
+        forms = ", ".join(f"“{f}” ({c})" for f, c in vg.forms)
+        note = f" {vg.note}" if vg.note else ""
+        if vg.kind == "spelling":
+            lead = "This manuscript spells one word more than one way"
+        elif vg.kind == "abbreviation":
+            lead = "This abbreviation is written more than one way"
+        else:
+            lead = "This is capitalized more than one way"
+        if vg.has_majority:
+            tail = (f" If that isn't deliberate, “{vg.dominant}” is the form "
+                    f"the book uses most.")
+        else:
+            tail = (f" The book uses both about equally; “{vg.dominant}” is the "
+                    f"form to settle on unless the split is deliberate.")
+        findings.append(Finding(
+            finding_id=f"c-{n:04d}",
+            chunk_id="consistency",
+            para_id=vg.site.para_id,
+            error_type=CONSISTENCY_KEY,
+            original_text=window,
+            occurrence=occurrence,
+            corrected_text=window,              # a query changes nothing
+            explanation=f"{lead}: {forms}.{note}{tail}",
+            confidence="high",
+        ))
+        n += 1
     return findings

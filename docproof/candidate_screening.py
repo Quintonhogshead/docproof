@@ -754,7 +754,14 @@ def _local_analyzer_sources(cfg, doc: DocumentModel, paragraphs, *,
         min_dominance=cfg.consistency.min_dominance,
         names=cfg.consistency.names,
         name_dominance=cfg.consistency.name_dominance,
-        name_min_count=cfg.consistency.name_min_count)
+        name_min_count=cfg.consistency.name_min_count,
+        spelling_variants=cfg.consistency.spelling_variants,
+        abbreviations=cfg.consistency.abbreviations,
+        acronym_case=cfg.consistency.acronym_case,
+        chicago_notes=cfg.consistency.chicago_notes,
+        max_queries_per_kind=cfg.consistency.max_queries_per_kind,
+        respell=variant.respell_map,
+        dictionary=cfg.spellcheck.dictionary or variant.dictionary)
     consistency_findings = to_findings(report, doc.paragraphs)
     if consistency_findings:
         finding_sources["term_consistency"] = consistency_findings

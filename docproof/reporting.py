@@ -27,6 +27,33 @@ def _tally_types(findings: list[Finding]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _variant_rows(groups) -> list[dict]:
+    """The JSON shape for the mechanical consistency scans (spelling variants,
+    abbreviations, acronym case): one row per group, each a single query."""
+    return [{"key": g.key, "dominant": g.dominant,
+             "forms": dict(g.counts), "has_majority": g.has_majority,
+             "minority": g.minority_total, "note": g.note}
+            for g in groups]
+
+
+def _variant_section(L: list, groups, title: str, blurb: str) -> None:
+    """A summary.md section for one mechanical consistency scan, omitted when
+    the scan found nothing so a clean manuscript adds no empty headings."""
+    if not groups:
+        return
+    L.append(f"## {title}\n")
+    L.append(blurb + "\n")
+    for g in groups:
+        forms = ", ".join(f"`{f}` ({n})"
+                          for f, n in sorted(g.counts.items(),
+                                             key=lambda kv: (-kv[1], kv[0])))
+        lead = (f"most often **{g.dominant}**" if g.has_majority
+                else f"no clear majority — **{g.dominant}** suggested")
+        note = f" — {g.note}" if g.note else ""
+        L.append(f"- {forms} — {lead}{note}")
+    L.append("")
+
+
 def scripted_check_rows(sweeps, findings: list[Finding],
                         applied_ids) -> list[dict]:
     """The scripted-check report: for each sweep, what it flagged, how much of
@@ -98,7 +125,10 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                                     "forms": dict(n.counts),
                                     "outliers": len(n.outliers),
                                     "enforced": n.enforce}
-                                   for n in consistency.names]}
+                                   for n in consistency.names],
+                         "variants": _variant_rows(consistency.variants),
+                         "abbreviations": _variant_rows(consistency.abbreviations),
+                         "casings": _variant_rows(consistency.casings)}
                         if consistency is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
@@ -556,6 +586,24 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
                      f"minority spelling {what}; the book uses "
                      f"**{nd.dominant}**")
         L.append("")
+
+    _variant_section(
+        L, consistency.variants if consistency is not None else (),
+        "Spelling variants",
+        "Words the manuscript spells more than one way — a difference of letters, "
+        "not hyphenation, that a paragraph-by-paragraph read cannot see. Each is a "
+        "question, not a correction; the recommendation is the spelling the book "
+        "itself uses most.")
+    _variant_section(
+        L, consistency.abbreviations if consistency is not None else (),
+        "Abbreviation styling",
+        "Abbreviations written more than one way across the book — dotted against "
+        "undotted, capitals against periods.")
+    _variant_section(
+        L, consistency.casings if consistency is not None else (),
+        "Acronym capitalization",
+        "Initialisms set in capitals in one place and as an ordinary word in "
+        "another.")
 
     rows = scripted_check_rows(sweeps, findings, applied_ids)
     if rows:

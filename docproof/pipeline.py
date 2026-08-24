@@ -538,7 +538,19 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             min_dominance=cfg.consistency.min_dominance,
             names=cfg.consistency.names,
             name_dominance=cfg.consistency.name_dominance,
-            name_min_count=cfg.consistency.name_min_count)
+            name_min_count=cfg.consistency.name_min_count,
+            spelling_variants=cfg.consistency.spelling_variants,
+            abbreviations=cfg.consistency.abbreviations,
+            acronym_case=cfg.consistency.acronym_case,
+            chicago_notes=cfg.consistency.chicago_notes,
+            max_queries_per_kind=cfg.consistency.max_queries_per_kind,
+            # The variant's respell map (grey->gray on a U.S. run) and the spell
+            # scan's lexicon feed the guards, so a form already enforced or owned
+            # by the author is not also asked about. The dictionary is the acronym
+            # scan's — an explicit one wins, else the variant's.
+            respell=variant.respell_map,
+            protected=spell.lexicon,
+            dictionary=cfg.spellcheck.dictionary or variant.dictionary)
         consistency_findings = to_findings(consistency, doc.paragraphs)
         # Near-identical protected names too close to call ride the same
         # deterministic prefix as the consistency queries: one question per
