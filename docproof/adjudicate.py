@@ -330,11 +330,23 @@ def site_word_candidates(words: Mapping[str, str],
 # being copied to every other sentence that happens to share its words.
 _PROPAGATABLE_SURFACE = re.compile(r"[A-Za-z]+(?:[’'\- ][A-Za-z]+)*\Z")
 
+# A minimal diff can trim to a degenerate surface — a single letter ("B" from a
+# "B" -> "B." initial fix) or a bare function word ("and" from "try and" ->
+# "try to", once the shared "try " prefix is stripped). Propagating such a
+# surface sweeps the whole book with noise the pass exists to prevent (a
+# Breniman review raised 179 "and" comments off one idiom fix). Two deterministic
+# floors keep propagation to surfaces that actually recur as the same error:
+_MIN_PROPAGATE_LEN = 3     # a shorter deleted surface never seeds propagation
+_MAX_ASK_SITES = 12        # a real word matching more unclaimed sites than this
+                           # is a common word, not a recurring typo — the whole
+                           # surface is dropped (logged), never a flood of queries
+
 
 def _propagatable(delete_text: str, insert_text: str) -> bool:
     """Whether a validated edit's minimal diff is a whole-word/short-phrase swap
     that means the same thing wherever the surface appears."""
     return (bool(delete_text)
+            and len(delete_text) >= _MIN_PROPAGATE_LEN
             and delete_text == delete_text.strip()
             and bool(_PROPAGATABLE_SURFACE.match(delete_text))
             and delete_text.lower() != insert_text.strip().lower())
@@ -428,7 +440,12 @@ def propagate_recurrences(validated: Sequence[Finding],
         # (a typo, a misspelled name) wants the same fix wherever it appears.
         ask = _known(dic, key)
         pat = _word_bounded(key)
-        emitted = 0
+        # Gather the eligible sites first, so a real-word surface that turns out
+        # to be a common word (many sites) can be dropped whole rather than
+        # emitting a flood of queries. A non-word typo keeps propagating to every
+        # site (bounded only by max_sites_per_surface) — it is the same error
+        # wherever it appears.
+        sites = []
         for p in paragraphs:
             for m in pat.finditer(p.text):
                 start, end = m.start(), m.end()
@@ -439,35 +456,46 @@ def propagate_recurrences(validated: Sequence[Finding],
                 fix = _match_case(surface, fix_base)
                 if fix == surface:
                     continue                         # a no-op at this casing
-                if emitted >= max_sites_per_surface:
-                    dropped[key] = dropped.get(key, 0) + 1
-                    continue
-                window, lo, occurrence = sentence_window(p.text, start, end)
-                corrected = (window[:start - lo] + fix + window[end - lo:])
-                n += 1
-                emitted += 1
-                if ask:
-                    explanation = (
-                        f'"{surface}" was changed to "{fix}" elsewhere in the '
-                        f'manuscript; here it may be correct as written, so this '
-                        f'is flagged for review rather than changed.')
-                else:
-                    explanation = (
-                        f'"{surface}" was corrected to "{fix}" elsewhere in the '
-                        f'manuscript; the same spelling here takes the same fix.')
-                findings.append(Finding(
-                    finding_id=f"{id_prefix}-{n:04d}",
-                    chunk_id="recurrence",
-                    para_id=p.para_id,
-                    error_type="spelling",
-                    original_text=window,
-                    occurrence=occurrence,
-                    corrected_text=corrected,
-                    explanation=explanation,
-                    # A verbatim recurrence of an already-validated fix is a
-                    # high-confidence edit; a real-word site is asked instead.
-                    confidence="medium" if ask else "high",
-                    force_query=ask))
+                sites.append((p, start, end, surface, fix))
+        if ask and len(sites) > _MAX_ASK_SITES:
+            # A dictionary word matching this widely is context-dependent, not a
+            # recurring typo. Dropping it whole (and saying so) beats burying the
+            # real findings under dozens of "may be correct as written" queries.
+            log.info('Recurrence propagation: "%s" matches %d site(s) as a '
+                     'common word; not propagated (over the %d-site query cap).',
+                     key, len(sites), _MAX_ASK_SITES)
+            continue
+        emitted = 0
+        for p, start, end, surface, fix in sites:
+            if emitted >= max_sites_per_surface:
+                dropped[key] = dropped.get(key, 0) + 1
+                continue
+            window, lo, occurrence = sentence_window(p.text, start, end)
+            corrected = (window[:start - lo] + fix + window[end - lo:])
+            n += 1
+            emitted += 1
+            if ask:
+                explanation = (
+                    f'"{surface}" was changed to "{fix}" elsewhere in the '
+                    f'manuscript; here it may be correct as written, so this '
+                    f'is flagged for review rather than changed.')
+            else:
+                explanation = (
+                    f'"{surface}" was corrected to "{fix}" elsewhere in the '
+                    f'manuscript; the same spelling here takes the same fix.')
+            findings.append(Finding(
+                finding_id=f"{id_prefix}-{n:04d}",
+                chunk_id="recurrence",
+                para_id=p.para_id,
+                error_type="spelling",
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=corrected,
+                explanation=explanation,
+                # A verbatim recurrence of an already-validated fix is a
+                # high-confidence edit; a real-word site is asked instead.
+                confidence="medium" if ask else "high",
+                force_query=ask))
     for key, lost in sorted(dropped.items()):
         # Never a silent cap: a truncated sweep that says nothing reads as
         # "covered everything", the exact failure the pass exists to prevent.

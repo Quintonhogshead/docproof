@@ -86,6 +86,19 @@ def test_propose_returns_nothing_when_languagetool_is_absent(monkeypatch):
     assert lt.propose([_para("body-0", "anything at all")]) == []
 
 
+def test_propose_sets_picky_on_the_server_per_call(monkeypatch):
+    # The server is long-lived and shared, so propose() must set the picky level
+    # every call — a stale True would leak into a later non-picky run.
+    tool = _FakeTool({})
+    tool.picky = False
+    monkeypatch.setattr(lt, "AVAILABLE", True)
+    monkeypatch.setattr(lt, "_get_tool", lambda dictionary: tool)
+    lt.propose([_para("body-0", "text")], picky=True)
+    assert tool.picky is True
+    lt.propose([_para("body-0", "text")], picky=False)
+    assert tool.picky is False
+
+
 def test_propose_keeps_a_real_fix_and_drops_every_kind_of_noise(monkeypatch):
     #        0         1
     #        0123456789012345678

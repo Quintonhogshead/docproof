@@ -49,6 +49,45 @@ def _screen(findings, para_text, provider, **kw):
     return screen(findings, para_text, provider, **kw)
 
 
+# --- deterministic meaning-gate bypass ---------------------------------------
+
+def test_meaning_gate_bypasses_punctuation_and_case_only_edits():
+    # A vocative comma and a resumed-dialogue lowercase carry no proposition for
+    # the meaning gate to weigh. With bypass_trivial they never reach the judge,
+    # so a judge that would wrongly hold them cannot: the provider is empty and
+    # would raise if it were called.
+    p = _para(text="I know Molly and I trust her, but she resumed.")
+    comma = _edit("f-1", "I know Molly", "I know, Molly")
+    case = _edit("f-2", "but she resumed", "But she resumed")
+    report = _screen([comma, case], _text(p), FakeProvider([]),
+                     bypass_trivial=True)
+    assert report.withheld == []          # both kept as edits
+    assert report.checked == 0            # neither was judged
+
+
+def test_fix_gate_still_judges_punctuation_edits():
+    # The bypass is the meaning gate's alone: a comma can be the WRONG repair,
+    # which is fix_check's question, so it must still be judged there.
+    p = _para(text="I know Molly and I trust her.")
+    comma = _edit("f-1", "I know Molly", "I know, Molly")
+    provider = FakeProvider([_verdicts({"item": 1, "verdict": "keep", "reason": ""})])
+    report = _screen([comma], _text(p), provider, spec=FIX, bypass_trivial=False)
+    assert report.checked == 1
+    assert report.calls == 1
+
+
+def test_meaning_gate_still_judges_word_and_homophone_changes():
+    # A changed alphanumeric run — an inserted word, a homophone swap — is NOT
+    # trivial and is judged even with bypass_trivial on.
+    p = _para(text="It affected their heart deeply.")
+    homophone = _edit("f-1", "their heart", "there heart")
+    provider = FakeProvider([_verdicts(
+        {"item": 1, "verdict": "withhold", "reason": "wrong homophone"})])
+    report = _screen([homophone], _text(p), provider, bypass_trivial=True)
+    assert report.checked == 1
+    assert len(report.withheld) == 1
+
+
 # --- verdict routing ---------------------------------------------------------
 
 def test_preserved_change_is_left_alone():

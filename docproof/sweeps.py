@@ -102,6 +102,10 @@ def sentence_window(text: str, start: int, end: int) -> tuple[str, int, int]:
     Findings quote a sentence rather than the whole paragraph for the same
     reason the model is told to: it is what a person reads in the report, and
     it is short enough to anchor unambiguously."""
+    # An out-of-range span (an end-of-text insertion computed as pos+1) must
+    # degrade to the trailing sentence, not crash the run at write time.
+    start = max(0, min(start, len(text)))
+    end = max(start, min(end, len(text)))
     bounds = [0] + [m.end() for m in _SENTENCE_END.finditer(text)] + [len(text)]
     lo = max(b for b in bounds if b <= start)
     hi = min(b for b in bounds if b >= end)
@@ -425,6 +429,14 @@ def _sweep_dialogue_tag(text: str, variant=None) -> list[Hit]:
             continue
         nxt = m.group("nxt")
         if nxt and nxt.lower() in _TAKES_OBJECT:
+            continue
+        # A reporting verb immediately followed by a present participle is an
+        # ACTION beat, not a tag: "She continued typing", "he kept reading". The
+        # period before it is a sentence break and correct — turning it into a
+        # comma (and lowercasing the subject) is the exact wrong edit. A real tag
+        # never runs verb-straight-into-gerund; the participle would carry a
+        # comma ("she said, smiling"), which this pattern does not match.
+        if nxt and len(nxt) > 4 and nxt.lower().endswith("ing"):
             continue
         subject = m.group("subject")
         # Pronoun subjects only. A name after the quote needs a judgment the
@@ -765,6 +777,143 @@ def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
     return findings
 
 
+# --- time of day --------------------------------------------------------------
+
+# A clock time with an AM/PM meridiem attached to a digit: "3:40AM", "2:00 AM",
+# "4:15PM", "at 2 PM". The digit requirement is what keeps the sweep off the
+# stray capital pair — "I AM here", an "AM" radio band — that is not a time at
+# all. Already-correct "3:40 a.m." matches too, but the replacement equals the
+# text, so no hit is emitted and the sweep stays idempotent.
+_TIME_MERIDIEM = re.compile(
+    r"(?<![.\d])(\d{1,2}(?::\d{2})?)[  ]*([AaPp])[  ]*\.?[  ]*([Mm])\.?")
+
+
+def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
+    """House/Chicago style sets a meridiem lowercase with periods and a space:
+    "3:40 a.m.", not "3:40AM". Only the meridiem is touched — whether the hour
+    itself should be spelled out or take ":00" is a number-style judgment the
+    number rules own, so a bare "2 p.m." keeps its digit here."""
+    hits: list[Hit] = []
+    for m in _TIME_MERIDIEM.finditer(text):
+        canonical = f"{m.group(1)} {m.group(2).lower()}.{m.group(3).lower()}."
+        if m.group(0) == canonical:
+            continue
+        hits.append(Hit(m.start(), m.end(), canonical,
+                        "House style sets a time's meridiem lowercase with "
+                        "periods: “a.m.”/“p.m.”"))
+    return hits
+
+
+# --- the deity capital ---------------------------------------------------------
+
+# "god" (lowercase g) as the monotheistic deity in a fixed interjection —
+# "oh my god", "thank god". The leading word is what makes the reference the
+# proper name rather than a common noun, so the sweep never has to decide
+# "a god"/"the gods"/"godforsaken" on its own: those never carry one of these
+# openers, and the \b after the word keeps "goddess"/"godsend" out. Only a
+# lowercase "god" is a hit, so re-scanning the capitalised result finds nothing.
+_DEITY_FRAME = re.compile(
+    r"\b(oh my|my|oh|thank|dear|good|god)\s+god\b", re.IGNORECASE)
+
+
+def _sweep_deity_capital(text: str, variant=None) -> list[Hit]:
+    """Capitalise “God” in the set interjections where it is the deity's name.
+    Kept to fixed frames on purpose — the general "is this god the deity"
+    question is a judgment, and a wrongly-capitalised god in a polytheistic
+    passage is a silent edit no one asked for."""
+    hits: list[Hit] = []
+    for m in _DEITY_FRAME.finditer(text):
+        # The "god god" arm of the alternation ("...god God...") is not a frame
+        # we fix; the real openers are the others. Locate the final "god".
+        gpos = m.end() - 3
+        if text[gpos:gpos + 3] != "god":            # already "God"
+            continue
+        # "god of war/thunder" is a common noun, not the deity's name.
+        if text[m.end():m.end() + 4].lower() == " of ":
+            continue
+        # An article before the frame marks a common-noun "god" ("a good god",
+        # "the god"), never the interjection.
+        before = text[max(0, m.start() - 5):m.start()].lower()
+        if re.search(r"\b(a|an|the|one|another|every|no|that|this)\s*$", before):
+            continue
+        # "god damn"/"goddamn" is a house-consistency question, not a cap fix.
+        if text[m.end():m.end() + 5].lower().startswith(" damn"):
+            continue
+        hits.append(Hit(gpos, gpos + 1, "G",
+                        "“God” takes a capital as the name of the deity in "
+                        "this expression."))
+    return hits
+
+
+# --- dialogue splice: tag after a complete quoted sentence --------------------
+
+# A reporting verb (optionally with one adverb) that sits between a
+# sentence-final quote and the NEXT opening quote, joined to it by a comma:
+#   "Of course!" Raymond said, "Anything for you."
+# The first quote ended the sentence (! or ?), so the tag closes it with a
+# period, and the second quote opens a new one — the comma is a splice.
+_SPLICE_TAG = re.compile(
+    r"(?P<end>[!?][”\"’'])[  ]+"
+    r"(?P<subject>[A-Z][\w'’]*|he|she|they|we|it|you)"
+    r"(?:[  ]+(?P<verb>[A-Za-z][\w'’]*))"
+    r"(?:[  ]+(?P<adverb>[A-Za-z]+ly))?"
+    r"(?P<comma>,)[  ]+(?=[“\"‘])")
+
+# Physical-action verbs that CANNOT take speech as their object, so a comma
+# before them inside a quote is a run-on, not a tag: the quote ends with a
+# period and the beat is its own sentence. Deliberately disjoint from
+# REPORTING_VERBS — a borderline verb the house counts as reporting (laughed,
+# sighed, breathed, cried) is left to the dialogue_tag error type to weigh.
+_ACTION_BEATS = frozenset("""
+smiled nodded grinned shrugged frowned chuckled winced blinked shuddered
+swallowed beamed gestured scowled smirked snorted flinched
+""".split())
+
+# A closing quote whose own comma sits just inside it, then a subject and a
+# physical-action verb that ENDS the beat (terminal punctuation or paragraph
+# end follows). "…at this point," Raymond smiled.  ->  …point." Raymond smiled.
+_ACTION_BEAT = re.compile(
+    r"(?P<comma>,)(?P<quote>[”\"’'])[  ]+"
+    r"(?P<subject>(?:[A-Z][\w'’]*|he|she|they|we|it|you))"
+    r"[  ]+(?P<verb>[A-Za-z]+)(?P<after>[  ]*[.!?]|\s*$)")
+
+
+def _sweep_dialogue_splice(text: str, variant=None) -> list[Hit]:
+    """Two comma-for-period splices around a dialogue tag that the per-sentence
+    passes glide over because each half reads locally fine:
+
+      * a tag after a ! or ?-ended quote, joined to the next quote by a comma
+        ("Of course!" Raymond said, "Anything.") — the tag takes a period;
+      * a physical-action beat mistaken for a tag ("…," Raymond smiled.) — the
+        quote takes a period and the beat is its own sentence.
+
+    Both are idempotent: the fixed comma is gone, so a re-scan matches nothing.
+    """
+    hits: list[Hit] = []
+    for m in _SPLICE_TAG.finditer(text):
+        if m.group("verb").lower() not in REPORTING_VERBS:
+            continue
+        c = m.start("comma")
+        hits.append(Hit(c, c + 1, ".",
+                        "House style: a complete quoted sentence ends the tag "
+                        "with a period before the next quotation."))
+    for m in _ACTION_BEAT.finditer(text):
+        if m.group("verb").lower() not in _ACTION_BEATS:
+            continue
+        subject = m.group("subject")
+        fixed = subject[0].upper() + subject[1:]
+        # comma -> period (inside the quote), and the beat's subject capitalised.
+        replacement = ("." + m.group("quote") + text[m.end("quote"):m.start("subject")]
+                       + fixed)
+        start, end = m.start("comma"), m.end("subject")
+        if text[start:end] == replacement:
+            continue
+        hits.append(Hit(start, end, replacement,
+                        "House style: an action beat is its own sentence, so "
+                        "the quotation closes with a period."))
+    return hits
+
+
 # --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
@@ -784,6 +933,11 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_quote_punctuation),
     Sweep("sweep_nested_quote", "Nested quotations set in singles",
           _sweep_nested_quote),
+    Sweep("sweep_time_of_day", "Times of day (a.m./p.m.)", _sweep_time_of_day),
+    Sweep("sweep_deity_capital", "Deity capitalized in set expressions",
+          _sweep_deity_capital),
+    Sweep("sweep_dialogue_splice", "Comma splices around a dialogue tag",
+          _sweep_dialogue_splice),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

@@ -108,3 +108,35 @@ def test_cap_is_logged_not_silently_truncated(caplog):
     # four remain, of which the 2-site cap lets two through and drops two.
     assert len(out) == 2
     assert any("cap" in r.message for r in caplog.records)
+
+
+def test_tiny_surface_does_not_seed_propagation():
+    # A minimal diff can trim to a single-letter surface (a "B" -> "B." initial
+    # fix). Propagating it would touch every stray "B" in the book; it must not.
+    ps = paras("Marshall B stood.", "Then B spoke.", "And B left.")
+    seed = _edit(ps[0], "B", "B.")
+    assert propagate_recurrences([seed], ps) == []
+
+
+def test_common_word_surface_is_dropped_not_flooded(caplog):
+    # "try and" -> "try to" trims to the surface "and"; a real, common word.
+    # It must not raise a query at every "and" in the book (the Breniman flood).
+    ps = paras("You should try and rest.",             # seed: and -> to
+               *[f"A cat and a dog number {i}." for i in range(20)])
+    seed = _edit(ps[0], "and", "to")
+    with caplog.at_level("INFO"):
+        out = propagate_recurrences([seed], ps)
+    assert out == []
+    assert any("common word" in r.message for r in caplog.records)
+
+
+def test_a_real_word_recurring_a_few_times_is_still_queried():
+    # The cap only fires on a flood: a handful of sites still propagate as
+    # queries, so the genuine catch-it-here-miss-it-there case is preserved.
+    ps = paras("It had a big effect on her.",           # seed: effect -> affect
+               "It did not effect him.",                # queried
+               "That will effect nothing.")             # queried
+    seed = _edit(ps[0], "effect", "affect")
+    out = propagate_recurrences([seed], ps)
+    assert {f.para_id for f in out} == {"body-0001", "body-0002"}
+    assert all(f.force_query for f in out)

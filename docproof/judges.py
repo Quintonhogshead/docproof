@@ -403,6 +403,38 @@ def _own_change(f: Finding) -> str:
            f"{(a.insert_text if a else f.corrected_text)!r}"
 
 
+def _meaning_trivial(f: Finding) -> bool:
+    """Whether a change cannot alter what a sentence MEANS, so the meaning gate
+    has nothing to weigh and should not see it.
+
+    Two shapes qualify, both provable from the minimal diff alone:
+      * punctuation / whitespace only — a comma set off a name in direct
+        address, a period closing an action beat, a semicolon for a splice.
+        Grouping and pause, never proposition.
+      * case only — "But" -> "but" resuming interrupted dialogue, "god" -> "God"
+        as the deity's name. The same letters.
+
+    This is the meaning gate's blind spot, not the fix gate's: a comma CAN be
+    the wrong repair (a splice wanting a semicolon), which is fix_check's
+    question — so only the meaning gate bypasses these. Anything with a changed
+    alphanumeric run (an inserted word, a swapped or reinflected verb) is NOT
+    trivial and is judged as before."""
+    a = f.anchor
+    if a is not None:
+        delete_text, insert_text = a.delete_text, a.insert_text
+    else:
+        # No anchor yet (a caller screening raw findings): reduce to the same
+        # minimal diff the validator would, so a whole-sentence quote that
+        # differs by one comma is read as the comma, not as two sentences.
+        from .validator import shrink
+        _pre, delete_text, insert_text = shrink(f.original_text, f.corrected_text)
+    if delete_text == insert_text:                  # nothing changes
+        return False
+    if all(not c.isalnum() for c in delete_text + insert_text):
+        return True                                 # punctuation / whitespace
+    return delete_text.casefold() == insert_text.casefold()   # case only
+
+
 def _is_flagged(verdict: dict | None, flag_unsure: bool) -> bool:
     """Whether a verdict withholds the change. One definition, shared by the
     per-paragraph loop and the final fold, so the two can never disagree about
@@ -559,6 +591,7 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
            provider: Provider, *, spec: JudgeSpec, model: str,
            instructions: str = "", context: str = "", max_tokens: int = 4000,
            concurrency: int = 8, flag_unsure: bool = True,
+           bypass_trivial: bool = False,
            usage: Usage) -> JudgeReport:
     """Put every change in `findings` to one judge and return the ones it will
     not vouch for.
@@ -576,9 +609,19 @@ def screen(findings: Sequence[Finding], para_text: dict[str, str],
     # Findings are grouped by paragraph but tracked by position, so a verdict
     # always lands back on the finding that was judged.
     by_para: dict[str, list[tuple[int, Finding]]] = {}
+    bypassed = 0
     for i, f in enumerate(findings):
+        if bypass_trivial and _meaning_trivial(f):
+            # A punctuation- or case-only change carries no proposition for the
+            # meaning gate to weigh; judging it only risks a wrong hold on a
+            # correct comma or capital. Kept as an edit, never sent to the judge.
+            bypassed += 1
+            continue
         if f.para_id in para_text:              # no paragraph -> nothing to read
             by_para.setdefault(f.para_id, []).append((i, f))
+    if bypassed:
+        log.info("%s: %d punctuation/case-only change(s) bypassed the gate "
+                 "deterministically.", spec.label, bypassed)
     if not by_para:
         return JudgeReport(spec, [], (), 0, 0)
 
