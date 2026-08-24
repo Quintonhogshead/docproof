@@ -524,3 +524,301 @@ def test_the_shipped_config_enables_the_name_scan():
     assert cfg.consistency.name_dominance == 5
     assert cfg.consistency.name_min_count == 20
     assert Config().consistency.names
+
+
+# --- mechanical scans: spelling variants (VarCon) -----------------------------
+# grey/gray differ by a letter, not by hyphenation, so the compound key scan
+# cannot group them. These read the whole book, count every spelling, and only
+# ask. The negatives matter most: a name, an author-owned word, and a form the
+# variant already enforces must never be raised.
+
+def _variants(report):
+    return {g.key: g for g in report.variants}
+
+
+def test_a_letter_level_spelling_variant_is_flagged():
+    r = find_inconsistencies(_paras(
+        "The colour of the water changed with the light over the bay.",
+        "She painted the colour of the sky the way she remembered it.",
+        "He could not name the color of her eyes when they asked him."))
+    g = _variants(r)["color"]
+    assert dict(g.counts) == {"colour": 2, "color": 1}
+    assert g.dominant == "colour" and g.has_majority
+
+
+def test_the_recommendation_is_the_form_the_book_uses_most():
+    r = find_inconsistencies(_paras(
+        "They organize the archive by year and then by author surname.",
+        "We organize the shelves twice a year, before and after the fair.",
+        "The society will organise a gala to mark the centenary this spring."))
+    assert _variants(r)["organize"].dominant == "organize"
+
+
+def test_a_spelling_variant_query_changes_nothing_and_cites_chicago():
+    paras = _paras(
+        "The colour of the water changed with the light over the bay.",
+        "She painted the colour of the sky the way she remembered it.",
+        "He could not name the color of her eyes when they asked him.")
+    findings = [f for f in to_findings(find_inconsistencies(paras), paras)
+                if "spells one word" in f.explanation]
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.error_type == CONSISTENCY_KEY
+    assert f.corrected_text == f.original_text          # a query edits nothing
+    assert "Merriam-Webster" in f.explanation           # Chicago note rides along
+
+
+def test_chicago_notes_can_be_turned_off():
+    paras = _paras(
+        "The colour of the water changed with the light over the bay.",
+        "She painted the colour of the sky the way she remembered it.",
+        "He could not name the color of her eyes when they asked him.")
+    r = find_inconsistencies(paras, chicago_notes=False)
+    assert r.variants[0].note == ""
+
+
+def test_an_even_spelling_split_asks_which_to_settle_on():
+    r = find_inconsistencies(_paras(
+        "He walked toward the gate, slow and unwilling, in the grey dawn.",
+        "She turned towards the sea and would not look back at the house."))
+    paras = _paras(
+        "He walked toward the gate, slow and unwilling, in the grey dawn.",
+        "She turned towards the sea and would not look back at the house.")
+    r = find_inconsistencies(paras)
+    g = _variants(r)["toward"]
+    assert not g.has_majority
+    assert any("settle on" in f.explanation for f in to_findings(r, paras))
+
+
+def test_a_name_is_not_a_spelling_variant():
+    """Mr. Grey is a character, not the colour spelled the British way."""
+    r = find_inconsistencies(_paras(
+        "Mr. Grey wore a grey coat to the funeral in the rain that morning.",
+        "Mr. Grey said nothing to anyone as the gray sky pressed down low.",
+        "Mr. Grey left before the reading of the will could even begin."))
+    # 'Grey' occurrences are names (capitalized mid-sentence); only 'grey'/'gray'
+    # the colour remain, one each — an even split, still a single query, never
+    # counting the surname.
+    g = _variants(r).get("gray")
+    if g is not None:
+        assert "Grey" not in g.counts
+
+
+def test_an_enforced_variant_is_not_also_asked_about():
+    """On a U.S. run grey->gray rides the respell map, so adjudication converts
+    it; the consistency scan must not query the same site."""
+    paras = _paras(
+        "The grey sky pressed low over the grey and empty winter fields.",
+        "A gray coat hung by the door where the gray light could not reach.")
+    assert "gray" not in _variants(find_inconsistencies(
+        paras, respell={"grey": "gray"}))
+    assert "gray" in _variants(find_inconsistencies(paras, respell={}))
+
+
+def test_an_author_owned_word_is_not_a_spelling_variant():
+    paras = _paras(
+        "The Colour was a place, not a shade: the Colour swallowed light.",
+        "They feared the Colour. The colour of ordinary things was safe.")
+    # 'Colour' the coined proper noun is protected; the lone lowercase 'colour'
+    # then stands alone and nothing is raised.
+    assert "color" not in _variants(find_inconsistencies(
+        paras, protected=["Colour"]))
+
+
+def test_a_consistent_book_raises_no_spelling_variant():
+    r = find_inconsistencies(_paras(
+        "The color of the water changed with the light over the bay at dusk.",
+        "She painted the color of the sky the way she remembered it as a child.",
+        "He could not name the color of her eyes when they finally asked him."))
+    assert r.variants == ()
+
+
+# --- the shipped table --------------------------------------------------------
+
+def test_the_varcon_table_is_present_and_excludes_homographs():
+    from docproof.consistency import _load_varcon
+    forms, members = _load_varcon()
+    assert forms, "varcon.tsv did not load"
+    # The headline variants are grouped.
+    assert forms.get("colour") == "color" and forms.get("gray") == "gray"
+    assert forms.get("towards") == "toward"
+    # Different words by sense must never appear — flagging these is the one way
+    # the scan fails. See tools/build_varcon.py::_EXCLUDED.
+    for danger in ("storey", "cheque", "tyre", "metre", "programme",
+                   "practise", "licence", "analyses"):
+        assert danger not in forms, f"{danger} leaked into the variant table"
+
+
+# --- mechanical scans: abbreviations ------------------------------------------
+
+def _abbrevs(report):
+    return {g.key: g for g in report.abbreviations}
+
+
+def test_a_dotted_and_undotted_abbreviation_is_flagged():
+    r = find_inconsistencies(_paras(
+        "The U.S. delegation arrived first, ahead of the U.S. press corps.",
+        "Later the US ambassador spoke about the treaty and its terms."))
+    g = _abbrevs(r)["us"]
+    assert g.dominant == "U.S." and g.has_majority
+    assert dict(g.counts) == {"U.S.": 2, "US": 1}
+
+
+def test_a_pronoun_and_a_verb_never_join_an_abbreviation_group():
+    """'us' and 'am' are lowercase, so they cannot be pulled into the U.S. and
+    a.m. groups — the guard is structural, not a word list."""
+    r = find_inconsistencies(_paras(
+        "Give the report to us before nine. I am certain it matters to us.",
+        "The meeting is at 9 a.m., and the second one runs to 5 p.m. sharp."))
+    assert _abbrevs(r) == {}
+
+
+def test_spaced_personal_initials_are_not_an_abbreviation():
+    r = find_inconsistencies(_paras(
+        "J. R. R. Tolkien wrote it slowly, over years, in his spare hours.",
+        "J. R. R. Tolkien revised it again before he would let anyone read."))
+    assert _abbrevs(r) == {}
+
+
+def test_a_heading_in_capitals_is_not_abbreviation_drift():
+    paras = [ParagraphRef("body-0000", "word/document.xml", "body",
+                          "THE US TREATY", "Heading1"),
+             ParagraphRef("body-0001", "word/document.xml", "body",
+                          "The U.S. team signed the U.S. treaty that spring.",
+                          "Normal")]
+    assert _abbrevs(find_inconsistencies(paras)) == {}
+
+
+def test_one_abbreviation_style_alone_is_silent():
+    r = find_inconsistencies(_paras(
+        "The US team won the US title and then the US crowd went home.",
+        "The US press said little about the US victory the next morning."))
+    assert r.abbreviations == ()
+
+
+# --- mechanical scans: acronym case -------------------------------------------
+
+def _cases(report):
+    return {g.key: g for g in report.casings}
+
+
+def test_an_acronym_set_two_ways_is_flagged():
+    r = find_inconsistencies(_paras(
+        "NASA announced the mission. NASA had waited years for the window.",
+        "Later Nasa confirmed the crew and the launch date to the reporters."),
+        dictionary="en_US")
+    g = _cases(r)["nasa"]
+    assert g.dominant == "NASA" and g.has_majority
+    assert dict(g.counts) == {"NASA": 2, "Nasa": 1}
+
+
+def test_an_ordinary_word_is_not_acronym_drift():
+    """AIDS the initialism and 'aids' the verb share letters; because 'aids' is
+    a dictionary word the scan leaves the whole key alone."""
+    r = find_inconsistencies(_paras(
+        "The AIDS ward was full that winter and the AIDS clinic overflowed.",
+        "A good map aids the traveler. Aids to navigation lined the channel."),
+        dictionary="en_US")
+    assert "aids" not in _cases(r)
+
+
+def test_a_protected_name_shouted_in_caps_is_not_acronym_drift():
+    """A character whose name the spell scan protects can be shouted in dialogue
+    ("VORREN!") without the caps reading as drift from the ordinary spelling."""
+    r = find_inconsistencies(_paras(
+        "“VORREN!” she screamed across the yard as the roof began to fall.",
+        "“VORREN!” came the cry again, closer now, from somewhere in the smoke.",
+        "Vorren turned at the sound of his name and could not find her face."),
+        dictionary="en_US", protected=["Vorren"])
+    assert "vorren" not in _cases(r)
+    # …and without the protection it would be raised, so the guard is doing work.
+    r2 = find_inconsistencies(_paras(
+        "“VORREN!” she screamed across the yard as the roof began to fall.",
+        "“VORREN!” came the cry again, closer now, from somewhere in the smoke.",
+        "Vorren turned at the sound of his name and could not find her face."),
+        dictionary="en_US")
+    assert "vorren" in _cases(r2)
+
+
+def test_acronym_case_declines_without_a_dictionary():
+    r = find_inconsistencies(_paras(
+        "NASA announced the mission. NASA had waited years for the window.",
+        "Later Nasa confirmed the crew and the launch date to the reporters."),
+        dictionary="nonexistent_variant_xx")
+    assert r.casings == ()
+
+
+def test_only_all_caps_with_no_word_form_is_silent():
+    r = find_inconsistencies(_paras(
+        "NASA announced the mission. NASA had waited years for the window.",
+        "NASA confirmed the crew and the launch date later to the reporters."),
+        dictionary="en_US")
+    assert r.casings == ()
+
+
+# --- cross-cutting ------------------------------------------------------------
+
+_MIXED = (
+    "The colour of the U.S. flag, NASA said, was true. He walked toward it.",
+    "She painted the color of the sky and turned towards the grey US shore.",
+    "Later Nasa spoke to the US press. NASA denied the gray of the smoke.")
+
+
+def test_every_mechanical_finding_is_a_query():
+    paras = _paras(*_MIXED)
+    r = find_inconsistencies(paras, dictionary="en_US")
+    mech = [f for f in to_findings(r, paras)
+            if f.para_id and f.finding_id.startswith("c-")]
+    assert mech
+    for f in mech:
+        assert f.corrected_text == f.original_text
+
+
+def test_finding_ids_are_unique_across_all_kinds():
+    paras = _paras(*_MIXED)
+    r = find_inconsistencies(paras, dictionary="en_US")
+    ids = [f.finding_id for f in to_findings(r, paras)]
+    assert len(ids) == len(set(ids))
+
+
+def test_the_scan_is_deterministic():
+    paras = _paras(*_MIXED)
+    a = [f.explanation for f in to_findings(
+        find_inconsistencies(paras, dictionary="en_US"), paras)]
+    b = [f.explanation for f in to_findings(
+        find_inconsistencies(paras, dictionary="en_US"), paras)]
+    assert a == b and len(a) >= 4
+
+
+def test_the_mixed_sample_exercises_all_three_scans():
+    r = find_inconsistencies(_paras(*_MIXED), dictionary="en_US")
+    assert r.variants and r.abbreviations and r.casings
+
+
+def test_the_per_kind_cap_bounds_the_output():
+    # Two clusters, cap of one: only one spelling-variant query survives, and
+    # the drop is logged, never silent.
+    paras = _paras(
+        "The colour and the flavour were both wrong that evening at dinner.",
+        "The color and the flavor were right the next day when she tried.")
+    r = find_inconsistencies(paras, max_queries_per_kind=1)
+    assert len(r.variants) == 1
+
+
+def test_flagged_counts_mechanical_groups():
+    paras = _paras(*_MIXED)
+    r = find_inconsistencies(paras, dictionary="en_US")
+    assert r.flagged == (
+        sum(len(t.outliers) for t in r.terms)
+        + sum(len(n.outliers) for n in r.names if not n.enforce)
+        + len(r.variants) + len(r.abbreviations) + len(r.casings))
+
+
+def test_the_shipped_config_enables_the_mechanical_scans():
+    cfg = load_config("config/default.yaml")
+    assert cfg.consistency.spelling_variants
+    assert cfg.consistency.abbreviations
+    assert cfg.consistency.acronym_case
+    assert cfg.consistency.chicago_notes
+    assert cfg.consistency.max_queries_per_kind == 40
+    assert Config().consistency.spelling_variants

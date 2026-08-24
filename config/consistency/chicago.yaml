@@ -1,0 +1,44 @@
+# Preference notes the consistency engine adds to a spelling-variant query, so a
+# reader deciding which spelling to keep sees what Chicago/Merriam-Webster favor.
+# This is PHRASING ONLY: the engine never enforces a preference — which spelling a
+# book uses is the author's to settle, and the query always recommends the form
+# the book itself uses most. The note is appended after that, as context.
+#
+# `classes` cover the regular British/American families; the engine recognizes
+# which family a cluster belongs to from its two spellings (see
+# docproof/consistency.py::_variant_class). `forms` override or add a note for a
+# specific American spelling — used for the one-off pairs no family rule covers.
+# A press proofreading in British English can blank these or turn the notes off
+# entirely with `consistency.chicago_notes: false`.
+
+classes:
+  our:  "Merriam-Webster prefers the -or spelling (color, honor); -our is chiefly British."
+  ize:  "Merriam-Webster prefers the -ize spelling (organize); -ise is chiefly British."
+  yze:  "Merriam-Webster prefers the -yze spelling (analyze); -yse is chiefly British."
+  re:   "Merriam-Webster prefers the -er ending (center, fiber); -re is chiefly British."
+  ce:   "Merriam-Webster prefers the -se spelling (defense); -ce is chiefly British."
+  ogue: "Merriam-Webster lists the short -og form (catalog); -ogue is also standard."
+  ll:   "Merriam-Webster prefers a single l before a suffix (traveled); British doubles it."
+
+forms:
+  toward: "Chicago and Merriam-Webster give 'toward'; 'towards' is chiefly British."
+  forward: "'forward' is the usual American form; 'forwards' is chiefly British."
+  backward: "'backward' is the usual American form; 'backwards' is chiefly British."
+  upward: "'upward' is the usual American form; 'upwards' is chiefly British."
+  downward: "'downward' is the usual American form; 'downwards' is chiefly British."
+  afterward: "'afterward' is the usual American form; 'afterwards' is chiefly British."
+  inward: "'inward' is the usual American form; 'inwards' is chiefly British."
+  outward: "'outward' is the usual American form; 'outwards' is chiefly British."
+  among: "Merriam-Webster gives 'among'; 'amongst' is chiefly British."
+  amid: "Merriam-Webster gives 'amid'; 'amidst' is chiefly British."
+  while: "In American usage 'while' is standard; 'whilst' is chiefly British."
+  gray: "Merriam-Webster gives 'gray' as American, 'grey' as chiefly British."
+  aluminum: "'aluminum' is the American spelling; 'aluminium' is British/IUPAC."
+  sulfur: "Merriam-Webster and the ACS prefer 'sulfur'; 'sulphur' is chiefly British."
+  skeptic: "Merriam-Webster gives 'skeptic'; 'sceptic' is chiefly British."
+  donut: "'doughnut' is the traditional spelling; 'donut' is an accepted American variant."
+  airplane: "'airplane' is American; 'aeroplane' is chiefly British."
+  mustache: "Merriam-Webster gives 'mustache'; 'moustache' is chiefly British."
+  pajamas: "'pajamas' is American; 'pyjamas' is British."
+  omelet: "Merriam-Webster gives 'omelet'; 'omelette' is the French/British form."
+  yogurt: "'yogurt' is the usual American spelling; 'yoghurt' is chiefly British."

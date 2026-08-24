@@ -95,6 +95,8 @@ include = ["docproof*", "app*", "config*"]
 app = ["static/*"]
 config = ["*.yaml"]
 "config.error_types" = ["*.yaml"]
+# The consistency engine's spelling-variant table and Chicago preference notes.
+"config.consistency" = ["*.tsv", "*.yaml"]
 "config.prep" = ["*.yaml", "*.idml", "*.jsx"]
 # The book-output fonts, embedded into book_*.docx files at write time.
 "config.prep.fonts" = ["*.ttf", "README.md"]
