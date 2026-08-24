@@ -114,6 +114,17 @@ class Finding:
     # the document by default while the change log still records it. Inert for a
     # finding that reaches the margin any other way.
     withheld: bool = False
+    # The repair channel's atomicity tag. A broken sentence is repaired as a
+    # *cluster* of co-dependent atomic edits (insert a missing word, a period to
+    # a colon, a run of commas) that are right only together — half of them
+    # applied leaves a sentence more broken than it was. Every member of one
+    # repair carries the same non-empty cluster_id, and `enforce_cluster_atomicity`
+    # (docproof/repair.py) runs after the judge gates: if any member did not
+    # survive as a clean tracked change, every other member is withdrawn to the
+    # margin with it, so the run never ships a partial repair. Empty for every
+    # finding outside the repair channel, which is all of them today — the field
+    # is inert until repair.enabled. See docproof/repair.py and docs/repair.md.
+    cluster_id: str = ""
 
 
 @dataclass(frozen=True)

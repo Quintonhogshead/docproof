@@ -50,6 +50,12 @@ class RewriteCandidate:
     note: str | None = None  # a ready-made margin explanation, if the proposing
                              # source has a better one than the generic default
                              # (Sapling's describe() line); None uses _explanation
+    # The repair channel tags every member of one sentence's repair with a shared
+    # non-empty cluster_id so the members stay atomic downstream (see
+    # docproof/repair.py and Finding.cluster_id). Empty for the single-edit
+    # sources that share this candidate type (rewrite, LanguageTool, Sapling,
+    # chapter sweep), whose diffs are independent, not co-dependent.
+    cluster_id: str = ""
 
 
 # --- propose: rewrite each paragraph, diff against the source ------------------

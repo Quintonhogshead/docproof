@@ -75,7 +75,8 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
                       query_types: frozenset[str] = frozenset(),
                       format_types: dict[str, str] | None = None,
-                      edit_guard=None) -> list[Finding]:
+                      edit_guard=None,
+                      guard_exempt: frozenset[str] = frozenset()) -> list[Finding]:
     """Anchor every finding, and decide which channel it goes down.
 
     `query_types` are error types that ask rather than correct. They skip the
@@ -94,7 +95,15 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     not proofreading, and is rejected before it can become a tracked change. It
     applies only to the shrink-to-a-diff path — a query or a formatting mark is
     not an edit — and never trips a sweep, whose changes are punctuation-sized.
-    None disables it, which is the default so a bare call stays unguarded."""
+    None disables it, which is the default so a bare call stays unguarded.
+
+    `guard_exempt` names error types the edit guard does not apply to. The one
+    caller is the repair channel: a sentence repair legitimately inserts a
+    dropped clause or word that the 16-char growth cap would refuse as
+    fabrication, and its fabrication defence is elsewhere — the cluster judge
+    ruled the whole sentence meaning-preserved before any member reached here.
+    The guard still runs on every other source, so exempting repair does not
+    loosen the net for the model's own token edits. Empty by default."""
     format_types = format_types or {}
     paras = index_paragraphs(doc)
     threshold = CONFIDENCE_RANK[min_confidence]
@@ -201,8 +210,9 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
         # can reach the manuscript. Checked ahead of the confidence gate so an
         # over-large edit is never merely "skipped, low confidence" — it is
         # refused outright, and counted.
-        if edit_guard is not None and edit_guard.enabled and _oversteps(
-                deleted, inserted, edit_guard):
+        if (edit_guard is not None and edit_guard.enabled
+                and f.error_type not in guard_exempt
+                and _oversteps(deleted, inserted, edit_guard)):
             out.append(_status(f, "rejected_oversized", anchor))
             log.warning("%s (%s): rejected as an over-large edit — deletes %d, "
                         "inserts %d chars, not a minimal proofreading fix",

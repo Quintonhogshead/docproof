@@ -113,6 +113,7 @@ STAGE_STATE = {
     "sapling": "Running the Sapling grammar check",
     "low_confidence": "Second look at the softer catches",
     "smoothing": "Reading for line-editing suggestions",
+    "repair": "Repairing broken sentences",
     "chapter_continuity": "Reading each chapter for continuity",
     "meaning_check": "Checking every change keeps your meaning",
     "fix_check": "Checking every fix is the right fix",
@@ -204,6 +205,7 @@ def _free_finish(cfg: Config) -> None:
     cfg.fix_check.enabled = False           # the fix check's judge
     cfg.sapling.enabled = False             # per-character bill + confirm valve
     cfg.smoothing.enabled = False           # a whole-book read plus a judge
+    cfg.repair.enabled = False              # a whole-book read plus a judge
     cfg.chapter_continuity.enabled = False  # per-chapter read plus a judge
     cfg.low_confidence.confirm = False      # the below-gate promotion valve
     cfg.ensemble.verifier_model = None      # the overseer-verifier
@@ -1006,8 +1008,8 @@ class JobRunner:
             cfg.sweeps = []
             cfg.candidate_screening.mode = "off"
             for _pass in ("glossary", "adjudicate", "rewrite", "languagetool",
-                          "sapling", "smoothing", "consistency", "spellcheck",
-                          "meaning_check", "fix_check"):
+                          "sapling", "smoothing", "repair", "consistency",
+                          "spellcheck", "meaning_check", "fix_check"):
                 getattr(cfg, _pass).enabled = False
             cfg.examination_graph.judgment.enabled = False
             cfg.continuity.enabled = True
