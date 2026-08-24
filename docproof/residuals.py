@@ -236,6 +236,13 @@ def residual_queries(paragraphs: Sequence[ParagraphRef],
     for para in paragraphs:
         if not para.reviewable:
             continue
+        # Page furniture — running heads and folios — is typesetting, not prose:
+        # a page-number "2" in a footer is not a spelled-out-numbers site, and
+        # querying it ends the run on a comment no author can act on. Headings
+        # are already excluded (they are swept-only, so not reviewable); header
+        # and footer paragraphs are reviewable but must be held to the same rule.
+        if para.location in ("header", "footer"):
+            continue
         spans = touched.get(para.para_id, ())
         for rule in _RULES:
             for start, end, why, replacement in rule.sites(para.text):

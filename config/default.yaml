@@ -688,6 +688,9 @@ sweeps:
   - sweep_terminal_period
   - sweep_quote_punctuation   # . and , inside a closing double quote (US)
   - sweep_nested_quote        # doubles inside dialogue demote to singles
+  - sweep_time_of_day         # 3:40AM -> 3:40 a.m.
+  - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
+  - sweep_dialogue_splice     # comma splices around a dialogue tag
 
 # After every gate has settled which edits stand, re-scan the reviewed text
 # for number-rule trigger sites no edit touched — bare numerals to one
