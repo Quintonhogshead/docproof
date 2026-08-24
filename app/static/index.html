@@ -145,6 +145,12 @@
             file (IDML) and a marked-up proof (PDF or redlined Word), apply the
             corrections exactly, and check nothing else moved</span>
         </label>
+        <label class="radio">
+          <input type="radio" name="kind" value="galley">
+          <span><strong>Galley proofread</strong> — a practitioner agent works
+            one manuscript in waves against a dollar budget, keeping its own
+            case file; lands in the Galley tab</span>
+        </label>
         <p id="kind-warning" class="muted small" hidden></p>
       </fieldset>
 
@@ -722,6 +728,28 @@ The name on the Acknowledgments page is Ellen, not Elen."></textarea>
                 deterministic — no model, no cost.</small>
             </label>
           </details>
+        </fieldset>
+
+        <fieldset class="field" id="galley-options" hidden>
+          <legend>How far should the galley agent go?</legend>
+          <label class="field">
+            <span>Tier</span>
+            <select id="galley-tier">
+              <option value="T0">T0 — quickest, tightest budget</option>
+              <option value="T1">T1</option>
+              <option value="T2" selected>T2 — the house default</option>
+              <option value="T3">T3</option>
+              <option value="T4">T4 — most thorough</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Budget (USD)</span>
+            <input id="galley-budget" type="number" min="0" step="1"
+                   placeholder="tier default">
+            <small class="muted">Left blank, the tier picks its own budget. The
+              agent allocates this across its waves and stops when it runs
+              out.</small>
+          </label>
         </fieldset>
 
         <fieldset class="field review-only">

@@ -21,7 +21,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from docproof.config import Config
+from docproof.config import Config, DetectorSpec
+
+# The detector line-up the ensemble switch turns on: a diverse two-model fan-out
+# (the default reviewer plus a second vendor), so agreement/union is across real
+# diversity rather than one model sampled twice. Off writes back an empty list,
+# which is single-detector mode. The verifier that adjudicates their findings is
+# ensemble.verifier_model in default.yaml, and only runs while this is non-empty.
+_ENSEMBLE_DETECTORS = [
+    DetectorSpec(model="claude-haiku-4-5", effort="low"),
+    DetectorSpec(model="gpt-5.6-luna", effort="low"),
+]
 
 
 def _get(cfg: Config, path: tuple[str, ...]):
@@ -302,6 +312,16 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "the manuscript.",
         "safety", ("examination_graph", "judgment", "enabled"),
         heavy=True, admin_only=True),
+    FeatureSpec(
+        "ensemble", "Ensemble review — diverse detectors + verifier",
+        "Two detectors of different vendors review every chunk; their findings "
+        "are merged by agreement (union, for recall), then a stronger verifier "
+        "adjudicates the disputed ones before anything reaches the author (for "
+        "precision). Each detector is the whole review over again, so this "
+        "multiplies the review's cost — the estimate does not include it. "
+        "Administrators only.",
+        "pass", ("ensemble", "detectors"), heavy=True, admin_only=True,
+        on_value=_ENSEMBLE_DETECTORS, off_value=[]),
 )
 
 FEATURES_BY_ID: dict[str, FeatureSpec] = {f.id: f for f in FEATURES}

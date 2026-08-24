@@ -141,6 +141,7 @@ const prepOutput = () =>
 const isPrep = () => kind() === 'prep';
 const isPromo = () => kind() === 'promo';
 const isCorrections = () => kind() === 'corrections';
+const isGalley = () => kind() === 'galley';
 
 document.querySelectorAll('input[name="kind"]').forEach((r) =>
   r.addEventListener('change', () => { renderFiles(); renderKind(); }));
@@ -660,11 +661,12 @@ function renderKind() {
   const prep = isPrep();
   const promo = isPromo();
   const corrections = isCorrections();
+  const galley = isGalley();
   // Review's options (confidence, sections, batch schedule) belong only to a
-  // review; prep's output options belong only to prep; corrections has its own
-  // panel and no model at all.
+  // review; prep's output options belong only to prep; corrections and galley
+  // each have their own panel and pick their own models.
   document.querySelectorAll('.review-only').forEach((el) => {
-    el.hidden = prep || promo || corrections;
+    el.hidden = prep || promo || corrections || galley;
   });
   // Two review-only fields have a second condition on top of the kind — the
   // between-round judge needs 2+ rounds, the meaning gate needs its switch on —
@@ -675,6 +677,8 @@ function renderKind() {
   $('prep-options').hidden = !prep;
   const corr = $('corrections-options');
   if (corr) corr.hidden = !corrections;
+  const gal = $('galley-options');
+  if (gal) gal.hidden = !galley;
   renderBookOptions();
   $('prep-cost').hidden = !prep;
   $('promo-cost').hidden = !promo;
@@ -692,11 +696,13 @@ function renderKind() {
   // match.
   $('start').textContent = promo ? 'Write promo copy'
     : prep ? 'Format the manuscript'
+    : galley ? 'Start galley proofread'
     : corrections ? (state.correctionsReading ? 'Reading corrections…'
       : corrNeedsRead ? 'Read corrections & apply' : 'Apply corrections')
     : 'Start review';
   $('staged-title').textContent = promo ? 'Ready to write copy'
     : prep ? 'Ready to prepare'
+    : galley ? 'Ready to proofread'
     : corrections ? 'Ready to correct' : 'Ready to review';
   document.querySelectorAll('details.sections').forEach((el) => {
     el.hidden = prep || promo || corrections;   // all read the whole document
@@ -3250,12 +3256,19 @@ $('start').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          // Corrections run one InDesign file at a time — a list is specific to
-          // its book — so only the first goes even if several are staged.
-          file_ids: (isCorrections()
+          // Corrections and galley each run one manuscript at a time — the list
+          // or the budget is specific to its book — so only the first goes even
+          // if several are staged.
+          file_ids: (isCorrections() || isGalley()
             ? filesToRun().slice(0, 1) : filesToRun()).map((f) => f.id),
           model: $('model').value,
           kind: kind(),
+          // Galley only: the practitioner tier and the dollar budget (blank =>
+          // the tier's own default). Ignored on every other kind.
+          tier: isGalley() ? ($('galley-tier') || {}).value || 'T2' : '',
+          budget_usd: (isGalley()
+            && (($('galley-budget') || {}).value || '').trim() !== '')
+            ? Number($('galley-budget').value) : null,
           corrections: isCorrections()
             ? (($('corrections-input') || {}).value || '') : '',
           // The reviewer comments the edits were read from (a marked-up PDF), so
@@ -3281,9 +3294,9 @@ $('start').addEventListener('click', async () => {
           prep_subject: isPrep() ? ($('prep-subject') || {}).value || '' : '',
           prep_title: isPrep() ? ($('prep-title') || {}).value.trim() : '',
           prep_author: isPrep() ? ($('prep-author') || {}).value.trim() : '',
-          mode: (isPrep() || isCorrections()) ? 'now' : mode(),
-          schedule_at: (!isPrep() && !isCorrections() && mode() === 'batch'
-                        && $('schedule-on').checked)
+          mode: (isPrep() || isCorrections() || isGalley()) ? 'now' : mode(),
+          schedule_at: (!isPrep() && !isCorrections() && !isGalley()
+                        && mode() === 'batch' && $('schedule-on').checked)
             ? $('schedule-at').value : null,
           min_confidence: $('confidence').value,
           // A profile is a review-only concept, and the server refuses one on any
