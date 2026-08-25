@@ -2348,7 +2348,17 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # clean tracked change, the rest are withdrawn to the margin with it, so the
     # run never writes half a broken-sentence repair. Uses the same span-
     # preserving to_query the gates use, so nothing else in the run moves.
-    if cfg.repair.enabled and prepared.whole_document:
+    #
+    # Gated on `cfg.repair.enabled` OR a cluster_id actually present in
+    # `validated` — not on repair alone — because a cluster can arrive here
+    # without this run's OWN repair channel ever having fired: the merge desk
+    # (docproof/mergedesk.py) carries clusters over from an earlier run's
+    # findings and relies on this same enforcement to keep them atomic through
+    # a fresh, $0 arbitration where repair.enabled is off. The `any()` is a
+    # single pass over an already-in-memory list, so an ordinary run without
+    # clusters pays nothing extra for the check.
+    if (cfg.repair.enabled or any(f.cluster_id for f in validated)) \
+            and prepared.whole_document:
         from .repair import enforce_cluster_atomicity
         enforce_cluster_atomicity(validated, prepared.doc)
     # Residual coverage, after every gate has settled what is actually being

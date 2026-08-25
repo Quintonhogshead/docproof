@@ -1685,6 +1685,17 @@ class Config(BaseModel):
     # house brief insists on — what this pass did not cover.
     change_log: bool = True
     revision_author: str = "Atmosphere Press Proofreader"
+    # The merge desk's per-lane author override (docproof/mergedesk.py,
+    # Finding.lane): a finding whose lane has an entry here is attributed to
+    # that name instead of `revision_author` when its tracked change or
+    # comment is written, so a merged deliverable can carry two authors —
+    # Word's "Show Markup > Specific People" then filters one lane from the
+    # other. A lane with no entry (including "", every finding outside a
+    # merged run) falls back to `revision_author` unchanged, so a run that
+    # never tags a lane writes byte-identical output to before this existed.
+    lane_authors: dict[str, str] = Field(default_factory=lambda: {
+        "copyedit": "Atmosphere Press Copy Editor",
+    })
     # Ask the model to justify each finding. The explanations become Word
     # margin comments, but they are also the bulk of the output tokens — and
     # output bills at roughly 5x input. Turn this off for a cheaper pass that
