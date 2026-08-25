@@ -63,10 +63,11 @@ def test_shipped_preset_applies_cleanly_to_a_loaded_config(genre):
     cfg = load_config(CONFIG)
     cfg, pending = apply_genre(cfg, genre)
     assert isinstance(cfg, Config)
-    # flights.posture is the one forward-referenced key every preset sets;
-    # this Config build has no `flights` section yet, so it always defers.
-    assert pending == {"flights.posture": pending.get("flights.posture")}
-    assert pending["flights.posture"] in ("strict", "lenient")
+    # flights.posture applies for real now that the flights lane's config
+    # section exists — nothing defers, and the judge posture lands where
+    # `docproof galley flights` reads its default from.
+    assert pending == {}
+    assert cfg.flights.posture in ("strict", "lenient")
 
 
 def test_apply_genre_none_is_a_noop():
@@ -163,7 +164,10 @@ def test_materialize_genre_pack_applies_overlay_and_continuity_prompt():
     assert cfg.consistency.name_dominance == 10
     assert "world rule" in cfg.continuity.prompt
     assert summary["genre"] == "fantasy_sf"
-    assert summary["pending"] == {"flights.posture": "lenient"}
+    # The flights section exists now, so the posture applies instead of
+    # deferring into pending.
+    assert summary["pending"] == {}
+    assert cfg.flights.posture == "lenient"
     assert "continuity_prompt" in summary
 
 

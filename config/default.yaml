@@ -216,6 +216,13 @@ genre_scans:
     min_words: 40            # a paragraph shorter than this has no real signal
     max_queries: 40
 
+# The copy-edit flights lane (docproof/flights.py; `docproof galley flights`).
+# posture is the judge's default stance — the measured 24%<->57% accepted-recall
+# dial. Genre posture presets (config/genres/*.yaml) set it per manuscript;
+# the --posture flag overrides it per run.
+flights:
+  posture: strict            # strict | lenient
+
 # The whole-book story sheet: one read that gives the detector passes the
 # narrative facts a per-paragraph check cannot know — who narrates, in what
 # person and tense, and each character's pronouns — injected into every

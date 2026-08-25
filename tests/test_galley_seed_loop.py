@@ -102,7 +102,14 @@ def test_seed_review_score_loop_catches_every_planted_error(tmp_path):
     # existing converter from a findings.json to that shape.
     from galley.adapters.docproof_ladder import gfindings_from_json
     gfindings, dropped = gfindings_from_json(findings_json, wave=1, model="mock")
-    assert dropped == 0
+    # The converter keeps only status=="validated" rows (non-applied rows —
+    # a rejected duplicate, a query — carry an Anchor but no real fix), so a
+    # sweep-vs-model duplicate legitimately drops here. What matters is that
+    # every VALIDATED row converted: drops never exceed the non-validated
+    # row count, and recall below still has to come out at 100%.
+    non_validated = sum(1 for f in payload["findings"]
+                        if f["status"] != "validated")
+    assert dropped <= non_validated
     gfindings_path = tmp_path / "gfindings.json"
     gfindings_path.write_text(
         json.dumps({"findings": [g.to_json() for g in gfindings]}),

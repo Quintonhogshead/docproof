@@ -1164,6 +1164,17 @@ class ReadingLevelScanConfig(BaseModel):
     max_queries: int = Field(default=40, ge=1)
 
 
+class FlightsConfig(BaseModel):
+    """The copy-edit flights lane (docproof/flights.py).
+
+    ``posture`` is the judge's default stance — the measured 24%↔57%
+    accepted-recall dial. "strict" defaults to keeping the original;
+    "lenient" leans toward accepting (same hard vetoes either way). Genre
+    posture presets set this per manuscript (config/genres/*.yaml); the
+    ``docproof galley flights --posture`` flag overrides it per run."""
+    posture: Literal["strict", "lenient"] = "strict"
+
+
 class GenreScansConfig(BaseModel):
     """Three opt-in, deterministic (or wordfreq-only), whole-document QUERY-
     ONLY scans a genre pack may turn on — see docproof/genrescans.py and
@@ -1690,6 +1701,7 @@ class Config(BaseModel):
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
     genre_scans: GenreScansConfig = Field(default_factory=GenreScansConfig)
+    flights: FlightsConfig = Field(default_factory=FlightsConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
     recurrence: RecurrenceConfig = Field(default_factory=RecurrenceConfig)
     examination_graph: ExaminationGraphConfig = Field(

@@ -498,7 +498,7 @@ def _galley_parser(sub) -> None:
                     help="the judge — one call per cluster, ~90%% of the "
                          "lane's cost (default: claude-fable-5)")
     gf.add_argument(
-        "--posture", choices=["strict", "lenient"], default="strict",
+        "--posture", choices=["strict", "lenient"], default=None,
         help="strict defaults to keeping the original (measured ~24%% of "
              "proposals accepted); lenient leans toward accepting (~57%%). "
              "Same proposals, same hard vetoes (voice/meaning/fragment/"
@@ -2140,6 +2140,10 @@ def _galley_flights(args) -> int:
     cfg = load_config(args.config)
     if getattr(args, "variant", None):
         cfg.variant = args.variant
+    # Posture: the flag wins when given; otherwise the config's flights
+    # section — which is where a genre posture preset lands it.
+    if args.posture is None:
+        args.posture = cfg.flights.posture
     out = Path(args.out) if args.out else Path(cfg.output_dir)
     usage = Usage()
     models = [m.strip() for m in args.models.split(",") if m.strip()]
