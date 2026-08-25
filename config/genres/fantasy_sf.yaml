@@ -1,0 +1,51 @@
+# Posture preset: fantasy / science fiction.
+#
+# Protective and world-aware: wide stylistic latitude for smoothing, but its
+# affirmations stay margin QUESTIONS (edits: false) rather than tracked
+# changes — a coined idiom or a deliberately strange sentence rhythm is common
+# in genre prose and is exactly what an automatic "fix" would damage. The
+# rewrite pass (a strong retype-and-diff recall lever) is off entirely: it is
+# the pass most likely to quietly "correct" a coined word into a real one.
+# Consistency's name-spelling bar is raised well above the house default, so
+# an invented name is never silently corrected toward a wrong dominant
+# spelling on thin evidence — a large invented cast means more spellings in
+# play, and the cost of a wrong silent correction (renaming a character) is
+# high.
+#
+# Pair with `docproof galley profile MANUSCRIPT --out profile.json` and then
+# `docproof galley genre-pack fantasy_sf --profile profile.json` to seed the
+# cast list this preset alone cannot know about.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: fantasy_sf
+description: >
+  Protective, world-aware posture: wide stylistic latitude for smoothing (it
+  only ever asks — edits stay off), the rewrite recall lever off entirely, and
+  the consistency scan's name-spelling bar raised well above the house
+  default so a coined name is never silently corrected. Pairs with a
+  `docproof galley profile` run to seed the cast list.
+
+overlay:
+  flights.posture: lenient
+  smoothing.enabled: true
+  smoothing.edits: false
+  smoothing.judge_harshness: lenient
+  smoothing.proposer_restraint: open
+  smoothing.include_dialogue: false
+  smoothing.max_per_1000_words: 2.0
+  smoothing.min_confidence: medium
+  rewrite.enabled: false
+  consistency.name_dominance: 10
+  consistency.name_min_count: 40
+
+# Genre-pack-only addition (see self_help_business.yaml's comment on why this
+# sits outside `overlay`): the whole-book continuity read gets a prompt that
+# adds a "world rule" contradiction category (a magic system or invented
+# technology's own stated rules broken later) on top of the built-in
+# timeline/age/attribute/object categories, and explicitly tells the reader
+# never to flag an unfamiliar coined term as an error. Path is relative to
+# this file's own directory. Only takes effect where continuity.enabled is
+# also turned on (this preset does not turn it on by itself — continuity is a
+# cost/opt-in decision, not a stylistic-posture one).
+continuity_prompt: prompts/fantasy_continuity.md

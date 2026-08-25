@@ -27,6 +27,7 @@ sees from a document filtered to the scoped ids alone.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import itertools
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,7 +167,13 @@ class SinglePassAdapter:
         dropped = 0
         seen: set[tuple] = set()
         for f in validated:
-            if f.anchor is None:
+            # Only a finding the validator both anchored AND kept as a tracked
+            # change is a real correction — a "query" or "skipped_low_confidence"
+            # finding carries an Anchor too (every channel gets one) but its
+            # insert_text is not a fix (a query's is always empty), and would
+            # hand the case file a fabricated deletion if converted. See
+            # docproof_ladder.gfindings_from_json's matching guard.
+            if f.anchor is None or f.status != "validated":
                 dropped += 1
                 continue
             key = (f.para_id, f.anchor.start, f.anchor.end, f.error_type,
@@ -176,8 +183,16 @@ class SinglePassAdapter:
                 # by identity so a second read adds only what it uniquely caught.
                 continue
             seen.add(key)
+            # Content-derived id: the orchestrator unions findings across waves
+            # by id alone, and the run-local "f-NNNN" counter restarts every
+            # call, so wave 3's "f-0007" would silently swallow wave 2's. A
+            # hash of the edit's identity makes a genuine cross-wave re-find
+            # dedupe and keeps distinct findings from ever colliding.
+            digest = hashlib.sha1(
+                "\x00".join(str(part) for part in key).encode("utf-8")
+            ).hexdigest()[:10]
             gfindings.append(GFinding(
-                id=f.finding_id,
+                id=f"sp-{digest}",
                 error_type=f.error_type,
                 span=Span(f.para_id, f.anchor.start, f.anchor.end),
                 find=f.anchor.delete_text,

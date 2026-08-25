@@ -35,6 +35,9 @@ SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 # so a Gmail "subject contains" filter has a stable string to match.
 ALERT_TAGS = "[DocProof][High][Action]"
 DONE_TAGS = "[DocProof][Low][Done]"
+# Galley's escalation channel: the practitioner has a question only a person
+# can answer, and the blocked work is waiting on the reply.
+QUESTION_TAGS = "[DocProof][Galley][Question]"
 
 DRIVE_FILE = "https://drive.google.com/file/d/{}/view"
 DRIVE_FOLDER = "https://drive.google.com/drive/folders/{}"
@@ -602,6 +605,43 @@ class GalleyEmailTransport:
         except Exception:                     # noqa: BLE001 - an alert must not sink the run
             log.warning("Galley %s alert failed to send: %s", kind, subject,
                         exc_info=True)
+
+
+def send_question(watch_home, subject: str, body: str, *, book: str = "",
+                  get_key=None, opener=drive._open_url) -> str:
+    """Push one Galley escalation question to the configured notify address.
+
+    The practitioner's channel for a question only a person can answer — an
+    intent-zone judgment, a spend past the plan, a knob that doesn't exist.
+    Returns the address it went to. LOUD on purpose, unlike the completion
+    mail: raises `ValueError` for a setup gap and `DriveError` for a refused
+    send, because the caller must KNOW the question did not go out and fall
+    back to logging it and stopping — a silently dropped question would leave
+    Galley waiting on a reply that can never come."""
+    from app.settings import get_api_key
+
+    from .settings import GOOGLE_KEY, WatchSettings
+
+    ws = WatchSettings.load(watch_home)
+    if not ws.notify_email:
+        raise ValueError("No notify address is set. Add one with "
+                         "`docproof-watch init --notify-email you@example.com`, "
+                         "then try again.")
+    if not (ws.client_id and ws.client_secret):
+        raise ValueError("Google sign-in is not set up yet.")
+    refresh = (get_key or get_api_key)(GOOGLE_KEY)
+    if not refresh:
+        raise ValueError("DocProof is not signed in to Google.")
+    token = drive.refresh_access_token(ws.client_id, ws.client_secret, refresh,
+                                       opener=opener)
+    tag = f"{QUESTION_TAGS} {book} — " if book else f"{QUESTION_TAGS} "
+    full = (body.rstrip() +
+            "\n\n—\nGalley is waiting on this answer; the blocked work is "
+            "paused and the rest continues. Reply by editing QUESTIONS.md in "
+            "the book's workspace (or answering in the session).")
+    send(token, ws.notify_email, f"{tag}{subject}", full, opener=opener)
+    log.info("Emailed %s a Galley question: %s", ws.notify_email, subject)
+    return ws.notify_email
 
 
 def send_test(watch_home, *, get_key=None, opener=drive._open_url) -> str:

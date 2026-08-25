@@ -343,6 +343,16 @@ class ConsistencyConfig(BaseModel):
     # dialect-mixed manuscript cannot flood the query channel. The cap is logged
     # when it bites — coverage is never silently truncated.
     max_queries_per_kind: int = Field(default=40, ge=1)
+    # Proper nouns known ahead of the run — typically extracted by
+    # `docproof galley profile` from the manuscript's own capitalization
+    # pattern, or typed in by an editor who already knows the cast list. Fed
+    # into the three mechanical scans' `protected` set (pipeline.py) alongside
+    # the spell scan's own lexicon, so a coined name the spell scan has not
+    # independently earned yet (too rare, or only ever seen sentence-initial)
+    # is still shielded from being read as "one term written two ways." Never
+    # corrects anything by itself — protection only, same as `protected`
+    # everywhere else in this module. See docproof/genre.py.
+    seeded_names: list[str] = Field(default_factory=list)
 
 
 class AdjudicateConfig(BaseModel):
@@ -1103,6 +1113,82 @@ class FactcheckConfig(BaseModel):
     cache_dir: str | None = None
 
 
+class AnachronismScanConfig(BaseModel):
+    """Query-only: flags vocabulary that reads as later than the manuscript's
+    own stated era — the same external-authority risk factcheck carries, so
+    the same rule applies: every catch is a margin question, never an edit.
+    Deterministic (a curated word -> earliest-plausible-year table, sanity-
+    checked against wordfreq so a typo in the table cannot silently misfire),
+    no API call. See docproof/genrescans.py."""
+    enabled: bool = False
+    # The manuscript's own setting, as a year AD the vocabulary should
+    # predate. None means "not stated," and the scan is a deliberate no-op
+    # even when enabled — guessing the era and then flagging against the
+    # guess is exactly the hallucination risk this pass exists to avoid.
+    # `docproof galley profile` never fills this in on its own for the same
+    # reason; a human (or the genre-pack `--profile` flow, which still only
+    # carries forward a year the profile pass was explicitly told) sets it.
+    era: int | None = None
+    max_queries: int = Field(default=40, ge=1)
+
+
+class CitationFormatScanConfig(BaseModel):
+    """Query-only: deterministic regex families that catch two citation
+    styles mixed in one manuscript (parenthetical author-year beside numbered-
+    bracket). Non-fiction only — a novel has no citations to be inconsistent
+    about, so this stays off unless a genre pack turns it on. See
+    docproof/genrescans.py."""
+    enabled: bool = False
+    # Each style needs at least this many occurrences before it counts as "a
+    # style this book uses" rather than an isolated one-off match.
+    min_occurrences: int = Field(default=2, ge=1)
+    max_queries: int = Field(default=40, ge=1)
+
+
+class ReadingLevelScanConfig(BaseModel):
+    """Query-only: flags paragraphs whose reading level sits far outside the
+    book's own target band, scored with the Automated Readability Index (chars
+    per word, words per sentence — no syllable counter needed) plus the mean
+    word rarity of its content words (wordfreq's zipf scale, reused as-is from
+    docproof/adjudicate.py). Self-referential by default: with `target_ari`
+    unset, the band is centered on the manuscript's OWN median paragraph, so
+    the scan asks "is this paragraph unlike the rest of the book" rather than
+    imposing an outside notion of what the genre should read like. See
+    docproof/genrescans.py."""
+    enabled: bool = False
+    target_ari: float | None = None
+    tolerance: float = Field(default=6.0, gt=0)
+    # A paragraph shorter than this many words has too little signal for the
+    # formula to mean anything (a one-line scene break, a salutation).
+    min_words: int = Field(default=40, ge=1)
+    max_queries: int = Field(default=40, ge=1)
+
+
+class FlightsConfig(BaseModel):
+    """The copy-edit flights lane (docproof/flights.py).
+
+    ``posture`` is the judge's default stance — the measured 24%↔57%
+    accepted-recall dial. "strict" defaults to keeping the original;
+    "lenient" leans toward accepting (same hard vetoes either way). Genre
+    posture presets set this per manuscript (config/genres/*.yaml); the
+    ``docproof galley flights --posture`` flag overrides it per run."""
+    posture: Literal["strict", "lenient"] = "strict"
+
+
+class GenreScansConfig(BaseModel):
+    """Three opt-in, deterministic (or wordfreq-only), whole-document QUERY-
+    ONLY scans a genre pack may turn on — see docproof/genrescans.py and
+    docproof/genre.py. Off by default like every other added whole-book pass;
+    nothing here ever writes a tracked change, by construction (every finding
+    sets force_query)."""
+    anachronism: AnachronismScanConfig = Field(
+        default_factory=AnachronismScanConfig)
+    citation_format: CitationFormatScanConfig = Field(
+        default_factory=CitationFormatScanConfig)
+    reading_level: ReadingLevelScanConfig = Field(
+        default_factory=ReadingLevelScanConfig)
+
+
 class ResidualsConfig(BaseModel):
     """After validation, re-scan the reviewed text for number-rule trigger
     sites (bare numerals to one hundred, percent signs, digit ordinals) that
@@ -1614,6 +1700,8 @@ class Config(BaseModel):
     repair: RepairConfig = Field(default_factory=RepairConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
+    genre_scans: GenreScansConfig = Field(default_factory=GenreScansConfig)
+    flights: FlightsConfig = Field(default_factory=FlightsConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)
     recurrence: RecurrenceConfig = Field(default_factory=RecurrenceConfig)
     examination_graph: ExaminationGraphConfig = Field(
@@ -1685,6 +1773,17 @@ class Config(BaseModel):
     # house brief insists on — what this pass did not cover.
     change_log: bool = True
     revision_author: str = "Atmosphere Press Proofreader"
+    # The merge desk's per-lane author override (docproof/mergedesk.py,
+    # Finding.lane): a finding whose lane has an entry here is attributed to
+    # that name instead of `revision_author` when its tracked change or
+    # comment is written, so a merged deliverable can carry two authors —
+    # Word's "Show Markup > Specific People" then filters one lane from the
+    # other. A lane with no entry (including "", every finding outside a
+    # merged run) falls back to `revision_author` unchanged, so a run that
+    # never tags a lane writes byte-identical output to before this existed.
+    lane_authors: dict[str, str] = Field(default_factory=lambda: {
+        "copyedit": "Atmosphere Press Copy Editor",
+    })
     # Ask the model to justify each finding. The explanations become Word
     # margin comments, but they are also the bulk of the output tokens — and
     # output bills at roughly 5x input. Turn this off for a cheaper pass that

@@ -384,7 +384,8 @@ class _Comments:
                          {"Id": f"rId{n}", "Type": _REL_COMMENTS,
                           "Target": "comments.xml"})
 
-    def attach_to_span(self, p, start: int, end: int, text: str) -> bool:
+    def attach_to_span(self, p, start: int, end: int, text: str,
+                       author: str | None = None) -> bool:
         """Anchor a comment to a range of the paragraph's text, with no
         revision around it — the query channel: this asks, and changes
         nothing.
@@ -392,17 +393,24 @@ class _Comments:
         Must run before any tracked change is applied to the paragraph, because
         it works in canonical-text offsets and applying a deletion moves text
         out of w:t. Splitting runs and inserting range markers does not shift
-        those offsets, so the edits that follow still land correctly."""
+        those offsets, so the edits that follow still land correctly.
+
+        `author`, if given, overrides the part's default author for this one
+        comment — the merge desk's per-lane attribution (Finding.lane,
+        Config.lane_authors); omitted, it falls back to the author the part
+        was opened with, unchanged from before lanes existed."""
         _ensure_boundary(p, start)
         _ensure_boundary(p, end)
         covered = [t for (t, s, e) in _text_spans(p)
                    if s >= start and e <= end and e > s]
         if not covered:
             return False
-        self.attach(p, covered[0].getparent(), covered[-1].getparent(), text)
+        self.attach(p, covered[0].getparent(), covered[-1].getparent(), text,
+                   author=author)
         return True
 
-    def attach(self, p, first_el, last_el, text: str) -> None:
+    def attach(self, p, first_el, last_el, text: str,
+              author: str | None = None) -> None:
         cid = str(next(self.ids))
         af, al = _p_level(first_el, p), _p_level(last_el, p)
         start = etree.Element(qn("w:commentRangeStart"), {qn("w:id"): cid})
@@ -414,7 +422,8 @@ class _Comments:
         p.insert(p.index(end) + 1, ref)
 
         c = etree.SubElement(self.root, qn("w:comment"),
-                             {qn("w:id"): cid, qn("w:author"): self.author,
+                             {qn("w:id"): cid,
+                              qn("w:author"): author or self.author,
                               qn("w:date"): self.date, qn("w:initials"): "dp"})
         cp = etree.SubElement(c, P_TAG)
         cr = etree.SubElement(cp, R_TAG)
@@ -595,6 +604,15 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
             f, query_comments=cfg.query_comments,
             not_applied_comments=cfg.not_applied_comments)
 
+    def _author(f: Finding) -> str:
+        """The tracked-change author for one finding: `revision_author`,
+        unless its lane (Finding.lane, the merge desk's tag) has an override
+        in `Config.lane_authors` — the only thing that lets a two-lane merged
+        run write two authors into one .docx. A finding with no lane (every
+        finding outside a merged run) always falls back to `revision_author`,
+        so this is a no-op for the single-author path."""
+        return cfg.lane_authors.get(f.lane, cfg.revision_author)
+
     queries: list[Finding] = []
     unplaced: list[str] = []
     for f in findings:
@@ -669,7 +687,8 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                 if comments is None:
                     comments = _Comments(pkg, cfg.revision_author, date)
                 lo, hi = query_span(f, paras[para_id].text)
-                if comments.attach_to_span(p, lo, hi, query_text(f)):
+                if comments.attach_to_span(p, lo, hi, query_text(f),
+                                          author=_author(f)):
                     queried.append(f.finding_id)
                 else:
                     unplaced.append(f.finding_id)
@@ -689,22 +708,23 @@ def apply_tracked_changes(pkg: DocxPackage, doc: DocumentModel,
                               "skipping.", f.finding_id)   # defense-in-depth 2
                     skipped.append(f.finding_id)
                     continue
+                author = _author(f)
                 if f.format:
                     marked = apply_format_change(p, a, f.format,
-                                                 cfg.revision_author, date, ids)
+                                                 author, date, ids)
                     if marked is None:
                         already.append(f.finding_id)
                         continue
                     first, last = marked
                 else:
-                    first, last = apply_replacement(p, a, cfg.revision_author,
-                                                    date, ids)
+                    first, last = apply_replacement(p, a, author, date, ids)
                 applied.append(f.finding_id)
                 if cfg.comments and not f.silent and in_body_flow:
                     if comments is None:
                         comments = _Comments(pkg, cfg.revision_author, date)
                     comments.attach(p, first, last,
-                                    f.explanation or f"{f.error_type} fix")
+                                    f.explanation or f"{f.error_type} fix",
+                                    author=author)
 
     log.info("Applied %d tracked change(s); %d skipped by safety checks.",
              len(applied), len(skipped))

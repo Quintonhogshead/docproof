@@ -1,0 +1,26 @@
+# Posture preset: general / commercial fiction.
+#
+# The house middle ground, named explicitly rather than left implicit: the
+# smoothing pass runs at its shipped ("strict" judge, "restrained" proposer)
+# posture, query-only (edits stay off), and the rewrite pass stays off, opt-in
+# like the house default. Picking this preset mainly makes "the default
+# posture" a first-class, nameable choice next to the other three, so a run
+# config or a job record says which genre call was made rather than "none."
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: general_fiction
+description: >
+  The house middle ground: smoothing on at its shipped strict/restrained
+  posture and query-only, the rewrite pass off. Exists to make "middle" a
+  nameable choice rather than "no genre picked."
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: true
+  smoothing.edits: false
+  smoothing.judge_harshness: strict
+  smoothing.proposer_restraint: restrained
+  smoothing.max_per_1000_words: 3.0
+  smoothing.min_confidence: medium
+  rewrite.enabled: false

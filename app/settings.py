@@ -134,6 +134,15 @@ class Paths:
         removed. One JSON object per line, appended, keyed by job id."""
         return self.root / "spending.jsonl"
 
+    @property
+    def galley_memory_db(self) -> Path:
+        """Galley's compounding memory store (house rulings, authors,
+        precedents) — see galley.memory.store.MemoryStore. Lives on the volume
+        beside the other durable state, not in any one job's results folder,
+        so it survives every job's own folder being cleared and accumulates
+        across every book Galley ever reviews."""
+        return self.root / "galley_memory.db"
+
     def ensure(self) -> "Paths":
         for d in (self.root, self.uploads, self.jobs, self.prompts, self.prep,
                   self.promo):

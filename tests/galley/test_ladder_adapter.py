@@ -150,6 +150,7 @@ def test_gfindings_from_json_lossless(tmp_path):
                 "error_type": "comma_splice",
                 "confidence": "high",
                 "explanation": "two clauses",
+                "status": "validated",
                 "anchor": {"start": 4, "end": 11, "delete_text": "sat down",
                            "insert_text": "sat down;"},
             },
@@ -159,7 +160,17 @@ def test_gfindings_from_json_lossless(tmp_path):
                 "error_type": "typo",
                 "confidence": "medium",
                 "explanation": "",
+                "status": "validated",
                 "anchor": None,  # unplaced -> dropped, counted
+            },
+            {
+                "finding_id": "f-0003",
+                "para_id": "body-0011",
+                "error_type": "continuity",
+                "confidence": "medium",
+                "explanation": "possible break",
+                "status": "query",  # anchored, but never applied -> dropped, counted
+                "anchor": {"start": 0, "end": 5, "delete_text": "Later", "insert_text": ""},
             },
         ]
     }
@@ -167,7 +178,9 @@ def test_gfindings_from_json_lossless(tmp_path):
     p.write_text(json.dumps(payload), encoding="utf-8")
 
     gfindings, dropped = gfindings_from_json(p, wave=3, model="claude-opus-5")
-    assert dropped == 1
+    # f-0002 (no anchor) and f-0003 (anchored, but status "query" not
+    # "validated" — never applied as a tracked change) are both dropped.
+    assert dropped == 2
     assert len(gfindings) == 1
     g = gfindings[0]
     assert g.id == "f-0001"

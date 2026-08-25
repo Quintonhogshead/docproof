@@ -351,3 +351,39 @@ def test_a_completion_send_that_fails_is_swallowed(tmp_path):
                                  opener=opener)
 
     assert sent is False
+
+
+# --- send_question (Galley's escalation push) ---------------------------------
+
+def test_send_question_sends_tagged_to_the_configured_address(tmp_path):
+    WatchSettings(folder_id="F", client_id="c", client_secret="s",
+                  notify_email="quinton@atmospherepress.com").save(tmp_path)
+    opener = _token_and_send_opener()
+
+    to = notify.send_question(tmp_path, "May I cap 'Mom' throughout?",
+                              "Profile says intent zone; run 1 lowered it.",
+                              book="Redding", get_key=lambda name: "refresh-1",
+                              opener=opener)
+
+    assert to == "quinton@atmospherepress.com"
+    assert len(opener.sent) == 1
+    raw = json.loads(opener.sent[0].data.decode())["raw"]
+    import base64
+    msg = base64.urlsafe_b64decode(raw).decode("utf-8", "replace")
+    assert "[DocProof][Galley][Question]" in msg
+    assert "Redding" in msg
+    assert "waiting on this answer" in msg
+
+
+def test_send_question_without_an_address_raises_a_clear_error(tmp_path):
+    WatchSettings(folder_id="F", client_id="c", client_secret="s").save(tmp_path)
+    with pytest.raises(ValueError):
+        notify.send_question(tmp_path, "s", "b",
+                             get_key=lambda name: "refresh-1")
+
+
+def test_send_question_without_a_sign_in_raises(tmp_path):
+    WatchSettings(folder_id="F", notify_email="q@a.com").save(tmp_path)
+    with pytest.raises(ValueError):
+        notify.send_question(tmp_path, "s", "b",
+                             get_key=lambda name: "refresh-1")

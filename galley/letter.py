@@ -183,7 +183,12 @@ def _section_queries(cf: CaseFile) -> list[str]:
     out = ["## Open queries", ""]
     finding_by_id = {f.id: f for f in cf.findings}
 
-    query_verdicts = [v for v in cf.verdicts if v.ruling == "query"]
+    # "query" (an arbitration overlap loser) and "reject" (a panel withhold,
+    # galley.adjudicate.screen_disputes) both route their finding to the
+    # margin, never delete it — see galley.contracts.Verdict. Both belong
+    # here; showing only "query" would silently drop every panel-rejected
+    # finding from the one document that promises none is ever hidden.
+    query_verdicts = [v for v in cf.verdicts if v.ruling in ("query", "reject")]
     verdict_ids = {v.finding_id for v in query_verdicts}
 
     if not query_verdicts:

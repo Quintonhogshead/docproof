@@ -1,0 +1,43 @@
+key: imported_edit
+name: Imported edit (external source)
+version: 1
+channel: change
+# This type is never sent to a model — no pass ever enables it, and no prompt
+# below is ever rendered. It exists so `docproof import-findings` and
+# `docproof replay` have a real, registered, channel:change label to put on a
+# row whose own error_type is missing, unrecognised, or names a query/format
+# type (see docproof/replay.py). Without a dedicated type, an externally
+# produced finding labelled "general_error" — a very natural label for a
+# subagent or a hand-built findings file to reach for — silently rides that
+# type's real channel (query) and lands as a margin comment instead of a
+# tracked change, which is exactly the trap the Redding stand-in run hit and
+# had to route around with a hand-rolled curated_fix.yaml. Replaying under
+# this type instead means an imported row always lands as the tracked change
+# it was meant to be, with nothing hand-rolled.
+detection_prompt: |
+  Not used by any detection pass. No config ever enables this type for a
+  model to find errors with; `docproof import-findings` and `docproof replay`
+  are the only code that ever constructs a finding under this key, applying
+  it to a row that already names the edit — see docproof/replay.py.
+
+  Do NOT flag anything with this type from a detection prompt. If it somehow
+  reached a model, it would have nothing to detect: every other shipped type
+  owns its own class of error, and this one owns none.
+fix_guidance: |
+  Not used by any detection pass. corrected_text arrives already decided — by
+  whatever produced the findings file import-findings or replay is reading —
+  and is written as-is (after quote sanitizing), the same as any other
+  change-channel finding.
+confidence_guidance: |
+  Not used by any detection pass. An imported row's confidence rides through
+  unchanged (default "medium" when the row has none).
+examples:
+  # Present only to satisfy the shipped-registry contract (every type needs a
+  # calibration example that anchors and survives the validator); never sent
+  # to a model, since no pass enables this type.
+  - text: "The lamp on the desk flickered, then finally caught."
+    finding:
+      original_text: "The lamp on the desk flickered, then finally caught."
+      corrected_text: "The lamp on the desk flickered, then finally held."
+      confidence: medium
+      explanation: "Placeholder calibration example; this type is never detected."

@@ -125,6 +125,17 @@ class Finding:
     # finding outside the repair channel, which is all of them today — the field
     # is inert until repair.enabled. See docproof/repair.py and docs/repair.md.
     cluster_id: str = ""
+    # The merge desk's provenance tag (docproof/mergedesk.py): which edit lane
+    # produced this finding — "mechanical" (a proofread pass) or "copyedit" (a
+    # rewrite pass), or "" for every finding outside a merged run, which is all
+    # of them today. Drives two things downstream: the merge desk's span-claim
+    # rules (a clean copy-edit rewrite may subsume an overlapping mechanical
+    # fix; otherwise mechanical wins) and, at write time, which tracked-change
+    # author the edit carries (Config.lane_authors, reassembler.py) so Word can
+    # filter one lane's changes from the other's. An empty lane always falls
+    # back to `revision_author`, so a run with no lanes is unaffected and its
+    # output stays byte-identical.
+    lane: str = ""
 
 
 @dataclass(frozen=True)

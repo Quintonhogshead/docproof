@@ -85,6 +85,11 @@ class Prepared:
     # belongs here rather than to any chunk, and it costs no API call.
     consistency: ConsistencyReport = field(default_factory=ConsistencyReport)
     consistency_findings: list = field(default_factory=list)
+    # The three genre-pack query-only scans (anachronism, citation format,
+    # reading level). Deterministic/wordfreq-only like consistency_findings, so
+    # it lives beside it rather than in `finish()` with the model passes. See
+    # docproof/genrescans.py.
+    genre_findings: list = field(default_factory=list)
     # Suspected real-word typos to put to the model, one per occurrence. Whole-
     # document only (it reads the spell scan's lexicon), and consumed on the
     # synchronous path; empty otherwise. See docproof/adjudicate.py.
@@ -549,13 +554,27 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             # by the author is not also asked about. The dictionary is the acronym
             # scan's — an explicit one wins, else the variant's.
             respell=variant.respell_map,
-            protected=spell.lexicon,
+            # spell.lexicon is the manuscript's own proper nouns, earned by
+            # capitalization pattern; consistency.seeded_names is the same
+            # kind of protection stated ahead of the run (typically from
+            # `docproof galley profile`) rather than inferred — a genre pack's
+            # coined-term seeding lands here. Union, not replace: neither
+            # source should have to duplicate the other.
+            protected=tuple(spell.lexicon) + tuple(cfg.consistency.seeded_names),
             dictionary=cfg.spellcheck.dictionary or variant.dictionary)
         consistency_findings = to_findings(consistency, doc.paragraphs)
         # Near-identical protected names too close to call ride the same
         # deterministic prefix as the consistency queries: one question per
         # pair, at the rarer spelling's first occurrence, changing nothing.
         consistency_findings += _name_pair_queries(spell, doc.paragraphs)
+
+        # The three genre-pack query-only scans (anachronism, citation format,
+        # reading level): deterministic/wordfreq-only, whole-document, off by
+        # default. Same gating shape as the consistency scan above — a partial
+        # run makes no claim about the whole book. See docproof/genrescans.py.
+        from .genrescans import run_genre_scans
+        genre_findings = (run_genre_scans(doc.paragraphs, cfg.genre_scans)
+                          if whole else [])
 
         # Suspected typos to adjudicate later, generated now off the same spell
         # scan. Whole-document only (it reads the lexicon) and consumed on the
@@ -606,6 +625,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         spell = SpellScan()
         consistency = ConsistencyReport()
         consistency_findings = []
+        genre_findings = []
         adjudicate_candidates = []
         story_sheet = ""
         swept = []
@@ -643,6 +663,7 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                     spell=spell, normalization=norm, baseline=baseline,
                     variant=variant, consistency=consistency,
                     consistency_findings=consistency_findings,
+                    genre_findings=genre_findings,
                     adjudicate_candidates=adjudicate_candidates,
                     story_sheet=story_sheet,
                     whole_document=whole,
@@ -2053,15 +2074,18 @@ def _run_judge_gates(cfg: Config, prepared: Prepared, validated: list,
         if not gate.enabled:
             continue
         # Eligibility is a position range, not a set of ids. `proposed` is built
-        # in a known order — the deterministic sweeps and the consistency scan
-        # first, then everything a model or an outside checker proposed — and
-        # validate_findings returns exactly one finding per input, in order, so
-        # position identifies a finding exactly where an id would not (ids are
-        # only unique per source: continuity and consistency both mint "c-0001").
+        # in a known order — the deterministic sweeps, the consistency scan,
+        # and the genre-pack query-only scans first, then everything a model
+        # or an outside checker proposed — and validate_findings returns
+        # exactly one finding per input, in order, so position identifies a
+        # finding exactly where an id would not (ids are only unique per
+        # source: continuity and consistency both mint "c-0001").
         first = 0
         skip_deterministic = gate.scope == "model_sources"
         if skip_deterministic:
-            first = len(prepared.sweep_findings) + len(prepared.consistency_findings)
+            first = (len(prepared.sweep_findings)
+                    + len(prepared.consistency_findings)
+                    + len(prepared.genre_findings))
         # A query changes no text and a formatting mark changes no characters, so
         # neither has anything for a judge to rule on. Only tracked changes are
         # read — which also means a change an earlier gate withdrew is already
@@ -2278,6 +2302,7 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                                      batch_reads=chapter_batch_reads)
     proposed = (list(prepared.sweep_findings)
                 + list(prepared.consistency_findings)
+                + list(prepared.genre_findings)
                 + repair_findings
                 + sapling_findings
                 + model_findings
@@ -2348,7 +2373,17 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
     # clean tracked change, the rest are withdrawn to the margin with it, so the
     # run never writes half a broken-sentence repair. Uses the same span-
     # preserving to_query the gates use, so nothing else in the run moves.
-    if cfg.repair.enabled and prepared.whole_document:
+    #
+    # Gated on `cfg.repair.enabled` OR a cluster_id actually present in
+    # `validated` — not on repair alone — because a cluster can arrive here
+    # without this run's OWN repair channel ever having fired: the merge desk
+    # (docproof/mergedesk.py) carries clusters over from an earlier run's
+    # findings and relies on this same enforcement to keep them atomic through
+    # a fresh, $0 arbitration where repair.enabled is off. The `any()` is a
+    # single pass over an already-in-memory list, so an ordinary run without
+    # clusters pays nothing extra for the check.
+    if (cfg.repair.enabled or any(f.cluster_id for f in validated)) \
+            and prepared.whole_document:
         from .repair import enforce_cluster_atomicity
         enforce_cluster_atomicity(validated, prepared.doc)
     # Residual coverage, after every gate has settled what is actually being
