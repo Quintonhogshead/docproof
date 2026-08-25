@@ -34,7 +34,7 @@ import random
 import re
 import weakref
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from galley.contracts import Chapter, GFinding, Manuscript
 
@@ -58,6 +58,30 @@ class PlantedError:
     original: str
     mutated: str
 
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "error_type": self.error_type,
+            "para_id": self.para_id,
+            "start": self.start,
+            "end": self.end,
+            "original": self.original,
+            "mutated": self.mutated,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "PlantedError":
+        d = data if isinstance(data, dict) else {}
+        return cls(
+            id=str(d.get("id", "")),
+            error_type=str(d.get("error_type", "")),
+            para_id=str(d.get("para_id", "")),
+            start=int(d.get("start", 0)),
+            end=int(d.get("end", 0)),
+            original=str(d.get("original", "")),
+            mutated=str(d.get("mutated", "")),
+        )
+
 
 @dataclass(frozen=True)
 class AnswerKey:
@@ -66,12 +90,35 @@ class AnswerKey:
     ``requested`` is the ``n`` asked for; ``len(planted)`` is what actually fit
     (a book with few mutable paragraphs in the sampled chapters may hold fewer —
     see :func:`seed_copy`). ``rng_seed`` is recorded so a run is replayable.
+
+    ``to_json``/``from_json`` make the key a durable artifact: ``galley seed``
+    writes it, ``galley score`` reads it back to grade a fleet's findings.
     """
 
     planted: tuple[PlantedError, ...] = ()
     seeded_chapters: tuple[int, ...] = ()
     rng_seed: int = 0
     requested: int = 0
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "planted": [p.to_json() for p in self.planted],
+            "seeded_chapters": list(self.seeded_chapters),
+            "rng_seed": self.rng_seed,
+            "requested": self.requested,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "AnswerKey":
+        d = data if isinstance(data, dict) else {}
+        return cls(
+            planted=tuple(
+                PlantedError.from_json(p) for p in (d.get("planted") or [])
+            ),
+            seeded_chapters=tuple(int(c) for c in (d.get("seeded_chapters") or ())),
+            rng_seed=int(d.get("rng_seed", 0)),
+            requested=int(d.get("requested", 0)),
+        )
 
 
 # --- the default taxonomy of deterministic, reversible mutations --------------
