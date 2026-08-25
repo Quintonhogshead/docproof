@@ -56,6 +56,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
     "heading_case",       # sweeps.py — headings set in title case
     "fact_check",         # factcheck.py — the external-world read
+    "copyedit",           # flights.py LANE — the copy-edit flights lane
 })
 
 # Every scripted sweep's key is free-form too. They are enumerated by
