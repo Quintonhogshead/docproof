@@ -38,6 +38,7 @@ def main(argv=None) -> int:
     inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
+    _genre_arg(inv)
     _profile_arg(inv)
 
     rev = sub.add_parser("review", help="run the full pipeline now")
@@ -191,11 +192,61 @@ def main(argv=None) -> int:
     rj.add_argument("--fix-model",
                     help="which model reads the changes for the fix check")
 
+    # `docproof galley <verb>` — a nested subcommand group, the same lazy
+    # pattern as every command above (heavy imports inside each cmd_* body,
+    # not at module import time). This checkout only owns two verbs here
+    # (profile, genre-pack); `audit`/`letter`/`seed`/`score` are a parallel
+    # Galley CLI track and land in this same group when that branch merges.
+    gl = sub.add_parser("galley", help="Galley practitioner tools: profiling "
+                                       "a manuscript, materializing a genre "
+                                       "pack run config")
+    gl_sub = gl.add_subparsers(dest="galley_cmd", required=True)
+
+    glp = gl_sub.add_parser(
+        "profile", help="a deterministic ($0) profile of a manuscript: word "
+                        "count, chapter structure, dialogue density, "
+                        "proper-noun candidates, repeated author tics, "
+                        "reading-level metrics, and a genre guess")
+    glp.add_argument("input", help="a .docx or .idml file")
+    glp.add_argument("--config", default="config/default.yaml")
+    glp.add_argument("--json", action="store_true",
+                     help="print the profile as JSON instead of a summary")
+    glp.add_argument("--out", help="write the profile JSON to this path "
+                                   "(in addition to any --json/summary print)")
+    glp.add_argument("--model",
+                     help="spend one call on this model to confirm the "
+                          "genre guess and add curated notes (default: no "
+                          "call, $0). Best-effort: any failure keeps the "
+                          "deterministic profile unchanged.")
+
+    glg = gl_sub.add_parser(
+        "genre-pack", help="materialize a run config: base config + a genre "
+                           "posture preset + (optionally) profile-derived "
+                           "name/era seeding")
+    glg.add_argument("genre", choices=list(_genre_choices()),
+                     help="which posture preset to apply")
+    glg.add_argument("--base", default="config/default.yaml",
+                     help="the base run config (default: config/default.yaml)")
+    glg.add_argument("--out", required=True,
+                     help="where to write the materialized run config")
+    glg.add_argument("--profile",
+                     help="a profile JSON from `docproof galley profile "
+                          "--json --out`; its proper-noun candidates seed "
+                          "consistency.seeded_names / spellcheck.allowlist")
+
     args = ap.parse_args(argv)
+    if args.cmd == "galley":
+        return {"profile": cmd_galley_profile,
+                "genre-pack": cmd_galley_genre_pack}[args.galley_cmd](args)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
             "eval": cmd_eval, "compare": cmd_compare}[args.cmd](args)
+
+
+def _genre_choices() -> tuple[str, ...]:
+    from .genre import available_genres
+    return available_genres()
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -219,6 +270,7 @@ def _common(p: argparse.ArgumentParser) -> None:
                         "extension, for the spell scan. Only needed when the "
                         "variant's dictionary is not bundled — spylls ships "
                         "en_US alone (default: config spellcheck.dictionary)")
+    _genre_arg(p)
     _profile_arg(p)
 
 
@@ -229,6 +281,21 @@ def _profile_arg(p: argparse.ArgumentParser) -> None:
              "low-effort production detector pass with Phase 2 receipts and "
              "writes tracked changes only; 'candidate-only' runs the explicit "
              "candidate detector alone through the guarded tracked-change path")
+
+
+def _genre_arg(p: argparse.ArgumentParser) -> None:
+    from .genre import available_genres
+    p.add_argument(
+        "--genre", choices=list(available_genres()) or None,
+        help="apply a genre posture preset to the stylistic lane (smoothing/"
+             "rewrite aggressiveness, the flights lane's judge posture, "
+             "consistency name-spelling seeding) before any --profile is "
+             "applied, so a profile's stricter boundary always wins over a "
+             "genre's looser one. See config/genres/ and docproof/genre.py. "
+             "For a full genre PACK (this preset plus continuity prompts, "
+             "genre-only scans, and profile-derived name/era seeding "
+             "materialized into a reviewable run config), use "
+             "`docproof galley genre-pack` instead.")
 
 
 def _selection(args) -> list[str] | None:
@@ -254,9 +321,22 @@ def _configure(args):
         cfg.comments = False
     if getattr(args, "out", None):
         cfg.output_dir = args.out
-    # A profile is a strict boundary, so it lands after general config knobs.
+    # A genre posture preset is itself a general config knob — it lands here,
+    # before the profile. A profile is a strict boundary, so it lands after
+    # every general config knob (genre included): apply_profile turns the
+    # whole stylistic lane off in detector-only/candidate-only mode, and a
+    # genre applied after it would silently break that boundary's own
+    # promise (no comment channel). See docproof/genre.py's module docstring.
     # The reviewer model is the one deliberate exception: experiments may hold
     # the profile constant while comparing detectors with --model.
+    genre_pending = {}
+    if getattr(args, "genre", None):
+        from .genre import apply_genre
+        cfg, genre_pending = apply_genre(cfg, args.genre)
+        for key in genre_pending:
+            log.warning("genre %r set %s, which this build cannot apply yet "
+                       "(no matching config section) — ignored", args.genre,
+                       key)
     apply_profile(cfg, getattr(args, "profile", None))
     if getattr(args, "model", None):
         cfg.api.model = args.model
@@ -895,6 +975,106 @@ def _run_mock(cfg, prepared, canned):
             and cfg.candidate_screening.mode == "apply"):
         findings.extend(prepared.candidate_screening.production_findings())
     return findings, usage
+
+
+def cmd_galley_profile(args) -> int:
+    from .config import load_config
+    from .genre_profile import build_profile, confirm_with_model
+
+    cfg = load_config(args.config)
+    try:
+        profile = build_profile(args.input, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if args.model:
+        from .formats import get_format
+        fmt = get_format(args.input)
+        pkg = fmt.preflight(args.input, cfg.tracked_changes_policy)
+        doc = fmt.build_document_model(pkg, cfg)
+        profile = confirm_with_model(profile, doc.paragraphs,
+                                     model=args.model, cfg=cfg)
+
+    if args.out:
+        Path(args.out).write_text(profile.model_dump_json(indent=2) + "\n",
+                                  encoding="utf-8")
+        print(f"wrote {args.out}")
+
+    if args.json:
+        print(profile.model_dump_json(indent=2))
+        return 0
+
+    print(f"{profile.word_count:,} words, {profile.paragraph_count} "
+         f"paragraph(s), {len(profile.chapters)} chapter(s)")
+    print(f"dialogue density: {profile.dialogue_density:.1%}")
+    if profile.proper_nouns:
+        top = ", ".join(f"{p.name} ({p.count})"
+                        for p in profile.proper_nouns[:10])
+        print(f"proper-noun candidates ({len(profile.proper_nouns)}): {top}"
+             + (" ..." if len(profile.proper_nouns) > 10 else ""))
+    for tic in profile.tics:
+        print(f"tic: {tic.label} x{tic.count}")
+    if profile.bespoke_sweep_candidates:
+        print(f"{len(profile.bespoke_sweep_candidates)} bespoke-sweep "
+             f"candidate(s) — see --json for patterns")
+    rl = profile.reading_level
+    if rl.ari is not None:
+        print(f"reading level: ARI {rl.ari:.1f}"
+             + (f", mean word rarity (zipf) {rl.mean_zipf:.2f}"
+                if rl.mean_zipf is not None else ""))
+    guesses = ", ".join(f"{g.genre} ({g.score:.0%})"
+                        for g in profile.genre_guesses)
+    print(f"genre guess: {guesses}")
+    print(f"recommended posture preset: {profile.recommended_preset}"
+         + (" (model-confirmed)" if profile.model_confirmed else ""))
+    if profile.model_notes:
+        print(f"model notes: {profile.model_notes}")
+    return 0
+
+
+def cmd_galley_genre_pack(args) -> int:
+    from .genre import write_genre_pack
+    from .genre_profile import Profile
+
+    profile = None
+    if args.profile:
+        try:
+            profile = Profile.model_validate_json(
+                Path(args.profile).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"error: --profile {args.profile}: {e}", file=sys.stderr)
+            return 2
+
+    try:
+        summary = write_genre_pack(
+            args.base, args.genre, args.out, profile=profile)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"wrote {summary['out_path']} — genre '{summary['genre']}' over "
+         f"{summary['base_config']}")
+    if summary["overlay_applied"]:
+        print(f"  posture: {', '.join(summary['overlay_applied'])}")
+    if summary["pending"]:
+        for key, value in summary["pending"].items():
+            print(f"  NOT applied (no matching config section yet): "
+                 f"{key} = {value!r}")
+    if "continuity_prompt" in summary:
+        print(f"  continuity prompt: {summary['continuity_prompt']}")
+    if "genre_scans_applied" in summary:
+        print(f"  genre scans: {summary['genre_scans_applied']}")
+    if summary["seeded_names_count"]:
+        print(f"  seeded {summary['seeded_names_count']} proper noun(s) from "
+             f"the profile into consistency.seeded_names / "
+             f"spellcheck.allowlist")
+    elif args.profile:
+        print("  profile had no proper-noun candidates to seed")
+    if "reading_level_target_ari" in summary:
+        print(f"  reading-level target ARI set to "
+             f"{summary['reading_level_target_ari']:.1f} from the profile")
+    return 0
 
 
 if __name__ == "__main__":
