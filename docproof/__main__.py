@@ -50,6 +50,12 @@ def main(argv=None) -> int:
                                     "(e.g. chunk-003,chunk-007)")
     rev.add_argument("--mock-findings",
                      help="JSON file of raw findings; skips the API entirely")
+    rev.add_argument("--resume", action="store_true",
+                     help="if a findings checkpoint from an interrupted run is "
+                          "in --out, replay it and skip the paid reads, going "
+                          "straight to writing the deliverable. A checkpoint is "
+                          "written automatically after the reads finish, so a "
+                          "crash while writing never re-buys them.")
     rev.add_argument("--rounds", type=int,
                      help="review this many times, each round reading the "
                           "previous round's corrections, with a strong judge "
@@ -191,11 +197,116 @@ def main(argv=None) -> int:
     rj.add_argument("--fix-model",
                     help="which model reads the changes for the fix check")
 
+    swp = sub.add_parser(
+        "sweep", help="run one agent-authored bespoke fix (a --rule) over a "
+                      "manuscript — a book-specific author tic no shipped "
+                      "detector catches. Dry-run by default; --apply writes "
+                      "tracked changes. No API.")
+    swp.add_argument("input", help="a .docx or .idml file")
+    swp.add_argument("--rule", required=True,
+                     help="the rule file: a .yaml/.json regex rule "
+                          "(pattern + replacement), or a .py sweep defining "
+                          "SWEEP or a scan() function")
+    swp.add_argument("--config", default="config/default.yaml")
+    swp.add_argument("--out", help="output directory for --apply "
+                                   "(default: from config)")
+    swp.add_argument("--apply", action="store_true",
+                     help="write the tracked-changes .docx (default is a dry "
+                          "run that counts and samples but writes nothing)")
+    swp.add_argument("--sample", type=int, default=5,
+                     help="how many before/after examples to show (default: 5)")
+    swp.add_argument("--variant", choices=list(VARIANT_KEYS),
+                     help="which English the manuscript is in (affects "
+                          "ingest/normalization; default: config variant)")
+    swp.add_argument("--force", action="store_true",
+                     help="apply even if the rule is not idempotent — matches "
+                          "remain after its own fix — which is almost always a "
+                          "bug in the rule")
+    swp.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
+    _galley_parser(sub)
+
     args = ap.parse_args(argv)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
-            "eval": cmd_eval, "compare": cmd_compare}[args.cmd](args)
+            "eval": cmd_eval, "compare": cmd_compare, "sweep": cmd_sweep,
+            "galley": cmd_galley}[args.cmd](args)
+
+
+def _galley_parser(sub) -> None:
+    """The `galley` command group: headless entry points for the practitioner
+    tools that until now only tests could reach — audit a finished run for what
+    it missed, render the editorial letter, and run the reference-free recall
+    gauge. These wrap galley/{audit,letter,seeding}.py; only `audit` calls a
+    model."""
+    gal = sub.add_parser(
+        "galley", help="practitioner tools over a finished run: audit for "
+                       "missed errors, write the editorial letter, gauge recall")
+    gsub = gal.add_subparsers(dest="galley_cmd", required=True)
+
+    ga = gsub.add_parser(
+        "audit", help="read a finished run for likely MISSED errors — one model "
+                      "call over the quietest chapters, where a miss hides")
+    ga.add_argument("results", help="the finished run's output directory "
+                                    "(the one holding findings.json)")
+    ga.add_argument("--source", required=True,
+                    help="the manuscript that run reviewed (.docx or .idml), "
+                         "read for the by-chapter density and page samples")
+    ga.add_argument("--config", default="config/default.yaml")
+    ga.add_argument("--model",
+                    help="the auditing model (default: the continuity reader if "
+                         "one is configured, else the review model)")
+    ga.add_argument("--n-samples", type=int, default=6,
+                    help="pages to sample from the quiet chapters (default: 6)")
+    ga.add_argument("--out", help="where to write audit.json "
+                                  "(default: the results directory)")
+    ga.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
+
+    gl = gsub.add_parser(
+        "letter", help="render the editorial letter and style sheet from a case "
+                       "file — a report on the run, no API, no new decisions")
+    gl.add_argument("casefile", help="a galley casefile.json, or a directory "
+                                     "holding one")
+    gl.add_argument("--source",
+                    help="the manuscript, for per-chapter finding counts in the "
+                         "letter (optional; .docx or .idml)")
+    gl.add_argument("--config", default="config/default.yaml")
+    gl.add_argument("--out", help="directory for letter.md and style-sheet.md "
+                                  "(default: beside the case file)")
+    gl.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
+
+    gs = gsub.add_parser(
+        "seed", help="plant known, reversible errors into a copy of a few "
+                     "chapters — the first move of the reference-free recall "
+                     "gauge; no API")
+    gs.add_argument("source", help="the manuscript (.docx or .idml)")
+    gs.add_argument("-n", "--count", type=int, default=8,
+                    help="how many errors to plant (default: 8)")
+    gs.add_argument("--seed", type=int, default=0,
+                    help="RNG seed; the same seed replays the same plants "
+                         "byte-for-byte (default: 0)")
+    gs.add_argument("--config", default="config/default.yaml")
+    gs.add_argument("--out", required=True,
+                    help="directory for seeded_manuscript.json and "
+                         "answer_key.json")
+    gs.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
+
+    gc = gsub.add_parser(
+        "score", help="grade a fleet's findings against a seed answer key — the "
+                      "last move of the recall gauge; no API")
+    gc.add_argument("findings", help="a JSON array of galley findings (or a "
+                                     "{'findings': [...]} envelope)")
+    gc.add_argument("--answer-key", required=True,
+                    help="the answer_key.json written by `galley seed`")
+    gc.add_argument("--out", help="where to write recall.json "
+                                  "(default: beside the findings file)")
+    gc.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -407,14 +518,9 @@ def cmd_review(args) -> int:
                 print(f"  {p}")
         return 0
 
-    provider = None
-    if not args.mock_findings:
-        try:
-            provider = build_provider(cfg)
-        except ProviderError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
-
+    # prepare() is deterministic and API-free, so it runs before any provider is
+    # built: its content hash fingerprints the checkpoint, and a --resume needs
+    # the Prepared to hand to finish() regardless.
     try:
         prepared = prepare(cfg, args.input, error_dir,
                            max_chunks=args.max_chunks,
@@ -423,18 +529,48 @@ def cmd_review(args) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    from . import run_checkpoint
+    fingerprint = {"content_hash": prepared.content_hash,
+                   "model": cfg.api.model,
+                   "config": str(Path(args.config).resolve())}
+
     coverage = None
-    if args.mock_findings:
-        canned = _load_mocks(args.mock_findings)
-        if canned is None:
-            return 2
-        findings, usage = _run_mock(cfg, prepared, canned)
-    else:
-        coverage = CoverageLedger()
-        findings, usage = run_sync(cfg, prepared, provider, coverage=coverage)
+    resumed = False
+    if args.resume and not args.mock_findings:
+        hit = run_checkpoint.load(out, fingerprint=fingerprint)
+        if hit is not None:
+            findings, usage, coverage = hit.findings, hit.usage, hit.coverage
+            resumed = True
+            print(f"Resumed from checkpoint: {len(findings)} finding(s) "
+                  f"replayed, paid reads skipped.")
+        else:
+            print("No usable checkpoint in the output directory; "
+                  "reviewing fresh.")
+
+    if not resumed:
+        if args.mock_findings:
+            canned = _load_mocks(args.mock_findings)
+            if canned is None:
+                return 2
+            findings, usage = _run_mock(cfg, prepared, canned)
+        else:
+            try:
+                provider = build_provider(cfg)
+            except ProviderError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
+            coverage = CoverageLedger()
+            findings, usage = run_sync(cfg, prepared, provider, coverage=coverage)
+            # The paid reads are done. Snapshot them before finish()'s late
+            # stages so a crash there never buys the detector passes again.
+            run_checkpoint.save(out, findings=findings, usage=usage,
+                                coverage=coverage, fingerprint=fingerprint)
 
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=args.input, coverage=coverage)
+    # finish() wrote the deliverable and findings.json; the checkpoint has done
+    # its job and must not shadow a later, different run.
+    run_checkpoint.clear(out)
     print(f"\n{_result_line(outputs)}.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
@@ -844,7 +980,354 @@ def cmd_eval(args) -> int:
     return 0
 
 
+# --- bespoke sweep ------------------------------------------------------------
+
+def cmd_sweep(args) -> int:
+    """Run one bespoke, book-scoped sweep over a manuscript — the $0
+    deterministic front door for an author tic no shipped detector anticipates
+    (doubled dialogue quotes, a home-made scene break). Dry-run by default:
+    count, sample, and check idempotency, writing nothing. `--apply` writes the
+    tracked-changes .docx, refusing a non-idempotent rule unless `--force`."""
+    from .custom_sweep import RuleError, load_rule
+    from .sweeps import run_sweep_objects
+
+    cfg = load_config(args.config)
+    if getattr(args, "variant", None):
+        cfg.variant = args.variant
+    if args.out:
+        cfg.output_dir = args.out
+    # A bespoke run is ONLY the rule. Silence every other free analyzer and
+    # every finish-stage model pass so nothing else edits, queries, or bills —
+    # the run stays deterministic and needs no provider.
+    cfg.sweeps = []
+    cfg.style.unclosed_quote_queries = False
+    cfg.style.heading_title_case = False
+    cfg.consistency.enabled = False
+    cfg.spellcheck.enabled = False
+    cfg.meaning_check.enabled = False
+    cfg.fix_check.enabled = False
+    cfg.repair.enabled = False
+    cfg.smoothing.enabled = False
+    cfg.continuity.enabled = False
+    cfg.chapter_continuity.enabled = False
+    cfg.rounds.count = 1
+
+    try:
+        sweep = load_rule(args.rule)
+    except RuleError as e:
+        print(f"error: --rule {args.rule}: {e}", file=sys.stderr)
+        return 2
+
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+    error_dir = Path(args.config).parent / "error_types"
+    try:
+        prepared = prepare(cfg, args.input, error_dir)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        findings, reports = run_sweep_objects(
+            prepared.doc.paragraphs, [sweep], prepared.variant,
+            ellipsis_style=cfg.style.ellipsis)
+    except Exception as e:                # noqa: BLE001 - a rule's scan is user code
+        print(f"error: rule '{sweep.key}' failed while scanning: {e}",
+              file=sys.stderr)
+        return 2
+    report = reports[0]
+    idempotent = report.remaining == 0
+
+    print(f"\nBespoke sweep '{report.key}' — {report.name}")
+    print(f"  {report.flagged} match(es) across "
+          f"{len(prepared.doc.paragraphs)} paragraph(s).")
+    if not idempotent:
+        print(f"  ⚠ not idempotent: {report.remaining} match(es) remain after "
+              f"the fix — the rule would fire again on its own output.")
+    shown = findings[:max(0, args.sample)]
+    for f in shown:
+        print(f"    {f.para_id}: {f.original_text!r} → {f.corrected_text!r}")
+    if len(findings) > len(shown):
+        print(f"    … and {len(findings) - len(shown)} more")
+
+    result = {"key": report.key, "name": report.name,
+              "flagged": report.flagged, "remaining": report.remaining,
+              "idempotent": idempotent, "paragraphs": len(prepared.doc.paragraphs),
+              "applied": False}
+
+    if not args.apply:
+        print("\n  Dry run — nothing written. Re-run with --apply to write "
+              "tracked changes.")
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        return 0
+
+    if report.flagged == 0:
+        print("\n  Nothing to apply.")
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        return 0
+    if not idempotent and not args.force:
+        print(f"\nerror: refusing to apply a non-idempotent rule "
+              f"({report.remaining} match(es) remain after its own fix). Fix "
+              f"the rule, or pass --force to apply it anyway.", file=sys.stderr)
+        return 3
+
+    # The bespoke findings ride the sweep channel finish() already applies; zero
+    # the other prepared channels so ONLY this rule lands.
+    prepared.sweep_findings = findings
+    prepared.sweep_reports = reports
+    prepared.consistency_findings = []
+    usage = Usage()
+    try:
+        outputs = finish(prepared, [], usage, cfg, out_dir=out,
+                         source_path=args.input)
+    except (IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    result["applied"] = True
+    print(f"\n{_result_line(outputs)}.")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json, out / "run.log"):
+        if p is not None:
+            print(f"  {p}")
+    if args.json:
+        result["reviewed_path"] = (str(outputs.reviewed_path)
+                                   if outputs.reviewed_path else None)
+        print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+# --- galley -------------------------------------------------------------------
+
+def cmd_galley(args) -> int:
+    """Dispatch the `galley` sub-verbs. Kept apart from the review commands: these
+    read a finished run rather than producing one."""
+    return {"audit": _galley_audit, "letter": _galley_letter,
+            "seed": _galley_seed, "score": _galley_score}[args.galley_cmd](args)
+
+
+def _galley_audit(args) -> int:
+    from galley.audit import audit_run, chapter_densities, read_findings
+    from galley.ingest import manuscript_from_source
+    from .providers import cost_of_usage
+
+    cfg = load_config(args.config)
+    results = Path(args.results)
+    if not (results / "findings.json").exists():
+        print(f"error: no findings.json in {results} — point the results "
+              f"argument at a finished run's output directory", file=sys.stderr)
+        return 2
+    out = Path(args.out) if args.out else results
+    setup_logging(out)
+
+    # The audit is a whole-book reasoning read, so it wants the strong reader the
+    # continuity pass uses, not the cheap per-chunk detector model.
+    model = args.model or cfg.continuity.model or cfg.api.model
+    try:
+        provider = build_provider(cfg)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    try:
+        ms = manuscript_from_source(args.source, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    usage = Usage()
+    hyps = audit_run(results, ms, provider, model, usage,
+                     n_samples=args.n_samples)
+    densities = chapter_densities(read_findings(results), ms)
+    cost = cost_of_usage(usage, fallback_model=model) or 0.0
+
+    payload = {
+        "results_dir": str(results),
+        "source": args.source,
+        "model": model,
+        "n_samples": args.n_samples,
+        "hypotheses": [h.to_json() for h in hyps],
+        "densities": [d.to_json() for d in densities],
+        "cost_usd": round(cost, 4),
+        "api_calls": usage.api_calls,
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    audit_path = out / "audit.json"
+    audit_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                          encoding="utf-8")
+
+    print(f"\n{len(hyps)} hypothesis/-es about likely missed errors "
+          f"({usage.api_calls} model call(s), ${cost:.2f}).")
+    quiet = sorted(densities, key=lambda d: (d.per_1k, d.index))[:5]
+    if quiet:
+        print("  quietest chapters (a miss most likely hides here):")
+        for d in quiet:
+            print(f"    ch {d.index:>3}  {d.per_1k:>5.2f}/1k  "
+                  f"{d.findings:>4} finding(s) in {d.words:>6} words  "
+                  f"{d.title[:40]}")
+    for h in hyps[:10]:
+        why = h.why[:70] + ("…" if len(h.why) > 70 else "")
+        print(f"  - ch {h.chapter}: {h.error_class} ({h.confidence}) — {why}")
+    print(f"\n  {audit_path}")
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+def _galley_letter(args) -> int:
+    from galley.casefile import CaseFile
+    from galley.letter import render_all
+
+    target = Path(args.casefile)
+    cf_path = target / "casefile.json" if target.is_dir() else target
+    if not cf_path.exists():
+        print(f"error: {cf_path} not found — pass a casefile.json or a "
+              f"directory holding one", file=sys.stderr)
+        return 2
+
+    out = Path(args.out) if args.out else cf_path.parent
+    setup_logging(out)
+    try:
+        cf = CaseFile.load(cf_path)
+    except (OSError, ValueError) as e:
+        print(f"error: could not read {cf_path}: {e}", file=sys.stderr)
+        return 2
+
+    ms = None
+    if args.source:
+        from galley.ingest import manuscript_from_source
+        cfg = load_config(args.config)
+        try:
+            ms = manuscript_from_source(args.source, cfg)
+        except (IngestError, FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    letter_path, style_path = render_all(cf, out, ms=ms)
+    open_queries = sum(1 for v in cf.verdicts if v.ruling == "query")
+    print(f"\nEditorial letter for {cf.book or '(untitled)'}: "
+          f"{len(cf.findings)} finding(s), {len(cf.waves)} wave(s), "
+          f"{open_queries} open query/-ies, {_money(cf.budget.spent_usd)} spent.")
+    print(f"  {letter_path}\n  {style_path}")
+    if args.json:
+        print(json.dumps({
+            "book": cf.book,
+            "letter": str(letter_path),
+            "style_sheet": str(style_path),
+            "findings": len(cf.findings),
+            "waves": len(cf.waves),
+            "open_queries": open_queries,
+            "spent_usd": round(cf.budget.spent_usd, 4),
+        }, ensure_ascii=False))
+    return 0
+
+
+def _galley_seed(args) -> int:
+    from galley.ingest import manuscript_from_source
+    from galley.seeding import seed_copy
+
+    cfg = load_config(args.config)
+    out = Path(args.out)
+    setup_logging(out)
+    try:
+        ms = manuscript_from_source(args.source, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    seeded, key = seed_copy(ms, args.count, rng_seed=args.seed)
+
+    out.mkdir(parents=True, exist_ok=True)
+    seeded_path = out / "seeded_manuscript.json"
+    key_path = out / "answer_key.json"
+    seeded_path.write_text(
+        json.dumps(seeded.to_json(), indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    key_path.write_text(
+        json.dumps(key.to_json(), indent=2, ensure_ascii=False),
+        encoding="utf-8")
+
+    by_type: dict[str, int] = {}
+    for pe in key.planted:
+        by_type[pe.error_type] = by_type.get(pe.error_type, 0) + 1
+    print(f"\nPlanted {len(key.planted)} of {key.requested} requested error(s) "
+          f"across chapter(s) {', '.join(map(str, key.seeded_chapters)) or '—'} "
+          f"(seed {key.rng_seed}).")
+    for et in sorted(by_type):
+        print(f"  {et:<22} {by_type[et]}")
+    if len(key.planted) < key.requested:
+        print("  (fewer than requested — the sampled chapters ran out of "
+              "mutable sites)")
+    print(f"\n  {seeded_path}\n  {key_path}")
+    print("  Next: run the fleet on the seeded text, then `galley score` its "
+          "findings against the answer key.")
+    if args.json:
+        print(json.dumps({
+            "seeded_manuscript": str(seeded_path),
+            "answer_key": str(key_path),
+            "planted": len(key.planted),
+            "requested": key.requested,
+            "seeded_chapters": list(key.seeded_chapters),
+            "rng_seed": key.rng_seed,
+        }, ensure_ascii=False))
+    return 0
+
+
+def _galley_score(args) -> int:
+    from galley.contracts import GFinding
+    from galley.seeding import AnswerKey, score_catches
+
+    findings_path = Path(args.findings)
+    key_path = Path(args.answer_key)
+    try:
+        raw = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {findings_path}: {e}", file=sys.stderr)
+        return 2
+    rows = raw.get("findings", raw) if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        print("error: findings must be a JSON array (or a {'findings': [...]} "
+              "envelope)", file=sys.stderr)
+        return 2
+    findings = [GFinding.from_json(r) for r in rows if isinstance(r, dict)]
+
+    try:
+        key = AnswerKey.from_json(json.loads(key_path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {key_path}: {e}", file=sys.stderr)
+        return 2
+
+    est = score_catches(findings, key)
+    out = Path(args.out) if args.out else findings_path.parent
+    out.mkdir(parents=True, exist_ok=True)
+    recall_path = out / "recall.json"
+    payload = {
+        "planted": est.planted,
+        "caught": est.caught,
+        "rate": round(est.rate, 4),
+        "by_type": {k: list(v) for k, v in est.by_type.items()},
+        "caveat": est.caveat,
+    }
+    recall_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
+
+    print(f"\n{est.summary()}")
+    for et in sorted(est.by_type):
+        caught, planted = est.by_type[et]
+        print(f"  {et:<22} {caught}/{planted}")
+    print(f"\n  {est.caveat}")
+    print(f"\n  {recall_path}")
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
 # --- helpers ------------------------------------------------------------------
+
+def _money(value: float) -> str:
+    return f"${value:,.2f}"
+
 
 def _result_line(outputs) -> str:
     """What a finished review produced, both halves of it — no full stop, so a

@@ -1961,33 +1961,13 @@ class JobRunner:
         """Ingest the source into a galley Manuscript (paragraphs + chapters).
 
         Built from DocProof's own ingest, so paragraph ids match the ones the
-        ladder adapter anchors its findings against. (The ladder normalizes text
-        inside its own prepare(); this Manuscript is used for scope resolution,
-        which keys on paragraph ids, so it needs no separate normalization pass.)
+        ladder adapter anchors its findings against. The work lives in
+        `galley.ingest` so the headless `docproof galley` CLI builds an identical
+        manuscript; this method stays as the app's seam (tests patch it).
         """
-        from docproof.ingest import build_document_model, preflight
+        from galley.ingest import manuscript_from_source
 
-        from galley.contracts import Chapter, Manuscript
-
-        pkg = preflight(job.source_path, cfg.tracked_changes_policy)
-        doc = build_document_model(pkg, cfg)
-        paragraphs = {p.para_id: p.text for p in doc.paragraphs}
-        order = tuple(p.para_id for p in doc.paragraphs)
-        chapters: tuple = ()
-        try:
-            from docproof.continuity import chapters as chapter_units
-            # is_heading takes a STYLE string; chapters() applies the text-based
-            # looks_like_chapter_heading itself, so a style predicate is all we owe
-            # it (the pipeline passes cfg.skip.is_sweep_only — the same one).
-            is_heading = getattr(cfg.skip, "is_sweep_only", lambda _s: False)
-            units = chapter_units(doc.paragraphs, is_heading)
-            chapters = tuple(
-                Chapter(u.index, u.title, tuple(p.para_id for p in u.paragraphs))
-                for u in units
-            )
-        except Exception:                     # noqa: BLE001 - chapters are best-effort
-            log.debug("Could not derive galley chapters", exc_info=True)
-        return Manuscript(paragraphs=paragraphs, order=order, chapters=chapters)
+        return manuscript_from_source(job.source_path, cfg)
 
     def _galley_adapters(self, job: Job, cfg: Config) -> dict:
         """Build the detector adapters for a galley run.
