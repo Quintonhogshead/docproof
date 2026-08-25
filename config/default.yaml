@@ -140,6 +140,10 @@ consistency:
   acronym_case: true        # NASA/Nasa (needs the spell dictionary)
   chicago_notes: true       # add the Merriam-Webster preference to the query
   max_queries_per_kind: 40  # per-scan cap, logged when it bites (no silent loss)
+  seeded_names: []          # proper nouns known ahead of the run (typically from
+                            # `docproof galley profile`); protects them in the
+                            # mechanical scans above even below the spell scan's
+                            # own protection bar. See docproof/genre.py.
 
 # A strong model reads the whole manuscript once, before the detector passes,
 # and returns the book's proper nouns (canonical casing) + suspected
@@ -190,6 +194,27 @@ factcheck:
   max_queries: 40           # the margin is an author's attention; overflow is
                             # logged, not placed
   cache_dir:                # blank = the shared default folder, as above
+
+# Three opt-in, deterministic (or wordfreq-only) whole-document QUERY-ONLY
+# scans a genre pack may turn on. No API call for any of them. Every finding
+# force_query's — never a tracked change, by construction. Off by default.
+# See docproof/genrescans.py and docproof/genre.py.
+genre_scans:
+  anachronism:
+    enabled: false
+    era:                    # the manuscript's own stated year AD; blank = no-op
+                            # even when enabled (never guessed)
+    max_queries: 40
+  citation_format:
+    enabled: false
+    min_occurrences: 2      # a style needs this many hits to count as "in use"
+    max_queries: 40
+  reading_level:
+    enabled: false
+    target_ari:             # blank = centered on the book's own median paragraph
+    tolerance: 6.0
+    min_words: 40            # a paragraph shorter than this has no real signal
+    max_queries: 40
 
 # The whole-book story sheet: one read that gives the detector passes the
 # narrative facts a per-paragraph check cannot know — who narrates, in what
