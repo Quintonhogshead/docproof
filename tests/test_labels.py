@@ -47,6 +47,7 @@ OPAQUE = {
     "docproof/candidate_screening.py: candidate.candidate_type",
     "docproof/editlayer.py: e.contributions[0].error_type",
     "docproof/eval/corpus.py: etype",
+    "docproof/replay.py: resolved_type",
     "docproof/rewrite.py: error_type",
     "docproof/rounds.py: q.error_type",
     "docproof/sapling.py: str(item.get('error_type', ''))",
