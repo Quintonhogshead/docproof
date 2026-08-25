@@ -2092,6 +2092,11 @@ class JobRunner:
             make_auditor,
             make_planner,
         )
+        from galley.calibration import (
+            latest_recall,
+            read_calibration,
+            record_run,
+        )
         from galley.deliverable import build_manuscript_deliverable
         from galley.letter import render_all
         from galley.orchestrator import run_galley
@@ -2138,7 +2143,13 @@ class JobRunner:
         brain_usage = Usage()
         audit_model = cfg.continuity.model or cfg.api.model
         auditor = make_auditor(self._provider(cfg), audit_model, brain_usage)
-        planner = make_planner(ms, min_confidence="medium")
+        # Live cost calibration: observed $/kword from prior runs, kept beside
+        # the memory db. read_calibration is tolerant — a missing or corrupt
+        # store reads back empty and the planner falls back to its default.
+        cal_path = (Path(self.store.paths.galley_memory_db).parent
+                    / "galley_calibration.json")
+        planner = make_planner(ms, min_confidence="medium",
+                               calibration=read_calibration(cal_path))
 
         try:
             cf = run_galley(ms, tier, budget, out, adapters=adapters,
@@ -2184,10 +2195,18 @@ class JobRunner:
         # The editorial letter + style sheet, alongside whatever the
         # deliverable step produced (or didn't).
         try:
-            render_all(cf, out, ms=ms)
+            render_all(cf, out, ms=ms, recall=latest_recall(cal_path))
         except Exception:                     # noqa: BLE001 - a warning, not a failure
             log.exception("Galley letter rendering failed for job %s", job_id)
             warnings.append("The editorial letter could not be rendered.")
+
+        # Feed this run's observed per-adapter costs back into the calibration
+        # store, so the next plan prices from evidence. Best-effort.
+        try:
+            record_run(cf, ms, cal_path)
+        except Exception:                     # noqa: BLE001 - calibration is a bonus
+            log.warning("Galley cost calibration failed for job %s", job_id,
+                        exc_info=True)
 
         # Memory ingest: best-effort, never a reason to fail a finished job.
         try:
