@@ -55,6 +55,17 @@ def test_a_quotation_already_terminated_drops_the_outer_mark():
     assert swept("sweep_quote_punctuation", '“Go!”.') == '“Go!”'
 
 
+@pytest.mark.parametrize("before,after", [
+    ('so “rosy”.” I had', 'so “rosy.” I had'),          # doubled close: collapse
+    ('“forced into isolation”.” She', '“forced into isolation.” She'),
+    ('“Go!”.” He left', '“Go!” He left'),               # terminated + doubled close
+])
+def test_a_doubled_closing_quote_is_collapsed_not_stranded(before, after):
+    # A malformed `”.”` (common in author manuscripts) must not become `.””` —
+    # the sweep consumes the trailing duplicate closing quote and emits one.
+    assert swept("sweep_quote_punctuation", before) == after
+
+
 @pytest.mark.parametrize("text", [
     'a straight "quote". left alone',        # normalizer could not place it
     'the pipe was 5”. It leaked.',           # an inch mark
