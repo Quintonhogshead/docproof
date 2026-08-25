@@ -307,6 +307,10 @@ def _settings_section(cfg: Config, batch: bool) -> list[str]:
         ("LanguageTool floor", on(cfg.languagetool.enabled)),
         ("Sapling grammar check", sapling),
         ("Consistency scan", on(cfg.consistency.enabled)),
+        ("Genre-pack scans (anachronism/citation/reading level)",
+         "/".join(on(s.enabled) for s in (
+             cfg.genre_scans.anachronism, cfg.genre_scans.citation_format,
+             cfg.genre_scans.reading_level))),
         ("Spell scan", on(cfg.spellcheck.enabled)),
         ("Continuity read", on(cfg.continuity.enabled)),
         ("Chapter continuity", on(cfg.chapter_continuity.enabled)),

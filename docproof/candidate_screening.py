@@ -907,6 +907,7 @@ def _local_analyzer_sources(cfg, doc: DocumentModel, paragraphs, *,
         chicago_notes=cfg.consistency.chicago_notes,
         max_queries_per_kind=cfg.consistency.max_queries_per_kind,
         respell=variant.respell_map,
+        protected=tuple(cfg.consistency.seeded_names),
         dictionary=cfg.spellcheck.dictionary or variant.dictionary)
     consistency_findings = to_findings(report, doc.paragraphs)
     if consistency_findings:

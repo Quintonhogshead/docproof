@@ -57,6 +57,9 @@ FREE_FORM: frozenset[str] = frozenset({
     "heading_case",       # sweeps.py — headings set in title case
     "fact_check",         # factcheck.py — the external-world read
     "copyedit",           # flights.py LANE — the copy-edit flights lane
+    "anachronism",        # genrescans.py — genre-pack query-only scan
+    "citation_format",    # genrescans.py — genre-pack query-only scan
+    "reading_level",      # genrescans.py — genre-pack query-only scan
 })
 
 # Every scripted sweep's key is free-form too. They are enumerated by
@@ -132,6 +135,10 @@ def will_produce(cfg, label: str, *, known_types=None) -> str:
         return RAN if cfg.style.unclosed_quote_queries else DID_NOT_RUN
     if label == "heading_case":
         return RAN if cfg.style.heading_title_case else DID_NOT_RUN
+    if label in ("anachronism", "citation_format", "reading_level"):
+        # One level deeper than `_SWITCH` supports: each lives under
+        # cfg.genre_scans.<label>.enabled, not a bare cfg.<label>.enabled.
+        return RAN if getattr(cfg.genre_scans, label).enabled else DID_NOT_RUN
     switch = _SWITCH.get(label)
     if switch is not None:
         return RAN if getattr(cfg, switch).enabled else DID_NOT_RUN
