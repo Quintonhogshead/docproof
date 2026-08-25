@@ -26,9 +26,11 @@ it should find, and when you'll stop.
    confirm + both gates. Copy-edit lane: flight deck on the PROOFREAD text,
    judge posture from the profile's genre. Genre pack scans as configured.
    Bespoke sweeps from the profile, each listed individually.
-2. **Config discipline.** Write the full run config; restate every section you
-   touch (a config REPLACES default.yaml — an omitted `sweeps:` kills all
-   sweeps). Per-category `passes`/`token_budget` knobs are per-run only.
+2. **Config discipline.** Get knob names, defaults, and mechanics from
+   `KNOBS.md` — never `cat` `config.py`/`default.yaml`/`sweeps.py` into context.
+   Write the full run config; restate every section you touch (a config REPLACES
+   default.yaml — an omitted `sweeps:` kills all sweeps). Per-category
+   `passes`/`token_budget` knobs are per-run only.
 3. **Price each line** = words/1000 × calibrated rate. Sum, add 15% headroom,
    compare to budget tier. Mark which lines are $0.
 4. **Expected yield** per line from calibration/recall history (seeded-recall

@@ -8,6 +8,14 @@ description: Profile a manuscript before any paid work — genre, posture, tics,
 Goal: a profile JSON the plan and every later stage trusts. Spend nothing, or
 at most one cheap model call to confirm genre and curate tics.
 
+**Context discipline (this stage is where the book leaks in).** Do NOT read the
+whole extracted manuscript into your context — that block then rides every turn
+for the rest of the run. Send scans to files and read back only summaries:
+`docproof inventory IN > runs/inventory.txt` then `head`/`grep`; grep the
+extracted text for tics/proper-nouns and read only the matching lines with a
+line or two of context. You are building counts and samples, not memorizing the
+book.
+
 ## Procedure
 
 1. **Structure scan ($0).** Word count, chapter map, heading style (structural:
