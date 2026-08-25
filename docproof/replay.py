@@ -1,0 +1,216 @@
+"""Shared machinery for `docproof import-findings` and `docproof replay`.
+
+Both verbs turn a findings list that already exists — produced outside
+docproof entirely, or paid for by docproof itself on an earlier run — into a
+$0 deliverable: shape-check every row, anchor it against the prepared
+manuscript, sanitize what actually lands in the document, and run finish()
+with every paid pass switched off.
+
+The one place the two genuinely differ is provenance, and it changes how much
+a row's own `error_type` can be trusted:
+
+* `import-findings`' rows come from outside docproof — a subagent flight, a
+  hand-built JSON file — and an `error_type` on them, if present at all,
+  carries no reliable channel information. The Redding stand-in run hit this
+  the hard way: a finding labelled "general_error" is channel:query in the
+  shipped registry, so replaying it through the ordinary channel logic
+  silently turns it into a margin comment instead of a tracked change, and
+  the run needed a hand-rolled curated_fix.yaml to force those rows onto the
+  edit channel. `import-findings` bakes that fix in: every row that does not
+  already name a known channel:change type is relabelled to a dedicated
+  edit-channel type (`imported_edit`, config/error_types/imported_edit.yaml)
+  so a plain findings dump always lands as a tracked change, no YAML of your
+  own required. See `resolve_error_type`.
+
+* `replay`'s rows came FROM a docproof run — a per-run findings checkpoint or
+  a finished run's findings.json — so their `error_type` is already one of
+  ours, correctly channelled. Replaying must not relabel them: forcing a
+  continuity question onto the edit channel on replay is not a faithful
+  rebuild, it is a different (and wrong) deliverable. So replay leaves
+  `error_type` alone and lets the full registry's channel assignments route
+  it, exactly as any other run would.
+
+Both sanitize `corrected_text` — straight quotes to curly, via the same
+context-aware curler normalize.py uses on ingest — before it reaches the
+document: a replayed row has round-tripped through at least one JSON file,
+often written by a different model or a hand-editor, and straight quotes creep
+in. `original_text` is never touched by this: sanitizing the anchor text but
+not the manuscript's own characters at that span would make what should be a
+quote-only touch-up read as a change to the whole surrounding sentence.
+"""
+from __future__ import annotations
+
+import dataclasses
+import itertools
+import json
+from pathlib import Path
+from typing import Any
+
+from .config import Config
+from .error_registry import ErrorType, load_error_types, shipped_keys
+from .models import Finding
+from .normalize import normalize_text
+from .variants import Variant
+
+DEFAULT_IMPORT_TYPE = "imported_edit"
+
+_FINDING_FIELDS = {f.name for f in dataclasses.fields(Finding)}
+
+
+def zero_paid_passes(cfg: Config) -> None:
+    """Silence every model-backed stage `prepare()` or `finish()` could run,
+    so an import/replay run makes no provider call regardless of what the
+    loaded config says. Mirrors `docproof sweep`'s isolation (see cmd_sweep in
+    __main__.py) but is a strict superset of it: sweep relies on several of
+    these already defaulting to off in config/default.yaml, this zeroes them
+    outright so the $0 guarantee does not depend on that.
+
+    Deliberately leaves the deterministic, free stages — the scripted sweeps,
+    the consistency scan, the spell scan — as the caller configured them: a
+    replayed deliverable is meant to be a full deliverable, not a bare echo of
+    the input rows."""
+    # prepare() itself can call a provider, for these two:
+    cfg.storysheet.enabled = False
+    cfg.candidate_screening.mode = "off"
+    # finish()'s paid stages. ensemble.enabled is a read-only property (true
+    # whenever `detectors` is non-empty), so it is disabled by emptying the
+    # list that actually drives it.
+    cfg.ensemble.detectors = []
+    cfg.sapling.enabled = False
+    cfg.repair.enabled = False
+    cfg.low_confidence.confirm = False
+    cfg.smoothing.enabled = False
+    cfg.continuity.enabled = False
+    cfg.chapter_continuity.enabled = False
+    cfg.meaning_check.enabled = False
+    cfg.fix_check.enabled = False
+    cfg.rounds.count = 1
+
+
+def rows_from_payload(raw: Any) -> list[dict]:
+    """Unwrap a contract envelope, a run_checkpoint.py file, a findings.json
+    report, or a bare array — every one of those either IS a findings array or
+    carries one under a `findings` key."""
+    rows = raw.get("findings", raw) if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        raise ValueError(
+            "expected a JSON array of findings, or an object with a "
+            "'findings' array (the contract envelope, a findings.checkpoint.json, "
+            "or a findings.json report)")
+    return rows
+
+
+def load_findings_file(path: str | Path) -> list[dict]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    return rows_from_payload(raw)
+
+
+def resolve_error_type(raw_type: str, registry: dict[str, ErrorType],
+                       default_key: str) -> tuple[str, bool]:
+    """(key, remapped). `raw_type` is kept as-is when it names a known
+    channel:change type; otherwise it is replaced by `default_key` — this is
+    the whole of the "don't hand-roll a curated_fix.yaml" fix. A type this run
+    never loaded (an unrecognised key, or one that is query/format channel)
+    is exactly what must not reach validate_findings unchanged: an unknown key
+    is not in `query_types`/`format_types` either, so it would silently fall
+    through to the edit channel anyway on THIS run, but a reader of the
+    findings file would see the original (wrong) label."""
+    et = registry.get(raw_type) if raw_type else None
+    if et is not None and et.channel == "change":
+        return raw_type, False
+    return default_key, True
+
+
+def sanitize_corrected(text: str, variant: Variant | None) -> str:
+    """Straight quotes to curly, the same context-aware curler ingest uses.
+    Only ever called on corrected_text — never on original_text, which must
+    stay byte-identical to what the manuscript actually contains for the
+    anchor to find it at all."""
+    return normalize_text(text, quotes=True, spaces=False, variant=variant)
+
+
+def build_findings(rows: list[dict], *, variant: Variant | None,
+                   error_dir: str | Path, remap_unchanneled: bool,
+                   id_prefix: str = "import"
+                   ) -> tuple[list[Finding], list[dict], int]:
+    """Rows to `Finding`s. Anchoring is NOT done here — validate_findings (via
+    a dry-run report) or finish() (for a real run) does that — this stage is
+    shape-checking, error-type resolution, and sanitizing only.
+
+    Returns `(findings, rejects, remapped_count)`. `rejects` are rows that
+    failed basic shape validation (missing para_id/original_text/
+    corrected_text, or not a JSON object at all), each with an index and a
+    plain-text reason. An anchor failure is a different thing — the row was
+    well-formed but its quote is not in the manuscript — and shows up later,
+    as status "rejected_no_anchor" on the finding validate_findings returns."""
+    registry: dict[str, ErrorType] = {}
+    if remap_unchanneled:
+        registry = load_error_types(error_dir, sorted(shipped_keys(error_dir)))
+
+    ids = itertools.count(1)
+    findings: list[Finding] = []
+    rejects: list[dict] = []
+    remapped = 0
+    for i, item in enumerate(rows):
+        if not isinstance(item, dict):
+            rejects.append({"index": i, "reason": "not a JSON object"})
+            continue
+        # Tolerate a row shaped like finding_to_dict's superset (findings.json
+        # adds applied/queried/unplaced; run_checkpoint entries are bare) —
+        # only the fields build_findings itself understands are read here.
+        para_id = item.get("para_id")
+        original_text = item.get("original_text")
+        corrected_text = item.get("corrected_text")
+        if not isinstance(para_id, str) or not para_id:
+            rejects.append({"index": i, "row": item,
+                            "reason": "missing or non-string para_id"})
+            continue
+        if not isinstance(original_text, str) or not original_text:
+            rejects.append({"index": i, "row": item,
+                            "reason": "missing or non-string original_text"})
+            continue
+        if not isinstance(corrected_text, str):
+            rejects.append({"index": i, "row": item,
+                            "reason": "missing or non-string corrected_text"})
+            continue
+
+        raw_type = str(item.get("error_type") or "")
+        if remap_unchanneled:
+            resolved_type, was_remapped = resolve_error_type(
+                raw_type, registry, DEFAULT_IMPORT_TYPE)
+        else:
+            resolved_type = raw_type or DEFAULT_IMPORT_TYPE
+            was_remapped = False
+        if was_remapped:
+            remapped += 1
+
+        confidence = item.get("confidence", "medium")
+        if confidence not in ("high", "medium", "low"):
+            confidence = "medium"
+        try:
+            occurrence = int(item.get("occurrence", 1) or 1)
+        except (TypeError, ValueError):
+            occurrence = 1
+
+        findings.append(Finding(
+            finding_id=f"f-{next(ids):04d}",
+            chunk_id=str(item.get("chunk_id") or id_prefix),
+            para_id=para_id,
+            error_type=resolved_type,
+            original_text=original_text,
+            occurrence=occurrence,
+            corrected_text=sanitize_corrected(corrected_text, variant),
+            explanation=str(item.get("explanation") or ""),
+            confidence=confidence,
+            # status/anchor are deliberately NOT carried over from the row:
+            # they belong to whatever run produced it (a different
+            # content_hash may not even hold the same offsets). finish() and
+            # validate_findings re-derive both fresh, the same as any other
+            # source of findings.
+        ))
+    return findings, rejects, remapped
+
+
+__all__ = ["DEFAULT_IMPORT_TYPE", "zero_paid_passes", "rows_from_payload",
+          "load_findings_file", "resolve_error_type", "sanitize_corrected",
+          "build_findings"]

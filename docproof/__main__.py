@@ -80,6 +80,9 @@ def main(argv=None) -> int:
     rev.add_argument("--fix-model",
                      help="which model reads the changes for the fix check "
                           "(default: config fix_check.model)")
+    rev.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result envelope "
+                          "to stdout (see docproof/contract.py)")
 
     sub_batch = sub.add_parser(
         "submit", help="queue a review at batch prices (50%% cheaper, "
@@ -258,6 +261,50 @@ def main(argv=None) -> int:
     mrg.add_argument("--json", action="store_true",
                      help="also print the machine-readable result to stdout")
 
+    imf = sub.add_parser(
+        "import-findings",
+        help="turn a findings file produced outside docproof (a subagent "
+             "flight, a hand-built JSON file) into a $0 tracked-changes "
+             "deliverable — the front door for injecting external findings "
+             "into a build. No API.")
+    imf.add_argument("findings", help="a findings JSON file: the contract "
+                                      "envelope, a findings.json report, or a "
+                                      "bare JSON array of finding dicts "
+                                      "(para_id, original_text, "
+                                      "corrected_text, and optionally "
+                                      "occurrence/confidence/explanation/"
+                                      "error_type)")
+    imf.add_argument("manuscript", help="the .docx or .idml manuscript these "
+                                        "findings were produced against")
+    imf.add_argument("--config", default="config/default.yaml")
+    imf.add_argument("--out", help="output directory (default: from config)")
+    imf.add_argument("--dry-run", action="store_true",
+                     help="anchor and channel every row and report what would "
+                          "happen; write nothing")
+    imf.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result envelope "
+                          "to stdout")
+
+    rpl = sub.add_parser(
+        "replay",
+        help="rebuild a deliverable at $0 from an existing findings "
+             "checkpoint (run_checkpoint.py's findings.checkpoint.json) or a "
+             "finished run's findings.json. No API.")
+    rpl.add_argument("findings", help="findings.checkpoint.json, "
+                                      "findings.json, or any file holding a "
+                                      "'findings' array in that shape")
+    rpl.add_argument("manuscript", help="the .docx or .idml manuscript to "
+                                        "rebuild against (normally the same "
+                                        "one the original run reviewed)")
+    rpl.add_argument("--config", default="config/default.yaml")
+    rpl.add_argument("--out", help="output directory (default: from config)")
+    rpl.add_argument("--dry-run", action="store_true",
+                     help="anchor and channel every row and report what would "
+                          "happen; write nothing")
+    rpl.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result envelope "
+                          "to stdout")
+
     _galley_parser(sub)
 
     args = ap.parse_args(argv)
@@ -266,6 +313,7 @@ def main(argv=None) -> int:
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
             "eval": cmd_eval, "compare": cmd_compare, "sweep": cmd_sweep,
             "merge": cmd_merge,
+            "import-findings": cmd_import_findings, "replay": cmd_replay,
             "galley": cmd_galley}[args.cmd](args)
 
 
@@ -733,6 +781,18 @@ def cmd_review(args) -> int:
                   outputs.summary_md, outputs.findings_json, out / "run.log"):
             if p is not None:
                 print(f"  {p}")
+        if args.json:
+            from .contract import build_envelope
+            payload = json.loads(outputs.findings_json.read_text("utf-8"))
+            envelope = build_envelope(
+                findings=payload.get("findings", []),
+                usage=_usage_from_payload(payload), fallback_model=cfg.api.model,
+                # Multi-round review runs its own per-round driver rather than
+                # this module's run_sync/checkpoint path, so neither a
+                # CoverageLedger nor a resumable checkpoint is available here
+                # to report — both simply read as empty/null.
+                coverage=None, checkpoint=None)
+            print(json.dumps(envelope, ensure_ascii=False))
         return 0
 
     # prepare() is deterministic and API-free, so it runs before any provider is
@@ -747,9 +807,19 @@ def cmd_review(args) -> int:
         return 2
 
     from . import run_checkpoint
-    fingerprint = {"content_hash": prepared.content_hash,
-                   "model": cfg.api.model,
-                   "config": str(Path(args.config).resolve())}
+    from .batch import pass_prompts
+    from .checkpoint import Checkpoint
+    # One fingerprint, shared by both checkpoint mechanisms below: the
+    # findings-boundary one (run_checkpoint, survives a crash AFTER run_sync)
+    # and the per-call one (Checkpoint, survives a crash DURING it — see
+    # app/jobs.py's _checkpoint for the pattern this mirrors). Hashing the
+    # config's full contents rather than its path is deliberate: a stale
+    # fingerprint that only named the path would replay findings from BEFORE
+    # an edit to that file, which is a correctness bug, not a cost one.
+    fingerprint = {"kind": "review", "content_hash": prepared.content_hash,
+                   "config": cfg.model_dump(mode="json"),
+                   "prompts": pass_prompts(cfg, prepared),
+                   "selection": _selection(args)}
 
     coverage = None
     resumed = False
@@ -764,6 +834,7 @@ def cmd_review(args) -> int:
             print("No usable checkpoint in the output directory; "
                   "reviewing fresh.")
 
+    call_checkpoint_path = out / "checkpoint.json"
     if not resumed:
         if args.mock_findings:
             canned = _load_mocks(args.mock_findings)
@@ -777,7 +848,21 @@ def cmd_review(args) -> int:
                 print(f"error: {e}", file=sys.stderr)
                 return 2
             coverage = CoverageLedger()
-            findings, usage = run_sync(cfg, prepared, provider, coverage=coverage)
+            # The intra-run checkpoint: each completed (pass, chunk) call lands
+            # here as it arrives, so a crash mid run_sync — not just after it,
+            # which is all the findings-boundary checkpoint below covers — is
+            # resumable too. No separate flag gates this the way --resume gates
+            # the findings-boundary replay: presence plus a matching
+            # fingerprint is what makes it apply (the same rule Checkpoint.load
+            # already enforces), so a fresh run's file simply is not there, and
+            # `docproof review` picks an interrupted run back up on its own,
+            # exactly as the app path does.
+            call_checkpoint = Checkpoint(call_checkpoint_path,
+                                         fingerprint=fingerprint)
+            call_checkpoint.load()
+            findings, usage = run_sync(cfg, prepared, provider,
+                                       coverage=coverage,
+                                       checkpoint=call_checkpoint)
             # The paid reads are done. Snapshot them before finish()'s late
             # stages so a crash there never buys the detector passes again.
             run_checkpoint.save(out, findings=findings, usage=usage,
@@ -785,14 +870,26 @@ def cmd_review(args) -> int:
 
     outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                      source_path=args.input, coverage=coverage)
-    # finish() wrote the deliverable and findings.json; the checkpoint has done
-    # its job and must not shadow a later, different run.
+    # finish() wrote the deliverable and findings.json; both checkpoints have
+    # done their job and must not shadow a later, different run.
     run_checkpoint.clear(out)
+    call_checkpoint_path.unlink(missing_ok=True)
     print(f"\n{_result_line(outputs)}.")
     for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
               outputs.findings_json, out / "run.log"):
         if p is not None:
             print(f"  {p}")
+    if args.json:
+        from .contract import build_envelope
+        payload = json.loads(outputs.findings_json.read_text("utf-8"))
+        # The checkpoint field is almost always null here: both checkpoints
+        # were just deleted above, since the run they made resumable finished.
+        # A caller sees a path there chiefly when reading an interrupted job's
+        # directory rather than a completed --json print.
+        envelope = build_envelope(findings=payload.get("findings", []),
+                                  usage=usage, fallback_model=cfg.api.model,
+                                  coverage=coverage, checkpoint=None)
+        print(json.dumps(envelope, ensure_ascii=False))
     return 0
 
 
@@ -1276,13 +1373,17 @@ def cmd_sweep(args) -> int:
         print("\n  Dry run — nothing written. Re-run with --apply to write "
               "tracked changes.")
         if args.json:
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(_envelope(findings=findings, usage=Usage(),
+                                       model=cfg.api.model, extra=result),
+                             ensure_ascii=False))
         return 0
 
     if report.flagged == 0:
         print("\n  Nothing to apply.")
         if args.json:
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(_envelope(findings=findings, usage=Usage(),
+                                       model=cfg.api.model, extra=result),
+                             ensure_ascii=False))
         return 0
     if not idempotent and not args.force:
         print(f"\nerror: refusing to apply a non-idempotent rule "
@@ -1312,7 +1413,118 @@ def cmd_sweep(args) -> int:
     if args.json:
         result["reviewed_path"] = (str(outputs.reviewed_path)
                                    if outputs.reviewed_path else None)
-        print(json.dumps(result, ensure_ascii=False))
+        payload = json.loads(outputs.findings_json.read_text("utf-8"))
+        print(json.dumps(_envelope(findings=payload.get("findings", []),
+                                   usage=usage, model=cfg.api.model,
+                                   extra=result), ensure_ascii=False))
+    return 0
+
+
+# --- import-findings / replay --------------------------------------------------
+
+def cmd_import_findings(args) -> int:
+    """`docproof import-findings`: the front door for injecting a findings file
+    produced OUTSIDE docproof (a subagent flight, a hand-built JSON file) into a
+    $0 tracked-changes deliverable. See docproof/replay.py for the machinery
+    and, in particular, why every row's error_type is forced onto an
+    edit-channel type rather than trusted."""
+    return _import_or_replay(args, remap_unchanneled=True, id_prefix="import")
+
+
+def cmd_replay(args) -> int:
+    """`docproof replay`: rebuild a deliverable at $0 from a findings checkpoint
+    or a finished run's findings.json — docproof's OWN prior output, so unlike
+    import-findings, each row's error_type is trusted and left alone. See
+    docproof/replay.py."""
+    return _import_or_replay(args, remap_unchanneled=False, id_prefix="replay")
+
+
+def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
+    from .replay import (DEFAULT_IMPORT_TYPE, build_findings,
+                        load_findings_file, zero_paid_passes)
+    from .validator import validate_findings
+
+    cfg = load_config(args.config)
+    if args.out:
+        cfg.output_dir = args.out
+    # Zeroed BEFORE prepare(): storysheet and candidate_screening are the two
+    # stages prepare() itself can spend on, and both must be off no matter what
+    # the loaded config says — see zero_paid_passes' docstring.
+    zero_paid_passes(cfg)
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+    error_dir = Path(args.config).parent / "error_types"
+
+    try:
+        rows = load_findings_file(args.findings)
+    except (OSError, ValueError) as e:
+        print(f"error: {args.findings}: {e}", file=sys.stderr)
+        return 2
+    except json.JSONDecodeError as e:
+        print(f"error: {args.findings}: not valid JSON ({e})", file=sys.stderr)
+        return 2
+
+    try:
+        prepared = prepare(cfg, args.manuscript, error_dir)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    findings, rejects, remapped = build_findings(
+        rows, variant=prepared.variant, error_dir=error_dir,
+        remap_unchanneled=remap_unchanneled, id_prefix=id_prefix)
+
+    checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
+                                query_types=prepared.query_types,
+                                format_types=prepared.format_types)
+    tally: dict[str, int] = {}
+    for f in checked:
+        tally[f.status] = tally.get(f.status, 0) + 1
+
+    verb = "import-findings" if remap_unchanneled else "replay"
+    print(f"\n`docproof {verb}`: {len(rows)} row(s) read — {len(findings)} "
+          f"usable, {len(rejects)} malformed"
+          + (f", {remapped} remapped onto '{DEFAULT_IMPORT_TYPE}' (no reliable "
+             f"channel on the row)" if remap_unchanneled else "") + ".")
+    for status in sorted(tally):
+        print(f"  {status:<24} {tally[status]}")
+    if rejects:
+        print("\n  malformed row(s):")
+        for r in rejects[:10]:
+            print(f"    [{r['index']}] {r['reason']}")
+        if len(rejects) > 10:
+            print(f"    … and {len(rejects) - 10} more")
+
+    extra = {"rows": len(rows), "usable": len(findings),
+             "malformed": rejects, "remapped": remapped, "tally": tally}
+
+    if args.dry_run:
+        print("\n  Dry run — nothing written. Re-run without --dry-run to "
+              "write the deliverable.")
+        if args.json:
+            print(json.dumps(_envelope(findings=checked, usage=Usage(),
+                                       model=cfg.api.model, extra=extra),
+                             ensure_ascii=False))
+        return 0
+
+    usage = Usage()
+    try:
+        outputs = finish(prepared, findings, usage, cfg, out_dir=out,
+                         source_path=args.manuscript)
+    except (IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"\n{_result_line(outputs)}.")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json, out / "run.log"):
+        if p is not None:
+            print(f"  {p}")
+    if args.json:
+        payload = json.loads(outputs.findings_json.read_text("utf-8"))
+        print(json.dumps(_envelope(findings=payload.get("findings", []),
+                                   usage=usage, model=cfg.api.model,
+                                   extra=extra), ensure_ascii=False))
     return 0
 
 
@@ -1565,8 +1777,6 @@ def _galley_audit(args) -> int:
         "n_samples": args.n_samples,
         "hypotheses": [h.to_json() for h in hyps],
         "densities": [d.to_json() for d in densities],
-        "cost_usd": round(cost, 4),
-        "api_calls": usage.api_calls,
     }
     out.mkdir(parents=True, exist_ok=True)
     audit_path = out / "audit.json"
@@ -1587,7 +1797,11 @@ def _galley_audit(args) -> int:
         print(f"  - ch {h.chapter}: {h.error_class} ({h.confidence}) — {why}")
     print(f"\n  {audit_path}")
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False))
+        # audit finds HYPOTHESES about missed errors, not Findings — the
+        # envelope's `findings` array stays empty; the real payload rides
+        # `extra`. `cost` is real: this is the one galley verb that spends.
+        print(json.dumps(_envelope(findings=(), usage=usage, model=model,
+                                   extra=payload), ensure_ascii=False))
     return 0
 
 
@@ -1627,20 +1841,26 @@ def _galley_letter(args) -> int:
           f"{open_queries} open query/-ies, {_money(cf.budget.spent_usd)} spent.")
     print(f"  {letter_path}\n  {style_path}")
     if args.json:
-        print(json.dumps({
-            "book": cf.book,
-            "letter": str(letter_path),
-            "style_sheet": str(style_path),
-            "findings": len(cf.findings),
-            "waves": len(cf.waves),
-            "open_queries": open_queries,
-            "spent_usd": round(cf.budget.spent_usd, 4),
-        }, ensure_ascii=False))
+        # No API call here — render_all is a report over decisions the case
+        # file already recorded — so cost is zero. `cf.findings` are galley
+        # GFindings, a different shape than the envelope's Finding-shaped
+        # `findings`; the count rides `extra` instead of the array itself.
+        print(json.dumps(_envelope(findings=(), usage=Usage(),
+                                   model=cfg.api.model if args.source else "",
+                                   extra={
+                                       "book": cf.book,
+                                       "letter": str(letter_path),
+                                       "style_sheet": str(style_path),
+                                       "findings": len(cf.findings),
+                                       "waves": len(cf.waves),
+                                       "open_queries": open_queries,
+                                       "spent_usd": round(cf.budget.spent_usd, 4),
+                                   }), ensure_ascii=False))
     return 0
 
 
 def _galley_seed(args) -> int:
-    from galley.ingest import manuscript_from_source
+    from galley.ingest import manuscript_from_source, write_manuscript_docx
     from galley.seeding import seed_copy
 
     cfg = load_config(args.config)
@@ -1664,6 +1884,23 @@ def _galley_seed(args) -> int:
         json.dumps(key.to_json(), indent=2, ensure_ascii=False),
         encoding="utf-8")
 
+    # Closes the seed -> review -> score loop: without a real document, the
+    # only thing to hand a review was this JSON, which nothing reviews. A
+    # .docx source materializes one directly; other formats (.idml) still get
+    # the JSON alone until write_manuscript_docx grows a second writer.
+    seeded_docx: Path | None = None
+    docx_error: str | None = None
+    if Path(args.source).suffix.lower() == ".docx":
+        try:
+            seeded_docx = write_manuscript_docx(
+                args.source, cfg, seeded, out / "seeded_manuscript.docx")
+        except (IngestError, FileNotFoundError, ValueError) as e:
+            docx_error = str(e)
+    else:
+        docx_error = (f"{Path(args.source).suffix or '(no extension)'} source: "
+                      f"only .docx can be materialized into a reviewable "
+                      f"document today")
+
     by_type: dict[str, int] = {}
     for pe in key.planted:
         by_type[pe.error_type] = by_type.get(pe.error_type, 0) + 1
@@ -1676,17 +1913,24 @@ def _galley_seed(args) -> int:
         print("  (fewer than requested — the sampled chapters ran out of "
               "mutable sites)")
     print(f"\n  {seeded_path}\n  {key_path}")
-    print("  Next: run the fleet on the seeded text, then `galley score` its "
-          "findings against the answer key.")
+    if seeded_docx is not None:
+        print(f"  {seeded_docx}")
+        print(f"  Next: `docproof review {seeded_docx}`, then `galley score` "
+              f"its findings.json against {key_path.name}.")
+    else:
+        print(f"  (no reviewable document written: {docx_error})")
     if args.json:
-        print(json.dumps({
-            "seeded_manuscript": str(seeded_path),
-            "answer_key": str(key_path),
-            "planted": len(key.planted),
-            "requested": key.requested,
-            "seeded_chapters": list(key.seeded_chapters),
-            "rng_seed": key.rng_seed,
-        }, ensure_ascii=False))
+        print(json.dumps(_envelope(findings=(), usage=Usage(),
+                                   model=cfg.api.model, extra={
+                                       "seeded_manuscript": str(seeded_path),
+                                       "seeded_docx": (str(seeded_docx)
+                                                       if seeded_docx else None),
+                                       "answer_key": str(key_path),
+                                       "planted": len(key.planted),
+                                       "requested": key.requested,
+                                       "seeded_chapters": list(key.seeded_chapters),
+                                       "rng_seed": key.rng_seed,
+                                   }), ensure_ascii=False))
     return 0
 
 
@@ -1735,7 +1979,11 @@ def _galley_score(args) -> int:
     print(f"\n  {est.caveat}")
     print(f"\n  {recall_path}")
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False))
+        # `findings` here are galley GFindings — a different shape than the
+        # envelope's Finding-shaped `findings` array — and no API call was
+        # made, so cost is zero; the recall payload rides `extra`.
+        print(json.dumps(_envelope(findings=(), usage=Usage(), model="",
+                                   extra=payload), ensure_ascii=False))
     return 0
 
 
@@ -2097,6 +2345,29 @@ def _plain_state(job) -> str:
             "ready": "ready to collect",
             "done": "finished",
             "failed": "needs attention"}.get(job.state, job.state)
+
+
+def _envelope(*, findings, usage: Usage, model: str, coverage=None,
+             checkpoint=None, extra: dict | None = None) -> dict:
+    """Thin call-site wrapper over docproof.contract.build_envelope, so every
+    verb's --json code reads the same way. See docproof/contract.py for the
+    envelope's shape and the reasoning behind it."""
+    from .contract import build_envelope
+    return build_envelope(findings=findings, usage=usage, fallback_model=model,
+                          coverage=coverage, checkpoint=checkpoint, extra=extra)
+
+
+def _usage_from_payload(payload: dict) -> Usage:
+    """Reconstruct a Usage from a findings.json's "usage" object — the same
+    shape `dataclasses.asdict(usage)` produced it in, so this is the read side
+    of that write. Used where a caller has no live Usage to hand the envelope
+    builder (multi-round review keeps its own driver's totals off this
+    module's beaten path); malformed input degrades to an all-zero Usage
+    rather than failing the whole --json print over a cost figure."""
+    try:
+        return Usage(**(payload.get("usage") or {}))
+    except TypeError:
+        return Usage()
 
 
 def _load_mocks(path: str):
