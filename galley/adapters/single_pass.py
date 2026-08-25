@@ -167,7 +167,13 @@ class SinglePassAdapter:
         dropped = 0
         seen: set[tuple] = set()
         for f in validated:
-            if f.anchor is None:
+            # Only a finding the validator both anchored AND kept as a tracked
+            # change is a real correction — a "query" or "skipped_low_confidence"
+            # finding carries an Anchor too (every channel gets one) but its
+            # insert_text is not a fix (a query's is always empty), and would
+            # hand the case file a fabricated deletion if converted. See
+            # docproof_ladder.gfindings_from_json's matching guard.
+            if f.anchor is None or f.status != "validated":
                 dropped += 1
                 continue
             key = (f.para_id, f.anchor.start, f.anchor.end, f.error_type,

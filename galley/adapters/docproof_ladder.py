@@ -82,9 +82,15 @@ def gfindings_from_json(
 ) -> tuple[list[GFinding], int]:
     """Convert a run's ``findings.json`` into GFindings.
 
-    Only findings the validator anchored carry a usable span; unanchored findings
-    (unplaced) are counted and returned as the second element so the caller can
-    note the loss. Conversion is lossless on span, error type, and the fix text.
+    Only findings the validator both anchored AND kept as a tracked change
+    (``status == "validated"``) carry a usable, applied fix; an anchored
+    "query" or "skipped_low_confidence" finding has an Anchor too (the
+    validator sets one for every channel), but its ``insert_text`` is not a
+    real correction — a query's is always empty — and converting it into a
+    GFinding would hand Galley's downstream case file a fabricated deletion.
+    Unanchored and non-validated findings alike are counted and returned as
+    the second element so the caller can note the loss. Conversion is lossless
+    on span, error type, and the fix text for every finding it does keep.
     """
 
     payload = json.loads(Path(findings_json).read_text(encoding="utf-8"))
@@ -92,7 +98,7 @@ def gfindings_from_json(
     dropped = 0
     for f in payload.get("findings", []):
         anchor = f.get("anchor")
-        if not anchor:
+        if not anchor or f.get("status") != "validated":
             dropped += 1
             continue
         out.append(

@@ -319,6 +319,11 @@ def _result_name(job: Job, which: str) -> str | None:
         # The read-only InDesign check tour — an ExtendScript the designer runs to
         # be walked to each composition check and open flag in the live document.
         "check-tour": f"{stem}_checks.jsx",
+        # Galley's two prose deliverables: the editorial cover letter (what ran,
+        # what it cost, every open query) and the per-book style-sheet decision
+        # log. See galley.letter.render_all.
+        "letter": "letter.md",
+        "style-sheet": "style-sheet.md",
     }
     if job.is_corrections and which in ("document", "docx"):
         # One "open it" button gives back the corrected file, whatever the

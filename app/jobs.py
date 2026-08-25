@@ -623,6 +623,24 @@ class Job:
                   and (Path(self.results_dir)
                        / "candidate-screening-report.md").is_file())
                  or "candidate-screening-report.md" in self.drive_files))
+        # Galley's deliverables: the adjudicated tracked-changes manuscript
+        # (same reviewed-document naming a plain review uses — the "document"/
+        # "docx" download buttons already resolve it), and the two prose
+        # documents that fall out of a finished run. Each is independently
+        # best-effort (see JobRunner._run_galley), so the card offers only the
+        # ones that actually landed on disk.
+        d["has_galley_document"] = bool(
+            d["format"] and self.kind == "galley" and self.state == "done"
+            and self.results_dir
+            and (Path(self.results_dir)
+                 / get_format(self.filename).reviewed_name(self.filename)
+                 ).is_file())
+        d["has_galley_letter"] = bool(
+            self.kind == "galley" and self.state == "done" and self.results_dir
+            and (Path(self.results_dir) / "letter.md").is_file())
+        d["has_galley_style_sheet"] = bool(
+            self.kind == "galley" and self.state == "done" and self.results_dir
+            and (Path(self.results_dir) / "style-sheet.md").is_file())
         # A click-through to this job's folder in the Drive archive, once it has
         # one. The card shows "In Drive" when archived, so the deliverable is one
         # link away even after the local copy is recycled on a redeploy.
@@ -1989,8 +2007,67 @@ class JobRunner:
             ),
         }
 
+    def _galley_screen_provider(self, cfg: Config, cf):
+        """A provider for the panel dispute screen, or ``None``.
+
+        The paid screen (``galley.adjudicate.screen_disputes``) only makes
+        sense once a later wave exists to dispute wave one — a T0/T1 run never
+        opens a second wave, so building a provider for it would be a key
+        requirement (and a cost) a plain ladder run never needed. Any failure
+        to build one (no key, a bad model) degrades to arbitration-only rather
+        than failing the whole run — the panel is a precision refinement, not
+        a requirement for a deliverable to exist."""
+        if not any(w.index > 1 for w in cf.waves):
+            return None
+        try:
+            return self._provider(cfg)
+        except ProviderError:
+            log.info("Galley dispute screen skipped: no provider for %s",
+                     cfg.api.model)
+            return None
+        except Exception:                     # noqa: BLE001 - screen is a refinement
+            log.warning("Could not build the galley dispute-screen provider; "
+                        "adjudicating by arbitration only", exc_info=True)
+            return None
+
+    def _ingest_galley_memory(self, cf) -> None:
+        """Fold this run's adjudication verdicts into the durable memory store
+        as precedents — how each mark was ruled on this book, and why.
+
+        Only findings that were actually adjudicated (carry a Verdict) become
+        precedents; a wave-one finding that held its span uncontested and was
+        never disputed has no ruling to record. Best-effort: memory is a
+        compounding convenience the practitioner leans on for the NEXT book,
+        not this job's product, so any failure here is a warning, never a
+        reason to fail an otherwise-finished job."""
+        if not cf.verdicts:
+            return
+        from galley.memory.ingest import ingest_job
+        from galley.memory.store import MemoryStore
+
+        finding_by_id = {f.id: f for f in cf.findings}
+        items = []
+        for v in cf.verdicts:
+            f = finding_by_id.get(v.finding_id)
+            items.append({
+                "disposition": v.ruling,
+                "error_type": (f.error_type if f else "") or "unknown",
+                "find_text": f.find if f else "",
+                "reason": v.reason,
+                "ruled_by": v.judge or "galley",
+            })
+        job_json = {"kind": "review", "book": cf.book, "findings": items}
+        store = MemoryStore.open(self.store.paths.galley_memory_db, now=_now)
+        try:
+            summary = ingest_job(store, job_json, book=cf.book)
+            log.info("Galley memory ingest for %r: %d new, %d duplicate, "
+                     "%d skipped", cf.book, summary.ingested,
+                     summary.duplicates, summary.skipped)
+        finally:
+            store.close()
+
     def _run_galley(self, job_id: str) -> None:
-        """Run a galley job: the practitioner wave loop over the case file.
+        """Run a galley job: the practitioner wave loop, then the deliverables.
 
         Follows the corrections runner's shape — CAS to running, honour a pending
         cancel, claim a results folder — then hands off to the orchestrator, which
@@ -1998,12 +2075,25 @@ class JobRunner:
         run's spend rides the shared `cost` field (shown against `budget_usd`), and
         each wave's coverage notes land in `warnings` so a 'done' galley job that
         left a hole does not read as a clean one.
+
+        Once the wave loop finishes, the case file alone is not a deliverable:
+        the findings are adjudicated (verdicts written back into the case file),
+        the adjudicated kept findings drive a real $0 tracked-changes manuscript
+        (galley.deliverable), the editorial letter and style sheet are rendered
+        alongside it, and the run's verdicts are folded into the durable memory
+        store. Each of those four steps is independently best-effort AFTER the
+        wave loop itself succeeds — a failure in any one is a warning on the
+        job, not a reason to discard a wave loop that already spent real money
+        and found real errors.
         """
+        from galley.adjudicate import adjudicate
         from galley.brain import (
             DEFAULT_MARGINAL_STOP_USD,
             make_auditor,
             make_planner,
         )
+        from galley.deliverable import build_manuscript_deliverable
+        from galley.letter import render_all
         from galley.orchestrator import run_galley
 
         job = self.store.get(job_id)
@@ -2064,6 +2154,47 @@ class JobRunner:
             for action in wave.actions:
                 if isinstance(action, dict):
                     warnings.extend(action.get("coverage_notes", []))
+
+        # Adjudicate: span arbitration always; the paid dispute screen only
+        # when a later wave exists to dispute wave one and a provider is
+        # available. Verdicts are written back into the case file — this is
+        # the slot the letter reads, and until now nothing ever filled it.
+        screen_provider = self._galley_screen_provider(cfg, cf)
+        adjudication = adjudicate(cf.findings, ms, screen_provider,
+                                  model=cfg.api.model)
+        cf.verdicts = adjudication.verdicts
+        cf.save(out / "casefile.json")
+
+        # The reviewed manuscript: adjudicated kept findings, driven through
+        # DocProof's own finish() at $0. build_manuscript_deliverable guards
+        # itself with assert_deliverable first — never ship a seeded
+        # (planted-error) copy — though ms here is always the job's own
+        # manuscript, never a seeded one.
+        try:
+            deliverable = build_manuscript_deliverable(
+                adjudication, ms, source_path=job.source_path, cfg=cfg,
+                out_dir=out)
+            warnings.extend(deliverable.dropped)
+        except Exception:                     # noqa: BLE001 - a warning, not a failure
+            log.exception("Galley deliverable build failed for job %s", job_id)
+            warnings.append(
+                "The reviewed manuscript could not be built from this run's "
+                "findings; the case file and letter are still available.")
+
+        # The editorial letter + style sheet, alongside whatever the
+        # deliverable step produced (or didn't).
+        try:
+            render_all(cf, out, ms=ms)
+        except Exception:                     # noqa: BLE001 - a warning, not a failure
+            log.exception("Galley letter rendering failed for job %s", job_id)
+            warnings.append("The editorial letter could not be rendered.")
+
+        # Memory ingest: best-effort, never a reason to fail a finished job.
+        try:
+            self._ingest_galley_memory(cf)
+        except Exception:                     # noqa: BLE001 - memory is a bonus
+            log.warning("Galley memory ingest failed for job %s", job_id,
+                       exc_info=True)
 
         self.store.update(
             job_id, state="done", results_dir=str(out), error=None, stage="",

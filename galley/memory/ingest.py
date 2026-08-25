@@ -70,6 +70,10 @@ _RULING_NORMALIZATION: dict[str, str] = {
     "replace": "accept",
     "replaced": "accept",
     "substitute": "accept",
+    # galley's own adjudication vocabulary (galley.contracts.RULINGS): "keep"
+    # is that vocabulary's "this finding held its span/passed the panel", the
+    # same disposition "accept"/"applied" name for corrections and review.
+    "keep": "accept",
     # reject family (a dismissed mark == the proofreader's mark was rejected)
     "reject": "reject",
     "rejected": "reject",
