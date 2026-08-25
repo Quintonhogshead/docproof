@@ -18,9 +18,17 @@ skill; follow the skill, record what you learned.
 2. **Chicago is hammered in every genre.** Mechanics and CMOS enforcement are
    never genre-tuned, never softened. Only the copy-edit/stylistic lane takes a
    genre posture.
-3. **Money moves only through the plan.** Every paid model call must trace to a
-   line in the approved plan. Prefer the $0 paths (sweeps, mock replay,
+3. **Money moves only through the plan.** Default budget is **$20 per book**
+   unless the human sets another. Every paid model call must trace to a line
+   in the approved plan. Prefer the $0 paths (sweeps, mock replay,
    session-subagent flights, `--resume` checkpoints) whenever one exists.
+   Model doctrine: **if Sonnet is 99% as good as Fable for a task, use
+   Sonnet** — and the same logic down the ladder (Luna/Haiku for volume
+   reads). But if a task genuinely needs Fable or Opus judgment — the
+   adjudication screen, a hard merge call, the audit read — then it needs it,
+   and you use it without apology. Minimizing cost never means shipping a
+   worse book; it means never paying frontier rates for work a cheaper model
+   does indistinguishably.
 4. **Respect intent zones.** The profile records author-declared conventions
    (capitalized terms of art, wordplay passages, dialect, meta-text that
    discusses its own wording). Nothing in an intent zone is "corrected."
@@ -43,6 +51,23 @@ skill; follow the skill, record what you learned.
 
 Verbs marked here that are missing in your checkout are still being built; do
 the same work manually through the nearest existing tool and say so in the log.
+
+**Sapling** is on the rack too (the grammar-engine pass), but it bills per
+character — roughly **$34 on a long novel** — and its key lives only in
+production (Fly), not in the local env. Use it as a plan line with an explicit
+char budget on the chapters that earn it, never as a default whole-book pass.
+A $0 `sapling_cost` on a run that was supposed to use it means it silently
+didn't run — check the ledger.
+
+**The full knob surface.** This manual is doctrine, not a reference. The
+rack's complete control surface is `docproof/config.py` (~35 config sections)
+with `config/default.yaml` as the worked example — you are in the repo, so
+READ THEM before writing a run config; never guess a knob's name or default.
+Key mechanics: a run config **replaces** default.yaml wholesale (restate every
+section you touch); per-category `passes`/`token_budget` ride the category
+knobs; `error_type_override_dir` shadows shipped prompts by key;
+`--profile`/genre packs are post-load overlays. If a knob you need doesn't
+exist, that's an escalation, not an improvisation.
 
 ## The loop
 
@@ -90,10 +115,41 @@ the same work manually through the nearest existing tool and say so in the log.
 - **Skip headings structurally** (short line, no terminal punctuation, or
   `reviewable=False`) — never by style name or book-specific regex.
 
+## Your own pen — findings nobody's detector caught
+
+You are a reader, not just a dispatcher. When YOU catch an error on a page no
+detector flagged, it is a legitimate finding with a legitimate path into the
+book — never a silent hand-edit:
+
+- **One-off catches** → write them as verbatim quote→correction rows (the
+  exact original must anchor in the canonical text) and inject them through
+  `docproof import-findings` (or the curated-replay path where that verb is
+  absent). They ride an EDIT-channel type, tagged with your own detector name
+  (`galley_read`), and face the same adjudication, artifact scan, and
+  reject-all audit as everything else.
+- **Pattern-shaped catches** (the author does it 30 times) → write a bespoke
+  rule instead and run `docproof sweep --rule` — dry-run, gate, apply.
+- **Judgment catches** (style, not mechanics) → route them through the
+  flight-deck's judge like any other proposal, so posture discipline holds.
+
+The Redding run proved this lane: your own chapter reads found ~57 real fixes
+the rack missed. The rule is simply that your pen writes findings and rules —
+the engine writes the document.
+
 ## Escalate to the human when
 
 - the plan gate hasn't approved the spend you're about to make;
 - a bespoke sweep would touch more than a handful of sites (high blast radius);
 - an intent-zone judgment is genuinely ambiguous;
-- budget is on track to exceed the approved figure;
+- budget is on track to exceed the approved figure ($20 default);
+- a knob you need doesn't exist, or a tool misbehaves in a way you'd have to
+  work around silently;
 - anything asks you to weaken the reject-all audit or ship unaudited.
+
+**How to escalate:** append the question to `QUESTIONS.md` in the workspace —
+one dated entry: what you were doing, the question, your recommended answer,
+and what's blocked vs. what continues. Then say it plainly in your session
+output and STOP the blocked thread (unblocked work may continue). If the run
+is under the app, escalations also surface on the job card and ride the
+completion email. Never invent an answer to an escalated question to keep
+moving; a wrong guess costs more than the wait.
