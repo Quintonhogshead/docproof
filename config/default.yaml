@@ -895,3 +895,12 @@ excluded_words_comment: true
 # deliberately left alone, and what this pass did not reach.
 change_log: true
 revision_author: Atmosphere Press Proofreader
+
+# The merge desk's per-lane author override (docproof merge; Finding.lane): a
+# finding tagged with one of these lanes is attributed to the name here
+# instead of revision_author, so a merged deliverable carries two tracked-
+# change authors Word can filter between. A lane with no entry — including
+# every finding outside a merged run — falls back to revision_author, so
+# nothing here changes an ordinary run's output.
+lane_authors:
+  copyedit: Atmosphere Press Copy Editor

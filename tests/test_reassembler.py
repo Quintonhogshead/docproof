@@ -176,3 +176,96 @@ def test_excluded_words_note_is_skipped_when_there_is_nothing_to_say(tmp_path,
     doc = build_document_model(pkg, cfg)
     assert annotate_excluded_words(pkg, doc, [], "Proofreader") is False
     assert not pkg.has("word/comments.xml")
+
+
+# --- two-author output (the merge desk's Finding.lane / Config.lane_authors) --
+
+_ORIG2 = "It was late, we were tired, the road went on."
+
+
+def _body2(doc):
+    return next(p.para_id for p in doc.paragraphs if p.text == _ORIG2)
+
+
+def test_untagged_findings_write_the_single_revision_author_unchanged(tmp_path,
+                                                                       cfg):
+    """No lane on a finding (every finding outside a merged run) must write
+    exactly what it always did: one author, `revision_author`. This is the
+    byte-identical guarantee the merge desk's addition to Finding/Config must
+    not disturb."""
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = _body2(doc)
+    f = Finding("f-1", "chunk-000", pid, "comma_splice", _ORIG2, 1, "",
+               "test", "high", status="validated",
+               anchor=Anchor(11, 14, ", w", ". W"))
+    assert f.lane == ""
+    stats = apply_tracked_changes(pkg, doc, [f], cfg)
+    assert stats.applied == ("f-1",)
+
+    out = tmp_path / "single_author.docx"
+    pkg.save(out)
+    body = DocxPackage(out).tree("word/document.xml")
+    authors = {el.get(_w("author")) for el in body.iter(_w("ins"))}
+    assert authors == {cfg.revision_author}
+
+
+def test_two_lane_findings_write_two_tracked_change_authors(tmp_path, cfg):
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = _body2(doc)
+    mech = Finding("f-1", "chunk-000", pid, "comma_splice", _ORIG2, 1, "",
+                   "A mechanical fix.", "high", status="validated",
+                   anchor=Anchor(11, 14, ", w", ". W"), lane="mechanical")
+    ce = Finding("f-2", "chunk-000", pid, "rewrite", _ORIG2, 1, "",
+                "A copy-edit rewrite.", "high", status="validated",
+                anchor=Anchor(26, 27, ",", ";"), lane="copyedit")
+    stats = apply_tracked_changes(pkg, doc, [mech, ce], cfg)
+    assert set(stats.applied) == {"f-1", "f-2"}
+
+    out = tmp_path / "two_author.docx"
+    pkg.save(out)
+    body = DocxPackage(out).tree("word/document.xml")
+    ins_by_author: dict[str, int] = {}
+    for el in body.iter(_w("ins")):
+        a = el.get(_w("author"))
+        ins_by_author[a] = ins_by_author.get(a, 0) + 1
+    assert set(ins_by_author) == {"Atmosphere Press Proofreader",
+                                  "Atmosphere Press Copy Editor"}
+    # One author per span — Word cannot stack pending revisions from two
+    # authors on the same characters, so each w:ins carries exactly one.
+    assert all(el.get(_w("author")) is not None for el in body.iter(_w("ins")))
+
+
+def test_two_lane_findings_write_two_comment_authors(tmp_path, cfg):
+    cfg = cfg.model_copy(update={"comments": True})
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = _body2(doc)
+    mech = Finding("f-1", "chunk-000", pid, "comma_splice", _ORIG2, 1, "",
+                   "A mechanical fix.", "high", status="validated",
+                   anchor=Anchor(11, 14, ", w", ". W"), lane="mechanical")
+    ce = Finding("f-2", "chunk-000", pid, "rewrite", _ORIG2, 1, "",
+                "A copy-edit rewrite.", "high", status="validated",
+                anchor=Anchor(26, 27, ",", ";"), lane="copyedit")
+    apply_tracked_changes(pkg, doc, [mech, ce], cfg)
+
+    out = tmp_path / "two_author_comments.docx"
+    pkg.save(out)
+    comments = DocxPackage(out).tree("word/comments.xml")
+    by_author = {c.get(_w("author")): "".join(c.itertext()) for c in comments}
+    assert set(by_author) == {"Atmosphere Press Proofreader",
+                              "Atmosphere Press Copy Editor"}
+    assert "mechanical fix" in by_author["Atmosphere Press Proofreader"]
+    assert "copy-edit rewrite" in by_author["Atmosphere Press Copy Editor"]
+
+
+def test_lane_authors_config_is_the_only_thing_that_changes_attribution(cfg):
+    """A lane with no entry in `lane_authors` (every lane but "copyedit" by
+    default) falls back to `revision_author` — including a lane spelled
+    "mechanical", which is not itself a key in the default map."""
+    assert cfg.lane_authors.get("mechanical", cfg.revision_author) == \
+        cfg.revision_author
+    assert cfg.lane_authors.get("", cfg.revision_author) == cfg.revision_author
+    assert cfg.lane_authors.get("copyedit", cfg.revision_author) == \
+        "Atmosphere Press Copy Editor"
