@@ -529,7 +529,14 @@ def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:
 # times where the model glided. Curly marks only: a straight " the normalizer
 # left straight is one it could not tell from an opener, and this sweep must
 # not out-guess it.
-_QUOTE_THEN_PUNCT = re.compile(r"”([.,])")
+#
+# A trailing duplicate closing quote is consumed too (`”.”` and `Go!”.”`): a
+# malformed doubled close, common in author manuscripts. Without the optional
+# `”?`, the match took only the first `”.` and the replacement re-emitted a
+# single `”`, stranding the second one — turning `rosy”.”` into `rosy.””`
+# instead of the intended `rosy.”`. A `”` after sentence-terminal punctuation is
+# never a legitimate opener (openers are `“`), so absorbing it is safe.
+_QUOTE_THEN_PUNCT = re.compile(r"”([.,])”?")
 
 
 def _sweep_quote_punctuation(text: str, variant=None) -> list[Hit]:
