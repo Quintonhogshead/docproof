@@ -1999,6 +1999,11 @@ class JobRunner:
         each wave's coverage notes land in `warnings` so a 'done' galley job that
         left a hole does not read as a clean one.
         """
+        from galley.brain import (
+            DEFAULT_MARGINAL_STOP_USD,
+            make_auditor,
+            make_planner,
+        )
         from galley.orchestrator import run_galley
 
         job = self.store.get(job_id)
@@ -2036,9 +2041,20 @@ class JobRunner:
             except Exception:                 # noqa: BLE001 - progress is not the job
                 log.debug("Could not record galley wave progress", exc_info=True)
 
+        # The practitioner brain: an audit read proposes missed-error
+        # hypotheses after each wave, and the planner turns the fresh ones into
+        # budgeted single_pass dispatches. T0/T1 tiers cap max_waves at 1, so
+        # the hooks only ever fire on T2 and up.
+        brain_usage = Usage()
+        audit_model = cfg.continuity.model or cfg.api.model
+        auditor = make_auditor(self._provider(cfg), audit_model, brain_usage)
+        planner = make_planner(ms, min_confidence="medium")
+
         try:
             cf = run_galley(ms, tier, budget, out, adapters=adapters,
-                            notify=notify, book=job.filename)
+                            notify=notify, book=job.filename,
+                            audit=auditor, plan_wave=planner,
+                            stop_threshold=DEFAULT_MARGINAL_STOP_USD)
         except Exception:                     # noqa: BLE001 - re-raised below
             self._release_results_dir(job_id)
             raise
