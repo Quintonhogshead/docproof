@@ -308,6 +308,19 @@ def _galley_parser(sub) -> None:
     gc.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
 
+    gq = gsub.add_parser(
+        "ask", help="email the press a question only a person can answer — "
+                    "Galley's escalation push channel, over the shared DocWatch "
+                    "notify address; loud when it cannot send")
+    gq.add_argument("subject", help="one line: what the question is about")
+    gq.add_argument("--body", help="the question itself (or use --file/stdin): "
+                                   "what you were doing, the question, your "
+                                   "recommended answer, what is blocked")
+    gq.add_argument("--file", dest="body_file",
+                    help="read the body from a file (e.g. QUESTIONS.md)")
+    gq.add_argument("--book", default="",
+                    help="the book this concerns, named in the subject tag")
+
 
 def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("input", help="a .docx or .idml file")
@@ -1105,7 +1118,47 @@ def cmd_galley(args) -> int:
     """Dispatch the `galley` sub-verbs. Kept apart from the review commands: these
     read a finished run rather than producing one."""
     return {"audit": _galley_audit, "letter": _galley_letter,
-            "seed": _galley_seed, "score": _galley_score}[args.galley_cmd](args)
+            "seed": _galley_seed, "score": _galley_score,
+            "ask": _galley_ask}[args.galley_cmd](args)
+
+
+def _galley_ask(args) -> int:
+    """Push one escalation question over the shared DocWatch Gmail pipe.
+
+    Loud by design: a question that cannot send exits 2 with the fix, so the
+    practitioner KNOWS to fall back — log it in QUESTIONS.md and stop the
+    blocked thread — instead of waiting on a reply that can never come."""
+    import sys
+
+    from app.watch.notify import send_question
+    from app.watch.settings import default_watch_home
+
+    if args.body:
+        body = args.body
+    elif args.body_file:
+        body = Path(args.body_file).read_text("utf-8")
+    else:
+        body = sys.stdin.read()
+    if not body.strip():
+        print("galley ask: an empty question helps nobody — say what you were "
+              "doing, the question, your recommended answer, and what is "
+              "blocked.", file=sys.stderr)
+        return 2
+    try:
+        to = send_question(default_watch_home(), args.subject, body,
+                           book=args.book)
+    except ValueError as e:
+        print(f"galley ask: could not send — {e}\nFall back: append the "
+              f"question to QUESTIONS.md and stop the blocked work.",
+              file=sys.stderr)
+        return 2
+    except Exception as e:                    # noqa: BLE001 - Gmail refusals land here
+        print(f"galley ask: the send failed ({e}).\nFall back: append the "
+              f"question to QUESTIONS.md and stop the blocked work.",
+              file=sys.stderr)
+        return 2
+    print(f"Question sent to {to}.")
+    return 0
 
 
 def _galley_audit(args) -> int:

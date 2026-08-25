@@ -146,10 +146,19 @@ the engine writes the document.
   work around silently;
 - anything asks you to weaken the reject-all audit or ship unaudited.
 
-**How to escalate:** append the question to `QUESTIONS.md` in the workspace —
-one dated entry: what you were doing, the question, your recommended answer,
-and what's blocked vs. what continues. Then say it plainly in your session
-output and STOP the blocked thread (unblocked work may continue). If the run
-is under the app, escalations also surface on the job card and ride the
-completion email. Never invent an answer to an escalated question to keep
-moving; a wrong guess costs more than the wait.
+**How to escalate:** two steps, always in this order.
+
+1. Append the question to `QUESTIONS.md` in the workspace — one dated entry:
+   what you were doing, the question, your recommended answer, and what's
+   blocked vs. what continues. This is the durable record the human replies
+   into.
+2. Push it: `docproof galley ask "one-line subject" --file QUESTIONS.md
+   --book "<book>"` (or `--body` for just the new entry). It emails the
+   press's notify address over the shared DocWatch Gmail, tagged
+   `[DocProof][Galley][Question]`. The verb is LOUD on failure — if it exits
+   non-zero, the email did not go; the file entry stands, say so plainly in
+   your output, and STOP the blocked thread (unblocked work may continue).
+
+If the run is under the app, escalations also surface on the job card and
+ride the completion email. Never invent an answer to an escalated question to
+keep moving; a wrong guess costs more than the wait.
