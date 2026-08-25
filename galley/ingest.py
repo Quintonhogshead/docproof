@@ -11,6 +11,7 @@ used for id-keyed scope work, not for anchoring.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from galley.contracts import Chapter, Manuscript
@@ -52,4 +53,52 @@ def manuscript_from_source(source_path: str, cfg: "Config") -> Manuscript:
     return Manuscript(paragraphs=paragraphs, order=order, chapters=chapters)
 
 
-__all__ = ["manuscript_from_source"]
+def write_manuscript_docx(source_path: str, cfg: "Config", manuscript: Manuscript,
+                          out_path: str) -> Path:
+    """Materialize a galley :class:`Manuscript`'s paragraph text back into a
+    real ``.docx``, built from ``source_path``'s own paragraphs — so
+    ``docproof review`` (or any other tool that reads a ``.docx``) can consume
+    it directly. Closes the seed -> review -> score loop: ``galley seed``
+    produces a seeded ``Manuscript`` and an answer key, but until this, only
+    the JSON existed — nothing a review could actually open.
+
+    Every paragraph whose text differs from the source is replaced WHOLE
+    (offset 0 to its full original length), not diffed down to a minimal
+    span: a ``Manuscript`` only carries a paragraph's final text, so replacing
+    it whole is correct regardless of how many separate edits produced that
+    text, and needs no offset bookkeeping to get right. Untracked — the
+    seeded copy is a fresh manuscript to hand to a review, not a reviewed one
+    (see :func:`docproof.reassembler.apply_untracked`).
+
+    Only ``.docx`` sources are supported today; an ``.idml`` source raises
+    ``ValueError`` — the untracked-write path this reuses is docx-only.
+    """
+    from docproof.ingest import build_document_model, preflight
+    from docproof.reassembler import apply_untracked
+
+    if Path(source_path).suffix.lower() != ".docx":
+        raise ValueError(
+            f"write_manuscript_docx only supports .docx sources, not "
+            f"{Path(source_path).suffix!r} ({source_path})")
+
+    pkg = preflight(source_path, cfg.tracked_changes_policy)
+    doc = build_document_model(pkg, cfg)
+    original_text = {p.para_id: p.text for p in doc.paragraphs}
+
+    edits_by_para: dict[str, list[tuple[int, int, str]]] = {}
+    for para_id, seeded_text in manuscript.paragraphs.items():
+        original = original_text.get(para_id)
+        if original is None or original == seeded_text:
+            continue
+        edits_by_para[para_id] = [(0, len(original), seeded_text)]
+
+    if edits_by_para:
+        apply_untracked(pkg, doc, edits_by_para)
+
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pkg.save(out)
+    return out
+
+
+__all__ = ["manuscript_from_source", "write_manuscript_docx"]
