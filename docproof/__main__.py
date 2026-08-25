@@ -358,6 +358,73 @@ def _galley_parser(sub) -> None:
     gcal.add_argument("--json", action="store_true",
                       help="also print the machine-readable result to stdout")
 
+    gf = gsub.add_parser(
+        "flights", help="the copy-edit lane: a panel of narrow taste passes "
+                        "(lenses), unioned by overlapping span, ruled on by "
+                        "one skeptical judge. Runs on ALREADY-PROOFREAD text — "
+                        "this lane never runs on raw manuscript; the merge "
+                        "desk owns combining its output with a proofread.")
+    gf.add_argument("input", nargs="?",
+                    help="a .docx or .idml file, already proofread. Omit only "
+                         "with --judge-only, which reads an existing clusters "
+                         "file instead of the manuscript")
+    gf.add_argument("--config", default="config/default.yaml")
+    gf.add_argument(
+        "--models", default="gpt-5.6-luna",
+        help="comma-separated proposer model ids; each reads every one of "
+             "--lenses, so N models x M lenses = N*M flights (default: "
+             "gpt-5.6-luna alone — measured 42%% taste-recall on 6 lenses; "
+             "adding a second model, e.g. claude-sonnet-5, measured 55-57%%)")
+    gf.add_argument(
+        "--lenses", default="economy,word_choice,flow,clarity,rhythm,repetition",
+        help="comma-separated lenses to run (default: all 6). 'general' is "
+             "also available — an undecomposed baseline for an A/B, not part "
+             "of the default matrix")
+    gf.add_argument("--judge-model", default="claude-fable-5",
+                    help="the judge — one call per cluster, ~90%% of the "
+                         "lane's cost (default: claude-fable-5)")
+    gf.add_argument(
+        "--posture", choices=["strict", "lenient"], default="strict",
+        help="strict defaults to keeping the original (measured ~24%% of "
+             "proposals accepted); lenient leans toward accepting (~57%%). "
+             "Same proposals, same hard vetoes (voice/meaning/fragment/"
+             "lateral-swap) either way — only the default and how generously "
+             "'defensible' reads moves. Genre tailoring sets this per "
+             "manuscript (default: strict)")
+    gf.add_argument("--min-confidence", choices=["low", "medium", "high"],
+                    default="medium",
+                    help="accept floor on the judge's own confidence "
+                         "(default: medium)")
+    gf.add_argument("--propose-max-tokens", type=int, default=8000)
+    gf.add_argument("--judge-max-tokens", type=int, default=1200)
+    gf.add_argument("--concurrency", type=int, default=4,
+                    help="propose windows / judge calls in flight at once "
+                         "(default: 4)")
+    gf.add_argument("--out", help="output directory (default: from config)")
+    gf.add_argument(
+        "--propose-only", action="store_true",
+        help="propose and cluster, then stop — write clusters.json instead "
+             "of spending on the judge. Lets an external flight (a session "
+             "subagent, a human) rule on the clusters later via --judge-only")
+    gf.add_argument(
+        "--judge-only", metavar="CLUSTERS_JSON",
+        help="skip propose/cluster; judge an existing clusters.json (from "
+             "--propose-only) and write findings. No manuscript needed — a "
+             "cluster carries its own paragraph text")
+    gf.add_argument(
+        "--external-proposals", metavar="PROPOSALS_JSON",
+        help="a JSON array (or {'proposals': [...]}) of additional proposals "
+             "— para_id, quote (or original), replacement, rationale, and "
+             "optionally model/lens — merged in before clustering, through "
+             "the same deterministic filters as an API flight. For a session "
+             "subagent acting as a flight without an API call of its own")
+    gf.add_argument("--dry-run", action="store_true",
+                    help="project cost from the manuscript's word count; no "
+                         "API calls, no keys")
+    gf.add_argument("--variant", choices=list(VARIANT_KEYS))
+    gf.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
+
 
 def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("input", help="a .docx or .idml file")
@@ -1157,7 +1224,8 @@ def cmd_galley(args) -> int:
     return {"audit": _galley_audit, "letter": _galley_letter,
             "seed": _galley_seed, "score": _galley_score,
             "ask": _galley_ask,
-            "calibrate": _galley_calibrate}[args.galley_cmd](args)
+            "calibrate": _galley_calibrate,
+            "flights": _galley_flights}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -1516,6 +1584,234 @@ def _galley_calibrate(args) -> int:
             "rate": round(est.rate, 4),
             "by_type": {k: list(v) for k, v in est.by_type.items()},
         }, ensure_ascii=False))
+    return 0
+
+
+def _flights_provider_of(cfg):
+    """A `model id -> Provider` resolver for the flights matrix, which can mix
+    vendors (`--models gpt-5.6-luna,claude-sonnet-5`). `build_provider(cfg)`
+    picks one vendor from `cfg.api`; this instead resolves each model id's own
+    vendor (`providers.provider_for`, falling back to `cfg.api.provider` for a
+    model the catalog has never heard of) and caches one provider per vendor,
+    so a mixed matrix still costs at most three constructions, not one per
+    flight."""
+    from .providers import ProviderError, provider_for
+
+    cache: dict[str, object] = {}
+
+    def get(model_id: str):
+        name = provider_for(model_id, cfg.api.provider)
+        if name not in cache:
+            kwargs = {"max_retries": cfg.api.max_retries,
+                      "prompt_caching": cfg.api.prompt_caching,
+                      "effort": cfg.api.effort}
+            if name == "anthropic":
+                from .providers.anthropic_provider import AnthropicProvider
+                cache[name] = AnthropicProvider(**kwargs)
+            elif name == "openai":
+                from .providers.openai_provider import OpenAIProvider
+                cache[name] = OpenAIProvider(**kwargs)
+            elif name == "gemini":
+                from .providers.gemini_provider import GeminiProvider
+                cache[name] = GeminiProvider(**kwargs)
+            else:
+                raise ProviderError(
+                    f"Unknown provider {name!r} for model {model_id!r}. Set "
+                    f"api.provider, or use a model id the catalog knows.")
+        return cache[name]
+
+    return get
+
+
+def _galley_flights(args) -> int:
+    """The copy-edit lane: propose -> site/filter -> cluster -> judge -> real
+    edit-channel findings tagged lane="copyedit". Three modes share this one
+    entry point (see the parser help): the full pipeline, --propose-only
+    (stop after clustering — no judge spend), and --judge-only (skip straight
+    to judging an existing clusters.json, no manuscript needed)."""
+    from . import flights as fl
+    from .providers import ProviderError
+
+    cfg = load_config(args.config)
+    if getattr(args, "variant", None):
+        cfg.variant = args.variant
+    out = Path(args.out) if args.out else Path(cfg.output_dir)
+    usage = Usage()
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    lenses = [l.strip() for l in args.lenses.split(",") if l.strip()]
+    flight_specs = fl.flight_matrix(models, lenses)
+
+    if args.judge_only:
+        setup_logging(out)
+        clusters_path = Path(args.judge_only)
+        try:
+            raw = json.loads(clusters_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: could not read {clusters_path}: {e}", file=sys.stderr)
+            return 2
+        rows = raw.get("clusters", raw) if isinstance(raw, dict) else raw
+        if not isinstance(rows, list):
+            print("error: clusters must be a JSON array (or a "
+                  "{'clusters': [...]} envelope)", file=sys.stderr)
+            return 2
+        clusters = [fl.Cluster.from_json(r) for r in rows if isinstance(r, dict)]
+        return _flights_judge_and_write(args, cfg, out, clusters, usage,
+                                        source=raw.get("source")
+                                        if isinstance(raw, dict) else None)
+
+    if not args.input:
+        print("error: an input manuscript is required unless --judge-only is "
+              "given", file=sys.stderr)
+        return 2
+
+    error_dir = Path(args.config).parent / "error_types"
+    try:
+        prepared = prepare(cfg, args.input, error_dir)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        words = sum(len(p.text.split())
+                   for p in fl.usable_paragraphs(prepared.doc.paragraphs))
+        proj = fl.project_cost(words, flight_specs, args.judge_model,
+                               propose_max_tokens=args.propose_max_tokens,
+                               judge_max_tokens=args.judge_max_tokens)
+        print(f"\nDry run — {words} reviewable word(s), {len(flight_specs)} "
+              f"flight(s): {', '.join(s.key for s in flight_specs)}")
+        for row in proj["flights"]:
+            print(f"  propose {row['flight']:<32} ~${row['est_usd']:.3f}  "
+                  f"(~{row['est_candidates']} candidate(s))")
+        print(f"  judge   {args.judge_model:<32} ~${proj['judge_usd']:.3f}  "
+              f"(~{proj['est_clusters']} cluster(s), from an est. "
+              f"{proj['est_total_candidates']} candidate(s))")
+        print(f"\n  PROJECTED total: ~${proj['total_usd']:.2f}")
+        if args.json:
+            print(json.dumps(proj, ensure_ascii=False))
+        return 0
+
+    setup_logging(out)
+    try:
+        provider_of = _flights_provider_of(cfg)
+        # Resolve every flight's provider up front so a missing key fails
+        # before any propose call is made, not partway through the matrix.
+        for spec in flight_specs:
+            provider_of(spec.model)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    paragraphs = prepared.doc.paragraphs
+    closing_quotes = (prepared.variant.closing_quotes if prepared.variant
+                      else "”\"")
+    text_of = {p.para_id: p.text for p in fl.usable_paragraphs(paragraphs)}
+
+    by_flight = fl.propose_flights(
+        paragraphs, provider_of, flight_specs,
+        max_tokens=args.propose_max_tokens, usage=usage,
+        closing_quotes=closing_quotes, concurrency=args.concurrency)
+
+    if args.external_proposals:
+        ext_path = Path(args.external_proposals)
+        try:
+            ext_raw = json.loads(ext_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: could not read {ext_path}: {e}", file=sys.stderr)
+            return 2
+        ext_rows = (ext_raw.get("proposals", ext_raw)
+                   if isinstance(ext_raw, dict) else ext_raw)
+        if not isinstance(ext_rows, list):
+            print("error: --external-proposals must be a JSON array (or a "
+                  "{'proposals': [...]} envelope)", file=sys.stderr)
+            return 2
+        ext_cands, ext_dropped = fl.load_external_proposals(
+            ext_rows, text_of, closing_quotes=closing_quotes)
+        for c in ext_cands:
+            by_flight.setdefault(c.flight, []).append(c)
+        print(f"  external proposals: {len(ext_cands)} sited, {ext_dropped} "
+              f"dropped by the deterministic filters")
+
+    clusters = fl.cluster_proposals(by_flight, text_of)
+    agree2 = sum(1 for c in clusters if c.agreement >= 2)
+    print(f"\nPropose: {sum(len(v) for v in by_flight.values())} candidate(s) "
+          f"across {len(by_flight)} flight(s).")
+    print(f"Union: {len(clusters)} cluster(s) ({agree2} by >=2 flights, "
+          f"{len(clusters) - agree2} by one).")
+
+    if args.propose_only:
+        out.mkdir(parents=True, exist_ok=True)
+        clusters_path = out / "clusters.json"
+        clusters_path.write_text(json.dumps(
+            {"clusters": [c.to_json() for c in clusters], "source": args.input,
+             "models": models, "lenses": lenses},
+            indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\n  propose-only: judge skipped, {len(clusters)} un-judged "
+              f"cluster(s) written.\n  {clusters_path}")
+        if args.json:
+            print(json.dumps({"clusters": str(clusters_path),
+                              "count": len(clusters)}, ensure_ascii=False))
+        return 0
+
+    return _flights_judge_and_write(args, cfg, out, clusters, usage,
+                                    source=args.input)
+
+
+def _flights_judge_and_write(args, cfg, out, clusters, usage, *,
+                             source: str | None) -> int:
+    """The shared tail of every `flights` mode that reaches the judge: rule on
+    every cluster once, accept at the confidence floor, and write the
+    findings envelope. `source` is carried through only for the report — a
+    cluster is judged from what it carries, not from re-reading the
+    manuscript."""
+    from . import flights as fl
+    from .providers import ProviderError, cost_of_usage
+
+    try:
+        provider = _flights_provider_of(cfg)(args.judge_model)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    verdicts = fl.judge_clusters(clusters, provider, model=args.judge_model,
+                                 posture=args.posture, usage=usage,
+                                 max_tokens=args.judge_max_tokens,
+                                 concurrency=args.concurrency)
+    accepted, counts = fl.accept(clusters, verdicts,
+                                 min_confidence=args.min_confidence)
+    ids = itertools.count(1)
+    findings = fl.findings_from_accepted(accepted, ids)
+
+    cost = cost_of_usage(usage, fallback_model=args.judge_model) or 0.0
+    envelope = {
+        "findings": [fl.finding_to_json(f) for f in findings],
+        "cost": {"total_usd": round(cost, 4), "by_model": usage.by_model},
+        "ledger": {"api_calls": usage.api_calls,
+                   "input_tokens": usage.input_tokens,
+                   "output_tokens": usage.output_tokens,
+                   "cache_read_input_tokens": usage.cache_read_input_tokens,
+                   "cache_creation_input_tokens": usage.cache_creation_input_tokens},
+        "checkpoint": None,
+        "lane": fl.LANE,
+        "posture": args.posture,
+        "judge_model": args.judge_model,
+        "min_confidence": args.min_confidence,
+        "clusters": len(clusters),
+        "judge_counts": counts.to_json(),
+        "source": source,
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    findings_path = out / "flights_findings.json"
+    findings_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+
+    print(f"\nJudge ({args.posture}, floor={args.min_confidence}): "
+          f"{counts.accepted} accepted, {counts.kept} kept-original, "
+          f"{counts.below_floor} below floor, {counts.unjudged} unjudged.")
+    print(f"  {len(findings)} finding(s), ${cost:.2f}, {usage.api_calls} "
+          f"model call(s).")
+    print(f"\n  {findings_path}")
+    if args.json:
+        print(json.dumps(envelope, ensure_ascii=False))
     return 0
 
 
