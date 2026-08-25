@@ -43,7 +43,9 @@ not stricter judges.
    "low" = marginal but defensible → still accept at lenient.
 4. **Cost control.** The judge is ~90% of spend and prices per cluster;
    keep the shared judge system prompt byte-stable so prompt caching holds.
-   Batch mode halves it when the timeline allows.
+   Batch mode halves it when the timeline allows. Send flights/judge output to
+   files (`--out`, or `> runs/flights.log`) and read a summary slice — never
+   dump the full proposal union or judge trace into your own context.
 5. **Output**: lane-tagged (`copyedit`) edit-channel findings for the merge
    desk. Never emit force_query rows from this lane; queries belong to the
    mechanical lane's channels.

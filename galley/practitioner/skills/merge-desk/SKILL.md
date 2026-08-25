@@ -23,10 +23,11 @@ proofread and the copy-edit by author name, with no composition artifacts.
 
 ## Procedure
 
-1. `docproof merge MANUSCRIPT --mechanical A.json --copyedit B.json --dry-run`
-   → read the claim ledger: every contested span, the winner, the rule. Spot-
-   check subsumptions — a rewrite that swallowed a spelling fix must contain
-   the correction in its replacement text.
+1. `docproof merge MANUSCRIPT --mechanical A.json --copyedit B.json --dry-run
+   > runs/merge_ledger.txt 2>&1` → then `grep`/`head` the claim ledger (never
+   dump the whole ledger into context): every contested span, the winner, the
+   rule. Spot-check subsumptions — a rewrite that swallowed a spelling fix must
+   contain the correction in its replacement text.
 2. Apply. Two author names (proofreader / copy editor) so the author can
    filter lanes. One span carries exactly one author — Word cannot stack
    pending revisions; if you want split attribution, split the span.

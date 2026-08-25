@@ -59,15 +59,39 @@ char budget on the chapters that earn it, never as a default whole-book pass.
 A $0 `sapling_cost` on a run that was supposed to use it means it silently
 didn't run — check the ledger.
 
-**The full knob surface.** This manual is doctrine, not a reference. The
-rack's complete control surface is `docproof/config.py` (~35 config sections)
-with `config/default.yaml` as the worked example — you are in the repo, so
-READ THEM before writing a run config; never guess a knob's name or default.
-Key mechanics: a run config **replaces** default.yaml wholesale (restate every
-section you touch); per-category `passes`/`token_budget` ride the category
-knobs; `error_type_override_dir` shadows shipped prompts by key;
-`--profile`/genre packs are post-load overlays. If a knob you need doesn't
-exist, that's an escalation, not an improvisation.
+**The knob surface lives in `KNOBS.md`.** Read that distilled cheat-sheet
+before writing a run config — it has every section name, the knobs you turn,
+their defaults, the config-replaces-wholesale mechanic, and the bespoke-sweep
+contract. **Do NOT `cat` `config.py`, `config/default.yaml`, `--help`, or
+`sweeps.py` into your context** — those are 60–90k-character reads that then
+ride your window every turn for the rest of the run, and they are the single
+biggest token cost we've measured (see Context discipline below). If a knob you
+need is not in `KNOBS.md`, that's an escalation (it may not exist), not a reason
+to go read the source.
+
+## Context discipline — your thinking is metered
+
+Every turn re-reads your entire context, so cost ≈ (context size) × (turns).
+A run that lets big blobs pile up and takes 150 small steps pays for that
+context ~150 times. Keep your window lean:
+
+1. **The manuscript and big reference blobs stay OUT of your head.** DocProof
+   ingests the text — you reason over findings, file paths, and short
+   summaries, never the whole book. Never `cat` the extracted manuscript,
+   `config.py`, `default.yaml`, `sweeps.py`, or `--help` into context.
+2. **Redirect verbose tool output to files, then read a slice.** Run
+   `docproof … > runs/<stage>.log 2>&1`, then `grep`/`head`/`tail` the handful
+   of lines you need. A full ladder/sweep/flights dump in the window is
+   re-charged on every later turn. Same for finding JSON — query it, don't
+   print it whole.
+3. **Work the loop as separate phase sessions, not one 150-turn marathon.**
+   Profile, plan, sweeps, ladder, flights, audit, adjudicate/deliver each run
+   as their own lean `-p` launch (see `galley-bin/galley-run.sh` `PHASE=…`).
+   Each starts near-empty and reads its inputs from workspace files; no single
+   session accumulates a fat context across the whole book.
+4. **Fewer, bigger tool calls.** Batch the writes (all sweep files at once),
+   avoid iterative dry-run→tweak churn, and don't re-read a file the harness
+   already tracks. Every avoided turn is context saved linearly.
 
 ## The loop
 
