@@ -155,16 +155,30 @@ def make_planner(
     est_usd_per_kword: float = 0.10,
     budget_headroom: float = 0.9,
     max_dispatches: int = 6,
+    calibration: Any = None,
 ) -> Callable[[list[Hypothesis], Governor, CaseFile], list[Dispatch]]:
     """Build a ``Planner``: fresh hypotheses -> budgeted single_pass dispatches.
 
     Hypotheses are grouped per chapter (one dispatch re-reads a chapter once
     with every suspected error type in a single combined pass). Each dispatch
-    is priced by chapter word count at ``est_usd_per_kword`` and admitted only
-    while the estimate fits inside ``governor.remaining_usd * budget_headroom``.
+    is priced by chapter word count at a per-kword rate and admitted only while
+    the estimate fits inside ``governor.remaining_usd * budget_headroom``.
     Planning only ever consumes the ``hyps`` argument — the fresh batch from
     this iteration's audit — so an empty audit converges the loop.
+
+    ``calibration``, if given (a ``galley.calibration.Calibration``, from
+    :func:`galley.calibration.read_calibration`), makes the per-kword rate
+    live: :func:`galley.calibration.est_usd_per_kword` looks up
+    ``("single_pass", model)``'s observed rate, falling back to
+    ``est_usd_per_kword`` when nothing has been calibrated yet. ``None`` (the
+    default) keeps the frozen constant exactly as before.
     """
+
+    rate = est_usd_per_kword
+    if calibration is not None:
+        from galley.calibration import est_usd_per_kword as _calibrated_rate
+
+        rate = _calibrated_rate(calibration, "single_pass", model, est_usd_per_kword)
 
     words_by_chapter: dict[int, int] = {}
     for ch in ms.chapters:
@@ -196,7 +210,7 @@ def make_planner(
         ranked = sorted(by_chapter.items(),
                         key=lambda kv: (-len(kv[1]), kv[0]))
         for chapter, keys in ranked:
-            est = (words_by_chapter[chapter] / 1000.0) * est_usd_per_kword
+            est = (words_by_chapter[chapter] / 1000.0) * rate
             if est > budget:
                 log.info(
                     "brain plan: chapter %d re-read (~$%.2f) over remaining "

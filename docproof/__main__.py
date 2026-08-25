@@ -321,6 +321,43 @@ def _galley_parser(sub) -> None:
     gq.add_argument("--book", default="",
                     help="the book this concerns, named in the subject tag")
 
+    gcal = gsub.add_parser(
+        "calibrate", help="close the self-measurement loop: seed known errors, "
+                          "run the $0 detector floor over them, score recall, "
+                          "and record cost/recall calibration the planner can "
+                          "read live — no API by default")
+    gcal.add_argument("source", nargs="?",
+                      help="the manuscript (.docx or .idml); required unless "
+                           "--from-run is given")
+    gcal.add_argument("-n", "--count", type=int, default=8,
+                      help="how many errors to plant (default: 8)")
+    gcal.add_argument("--seed", type=int, default=0,
+                      help="RNG seed; the same seed replays the same plants "
+                           "(default: 0)")
+    gcal.add_argument("--config", default="config/default.yaml")
+    gcal.add_argument("--book", default="",
+                      help="book name recorded with this calibration sample "
+                           "(default: the source filename)")
+    gcal.add_argument("--calibration",
+                      help="the calibration JSON store to read and update "
+                           "(default: galley_calibration.json beside --config)")
+    gcal.add_argument("--out",
+                      help="directory for seeded_manuscript.json/answer_key.json "
+                           "(default: the current directory)")
+    gcal.add_argument("--from-run", metavar="RESULTS_DIR",
+                      help="skip seeding and scoring; instead record cost "
+                           "calibration from an existing casefile.json in this "
+                           "directory (source is still required, to resolve "
+                           "word counts for that run's scopes)")
+    gcal.add_argument("--model",
+                      help="not yet wired into the seeded closed loop — the "
+                           "paid adapters re-read the source from disk, not "
+                           "the in-memory seeded copy, so recall can't be "
+                           "scored for a paid pass yet. Calibrate a real run's "
+                           "cost instead with --from-run")
+    gcal.add_argument("--json", action="store_true",
+                      help="also print the machine-readable result to stdout")
+
 
 def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("input", help="a .docx or .idml file")
@@ -1119,7 +1156,8 @@ def cmd_galley(args) -> int:
     read a finished run rather than producing one."""
     return {"audit": _galley_audit, "letter": _galley_letter,
             "seed": _galley_seed, "score": _galley_score,
-            "ask": _galley_ask}[args.galley_cmd](args)
+            "ask": _galley_ask,
+            "calibrate": _galley_calibrate}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -1373,6 +1411,111 @@ def _galley_score(args) -> int:
     print(f"\n  {recall_path}")
     if args.json:
         print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+def _galley_calibrate(args) -> int:
+    from galley.calibration import (
+        DEFAULT_CALIBRATION_FILENAME,
+        calibrate_free,
+        record_run,
+        record_recall,
+    )
+    from galley.casefile import CaseFile
+    from galley.ingest import manuscript_from_source
+
+    if not args.source:
+        print("error: source is required (the manuscript to seed, or — with "
+              "--from-run — the manuscript that run reviewed)", file=sys.stderr)
+        return 2
+
+    cfg = load_config(args.config)
+    calibration_path = (
+        Path(args.calibration) if args.calibration
+        else Path(args.config).parent / DEFAULT_CALIBRATION_FILENAME
+    )
+    calibration_path.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out) if args.out else Path.cwd()
+    out.mkdir(parents=True, exist_ok=True)
+    setup_logging(out)
+
+    try:
+        ms = manuscript_from_source(args.source, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    book = args.book or Path(args.source).stem
+
+    if args.from_run:
+        results = Path(args.from_run)
+        cf_path = results / "casefile.json" if results.is_dir() else results
+        if not cf_path.exists():
+            print(f"error: {cf_path} not found — pass a casefile.json or a "
+                  f"directory holding one", file=sys.stderr)
+            return 2
+        try:
+            cf = CaseFile.load(cf_path)
+        except (OSError, ValueError) as e:
+            print(f"error: could not read {cf_path}: {e}", file=sys.stderr)
+            return 2
+
+        calibration = record_run(cf, ms, calibration_path)
+        entries = sorted(calibration.cost.values(),
+                         key=lambda e: (e.adapter, e.model))
+        print(f"\nRecorded cost calibration from {cf_path} "
+              f"({len(cf.waves)} wave(s)) into {calibration_path}:")
+        for e in entries:
+            print(f"  {e.adapter:<14} {e.model or '(no model)':<24} "
+                  f"${e.usd_per_kword:.4f}/kword  ({e.samples} sample(s), "
+                  f"{e.kwords_total:.1f}k word(s) total)")
+        if args.json:
+            print(json.dumps({
+                "calibration": str(calibration_path),
+                "cost": {k: e.to_json() for k, e in calibration.cost.items()},
+            }, ensure_ascii=False))
+        return 0
+
+    if args.model:
+        print("error: --model is not yet wired into the seeded closed loop — "
+              "the paid adapters re-read the source from disk, not the "
+              "in-memory seeded copy, so recall can't be scored for a paid "
+              "pass yet. Calibrate a real run's cost instead with --from-run",
+              file=sys.stderr)
+        return 2
+
+    result = calibrate_free(ms, args.count, rng_seed=args.seed, book=book)
+    est = result.estimate
+
+    seeded_path = out / "seeded_manuscript.json"
+    key_path = out / "answer_key.json"
+    seeded_path.write_text(
+        json.dumps(result.seeded.to_json(), indent=2, ensure_ascii=False),
+        encoding="utf-8")
+    key_path.write_text(
+        json.dumps(result.answer_key.to_json(), indent=2, ensure_ascii=False),
+        encoding="utf-8")
+
+    record_run(result.casefile, result.seeded, calibration_path)
+    record_recall(est, calibration_path, book=book)
+
+    print(f"\n{est.summary()}")
+    for et in sorted(est.by_type):
+        caught, planted = est.by_type[et]
+        print(f"  {et:<22} {caught}/{planted}")
+    print(f"\n  {est.caveat}")
+    print(f"\n  {seeded_path}\n  {key_path}\n  {calibration_path}")
+    if args.json:
+        print(json.dumps({
+            "book": book,
+            "calibration": str(calibration_path),
+            "seeded_manuscript": str(seeded_path),
+            "answer_key": str(key_path),
+            "planted": est.planted,
+            "caught": est.caught,
+            "rate": round(est.rate, 4),
+            "by_type": {k: list(v) for k, v in est.by_type.items()},
+        }, ensure_ascii=False))
     return 0
 
 
