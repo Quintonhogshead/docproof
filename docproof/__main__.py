@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import itertools
 import json
 import logging
@@ -225,6 +226,37 @@ def main(argv=None) -> int:
     swp.add_argument("--json", action="store_true",
                      help="also print the machine-readable result to stdout")
 
+    mrg = sub.add_parser(
+        "merge", help="the merge desk: reconcile a mechanical/proofread "
+                      "findings set with a copy-edit/rewrite findings set "
+                      "into one deliverable with two tracked-changes "
+                      "authors. Writes by default; --dry-run only prints "
+                      "the claim ledger. No API.")
+    mrg.add_argument("input", help="a .docx or .idml file")
+    mrg.add_argument("--mechanical", required=True,
+                     help="findings JSON for the mechanical/proofread lane "
+                          "(a JSON array, or a {'findings': [...]} "
+                          "envelope — e.g. a docproof review --resume "
+                          "checkpoint's findings, or findings.json). A "
+                          "finding with no 'lane' field lands here.")
+    mrg.add_argument("--copyedit",
+                     help="findings JSON for the copy-edit/rewrite lane, "
+                          "same shape (default: none — a mechanical-only "
+                          "run, useful to smoke-test the artifact scan "
+                          "alone). A finding's own 'lane' field, when "
+                          "present, overrides which lane it lands in.")
+    mrg.add_argument("--config", default="config/default.yaml")
+    mrg.add_argument("--out", help="output directory "
+                                   "(default: from config)")
+    mrg.add_argument("--dry-run", action="store_true",
+                     help="print the claim ledger — who won each contested "
+                          "span, and why — and write nothing")
+    mrg.add_argument("--variant", choices=list(VARIANT_KEYS),
+                     help="which English the manuscript is in (default: "
+                          "config variant)")
+    mrg.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
     _galley_parser(sub)
 
     args = ap.parse_args(argv)
@@ -232,6 +264,7 @@ def main(argv=None) -> int:
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
             "eval": cmd_eval, "compare": cmd_compare, "sweep": cmd_sweep,
+            "merge": cmd_merge,
             "galley": cmd_galley}[args.cmd](args)
 
 
@@ -1095,6 +1128,161 @@ def cmd_sweep(args) -> int:
     if args.json:
         result["reviewed_path"] = (str(outputs.reviewed_path)
                                    if outputs.reviewed_path else None)
+        print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+# --- merge desk -----------------------------------------------------------------
+
+def _load_findings_file(path: Path) -> list[dict] | None:
+    """A findings JSON file: a bare array, or a `{"findings": [...]}` envelope
+    (what `findings.json` and a run checkpoint both write). None on any
+    problem, after printing why."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as e:
+        print(f"error: could not read {path}: {e}", file=sys.stderr)
+        return None
+    except json.JSONDecodeError as e:
+        print(f"error: {path}: {e}", file=sys.stderr)
+        return None
+    rows = raw.get("findings", raw) if isinstance(raw, dict) else raw
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        print(f"error: {path}: must be a JSON array of finding objects, or a "
+              "{'findings': [...]} envelope", file=sys.stderr)
+        return None
+    return rows
+
+
+_LEDGER_VERBS = {"rewrite_clean": "copy-edit rewrite (clean) subsumes",
+                 "mechanical_default": "mechanical wins over",
+                 "cluster_atomic": "cluster claims its span for"}
+
+
+def cmd_merge(args) -> int:
+    """The merge desk: reconcile a mechanical/proofread findings set with a
+    copy-edit/rewrite findings set into one deliverable with two tracked-
+    changes authors (docproof/mergedesk.py). $0, like `docproof sweep`: every
+    paid pass is silenced, and the claim rules run over the deterministic
+    sweeps + LanguageTool, never a provider. Writes by default; `--dry-run`
+    only prints the claim ledger."""
+    from . import mergedesk
+
+    cfg = load_config(args.config)
+    if getattr(args, "variant", None):
+        cfg.variant = args.variant
+    if args.out:
+        cfg.output_dir = args.out
+    # Only the two lanes' findings are reconciled here — no new paid pass,
+    # model read, or judge gate runs. The built-in sweeps are deliberately
+    # LEFT ON (unlike `docproof sweep`, which zeroes them): they are what
+    # gives a house-style span (an ellipsis, a stacked-punctuation run)
+    # priority over either lane's edit, exactly as in an ordinary review.
+    cfg.consistency.enabled = False
+    cfg.spellcheck.enabled = False
+    cfg.meaning_check.enabled = False
+    cfg.fix_check.enabled = False
+    cfg.repair.enabled = False
+    cfg.smoothing.enabled = False
+    cfg.continuity.enabled = False
+    cfg.chapter_continuity.enabled = False
+    cfg.low_confidence.confirm = False
+    cfg.rounds.count = 1
+
+    mech_raw = _load_findings_file(Path(args.mechanical))
+    if mech_raw is None:
+        return 2
+    ce_raw: list[dict] = []
+    if args.copyedit:
+        ce_raw = _load_findings_file(Path(args.copyedit))
+        if ce_raw is None:
+            return 2
+
+    out = Path(cfg.output_dir)
+    setup_logging(out)
+    error_dir = Path(args.config).parent / "error_types"
+    try:
+        prepared = prepare(cfg, args.input, error_dir)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    try:
+        mechanical = mergedesk.tag_lane(mech_raw, mergedesk.MECHANICAL)
+        copyedit = mergedesk.tag_lane(ce_raw, mergedesk.COPYEDIT)
+    except mergedesk.MergeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    merged = mergedesk.merge_lanes(
+        mechanical, copyedit, prepared.doc, min_confidence=cfg.min_confidence,
+        query_types=prepared.query_types, format_types=prepared.format_types,
+        edit_guard=cfg.edit_guard, variant=prepared.variant,
+        ellipsis_style=cfg.style.ellipsis)
+    merged, artifacts = mergedesk.iterate_until_clean(
+        merged, prepared.doc, min_confidence=cfg.min_confidence,
+        query_types=prepared.query_types, format_types=prepared.format_types,
+        edit_guard=cfg.edit_guard)
+
+    print(f"\nMerge desk: {len(mechanical)} mechanical + {len(copyedit)} "
+          f"copy-edit finding(s) → {len(merged.ledger)} contested span(s).")
+    for r in merged.ledger:
+        tail = f" — {r.reason}" if r.reason else ""
+        loser = f" {r.loser_id}" if r.loser_id else ""
+        print(f"  {r.para_id} [{r.start}:{r.end}]  {_LEDGER_VERBS[r.rule]}"
+              f"{loser}{tail}  (winner {r.winner_id}, {r.winner_lane})")
+    if artifacts:
+        print(f"\n{len(artifacts)} merged-result artifact(s):")
+        for hit in artifacts:
+            state = f"dropped {hit.dropped_id}" if hit.resolved else "UNRESOLVED"
+            print(f"  {hit.para_id or '?'}: {hit.pattern} — {state}")
+    unresolved = [h for h in artifacts if not h.resolved]
+
+    result = {
+        "findings": [dataclasses.asdict(f) for f in merged.validated],
+        "cost": {"total": 0.0},
+        "ledger": {"claims": [r.to_json() for r in merged.ledger]},
+        "claims": {"contested": len(merged.ledger),
+                  "artifacts": [h.to_json() for h in artifacts]},
+        "checkpoint": None,
+    }
+
+    if args.dry_run:
+        print("\n  Dry run — nothing written. Re-run without --dry-run to "
+              "write the deliverable.")
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        return 3 if unresolved else 0
+
+    if unresolved:
+        print("\nerror: unresolved merged-result artifact(s) — refusing to "
+              "write. Re-run with --dry-run to inspect them, or fix the "
+              "finding(s) that contribute to them.", file=sys.stderr)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+        return 3
+
+    usage = Usage()
+    try:
+        outputs = finish(prepared, merged.findings, usage, cfg, out_dir=out,
+                         source_path=args.input)
+    except (IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"\n{_result_line(outputs)}.")
+    for p in (outputs.reviewed_path, outputs.change_log, outputs.summary_md,
+              outputs.findings_json, out / "run.log"):
+        if p is not None:
+            print(f"  {p}")
+    if outputs.findings_json is not None:
+        try:
+            written = json.loads(outputs.findings_json.read_text(encoding="utf-8"))
+            result["findings"] = written.get("findings", written) \
+                if isinstance(written, dict) else written
+        except (OSError, json.JSONDecodeError):
+            pass
+    if args.json:
         print(json.dumps(result, ensure_ascii=False))
     return 0
 
