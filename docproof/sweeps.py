@@ -967,10 +967,24 @@ def run_sweeps(paragraphs: Sequence[ParagraphRef], keys: Sequence[str],
 
     Findings are numbered in their own `s-` series so they can never collide
     with the model's `f-` series, whatever order the two arrive in."""
+    return run_sweep_objects(paragraphs, resolve(keys), variant,
+                             ellipsis_style=ellipsis_style)
+
+
+def run_sweep_objects(paragraphs: Sequence[ParagraphRef],
+                      sweeps: Sequence[Sweep], variant=None, *,
+                      ellipsis_style: str = "nbsp", start: int = 0
+                      ) -> tuple[list[Finding], list[SweepReport]]:
+    """Run a set of `Sweep` objects, not registry keys — the seam a bespoke,
+    agent-authored sweep enters through (`docproof sweep --rule`). Identical to
+    what `run_sweeps` does for the built-ins: same `s-` finding series, same
+    Hit -> sentence-window Finding, same idempotency re-scan. `run_sweeps` is
+    now this over `resolve(keys)`, so the built-in path is byte-for-byte
+    unchanged."""
     findings: list[Finding] = []
     reports: list[SweepReport] = []
-    n = 0
-    for sweep in resolve(keys):
+    n = start
+    for sweep in sweeps:
         # The ellipsis sweep is the one whose right answer is a house choice
         # (config/default.yaml → style.ellipsis); every other sweep reads only
         # text and variant, so it is bound here and the rest are called as-is.
