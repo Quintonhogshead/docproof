@@ -1,0 +1,44 @@
+# Posture preset: self-help / business non-fiction.
+#
+# Aggressive stylistic lane, lenient judge posture, high accept — this is the
+# genre where an author most wants the pipeline to actually TIGHTEN prose, not
+# just ask about it, so smoothing runs open with its affirmations landing as
+# tracked changes (edits: true) rather than margin questions, and the rewrite
+# recall lever is on to catch more of the mechanical tail too. Consistency's
+# name-spelling bar is left at the house default: non-fiction rarely carries a
+# large invented cast, so there is nothing genre-specific to loosen there.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS. Nothing below touches Chicago
+# enforcement, the sweeps, or the edit guard.
+name: self_help_business
+description: >
+  Aggressive stylistic lane for non-fiction business/self-help writing: the
+  smoothing pass runs open and lenient, its high-confidence affirmations
+  become tracked edits instead of margin questions, and the rewrite pass's
+  recall lever is on. Consistency stays at the house default.
+
+overlay:
+  flights.posture: lenient
+  smoothing.enabled: true
+  smoothing.edits: true
+  smoothing.judge_harshness: lenient
+  smoothing.proposer_restraint: open
+  smoothing.include_dialogue: false
+  smoothing.max_per_1000_words: 5.0
+  smoothing.min_confidence: low
+  rewrite.enabled: true
+  rewrite.samples: 2
+  rewrite.diverse: true
+  rewrite.edit_confidence: medium
+
+# Genre-pack-only additions (not part of `overlay`; applied only by
+# `docproof galley genre-pack`, never by the bare `--genre` review flag — see
+# docproof/genre.py's module docstring on why the two paths differ). A
+# business title is the manuscript most likely to cite sources and to have a
+# stated target reading level, so both query-only scans are worth turning on.
+genre_scans:
+  citation_format:
+    enabled: true
+  reading_level:
+    enabled: true

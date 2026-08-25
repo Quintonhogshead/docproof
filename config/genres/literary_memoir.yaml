@@ -1,0 +1,24 @@
+# Posture preset: literary fiction / memoir.
+#
+# Near proofread-only on style: the smoothing pass and the rewrite pass both
+# stay off, exactly as the house default already ships them, so choosing this
+# preset over choosing nothing changes only the flights lane's judge posture
+# to strict and leaves everything else where a run without any genre already
+# sits. That is deliberate: a manuscript this voice-sensitive should not get
+# automatic line-edit suggestions unless a run explicitly turns them on
+# (`--error-types` / a config edit), not merely because a genre was named.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: literary_memoir
+description: >
+  Near proofread-only on style: smoothing and the rewrite pass both stay off,
+  matching the house default — this preset only tightens the flights lane's
+  judge posture to strict. Voice risk is highest in this genre, so nothing
+  here adds a stylistic suggestion source; that stays an explicit, separate
+  opt-in per run.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: false
+  rewrite.enabled: false
