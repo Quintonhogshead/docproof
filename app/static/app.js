@@ -4419,6 +4419,29 @@ function galleyActions(job) {
   summary.textContent =
     `${waves} wave${waves === 1 ? '' : 's'} · $${spend} of $${budget} budget`;
   wrap.append(summary);
+
+  // The adjudicated deliverables: each is independently best-effort (see
+  // JobRunner._run_galley), so only offer a button for what actually landed.
+  const actions = document.createElement('div');
+  actions.className = 'job-actions';
+  const note = actionNote();
+  if (job.has_galley_document) {
+    actions.append(openButton(job, 'document',
+      WEB ? 'Download reviewed document' : 'Open reviewed document', note));
+  }
+  if (job.has_galley_letter) {
+    actions.append(openButton(job, 'letter',
+      WEB ? 'Download editorial letter' : 'Open editorial letter', note,
+      { quiet: true }));
+  }
+  if (job.has_galley_style_sheet) {
+    actions.append(openButton(job, 'style-sheet',
+      WEB ? 'Download style sheet' : 'Open style sheet', note,
+      { quiet: true }));
+  }
+  if (actions.childElementCount) {
+    wrap.append(actions, note);
+  }
   return wrap;
 }
 
