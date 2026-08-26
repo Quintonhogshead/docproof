@@ -119,8 +119,15 @@ context ~150 times. Keep your window lean:
 
 ## The traps ledger (all paid for in blood)
 
-- **A run config REPLACES default.yaml wholesale.** Omitting `sweeps:` turns
-  every sweep off. Always restate the full sections you touch.
+- **A run config REPLACES default.yaml wholesale.** Two omissions gut a run
+  silently: omitting **`error_types:`** zeroes every typed LLM pass
+  (`0 error type(s) in 0 pass(es)`) AND makes any `ensemble:` block inert — the
+  ensemble only fires *through* the typed passes, so the run degrades to
+  sweeps + spellscan + LT-basic and misses every correctly-spelled
+  homophone/grammar error (bit the Lighthouse benchmark, 2026-08-26). Omitting
+  **`sweeps:`** turns every sweep off. Restate the full `error_types:` and
+  `sweeps:` lists even when you want the defaults — copy them from default.yaml,
+  never drop them.
 - **`general_error` is query-channel.** Replayed edit rows must ride an
   EDIT-channel type (`curated_fix`-style) or they silently demote to comments.
 - **Same-point insertions compose into `,,`.** Two lanes inserting at one

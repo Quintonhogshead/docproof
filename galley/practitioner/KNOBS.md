@@ -10,11 +10,69 @@ ESCALATION (the knob may not exist), not a reason to go read the source.
 ## The one mechanic that bites
 
 A run config **REPLACES `default.yaml` wholesale** — it is not a patch. Any
-top-level section you omit reverts to code defaults, and an omitted `sweeps:`
-turns **every** sweep off. Restate every section you touch, in full.
+top-level section you omit reverts to code defaults. Two omissions silently
+gut a run and look like a config that "just uses defaults":
+
+- Omitting **`error_types:`** zeroes **every typed LLM pass** — the log prints
+  `0 error type(s) … in 0 pass(es)`. The ensemble runs *through* those passes,
+  so a defined `ensemble:` block is **inert** with no `error_types`; the run
+  catches only sweeps + spellscan + LT-basic and misses every correctly-spelled
+  homophone/grammar error (they're/their, effected/affected, then/than,
+  who/whom). This one bit a seeded benchmark (Lighthouse, 2026-08-26).
+- Omitting **`sweeps:`** turns **every** sweep off.
+
+Restate every section you touch, **and restate `error_types:` and `sweeps:`
+even when you think you want defaults.** You cannot read default.yaml (context
+discipline), so the full shipped lists are embedded below — paste them in
+verbatim. Never assume "leave it out = use defaults"; leave it out = OFF.
 
 `--profile` and genre packs are post-load overlays (they layer on top).
 `error_type_override_dir` shadows shipped detector prompts by key.
+
+## Paste-ready shipped defaults (you cannot read default.yaml — copy from here)
+
+These are the exact shipped lists as of v0.125.0. If a config wants the typed
+passes or the built-in sweeps, paste these blocks in **whole**. The ensemble
+fires **only through `error_types`** — no `error_types`, no ensemble, no typed
+recall (log reads `0 error type(s) in 0 pass(es)`).
+
+```yaml
+# The typed LLM passes — the recall engine. Groups = one read each; keep all 9.
+error_types:
+  - [repeated_word, spelling, homophone_confusion, apostrophe_error, capitalization]
+  - [serial_comma, complex_list_semicolon, introductory_comma,
+     direct_address_comma, tag_question_comma]
+  - [dialogue_tag, speaker_change]
+  - [number_style, currency_style, ly_adverb_hyphen, title_italics]
+  - [comma_splice, run_on_sentence, compound_sentence_comma,
+     subject_verb_agreement, that_which, that_who]
+  - [tense_shift, pronoun_agreement, missing_word, preposition_error]
+  - [try_and, list_intro_colon]
+  - terminal_mark        # query-channel: asks, never edits
+  - unnecessary_comma    # the one comma rule that DELETES; isolated on purpose
+
+# The 13 deterministic $0 sweeps. Omitting the section turns ALL of them off.
+sweeps:
+  - sweep_ellipsis
+  - sweep_dash
+  - sweep_stacked_punctuation
+  - sweep_doubled_word
+  - sweep_century
+  - sweep_compound_number
+  - sweep_dialogue_tag
+  - sweep_terminal_period
+  - sweep_quote_punctuation
+  - sweep_nested_quote
+  - sweep_time_of_day
+  - sweep_deity_capital
+  - sweep_dialogue_splice
+```
+
+To ADD a per-category repeat read or a bespoke sweep, paste the block above and
+append/modify — don't hand-pick a subset unless you mean to drop the rest.
+**KNOBS.md is the authority: if a knob is listed here it exists — trust it over
+a source `grep`.** (`languagetool.picky` is real — config.py:679 — and was once
+wrongly dropped on a bad grep.)
 
 ## Top-level sections (names are exact)
 
@@ -31,6 +89,7 @@ turns **every** sweep off. Restate every section you touch, in full.
 |---|---|---|
 | `min_confidence` | `medium` | low\|medium\|high gate for APPLYING a change. |
 | `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. |
+| `error_types` | full shipped list | The typed LLM passes. **OMITTING THE SECTION ZEROES EVERY PASS** and makes any `ensemble:` inert (`0 error type(s) in 0 pass(es)`). Restate the full default list to keep them; the ensemble only fires through these. |
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
 | `languagetool.picky` | off | +~1 candidate/44k words; most picky rules are the filtered style class. |
 | `sweeps` | 13 rules | Deterministic $0 rules. OMITTING THE SECTION KILLS ALL OF THEM. Add bespoke `.py`/regex keys here. |
