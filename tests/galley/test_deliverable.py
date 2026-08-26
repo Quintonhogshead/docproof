@@ -20,6 +20,7 @@ from galley.adjudicate import AdjudicationResult
 from galley.contracts import GFinding, Manuscript, Provenance, Span
 from galley.deliverable import (
     build_manuscript_deliverable,
+    ensure_format_types_enabled,
     gfinding_to_finding,
     partition_for_deliverable,
     zero_cost_config,
@@ -184,6 +185,66 @@ def test_build_manuscript_deliverable_applies_edits_and_queries(tmp_path):
     assert any("g-3" in line for line in deliverable.dropped)
     assert not any("g-1" in line for line in deliverable.dropped)
     assert not any("g-2" in line for line in deliverable.dropped)
+
+
+def _italic_gfinding(ms: Manuscript) -> GFinding:
+    """A title_italics GFinding marking the word 'door' in TEH_PARA. Its find
+    and replace are the SAME span — the shape the DocProof ladder round-trips
+    for a format finding (the validator sets delete_text == insert_text) — so
+    it means 'mark this span italic', changing no characters."""
+    text = ms.paragraphs[TEH_PARA]
+    start = text.index("door")
+    return GFinding(
+        id="g-it", error_type="title_italics",
+        span=Span(TEH_PARA, start, start + 4),
+        find="door", replace="door",
+        note="book title should be italic",
+        provenance=Provenance("docproof_ladder", 1, "fake-model", 0.0),
+    )
+
+
+def test_ensure_format_types_enabled_adds_a_trimmed_format_type():
+    cfg = _lean_cfg()
+    cfg.error_types = [[k for grp in cfg.error_type_groups for k in grp
+                        if k != "title_italics"]]
+    assert "title_italics" not in cfg.error_type_keys
+
+    from docproof.models import Finding
+    f = Finding("g-it", "", TEH_PARA, "title_italics", "door", 1, "door", "", "medium")
+    updated, added = ensure_format_types_enabled(cfg, [f], DEFAULT_ERROR_DIR)
+    assert added == ["title_italics"]
+    assert "title_italics" in updated.error_type_keys
+    # A no-op when nothing is missing — same config back, nothing added.
+    again, added2 = ensure_format_types_enabled(updated, [f], DEFAULT_ERROR_DIR)
+    assert added2 == []
+
+
+def test_build_manuscript_deliverable_applies_italics_even_when_config_trims_it(tmp_path):
+    """The multi-pass hazard: a lean per-phase / genre config drops
+    title_italics, and without the guarantee the italic finding would fall to
+    the change channel and vanish as a no-op. The deliverable re-enables the
+    type so the mark actually lands, as a reversible tracked formatting
+    revision (w:rPrChange), changing no words."""
+    ms = _fixture_manuscript()
+    cfg = _lean_cfg()
+    cfg.error_types = [[k for grp in cfg.error_type_groups for k in grp
+                        if k != "title_italics"]]
+    assert "title_italics" not in cfg.error_type_keys
+
+    result = AdjudicationResult(kept=[_italic_gfinding(ms)], queries=[])
+    out = tmp_path / "run"
+    deliverable = build_manuscript_deliverable(
+        result, ms, source_path=FIXTURE, cfg=cfg, out_dir=out)
+
+    assert deliverable.outputs.applied >= 1
+    assert not any("g-it" in line for line in deliverable.dropped)
+    # Applied as a tracked FORMATTING revision, not a text edit: the reviewed
+    # document carries a w:rPrChange, and reject-all still reproduces the text
+    # (build_manuscript_deliverable's own word-count guard did not fire).
+    from zipfile import ZipFile
+    with ZipFile(deliverable.outputs.reviewed_path) as z:
+        doc_xml = z.read("word/document.xml").decode("utf-8")
+    assert "rPrChange" in doc_xml
 
 
 def test_build_manuscript_deliverable_refuses_a_seeded_manuscript(tmp_path):

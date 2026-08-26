@@ -1440,8 +1440,9 @@ def cmd_replay(args) -> int:
 
 
 def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
-    from .replay import (DEFAULT_IMPORT_TYPE, build_findings,
-                        load_findings_file, zero_paid_passes)
+    from .replay import (DEFAULT_IMPORT_TYPE, WordCountDelta, build_findings,
+                        load_findings_file, word_count_delta_guard,
+                        zero_paid_passes)
     from .validator import validate_findings
 
     cfg = load_config(args.config)
@@ -1512,6 +1513,15 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         outputs = finish(prepared, findings, usage, cfg, out_dir=out,
                          source_path=args.manuscript)
     except (IngestError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    # A formatting row that reached the change channel deletes the sentence it
+    # should only have marked, and the reject-all audit cannot see it. Catch it
+    # by word count before calling the deliverable done.
+    try:
+        word_count_delta_guard(outputs.reviewed_path)
+    except WordCountDelta as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
