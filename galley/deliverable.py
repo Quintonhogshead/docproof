@@ -35,13 +35,16 @@ can be reconciled later without either blocking the other.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from docproof.config import Config
+from docproof.error_registry import load_error_types, shipped_keys
 from docproof.models import Finding, Usage
 from docproof.pipeline import Outputs, finish, prepare
+from docproof.replay import word_count_delta_guard
 
 from galley.adapters.docproof_ladder import DEFAULT_ERROR_DIR
 from galley.contracts import GFinding, Manuscript
@@ -49,6 +52,8 @@ from galley.seeding import assert_deliverable
 
 if TYPE_CHECKING:
     from galley.adjudicate import AdjudicationResult
+
+log = logging.getLogger("galley.deliverable")
 
 
 def zero_cost_config(cfg: Config) -> Config:
@@ -81,6 +86,49 @@ def zero_cost_config(cfg: Config) -> Config:
     z.candidate_screening.mode = "off"
     z.examination_graph.judgment.enabled = False
     return z
+
+
+def ensure_format_types_enabled(
+    cfg: Config, findings: list[Finding], error_dir: str | Path
+) -> tuple[Config, list[str]]:
+    """Guarantee every format-channel type the findings use is routable.
+
+    A ``title_italics`` finding changes no characters — ``original_text`` and
+    ``corrected_text`` are the same span. The validator routes it down the
+    reversible tracked-format path (a ``w:rPrChange``, which "reject" undoes)
+    ONLY when its ``error_type`` is in ``prepared.format_types``, which is built
+    from the run's enabled ``error_types``. If the config that reaches the
+    deliverable trimmed ``title_italics`` — a genre/posture pack narrowing the
+    house-style group, a lean per-phase config across multiple passes — the same
+    finding falls through to the ordinary change path, where ``shrink`` sees no
+    diff and drops it as ``rejected_noop``: the italic is lost, silently.
+
+    The findings are already adjudicated; whether ``title_italics`` ran as a
+    *detector* is beside the point (paid passes are off here anyway). What has
+    to hold is that it can be *applied*. So any format-channel key present among
+    the findings but absent from ``cfg.error_types`` is appended as its own
+    group. Returns the (possibly unchanged) config and the keys it enabled, for
+    the caller to note. A no-op — byte-identical config — when every needed
+    format type was already enabled.
+    """
+
+    used = {f.error_type for f in findings if f.error_type}
+    if not used:
+        return cfg, []
+    registry = load_error_types(error_dir, sorted(shipped_keys(error_dir)))
+    format_keys = {k for k, et in registry.items() if et.is_format}
+    already = set(cfg.error_type_keys)
+    missing = sorted((used & format_keys) - already)
+    if not missing:
+        return cfg, []
+    z = cfg.model_copy(deep=True)
+    # A fresh group of bare keys — a valid ``error_types`` entry shape, and one
+    # that adds no duplicate key (every element is absent from ``already``).
+    z.error_types = list(z.error_types) + [list(missing)]
+    log.info("deliverable: auto-enabled format type(s) %s so their findings "
+             "apply as tracked formatting rather than being dropped as no-ops",
+             ", ".join(missing))
+    return z, missing
 
 
 def _occurrence_at(haystack: str, needle: str, start: int) -> int | None:
@@ -243,16 +291,31 @@ def build_manuscript_deliverable(
         findings.append(f)
 
     zcfg = zero_cost_config(cfg)
+    # Format findings (title_italics) change no characters, so they must ride
+    # the format channel or they vanish as no-ops. Guarantee their type is
+    # enabled even if the run's config trimmed it — across multiple passes a
+    # lean per-phase config easily drops it. Uses the un-normalized findings so
+    # a query'd format finding still counts (it will simply anchor as a
+    # comment). Errors are surfaced, not swallowed: an unroutable format finding
+    # is a lost edit, not a cosmetic detail.
+    zcfg, _ = ensure_format_types_enabled(zcfg, findings, error_dir)
     prepared = prepare(zcfg, str(source_path), error_dir)
     usage = Usage()
     outputs = finish(prepared, findings, usage, zcfg,
                      out_dir=out_dir, source_path=source_path)
+    # Backstop: a formatting finding that reached the change channel by mistake
+    # deletes the sentence it should only have marked. The reject-all audit is
+    # blind to it (rejecting a deletion restores the text); a word-count delta
+    # on the accepted view is not. Raises WordCountDelta rather than shipping a
+    # manuscript short a sentence.
+    word_count_delta_guard(outputs.reviewed_path)
     return DeliverableResult(outputs=outputs, dropped=dropped)
 
 
 __all__ = [
     "DeliverableResult",
     "build_manuscript_deliverable",
+    "ensure_format_types_enabled",
     "gfinding_to_finding",
     "partition_for_deliverable",
     "zero_cost_config",

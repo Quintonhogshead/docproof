@@ -142,10 +142,27 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
     corrected_text, or not a JSON object at all), each with an index and a
     plain-text reason. An anchor failure is a different thing — the row was
     well-formed but its quote is not in the manuscript — and shows up later,
-    as status "rejected_no_anchor" on the finding validate_findings returns."""
+    as status "rejected_no_anchor" on the finding validate_findings returns.
+
+    Format-carrying rows are dropped here, unconditionally. A `title_italics`
+    row records `original_text` as the whole sentence and `corrected_text` as
+    just the span to italicise — a shape that only means "mark this span" when
+    it rides the format channel. A row has no format slot the replay Finding
+    preserves, so on a run that has not enabled `title_italics` the same pair
+    routes to the ordinary change channel, where `shrink` reads it as "delete
+    the sentence, keep the title" and eats real prose. The reject-all audit
+    cannot catch it — rejecting a tracked deletion restores the text — so the
+    only safe move is to never let a format row become a replay Finding.
+    Italics are applied through the deliverable's own format channel
+    (`galley.deliverable`), not by replaying a findings file."""
     registry: dict[str, ErrorType] = {}
     if remap_unchanneled:
         registry = load_error_types(error_dir, sorted(shipped_keys(error_dir)))
+    # Format-channel keys are needed on BOTH paths (replay too) to spot a
+    # format row by its error type, so load them even when not remapping.
+    format_registry = registry or load_error_types(
+        error_dir, sorted(shipped_keys(error_dir)))
+    format_keys = {k for k, et in format_registry.items() if et.is_format}
 
     ids = itertools.count(1)
     findings: list[Finding] = []
@@ -175,6 +192,16 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             continue
 
         raw_type = str(item.get("error_type") or "")
+        # A format-carrying row cannot round-trip: its find/replace only mean
+        # "mark this span" on the format channel, and replay has no format slot.
+        # Drop it (by an explicit format field, or a format-channel type) rather
+        # than let it become a prose-eating deletion. See the docstring.
+        if item.get("format") or raw_type in format_keys:
+            rejects.append({"index": i, "row": item,
+                            "reason": f"format-carrying row ({raw_type or 'unknown'}) "
+                            "dropped: formatting cannot round-trip through replay; "
+                            "apply italics via the deliverable's format channel"})
+            continue
         if remap_unchanneled:
             resolved_type, was_remapped = resolve_error_type(
                 raw_type, registry, DEFAULT_IMPORT_TYPE)
@@ -211,6 +238,59 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
     return findings, rejects, remapped
 
 
+class WordCountDelta(Exception):
+    """A replayed/mock deliverable removed more prose than a proofread should.
+
+    Message is user-facing. Raised by :func:`word_count_delta_guard`."""
+
+    def __init__(self, reject_words: int, accept_words: int, reason: str):
+        self.reject_words = reject_words
+        self.accept_words = accept_words
+        super().__init__(reason)
+
+
+def word_count_delta_guard(reviewed_path: str | Path, *,
+                           max_drop_ratio: float = 0.02, min_drop: int = 25
+                           ) -> tuple[int, int]:
+    """Refuse a finished replay/mock document that ate prose it should not have.
+
+    The backstop for a format-carrying row that slips past
+    :func:`build_findings`' drop-filter (or any other misroute that lands as a
+    deletion): such a row records the whole sentence as its ``original_text``
+    and only a span as its ``corrected_text``, so on the change channel it reads
+    as "delete the sentence, keep the span" and removes real words. The
+    reject-all audit cannot see it — rejecting a tracked deletion restores the
+    text, so that view still matches the ingest — but the ACCEPTED view is now
+    short a sentence.
+
+    Counts words in both views of the finished document and raises
+    :class:`WordCountDelta` when accepting the changes dropped more than
+    ``min_drop`` words AND more than ``max_drop_ratio`` of the ingested count.
+    Both conditions together: the ratio keeps a real book from tripping on a
+    handful of legitimate deletions, the floor keeps a tiny document from
+    tripping on one. A proofread only ever nets a few words down; a
+    sentence-eating misroute clears both bars at once. Returns
+    ``(reject_words, accept_words)`` on success.
+    """
+    from .reassembler import paragraph_view_text
+    from .utils.xml_helpers import DocxPackage, walk_package
+
+    pkg = DocxPackage(reviewed_path)
+    reject_words = accept_words = 0
+    for wp in walk_package(pkg):
+        reject_words += len(paragraph_view_text(wp.element, "reject").split())
+        accept_words += len(paragraph_view_text(wp.element, "accept").split())
+    drop = reject_words - accept_words
+    if drop > min_drop and drop > max_drop_ratio * max(reject_words, 1):
+        raise WordCountDelta(
+            reject_words, accept_words,
+            f"Refusing to ship: accepting the changes removed {drop} words "
+            f"({reject_words} → {accept_words}), far more than a proofread "
+            f"should. This is the signature of a formatting row misapplied as a "
+            f"deletion — investigate before delivering.")
+    return reject_words, accept_words
+
+
 __all__ = ["DEFAULT_IMPORT_TYPE", "zero_paid_passes", "rows_from_payload",
           "load_findings_file", "resolve_error_type", "sanitize_corrected",
-          "build_findings"]
+          "build_findings", "WordCountDelta", "word_count_delta_guard"]

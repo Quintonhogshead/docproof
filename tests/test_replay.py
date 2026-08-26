@@ -173,6 +173,41 @@ def test_build_findings_defaults_and_clamps_optional_fields():
     assert findings[0].occurrence == 1
 
 
+# --- format rows cannot round-trip through replay --------------------------
+
+def test_build_findings_drops_a_format_channel_row_on_both_paths():
+    """title_italics is a real format-channel type. Its row records the whole
+    sentence as original_text and only the title span as corrected_text — a
+    shape that means "mark this span" ONLY on the format channel. Replay has no
+    format slot, so if this became a Finding it would read as "delete the
+    sentence, keep the span" and eat prose. Drop it, on import AND replay."""
+    row = {"para_id": "body-0000",
+           "original_text": "She loved The Great Gatsby dearly.",
+           "corrected_text": "The Great Gatsby",
+           "error_type": "title_italics"}
+    for remap in (True, False):
+        findings, rejects, remapped = build_findings(
+            [row], variant=None, error_dir=ERROR_DIR, remap_unchanneled=remap)
+        assert findings == []
+        assert len(rejects) == 1
+        assert "format-carrying" in rejects[0]["reason"]
+
+
+def test_build_findings_drops_a_row_carrying_a_format_field():
+    """Even a row whose error_type is unremarkable is dropped when it carries a
+    `format` field — that field is exactly what a serialized format finding
+    (finding_to_dict is dataclasses.asdict) writes, and the tell that its
+    find/replace are a mark, not an edit."""
+    row = {"para_id": "body-0000", "original_text": "the whole sentence here",
+           "corrected_text": "whole", "error_type": "spelling",
+           "format": "italic"}
+    findings, rejects, remapped = build_findings(
+        [row], variant=None, error_dir=ERROR_DIR, remap_unchanneled=True)
+    assert findings == []
+    assert len(rejects) == 1
+    assert "format-carrying" in rejects[0]["reason"]
+
+
 # --- zero_paid_passes ---------------------------------------------------------
 
 def test_zero_paid_passes_disables_every_provider_backed_stage():
@@ -219,3 +254,72 @@ def test_zero_paid_passes_leaves_free_deterministic_stages_alone():
     zero_paid_passes(cfg)
     assert cfg.consistency.enabled is True
     assert cfg.spellcheck.enabled is True
+
+
+# --- word_count_delta_guard -------------------------------------------------
+
+import pytest
+
+from docproof.config import Config
+from docproof.ingest import build_document_model, preflight
+from docproof.models import Anchor, Finding
+from docproof.reassembler import apply_tracked_changes
+from docproof.replay import WordCountDelta, word_count_delta_guard
+from docproof.utils.xml_helpers import walk_package
+
+from .conftest import FIXTURES
+
+_ORIG = "It was late, we were tired, the road went on."
+
+
+def _reviewed_with_deletion(tmp_path, deleted_span: str) -> str:
+    """styled.docx with one tracked deletion of `deleted_span` from its body
+    paragraph — the shape a formatting row misrouted onto the change channel
+    produces. Returns the saved path."""
+    cfg = Config()
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = next(p.para_id for p in doc.paragraphs if p.text == _ORIG)
+    start = _ORIG.index(deleted_span)
+    f = Finding("f-1", "chunk-000", pid, "comma_splice", _ORIG, 1, "", "test",
+                "high", status="validated",
+                anchor=Anchor(start, start + len(deleted_span), deleted_span, ""))
+    stats = apply_tracked_changes(pkg, doc, [f], cfg)
+    assert stats.applied == ("f-1",)
+    out = tmp_path / "reviewed.docx"
+    pkg.save(out)
+    return str(out)
+
+
+def test_word_count_delta_guard_raises_on_a_sentence_eating_deletion(tmp_path):
+    path = _reviewed_with_deletion(tmp_path, "we were tired, the road went on")
+    # Thresholds lowered so the 7-word drop on this tiny fixture clears the
+    # bars deterministically — the production defaults are validated below.
+    with pytest.raises(WordCountDelta) as exc:
+        word_count_delta_guard(path, max_drop_ratio=0.1, min_drop=3)
+    assert exc.value.reject_words > exc.value.accept_words
+
+
+def test_word_count_delta_guard_floor_spares_a_tiny_document(tmp_path):
+    """The min_drop floor keeps a small document with one legitimate deletion
+    from tripping: the same 7-word drop is under the 25-word default floor."""
+    path = _reviewed_with_deletion(tmp_path, "we were tired, the road went on")
+    reject_words, accept_words = word_count_delta_guard(path)  # defaults
+    drop = reject_words - accept_words
+    assert 0 < drop < 25  # counted, but under the floor, so not raised
+
+
+def test_word_count_delta_guard_passes_a_clean_document(tmp_path):
+    """A document whose only edit inserts/keeps words never trips the guard."""
+    cfg = Config()
+    pkg = preflight(FIXTURES / "styled.docx", "abort")
+    doc = build_document_model(pkg, cfg)
+    pid = next(p.para_id for p in doc.paragraphs if p.text == _ORIG)
+    # ", w" -> ". W": a real proofreading fix, zero net word change.
+    f = Finding("f-1", "chunk-000", pid, "comma_splice", _ORIG, 1, "", "test",
+                "high", status="validated", anchor=Anchor(11, 14, ", w", ". W"))
+    apply_tracked_changes(pkg, doc, [f], cfg)
+    out = tmp_path / "clean.docx"
+    pkg.save(out)
+    reject_words, accept_words = word_count_delta_guard(str(out))
+    assert reject_words == accept_words
