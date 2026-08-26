@@ -202,6 +202,7 @@ def _apply_section_updates(cfg: Config, section: str, updates: dict) -> None:
 
 def materialize_genre_pack(base_config: str | Path, genre: str, *,
                            profile: Any | None = None,
+                           corrections: Any | None = None,
                            era: int | None = None,
                            stage: str | None = None,
                            genres_dir: str | Path | None = None,
@@ -292,7 +293,15 @@ def materialize_genre_pack(base_config: str | Path, genre: str, *,
 
     seeded_names: list[str] = []
     if profile is not None:
-        names = [n.name for n in getattr(profile, "proper_nouns", [])]
+        # With a correction overlay, seed only the vetted names (reject/suspect
+        # dropped); the raw profile is untouched. Without it, every candidate,
+        # exactly as before.
+        if corrections is not None:
+            from .profile_corrections import seedable_names
+            names = seedable_names(profile, corrections)
+            summary["corrections_applied"] = True
+        else:
+            names = [n.name for n in getattr(profile, "proper_nouns", [])]
         if names:
             merged_names = sorted(set(cfg.consistency.seeded_names) | set(names))
             cfg.consistency.seeded_names = merged_names
@@ -327,15 +336,16 @@ def materialize_genre_pack(base_config: str | Path, genre: str, *,
 
 
 def write_genre_pack(base_config: str | Path, genre: str, out_path: str | Path,
-                     *, profile: Any | None = None, era: int | None = None,
+                     *, profile: Any | None = None,
+                     corrections: Any | None = None, era: int | None = None,
                      stage: str | None = None,
                      genres_dir: str | Path | None = None,
                      stages_dir: str | Path | None = None) -> dict[str, Any]:
     """`materialize_genre_pack`, written to `out_path` as YAML. Returns the
     same summary dict for the caller (the CLI) to print."""
     cfg, summary = materialize_genre_pack(
-        base_config, genre, profile=profile, era=era, stage=stage,
-        genres_dir=genres_dir, stages_dir=stages_dir)
+        base_config, genre, profile=profile, corrections=corrections, era=era,
+        stage=stage, genres_dir=genres_dir, stages_dir=stages_dir)
     data = cfg.model_dump(mode="json")
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -520,6 +520,12 @@ def _galley_parser(sub) -> None:
                      help="a profile JSON from `docproof galley profile "
                           "--json --out`; its proper-noun candidates seed "
                           "consistency.seeded_names / spellcheck.allowlist")
+    glg.add_argument("--corrections",
+                     help="a profile-corrections overlay JSON (from `docproof "
+                          "galley triage-nouns` + human edits): only its "
+                          "protect/enforce names seed the config; reject/"
+                          "suspect names are held back. The raw profile is "
+                          "untouched.")
     glg.add_argument("--stage", choices=list(_stage_choices()) or None,
                      help="also apply a workflow-stage preset (which lanes "
                           "run), composed BEFORE the genre and with its lane "
@@ -678,6 +684,18 @@ def _galley_parser(sub) -> None:
     _genre_arg(gct)
     gct.add_argument("--json", action="store_true",
                      help="print the certificate as JSON")
+
+    gtn = gsub.add_parser(
+        "triage-nouns",
+        help="group a profile's proper-noun candidates into protect/enforce/"
+             "reject/suspect (with counts, reasons, and near-match flags like "
+             "Deut/Deute) — the first move of building a correction overlay. $0")
+    gtn.add_argument("profile", help="a profile JSON from `galley profile`")
+    gtn.add_argument("--out", help="write a correction-overlay STARTER JSON "
+                                   "here (proper_noun_classes prefilled with "
+                                   "the suggestions for you to edit)")
+    gtn.add_argument("--json", action="store_true",
+                     help="print the triage table as JSON")
 
 
 def _genre_choices() -> tuple[str, ...]:
@@ -1936,7 +1954,8 @@ def cmd_galley(args) -> int:
             "import-judgments": _galley_import_judgments,
             "routes": _galley_routes,
             "approve": _galley_approve,
-            "certify": _galley_certify}[args.galley_cmd](args)
+            "certify": _galley_certify,
+            "triage-nouns": _galley_triage_nouns}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2702,6 +2721,49 @@ def cmd_galley_profile(args) -> int:
     return 0
 
 
+def _galley_triage_nouns(args) -> int:
+    from .genre_profile import Profile
+    from .profile_corrections import triage_proper_nouns
+
+    try:
+        profile = Profile.model_validate_json(
+            Path(args.profile).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"error: {args.profile}: {e}", file=sys.stderr)
+        return 2
+    entries = triage_proper_nouns(profile)
+
+    buckets: dict[str, list] = {}
+    for e in entries:
+        buckets.setdefault(e.suggested_class, []).append(e)
+    print(f"Proper-noun triage for {profile.source} "
+          f"({len(entries)} candidate(s)):")
+    for cls in ("protect", "enforce", "reject", "suspect"):
+        rows = buckets.get(cls, [])
+        if not rows:
+            continue
+        print(f"\n  {cls.upper()} ({len(rows)}):")
+        for e in rows:
+            print(f"    {e.name:20} {e.count:>4}x   {e.reason}")
+
+    if getattr(args, "out", None):
+        starter = {
+            "source": profile.source,
+            "recommended_preset": None,
+            "proper_noun_classes": {e.name: e.suggested_class for e in entries},
+            "note": "Triage suggestions — edit before use. Only protect/"
+                    "enforce names seed the config; reject/suspect are held.",
+        }
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(starter, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        print(f"\n  wrote correction-overlay starter: {out}")
+    if args.json:
+        print(json.dumps([e.model_dump() for e in entries], ensure_ascii=False))
+    return 0
+
+
 def cmd_galley_genre_pack(args) -> int:
     from .genre import write_genre_pack
     from .genre_profile import Profile
@@ -2715,10 +2777,26 @@ def cmd_galley_genre_pack(args) -> int:
             print(f"error: --profile {args.profile}: {e}", file=sys.stderr)
             return 2
 
+    corrections = None
+    if getattr(args, "corrections", None):
+        from .profile_corrections import ProfileCorrections
+        try:
+            corrections = ProfileCorrections.model_validate_json(
+                Path(args.corrections).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"error: --corrections {args.corrections}: {e}",
+                  file=sys.stderr)
+            return 2
+        if profile is None:
+            print("error: --corrections needs --profile (it overlays one)",
+                  file=sys.stderr)
+            return 2
+
     try:
         summary = write_genre_pack(
             args.base, args.genre, args.out, profile=profile,
-            stage=getattr(args, "stage", None), era=getattr(args, "era", None))
+            corrections=corrections, stage=getattr(args, "stage", None),
+            era=getattr(args, "era", None))
     except (FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -2740,6 +2818,9 @@ def cmd_galley_genre_pack(args) -> int:
         print(f"  continuity prompt: {summary['continuity_prompt']}")
     if "genre_scans_applied" in summary:
         print(f"  genre scans: {summary['genre_scans_applied']}")
+    if summary.get("corrections_applied"):
+        print("  correction overlay applied: reject/suspect names held back "
+              "from seeding (raw profile untouched)")
     if summary["seeded_names_count"]:
         print(f"  seeded {summary['seeded_names_count']} proper noun(s) from "
              f"the profile into consistency.seeded_names / "
