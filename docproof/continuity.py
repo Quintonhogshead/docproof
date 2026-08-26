@@ -728,10 +728,15 @@ def chapters(paragraphs: Sequence[ParagraphRef],
     it is the first. Huge units are size-split at `max_tokens`. A manuscript with
     no chapter markers at all yields one unit, then size-split — the pass still
     runs, just in book-sized windows rather than chapter-aligned ones."""
+    from .headings import is_structural_heading
     from .utils.tokens import estimate_tokens
 
     def is_break(p: ParagraphRef) -> bool:
-        return is_heading(p.style) or looks_like_chapter_heading(p)
+        # STYLE path is guarded by the shared structural predicate (a long body
+        # paragraph mis-styled "Heading 3" is not a chapter break); the TEXT
+        # convention ("Chapter Nine") is the separate additive signal.
+        return (is_structural_heading(p, is_heading)
+                or looks_like_chapter_heading(p))
 
     groups = _split_on_headings(list(paragraphs), is_break)
     if not groups:

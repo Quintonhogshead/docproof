@@ -202,8 +202,11 @@ def _apply_section_updates(cfg: Config, section: str, updates: dict) -> None:
 
 def materialize_genre_pack(base_config: str | Path, genre: str, *,
                            profile: Any | None = None,
+                           corrections: Any | None = None,
                            era: int | None = None,
-                           genres_dir: str | Path | None = None
+                           stage: str | None = None,
+                           genres_dir: str | Path | None = None,
+                           stages_dir: str | Path | None = None
                            ) -> tuple[Config, dict[str, Any]]:
     """Base config + a genre's posture preset + (optionally) profile-derived
     seeding, as one materialized Config plus a summary dict of what changed —
@@ -251,6 +254,16 @@ def materialize_genre_pack(base_config: str | Path, genre: str, *,
     preset = load_genre_preset(genre, genres_dir)
     summary: dict[str, Any] = {"genre": genre, "base_config": str(base_config)}
 
+    # A workflow-stage preset lands FIRST (which lanes run), then the genre
+    # posture on top, then the stage's lane locks are re-asserted so the stage
+    # wins over the genre — the same precedence the live --stage/--genre path
+    # uses in docproof/__main__.py's _configure. See docproof/stages.py.
+    stage_locks: dict[str, Any] = {}
+    if stage:
+        from .stages import apply_stage
+        cfg, stage_locks = apply_stage(cfg, stage, stages_dir=stages_dir)
+        summary["stage"] = stage
+
     pending = _apply_overlay(cfg, preset.get("overlay") or {})
     summary["overlay_applied"] = sorted(set(preset.get("overlay") or {})
                                         - set(pending))
@@ -280,7 +293,15 @@ def materialize_genre_pack(base_config: str | Path, genre: str, *,
 
     seeded_names: list[str] = []
     if profile is not None:
-        names = [n.name for n in getattr(profile, "proper_nouns", [])]
+        # With a correction overlay, seed only the vetted names (reject/suspect
+        # dropped); the raw profile is untouched. Without it, every candidate,
+        # exactly as before.
+        if corrections is not None:
+            from .profile_corrections import seedable_names
+            names = seedable_names(profile, corrections)
+            summary["corrections_applied"] = True
+        else:
+            names = [n.name for n in getattr(profile, "proper_nouns", [])]
         if names:
             merged_names = sorted(set(cfg.consistency.seeded_names) | set(names))
             cfg.consistency.seeded_names = merged_names
@@ -303,16 +324,28 @@ def materialize_genre_pack(base_config: str | Path, genre: str, *,
                 **cfg.genre_scans.anachronism.model_dump(), "era": era}})
         summary["anachronism_era"] = era
 
+    # Re-assert the stage's lane locks LAST — after the genre overlay and every
+    # profile-derived nudge — so the stage wins over the genre. A non-empty
+    # `stage_lock_violations` names a lane the genre tried to reopen; the
+    # materialized config still ends in the stage-correct state.
+    if stage_locks:
+        from .stages import enforce_locks
+        summary["stage_lock_violations"] = enforce_locks(cfg, stage_locks)
+
     return cfg, summary
 
 
 def write_genre_pack(base_config: str | Path, genre: str, out_path: str | Path,
-                     *, profile: Any | None = None, era: int | None = None,
-                     genres_dir: str | Path | None = None) -> dict[str, Any]:
+                     *, profile: Any | None = None,
+                     corrections: Any | None = None, era: int | None = None,
+                     stage: str | None = None,
+                     genres_dir: str | Path | None = None,
+                     stages_dir: str | Path | None = None) -> dict[str, Any]:
     """`materialize_genre_pack`, written to `out_path` as YAML. Returns the
     same summary dict for the caller (the CLI) to print."""
     cfg, summary = materialize_genre_pack(
-        base_config, genre, profile=profile, era=era, genres_dir=genres_dir)
+        base_config, genre, profile=profile, corrections=corrections, era=era,
+        stage=stage, genres_dir=genres_dir, stages_dir=stages_dir)
     data = cfg.model_dump(mode="json")
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

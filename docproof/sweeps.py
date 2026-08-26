@@ -687,11 +687,15 @@ def heading_case_findings(paragraphs: Sequence[ParagraphRef],
     things to come" untouched through an entire run (DP-006); folding the
     headings' names into the scripted pass closes it without ever showing a
     heading to a model."""
+    from .headings import is_structural_heading
     findings: list[Finding] = []
     flagged = remaining = 0
     n = 0
     for para in paragraphs:
-        if not skip.is_sweep_only(para.style):
+        # The SHARED structural predicate, not the style name alone: a long body
+        # paragraph mis-styled as a heading must not be title-cased (a wrong
+        # edit to real prose). Same definition the chapter segmentation uses.
+        if not is_structural_heading(para, skip.is_sweep_only):
             continue
         hits = title_case_hits(para.text)
         if not hits:

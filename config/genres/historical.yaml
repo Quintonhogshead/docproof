@@ -1,0 +1,49 @@
+# Posture preset: history / historical narrative non-fiction.
+#
+# Conservative on style, period-aware on scans. Smoothing stays QUERY-ONLY
+# (edits: false) and the rewrite pass is off — a historian's cadence and the
+# wording of quoted primary sources are not the pipeline's to rewrite. What
+# this genre adds over general_nonfiction is period awareness:
+#
+#   * the anachronism query scan is on — but a deliberate no-op until an era
+#     is supplied. Set it at materialization: `docproof galley genre-pack
+#     historical --era 1863`. The scan never guesses the year (guessing then
+#     flagging against the guess is the hallucination it exists to avoid), so
+#     without `--era` it stays quiet by design.
+#   * the whole-book continuity read, WHERE A RUN TURNS IT ON, gets a prompt
+#     that adds a "period consistency" contradiction category (an institution
+#     or technology the book fixes to one era, contradicted later) on top of
+#     the built-in timeline/age/attribute/object categories, and is told to
+#     leave real-world vocabulary judgments to the anachronism scan. This does
+#     not turn continuity on by itself — that stays a cost/opt-in decision.
+#   * citation_format is on (primary-source citation styles mixed in one book).
+#
+# Pair with `docproof galley genre-pack historical --profile profile.json
+# --era <year>` to seed people/place names and set the era in one step.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: historical
+description: >
+  History / historical narrative: smoothing query-only and the rewrite pass
+  off, the flights judge strict, the anachronism scan on (no-op until an --era
+  is set at materialization), citation_format on, and a period-aware
+  continuity prompt. Pairs with a profile run and `--era`.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: true
+  smoothing.edits: false
+  smoothing.judge_harshness: strict
+  smoothing.proposer_restraint: restrained
+  smoothing.max_per_1000_words: 3.0
+  smoothing.min_confidence: medium
+  rewrite.enabled: false
+
+genre_scans:
+  anachronism:
+    enabled: true
+  citation_format:
+    enabled: true
+
+continuity_prompt: prompts/historical_continuity.md

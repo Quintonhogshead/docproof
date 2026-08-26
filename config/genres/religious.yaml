@@ -1,0 +1,46 @@
+# Posture preset: religious / theological non-fiction.
+#
+# This preset exists because religious/theological non-fiction had no home and
+# was being run under `self_help_business` — a posture that turns on aggressive
+# edits-mode smoothing and the rewrite recall lever, both of which are actively
+# WRONG here. Two properties define the genre:
+#
+#   1. Quoted sacred and liturgical text must not be reworded. House-style
+#      punctuation may still apply, but modernizing or "smoothing" the wording
+#      of Scripture, a creed, or a liturgical formula is a defect, not a fix.
+#      So smoothing is OFF and rewrite is OFF — no automatic line-edit source
+#      runs. The quotation-class permission model (author prose vs Scripture vs
+#      bibliographic) is enforced structurally through intent zones, not here.
+#   2. A large fixed vocabulary of proper nouns and transliterations —
+#      Deuteronomy/Deut., Yahweh, transliterated Hebrew/Greek/Arabic — many of
+#      them near-neighbours of each other and of common words. The consistency
+#      scan's name-spelling bar is raised well above the house default so a
+#      transliterated name is never silently corrected toward a wrong dominant
+#      spelling on thin evidence (the Deut/Deute false-match class).
+#
+# Pair with `docproof galley genre-pack religious --profile profile.json` to
+# seed the book's own proper-noun list, and declare Scripture/quotation spans
+# as intent zones in the profile so no lane proposes changes inside them.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: religious
+description: >
+  Theological / religious non-fiction: smoothing and the rewrite pass both off
+  (quoted Scripture and liturgical text must never be reworded), the flights
+  judge strict, the consistency name-spelling bar raised so transliterations
+  are never silently corrected, and citation/reading-level query scans on.
+  Pairs with a profile run + declared Scripture intent zones.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: false
+  rewrite.enabled: false
+  consistency.name_dominance: 10
+  consistency.name_min_count: 30
+
+genre_scans:
+  citation_format:
+    enabled: true
+  reading_level:
+    enabled: true

@@ -1794,6 +1794,13 @@ class Config(BaseModel):
     # originals, so an override directory only has to hold what changed.
     error_type_override_dir: str | None = None
 
+    # Path to an intent-zones JSON (docproof/intent_zones.py). When set, the
+    # deterministic sweep layer consults the resolved zones before its findings
+    # reach the author: a sweep whose edit falls inside a protected span, and
+    # whose kind that span's permission forbids, is downgraded to a query rather
+    # than auto-applied. None (default) = no zones, behaviour unchanged.
+    intent_zones_file: str | None = None
+
     @field_validator("error_types")
     @classmethod
     def _validate_error_types(cls, value):

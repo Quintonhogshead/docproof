@@ -511,6 +511,24 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             sweep_findings += heading_findings
             sweep_reports.append(heading_report)
 
+        # Intent zones consulted BEFORE these deterministic findings reach the
+        # author: a sweep whose edit lands inside a protected span, of a kind
+        # that span's permission forbids, is downgraded to a query rather than
+        # auto-applied — so a quoted "that that" is never silently "fixed"
+        # ahead of adjudication. No-op unless a zones file is configured.
+        if cfg.intent_zones_file:
+            from .intent_zones import enforce, load_intent_zones, resolve
+            zones = load_intent_zones(cfg.intent_zones_file)
+            if zones.any:
+                resolved = resolve(zones, list(doc.paragraphs),
+                                   closing_quotes=variant.closing_quotes)
+                sweep_findings, zone_collisions = enforce(
+                    sweep_findings, resolved, list(doc.paragraphs))
+                if zone_collisions:
+                    log.info("intent zones: %d sweep finding(s) downgraded to "
+                             "queries inside protected spans",
+                             len(zone_collisions))
+
         # The spell scan reads the WHOLE document even when the run covers a
         # few sections. It changes nothing, so reading more costs nothing — and
         # a coined name is only recognisable as the author's by being used

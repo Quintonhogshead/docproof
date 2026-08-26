@@ -39,6 +39,7 @@ def main(argv=None) -> int:
     inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
+    _stage_arg(inv)
     _genre_arg(inv)
     _profile_arg(inv)
 
@@ -307,7 +308,17 @@ def main(argv=None) -> int:
 
     _galley_parser(sub)
 
+    cap = sub.add_parser(
+        "capabilities",
+        help="print the command tree (verbs + one-line help + config section "
+             "names) as JSON — so a practitioner discovers what exists without "
+             "reading --help or the source. $0")
+    cap.add_argument("--json", action="store_true",
+                     help="the default output IS json; accepted for symmetry")
+
     args = ap.parse_args(argv)
+    if args.cmd == "capabilities":
+        return _cmd_capabilities(ap)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
@@ -315,6 +326,44 @@ def main(argv=None) -> int:
             "merge": cmd_merge,
             "import-findings": cmd_import_findings, "replay": cmd_replay,
             "galley": cmd_galley}[args.cmd](args)
+
+
+def _capabilities_tree(parser) -> list[dict] | None:
+    """Walk an argparse parser's subcommands into a JSON tree of
+    {name, help, subcommands?}. Introspective, so it can never drift from the
+    real verbs the way a hand-maintained list would."""
+    action = None
+    for a in parser._actions:
+        if isinstance(a, argparse._SubParsersAction):
+            action = a
+            break
+    if action is None:
+        return None
+    help_by_name = {ca.dest: (ca.help or "") for ca in action._choices_actions}
+    out: list[dict] = []
+    for name, subparser in action.choices.items():
+        entry: dict = {"name": name, "help": help_by_name.get(name, "")}
+        child = _capabilities_tree(subparser)
+        if child:
+            entry["subcommands"] = child
+        out.append(entry)
+    return out
+
+
+def _cmd_capabilities(ap) -> int:
+    """The compact capability manifest — the whole command tree plus the config
+    section names, as one JSON document."""
+    from .config import Config
+    manifest = {
+        "tool": "docproof",
+        "version": __version__,
+        "commands": _capabilities_tree(ap) or [],
+        "config_sections": sorted(Config.model_fields.keys()),
+        "genres": list(_genre_choices()),
+        "stages": list(_stage_choices()),
+    }
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return 0
 
 
 def _galley_parser(sub) -> None:
@@ -471,6 +520,22 @@ def _galley_parser(sub) -> None:
                      help="a profile JSON from `docproof galley profile "
                           "--json --out`; its proper-noun candidates seed "
                           "consistency.seeded_names / spellcheck.allowlist")
+    glg.add_argument("--corrections",
+                     help="a profile-corrections overlay JSON (from `docproof "
+                          "galley triage-nouns` + human edits): only its "
+                          "protect/enforce names seed the config; reject/"
+                          "suspect names are held back. The raw profile is "
+                          "untouched.")
+    glg.add_argument("--stage", choices=list(_stage_choices()) or None,
+                     help="also apply a workflow-stage preset (which lanes "
+                          "run), composed BEFORE the genre and with its lane "
+                          "locks re-asserted after, so the genre cannot reopen "
+                          "a lane the stage forbids. See config/stages/")
+    glg.add_argument("--era", type=int,
+                     help="the manuscript's setting, as a year AD the "
+                          "vocabulary should predate — turns the anachronism "
+                          "scan from a no-op into an active scan (historical "
+                          "genre). Never inferred; you state it.")
 
     gf = gsub.add_parser(
         "flights", help="the copy-edit lane: a panel of narrow taste passes "
@@ -539,10 +604,164 @@ def _galley_parser(sub) -> None:
     gf.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
 
+    gxj = gsub.add_parser(
+        "export-judgments",
+        help="build a canonical judgment PACKET from a clusters.json (from "
+             "flights --propose-only) for an external judge — a session agent "
+             "or a human — to rule on. $0: no model, no keys. Pairs with "
+             "import-judgments")
+    gxj.add_argument("clusters", help="a clusters.json from "
+                                      "`galley flights --propose-only`")
+    gxj.add_argument("--out", required=True,
+                     help="where to write the judgment packet JSON")
+    gxj.add_argument("--intent-zones", metavar="ZONES_JSON",
+                     help="a JSON mapping para_id -> [[start,end],...] of "
+                          "protected char ranges; a cluster whose span "
+                          "intersects one is flagged intent_zone so the import "
+                          "refuses to EDIT it (query/reject only)")
+    gxj.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
+    gij = gsub.add_parser(
+        "import-judgments",
+        help="the model-free judge route: validate a filled judgment packet "
+             "(anchoring, atomicity, allowed channel, intent-zone compliance) "
+             "and write the findings envelope — NO model call, unlike "
+             "flights --judge-only. Pairs with export-judgments")
+    gij.add_argument("packet", help="a judgment packet JSON with decisions "
+                                    "filled in by the external judge")
+    gij.add_argument("--out", help="output directory for flights_findings.json "
+                                   "(default: beside the packet)")
+    gij.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
+    grt = gsub.add_parser(
+        "routes",
+        help="the effective-config egress report: every model the config "
+             "would CALL, the provider that serves it, and whether its lane is "
+             "active. $0. --deny PROVIDER fails if that provider is reachable")
+    _stage_arg(grt)
+    _genre_arg(grt)
+    grt.add_argument("--config", default="config/default.yaml")
+    grt.add_argument("--deny", action="append", default=[], metavar="PROVIDER",
+                     help="fail (exit 3) if any ACTIVE route reaches this "
+                          "provider (repeatable) — a data-egress preflight")
+    grt.add_argument("--json", action="store_true",
+                     help="print the routes as JSON")
+
+    gap = gsub.add_parser(
+        "approve",
+        help="write the immutable approval manifest (approval.json) from a "
+             "human-approved plan: source + config hashes, allowed models/"
+             "providers, stage, enabled lanes, max spend. $0")
+    gap.add_argument("input", help="the manuscript this approval is for")
+    _stage_arg(gap)
+    _genre_arg(gap)
+    gap.add_argument("--config", default="config/default.yaml")
+    gap.add_argument("--budget", type=float, required=True,
+                     help="the approved maximum spend in USD")
+    gap.add_argument("--out", default="approval.json",
+                     help="where to write the manifest (default: approval.json)")
+    gap.add_argument("--note", default="", help="a free-text note recorded in "
+                                                "the manifest")
+    gap.add_argument("--json", action="store_true")
+
+    gct = gsub.add_parser(
+        "certify",
+        help="the delivery gate: re-check a finished run against its approval "
+             "and the structural invariants (hashes, approved routes, "
+             "checkpoint, zero-cost anomaly, budget, artifact scan). Exit 4 if "
+             "any check fails. $0")
+    gct.add_argument("run", help="the finished run's output directory")
+    gct.add_argument("--approval", help="the approval.json to certify against "
+                                        "(optional; hash/route/budget checks "
+                                        "are skipped without it)")
+    gct.add_argument("--source", help="the manuscript, to check the source "
+                                      "hash against the approval")
+    gct.add_argument("--config", help="the effective config, to check the "
+                                      "config hash and routes")
+    _stage_arg(gct)
+    _genre_arg(gct)
+    gct.add_argument("--json", action="store_true",
+                     help="print the certificate as JSON")
+
+    gtn = gsub.add_parser(
+        "triage-nouns",
+        help="group a profile's proper-noun candidates into protect/enforce/"
+             "reject/suspect (with counts, reasons, and near-match flags like "
+             "Deut/Deute) — the first move of building a correction overlay. $0")
+    gtn.add_argument("profile", help="a profile JSON from `galley profile`")
+    gtn.add_argument("--out", help="write a correction-overlay STARTER JSON "
+                                   "here (proper_noun_classes prefilled with "
+                                   "the suggestions for you to edit)")
+    gtn.add_argument("--json", action="store_true",
+                     help="print the triage table as JSON")
+
+    giz = gsub.add_parser(
+        "intent-zones",
+        help="resolve an intent-zones file against a manuscript and preview the "
+             "protected spans + permission classes. --out writes the resolved "
+             "{para_id: [[start,end]]} map that export-judgments consumes. $0")
+    giz.add_argument("input", help="a .docx or .idml file")
+    giz.add_argument("--zones", required=True,
+                     help="an intent-zones JSON ({'zones': [...]}); see "
+                          "docproof/intent_zones.py for the selector schema")
+    giz.add_argument("--config", default="config/default.yaml")
+    giz.add_argument("--out", help="write the resolved para->spans map here")
+    giz.add_argument("--json", action="store_true",
+                     help="print the resolved map as JSON")
+
+    gld = gsub.add_parser(
+        "ledger",
+        help="the finding lifecycle ledger: reconstruct every finding's stable "
+             "id and state (detected/merged/queried/rejected/dropped) from a "
+             "finished run, with a duplicate report. $0")
+    gld.add_argument("run", help="a finished run directory (holding "
+                                 "findings.json) or a findings.json file")
+    gld.add_argument("--out", help="write the ledger JSON here")
+    gld.add_argument("--json", action="store_true",
+                     help="print the full ledger as JSON")
+
+    gst = gsub.add_parser(
+        "state",
+        help="the resumable run state machine: show the current state, advance "
+             "it (hash-stamped), or verify it is safe to resume. $0")
+    gst.add_argument("run", help="the run workspace (holds state.json)")
+    gst.add_argument("--advance", metavar="STATE",
+                     help="advance to this run state (forward-only); creates "
+                          "state.json if absent")
+    gst.add_argument("--source", help="stamp/verify this manuscript's hash")
+    gst.add_argument("--config", help="stamp/verify this config's hash "
+                                      "(with --stage/--genre applied)")
+    _stage_arg(gst)
+    _genre_arg(gst)
+    gst.add_argument("--at", default="", help="timestamp to record (you supply "
+                                              "it; never read from a clock)")
+    gst.add_argument("--by", default="", help="who is advancing the state")
+    gst.add_argument("--verify-resume", action="store_true",
+                     help="check the current source/config hashes still match "
+                          "what the state was recorded against; exit 6 on drift")
+    gst.add_argument("--json", action="store_true")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
     return available_genres()
+
+
+def _stage_choices() -> tuple[str, ...]:
+    from .stages import available_stages
+    return available_stages()
+
+
+def _stage_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--stage", choices=list(_stage_choices()) or None,
+        help="apply a workflow-stage preset (which lanes run) before the "
+             "genre posture, and re-assert its lane LOCKS after it, so a genre "
+             "can never turn on a lane the stage forbids (e.g. mechanical-wave "
+             "keeps edits-mode smoothing and the rewrite lever off whatever "
+             "genre is set). See config/stages/ and docproof/stages.py.")
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -566,8 +785,15 @@ def _common(p: argparse.ArgumentParser) -> None:
                         "extension, for the spell scan. Only needed when the "
                         "variant's dictionary is not bundled — spylls ships "
                         "en_US alone (default: config spellcheck.dictionary)")
+    _stage_arg(p)
     _genre_arg(p)
     _profile_arg(p)
+    p.add_argument(
+        "--approval", metavar="APPROVAL_JSON",
+        help="an approval.json from `docproof galley approve`. When given, the "
+             "command REFUSES to run (exit 5) if the manuscript, the effective "
+             "config, or any active model route deviates from what was "
+             "approved — the immutable-manifest gate.")
 
 
 def _profile_arg(p: argparse.ArgumentParser) -> None:
@@ -601,6 +827,27 @@ def _selection(args) -> list[str] | None:
     return [c.strip() for c in raw.split(",") if c.strip()]
 
 
+def _resolve_error_dir(config_path: str | Path) -> Path:
+    """Locate the ``error_types/`` prompt directory for a run config.
+
+    Prefer the directory beside the config — ``config/error_types`` when running
+    the shipped ``config/default.yaml``, or a workspace's own edited copy. When a
+    RELOCATED config has no sibling ``error_types/`` (the common case for a
+    materialized genre-pack config written into a book workspace), fall back to
+    the packaged shipped directory, so a materialized config is self-contained
+    wherever it lives. Before this fallback, such a config failed ``inventory``
+    (and every typed pass) by looking for ``error_types/`` beside itself and
+    finding nothing. When neither exists, return the beside-path unchanged so the
+    downstream FileNotFoundError still names the location the user expected."""
+    beside = Path(config_path).parent / "error_types"
+    if beside.is_dir():
+        return beside
+    packaged = Path(__file__).resolve().parent.parent / "config" / "error_types"
+    if packaged.is_dir():
+        return packaged
+    return beside
+
+
 def _configure(args):
     cfg = load_config(args.config)
     if getattr(args, "error_types", None):
@@ -625,6 +872,13 @@ def _configure(args):
     # promise (no comment channel). See docproof/genre.py's module docstring.
     # The reviewer model is the one deliberate exception: experiments may hold
     # the profile constant while comparing detectors with --model.
+    # A workflow-stage preset lands BEFORE the genre so its lane locks can be
+    # re-asserted AFTER the genre (stage > genre): a genre never turns on a lane
+    # the stage forbids. Profile lands last of all (profile > stage > genre).
+    stage_locks: dict = {}
+    if getattr(args, "stage", None):
+        from .stages import apply_stage
+        cfg, stage_locks = apply_stage(cfg, args.stage)
     genre_pending = {}
     if getattr(args, "genre", None):
         from .genre import apply_genre
@@ -633,10 +887,17 @@ def _configure(args):
             log.warning("genre %r set %s, which this build cannot apply yet "
                        "(no matching config section) — ignored", args.genre,
                        key)
+    if stage_locks:
+        from .stages import enforce_locks
+        violated = enforce_locks(cfg, stage_locks)
+        for key in violated:
+            log.warning("stage %r locks %s; the genre %r tried to change it — "
+                        "the stage lock wins", args.stage, key,
+                        getattr(args, "genre", None))
     apply_profile(cfg, getattr(args, "profile", None))
     if getattr(args, "model", None):
         cfg.api.model = args.model
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     return cfg, error_dir
 
 
@@ -729,8 +990,38 @@ def cmd_inventory(args) -> int:
     return 0
 
 
+def _approval_guard(args, cfg) -> int | None:
+    """Refuse a paid run whose inputs deviate from an approval manifest. Returns
+    an exit code to abort with, or None when the run is within approval (or no
+    --approval was given). The immutable-manifest gate: source hash, config
+    hash, and active model routes must all match what a human approved."""
+    approval = getattr(args, "approval", None)
+    if not approval:
+        return None
+    from galley.manifest import verify_plan
+    try:
+        manifest = json.loads(Path(approval).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read approval {approval}: {e}", file=sys.stderr)
+        return 5
+    devs = verify_plan(manifest, source=args.input, cfg=cfg)
+    if devs:
+        print(f"REFUSED: this run deviates from {approval} —", file=sys.stderr)
+        for d in devs:
+            print(f"  - {d.kind}: {d.detail}", file=sys.stderr)
+        print("  re-approve with `docproof galley approve` if the change is "
+              "intended.", file=sys.stderr)
+        return 5
+    print(f"approval {approval}: source, config, and model routes match — "
+          f"proceeding.")
+    return None
+
+
 def cmd_review(args) -> int:
     cfg, error_dir = _configure(args)
+    guard = _approval_guard(args, cfg)
+    if guard is not None:
+        return guard
     out = Path(cfg.output_dir)
     setup_logging(out)
 
@@ -986,7 +1277,7 @@ def cmd_rejudge(args) -> int:
     from .rejudge import RejudgeError, rejudge
 
     cfg = load_config(args.config)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     if args.meaning_model:
         cfg.meaning_check.model = args.meaning_model
         cfg.meaning_check.enabled = True
@@ -1334,7 +1625,7 @@ def cmd_sweep(args) -> int:
 
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -1454,7 +1745,7 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     zero_paid_passes(cfg)
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
 
     try:
         rows = load_findings_file(args.findings)
@@ -1606,7 +1897,7 @@ def cmd_merge(args) -> int:
 
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -1704,7 +1995,16 @@ def cmd_galley(args) -> int:
             "calibrate": _galley_calibrate,
             "flights": _galley_flights,
             "profile": cmd_galley_profile,
-            "genre-pack": cmd_galley_genre_pack}[args.galley_cmd](args)
+            "genre-pack": cmd_galley_genre_pack,
+            "export-judgments": _galley_export_judgments,
+            "import-judgments": _galley_import_judgments,
+            "routes": _galley_routes,
+            "approve": _galley_approve,
+            "certify": _galley_certify,
+            "triage-nouns": _galley_triage_nouns,
+            "intent-zones": _galley_intent_zones,
+            "ledger": _galley_ledger,
+            "state": _galley_state}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2183,7 +2483,7 @@ def _galley_flights(args) -> int:
               "given", file=sys.stderr)
         return 2
 
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -2470,6 +2770,188 @@ def cmd_galley_profile(args) -> int:
     return 0
 
 
+def _galley_state(args) -> int:
+    from galley.manifest import config_hash, sha256_file
+    from galley.state_machine import (RunStateMachine, StateError,
+                                      hash_artifact)
+
+    run = Path(args.run)
+    state_path = run / "state.json"
+    machine = RunStateMachine.load(state_path) if state_path.is_file() \
+        else RunStateMachine()
+
+    src_hash = sha256_file(args.source) if getattr(args, "source", None) \
+        and Path(args.source).is_file() else ""
+    cfg_hash = ""
+    if getattr(args, "config", None):
+        try:
+            cfg_hash = config_hash(_effective_cfg(args))
+        except (FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    if getattr(args, "verify_resume", False):
+        mismatches = machine.verify_resume(
+            source_sha256=src_hash, config_sha256=cfg_hash,
+            artifact_hasher=hash_artifact)
+        if mismatches:
+            print(f"UNSAFE to resume from {machine.current!r}:", file=sys.stderr)
+            for m in mismatches:
+                print(f"  - {m}", file=sys.stderr)
+            return 6
+        print(f"safe to resume from {machine.current!r}")
+        return 0
+
+    if getattr(args, "advance", None):
+        try:
+            rec = machine.advance(args.advance, at=args.at, by=args.by,
+                                  source_sha256=src_hash, config_sha256=cfg_hash)
+        except StateError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        run.mkdir(parents=True, exist_ok=True)
+        machine.save(state_path)
+        print(f"advanced to {rec.state!r} (from {len(machine.history)} "
+              f"recorded state(s))")
+    else:
+        print(f"run state: {machine.current or '(none recorded)'}")
+        for rec in machine.history:
+            print(f"  {rec.state:20} {rec.at or ''} {rec.by or ''}")
+    if args.json:
+        print(machine.model_dump_json())
+    return 0
+
+
+def _galley_ledger(args) -> int:
+    from galley.lifecycle import reconstruct_from_findings
+
+    run = Path(args.run)
+    findings_path = run / "findings.json" if run.is_dir() else run
+    if not findings_path.is_file():
+        findings_path = run / "flights_findings.json"
+    try:
+        envelope = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read findings from {args.run}: {e}",
+              file=sys.stderr)
+        return 2
+
+    led = reconstruct_from_findings(envelope)
+    states = led.by_state()
+    dups = led.duplicates()
+    print(f"Lifecycle ledger — {len(led)} finding(s) from {findings_path}:")
+    for state in ("detected", "verified", "held", "promoted", "merged",
+                  "queried", "rejected", "dropped", "delivered"):
+        if states.get(state):
+            print(f"  {state:10} {states[state]}")
+    if dups:
+        n = sum(len(v) for v in dups.values())
+        print(f"\n  {len(dups)} duplicate group(s) ({n} finding(s) share a "
+              f"content key):")
+        for key, ids in list(dups.items())[:20]:
+            print(f"    {key}: {', '.join(ids)}")
+    else:
+        print("\n  no content-duplicate findings")
+
+    if getattr(args, "out", None):
+        led.save(args.out)
+        print(f"\n  wrote ledger: {args.out}")
+    if args.json:
+        print(json.dumps(led.to_json(), ensure_ascii=False))
+    return 0
+
+
+def _galley_intent_zones(args) -> int:
+    from .config import load_config
+    from .formats import get_format
+    from .intent_zones import load_intent_zones, resolve
+
+    try:
+        cfg = load_config(args.config)
+        zones = load_intent_zones(args.zones)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    try:
+        fmt = get_format(args.input)
+        pkg = fmt.preflight(args.input, cfg.tracked_changes_policy)
+        doc = fmt.build_document_model(pkg, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    closing = doc.variant.closing_quotes if getattr(doc, "variant", None) \
+        else "”\""
+    resolved = resolve(zones, list(doc.paragraphs), closing_quotes=closing)
+    span_map = resolved.as_dict()
+    total = sum(len(v) for v in span_map.values())
+    print(f"Resolved {len(zones.zones)} intent zone(s) → {total} protected "
+          f"span(s) across {len(span_map)} paragraph(s):")
+    for z in zones.zones:
+        sel = ("para_ids" if z.para_ids else "para_range" if z.para_range
+               else "terms" if z.terms else "regex" if z.regex
+               else "quotes" if z.quotes else "?")
+        print(f"  [{z.permission}] {z.label or z.category or '(zone)'} "
+              f"— by {sel}")
+
+    if getattr(args, "out", None):
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(
+            {pid: [[s, e] for s, e in spans]
+             for pid, spans in span_map.items()},
+            indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\n  wrote resolved span map: {out}")
+    if args.json:
+        print(json.dumps({pid: [[s, e] for s, e in spans]
+                          for pid, spans in span_map.items()},
+                         ensure_ascii=False))
+    return 0
+
+
+def _galley_triage_nouns(args) -> int:
+    from .genre_profile import Profile
+    from .profile_corrections import triage_proper_nouns
+
+    try:
+        profile = Profile.model_validate_json(
+            Path(args.profile).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"error: {args.profile}: {e}", file=sys.stderr)
+        return 2
+    entries = triage_proper_nouns(profile)
+
+    buckets: dict[str, list] = {}
+    for e in entries:
+        buckets.setdefault(e.suggested_class, []).append(e)
+    print(f"Proper-noun triage for {profile.source} "
+          f"({len(entries)} candidate(s)):")
+    for cls in ("protect", "enforce", "reject", "suspect"):
+        rows = buckets.get(cls, [])
+        if not rows:
+            continue
+        print(f"\n  {cls.upper()} ({len(rows)}):")
+        for e in rows:
+            print(f"    {e.name:20} {e.count:>4}x   {e.reason}")
+
+    if getattr(args, "out", None):
+        starter = {
+            "source": profile.source,
+            "recommended_preset": None,
+            "proper_noun_classes": {e.name: e.suggested_class for e in entries},
+            "note": "Triage suggestions — edit before use. Only protect/"
+                    "enforce names seed the config; reject/suspect are held.",
+        }
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(starter, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        print(f"\n  wrote correction-overlay starter: {out}")
+    if args.json:
+        print(json.dumps([e.model_dump() for e in entries], ensure_ascii=False))
+    return 0
+
+
 def cmd_galley_genre_pack(args) -> int:
     from .genre import write_genre_pack
     from .genre_profile import Profile
@@ -2483,15 +2965,37 @@ def cmd_galley_genre_pack(args) -> int:
             print(f"error: --profile {args.profile}: {e}", file=sys.stderr)
             return 2
 
+    corrections = None
+    if getattr(args, "corrections", None):
+        from .profile_corrections import ProfileCorrections
+        try:
+            corrections = ProfileCorrections.model_validate_json(
+                Path(args.corrections).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            print(f"error: --corrections {args.corrections}: {e}",
+                  file=sys.stderr)
+            return 2
+        if profile is None:
+            print("error: --corrections needs --profile (it overlays one)",
+                  file=sys.stderr)
+            return 2
+
     try:
         summary = write_genre_pack(
-            args.base, args.genre, args.out, profile=profile)
+            args.base, args.genre, args.out, profile=profile,
+            corrections=corrections, stage=getattr(args, "stage", None),
+            era=getattr(args, "era", None))
     except (FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
     print(f"wrote {summary['out_path']} — genre '{summary['genre']}' over "
          f"{summary['base_config']}")
+    if "stage" in summary:
+        print(f"  stage: {summary['stage']} (lanes + locks)")
+    if summary.get("stage_lock_violations"):
+        print(f"  stage lock WON over genre for: "
+              f"{', '.join(summary['stage_lock_violations'])}")
     if summary["overlay_applied"]:
         print(f"  posture: {', '.join(summary['overlay_applied'])}")
     if summary["pending"]:
@@ -2502,6 +3006,9 @@ def cmd_galley_genre_pack(args) -> int:
         print(f"  continuity prompt: {summary['continuity_prompt']}")
     if "genre_scans_applied" in summary:
         print(f"  genre scans: {summary['genre_scans_applied']}")
+    if summary.get("corrections_applied"):
+        print("  correction overlay applied: reject/suspect names held back "
+              "from seeding (raw profile untouched)")
     if summary["seeded_names_count"]:
         print(f"  seeded {summary['seeded_names_count']} proper noun(s) from "
              f"the profile into consistency.seeded_names / "
@@ -2511,6 +3018,221 @@ def cmd_galley_genre_pack(args) -> int:
     if "reading_level_target_ari" in summary:
         print(f"  reading-level target ARI set to "
              f"{summary['reading_level_target_ari']:.1f} from the profile")
+    if "anachronism_era" in summary:
+        print(f"  anachronism scan era set to {summary['anachronism_era']} "
+              f"(the scan is a no-op without it)")
+    return 0
+
+
+def _effective_cfg(args):
+    """Build the effective Config from --config plus any --stage/--genre, with
+    the same stage>genre precedence _configure uses. For the read-only galley
+    verbs (routes/approve/certify) that need the config a run WOULD use."""
+    cfg = load_config(args.config)
+    stage_locks = {}
+    if getattr(args, "stage", None):
+        from .stages import apply_stage
+        cfg, stage_locks = apply_stage(cfg, args.stage)
+    if getattr(args, "genre", None):
+        from .genre import apply_genre
+        cfg, _ = apply_genre(cfg, args.genre)
+    if stage_locks:
+        from .stages import enforce_locks
+        enforce_locks(cfg, stage_locks)
+    return cfg
+
+
+def _galley_routes(args) -> int:
+    from .genre import available_genres  # noqa: F401 (parser choices)
+    from galley.manifest import model_routes
+
+    try:
+        cfg = _effective_cfg(args)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    routes = model_routes(cfg)
+    active = [r for r in routes if r.active]
+    print(f"Effective model routes for {args.config}"
+          f"{f' +stage {args.stage}' if getattr(args, 'stage', None) else ''}"
+          f"{f' +genre {args.genre}' if getattr(args, 'genre', None) else ''}:")
+    for r in routes:
+        mark = " " if r.active else "·"
+        print(f"  {mark} {r.role:<34} {r.model:<20} {r.provider}"
+              f"{'' if r.active else '   (lane off)'}")
+    reachable = sorted({r.provider for r in active})
+    print(f"\n  active providers: {', '.join(reachable)}")
+
+    denied = sorted(set(getattr(args, "deny", []) or []))
+    violations = [r for r in active if r.provider in denied]
+    if args.json:
+        print(json.dumps({"routes": [r.to_json() for r in routes],
+                          "active_providers": reachable,
+                          "denied": denied,
+                          "violations": [r.to_json() for r in violations]},
+                         ensure_ascii=False))
+    if violations:
+        print(f"\n  DENIED provider reachable: "
+              + "; ".join(f"{r.role}->{r.provider}" for r in violations),
+              file=sys.stderr)
+        return 3
+    return 0
+
+
+def _galley_approve(args) -> int:
+    from galley.manifest import build_manifest
+
+    try:
+        cfg = _effective_cfg(args)
+        manifest = build_manifest(
+            source=args.input, config_path=args.config, cfg=cfg,
+            max_spend_usd=args.budget, stage=getattr(args, "stage", None),
+            genre=getattr(args, "genre", None), note=args.note)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    print(f"wrote {out} — approval for {args.input}")
+    print(f"  source {manifest['source_sha256'][:12]}…  config "
+          f"{manifest['config_sha256'][:12]}…")
+    print(f"  budget ${manifest['max_spend_usd']:.2f}  stage "
+          f"{manifest['stage']}  lanes {manifest['enabled_lanes']}")
+    print(f"  allowed providers: {', '.join(manifest['allowed_providers'])}")
+    print(f"  allowed models: {', '.join(manifest['allowed_models'])}")
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False))
+    return 0
+
+
+def _galley_certify(args) -> int:
+    from galley.manifest import certify_run
+
+    manifest = None
+    if getattr(args, "approval", None):
+        try:
+            manifest = json.loads(Path(args.approval).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: could not read {args.approval}: {e}", file=sys.stderr)
+            return 2
+    cfg = None
+    if getattr(args, "config", None):
+        try:
+            cfg = _effective_cfg(args)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+    try:
+        cert = certify_run(args.run, manifest=manifest, cfg=cfg,
+                           source=getattr(args, "source", None))
+    except (FileNotFoundError, OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"Certificate for {args.run}:")
+    for c in cert.checks:
+        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip"}[c.status]
+        print(f"  [{glyph}] {c.name}{f' — {c.detail}' if c.detail else ''}")
+    print(f"\n  {'PASSED' if cert.passed else 'FAILED'} "
+          f"({len(cert.failed)} failing check(s))")
+    if args.json:
+        print(json.dumps(cert.to_json(), ensure_ascii=False))
+    return 0 if cert.passed else 4
+
+
+def _galley_export_judgments(args) -> int:
+    """clusters.json (from flights --propose-only) -> a canonical judgment
+    packet for an external judge. $0, no model."""
+    from . import flights as fl
+    from galley.packet import export_packet
+
+    try:
+        raw = json.loads(Path(args.clusters).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {args.clusters}: {e}", file=sys.stderr)
+        return 2
+    rows = raw.get("clusters", raw) if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        print("error: clusters must be a JSON array (or a "
+              "{'clusters': [...]} envelope)", file=sys.stderr)
+        return 2
+    clusters = [fl.Cluster.from_json(r) for r in rows if isinstance(r, dict)]
+
+    zones: dict = {}
+    if getattr(args, "intent_zones", None):
+        try:
+            zraw = json.loads(Path(args.intent_zones).read_text(encoding="utf-8"))
+            zones = {str(pid): [(int(a), int(b)) for a, b in ranges]
+                     for pid, ranges in zraw.items()}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+            print(f"error: --intent-zones {args.intent_zones}: {e}",
+                  file=sys.stderr)
+            return 2
+
+    source = raw.get("source") if isinstance(raw, dict) else None
+    packet = export_packet(clusters, source=source, intent_zones=zones)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(packet, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    flagged = sum(1 for c in packet["clusters"] if c["intent_zone"])
+    print(f"wrote {out} — {len(packet['clusters'])} cluster(s) to judge"
+          f"{f', {flagged} in an intent zone (query/reject only)' if flagged else ''}")
+    print("  fill each cluster's `decision` (accept|replace|query|reject), "
+          "then `docproof galley import-judgments`")
+    if args.json:
+        print(json.dumps({"out": str(out), "clusters": len(packet["clusters"]),
+                          "intent_zone_flagged": flagged}, ensure_ascii=False))
+    return 0
+
+
+def _galley_import_judgments(args) -> int:
+    """A filled judgment packet -> the findings envelope, validated, no model
+    call. The model-free counterpart to flights --judge-only."""
+    from . import flights as fl
+    from galley.packet import PacketError, import_decisions
+
+    try:
+        packet = json.loads(Path(args.packet).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {args.packet}: {e}", file=sys.stderr)
+        return 2
+    try:
+        result = import_decisions(packet)
+    except PacketError as e:
+        print(f"error: judgment packet rejected — {e}", file=sys.stderr)
+        return 2
+
+    out = Path(args.out) if getattr(args, "out", None) else Path(args.packet).parent
+    out.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "findings": [fl.finding_to_json(f) for f in result.findings],
+        "cost": {"total_usd": 0.0, "by_model": {}},
+        "ledger": {"api_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                   "cache_read_input_tokens": 0,
+                   "cache_creation_input_tokens": 0},
+        "checkpoint": None,
+        "lane": fl.LANE,
+        "posture": "external",
+        "judge_model": "external:import-judgments",
+        "min_confidence": None,
+        "clusters": len(packet.get("clusters", []) or []),
+        "judge_counts": result.counts,
+        "source": result.source,
+    }
+    findings_path = out / "flights_findings.json"
+    findings_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    c = result.counts
+    print(f"\nImported (model-free): {c.get('accept', 0)} accepted, "
+          f"{c.get('replace', 0)} replaced, {c.get('query', 0)} queried, "
+          f"{c.get('reject', 0)} rejected, {c.get('unruled', 0)} unruled.")
+    print(f"  {len(result.findings)} finding(s), $0.00, 0 model call(s).")
+    print(f"\n  {findings_path}")
+    if args.json:
+        print(json.dumps(envelope, ensure_ascii=False))
     return 0
 
 
