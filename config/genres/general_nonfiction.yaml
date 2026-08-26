@@ -1,0 +1,35 @@
+# Posture preset: general / trade non-fiction.
+#
+# The non-fiction middle ground, the counterpart to general_fiction: a
+# named, first-class "default nonfiction posture" so a run config or job
+# record says which call was made rather than "none." The smoothing pass runs
+# but stays QUERY-ONLY (edits: false) — offered in the margin, never a silent
+# tracked change — and the rewrite pass stays off, opt-in like the house
+# default. A genre never decides whether the copy-edit lane WRITES; that is a
+# workflow-stage decision (config/stages/), so this preset deliberately leaves
+# edits off and lets the stage turn the lane on.
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: general_nonfiction
+description: >
+  The non-fiction middle ground: smoothing on but query-only (offered, never
+  auto-applied), the rewrite pass off, a reading-level scan on. Exists to make
+  "general nonfiction" a nameable posture rather than borrowing a fiction or a
+  self-help preset that does not fit.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: true
+  smoothing.edits: false
+  smoothing.judge_harshness: strict
+  smoothing.proposer_restraint: restrained
+  smoothing.max_per_1000_words: 3.0
+  smoothing.min_confidence: medium
+  rewrite.enabled: false
+
+# A trade non-fiction title is more likely than a novel to carry a stated
+# target reading level; the reading-level scan is query-only by construction.
+genre_scans:
+  reading_level:
+    enabled: true

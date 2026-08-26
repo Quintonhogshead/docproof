@@ -1,0 +1,35 @@
+# Posture preset: academic / scholarly non-fiction.
+#
+# The most conservative stylistic posture of any preset. Scholarly register —
+# nominalizations, hedged qualifiers, long periodic sentences, discipline
+# jargon — is a deliberate feature, not prose to be "tightened," so the
+# smoothing pass is OFF entirely and the rewrite pass is off: no automatic
+# line-edit source runs unless a run explicitly turns one on. What a scholarly
+# manuscript DOES need caught is inconsistency of apparatus, so both non-fiction
+# query scans are on: citation_format (mixed author-year vs numbered-bracket)
+# and reading_level (paragraphs far outside the book's own band, e.g. a block
+# quotation dropped into running prose).
+#
+# Pair with `docproof galley genre-pack academic --profile profile.json` to
+# seed technical terms and cited authors' names into the consistency /
+# spell-scan allowlists so a term of art is never silently "corrected."
+#
+# Mechanics/proofreading are UNCHANGED by this preset — see
+# docproof/genre.py's ALLOWED_PRESET_KEYS.
+name: academic
+description: >
+  The most conservative posture: smoothing and the rewrite pass both off (a
+  scholarly register is deliberate), the flights judge strict, and both
+  non-fiction query scans on (citation_format, reading_level). Pairs with a
+  `docproof galley profile` run to seed technical terms and cited names.
+
+overlay:
+  flights.posture: strict
+  smoothing.enabled: false
+  rewrite.enabled: false
+
+genre_scans:
+  citation_format:
+    enabled: true
+  reading_level:
+    enabled: true

@@ -601,6 +601,27 @@ def _selection(args) -> list[str] | None:
     return [c.strip() for c in raw.split(",") if c.strip()]
 
 
+def _resolve_error_dir(config_path: str | Path) -> Path:
+    """Locate the ``error_types/`` prompt directory for a run config.
+
+    Prefer the directory beside the config — ``config/error_types`` when running
+    the shipped ``config/default.yaml``, or a workspace's own edited copy. When a
+    RELOCATED config has no sibling ``error_types/`` (the common case for a
+    materialized genre-pack config written into a book workspace), fall back to
+    the packaged shipped directory, so a materialized config is self-contained
+    wherever it lives. Before this fallback, such a config failed ``inventory``
+    (and every typed pass) by looking for ``error_types/`` beside itself and
+    finding nothing. When neither exists, return the beside-path unchanged so the
+    downstream FileNotFoundError still names the location the user expected."""
+    beside = Path(config_path).parent / "error_types"
+    if beside.is_dir():
+        return beside
+    packaged = Path(__file__).resolve().parent.parent / "config" / "error_types"
+    if packaged.is_dir():
+        return packaged
+    return beside
+
+
 def _configure(args):
     cfg = load_config(args.config)
     if getattr(args, "error_types", None):
@@ -636,7 +657,7 @@ def _configure(args):
     apply_profile(cfg, getattr(args, "profile", None))
     if getattr(args, "model", None):
         cfg.api.model = args.model
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     return cfg, error_dir
 
 
@@ -986,7 +1007,7 @@ def cmd_rejudge(args) -> int:
     from .rejudge import RejudgeError, rejudge
 
     cfg = load_config(args.config)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     if args.meaning_model:
         cfg.meaning_check.model = args.meaning_model
         cfg.meaning_check.enabled = True
@@ -1334,7 +1355,7 @@ def cmd_sweep(args) -> int:
 
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -1454,7 +1475,7 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     zero_paid_passes(cfg)
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
 
     try:
         rows = load_findings_file(args.findings)
@@ -1606,7 +1627,7 @@ def cmd_merge(args) -> int:
 
     out = Path(cfg.output_dir)
     setup_logging(out)
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -2183,7 +2204,7 @@ def _galley_flights(args) -> int:
               "given", file=sys.stderr)
         return 2
 
-    error_dir = Path(args.config).parent / "error_types"
+    error_dir = _resolve_error_dir(args.config)
     try:
         prepared = prepare(cfg, args.input, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:

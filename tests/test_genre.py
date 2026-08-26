@@ -26,8 +26,17 @@ from docproof.profiles import DETECTOR_ONLY, apply_profile
 CONFIG = Path(__file__).parent.parent / "config" / "default.yaml"
 GENRES_DIR = Path(__file__).parent.parent / "config" / "genres"
 
-SHIPPED_GENRES = ("fantasy_sf", "general_fiction", "literary_memoir",
-                  "self_help_business")
+SHIPPED_GENRES = ("academic", "fantasy_sf", "general_fiction",
+                  "general_nonfiction", "historical", "literary_memoir",
+                  "religious", "self_help_business")
+
+# The non-fiction posture presets added by the config/genre taxonomy work.
+# House rule for every one of them: a genre sets POSTURE, never a workflow
+# stage's lane switches — so none may turn on edits-mode smoothing or the
+# rewrite recall lever. That contamination (religious non-fiction run under
+# self_help_business, which flips both on) is exactly what these presets fix.
+NONFICTION_GENRES = ("academic", "general_nonfiction", "historical",
+                     "religious")
 
 # Every knob a mechanics/proofreading section owns — none of these may ever
 # appear in a genre preset's `overlay`. Not exhaustive of every Config field,
@@ -41,8 +50,43 @@ _MECHANICS_SECTIONS = ("normalize", "style", "edit_guard", "spellcheck",
 
 # --- the shipped presets ------------------------------------------------------
 
-def test_available_genres_lists_the_four_shipped_presets():
+def test_available_genres_lists_every_shipped_preset():
     assert available_genres() == tuple(sorted(SHIPPED_GENRES))
+
+
+@pytest.mark.parametrize("genre", NONFICTION_GENRES)
+def test_nonfiction_preset_never_enables_a_copyedit_wave_lane(genre):
+    """A genre is a posture, not a workflow stage: no non-fiction preset may
+    turn on edits-mode smoothing or the rewrite lever. Those belong to the
+    copy-edit wave (config/stages/), and letting a genre enable them is the
+    contamination the taxonomy work removes."""
+    cfg = load_config(CONFIG)
+    cfg, _pending = apply_genre(cfg, genre)
+    assert cfg.smoothing.edits is False, f"{genre} enabled edits-mode smoothing"
+    assert cfg.rewrite.enabled is False, f"{genre} enabled the rewrite lever"
+
+
+def test_religious_preset_protects_quoted_text_and_raises_the_name_bar():
+    """The preset that gives theological non-fiction a home: no automatic
+    line-edit source (Scripture must not be reworded) and a name-spelling bar
+    well above house default (transliteration near-matches like Deut/Deute)."""
+    cfg = load_config(CONFIG)
+    cfg, _ = apply_genre(cfg, "religious")
+    assert cfg.smoothing.enabled is False
+    assert cfg.rewrite.enabled is False
+    assert cfg.consistency.name_dominance > 5      # above the house default
+    assert cfg.consistency.name_min_count > 20
+
+
+def test_historical_pack_wires_era_and_period_continuity():
+    cfg, summary = materialize_genre_pack(CONFIG, "historical", era=1863)
+    assert cfg.genre_scans.anachronism.enabled is True
+    assert cfg.genre_scans.anachronism.era == 1863
+    assert cfg.genre_scans.citation_format.enabled is True
+    assert "period consistency" in cfg.continuity.prompt
+    # Without an era the scan is a deliberate no-op (never guessed).
+    cfg2, summary2 = materialize_genre_pack(CONFIG, "historical")
+    assert cfg2.genre_scans.anachronism.era is None
 
 
 @pytest.mark.parametrize("genre", SHIPPED_GENRES)
@@ -253,6 +297,30 @@ def test_write_genre_pack_round_trips_through_load_config(tmp_path):
     assert reloaded.smoothing.enabled is False
     assert reloaded.rewrite.enabled is False
     assert summary["out_path"] == str(out)
+
+
+def test_materialized_config_is_self_contained_for_error_types(tmp_path):
+    """A genre-pack config written into a book workspace has no sibling
+    error_types/ directory. `_resolve_error_dir` must fall back to the packaged
+    shipped prompts so the relocated config still runs `inventory` and every
+    typed pass — the failure the portability fix removes."""
+    from docproof.__main__ import _resolve_error_dir
+    out = tmp_path / "bookws" / "run.yaml"
+    write_genre_pack(CONFIG, "religious", out)
+    assert not (out.parent / "error_types").exists()
+    resolved = _resolve_error_dir(out)
+    assert resolved.is_dir()
+    assert (resolved / "spelling.yaml").is_file()
+
+
+def test_resolve_error_dir_prefers_a_sibling_directory(tmp_path):
+    """When a config DOES have its own error_types/ beside it (an edited
+    workspace copy), that wins over the packaged fallback."""
+    from docproof.__main__ import _resolve_error_dir
+    (tmp_path / "error_types").mkdir()
+    cfg = tmp_path / "run.yaml"
+    cfg.write_text("{}")
+    assert _resolve_error_dir(cfg) == tmp_path / "error_types"
 
 
 # --- name seeding actually reaches the consistency checks (not just config) --
