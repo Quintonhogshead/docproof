@@ -308,7 +308,17 @@ def main(argv=None) -> int:
 
     _galley_parser(sub)
 
+    cap = sub.add_parser(
+        "capabilities",
+        help="print the command tree (verbs + one-line help + config section "
+             "names) as JSON — so a practitioner discovers what exists without "
+             "reading --help or the source. $0")
+    cap.add_argument("--json", action="store_true",
+                     help="the default output IS json; accepted for symmetry")
+
     args = ap.parse_args(argv)
+    if args.cmd == "capabilities":
+        return _cmd_capabilities(ap)
     return {"inventory": cmd_inventory, "review": cmd_review,
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
@@ -316,6 +326,44 @@ def main(argv=None) -> int:
             "merge": cmd_merge,
             "import-findings": cmd_import_findings, "replay": cmd_replay,
             "galley": cmd_galley}[args.cmd](args)
+
+
+def _capabilities_tree(parser) -> list[dict] | None:
+    """Walk an argparse parser's subcommands into a JSON tree of
+    {name, help, subcommands?}. Introspective, so it can never drift from the
+    real verbs the way a hand-maintained list would."""
+    action = None
+    for a in parser._actions:
+        if isinstance(a, argparse._SubParsersAction):
+            action = a
+            break
+    if action is None:
+        return None
+    help_by_name = {ca.dest: (ca.help or "") for ca in action._choices_actions}
+    out: list[dict] = []
+    for name, subparser in action.choices.items():
+        entry: dict = {"name": name, "help": help_by_name.get(name, "")}
+        child = _capabilities_tree(subparser)
+        if child:
+            entry["subcommands"] = child
+        out.append(entry)
+    return out
+
+
+def _cmd_capabilities(ap) -> int:
+    """The compact capability manifest — the whole command tree plus the config
+    section names, as one JSON document."""
+    from .config import Config
+    manifest = {
+        "tool": "docproof",
+        "version": __version__,
+        "commands": _capabilities_tree(ap) or [],
+        "config_sections": sorted(Config.model_fields.keys()),
+        "genres": list(_genre_choices()),
+        "stages": list(_stage_choices()),
+    }
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    return 0
 
 
 def _galley_parser(sub) -> None:
