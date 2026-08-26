@@ -221,6 +221,86 @@ def resolve(zones: IntentZones, paragraphs: list[ParagraphRef], *,
     return ResolvedZones(by_para)
 
 
+def _edit_span(finding, para_text: str) -> tuple[int, int] | None:
+    """The absolute [start, end) char range a finding actually changes in its
+    paragraph, or None if its quoted window cannot be located. Locates the
+    ``occurrence``-th occurrence of the finding's ``original_text`` window, then
+    trims the common prefix/suffix between it and ``corrected_text`` down to the
+    minimal differing region — the same shape the validator anchors."""
+    window = getattr(finding, "original_text", "") or ""
+    corrected = getattr(finding, "corrected_text", "") or ""
+    if not window:
+        return None
+    occ = max(1, getattr(finding, "occurrence", 1) or 1)
+    idx = -1
+    for _ in range(occ):
+        idx = para_text.find(window, idx + 1)
+        if idx < 0:
+            return None
+    # minimal differing region within the window
+    p = 0
+    while p < len(window) and p < len(corrected) and window[p] == corrected[p]:
+        p += 1
+    s = 0
+    while (s < len(window) - p and s < len(corrected) - p
+           and window[-1 - s] == corrected[-1 - s]):
+        s += 1
+    lo = idx + p
+    hi = idx + len(window) - s
+    return (lo, max(lo, hi))
+
+
+def enforce(findings: list, resolved: ResolvedZones,
+            paragraphs: list[ParagraphRef]
+            ) -> tuple[list, list[dict[str, Any]]]:
+    """Consult the resolved zones for every finding and downgrade any that a
+    zone forbids from an EDIT to a QUERY (``force_query=True``) — never a silent
+    drop, so the author still sees it and the collision is auditable.
+
+    Returns ``(findings, collisions)``: the (possibly rewritten) finding list
+    and a record of every downgrade — ``{finding_id, para_id, permission,
+    label, edit_kind}`` — for the report and certify's intent-zone check. A
+    finding already riding the query channel, or one whose span can't be
+    located, is left untouched."""
+    import dataclasses
+
+    if not resolved.any:
+        return findings, []
+    text_of = {p.para_id: p.text for p in paragraphs}
+    out: list = []
+    collisions: list[dict[str, Any]] = []
+    for f in findings:
+        if getattr(f, "force_query", False):
+            out.append(f)
+            continue
+        para_text = text_of.get(getattr(f, "para_id", ""))
+        if para_text is None:
+            out.append(f)
+            continue
+        span = _edit_span(f, para_text)
+        if span is None:
+            out.append(f)
+            continue
+        zone = resolved.zone_at(f.para_id, span[0], span[1])
+        if zone is None:
+            out.append(f)
+            continue
+        kind = edit_kind_of(getattr(f, "error_type", ""),
+                            getattr(f, "detector", "") or "")
+        if permits(zone, kind):
+            out.append(f)
+            continue
+        collisions.append({
+            "finding_id": getattr(f, "finding_id", ""),
+            "para_id": f.para_id,
+            "permission": zone.permission,
+            "label": zone.label or zone.category,
+            "edit_kind": kind,
+        })
+        out.append(dataclasses.replace(f, force_query=True))
+    return out, collisions
+
+
 def load_intent_zones(path: str) -> IntentZones:
     """Load an intent-zones document (``{"zones": [...]}`` or a bare list)."""
     import json
@@ -232,5 +312,6 @@ def load_intent_zones(path: str) -> IntentZones:
 
 __all__ = [
     "PERMISSIONS", "PUNCTUATION_SWEEPS", "IntentZone", "IntentZones",
-    "ResolvedZones", "permits", "edit_kind_of", "resolve", "load_intent_zones",
+    "ResolvedZones", "permits", "edit_kind_of", "resolve", "enforce",
+    "load_intent_zones",
 ]

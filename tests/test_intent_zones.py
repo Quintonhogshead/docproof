@@ -123,3 +123,77 @@ def test_no_zones_means_nothing_protected():
     r = resolve(IntentZones(), _paras())
     assert r.any is False
     assert r.zone_at("body-0001", 0, 5) is None
+
+
+# --- enforcement (downgrade to query, never silent drop) ---------------------
+
+from docproof.intent_zones import enforce
+from docproof.models import Finding
+
+
+def _finding(**kw):
+    kw.setdefault("confidence", "high")
+    return Finding(**kw)
+
+
+def test_enforce_downgrades_a_wording_sweep_inside_a_locked_zone():
+    para = _paras()[0]
+    f = _finding(finding_id="dw-1", chunk_id="sweep", para_id="body-0001",
+                 error_type="sweep_doubled_word", occurrence=1,
+                 original_text=para.text,
+                 corrected_text=para.text.replace("that that", "that"),
+                 explanation="doubled")
+    z = IntentZones(zones=[IntentZone(permission="locked",
+                                      para_ids=["body-0001"])])
+    kept, collisions = enforce([f], resolve(z, _paras()), _paras())
+    assert kept[0].force_query is True
+    assert len(collisions) == 1 and collisions[0]["permission"] == "locked"
+
+
+def test_enforce_allows_a_punctuation_sweep_in_a_punctuation_zone():
+    para = ParagraphRef("body-0009", "w", "body", "He paused...then went.",
+                        "Normal")
+    f = _finding(finding_id="el-1", chunk_id="sweep", para_id="body-0009",
+                 error_type="sweep_ellipsis", occurrence=1,
+                 original_text="He paused...then went.",
+                 corrected_text="He paused…then went.", explanation="ell")
+    z = IntentZones(zones=[IntentZone(permission="punctuation",
+                                      para_ids=["body-0009"])])
+    kept, collisions = enforce([f], resolve(z, [para]), [para])
+    assert kept[0].force_query is False
+    assert collisions == []
+
+
+def test_enforce_blocks_a_wording_sweep_in_a_punctuation_zone():
+    para = ParagraphRef("body-0009", "w", "body", "the word here", "Normal")
+    f = _finding(finding_id="w-1", chunk_id="sweep", para_id="body-0009",
+                 error_type="sweep_deity_capital", occurrence=1,
+                 original_text="the word here",
+                 corrected_text="the Word here", explanation="cap")
+    z = IntentZones(zones=[IntentZone(permission="punctuation",
+                                      para_ids=["body-0009"])])
+    kept, _ = enforce([f], resolve(z, [para]), [para])
+    assert kept[0].force_query is True
+
+
+def test_enforce_leaves_findings_outside_zones_untouched():
+    para = _paras()[2]      # body-0003, no zone
+    f = _finding(finding_id="x-1", chunk_id="sweep", para_id="body-0003",
+                 error_type="sweep_doubled_word", occurrence=1,
+                 original_text=para.text, corrected_text=para.text + "!",
+                 explanation="x")
+    z = IntentZones(zones=[IntentZone(permission="locked",
+                                      para_ids=["body-0001"])])
+    kept, collisions = enforce([f], resolve(z, _paras()), _paras())
+    assert kept[0].force_query is False
+    assert collisions == []
+
+
+def test_enforce_no_zones_is_a_noop():
+    para = _paras()[0]
+    f = _finding(finding_id="x", chunk_id="sweep", para_id="body-0001",
+                 error_type="sweep_doubled_word", occurrence=1,
+                 original_text=para.text, corrected_text=para.text,
+                 explanation="x")
+    kept, collisions = enforce([f], resolve(IntentZones(), _paras()), _paras())
+    assert kept == [f] and collisions == []
