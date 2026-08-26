@@ -550,6 +550,37 @@ def _galley_parser(sub) -> None:
     gf.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
 
+    gxj = gsub.add_parser(
+        "export-judgments",
+        help="build a canonical judgment PACKET from a clusters.json (from "
+             "flights --propose-only) for an external judge — a session agent "
+             "or a human — to rule on. $0: no model, no keys. Pairs with "
+             "import-judgments")
+    gxj.add_argument("clusters", help="a clusters.json from "
+                                      "`galley flights --propose-only`")
+    gxj.add_argument("--out", required=True,
+                     help="where to write the judgment packet JSON")
+    gxj.add_argument("--intent-zones", metavar="ZONES_JSON",
+                     help="a JSON mapping para_id -> [[start,end],...] of "
+                          "protected char ranges; a cluster whose span "
+                          "intersects one is flagged intent_zone so the import "
+                          "refuses to EDIT it (query/reject only)")
+    gxj.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
+    gij = gsub.add_parser(
+        "import-judgments",
+        help="the model-free judge route: validate a filled judgment packet "
+             "(anchoring, atomicity, allowed channel, intent-zone compliance) "
+             "and write the findings envelope — NO model call, unlike "
+             "flights --judge-only. Pairs with export-judgments")
+    gij.add_argument("packet", help="a judgment packet JSON with decisions "
+                                    "filled in by the external judge")
+    gij.add_argument("--out", help="output directory for flights_findings.json "
+                                   "(default: beside the packet)")
+    gij.add_argument("--json", action="store_true",
+                     help="also print the machine-readable result to stdout")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
@@ -1766,7 +1797,9 @@ def cmd_galley(args) -> int:
             "calibrate": _galley_calibrate,
             "flights": _galley_flights,
             "profile": cmd_galley_profile,
-            "genre-pack": cmd_galley_genre_pack}[args.galley_cmd](args)
+            "genre-pack": cmd_galley_genre_pack,
+            "export-judgments": _galley_export_judgments,
+            "import-judgments": _galley_import_judgments}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2582,6 +2615,100 @@ def cmd_galley_genre_pack(args) -> int:
     if "anachronism_era" in summary:
         print(f"  anachronism scan era set to {summary['anachronism_era']} "
               f"(the scan is a no-op without it)")
+    return 0
+
+
+def _galley_export_judgments(args) -> int:
+    """clusters.json (from flights --propose-only) -> a canonical judgment
+    packet for an external judge. $0, no model."""
+    from . import flights as fl
+    from galley.packet import export_packet
+
+    try:
+        raw = json.loads(Path(args.clusters).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {args.clusters}: {e}", file=sys.stderr)
+        return 2
+    rows = raw.get("clusters", raw) if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        print("error: clusters must be a JSON array (or a "
+              "{'clusters': [...]} envelope)", file=sys.stderr)
+        return 2
+    clusters = [fl.Cluster.from_json(r) for r in rows if isinstance(r, dict)]
+
+    zones: dict = {}
+    if getattr(args, "intent_zones", None):
+        try:
+            zraw = json.loads(Path(args.intent_zones).read_text(encoding="utf-8"))
+            zones = {str(pid): [(int(a), int(b)) for a, b in ranges]
+                     for pid, ranges in zraw.items()}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
+            print(f"error: --intent-zones {args.intent_zones}: {e}",
+                  file=sys.stderr)
+            return 2
+
+    source = raw.get("source") if isinstance(raw, dict) else None
+    packet = export_packet(clusters, source=source, intent_zones=zones)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(packet, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    flagged = sum(1 for c in packet["clusters"] if c["intent_zone"])
+    print(f"wrote {out} — {len(packet['clusters'])} cluster(s) to judge"
+          f"{f', {flagged} in an intent zone (query/reject only)' if flagged else ''}")
+    print("  fill each cluster's `decision` (accept|replace|query|reject), "
+          "then `docproof galley import-judgments`")
+    if args.json:
+        print(json.dumps({"out": str(out), "clusters": len(packet["clusters"]),
+                          "intent_zone_flagged": flagged}, ensure_ascii=False))
+    return 0
+
+
+def _galley_import_judgments(args) -> int:
+    """A filled judgment packet -> the findings envelope, validated, no model
+    call. The model-free counterpart to flights --judge-only."""
+    from . import flights as fl
+    from galley.packet import PacketError, import_decisions
+
+    try:
+        packet = json.loads(Path(args.packet).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read {args.packet}: {e}", file=sys.stderr)
+        return 2
+    try:
+        result = import_decisions(packet)
+    except PacketError as e:
+        print(f"error: judgment packet rejected — {e}", file=sys.stderr)
+        return 2
+
+    out = Path(args.out) if getattr(args, "out", None) else Path(args.packet).parent
+    out.mkdir(parents=True, exist_ok=True)
+    envelope = {
+        "findings": [fl.finding_to_json(f) for f in result.findings],
+        "cost": {"total_usd": 0.0, "by_model": {}},
+        "ledger": {"api_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                   "cache_read_input_tokens": 0,
+                   "cache_creation_input_tokens": 0},
+        "checkpoint": None,
+        "lane": fl.LANE,
+        "posture": "external",
+        "judge_model": "external:import-judgments",
+        "min_confidence": None,
+        "clusters": len(packet.get("clusters", []) or []),
+        "judge_counts": result.counts,
+        "source": result.source,
+    }
+    findings_path = out / "flights_findings.json"
+    findings_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False),
+                             encoding="utf-8")
+    c = result.counts
+    print(f"\nImported (model-free): {c.get('accept', 0)} accepted, "
+          f"{c.get('replace', 0)} replaced, {c.get('query', 0)} queried, "
+          f"{c.get('reject', 0)} rejected, {c.get('unruled', 0)} unruled.")
+    print(f"  {len(result.findings)} finding(s), $0.00, 0 model call(s).")
+    print(f"\n  {findings_path}")
+    if args.json:
+        print(json.dumps(envelope, ensure_ascii=False))
     return 0
 
 
