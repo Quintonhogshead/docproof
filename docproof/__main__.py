@@ -711,6 +711,17 @@ def _galley_parser(sub) -> None:
     giz.add_argument("--json", action="store_true",
                      help="print the resolved map as JSON")
 
+    gld = gsub.add_parser(
+        "ledger",
+        help="the finding lifecycle ledger: reconstruct every finding's stable "
+             "id and state (detected/merged/queried/rejected/dropped) from a "
+             "finished run, with a duplicate report. $0")
+    gld.add_argument("run", help="a finished run directory (holding "
+                                 "findings.json) or a findings.json file")
+    gld.add_argument("--out", help="write the ledger JSON here")
+    gld.add_argument("--json", action="store_true",
+                     help="print the full ledger as JSON")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
@@ -1970,7 +1981,8 @@ def cmd_galley(args) -> int:
             "approve": _galley_approve,
             "certify": _galley_certify,
             "triage-nouns": _galley_triage_nouns,
-            "intent-zones": _galley_intent_zones}[args.galley_cmd](args)
+            "intent-zones": _galley_intent_zones,
+            "ledger": _galley_ledger}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2733,6 +2745,45 @@ def cmd_galley_profile(args) -> int:
          + (" (model-confirmed)" if profile.model_confirmed else ""))
     if profile.model_notes:
         print(f"model notes: {profile.model_notes}")
+    return 0
+
+
+def _galley_ledger(args) -> int:
+    from galley.lifecycle import reconstruct_from_findings
+
+    run = Path(args.run)
+    findings_path = run / "findings.json" if run.is_dir() else run
+    if not findings_path.is_file():
+        findings_path = run / "flights_findings.json"
+    try:
+        envelope = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read findings from {args.run}: {e}",
+              file=sys.stderr)
+        return 2
+
+    led = reconstruct_from_findings(envelope)
+    states = led.by_state()
+    dups = led.duplicates()
+    print(f"Lifecycle ledger — {len(led)} finding(s) from {findings_path}:")
+    for state in ("detected", "verified", "held", "promoted", "merged",
+                  "queried", "rejected", "dropped", "delivered"):
+        if states.get(state):
+            print(f"  {state:10} {states[state]}")
+    if dups:
+        n = sum(len(v) for v in dups.values())
+        print(f"\n  {len(dups)} duplicate group(s) ({n} finding(s) share a "
+              f"content key):")
+        for key, ids in list(dups.items())[:20]:
+            print(f"    {key}: {', '.join(ids)}")
+    else:
+        print("\n  no content-duplicate findings")
+
+    if getattr(args, "out", None):
+        led.save(args.out)
+        print(f"\n  wrote ledger: {args.out}")
+    if args.json:
+        print(json.dumps(led.to_json(), ensure_ascii=False))
     return 0
 
 
