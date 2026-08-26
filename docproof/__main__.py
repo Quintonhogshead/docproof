@@ -581,6 +581,56 @@ def _galley_parser(sub) -> None:
     gij.add_argument("--json", action="store_true",
                      help="also print the machine-readable result to stdout")
 
+    grt = gsub.add_parser(
+        "routes",
+        help="the effective-config egress report: every model the config "
+             "would CALL, the provider that serves it, and whether its lane is "
+             "active. $0. --deny PROVIDER fails if that provider is reachable")
+    _stage_arg(grt)
+    _genre_arg(grt)
+    grt.add_argument("--config", default="config/default.yaml")
+    grt.add_argument("--deny", action="append", default=[], metavar="PROVIDER",
+                     help="fail (exit 3) if any ACTIVE route reaches this "
+                          "provider (repeatable) — a data-egress preflight")
+    grt.add_argument("--json", action="store_true",
+                     help="print the routes as JSON")
+
+    gap = gsub.add_parser(
+        "approve",
+        help="write the immutable approval manifest (approval.json) from a "
+             "human-approved plan: source + config hashes, allowed models/"
+             "providers, stage, enabled lanes, max spend. $0")
+    gap.add_argument("input", help="the manuscript this approval is for")
+    _stage_arg(gap)
+    _genre_arg(gap)
+    gap.add_argument("--config", default="config/default.yaml")
+    gap.add_argument("--budget", type=float, required=True,
+                     help="the approved maximum spend in USD")
+    gap.add_argument("--out", default="approval.json",
+                     help="where to write the manifest (default: approval.json)")
+    gap.add_argument("--note", default="", help="a free-text note recorded in "
+                                                "the manifest")
+    gap.add_argument("--json", action="store_true")
+
+    gct = gsub.add_parser(
+        "certify",
+        help="the delivery gate: re-check a finished run against its approval "
+             "and the structural invariants (hashes, approved routes, "
+             "checkpoint, zero-cost anomaly, budget, artifact scan). Exit 4 if "
+             "any check fails. $0")
+    gct.add_argument("run", help="the finished run's output directory")
+    gct.add_argument("--approval", help="the approval.json to certify against "
+                                        "(optional; hash/route/budget checks "
+                                        "are skipped without it)")
+    gct.add_argument("--source", help="the manuscript, to check the source "
+                                      "hash against the approval")
+    gct.add_argument("--config", help="the effective config, to check the "
+                                      "config hash and routes")
+    _stage_arg(gct)
+    _genre_arg(gct)
+    gct.add_argument("--json", action="store_true",
+                     help="print the certificate as JSON")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
@@ -626,6 +676,12 @@ def _common(p: argparse.ArgumentParser) -> None:
     _stage_arg(p)
     _genre_arg(p)
     _profile_arg(p)
+    p.add_argument(
+        "--approval", metavar="APPROVAL_JSON",
+        help="an approval.json from `docproof galley approve`. When given, the "
+             "command REFUSES to run (exit 5) if the manuscript, the effective "
+             "config, or any active model route deviates from what was "
+             "approved — the immutable-manifest gate.")
 
 
 def _profile_arg(p: argparse.ArgumentParser) -> None:
@@ -822,8 +878,38 @@ def cmd_inventory(args) -> int:
     return 0
 
 
+def _approval_guard(args, cfg) -> int | None:
+    """Refuse a paid run whose inputs deviate from an approval manifest. Returns
+    an exit code to abort with, or None when the run is within approval (or no
+    --approval was given). The immutable-manifest gate: source hash, config
+    hash, and active model routes must all match what a human approved."""
+    approval = getattr(args, "approval", None)
+    if not approval:
+        return None
+    from galley.manifest import verify_plan
+    try:
+        manifest = json.loads(Path(approval).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"error: could not read approval {approval}: {e}", file=sys.stderr)
+        return 5
+    devs = verify_plan(manifest, source=args.input, cfg=cfg)
+    if devs:
+        print(f"REFUSED: this run deviates from {approval} —", file=sys.stderr)
+        for d in devs:
+            print(f"  - {d.kind}: {d.detail}", file=sys.stderr)
+        print("  re-approve with `docproof galley approve` if the change is "
+              "intended.", file=sys.stderr)
+        return 5
+    print(f"approval {approval}: source, config, and model routes match — "
+          f"proceeding.")
+    return None
+
+
 def cmd_review(args) -> int:
     cfg, error_dir = _configure(args)
+    guard = _approval_guard(args, cfg)
+    if guard is not None:
+        return guard
     out = Path(cfg.output_dir)
     setup_logging(out)
 
@@ -1799,7 +1885,10 @@ def cmd_galley(args) -> int:
             "profile": cmd_galley_profile,
             "genre-pack": cmd_galley_genre_pack,
             "export-judgments": _galley_export_judgments,
-            "import-judgments": _galley_import_judgments}[args.galley_cmd](args)
+            "import-judgments": _galley_import_judgments,
+            "routes": _galley_routes,
+            "approve": _galley_approve,
+            "certify": _galley_certify}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2616,6 +2705,124 @@ def cmd_galley_genre_pack(args) -> int:
         print(f"  anachronism scan era set to {summary['anachronism_era']} "
               f"(the scan is a no-op without it)")
     return 0
+
+
+def _effective_cfg(args):
+    """Build the effective Config from --config plus any --stage/--genre, with
+    the same stage>genre precedence _configure uses. For the read-only galley
+    verbs (routes/approve/certify) that need the config a run WOULD use."""
+    cfg = load_config(args.config)
+    stage_locks = {}
+    if getattr(args, "stage", None):
+        from .stages import apply_stage
+        cfg, stage_locks = apply_stage(cfg, args.stage)
+    if getattr(args, "genre", None):
+        from .genre import apply_genre
+        cfg, _ = apply_genre(cfg, args.genre)
+    if stage_locks:
+        from .stages import enforce_locks
+        enforce_locks(cfg, stage_locks)
+    return cfg
+
+
+def _galley_routes(args) -> int:
+    from .genre import available_genres  # noqa: F401 (parser choices)
+    from galley.manifest import model_routes
+
+    try:
+        cfg = _effective_cfg(args)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    routes = model_routes(cfg)
+    active = [r for r in routes if r.active]
+    print(f"Effective model routes for {args.config}"
+          f"{f' +stage {args.stage}' if getattr(args, 'stage', None) else ''}"
+          f"{f' +genre {args.genre}' if getattr(args, 'genre', None) else ''}:")
+    for r in routes:
+        mark = " " if r.active else "·"
+        print(f"  {mark} {r.role:<34} {r.model:<20} {r.provider}"
+              f"{'' if r.active else '   (lane off)'}")
+    reachable = sorted({r.provider for r in active})
+    print(f"\n  active providers: {', '.join(reachable)}")
+
+    denied = sorted(set(getattr(args, "deny", []) or []))
+    violations = [r for r in active if r.provider in denied]
+    if args.json:
+        print(json.dumps({"routes": [r.to_json() for r in routes],
+                          "active_providers": reachable,
+                          "denied": denied,
+                          "violations": [r.to_json() for r in violations]},
+                         ensure_ascii=False))
+    if violations:
+        print(f"\n  DENIED provider reachable: "
+              + "; ".join(f"{r.role}->{r.provider}" for r in violations),
+              file=sys.stderr)
+        return 3
+    return 0
+
+
+def _galley_approve(args) -> int:
+    from galley.manifest import build_manifest
+
+    try:
+        cfg = _effective_cfg(args)
+        manifest = build_manifest(
+            source=args.input, config_path=args.config, cfg=cfg,
+            max_spend_usd=args.budget, stage=getattr(args, "stage", None),
+            genre=getattr(args, "genre", None), note=args.note)
+    except (FileNotFoundError, ValueError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    print(f"wrote {out} — approval for {args.input}")
+    print(f"  source {manifest['source_sha256'][:12]}…  config "
+          f"{manifest['config_sha256'][:12]}…")
+    print(f"  budget ${manifest['max_spend_usd']:.2f}  stage "
+          f"{manifest['stage']}  lanes {manifest['enabled_lanes']}")
+    print(f"  allowed providers: {', '.join(manifest['allowed_providers'])}")
+    print(f"  allowed models: {', '.join(manifest['allowed_models'])}")
+    if args.json:
+        print(json.dumps(manifest, ensure_ascii=False))
+    return 0
+
+
+def _galley_certify(args) -> int:
+    from galley.manifest import certify_run
+
+    manifest = None
+    if getattr(args, "approval", None):
+        try:
+            manifest = json.loads(Path(args.approval).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"error: could not read {args.approval}: {e}", file=sys.stderr)
+            return 2
+    cfg = None
+    if getattr(args, "config", None):
+        try:
+            cfg = _effective_cfg(args)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+    try:
+        cert = certify_run(args.run, manifest=manifest, cfg=cfg,
+                           source=getattr(args, "source", None))
+    except (FileNotFoundError, OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    print(f"Certificate for {args.run}:")
+    for c in cert.checks:
+        glyph = {"pass": "PASS", "fail": "FAIL", "skip": "skip"}[c.status]
+        print(f"  [{glyph}] {c.name}{f' — {c.detail}' if c.detail else ''}")
+    print(f"\n  {'PASSED' if cert.passed else 'FAILED'} "
+          f"({len(cert.failed)} failing check(s))")
+    if args.json:
+        print(json.dumps(cert.to_json(), ensure_ascii=False))
+    return 0 if cert.passed else 4
 
 
 def _galley_export_judgments(args) -> int:
