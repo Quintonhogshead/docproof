@@ -722,6 +722,27 @@ def _galley_parser(sub) -> None:
     gld.add_argument("--json", action="store_true",
                      help="print the full ledger as JSON")
 
+    gst = gsub.add_parser(
+        "state",
+        help="the resumable run state machine: show the current state, advance "
+             "it (hash-stamped), or verify it is safe to resume. $0")
+    gst.add_argument("run", help="the run workspace (holds state.json)")
+    gst.add_argument("--advance", metavar="STATE",
+                     help="advance to this run state (forward-only); creates "
+                          "state.json if absent")
+    gst.add_argument("--source", help="stamp/verify this manuscript's hash")
+    gst.add_argument("--config", help="stamp/verify this config's hash "
+                                      "(with --stage/--genre applied)")
+    _stage_arg(gst)
+    _genre_arg(gst)
+    gst.add_argument("--at", default="", help="timestamp to record (you supply "
+                                              "it; never read from a clock)")
+    gst.add_argument("--by", default="", help="who is advancing the state")
+    gst.add_argument("--verify-resume", action="store_true",
+                     help="check the current source/config hashes still match "
+                          "what the state was recorded against; exit 6 on drift")
+    gst.add_argument("--json", action="store_true")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
@@ -1982,7 +2003,8 @@ def cmd_galley(args) -> int:
             "certify": _galley_certify,
             "triage-nouns": _galley_triage_nouns,
             "intent-zones": _galley_intent_zones,
-            "ledger": _galley_ledger}[args.galley_cmd](args)
+            "ledger": _galley_ledger,
+            "state": _galley_state}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2745,6 +2767,58 @@ def cmd_galley_profile(args) -> int:
          + (" (model-confirmed)" if profile.model_confirmed else ""))
     if profile.model_notes:
         print(f"model notes: {profile.model_notes}")
+    return 0
+
+
+def _galley_state(args) -> int:
+    from galley.manifest import config_hash, sha256_file
+    from galley.state_machine import (RunStateMachine, StateError,
+                                      hash_artifact)
+
+    run = Path(args.run)
+    state_path = run / "state.json"
+    machine = RunStateMachine.load(state_path) if state_path.is_file() \
+        else RunStateMachine()
+
+    src_hash = sha256_file(args.source) if getattr(args, "source", None) \
+        and Path(args.source).is_file() else ""
+    cfg_hash = ""
+    if getattr(args, "config", None):
+        try:
+            cfg_hash = config_hash(_effective_cfg(args))
+        except (FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+
+    if getattr(args, "verify_resume", False):
+        mismatches = machine.verify_resume(
+            source_sha256=src_hash, config_sha256=cfg_hash,
+            artifact_hasher=hash_artifact)
+        if mismatches:
+            print(f"UNSAFE to resume from {machine.current!r}:", file=sys.stderr)
+            for m in mismatches:
+                print(f"  - {m}", file=sys.stderr)
+            return 6
+        print(f"safe to resume from {machine.current!r}")
+        return 0
+
+    if getattr(args, "advance", None):
+        try:
+            rec = machine.advance(args.advance, at=args.at, by=args.by,
+                                  source_sha256=src_hash, config_sha256=cfg_hash)
+        except StateError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        run.mkdir(parents=True, exist_ok=True)
+        machine.save(state_path)
+        print(f"advanced to {rec.state!r} (from {len(machine.history)} "
+              f"recorded state(s))")
+    else:
+        print(f"run state: {machine.current or '(none recorded)'}")
+        for rec in machine.history:
+            print(f"  {rec.state:20} {rec.at or ''} {rec.by or ''}")
+    if args.json:
+        print(machine.model_dump_json())
     return 0
 
 

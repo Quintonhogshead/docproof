@@ -339,7 +339,120 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
 
     # 4. Deterministic artifact scan over the change log / findings text.
     cert.checks.append(_artifact_scan(run))
+
+    # 5. Fuller structural checks over the findings themselves.
+    if envelope is not None:
+        cert.checks.append(_certify_no_merged_duplicates(envelope))
+        cert.checks.append(_certify_no_insertion_collisions(envelope))
+        cert.checks.append(_certify_two_author_attribution(envelope))
+
+    # 6. Intent-zone collisions, if the run recorded them.
+    cert.checks.append(_certify_intent_zone_collisions(run))
+
+    # 7. Run state machine, if present — a delivery certificate expects the run
+    # to have reached at least the audited state.
+    cert.checks.append(_certify_run_state(run))
     return cert
+
+
+def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:
+    """Two findings that share a content key AND both merged would double-apply
+    the same edit. A duplicate where one side dropped is expected (that is dedup
+    working); only a duplicate that survived on both sides fails."""
+    from galley.lifecycle import reconstruct_from_findings
+    led = reconstruct_from_findings(envelope)
+    bad = []
+    for key, ids in led.duplicates().items():
+        merged = [i for i in ids if led.state_of(i) == "merged"]
+        if len(merged) > 1:
+            bad.append(f"{key}: {', '.join(merged)}")
+    if bad:
+        return Check("no duplicate merged edits", "fail",
+                     "; ".join(bad))
+    return Check("no duplicate merged edits", "pass",
+                 "no content-duplicate edit applied twice")
+
+
+def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
+    """Two edits at the same anchor (same para_id + original window + occurrence)
+    with different corrections would compose into an artifact (,, or " "). The
+    merge desk dedupes by insertion point; this is the certificate that it did."""
+    seen: dict[tuple, str] = {}
+    collisions: list[str] = []
+    for row in envelope.get("findings", []) or []:
+        if not isinstance(row, dict):
+            continue
+        # Only edits that actually change text and would apply (not queries).
+        corr = row.get("corrected_text", "")
+        if row.get("force_query") or not corr:
+            continue
+        key = (row.get("para_id", ""), row.get("original_text", ""),
+               row.get("occurrence", 1))
+        if key in seen and seen[key] != corr:
+            collisions.append(str(row.get("para_id", "")))
+        else:
+            seen[key] = corr
+    if collisions:
+        return Check("no insertion collisions", "fail",
+                     f"conflicting edits at the same anchor in: "
+                     f"{', '.join(sorted(set(collisions)))}")
+    return Check("no insertion collisions", "pass",
+                 "no two edits claim the same anchor")
+
+
+def _certify_two_author_attribution(envelope: dict[str, Any]) -> Check:
+    """When both lanes ran (a copyedit finding beside a mechanical one), the
+    deliverable must carry two authors so the author can tell a proofread change
+    from a copy-edit one. This flags that both lanes are present so attribution
+    can be confirmed; a single-lane run needs no second author."""
+    lanes = set()
+    for row in envelope.get("findings", []) or []:
+        if not isinstance(row, dict):
+            continue
+        lane = row.get("lane") or ("copyedit" if row.get("error_type") ==
+                                   "copyedit" else "mechanical")
+        lanes.add("copyedit" if lane == "copyedit" else "mechanical")
+    if {"copyedit", "mechanical"} <= lanes:
+        return Check("two-author attribution", "pass",
+                     "both lanes present — confirm the deliverable names two "
+                     "authors")
+    return Check("two-author attribution", "skip",
+                 f"single lane ({', '.join(sorted(lanes)) or 'none'}) — one "
+                 f"author")
+
+
+def _certify_intent_zone_collisions(run: Path) -> Check:
+    """If the run recorded intent-zone collisions (edits downgraded to queries
+    inside protected spans), surface the count — informational, since the
+    downgrade already protected the zone; a high count may mean a mis-drawn
+    zone."""
+    data = _load_json(run / "intent_collisions.json")
+    if data is None:
+        return Check("intent-zone collisions", "skip",
+                     "no intent-zone record for this run")
+    rows = data if isinstance(data, list) else data.get("collisions", [])
+    n = len(rows or [])
+    return Check("intent-zone collisions", "pass",
+                 f"{n} edit(s) downgraded to queries inside protected spans")
+
+
+def _certify_run_state(run: Path) -> Check:
+    """If a run state machine is present, a delivery certificate expects the run
+    to have reached at least the audited state."""
+    from galley.state_machine import RunStateMachine
+    path = run / "state.json"
+    if not path.is_file():
+        return Check("run state", "skip", "no state.json for this run")
+    try:
+        machine = RunStateMachine.load(path)
+    except (OSError, ValueError) as e:
+        return Check("run state", "fail", f"state.json unreadable: {e}")
+    if machine.reached("audited"):
+        return Check("run state", "pass",
+                     f"reached {machine.current!r}")
+    return Check("run state", "fail",
+                 f"only reached {machine.current!r}; delivery expects at least "
+                 f"'audited'")
 
 
 def _check_hash(name: str, actual: str, expected: Any) -> Check:
