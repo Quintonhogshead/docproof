@@ -26,8 +26,52 @@ even when you think you want defaults.** You cannot read default.yaml (context
 discipline), so the full shipped lists are embedded below — paste them in
 verbatim. Never assume "leave it out = use defaults"; leave it out = OFF.
 
-`--profile` and genre packs are post-load overlays (they layer on top).
-`error_type_override_dir` shadows shipped detector prompts by key.
+`--profile`, `--stage`, and genre packs are post-load overlays (they layer on
+top). `error_type_override_dir` shadows shipped detector prompts by key.
+
+## Stages, genres, and the approval gate (post-load overlays)
+
+Three separate axes compose onto a base config. Precedence, strict-to-loose:
+**profile > stage > genre > base.**
+
+- **`--stage`** (`config/stages/`) chooses *which lanes run* and LOCKS some so a
+  genre cannot reopen them. `mechanical-wave` is the portable Wave 1 recipe:
+  the ensemble block below, over the base's full typed passes/sweeps, repair on,
+  and the copy-edit lane (smoothing edits, rewrite) **locked off**.
+  `copyedit-wave` runs style on already-proofread text; `external-judgment`
+  proposes for the packet route; `final-replay` zeroes detection
+  (`error_types: []`, ensemble off) to rebuild from accepted decisions.
+- **`--genre`** (`config/genres/`) sets *posture only* (judge stance, name bar,
+  smoothing volume, query scans) — never a lane switch. Taxonomy: `general_
+  fiction`, `literary_memoir`, `fantasy_sf`, `general_nonfiction`, `academic`,
+  `historical`, `religious`, `self_help_business`. Run theological non-fiction
+  under `religious`, never `self_help_business` (that one turns edits + rewrite
+  on).
+- **`docproof galley approve`** freezes the composed config into `approval.json`
+  (source + config hashes, allowed models/providers, stage, lanes, budget).
+  `docproof review --approval …` refuses to run on any deviation; `docproof
+  galley certify` is the delivery gate. `docproof galley routes` prints the
+  effective model→provider egress map — the one place routing is legible.
+
+Compose all three into a reviewable file:
+`docproof galley genre-pack religious --stage mechanical-wave --out runs/book/mech.yaml`.
+A materialized config resolves its `error_types/` from the packaged prompts when
+no sibling dir exists, so it is self-contained wherever it lives.
+
+**The ensemble recall recipe (what `mechanical-wave` bakes in):**
+
+```yaml
+ensemble:
+  detectors:
+    - {model: gpt-5.6-luna, effort: low}
+    - {model: claude-haiku-4-5, effort: low}   # diverse union = recall
+  verifier_model: gpt-5.6-luna                  # precision over the disputed set
+  verifier_effort: high
+  verify_policy: disputed
+```
+
+`ensemble` fires ONLY through `error_types` — pair it with the full typed-pass
+list, never alone (see the trap above).
 
 ## Paste-ready shipped defaults (you cannot read default.yaml — copy from here)
 
@@ -88,7 +132,7 @@ wrongly dropped on a bad grep.)
 | Knob | Default | What it does / when to change |
 |---|---|---|
 | `min_confidence` | `medium` | low\|medium\|high gate for APPLYING a change. |
-| `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. |
+| `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. Ready-made as `--stage mechanical-wave` (see the ensemble block above); fires ONLY through `error_types`. |
 | `error_types` | full shipped list | The typed LLM passes. **OMITTING THE SECTION ZEROES EVERY PASS** and makes any `ensemble:` inert (`0 error type(s) in 0 pass(es)`). Restate the full default list to keep them; the ensemble only fires through these. |
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
 | `languagetool.picky` | off | +~1 candidate/44k words; most picky rules are the filtered style class. |
