@@ -1,0 +1,30 @@
+# Stage preset: the copy-edit wave — style, on ALREADY-PROOFREAD text.
+#
+# The second wave. It runs after the mechanical wave's tracked changes are in,
+# never on raw manuscript (running it first is the clobbering trap the merge
+# desk exists to avoid). It turns the copy-edit lane ON by default — smoothing
+# as tracked edits — but LEAVES IT UNLOCKED, so a voice-protective genre
+# (academic, religious, literary_memoir) applied on top still wins to hold the
+# lane to query-only or off: even a copy-edit wave must not reword Scripture or
+# flatten a literary cadence. What this stage DOES lock is the mechanical
+# repair lane OFF — the broken-sentence repair pass belongs to wave 1 and must
+# not re-touch text a proofread already settled.
+#
+# Compose:  docproof galley genre-pack self_help_business
+#     --stage copyedit-wave --out runs/book/copyedit.yaml
+name: copyedit-wave
+description: >
+  The style wave on already-proofread text: the smoothing lane on as tracked
+  edits by default (a protective genre can still hold it to query-only — the
+  lane is intentionally left unlocked), and the mechanical repair lane locked
+  OFF so it never re-touches settled proofread text.
+
+patch:
+  smoothing:
+    enabled: true
+    edits: true
+  repair:
+    enabled: false
+
+locks:
+  - repair.enabled

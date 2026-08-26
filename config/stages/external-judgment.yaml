@@ -1,0 +1,30 @@
+# Stage preset: copy-edit PROPOSALS for external judgment.
+#
+# The $0 flight path: generate copy-edit proposals but never let the built-in
+# model judge apply them — a session agent (Sol/Claude) or a human rules on the
+# exported judgment packet instead (`docproof galley export-judgments` ->
+# `import-judgments`). So the smoothing lane runs but its edits are held to
+# QUERY-ONLY and LOCKED there: nothing auto-applies, every proposal survives as
+# something the external judge decides. The rewrite lever and the mechanical
+# repair lane are locked off — this stage proposes copy-edits, it does not
+# re-run detection or repair.
+name: external-judgment
+description: >
+  Copy-edit proposals for an external judge: the smoothing lane on but locked
+  to query-only (nothing auto-applies — a session agent or human rules on the
+  exported packet), with the rewrite and repair lanes locked off. The $0
+  external-judgment flight path.
+
+patch:
+  smoothing:
+    enabled: true
+    edits: false
+  rewrite:
+    enabled: false
+  repair:
+    enabled: false
+
+locks:
+  - smoothing.edits
+  - rewrite.enabled
+  - repair.enabled

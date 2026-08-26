@@ -39,6 +39,7 @@ def main(argv=None) -> int:
     inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
+    _stage_arg(inv)
     _genre_arg(inv)
     _profile_arg(inv)
 
@@ -471,6 +472,16 @@ def _galley_parser(sub) -> None:
                      help="a profile JSON from `docproof galley profile "
                           "--json --out`; its proper-noun candidates seed "
                           "consistency.seeded_names / spellcheck.allowlist")
+    glg.add_argument("--stage", choices=list(_stage_choices()) or None,
+                     help="also apply a workflow-stage preset (which lanes "
+                          "run), composed BEFORE the genre and with its lane "
+                          "locks re-asserted after, so the genre cannot reopen "
+                          "a lane the stage forbids. See config/stages/")
+    glg.add_argument("--era", type=int,
+                     help="the manuscript's setting, as a year AD the "
+                          "vocabulary should predate — turns the anachronism "
+                          "scan from a no-op into an active scan (historical "
+                          "genre). Never inferred; you state it.")
 
     gf = gsub.add_parser(
         "flights", help="the copy-edit lane: a panel of narrow taste passes "
@@ -545,6 +556,21 @@ def _genre_choices() -> tuple[str, ...]:
     return available_genres()
 
 
+def _stage_choices() -> tuple[str, ...]:
+    from .stages import available_stages
+    return available_stages()
+
+
+def _stage_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--stage", choices=list(_stage_choices()) or None,
+        help="apply a workflow-stage preset (which lanes run) before the "
+             "genre posture, and re-assert its lane LOCKS after it, so a genre "
+             "can never turn on a lane the stage forbids (e.g. mechanical-wave "
+             "keeps edits-mode smoothing and the rewrite lever off whatever "
+             "genre is set). See config/stages/ and docproof/stages.py.")
+
+
 def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("input", help="a .docx or .idml file")
     p.add_argument("--config", default="config/default.yaml")
@@ -566,6 +592,7 @@ def _common(p: argparse.ArgumentParser) -> None:
                         "extension, for the spell scan. Only needed when the "
                         "variant's dictionary is not bundled — spylls ships "
                         "en_US alone (default: config spellcheck.dictionary)")
+    _stage_arg(p)
     _genre_arg(p)
     _profile_arg(p)
 
@@ -646,6 +673,13 @@ def _configure(args):
     # promise (no comment channel). See docproof/genre.py's module docstring.
     # The reviewer model is the one deliberate exception: experiments may hold
     # the profile constant while comparing detectors with --model.
+    # A workflow-stage preset lands BEFORE the genre so its lane locks can be
+    # re-asserted AFTER the genre (stage > genre): a genre never turns on a lane
+    # the stage forbids. Profile lands last of all (profile > stage > genre).
+    stage_locks: dict = {}
+    if getattr(args, "stage", None):
+        from .stages import apply_stage
+        cfg, stage_locks = apply_stage(cfg, args.stage)
     genre_pending = {}
     if getattr(args, "genre", None):
         from .genre import apply_genre
@@ -654,6 +688,13 @@ def _configure(args):
             log.warning("genre %r set %s, which this build cannot apply yet "
                        "(no matching config section) — ignored", args.genre,
                        key)
+    if stage_locks:
+        from .stages import enforce_locks
+        violated = enforce_locks(cfg, stage_locks)
+        for key in violated:
+            log.warning("stage %r locks %s; the genre %r tried to change it — "
+                        "the stage lock wins", args.stage, key,
+                        getattr(args, "genre", None))
     apply_profile(cfg, getattr(args, "profile", None))
     if getattr(args, "model", None):
         cfg.api.model = args.model
@@ -2506,13 +2547,19 @@ def cmd_galley_genre_pack(args) -> int:
 
     try:
         summary = write_genre_pack(
-            args.base, args.genre, args.out, profile=profile)
+            args.base, args.genre, args.out, profile=profile,
+            stage=getattr(args, "stage", None), era=getattr(args, "era", None))
     except (FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
     print(f"wrote {summary['out_path']} — genre '{summary['genre']}' over "
          f"{summary['base_config']}")
+    if "stage" in summary:
+        print(f"  stage: {summary['stage']} (lanes + locks)")
+    if summary.get("stage_lock_violations"):
+        print(f"  stage lock WON over genre for: "
+              f"{', '.join(summary['stage_lock_violations'])}")
     if summary["overlay_applied"]:
         print(f"  posture: {', '.join(summary['overlay_applied'])}")
     if summary["pending"]:
@@ -2532,6 +2579,9 @@ def cmd_galley_genre_pack(args) -> int:
     if "reading_level_target_ari" in summary:
         print(f"  reading-level target ARI set to "
              f"{summary['reading_level_target_ari']:.1f} from the profile")
+    if "anachronism_era" in summary:
+        print(f"  anachronism scan era set to {summary['anachronism_era']} "
+              f"(the scan is a no-op without it)")
     return 0
 
 

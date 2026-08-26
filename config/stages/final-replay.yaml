@@ -1,0 +1,39 @@
+# Stage preset: final replay — rebuild the deliverable, detect NOTHING new.
+#
+# The last stage. Accepted decisions (from adjudication, from an imported
+# judgment packet, from an archived run) are replayed into the tracked-changes
+# document through finish(); no new detection may run, because a finding raised
+# now would have faced none of the gates the earlier waves applied. So this
+# stage zeroes the typed passes (error_types: [] — the one place emptying that
+# list is CORRECT and deliberate, not the silent-gutting trap), turns the
+# ensemble off, and locks every stylistic/recall lane shut. It is the
+# machine-checkable version of "replay only, no surprises."
+#
+# Sweeps are intentionally LEFT to the base config: the deterministic $0
+# normalization sweeps are idempotent and part of producing a clean artifact,
+# not a detection lane.
+name: final-replay
+description: >
+  Rebuild the deliverable from already-accepted decisions with no new
+  detection: typed passes emptied, the ensemble off, and every stylistic/recall
+  lane locked shut. The machine-checkable "replay only" stage.
+
+patch:
+  error_types: []
+  ensemble:
+    detectors: []
+    verify_policy: none
+  smoothing:
+    enabled: false
+    edits: false
+  rewrite:
+    enabled: false
+  repair:
+    enabled: false
+
+locks:
+  - smoothing.enabled
+  - smoothing.edits
+  - rewrite.enabled
+  - repair.enabled
+  - ensemble.verify_policy

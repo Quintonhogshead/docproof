@@ -1,0 +1,42 @@
+# Stage preset: the mechanical wave — Chicago proofread, recall-first.
+#
+# This is the portable, known-good Wave 1 recipe (the one that used to live
+# only as prose in KNOBS.md). It runs the ensemble recall engine — Luna + Haiku
+# union with a Luna verifier over the disputed findings — on top of the base
+# config's full error_types and sweeps (a stage is a PATCH on a full base; it
+# never restates or drops those lists). The copy-edit lane is held shut and
+# LOCKED shut: no genre applied on top of this stage can turn on edits-mode
+# smoothing or the rewrite lever. That is the whole point — a mechanical wave
+# stays mechanical whatever posture the book carries.
+#
+# Compose it with a genre:  docproof galley genre-pack religious
+#     --stage mechanical-wave --out runs/book/mech.yaml
+# The genre still sets posture (name bar, judge stance, query scans); the stage
+# guarantees the wave does not silently become a copy-edit.
+name: mechanical-wave
+description: >
+  The Chicago proofread wave: the Luna+Haiku ensemble with a Luna verifier over
+  the base config's full typed passes and sweeps, broken-sentence repair on, and
+  the copy-edit lane (smoothing edits, rewrite) locked OFF so no genre can
+  reopen it. The portable Wave 1 recall recipe.
+
+patch:
+  ensemble:
+    detectors:
+      - {model: gpt-5.6-luna, effort: low}
+      - {model: claude-haiku-4-5, effort: low}
+    verifier_model: gpt-5.6-luna
+    verifier_effort: high
+    verify_policy: disputed
+  smoothing:
+    enabled: false
+    edits: false
+  rewrite:
+    enabled: false
+  repair:
+    enabled: true
+
+locks:
+  - smoothing.enabled
+  - smoothing.edits
+  - rewrite.enabled
