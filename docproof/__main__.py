@@ -697,6 +697,20 @@ def _galley_parser(sub) -> None:
     gtn.add_argument("--json", action="store_true",
                      help="print the triage table as JSON")
 
+    giz = gsub.add_parser(
+        "intent-zones",
+        help="resolve an intent-zones file against a manuscript and preview the "
+             "protected spans + permission classes. --out writes the resolved "
+             "{para_id: [[start,end]]} map that export-judgments consumes. $0")
+    giz.add_argument("input", help="a .docx or .idml file")
+    giz.add_argument("--zones", required=True,
+                     help="an intent-zones JSON ({'zones': [...]}); see "
+                          "docproof/intent_zones.py for the selector schema")
+    giz.add_argument("--config", default="config/default.yaml")
+    giz.add_argument("--out", help="write the resolved para->spans map here")
+    giz.add_argument("--json", action="store_true",
+                     help="print the resolved map as JSON")
+
 
 def _genre_choices() -> tuple[str, ...]:
     from .genre import available_genres
@@ -1955,7 +1969,8 @@ def cmd_galley(args) -> int:
             "routes": _galley_routes,
             "approve": _galley_approve,
             "certify": _galley_certify,
-            "triage-nouns": _galley_triage_nouns}[args.galley_cmd](args)
+            "triage-nouns": _galley_triage_nouns,
+            "intent-zones": _galley_intent_zones}[args.galley_cmd](args)
 
 
 def _galley_ask(args) -> int:
@@ -2718,6 +2733,54 @@ def cmd_galley_profile(args) -> int:
          + (" (model-confirmed)" if profile.model_confirmed else ""))
     if profile.model_notes:
         print(f"model notes: {profile.model_notes}")
+    return 0
+
+
+def _galley_intent_zones(args) -> int:
+    from .config import load_config
+    from .formats import get_format
+    from .intent_zones import load_intent_zones, resolve
+
+    try:
+        cfg = load_config(args.config)
+        zones = load_intent_zones(args.zones)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    try:
+        fmt = get_format(args.input)
+        pkg = fmt.preflight(args.input, cfg.tracked_changes_policy)
+        doc = fmt.build_document_model(pkg, cfg)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    closing = doc.variant.closing_quotes if getattr(doc, "variant", None) \
+        else "”\""
+    resolved = resolve(zones, list(doc.paragraphs), closing_quotes=closing)
+    span_map = resolved.as_dict()
+    total = sum(len(v) for v in span_map.values())
+    print(f"Resolved {len(zones.zones)} intent zone(s) → {total} protected "
+          f"span(s) across {len(span_map)} paragraph(s):")
+    for z in zones.zones:
+        sel = ("para_ids" if z.para_ids else "para_range" if z.para_range
+               else "terms" if z.terms else "regex" if z.regex
+               else "quotes" if z.quotes else "?")
+        print(f"  [{z.permission}] {z.label or z.category or '(zone)'} "
+              f"— by {sel}")
+
+    if getattr(args, "out", None):
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(
+            {pid: [[s, e] for s, e in spans]
+             for pid, spans in span_map.items()},
+            indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"\n  wrote resolved span map: {out}")
+    if args.json:
+        print(json.dumps({pid: [[s, e] for s, e in spans]
+                          for pid, spans in span_map.items()},
+                         ensure_ascii=False))
     return 0
 
 
