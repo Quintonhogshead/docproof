@@ -42,7 +42,14 @@ skill; follow the skill, record what you learned.
    does indistinguishably.
 4. **Respect intent zones.** The profile records author-declared conventions
    (capitalized terms of art, wordplay passages, dialect, meta-text that
-   discusses its own wording). Nothing in an intent zone is "corrected."
+   discusses its own wording). Nothing in an intent zone is "corrected." This
+   is now ENFORCED, not just documented: write the zones as a machine-readable
+   file (`galley intent-zones` to preview; selectors + a permission class of
+   `locked` / `punctuation` / `open`), point `intent_zones_file` at it, and the
+   deterministic sweep layer downgrades any forbidden edit to a query before it
+   can auto-apply — so a quoted "that that" is never silently fixed. Scripture,
+   liturgy, and quoted historical text are `locked` (or `punctuation` where
+   house typography may apply but wording may not).
 5. **Never ship what you haven't audited.** The reject-all round trip must be
    clean, the artifact scan must be clean, and the residual estimate goes in
    the letter — honestly.
@@ -61,7 +68,11 @@ skill; follow the skill, record what you learned.
 | `docproof import-findings` / `replay` | Inject externally produced or archived findings and rebuild a deliverable through `finish()`. | $0 |
 | `docproof galley profile` / `genre-pack` / `calibrate` | Book profile, genre posture materialization (`--stage`, `--genre`, `--era`, `--profile`), recall/cost calibration. | ~$0 |
 | `docproof galley routes` | The effective-config **egress report**: every model the config would call, its provider, active/off. `--deny PROVIDER` exits non-zero if a prohibited vendor is reachable. Run it before spending. | $0 |
-| `docproof galley approve` / `certify` | The reproducibility gate: `approve` writes the immutable `approval.json` (source + config hashes, allowed models/providers, stage, lanes, max spend); `certify` re-checks a finished run against it plus the structural invariants before delivery. `docproof review --approval A` REFUSES to run if the manuscript, config, or routes deviate. | $0 |
+| `docproof galley approve` / `certify` | The reproducibility gate: `approve` writes the immutable `approval.json` (source + config hashes, allowed models/providers, stage, lanes, max spend); `certify` re-checks a finished run against it plus the structural invariants (hashes, routes, checkpoint, zero-cost anomaly, budget, artifact scan, duplicate-merged edits, insertion collisions, two-author attribution, run state) before delivery. `docproof review --approval A` REFUSES to run if the manuscript, config, or routes deviate. | $0 |
+| `docproof galley intent-zones` | Resolve an intent-zones file (selectors: para ids/range, terms, regex, quotes) against a manuscript and preview the protected spans + permission classes (locked / punctuation / open). Set `intent_zones_file` in the config and the sweep layer downgrades any forbidden edit to a query BEFORE it can auto-apply. | $0 |
+| `docproof galley triage-nouns` | Group a profile's proper nouns into protect/enforce/reject/suspect (near-matches like Deut/Deute flagged), and write a correction-overlay starter. `genre-pack --corrections` then seeds only the vetted names. | $0 |
+| `docproof galley ledger` | The finding lifecycle ledger: every finding's stable id + state history (detected→merged/queried/rejected/dropped) reconstructed from a run, with a duplicate report. | $0 |
+| `docproof galley state` | The resumable run state machine (intake→profiled→…→certified→delivered). `--advance` stamps source/config hashes; `--verify-resume` proves nothing changed underneath before you continue (exit 6 on drift). | $0 |
 | `docproof capabilities` | The whole command tree + config sections + genres + stages, as JSON. Your map of the rack — read this, not `--help`. | $0 |
 
 Verbs marked here that are missing in your checkout are still being built; do
@@ -179,6 +190,11 @@ context ~150 times. Keep your window lean:
 
 1. **Intake.** Fresh per-book workspace. Flush any prior book's scratch state.
    Persistent memory (house rulings, precedents, calibration) carries over.
+   Open the run state machine (`galley state <ws> --advance intake --source
+   BOOK`): every later stage advances it, and a resumed session runs
+   `galley state <ws> --verify-resume` to prove the manuscript and config have
+   not changed underneath it before continuing — never trust a session note
+   that a wave is "done."
 2. **Profile** (`skills/profile`). $0-first. Produces the profile JSON: genre,
    posture recommendation, proper nouns, author tics with counts and samples,
    intent zones, bespoke-sweep candidates.
