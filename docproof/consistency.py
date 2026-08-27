@@ -166,6 +166,15 @@ class VariantGroup:
 
 
 @dataclass(frozen=True)
+class DeityPronounDrift:
+    """A book that capitalizes pronouns referring to God, and the lowercase
+    strays inside deity-anchored sentences. Queries only: pronoun reference is
+    the author's to resolve, not a scan's."""
+    capitalized: int                      # mid-sentence He/His/Him/Himself seen
+    outliers: tuple[Occurrence, ...]      # lowercase strays, deity in sentence
+
+
+@dataclass(frozen=True)
 class ConsistencyReport:
     ran: bool = False
     terms: tuple[Inconsistency, ...] = ()
@@ -173,6 +182,8 @@ class ConsistencyReport:
     variants: tuple[VariantGroup, ...] = ()        # spelling variants (VarCon)
     abbreviations: tuple[VariantGroup, ...] = ()   # U.S. vs US, a.m. vs AM
     casings: tuple[VariantGroup, ...] = ()         # NASA vs Nasa
+    policy: tuple[VariantGroup, ...] = ()          # non-US forms, policy "us"
+    deity: DeityPronounDrift | None = None         # he->He in a reverent book
 
     @property
     def _mechanical(self) -> tuple[VariantGroup, ...]:
@@ -180,11 +191,12 @@ class ConsistencyReport:
 
     @property
     def flagged(self) -> int:
-        # Terms and non-enforced names are per-occurrence; the mechanical scans
-        # are one query per group.
+        # Terms, non-enforced names and deity strays are per-occurrence; the
+        # mechanical and policy scans are one query per group.
         return (sum(len(t.outliers) for t in self.terms)
                 + sum(len(n.outliers) for n in self.names if not n.enforce)
-                + len(self._mechanical))
+                + len(self._mechanical) + len(self.policy)
+                + (len(self.deity.outliers) if self.deity else 0))
 
     @property
     def corrected(self) -> int:
@@ -519,6 +531,131 @@ def find_spelling_variants(paragraphs: Sequence[ParagraphRef], *,
     return tuple(_cap(out, "spelling-variant", max_queries))
 
 
+def find_variant_policy(paragraphs: Sequence[ParagraphRef], *,
+                        respell: Mapping[str, str] | None = None,
+                        protected: Sequence[str] = (),
+                        chicago: bool = True,
+                        max_queries: int = 40) -> tuple[VariantGroup, ...]:
+    """Words this book spells the British way THROUGHOUT (theatre, colour) —
+    the case the mixed-usage scan structurally cannot see, raised only when
+    ``consistency.variant_policy`` is "us".
+
+    One query per cluster, proposing the American spelling. Restricted to the
+    regular British/American families (_variant_class: -our, -ise, -re, …), so
+    a form Merriam-Webster accepts in U.S. prose anyway (towards, grey as a
+    name) is never flagged as policy. A cluster the book uses BOTH ways is the
+    mixed-usage scan's to ask about, not this one's — two queries about one
+    word is one too many."""
+    forms_map, members_map = _load_varcon()
+    if not forms_map:
+        return ()
+    respell_keys = {k.lower() for k in (respell or {})}
+    protected_l = {w.lower() for w in protected}
+
+    by_cluster: dict[str, dict] = {}
+    for para in paragraphs:
+        for m in _WORD.finditer(para.text):
+            raw = m.group(0)
+            w = raw.lower().strip("’'")
+            cid = forms_map.get(w)
+            if cid is None:
+                continue
+            g = by_cluster.setdefault(
+                cid, {"counts": Counter(), "sites": [], "skip": False})
+            if w in respell_keys or w in protected_l:
+                g["skip"] = True
+                continue
+            if raw[:1].isupper() and not _sentence_initial(para.text, m.start()):
+                continue
+            g["counts"][w] += 1
+            g["sites"].append(
+                Occurrence(para.para_id, m.start(), m.start() + len(raw), raw))
+
+    out: list[VariantGroup] = []
+    for cid in sorted(by_cluster):
+        g = by_cluster[cid]
+        counts: Counter = g["counts"]
+        # Policy speaks only where the book never uses the American form at
+        # all; mixed usage already gets the mixed-usage query.
+        if g["skip"] or not counts or cid in counts:
+            continue
+        other = next(iter(counts))
+        if not _variant_class(cid, other):
+            continue
+        note = _chicago_note(cid, members_map.get(cid, ())) if chicago else ""
+        out.append(VariantGroup(
+            "policy", cid, Counter(counts), cid, True, g["sites"][0],
+            sum(counts.values()), note))
+    return tuple(_cap(out, "variant-policy", max_queries))
+
+
+# --- deity pronouns -----------------------------------------------------------
+
+# The pronouns reverent capitalization applies to, and the names that anchor a
+# sentence to God plainly enough for a query to be worth the margin space.
+_DEITY_PRONOUNS = frozenset({"he", "his", "him", "himself"})
+_DEITY_CAPS = frozenset({"He", "His", "Him", "Himself"})
+_DEITY_NAME = re.compile(
+    r"\b(?:God|Lord|Jesus|Christ|Almighty|Savior|Saviour|Messiah|"
+    r"Holy Spirit|Heavenly Father)\b")
+
+
+def find_deity_pronouns(paragraphs: Sequence[ParagraphRef], *,
+                        min_capitalized: int = 8,
+                        max_queries: int = 25) -> DeityPronounDrift | None:
+    """Lowercase he/his/him in a book that capitalizes pronouns referring to
+    God — "He also sees the struggles we go through, and he knows every
+    decision" — raised as queries, because only the author can say which
+    pronouns are His.
+
+    Self-gating: the scan speaks only when the book plainly follows reverent
+    capitalization (at least ``min_capitalized`` mid-sentence He/His/Him and a
+    few explicit deity names), and only flags a lowercase pronoun whose own
+    PARAGRAPH names God — or whose own sentence carries a mid-sentence
+    capitalized deity pronoun; anything farther from an anchor is guesswork.
+    ("God is patient with us! He also sees…, and he knows every decision" —
+    the name is a sentence back, the paragraph is the anchor that catches it.)
+    Chicago itself lowercases deity
+    pronouns; this scan enforces nothing, it keeps the book consistent with
+    the convention the book already chose."""
+    capitalized = 0
+    names = 0
+    candidates: list[Occurrence] = []
+    for para in paragraphs:
+        text = para.text
+        if _skip_caps_context(para):
+            continue
+        names += len(_DEITY_NAME.findall(text))
+        for m in _WORD.finditer(text):
+            w = m.group(0)
+            if w in _DEITY_CAPS and not _sentence_initial(text, m.start()):
+                capitalized += 1
+            elif w in _DEITY_PRONOUNS:
+                candidates.append(
+                    Occurrence(para.para_id, m.start(), m.start() + len(w), w))
+    if capitalized < min_capitalized or names < 3:
+        return None
+
+    by_id = {p.para_id: p for p in paragraphs}
+    outliers: list[Occurrence] = []
+    for o in candidates:
+        text = by_id[o.para_id].text
+        sentence, lo, _occ = sentence_window(text, o.start, o.end)
+        anchored = bool(_DEITY_NAME.search(text)) or any(
+            m.group(0) in _DEITY_CAPS
+            and not _sentence_initial(text, lo + m.start())
+            for m in _WORD.finditer(sentence))
+        if anchored:
+            outliers.append(o)
+    if not outliers:
+        return None
+    if len(outliers) > max_queries:
+        log.info("Deity-pronoun queries capped at %d (%d found).",
+                 max_queries, len(outliers))
+        outliers = outliers[:max_queries]
+    return DeityPronounDrift(capitalized, tuple(outliers))
+
+
 # A run of letter-then-dot (U.S., a.m., Ph.D.) with no spaces between the units,
 # so spaced personal initials ("J. R. R.") never match as one token.
 _DOTTED = re.compile(r"(?:[A-Za-z]\.){2,}")
@@ -668,6 +805,9 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          respell: Mapping[str, str] | None = None,
                          protected: Sequence[str] = (),
                          dictionary: str = "en_US",
+                         variant_policy: str = "off",
+                         deity_pronouns: bool = True,
+                         deity_min_capitalized: int = 8,
                          max_queries_per_kind: int = 40) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
@@ -761,13 +901,22 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
         paragraphs, min_dominance=min_dominance, dictionary=dictionary,
         protected=protected,
         max_queries=max_queries_per_kind) if acronym_case else ())
+    policy = (find_variant_policy(
+        paragraphs, respell=respell, protected=protected,
+        chicago=chicago_notes,
+        max_queries=max_queries_per_kind) if variant_policy == "us" else ())
+    deity = (find_deity_pronouns(
+        paragraphs, min_capitalized=deity_min_capitalized,
+        max_queries=max_queries_per_kind) if deity_pronouns else None)
     report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift,
                                variants=variants, abbreviations=abbrevs,
-                               casings=cases)
+                               casings=cases, policy=policy, deity=deity)
     log.info("Consistency scan: %d term(s), %d spelling-variant(s), "
-             "%d abbreviation(s), %d acronym-case(s), and %d name(s) with "
+             "%d abbreviation(s), %d acronym-case(s), %d policy form(s), "
+             "%d deity-pronoun stray(s), and %d name(s) with "
              "diacritic drift — %d occurrence(s) to correct, %d to ask about",
-             len(terms), len(variants), len(abbrevs), len(cases), len(drift),
+             len(terms), len(variants), len(abbrevs), len(cases), len(policy),
+             len(deity.outliers) if deity else 0, len(drift),
              report.corrected, report.flagged)
     return report
 
@@ -902,4 +1051,57 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             confidence="high",
         ))
         n += 1
+
+    # Policy: one query per cluster, at the first occurrence, proposing the
+    # American spelling the book never uses.
+    for vg in report.policy:
+        para = by_id.get(vg.site.para_id)
+        if para is None:
+            continue
+        window, _, occurrence = sentence_window(
+            para.text, vg.site.start, vg.site.end)
+        forms = ", ".join(f"“{f}” ({c})" for f, c in vg.forms)
+        note = f" {vg.note}" if vg.note else ""
+        findings.append(Finding(
+            finding_id=f"c-{n:04d}",
+            chunk_id="consistency",
+            para_id=vg.site.para_id,
+            error_type=CONSISTENCY_KEY,
+            original_text=window,
+            occurrence=occurrence,
+            corrected_text=window,              # a query changes nothing
+            explanation=(
+                f"House style prefers the U.S. spelling “{vg.dominant}”; "
+                f"this book uses {forms} throughout.{note} Change to "
+                f"“{vg.dominant}” everywhere?"),
+            confidence="high",
+        ))
+        n += 1
+
+    # Deity pronouns: one query per stray, because each needs its own eyes —
+    # only the author knows which pronouns are His.
+    if report.deity:
+        for o in report.deity.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, _, occurrence = sentence_window(para.text, o.start, o.end)
+            findings.append(Finding(
+                finding_id=f"c-{n:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=CONSISTENCY_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window,          # a query changes nothing
+                explanation=(
+                    f"This book capitalizes pronouns referring to God "
+                    f"({report.deity.capitalized} mid-sentence uses of "
+                    f"He/His/Him). If this “{o.form}” refers to God, the "
+                    f"book's own convention makes it "
+                    f"“{o.form[:1].upper()}{o.form[1:]}”; if it refers to "
+                    f"someone else, please ignore this note."),
+                confidence="medium",
+            ))
+            n += 1
     return findings
