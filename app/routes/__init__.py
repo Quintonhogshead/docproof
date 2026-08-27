@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from . import (admin, compare, files, jobs, models, presets, promo, prompts,
-               sapling, settings, styles, version, watch)
+               quest, sapling, settings, styles, version, watch)
 
 
 def register(app: FastAPI) -> None:
@@ -24,6 +24,7 @@ def register(app: FastAPI) -> None:
     prompts.register(app)
     watch.register(app)
     promo.register(app)
+    quest.register(app)
     sapling.register(app)
     settings.register(app)
 
