@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spell &amp; Check — The Party Assembles</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  /* Committed single-theme design: a cozy campfire at dusk. All colors explicit. */
+  :root{
+    --ink:#1a140e;
+    --card:#261e14;
+    --card-2:#1f1810;
+    --parchment:#f2e6cd;
+    --faded:#b3a184;
+    --dim:#7d6f5a;
+    --ember:#f0954a;
+    --ember-hot:#ffb066;
+    --arcane:#8fbcab;
+    --line:rgba(242,230,205,.14);
+    --line-strong:rgba(242,230,205,.3);
+    --disp:'Macondo', 'Comic Sans MS', cursive;
+    --body:'Alegreya Sans', 'Gill Sans', 'Segoe UI', system-ui, sans-serif;
+    --mono:'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ink); color:var(--parchment);
+    font-family:var(--body); font-size:16px; line-height:1.5;
+    background-image:
+      radial-gradient(1000px 500px at 72% -6%, var(--glow), transparent 60%),
+      radial-gradient(760px 560px at 6% 106%, rgba(143,188,171,.06), transparent 55%);
+    min-height:100vh;
+    --glow:rgba(240,149,74,.10);
+    transition:background .5s;
+  }
+  /* per-manuscript skins: same party, same machine — new accent, new air */
+  body.skin-romantasy{--ember:#ef6f96; --ember-hot:#ff9ab8; --glow:rgba(239,111,150,.12); --ink:#1c1216; --card:#281a20; --card-2:#211519}
+  body.skin-noir{--ember:#cfa452; --ember-hot:#ecc987; --glow:rgba(120,150,190,.10); --ink:#12151a; --card:#1c2027; --card-2:#171b21}
+  body.skin-cozy{--ember:#e9b64f; --ember-hot:#ffd27a; --glow:rgba(233,182,79,.10); --ink:#171610; --card:#232013; --card-2:#1c1a10}
+
+  .skinbar{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:14px 0 0}
+  .skinlabel{font:11.5px var(--mono); color:var(--dim); letter-spacing:.06em; margin-right:4px}
+  .skinpill{border:1px solid var(--line); background:var(--card-2); color:var(--faded); border-radius:999px;
+    padding:6px 14px; font:13px var(--body); cursor:pointer; transition:border-color .2s, color .2s}
+  .skinpill i{font-style:normal; color:var(--dim); font-size:11.5px; margin-left:6px; letter-spacing:.08em; text-transform:uppercase}
+  .skinpill:hover{border-color:var(--line-strong); color:var(--parchment)}
+  .skinpill.on{border-color:var(--ember); color:var(--parchment); box-shadow:0 0 0 1px var(--ember) inset}
+  .skinpill:focus-visible{outline:2px solid var(--ember-hot); outline-offset:2px}
+  .wrap{max-width:1140px; margin:0 auto; padding:0 28px 150px}
+  .mocktag{position:fixed; top:10px; right:12px; font:11px var(--mono); color:var(--dim); letter-spacing:.08em; opacity:.7; z-index:9}
+
+  header{display:flex; align-items:center; gap:20px; flex-wrap:wrap; padding:18px 0 14px; border-bottom:1px solid var(--line)}
+  .wordmark{font-family:var(--disp); font-size:24px; color:var(--parchment); white-space:nowrap}
+  .wordmark .amp{color:var(--ember)}
+  .steps{display:flex; gap:4px; align-items:center; font-size:12.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim)}
+  .steps .sep{color:var(--line-strong); margin:0 6px}
+  .steps .done{color:var(--faded)} .steps .done::before{content:"✓ "; color:var(--arcane)}
+  .steps .now{color:var(--ember)}
+  .mschip{margin-left:auto; display:flex; align-items:center; gap:12px; border:1px solid var(--line); border-radius:12px;
+    padding:8px 16px; background:var(--card-2); font-size:14px; color:var(--faded); white-space:nowrap}
+  .mschip b{color:var(--parchment); font-weight:500; font-family:var(--disp); font-size:16px}
+  .mschip .price{color:var(--ember); font-weight:700; font-size:16px; font-variant-numeric:tabular-nums}
+
+  .dm{display:flex; gap:16px; align-items:flex-start; padding:26px 0 20px}
+  .lantern{flex:0 0 auto; width:50px; height:50px; border:1px solid var(--line-strong); border-radius:50%;
+    background:radial-gradient(circle at 50% 62%, rgba(240,149,74,.35), rgba(240,149,74,.05) 70%);
+    display:grid; place-items:center}
+  .flame{width:10px; height:16px; background:var(--ember-hot); border-radius:50% 50% 50% 50%/62% 62% 38% 38%;
+    box-shadow:0 0 14px 3px rgba(240,149,74,.55); transform-origin:50% 90%; animation:flick 2.6s ease-in-out infinite}
+  @keyframes flick{0%,100%{transform:scaleY(1) rotate(-2deg)}30%{transform:scaleY(1.1) rotate(2deg)}60%{transform:scaleY(.95) rotate(-1deg)}}
+  .dm .who{font-size:12px; letter-spacing:.18em; text-transform:uppercase; color:var(--faded); margin-bottom:4px}
+  .dm .say{font-family:var(--disp); font-size:clamp(18px,2.4vw,23px); line-height:1.5; max-width:64ch; text-wrap:balance; margin:0}
+  .dm .say em{color:var(--ember-hot); font-style:normal}
+
+  .stage{display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr); gap:26px; align-items:start}
+  @media (max-width:900px){.stage{grid-template-columns:1fr}}
+  .panel-label{font-size:12px; letter-spacing:.2em; text-transform:uppercase; color:var(--dim); margin:22px 0 10px; display:flex; align-items:baseline; gap:10px}
+  .panel-label b{color:var(--faded); font-weight:500}
+  .panel-label .hint{margin-left:auto; text-transform:none; letter-spacing:0; font-size:12.5px; color:var(--dim); font-style:italic}
+  .reset{background:none; border:none; color:var(--dim); font:12px var(--body); letter-spacing:.06em; cursor:pointer; text-decoration:underline dotted; padding:0}
+  .reset:hover{color:var(--ember)}
+  .reset:focus-visible{outline:2px solid var(--ember); outline-offset:2px; border-radius:4px}
+
+  /* ---------- zones ---------- */
+  .zone{display:grid; gap:10px; border:1.5px dashed transparent; border-radius:16px; padding:8px; transition:border-color .2s, background .2s; min-height:96px}
+  .zone.over{border-color:var(--ember); background:rgba(240,149,74,.05)}
+  .zone.empty::after{content:attr(data-empty); display:grid; place-items:center; color:var(--dim); font-style:italic; font-size:14px; min-height:80px}
+
+  /* ---------- adventurer cards ---------- */
+  .adv{display:grid; grid-template-columns:56px 1fr auto; gap:14px; align-items:center;
+    border:1px solid var(--line); border-radius:16px; background:var(--card); padding:14px 16px;
+    cursor:grab; user-select:none; -webkit-user-select:none; position:relative;
+    transition:transform .15s, border-color .2s, box-shadow .2s}
+  .adv:active{cursor:grabbing}
+  .adv:hover{transform:translateY(-2px) rotate(-.3deg); border-color:var(--line-strong)}
+  .adv:focus-visible{outline:2px solid var(--ember-hot); outline-offset:3px}
+  .adv.dragging{opacity:.45; transform:rotate(1.5deg)}
+  .adv.pop{animation:pop .45s cubic-bezier(.34,1.56,.64,1)}
+  @keyframes pop{0%{transform:scale(.92)}60%{transform:scale(1.04)}100%{transform:scale(1)}}
+  .adv.itemtarget{border-color:var(--arcane); box-shadow:0 0 0 2px rgba(143,188,171,.35)}
+  .sigil{width:56px; height:56px; border-radius:18px; border:1px solid var(--line-strong); display:grid; place-items:center;
+    background:var(--card-2); color:var(--faded)}
+  .zone.party .sigil{color:var(--ember); border-color:rgba(240,149,74,.5); box-shadow:0 0 16px rgba(240,149,74,.15)}
+  .sigil svg{width:28px; height:28px; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+  .aname{font-family:var(--disp); font-size:21px; line-height:1.1}
+  .aname small{font-family:var(--body); font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--ember); margin-left:8px}
+  .zone.bench .aname small{color:var(--dim)}
+  .ajob{font-size:14px; color:var(--faded); margin-top:3px}
+  .alane{font:11px var(--mono); color:var(--dim); margin-top:5px}
+  .aprice{font-size:17px; font-weight:700; color:var(--parchment); font-variant-numeric:tabular-nums; align-self:start}
+  .zone.bench .aprice{color:var(--dim)}
+  .gear{grid-column:2/4; display:flex; flex-wrap:wrap; gap:6px}
+  .gear:empty{display:none}
+  .gchip{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--arcane);
+    border:1px solid rgba(143,188,171,.4); background:rgba(143,188,171,.08); border-radius:999px; padding:3px 10px 3px 8px; cursor:pointer}
+  .gchip svg{width:13px; height:13px; stroke:currentColor; fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round}
+  .gchip .x{color:var(--dim); font-size:13px; margin-left:2px}
+  .gchip:hover .x{color:var(--ember)}
+  .gchip:focus-visible{outline:2px solid var(--arcane); outline-offset:2px}
+
+  /* ---------- brain picker ---------- */
+  .brains{display:grid; gap:8px}
+  .brain{display:grid; grid-template-columns:40px 1fr auto; gap:12px; align-items:center; border:1px solid var(--line); border-radius:12px;
+    background:var(--card); padding:10px 12px; cursor:pointer; user-select:none; -webkit-user-select:none; transition:border-color .2s, box-shadow .2s}
+  .brain:hover{border-color:var(--line-strong)}
+  .brain:focus-visible{outline:2px solid var(--ember-hot); outline-offset:2px}
+  .brain.chosen{border-color:rgba(240,149,74,.55); box-shadow:0 0 0 2px rgba(240,149,74,.25); background:linear-gradient(180deg,#2a2115,#241c11)}
+  .bsigil{width:40px; height:40px; border-radius:12px; border:1px solid var(--line-strong); display:grid; place-items:center; color:var(--dim); background:var(--card-2)}
+  .brain.chosen .bsigil{color:var(--ember); border-color:rgba(240,149,74,.5)}
+  .bsigil svg{width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+  .bname{font-family:var(--disp); font-size:16px}
+  .bname .chk{font-family:var(--body); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--ember); margin-left:8px; visibility:hidden}
+  .brain.chosen .bname .chk{visibility:visible}
+  .beffect{font-size:13px; color:var(--faded); margin-top:2px}
+  .blane{font:10.5px var(--mono); color:var(--dim); margin-top:4px}
+  .bprice{font-size:15px; font-weight:700; color:var(--parchment); font-variant-numeric:tabular-nums}
+
+  /* ---------- shop ---------- */
+  .shop{border:1px solid var(--line); border-radius:16px; background:var(--card-2); padding:14px}
+  .shopgrid{display:grid; gap:8px}
+  .item{display:grid; grid-template-columns:40px 1fr auto; gap:12px; align-items:center; border:1px solid var(--line); border-radius:12px;
+    background:var(--card); padding:10px 12px; cursor:grab; user-select:none; -webkit-user-select:none; transition:transform .15s, border-color .2s, box-shadow .2s}
+  .item:active{cursor:grabbing}
+  .item:hover{transform:translateY(-1px); border-color:rgba(143,188,171,.5)}
+  .item:focus-visible{outline:2px solid var(--arcane); outline-offset:2px}
+  .item.armed{border-color:var(--arcane); box-shadow:0 0 0 2px rgba(143,188,171,.35)}
+  .item.dragging{opacity:.45}
+  .isigil{width:40px; height:40px; border-radius:12px; border:1px solid rgba(143,188,171,.35); display:grid; place-items:center; color:var(--arcane); background:rgba(143,188,171,.06)}
+  .isigil svg{width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+  .iname{font-family:var(--disp); font-size:16px}
+  .ieffect{font-size:13px; color:var(--faded); margin-top:2px}
+  .ilane{font:10.5px var(--mono); color:var(--dim); margin-top:4px}
+  .iprice{font-size:15px; font-weight:700; color:var(--parchment); font-variant-numeric:tabular-nums}
+  .shopnote{font-size:12.5px; color:var(--dim); font-style:italic; margin:10px 2px 0}
+
+  /* ---------- feed ---------- */
+  .feed{margin-top:16px; border:1px solid var(--line); border-radius:16px; background:#161009; padding:14px 16px;
+    font:12.5px/1.9 var(--mono); color:var(--faded); min-height:120px; max-height:210px; overflow-y:auto}
+  .feed .k{color:var(--ember)} .feed .g{color:var(--arcane)} .feed .t{color:var(--dim)}
+  .feed div{opacity:0; transform:translateY(3px); transition:opacity .35s, transform .35s}
+  .feed div.on{opacity:1; transform:none}
+
+  /* ---------- CTA ---------- */
+  .ctabar{position:fixed; left:0; right:0; bottom:0; background:linear-gradient(180deg, rgba(26,20,14,0), #1a140e 40%); padding:36px 28px 20px; display:flex; justify-content:center; z-index:4}
+  .ctainner{width:100%; max-width:1084px; display:flex; align-items:center; gap:18px; flex-wrap:wrap}
+  .status{font-family:var(--disp); font-size:17px; color:var(--faded)}
+  .status .tot{color:var(--ember); font-weight:700}
+  .cta{margin-left:auto; font-family:var(--body); font-weight:700; font-size:16px; letter-spacing:.05em;
+    color:#241203; background:var(--ember); border:none; border-radius:12px; padding:14px 32px; cursor:pointer;
+    box-shadow:0 0 24px rgba(240,149,74,.3); transition:background .3s, opacity .3s}
+  .cta:hover{background:var(--ember-hot)}
+  .cta:disabled{background:var(--dim); cursor:not-allowed; box-shadow:none; opacity:.6}
+  .cta:focus-visible{outline:2px solid var(--ember-hot); outline-offset:3px}
+  .ctasub{flex-basis:100%; font-size:12.5px; color:var(--dim); text-align:right; margin-top:-4px}
+
+  /* ---------- upload zone ---------- */
+  .drop{display:flex; align-items:center; gap:14px; border:1.5px dashed var(--line-strong); border-radius:16px;
+    background:var(--card-2); padding:14px 18px; margin-top:16px; cursor:pointer; transition:border-color .2s, background .2s}
+  .drop:hover, .drop.over{border-color:var(--ember); background:rgba(240,149,74,.05)}
+  .drop:focus-visible{outline:2px solid var(--ember-hot); outline-offset:2px}
+  .drop .dicon{flex:0 0 auto; width:40px; height:40px; border-radius:12px; border:1px solid var(--line-strong);
+    display:grid; place-items:center; color:var(--ember); background:var(--card)}
+  .drop .dicon svg{width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+  .drop .dtitle{font-family:var(--disp); font-size:17px}
+  .drop .dsub{font-size:13px; color:var(--faded); margin-top:2px}
+  .drop.busy{pointer-events:none; opacity:.75}
+  .drop.busy .dicon{animation:spinpulse 1.2s ease-in-out infinite}
+  @keyframes spinpulse{50%{transform:rotate(8deg) scale(1.08)}}
+  .dropnote{font:11.5px var(--mono); color:var(--dim); margin-top:8px}
+  .dropnote b{color:var(--ember); font-weight:400}
+
+  @media (prefers-reduced-motion:reduce){
+    .flame{animation:none}
+    .adv.pop{animation:none}
+    .drop.busy .dicon{animation:none}
+    .adv,.item,.feed div{transition:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="mocktag">prototype · sample text stays on this machine + one model call</div>
+<div class="wrap">
+
+  <header>
+    <div class="wordmark">Spell <span class="amp">&amp;</span> Check</div>
+    <nav class="steps" aria-label="Progress">
+      <span class="done">Upload</span><span class="sep">—</span>
+      <span class="now">Assemble</span><span class="sep">—</span>
+      <span>Quest</span><span class="sep">—</span>
+      <span>Loot</span>
+    </nav>
+    <div class="mschip"><b id="booktitle">The Ashen Crown</b><span id="bookwords">98,400 words</span><span class="price" id="chiptotal">$39</span></div>
+  </header>
+
+  <div class="drop" id="drop" role="button" tabindex="0"
+       aria-label="Upload your manuscript. Accepts .docx, .txt, or .md.">
+    <div class="dicon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 20h14"/></svg></div>
+    <div>
+      <div class="dtitle" id="droptitle">Drop your manuscript here — Galley will read a few pages and dress the party for it</div>
+      <div class="dsub" id="dropsub">.docx, .txt, or .md · your text is read by an AI model to build the costume · nothing is stored</div>
+    </div>
+    <input type="file" id="fileinput" accept=".docx,.txt,.md" hidden>
+  </div>
+  <div class="dropnote" id="dropnote"></div>
+
+  <div class="skinbar" id="skinbar" role="tablist" aria-label="Demo: try the skin on another manuscript">
+    <span class="skinlabel">or try a sample manuscript:</span>
+  </div>
+
+  <section class="dm">
+    <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
+    <div>
+      <div class="who">Galley · your AI guide — she reads your book; her party wears its costume</div>
+      <p class="say" id="say"></p>
+    </div>
+  </section>
+
+  <div class="stage">
+    <section>
+      <div class="panel-label">Your party · <b id="partycount"></b>
+        <button class="reset" id="reset">back to Galley's pick</button>
+      </div>
+      <div class="zone party empty" id="party" data-empty="An empty campfire… drag an adventurer over."></div>
+
+      <div class="panel-label">Waiting at the tavern
+        <span class="hint">drag (or tap) to hire &amp; dismiss</span>
+      </div>
+      <div class="zone bench" id="bench" data-empty="Everyone's been hired!"></div>
+    </section>
+
+    <section>
+      <div class="panel-label">Who plans the quest? <span class="hint">Galley's counsel — pick one</span></div>
+      <div class="brains" id="brains" role="radiogroup" aria-label="Who plans the quest"></div>
+
+      <div class="panel-label">The curiosity shop <span class="hint">drag an item onto an adventurer</span></div>
+      <div class="shop">
+        <div class="shopgrid" id="shop"></div>
+        <p class="shopnote">Each trinket changes how its bearer reads — the small print shows exactly what it does under the hood.</p>
+      </div>
+      <div class="panel-label">The ledger</div>
+      <div class="feed" id="feed" aria-live="polite"></div>
+    </section>
+  </div>
+</div>
+
+<div class="ctabar">
+  <div class="ctainner">
+    <span class="status" id="status" aria-live="polite"></span>
+    <button class="cta" id="cta">Begin the Quest</button>
+    <span class="ctasub" id="ctasub">Prices are for this manuscript's length · estimated journey 3–5 hours · we'll send a raven (okay, an email) when the loot is ready.</span>
+  </div>
+</div>
+
+<script>
+(function(){
+  var ICONS = {
+    dagger:'<path d="M12 3l2 7-2 11-2-11 2-7z"/><path d="M8 10h8"/>',
+    shield:'<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/>',
+    book:'<path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3V4z"/><path d="M5 4a3 3 0 013 3v13"/><path d="M12 9h4M12 13h4"/>',
+    hammer:'<path d="M4 15l7-7 3 3-7 7H4v-3z"/><path d="M13 6l3-3 5 5-3 3"/>',
+    staff:'<path d="M12 21V8"/><circle cx="12" cy="5" r="2.5"/><path d="M9 12h6"/>',
+    lute:'<circle cx="9" cy="15" r="5"/><path d="M12.5 11.5L20 4"/><path d="M18 3l3 3"/>',
+    lantern:'<rect x="8" y="7" width="8" height="11" rx="2"/><path d="M10 7V5h4v2"/><path d="M12 11v3"/>',
+    glasses:'<circle cx="7.5" cy="14" r="3.5"/><circle cx="16.5" cy="14" r="3.5"/><path d="M11 14h2M4 14l1-6M20 14l-1-6"/>',
+    charm:'<circle cx="12" cy="13" r="5"/><path d="M12 8V4M9 4h6"/><path d="M10 13l1.5 1.5L15 11"/>',
+    potion:'<path d="M10 3h4M11 3v4l-4.5 8A3.5 3.5 0 0010 20h4a3.5 3.5 0 003.5-5L13 7V3"/><path d="M8.5 15h7"/>',
+    map:'<path d="M4 6l5-2 6 2 5-2v14l-5 2-6-2-5 2V6z"/><path d="M9 4v14M15 6v14"/>',
+    owl:'<circle cx="12" cy="12" r="8"/><circle cx="9" cy="10" r="1.6"/><circle cx="15" cy="10" r="1.6"/><path d="M10.8 14l1.2 1.2L13.2 14"/><path d="M5 7l3-3M19 7l-3-3"/>',
+    orb:'<circle cx="12" cy="10" r="6"/><path d="M9 19h6M10 22h4"/><path d="M9.5 8a3 3 0 012.5-1.5"/>'
+  };
+  function svg(k, cls){ return '<svg viewBox="0 0 24 24" aria-hidden="true">'+ICONS[k]+'</svg>'; }
+
+  /* The party is permanent — Pip is always Pip underneath. Each manuscript's skin
+     dresses them in an alias + voice; the lane line never changes costume. */
+  var ADV = [
+    {id:'pip',    name:'Pip',    role:'Scout',      lane:'spelling_sweep · luna ensemble', price:9,  icon:'dagger'},
+    {id:'bram',   name:'Bram',   role:'Knight',     lane:'grammar_watch · languagetool + judge', price:12, icon:'shield'},
+    {id:'maple',  name:'Maple',  role:'Archivist',  lane:'consistency_scan · variants / caps', price:8,  icon:'book'},
+    {id:'cinder', name:'Cinder', role:'Blacksmith', lane:'repair_channel · density-triggered', price:10, icon:'hammer'},
+    {id:'sage',   name:'Sage',   role:'Wizard',     lane:'continuity · whole-book pass', price:39, icon:'staff'},
+    {id:'lark',   name:'Lark',   role:'Bard',       lane:'smoothing · query-only', price:29, icon:'lute'}
+  ];
+
+  var SKINS = [
+    {id:'fantasy', pill:'The Ashen Crown', tag:'epic fantasy', title:'The Ashen Crown', words:'98,400 words',
+     register:'epic fantasy', maturity:'standard', bodyClass:'',
+     say:'I read your first pages — ash-priests, a hollow city, a queen who won’t burn. <em>Here’s the party I’d bring.</em> At home in fantasy, my companions wear their own names.',
+     emptyParty:'An empty campfire… drag an adventurer over.', emptyBench:'Everyone’s been hired!',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll send a raven (okay, an email) when the loot is ready.',
+     adv:{
+       pip:{alias:'Pip', job:'Hunts typos and misspelled words.'},
+       bram:{alias:'Bram', job:'Keeps grammar and punctuation lawful.'},
+       maple:{alias:'Maple', job:'Keeps names spelled the same on page 12 and page 312.'},
+       cinder:{alias:'Cinder', job:'Reforges broken sentences. Tangled ones become boss fights.'},
+       sage:{alias:'Sage', job:'Remembers if the queen’s eyes changed color between chapters.'},
+       lark:{alias:'Lark', job:'Suggests where a line could sing. Never rewrites without asking.'}
+     }},
+    {id:'romantasy', pill:'A Court of Ink & Longing', tag:'spicy romantasy', title:'A Court of Ink & Longing', words:'104,200 words',
+     register:'romantasy', maturity:'mature', bodyClass:'skin-romantasy',
+     say:'I read your first pages — a masked court, a bargain sealed in ink, and chapter twelve (…my). <em>Here’s the party I’d bring, dressed for the occasion.</em> No one blushes. Much.',
+     emptyParty:'An empty ballroom… drag an adventurer in.', emptyBench:'Every dance card is full!',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll send word by moth at midnight (okay, an email).',
+     adv:{
+       pip:{alias:'Wren Nightbloom', job:'Slips through every ballroom scene, lifting typos like jewelry.'},
+       bram:{alias:'Lord Bramwell', job:'Keeps your commas chaperoned, however heated the scene.'},
+       maple:{alias:'Madame Maplewood', job:'Ensures “Caelith” is spelled one way in all 104,200 words.'},
+       cinder:{alias:'Cinzelle', job:'Reforges sentences too tangled by passion to parse.'},
+       sage:{alias:'Seer Sagesse', job:'Recalls whose mask was silver at the first ball — and the last.'},
+       lark:{alias:'Larkspur', job:'Court poet. Suggests where a line could smolder. Asks first.'}
+     }},
+    {id:'noir', pill:'The Long Rain', tag:'noir thriller', title:'The Long Rain', words:'91,700 words',
+     register:'noir', maturity:'standard', bodyClass:'skin-noir',
+     say:'Read your opening. A dead man, a wet city, a narrator who lies. <em>My crew works cheap and finds everything.</em> Same faces, new coats.',
+     emptyParty:'An empty office… send somebody in.', emptyBench:'The whole crew’s on the clock.',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll leave a message with your answering service (okay, an email).',
+     adv:{
+       pip:{alias:'Slim', job:'Cases every paragraph. Typos don’t hide from Slim.'},
+       bram:{alias:'Sgt. Brammell', job:'Runs grammar like a precinct. Everything gets booked.'},
+       maple:{alias:'Records', job:'Remembers what you called the diner on page 40. And page 212.'},
+       cinder:{alias:'The Fixer', job:'When a sentence gets worked over by three mistakes, she makes it talk.'},
+       sage:{alias:'The Tail', job:'Follows your story the whole way. Notices when the alibi changes.'},
+       lark:{alias:'Vel', job:'Lounge singer. Knows where a line could sing. Only suggests.'}
+     }},
+    {id:'cozy', pill:'The Marmalade Fete', tag:'cozy mystery', title:'Murder at the Marmalade Fete', words:'88,300 words',
+     register:'cozy mystery', maturity:'cozy', bodyClass:'skin-cozy',
+     say:'I read your first pages — a village fete, a suspicious jam judge, one (1) body. The gentlest of crimes. <em>Tea first. Then typos.</em>',
+     emptyParty:'An empty tearoom… do invite someone.', emptyBench:'The whole village is helping!',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll pop a note through the letterbox (okay, an email).',
+     adv:{
+       pip:{alias:'Pippin', job:'The vicarage cat. Pads through chapters batting typos off the table.'},
+       bram:{alias:'Constable Bramley', job:'Keeps punctuation orderly. Politely.'},
+       maple:{alias:'Mrs. Maplethorpe', job:'Parish archivist. Certain the vicar is spelled one way in the flower rota and another in chapter nine.'},
+       cinder:{alias:'Old Cinders', job:'The farrier. Mends broken sentences the way he mends gates.'},
+       sage:{alias:'Granny Sage', job:'Remembers everything. Especially whose garden the body was in.'},
+       lark:{alias:'Miss Larkin', job:'Choir director. Suggests where a line could carry. Never insists.'}
+     }}
+  ];
+  var ITEMS = [
+    {id:'lantern',    name:'Lantern of Second Looks', effect:'Their bearer sweeps every chapter twice.', lane:'passes: 2', price:6, icon:'lantern'},
+    {id:'spectacles', name:'Keen Spectacles',         effect:'Reads in smaller pieces, so less slips by.', lane:'token_budget ↓ · closer chunks', price:4, icon:'glasses'},
+    {id:'charm',      name:'Echo Charm',              effect:'A twin double-checks everything they find.', lane:'ensemble: +1 model · union', price:5, icon:'charm'},
+    {id:'potion',     name:'Potion of Persistence',   effect:'Comes back after the fixes for one more round.', lane:'rounds: +1 · over corrected text', price:8, icon:'potion'}
+  ];
+  var BRAINS = [
+    {id:'map',  name:'Galley’s trusty map', effect:'She follows the route that has worked on a thousand books.', lane:'governor: in-code · fixed waves', price:0,  icon:'map'},
+    {id:'hoot', name:'Hoot, the owl',       effect:'Perches on her shoulder and re-plans between waves.',        lane:'brain: sonnet-5 · casefile summaries', price:12, icon:'owl'},
+    {id:'orrin',name:'Orrin’s crystal orb', effect:'A grand strategist reads every report and redraws the whole plan.', lane:'brain: opus-5 · full casefile + audit loop', price:25, icon:'orb'}
+  ];
+  var SUGGESTED = ['pip','bram','maple','cinder'];
+
+  var party = SUGGESTED.slice();
+  var brain = 'map';
+  var skin = SKINS[0];
+  var gear = {};           // advId -> [itemId]
+  var armedItem = null;    // click-to-equip fallback
+  var byId = {}; ADV.forEach(function(a){ byId[a.id]=a; });
+  var itemById = {}; ITEMS.forEach(function(i){ itemById[i.id]=i; });
+  var brainById = {}; BRAINS.forEach(function(b){ brainById[b.id]=b; });
+
+  var partyEl = document.getElementById('party'), benchEl = document.getElementById('bench'),
+      shopEl = document.getElementById('shop'), feedEl = document.getElementById('feed'),
+      statusEl = document.getElementById('status'), chip = document.getElementById('chiptotal'),
+      countEl = document.getElementById('partycount'), cta = document.getElementById('cta');
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  /* Adventurer prices scale with manuscript length (the band); items and
+     counsel stay flat for now. */
+  function priced(p){ return Math.round(p * (skin.band || 1)); }
+  function total(){
+    var t = brainById[brain].price;
+    party.forEach(function(id){
+      t += priced(byId[id].price);
+      (gear[id]||[]).forEach(function(g){ t += itemById[g].price; });
+    });
+    return t;
+  }
+
+  function log(html, cls){
+    var d = document.createElement('div');
+    d.innerHTML = html;
+    feedEl.appendChild(d);
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){ d.classList.add('on'); }); });
+    feedEl.scrollTop = feedEl.scrollHeight;
+    while(feedEl.children.length > 40) feedEl.removeChild(feedEl.firstChild);
+  }
+
+  function advCard(a, inParty){
+    var s = skin.adv[a.id];
+    var el = document.createElement('div');
+    el.className = 'adv'; el.tabIndex = 0; el.dataset.id = a.id;
+    el.setAttribute('role','button');
+    el.setAttribute('aria-label', s.alias + ', ' + a.role + ', $' + priced(a.price) + (inParty ? ', in party. Activate to dismiss.' : ', waiting. Activate to hire.'));
+    el.draggable = true;
+    var gchips = (inParty ? (gear[a.id]||[]) : []).map(function(g){
+      var it = itemById[g];
+      return '<span class="gchip" role="button" tabindex="0" data-adv="'+a.id+'" data-item="'+g+'" title="'+it.effect+' ('+it.lane+')">' +
+             svg(it.icon) + it.name + ' <b>+$'+it.price+'</b><span class="x">✕</span></span>';
+    }).join('');
+    var tag = a.role + (s.alias !== a.name ? ' · always ' + a.name : '');
+    el.innerHTML =
+      '<div class="sigil">'+svg(a.icon)+'</div>' +
+      '<div><div class="aname">'+esc(s.alias)+'<small>'+esc(tag)+'</small></div>' +
+      '<div class="ajob">'+esc(s.job)+'</div><div class="alane">lane: '+a.lane+'</div></div>' +
+      '<div class="aprice">$'+priced(a.price)+'</div>' +
+      '<div class="gear">'+gchips+'</div>';
+    return el;
+  }
+
+  function itemCard(it){
+    var el = document.createElement('div');
+    el.className = 'item'; el.tabIndex = 0; el.dataset.item = it.id;
+    el.setAttribute('role','button');
+    el.setAttribute('aria-label', it.name + ', +$' + it.price + '. Activate, then choose an adventurer.');
+    el.draggable = true;
+    el.innerHTML =
+      '<div class="isigil">'+svg(it.icon)+'</div>' +
+      '<div><div class="iname">'+it.name+'</div><div class="ieffect">'+it.effect+'</div>' +
+      '<div class="ilane">'+it.lane+'</div></div>' +
+      '<div class="iprice">+$'+it.price+'</div>';
+    return el;
+  }
+
+  var brainsEl = document.getElementById('brains');
+  function renderBrains(){
+    brainsEl.innerHTML = '';
+    BRAINS.forEach(function(b){
+      var el = document.createElement('div');
+      el.className = 'brain' + (b.id === brain ? ' chosen' : '');
+      el.tabIndex = 0; el.dataset.brain = b.id;
+      el.setAttribute('role','radio');
+      el.setAttribute('aria-checked', b.id === brain ? 'true' : 'false');
+      el.setAttribute('aria-label', b.name + (b.price ? ', +$' + b.price : ', included'));
+      el.innerHTML =
+        '<div class="bsigil">'+svg(b.icon)+'</div>' +
+        '<div><div class="bname">'+b.name+'<span class="chk">✓ chosen</span></div>' +
+        '<div class="beffect">'+b.effect+'</div><div class="blane">'+b.lane+'</div></div>' +
+        '<div class="bprice">'+(b.price ? '+$'+b.price : 'included')+'</div>';
+      brainsEl.appendChild(el);
+    });
+  }
+
+  function render(popId){
+    partyEl.innerHTML = ''; benchEl.innerHTML = '';
+    renderBrains();
+    ADV.forEach(function(a){
+      var inParty = party.indexOf(a.id) >= 0;
+      var el = advCard(a, inParty);
+      if(a.id === popId) el.classList.add('pop');
+      (inParty ? partyEl : benchEl).appendChild(el);
+    });
+    partyEl.classList.toggle('empty', party.length === 0);
+    benchEl.classList.toggle('empty', party.length === ADV.length);
+    var t = total();
+    chip.textContent = '$' + t;
+    countEl.textContent = party.length + ' adventurer' + (party.length===1?'':'s');
+    statusEl.innerHTML = party.length
+      ? 'Your party of ' + party.length + ' is ready — <span class="tot">$' + t + '</span>'
+      : 'The campfire is empty…';
+    cta.disabled = party.length === 0;
+  }
+
+  function hire(id){
+    if(party.indexOf(id) >= 0) return;
+    party.push(id);
+    log('<span class="t">hire</span> <span class="k">'+id+'</span> joins the party · +$'+byId[id].price);
+    render(id);
+  }
+  function dismiss(id){
+    var i = party.indexOf(id); if(i < 0) return;
+    party.splice(i,1);
+    var dropped = (gear[id]||[]).length;
+    delete gear[id];
+    log('<span class="t">dismiss</span> <span class="k">'+id+'</span> heads back to the tavern' + (dropped ? ' · returns '+dropped+' item'+(dropped>1?'s':'') : ''));
+    render();
+  }
+  function equip(advId, itemId){
+    if(party.indexOf(advId) < 0) return;
+    gear[advId] = gear[advId] || [];
+    if(gear[advId].indexOf(itemId) >= 0){
+      log('<span class="t">equip</span> '+byId[advId].name+' already carries that.');
+      return;
+    }
+    gear[advId].push(itemId);
+    log('<span class="t">equip</span> <span class="g">'+itemId+'</span> → '+byId[advId].name+' <span class="t">('+itemById[itemId].lane+')</span> · +$'+itemById[itemId].price);
+    render(advId);
+  }
+  function unequip(advId, itemId){
+    gear[advId] = (gear[advId]||[]).filter(function(g){ return g !== itemId; });
+    log('<span class="t">unequip</span> <span class="g">'+itemId+'</span> back to the shop');
+    render();
+  }
+  function disarm(){
+    armedItem = null;
+    Array.prototype.forEach.call(shopEl.children, function(c){ c.classList.remove('armed'); });
+    Array.prototype.forEach.call(partyEl.children, function(c){ c.classList.remove('itemtarget'); });
+  }
+
+  /* ----- clicks (also the touch/keyboard path) ----- */
+  document.addEventListener('click', function(e){
+    var chipEl = e.target.closest('.gchip');
+    if(chipEl){ unequip(chipEl.dataset.adv, chipEl.dataset.item); return; }
+    var brainEl = e.target.closest('.brain');
+    if(brainEl){
+      if(brainEl.dataset.brain !== brain){
+        brain = brainEl.dataset.brain;
+        var b = brainById[brain];
+        log('<span class="t">counsel</span> <span class="k">'+brain+'</span> now plans the quest <span class="t">('+b.lane+')</span>' + (b.price ? ' · +$'+b.price : ''));
+        render();
+      }
+      return;
+    }
+    var item = e.target.closest('.item');
+    if(item){
+      if(armedItem === item.dataset.item){ disarm(); return; }
+      disarm();
+      armedItem = item.dataset.item;
+      item.classList.add('armed');
+      Array.prototype.forEach.call(partyEl.children, function(c){ c.classList.add('itemtarget'); });
+      log('<span class="t">shop</span> holding <span class="g">'+armedItem+'</span> — now tap an adventurer');
+      return;
+    }
+    var adv = e.target.closest('.adv');
+    if(adv){
+      var id = adv.dataset.id;
+      if(armedItem && party.indexOf(id) >= 0){ equip(id, armedItem); disarm(); return; }
+      if(armedItem) disarm();
+      (party.indexOf(id) >= 0 ? dismiss : hire)(id);
+      return;
+    }
+    if(armedItem) disarm();
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var t = e.target.closest('.adv, .item, .gchip, .brain');
+    if(t){ e.preventDefault(); t.click(); }
+  });
+
+  /* ----- drag & drop ----- */
+  document.addEventListener('dragstart', function(e){
+    var adv = e.target.closest('.adv'), item = e.target.closest('.item');
+    if(adv){ e.dataTransfer.setData('text/plain','adv:'+adv.dataset.id); adv.classList.add('dragging'); }
+    else if(item){ e.dataTransfer.setData('text/plain','item:'+item.dataset.item); item.classList.add('dragging'); }
+  });
+  document.addEventListener('dragend', function(e){
+    var t = e.target.closest('.adv, .item'); if(t) t.classList.remove('dragging');
+    partyEl.classList.remove('over'); benchEl.classList.remove('over');
+  });
+  [partyEl, benchEl].forEach(function(zone){
+    zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', function(){ zone.classList.remove('over'); });
+    zone.addEventListener('drop', function(e){
+      e.preventDefault(); zone.classList.remove('over');
+      var data = e.dataTransfer.getData('text/plain') || '';
+      if(data.indexOf('adv:') === 0){
+        var id = data.slice(4);
+        (zone === partyEl ? hire : dismiss)(id);
+      } else if(data.indexOf('item:') === 0 && zone === partyEl){
+        var card = e.target.closest('.adv');
+        if(card) equip(card.dataset.id, data.slice(5));
+        else log('<span class="t">shop</span> drop it onto a specific adventurer');
+      }
+    });
+  });
+  partyEl.addEventListener('dragover', function(e){
+    var card = e.target.closest('.adv');
+    Array.prototype.forEach.call(partyEl.children, function(c){ c.classList.toggle('itemtarget', c === card); });
+  });
+  partyEl.addEventListener('drop', function(){
+    Array.prototype.forEach.call(partyEl.children, function(c){ c.classList.remove('itemtarget'); });
+  });
+
+  document.getElementById('reset').addEventListener('click', function(){
+    party = SUGGESTED.slice(); gear = {}; brain = 'map'; disarm();
+    log('<span class="t">galley</span> back to my pick — <span class="k">pip, bram, maple, cinder</span> + my trusty map · $' + (priced(9)+priced(12)+priced(8)+priced(10)));
+    render();
+  });
+  cta.addEventListener('click', function(){
+    if(cta.disabled) return;
+    statusEl.innerHTML = 'Off they go! — next screen: the map comes alive.';
+    log('<span class="t">quest</span> <span class="g">wave 1 planned</span> · party of '+party.length+' · $'+total());
+  });
+
+  var skinbarEl = document.getElementById('skinbar');
+  function applySkin(s, silent){
+    skin = s;
+    document.body.className = s.bodyClass;
+    document.getElementById('booktitle').textContent = s.title;
+    document.getElementById('bookwords').textContent = s.words;
+    document.getElementById('say').innerHTML = s.say;
+    document.getElementById('ctasub').textContent = s.sub;
+    partyEl.dataset.empty = s.emptyParty;
+    benchEl.dataset.empty = s.emptyBench;
+    Array.prototype.forEach.call(skinbarEl.querySelectorAll('.skinpill'), function(p){
+      p.classList.toggle('on', p.dataset.skin === s.id);
+      p.setAttribute('aria-selected', p.dataset.skin === s.id ? 'true' : 'false');
+    });
+    if(!silent) log('<span class="t">skin</span> <span class="k">'+esc(s.id)+'</span> · register: '+esc(s.register)+' · maturity: '+esc(s.maturity)+' · <span class="g">same party, new costume</span>');
+    render();
+  }
+  SKINS.forEach(function(s){
+    var b = document.createElement('button');
+    b.className = 'skinpill'; b.dataset.skin = s.id;
+    b.setAttribute('role','tab'); b.setAttribute('aria-selected','false');
+    b.innerHTML = s.pill + '<i>' + s.tag + '</i>';
+    b.addEventListener('click', function(){ if(skin.id !== s.id) applySkin(s); });
+    skinbarEl.appendChild(b);
+  });
+
+  /* ----- upload → live skin ----- */
+  var PALETTES = {ember:'', rose:'skin-romantasy', rain:'skin-noir', honey:'skin-cozy'};
+  var dropEl = document.getElementById('drop'), fileInput = document.getElementById('fileinput'),
+      dropTitle = document.getElementById('droptitle'), dropSub = document.getElementById('dropsub'),
+      dropNote = document.getElementById('dropnote');
+  var DROP_TITLE = dropTitle.textContent, DROP_SUB = dropSub.textContent;
+
+  function skinFromServer(r){
+    var s = r.skin;
+    return {
+      id:'uploaded', pill:s.book_title, tag:s.genre, title:s.book_title,
+      words:(r.word_count||0).toLocaleString() + ' words',
+      register:s.genre, maturity:s.maturity,
+      bodyClass:PALETTES[s.palette] || '',
+      say:esc(s.narration) + ' <em>Here’s the party I’d bring.</em>',
+      emptyParty:s.empty_party, emptyBench:s.empty_bench,
+      sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · ' + s.signoff,
+      band:r.band || 1,
+      adv:{pip:s.pip, bram:s.bram, maple:s.maple, cinder:s.cinder, sage:s.sage, lark:s.lark}
+    };
+  }
+
+  function upsertUploadedPill(s){
+    var old = skinbarEl.querySelector('.skinpill[data-skin="uploaded"]');
+    if(old) old.remove();
+    var b = document.createElement('button');
+    b.className = 'skinpill'; b.dataset.skin = 'uploaded';
+    b.setAttribute('role','tab'); b.setAttribute('aria-selected','false');
+    b.innerHTML = esc(s.pill) + '<i>your book</i>';
+    b.addEventListener('click', function(){ if(skin.id !== 'uploaded') applySkin(s); });
+    skinbarEl.appendChild(b);
+  }
+
+  function sendManuscript(file){
+    if(!file) return;
+    var name = (file.name || '').toLowerCase();
+    if(!/\.(docx|txt|md)$/.test(name)){
+      dropNote.innerHTML = '<b>Galley reads .docx, .txt, or .md — ' + esc(file.name) + ' isn’t one.</b>';
+      return;
+    }
+    dropEl.classList.add('busy');
+    dropTitle.textContent = 'Galley is reading “' + file.name + '”…';
+    dropSub.textContent = 'a few pages and one small model call — usually under a minute';
+    dropNote.textContent = '';
+    log('<span class="t">ingest</span> <span class="k">' + esc(file.name) + '</span> · reading a sample…');
+    var fd = new FormData();
+    fd.append('file', file, file.name);
+    fetch('/api/quest/skin', {method:'POST', body:fd})
+      .then(function(resp){
+        return resp.json().catch(function(){ return {}; }).then(function(body){
+          if(!resp.ok) throw new Error(body.detail || ('Upload failed (' + resp.status + ').'));
+          return body;
+        });
+      })
+      .then(function(r){
+        var s = skinFromServer(r);
+        upsertUploadedPill(s);
+        var costBit = (typeof r.cost === 'number') ? ' · $' + r.cost.toFixed(4) : '';
+        log('<span class="t">skin</span> generated by <span class="k">' + esc(r.model) + '</span>' + costBit + (r.cached ? ' · <span class="g">cached</span>' : ''));
+        if(r.fallback){
+          log('<span class="t">skin</span> the model’s answer wasn’t usable — the party stays in their own clothes. <span class="t">(' + esc(r.error || 'unknown') + ')</span>');
+        }
+        if(r.alias_collisions && r.alias_collisions.length){
+          log('<span class="t">skin</span> heads up: alias(es) match names in your book — ' + esc(r.alias_collisions.join(', ')));
+        }
+        applySkin(s);
+      })
+      .catch(function(e){
+        dropNote.innerHTML = '<b>' + esc(e.message) + '</b>';
+        log('<span class="t">skin</span> <span class="k">failed</span> · ' + esc(e.message));
+      })
+      .then(function(){
+        dropEl.classList.remove('busy');
+        dropTitle.textContent = DROP_TITLE;
+        dropSub.textContent = DROP_SUB;
+        fileInput.value = '';
+      });
+  }
+
+  dropEl.addEventListener('click', function(){ fileInput.click(); });
+  dropEl.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', function(){ sendManuscript(fileInput.files[0]); });
+  ['dragover','dragenter'].forEach(function(ev){
+    dropEl.addEventListener(ev, function(e){ e.preventDefault(); dropEl.classList.add('over'); });
+  });
+  dropEl.addEventListener('dragleave', function(){ dropEl.classList.remove('over'); });
+  dropEl.addEventListener('drop', function(e){
+    e.preventDefault(); dropEl.classList.remove('over');
+    sendManuscript(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+
+  ITEMS.forEach(function(it){ shopEl.appendChild(itemCard(it)); });
+  applySkin(SKINS[0], true);
+  log('<span class="t">ingest</span> <span class="k">the-ashen-crown.docx</span> · 98,400 words');
+  log('<span class="t">galley</span> suggests a party of 4 · <span class="k">$39</span>');
+})();
+</script>
+</body>
+</html>
