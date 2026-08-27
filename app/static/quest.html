@@ -36,10 +36,19 @@
     --glow:rgba(240,149,74,.10);
     transition:background .5s;
   }
-  /* per-manuscript skins: same party, same machine — new accent, new air */
-  body.skin-romantasy{--ember:#ef6f96; --ember-hot:#ff9ab8; --glow:rgba(239,111,150,.12); --ink:#1c1216; --card:#281a20; --card-2:#211519}
-  body.skin-noir{--ember:#cfa452; --ember-hot:#ecc987; --glow:rgba(120,150,190,.10); --ink:#12151a; --card:#1c2027; --card-2:#171b21}
-  body.skin-cozy{--ember:#e9b64f; --ember-hot:#ffd27a; --glow:rgba(233,182,79,.10); --ink:#171610; --card:#232013; --card-2:#1c1a10}
+  /* per-manuscript skins: same party, same machine — new accent, new air.
+     One class per palette in the SkinSpec enum; ember is the bare default. */
+  body.skin-rose{--ember:#ef6f96; --ember-hot:#ff9ab8; --glow:rgba(239,111,150,.12); --ink:#1c1216; --card:#281a20; --card-2:#211519}
+  body.skin-rain{--ember:#cfa452; --ember-hot:#ecc987; --glow:rgba(120,150,190,.10); --ink:#12151a; --card:#1c2027; --card-2:#171b21}
+  body.skin-honey{--ember:#e9b64f; --ember-hot:#ffd27a; --glow:rgba(233,182,79,.10); --ink:#171610; --card:#232013; --card-2:#1c1a10}
+  body.skin-void{--ember:#8e7ff0; --ember-hot:#b3a6ff; --glow:rgba(142,127,240,.12); --ink:#12121c; --card:#1d1d2b; --card-2:#171722}
+  body.skin-neon{--ember:#e858c8; --ember-hot:#ff85e0; --glow:rgba(232,88,200,.12); --ink:#140f1a; --card:#201727; --card-2:#1a1220}
+  body.skin-verdigris{--ember:#57b09a; --ember-hot:#7fd4bd; --glow:rgba(87,176,154,.10); --ink:#0f1614; --card:#18241f; --card-2:#131d19}
+  body.skin-bone{--ember:#c04a44; --ember-hot:#e07a70; --glow:rgba(192,74,68,.10); --ink:#151112; --card:#211a1a; --card-2:#1a1414; --parchment:#e8e2d6}
+  body.skin-gold{--ember:#d9a92f; --ember-hot:#f2c95c; --glow:rgba(217,169,47,.12); --ink:#171226; --card:#241d33; --card-2:#1d1729}
+  body.skin-slate{--ember:#7fa7c9; --ember-hot:#a6c8e3; --glow:rgba(127,167,201,.09); --ink:#131518; --card:#1e2126; --card-2:#181b1f}
+  body.skin-rust{--ember:#cd6a3a; --ember-hot:#ea8f5d; --glow:rgba(205,106,58,.10); --ink:#18100b; --card:#251811; --card-2:#1e130d}
+  body.skin-frost{--ember:#7fc4e0; --ember-hot:#a8dff2; --glow:rgba(127,196,224,.10); --ink:#0f1418; --card:#182229; --card-2:#131b21}
 
   .skinbar{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:14px 0 0}
   .skinlabel{font:11.5px var(--mono); color:var(--dim); letter-spacing:.06em; margin-right:4px}
@@ -320,7 +329,7 @@
        lark:{alias:'Lark', job:'Suggests where a line could sing. Never rewrites without asking.'}
      }},
     {id:'romantasy', pill:'A Court of Ink & Longing', tag:'spicy romantasy', title:'A Court of Ink & Longing', words:'104,200 words',
-     register:'romantasy', maturity:'mature', bodyClass:'skin-romantasy',
+     register:'romantasy', maturity:'mature', bodyClass:'skin-rose',
      say:'I read your first pages — a masked court, a bargain sealed in ink, and chapter twelve (…my). <em>Here’s the party I’d bring, dressed for the occasion.</em> No one blushes. Much.',
      emptyParty:'An empty ballroom… drag an adventurer in.', emptyBench:'Every dance card is full!',
      sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll send word by moth at midnight (okay, an email).',
@@ -333,7 +342,7 @@
        lark:{alias:'Larkspur', job:'Court poet. Suggests where a line could smolder. Asks first.'}
      }},
     {id:'noir', pill:'The Long Rain', tag:'noir thriller', title:'The Long Rain', words:'91,700 words',
-     register:'noir', maturity:'standard', bodyClass:'skin-noir',
+     register:'noir', maturity:'standard', bodyClass:'skin-rain',
      say:'Read your opening. A dead man, a wet city, a narrator who lies. <em>My crew works cheap and finds everything.</em> Same faces, new coats.',
      emptyParty:'An empty office… send somebody in.', emptyBench:'The whole crew’s on the clock.',
      sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll leave a message with your answering service (okay, an email).',
@@ -346,7 +355,7 @@
        lark:{alias:'Vel', job:'Lounge singer. Knows where a line could sing. Only suggests.'}
      }},
     {id:'cozy', pill:'The Marmalade Fete', tag:'cozy mystery', title:'Murder at the Marmalade Fete', words:'88,300 words',
-     register:'cozy mystery', maturity:'cozy', bodyClass:'skin-cozy',
+     register:'cozy mystery', maturity:'cozy', bodyClass:'skin-honey',
      say:'I read your first pages — a village fete, a suspicious jam judge, one (1) body. The gentlest of crimes. <em>Tea first. Then typos.</em>',
      emptyParty:'An empty tearoom… do invite someone.', emptyBench:'The whole village is helping!',
      sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll pop a note through the letterbox (okay, an email).',
@@ -357,6 +366,58 @@
        cinder:{alias:'Old Cinders', job:'The farrier. Mends broken sentences the way he mends gates.'},
        sage:{alias:'Granny Sage', job:'Remembers everything. Especially whose garden the body was in.'},
        lark:{alias:'Miss Larkin', job:'Choir director. Suggests where a line could carry. Never insists.'}
+     }},
+    {id:'space', pill:'The Last Signal', tag:'space opera', title:'The Last Signal', words:'96,100 words',
+     register:'space opera', maturity:'standard', bodyClass:'skin-void',
+     say:'I read your first pages — a distress call from a dead relay, a cold ship, a crew of one who talks to the walls. <em>Here’s the crew I’d wake from cryo.</em>',
+     emptyParty:'An empty bridge… wake someone from cryo.', emptyBench:'All hands on deck!',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll ping your comms relay (okay, an email).',
+     adv:{
+       pip:{alias:'Blip', job:'A scout drone. Sweeps every deck of your manuscript for typos and stray characters.'},
+       bram:{alias:'Officer Bram-9', job:'Protocol enforcement. No comma leaves the airlock unlogged.'},
+       maple:{alias:'M4PLE', job:'The archive AI. Keeps names and call signs identical from launch to landing.'},
+       cinder:{alias:'Chief Cindra', job:'Engineering. Welds broken sentences back together in zero-g.'},
+       sage:{alias:'The Navigator', job:'Plots continuity across light-years — who knew what, and in which system.'},
+       lark:{alias:'L4RK', job:'The comms poet. Suggests where a line could carry farther. Transmits questions only.'}
+     }},
+    {id:'gothic', pill:'The House on Wither Hill', tag:'gothic horror', title:'The House on Wither Hill', words:'83,600 words',
+     register:'gothic horror', maturity:'mature', bodyClass:'skin-bone',
+     say:'I read your first pages — a house with a third floor nobody built, a will read by candlelight, a sister who never writes back. <em>Here’s the party I’d bring.</em> They do not frighten easily.',
+     emptyParty:'An empty séance table… invite someone brave.', emptyBench:'Every room is occupied. Every room.',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll knock three times when it’s done (okay, an email).',
+     adv:{
+       pip:{alias:'Whisper', job:'Slips beneath the floorboards and drags every typo into the light.'},
+       bram:{alias:'Deacon Bramwood', job:'Keeps grammar consecrated. Nothing misplaced crosses his threshold.'},
+       maple:{alias:'The Keeper of Names', job:'Remembers exactly how every name was written. The house tries to change them.'},
+       cinder:{alias:'Gravesmith Cinder', job:'Rebuilds sentences that came apart in the dark. Some fight back.'},
+       sage:{alias:'The Watcher in the Walls', job:'Has seen every chapter. Notices when the portrait’s eyes change color.'},
+       lark:{alias:'The Mourning Singer', job:'Hums where a line could haunt better. Only ever asks.'}
+     }},
+    {id:'western', pill:'A Fistful of Dust', tag:'western', title:'A Fistful of Dust', words:'71,400 words',
+     register:'western', maturity:'standard', bodyClass:'skin-rust',
+     say:'I read your first pages — a town with one well, a stranger with two guns, and a debt nobody says out loud. <em>Here’s the posse I’d ride with.</em>',
+     emptyParty:'An empty saloon… somebody push through those doors.', emptyBench:'The whole posse’s saddled up.',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll wire the telegraph office (okay, an email).',
+     adv:{
+       pip:{alias:'Kid Pip', job:'Fastest eyes in the territory. Typos never make it past the county line.'},
+       bram:{alias:'Sheriff Bramley', job:'Keeps grammar law in a lawless land. Everything gets a fair trial.'},
+       maple:{alias:'Clerk Maplewood', job:'The county ledger. One spelling per name, from page one to the last fence post.'},
+       cinder:{alias:'Smithy Cinder', job:'Hammers busted sentences straight at the forge. The tangled ones are showdowns.'},
+       sage:{alias:'Old Sage', job:'The tracker. Follows your story’s trail and notices when the hoofprints change.'},
+       lark:{alias:'Lark, the saloon singer', job:'Knows where a line could land harder. Suggests from the stage, never insists.'}
+     }},
+    {id:'cyber', pill:'Glass Harbor', tag:'cyberpunk', title:'Glass Harbor', words:'89,900 words',
+     register:'cyberpunk', maturity:'mature', bodyClass:'skin-neon',
+     say:'I read your first pages — rain on chrome, a city that sells memory by the gram, a courier with someone else’s heartbeat. <em>Here’s the crew I’d jack in.</em>',
+     emptyParty:'An empty safehouse… bring someone in from the rain.', emptyBench:'The whole crew is jacked in.',
+     sub:'Prices are for this manuscript’s length · estimated journey 3–5 hours · we’ll drop the payload to your neural queue (okay, an email).',
+     adv:{
+       pip:{alias:'Patch', job:'Runs the sweep. Typos get found, tagged, and sold back to you at no markup.'},
+       bram:{alias:'Firewall', job:'Grammar security. Every clause gets scanned before it ships.'},
+       maple:{alias:'Cache', job:'Perfect recall. Your names and handles stay identical across every district.'},
+       cinder:{alias:'The Splicer', job:'Rebuilds corrupted sentences byte by byte. Bad clusters become boss fights.'},
+       sage:{alias:'Oracle', job:'Watches the whole feed. Flags it when the timeline glitches between chapters.'},
+       lark:{alias:'Static', job:'Street poet. Pings you where a line could hit harder. Read receipts optional.'}
      }}
   ];
   var ITEMS = [
@@ -635,7 +696,7 @@
   });
 
   /* ----- upload → live skin ----- */
-  var PALETTES = {ember:'', rose:'skin-romantasy', rain:'skin-noir', honey:'skin-cozy'};
+  var PALETTES = {ember:'', rose:'skin-rose', rain:'skin-rain', honey:'skin-honey', void:'skin-void', neon:'skin-neon', verdigris:'skin-verdigris', bone:'skin-bone', gold:'skin-gold', slate:'skin-slate', rust:'skin-rust', frost:'skin-frost'};
   var dropEl = document.getElementById('drop'), fileInput = document.getElementById('fileinput'),
       dropTitle = document.getElementById('droptitle'), dropSub = document.getElementById('dropsub'),
       dropNote = document.getElementById('dropnote');

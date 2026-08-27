@@ -30,7 +30,8 @@ class SkinSpec(BaseModel):
     book_title: str
     genre: str                          # e.g. "spicy romantasy", "noir thriller"
     maturity: Literal["cozy", "standard", "mature"]
-    palette: Literal["ember", "rose", "rain", "honey"]
+    palette: Literal["ember", "rose", "rain", "honey", "void", "neon",
+                     "verdigris", "bone", "gold", "slate", "rust", "frost"]
     language: str
     is_fiction: bool
     themes: list[str]                   # a few words each, for logging/QA

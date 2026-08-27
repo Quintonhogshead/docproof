@@ -156,8 +156,12 @@ fantasy", "spicy romantasy").
 - maturity: "cozy", "standard", or "mature" — judged from the content. This \
 tunes how knowing the copy may be. Regardless of the book's content, all copy \
 you write stays tasteful and non-explicit.
-- palette: the nearest mood — "ember" (fantasy/adventure), "rose" \
-(romance/romantasy), "rain" (crime/thriller/dark), "honey" (cozy/gentle/comic).
+- palette: the nearest mood — "ember" (epic fantasy/adventure), "rose" \
+(romance/romantasy), "rain" (crime/noir/thriller), "honey" (cozy/gentle/comic), \
+"void" (science fiction/space), "neon" (cyberpunk/urban fantasy/near-future), \
+"verdigris" (nautical/pirate/historical adventure), "bone" (horror/gothic), \
+"gold" (myth/royal intrigue/epic history), "slate" (literary/contemporary), \
+"rust" (western/frontier/post-apocalyptic), "frost" (winter fantasy/nordic).
 - language: the manuscript's language. Write ALL skin copy in English.
 - is_fiction: false for nonfiction, memoir, poetry collections. Still write a \
 good skin — costume the party for the real subject matter, gently.
