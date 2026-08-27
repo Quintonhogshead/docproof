@@ -138,8 +138,13 @@ Rules:
 become "Madame Maplewood of the Records"). ALWAYS invent aliases — riff on the \
 true name where you can, so the member stays recognizable. The one exception: \
 plain sword-and-campfire epic fantasy, where the true names are already at \
-home and may stay. NEVER use the name of an actual character, place, or \
-person appearing in the manuscript.
+home and may stay. Names must sound like people from the book's world: real \
+surnames of that place and era ("Maple Dawson", "Bramwell Carter"), a title or \
+honorific doing the work ("Deacon Bramwell", "Auntie Maple", "Sgt. Bram"), or \
+a bare nickname ("Slim"). Do NOT build trait-compound surnames ("Quickpen", \
+"Rulewright", "Longmemory", "Bluebook") unless the manuscript itself names its \
+people that way. NEVER use the name of an actual character, place, or person \
+appearing in the manuscript.
 - job: ONE sentence in the book's register describing that member's real \
 function (given above). Charming, but never misleading about what it does.
 - look: ONE sentence describing that member's appearance in this book's world, \
