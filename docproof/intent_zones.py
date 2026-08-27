@@ -202,7 +202,14 @@ class ResolvedZones:
         rank = {"locked": 0, "punctuation": 1, "open": 2}
         best: IntentZone | None = None
         for lo, hi, zone in self._by_para.get(para_id, ()):  # half-open
-            if start < hi and lo < end:
+            # A zero-width span is a pure INSERTION point: appending a period
+            # at the end of a locked title touches [37,37) against a zone of
+            # [0,37) and slips a strict half-open test — the Purpura beta's
+            # title-period bug. An insertion touching either boundary edits
+            # the protected text and counts as inside.
+            hit = (lo <= start <= hi) if start == end \
+                else (start < hi and lo < end)
+            if hit:
                 if best is None or rank[zone.permission] < rank[best.permission]:
                     best = zone
         return best

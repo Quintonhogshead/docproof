@@ -2726,7 +2726,7 @@ def _result_line(outputs) -> str:
     forty questions waiting in it needed nothing looked at."""
     line = f"{outputs.applied} tracked change(s) applied"
     if outputs.queried:
-        line += f", {outputs.queried} question(s) left in the margins"
+        line += f", {outputs.queried} question(s) raised"
     return line
 
 

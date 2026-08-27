@@ -250,8 +250,15 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
     dozens were the identical house-style sentence — 79 copies of the dash
     rule. The edits all stand; the first instance (document order) keeps the
     note, says how many siblings it speaks for, and points at the change log,
-    which lists every one. Queries are never collapsed: each is its own
-    question. Returns how many comments were silenced."""
+    which lists every one.
+
+    QUERIES collapse too, one comment per TYPE (Quinton, 2026-08-27): the
+    Purpura beta margins carried 56 per-site "this number was left unchanged"
+    notes and 27 per-family consistency questions — a barrage, not a
+    conversation. Past the same threshold, the first site of a query type
+    keeps one counted comment for the whole class and points at the report;
+    below it, a query is still its own question (two speaker-change questions
+    stay two questions). Returns how many comments were silenced."""
     if threshold <= 0:
         return 0
     order = {p.para_id: i for i, p in enumerate(doc.paragraphs)}
@@ -272,6 +279,26 @@ def _collapse_repeated_comments(validated: list, doc: DocumentModel,
             f"{expl} Applied {len(idxs)} times in this manuscript; the "
             f"comment appears once here, and the change log lists every "
             f"instance."))
+        for i in idxs[1:]:
+            validated[i] = replace(validated[i], silent=True)
+        silenced += len(idxs) - 1
+
+    qgroups: dict[str, list[int]] = {}
+    for i, f in enumerate(validated):
+        if f.status != "query" or f.silent or not f.explanation:
+            continue
+        qgroups.setdefault(f.error_type, []).append(i)
+    for _etype, idxs in qgroups.items():
+        if len(idxs) <= threshold:
+            continue
+        idxs.sort(key=lambda i: (
+            order.get(validated[i].para_id, len(order)),
+            validated[i].anchor.start if validated[i].anchor else 0))
+        first = idxs[0]
+        validated[first] = replace(validated[first], explanation=(
+            f"{validated[first].explanation} This question applies at "
+            f"{len(idxs)} places in the manuscript; the comment appears once "
+            f"here, and the report lists every site."))
         for i in idxs[1:]:
             validated[i] = replace(validated[i], silent=True)
         silenced += len(idxs) - 1
@@ -2349,6 +2376,26 @@ def finish(prepared: Prepared, findings: list, usage: Usage, cfg: Config, *,
                 + promoted
                 + smoothing_findings
                 + chapter_continuity_findings)
+
+    # Intent zones guard EVERY channel into the document, not just the sweep
+    # layer prepare() already covered: a model edit, a repair cluster, or a
+    # replayed/imported row into a locked span is downgraded to a query here,
+    # exactly as a sweep would be. The Purpura beta proved the gap — a
+    # replayed findings file re-applied an edit inside a locked title zone
+    # that the sweep-layer enforcement had already downgraded once.
+    if cfg.intent_zones_file:
+        from .intent_zones import enforce as _zones_enforce
+        from .intent_zones import load_intent_zones, resolve
+        _zones = load_intent_zones(cfg.intent_zones_file)
+        if _zones.any:
+            _resolved = resolve(_zones, list(prepared.doc.paragraphs),
+                                closing_quotes=prepared.variant.closing_quotes)
+            proposed, _zone_hits = _zones_enforce(proposed, _resolved,
+                                                  list(prepared.doc.paragraphs))
+            if _zone_hits:
+                log.info("intent zones: %d finding(s) downgraded to queries "
+                         "inside protected spans at finish()",
+                         len(_zone_hits))
 
     def _validate(findings):
         return validate_findings(findings, prepared.doc, cfg.min_confidence,

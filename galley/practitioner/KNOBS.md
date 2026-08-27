@@ -7,6 +7,25 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.133.0 (Purpura beta round 2)
+
+- `docproof capabilities` now carries **per-verb arg schemas** (flags,
+  required, choices) — you never need `--help` for a signature.
+- `--stage final-replay` now zeroes **every** detector (residuals, spellcheck,
+  consistency, glossary, LT, gates) — "detect nothing new" is real.
+- **Query comments collapse one-per-TYPE** past `comment_collapse` (default 3):
+  a number-policy class or a consistency family leaves ONE counted comment;
+  the report lists every site. Below the threshold a query is its own question.
+- **Intent zones now guard every channel at finish()** — model edits, repair,
+  and replayed/imported rows are downgraded inside protected spans, not just
+  sweeps; zero-width insertions at a zone boundary count as inside.
+- `docproof replay` round-trips pure insertions (empty original_text) via the
+  row's serialized anchor.
+- certify gained a **spellfix sanity** check (truncated-stem signature).
+- A materialized config may write a top-level list at COLUMN 0 under its key
+  (`sweeps:` then `- sweep_x` unindented) — valid YAML; don't misread it as an
+  empty section.
+
 ## The one mechanic that bites
 
 A run config **REPLACES `default.yaml` wholesale** — it is not a patch. Any

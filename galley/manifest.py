@@ -382,6 +382,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
 
     # 4. Deterministic artifact scan over the change log / findings text.
     cert.checks.append(_artifact_scan(run))
+    cert.checks.append(_certify_spellfix_sanity(run))
 
     # 5. Fuller structural checks over the findings themselves.
     if envelope is not None:
@@ -632,6 +633,39 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
                             "pass" if float(cost) <= cap else "fail",
                             f"${float(cost):.2f} of ${cap:.2f} approved"))
     return checks
+
+
+_SPELLFIX_EXPL = re.compile(r'"(\w+)" appears to be a misspelling of "(.+?)"')
+
+
+def _certify_spellfix_sanity(run: Path) -> Check:
+    """Catch the truncated-stem spelling signature: the flagged token is a
+    PREFIX of the suggested word and the suggestion already appears in the
+    original text — which means the tokenizer split a word (an accent, once)
+    and the 'fix' re-inserts characters that were never missing. Six such
+    wrong edits ('clichéé', 'cruditéé', 'voilàà', 'entréée') shipped on the
+    Purpura beta and passed every other gate."""
+    data = _load_json(run / "findings.json")
+    if data is None:
+        return Check("spellfix sanity", "skip", "no findings.json to scan")
+    rows = data.get("findings", data) if isinstance(data, dict) else data
+    bad: list[str] = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not row.get("applied"):
+            continue
+        m = _SPELLFIX_EXPL.match(str(row.get("explanation") or ""))
+        if not m:
+            continue
+        token, suggestion = m.group(1), m.group(2)
+        if (suggestion != token and suggestion.startswith(token)
+                and suggestion in str(row.get("original_text") or "")):
+            bad.append(f"{row.get('para_id')}: \"{token}\" -> "
+                       f"\"{suggestion}\" (already present)")
+    if bad:
+        return Check("spellfix sanity", "fail",
+                     "truncated-stem spelling fix(es): " + "; ".join(bad[:6]))
+    return Check("spellfix sanity", "pass",
+                 "no truncated-stem spelling corrections")
 
 
 def _artifact_scan(run: Path) -> Check:
