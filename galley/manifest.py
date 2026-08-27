@@ -352,7 +352,53 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # 7. Run state machine, if present — a delivery certificate expects the run
     # to have reached at least the audited state.
     cert.checks.append(_certify_run_state(run))
+
+    # 8. Text hygiene over the delivered .docx itself: no double spaces, no
+    # paragraph-trailing whitespace. The Johnson run shipped 84 double spaces
+    # the head proofreader's own check caught — whatever path produced the
+    # deliverable, this fails loud instead.
+    cert.checks.append(_certify_text_hygiene(run))
     return cert
+
+
+def _certify_text_hygiene(run: Path) -> Check:
+    """Scan every delivered .docx in the run directory (accept-all view) for
+    double spaces and paragraph-trailing whitespace — the two things
+    normalization promises are gone. Skips honestly when there is no .docx or
+    the OOXML tooling is unavailable."""
+    docs = sorted(p for p in run.glob("*.docx") if not p.name.startswith("~$"))
+    if not docs:
+        return Check("delivered text hygiene", "skip",
+                     "no .docx in the run directory")
+    try:
+        from docproof.utils.xml_helpers import (DocxPackage, paragraph_text,
+                                                walk_package)
+    except Exception as e:                        # lxml missing, etc.
+        return Check("delivered text hygiene", "skip",
+                     f"OOXML tooling unavailable: {e}")
+    trailing = re.compile(r"[  ]+(?=\n|$)")
+    problems: list[str] = []
+    for path in docs:
+        try:
+            pkg = DocxPackage(str(path))
+        except Exception as e:
+            problems.append(f"{path.name}: unreadable ({e})")
+            continue
+        doubles = trails = 0
+        for wp in walk_package(pkg):
+            text = paragraph_text(wp.element)
+            if not any(c.isalnum() for c in text):
+                continue                          # scene dividers space freely
+            doubles += text.count("  ")
+            trails += sum(1 for _ in trailing.finditer(text))
+        if doubles or trails:
+            problems.append(f"{path.name}: {doubles} double space(s), "
+                            f"{trails} trailing-space run(s)")
+    if problems:
+        return Check("delivered text hygiene", "fail", "; ".join(problems))
+    return Check("delivered text hygiene", "pass",
+                 f"{len(docs)} document(s): no double spaces, no trailing "
+                 f"whitespace")
 
 
 def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:

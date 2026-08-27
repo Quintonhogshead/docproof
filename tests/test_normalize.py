@@ -301,3 +301,26 @@ def test_warn_writes_the_file_and_records_the_failure(tmp_path):
 def test_config_defaults_to_refusing():
     assert Config().audit == "strict"
     assert Config().normalize.quotes and Config().normalize.spaces
+
+
+# --- trailing whitespace and the NBSP gap (Johnson run, 84 doubles) -----------
+
+@pytest.mark.parametrize("before,after", [
+    ("The end.  ", "The end."),            # trailing double stripped whole
+    ("The end. ", "The end."),             # a single trailing space too
+    ("The end.  \nNext line", "The end.\nNext line"),   # before a line break
+    ("a.  b", "a. b"),                # NBSP+space run collapses
+    ("a.   b", "a. b"),               # mixed run collapses
+])
+def test_trailing_and_nbsp_space_runs(before, after):
+    assert normalize_text(before, quotes=False) == after
+
+
+@pytest.mark.parametrize("text", [
+    "  led by two spaces",                 # leading indentation is kept
+    "*   *   *",                           # scene dividers space freely
+    "word …",                         # the house NBSP before an ellipsis
+    "line one\n  indented line two",       # a later line's indent is leading too
+])
+def test_space_normalization_leaves_these_alone(text):
+    assert normalize_text(text, quotes=False) == text

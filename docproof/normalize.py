@@ -151,8 +151,18 @@ def _quote_edits(text: str, *, single_primary: bool = False
 
 
 # Two or more spaces that follow visible text: leading indentation is left
-# alone, which is what the brief asks for.
-_SPACE_RUN = re.compile(r"(?<=\S) {2,}")
+# alone, which is what the brief asks for. The class includes the non-breaking
+# space, because a run like ".  " hid from the old ASCII-only pattern two
+# ways at once: the NBSP is not an ASCII space, and as Unicode whitespace it
+# also failed the \S lookbehind for the ASCII pair after it.
+_SPACE_RUN = re.compile(r"(?<=\S)[  ]{2,}")
+# Spaces at the end of a paragraph, or before a line break, are stripped
+# entirely rather than collapsed: they render as nothing, and if the author
+# later merges two paragraphs a collapsed-but-kept trailing space becomes a
+# mid-paragraph double. (The head proofreader's 84-double-space check on the
+# Johnson run was mainly these.) A lone trailing non-breaking space is left to
+# the ellipsis sweep, which owns NBSP placement.
+_TRAILING_RUN = re.compile(r"[  ]*[ ][  ]*(?=\n|$)|[  ]{2,}(?=\n|$)")
 
 
 def _space_edits(text: str) -> list[tuple[int, int, str]]:
@@ -160,7 +170,11 @@ def _space_edits(text: str) -> list[tuple[int, int, str]]:
     # is spaced the way it is on purpose.
     if not any(c.isalnum() for c in text):
         return []
-    return [(m.start(), m.end(), " ") for m in _SPACE_RUN.finditer(text)]
+    edits = [(m.start(), m.end(), "") for m in _TRAILING_RUN.finditer(text)]
+    taken = [(s, e) for s, e, _ in edits]
+    edits += [(m.start(), m.end(), " ") for m in _SPACE_RUN.finditer(text)
+              if not any(s < m.end() and m.start() < e for s, e in taken)]
+    return edits
 
 
 def normalize_text(text: str, *, quotes: bool = True, spaces: bool = True,
