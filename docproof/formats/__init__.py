@@ -26,6 +26,7 @@ DOCX = DocumentFormat(
     normalize=_docx.normalize,
     snapshot=_docx.snapshot,
     annotate_excluded_words=_docx.annotate_excluded_words,
+    speaker_split=_docx.speaker_split,
 )
 
 IDML = DocumentFormat(

@@ -515,6 +515,13 @@ def _round_config(cfg, k: int, reuse: bool):
     rcfg.candidate_screening.mode = "off"
     rcfg.normalize.quotes = False
     rcfg.normalize.spaces = False
+    # Speaker splits happened once, in round 1's prepare, and the layers'
+    # paragraph geometry is fixed from then on. A later round splitting a
+    # paragraph — even one an edit just created a boundary in — would renumber
+    # every para_id after it out from under the round-1 edit layers, the exact
+    # invariant editlayer.py documents ("span edits never split or merge
+    # paragraphs").
+    rcfg.speaker_split.enabled = False
     if reuse:
         rcfg.glossary.enabled = False
         rcfg.storysheet.enabled = False

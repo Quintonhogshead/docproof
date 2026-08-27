@@ -203,7 +203,10 @@ def _comment_texts(path) -> list[str]:
     return re.findall(r"<w:t[^>]*>(.*?)</w:t>", body, re.S)
 
 
-SPEAKERS = "“I won’t go.” “You will.”"
+# A JUDGMENT-case speaker query: narration between the quotes, so the
+# deterministic speaker-split pass (which owns whitespace-only boundaries and
+# restructures the paragraph in prepare) leaves it whole for the query channel.
+SPEAKERS = "“I won’t go.” She looked away. “You will.”"
 
 
 def test_a_query_writes_a_comment_and_changes_nothing(tmp_path):
@@ -578,3 +581,30 @@ def test_a_query_with_no_anchor_is_counted_as_unplaced_not_dropped(tmp_path):
     assert stats.queried == () and stats.unplaced == ("q-x",)
     assert stats.applied == () and stats.skipped == ()
     assert _comment_texts(tmp_path / "q.docx") == []
+
+
+# --- the speaker-split pass end to end ----------------------------------------
+
+def test_speaker_split_lands_tracked_with_a_declarative_comment(tmp_path):
+    from docproof.speakersplit import SPLIT_COMMENT
+    out = _run(tmp_path,
+               ["Narration before.",
+                "“I won’t go.” “You will, and you’ll thank me.”",
+                "Narration after."],
+               [], error_types=["spelling"])
+    pkg = DocxPackage(out.reviewed_path)
+    texts = [paragraph_view_text(wp.element, "accept")
+             for wp in walk_package(pkg)]
+    assert "“I won’t go.”" in texts
+    assert "“You will, and you’ll thank me.”" in texts
+    # The paragraph mark rides as a tracked insertion under the house author.
+    doc = zipfile.ZipFile(out.reviewed_path).read("word/document.xml").decode()
+    assert re.search(r'<w:pPr>.*?<w:rPr><w:ins [^>]*w:author="Atmosphere Press '
+                     r'Proofreader"', doc, re.S)
+    # The declarative comment reached the margin, and it states, never asks.
+    comments = zipfile.ZipFile(out.reviewed_path).read(
+        "word/comments.xml").decode()
+    assert "separated the dialogue" in comments
+    assert SPLIT_COMMENT.split("—")[0][:40] in comments
+    # The reject-all audit held: the run shipped.
+    assert out.reviewed_path.exists()

@@ -50,6 +50,10 @@ def _eval_config(cfg: Config) -> Config:
     cfg.min_confidence = "low"
     cfg.consistency.enabled = False
     cfg.spellcheck.enabled = False
+    # The speaker-split pass restructures paragraphs in prepare, which shifts
+    # every later case's para_id out from under its ground-truth row. The eval
+    # measures detectors, not the splitter — it has its own unit tests.
+    cfg.speaker_split.enabled = False
     # Belt and braces: the runner never calls finish() (see the module
     # docstring), so a finish()-resident pass cannot fire here anyway. The line
     # is here so that if the eval ever grows a finish() path, the scorecard does

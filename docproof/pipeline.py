@@ -388,6 +388,18 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         log.info("%s files are not normalized; quotes and spacing are left as "
                  "the author's application wrote them.", fmt.suffix)
 
+    # Speaker splits happen here too — after normalization (the boundary
+    # pattern needs curly quotes and collapsed spaces) and before the snapshot,
+    # so para_ids, anchors and the audit baseline all measure the split text.
+    # Whole-document real runs only: a partial selection must not restructure
+    # paragraphs outside it, and a counts-only preflight edits nothing.
+    speaker_splits: list = []
+    if (cfg.speaker_split.enabled and fmt.speaker_split is not None
+            and analyses and selection is None and not max_chunks):
+        speaker_splits = fmt.speaker_split(
+            pkg, variant, author=cfg.revision_author,
+            max_splits=cfg.speaker_split.max_splits)
+
     # The audit's yardstick, taken after normalization and before any tracked
     # change: this is "the document as ingested", and rejecting every revision
     # must return to exactly it. A counts-only preflight never audits anything,
@@ -500,6 +512,11 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
         if cfg.style.unclosed_quote_queries:
             from .sweeps import unclosed_quote_findings
             sweep_findings += unclosed_quote_findings(swept, variant)
+        # The declarative comment for each speaker split already made in
+        # prepare — a query per new paragraph, riding the sweeps' channel.
+        if speaker_splits:
+            from .speakersplit import split_findings
+            sweep_findings += split_findings(speaker_splits, swept)
         # The heading pass: title-case the paragraphs the skip config marks as
         # headings. Style-aware, so it cannot be a plain per-paragraph sweep,
         # but its findings and its flagged/remaining counts ride the same
@@ -566,6 +583,9 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             abbreviations=cfg.consistency.abbreviations,
             acronym_case=cfg.consistency.acronym_case,
             chicago_notes=cfg.consistency.chicago_notes,
+            variant_policy=cfg.consistency.variant_policy,
+            deity_pronouns=cfg.consistency.deity_pronouns,
+            deity_min_capitalized=cfg.consistency.deity_min_capitalized,
             max_queries_per_kind=cfg.consistency.max_queries_per_kind,
             # The variant's respell map (grey->gray on a U.S. run) and the spell
             # scan's lexicon feed the guards, so a form already enforced or owned
@@ -1336,7 +1356,9 @@ def _repair_findings(cfg: Config, prepared: Prepared, usage: Usage, *,
 
     sites = repair_mod.triggered_sentences(
         trigger_findings, prepared.doc.paragraphs,
-        threshold=cfg.repair.error_threshold)
+        threshold=cfg.repair.error_threshold,
+        syntax_types=cfg.repair.syntax_error_types,
+        syntax_threshold=cfg.repair.syntax_error_threshold)
     if not sites:
         return []
 
