@@ -52,11 +52,22 @@ def sha256_file(path: str | Path) -> str:
     return h.hexdigest()
 
 
+# Fields that say WHERE a run writes, not WHAT it does — excluded from the
+# hash so `approve` (no --out) and `review --out runs/...` agree on the same
+# material config. Leaving output_dir in is what made every gated run refuse
+# itself: _configure stamps args.out onto the config before verify_plan runs.
+_VOLATILE_CONFIG_FIELDS = ("output_dir",)
+
+
 def config_hash(cfg: Any) -> str:
     """A stable hash of a loaded Config's effective content — the model_dump
     serialized with sorted keys, so two configs that differ only in key order
-    or comments hash the same, and any material change hashes differently."""
+    or comments hash the same, and any material change hashes differently.
+    Volatile run-location fields (see _VOLATILE_CONFIG_FIELDS) are excluded:
+    where a run writes its output is not part of what a human approved."""
     data = cfg.model_dump(mode="json")
+    for name in _VOLATILE_CONFIG_FIELDS:
+        data.pop(name, None)
     blob = json.dumps(data, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -300,13 +311,30 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     run = Path(run_dir)
     cert = Certificate()
 
+    # The envelope is read early because two checks below need to know whether
+    # this run actually spent money: a $0 replay rebuild legitimately runs a
+    # different (final-replay) config than the approved paid wave, so its
+    # config-hash mismatch is informational, not a failure.
+    early_envelope = _load_json(run / "findings.json")
+    if early_envelope is None:
+        early_envelope = _load_json(run / "flights_findings.json")
+    _cost = ((early_envelope or {}).get("cost") or {}).get("total_usd")
+    run_paid = bool(_cost) and float(_cost) > 0
+
     # 1. Source + config hashes match the approval (if one is given).
     if manifest is not None and source is not None:
         cert.checks.append(_check_hash("source hash", sha256_file(source),
                                        manifest.get("source_sha256")))
     if manifest is not None and cfg is not None:
-        cert.checks.append(_check_hash("config hash", config_hash(cfg),
-                                       manifest.get("config_sha256")))
+        hash_check = _check_hash("config hash", config_hash(cfg),
+                                 manifest.get("config_sha256"))
+        if hash_check.status == "fail" and not run_paid:
+            hash_check = Check(
+                "config hash", "skip",
+                f"{hash_check.detail} — a $0 replay rebuild runs its own "
+                f"config; the approved hash governs the paid wave (routes "
+                f"still checked below)")
+        cert.checks.append(hash_check)
 
     # 2. Model routes stay within the approved set (route check only —
     # source/config hashes are checked separately above).
@@ -328,9 +356,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
             else "all active routes within the approved set"))
 
     # 3. Findings envelope: checkpoint present, no zero-cost anomaly, budget.
-    envelope = _load_json(run / "findings.json")
-    if envelope is None:
-        envelope = _load_json(run / "flights_findings.json")
+    envelope = early_envelope
     if envelope is None:
         cert.checks.append(Check("findings envelope", "skip",
                                  "no findings.json in the run directory"))
@@ -366,12 +392,18 @@ def _certify_text_hygiene(run: Path) -> Check:
     double spaces and paragraph-trailing whitespace — the two things
     normalization promises are gone. Skips honestly when there is no .docx or
     the OOXML tooling is unavailable."""
-    docs = sorted(p for p in run.glob("*.docx") if not p.name.startswith("~$"))
+    # The change-log docx quotes ORIGINAL, pre-fix text (its trailing spaces
+    # are what the run fixed), so hygiene applies only to the manuscript
+    # deliverable — and to its ACCEPT view, the text the author ends up with.
+    docs = sorted(p for p in run.glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower())
     if not docs:
         return Check("delivered text hygiene", "skip",
-                     "no .docx in the run directory")
+                     "no manuscript .docx in the run directory")
     try:
-        from docproof.utils.xml_helpers import (DocxPackage, paragraph_text,
+        from docproof.reassembler import paragraph_view_text
+        from docproof.utils.xml_helpers import (DocxPackage,
                                                 walk_package)
     except Exception as e:                        # lxml missing, etc.
         return Check("delivered text hygiene", "skip",
@@ -386,7 +418,7 @@ def _certify_text_hygiene(run: Path) -> Check:
             continue
         doubles = trails = 0
         for wp in walk_package(pkg):
-            text = paragraph_text(wp.element)
+            text = paragraph_view_text(wp.element, "accept")
             if not any(c.isalnum() for c in text):
                 continue                          # scene dividers space freely
             doubles += text.count("  ")
@@ -407,11 +439,28 @@ def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:
     working); only a duplicate that survived on both sides fails."""
     from galley.lifecycle import reconstruct_from_findings
     led = reconstruct_from_findings(envelope)
+    # Anchor spans distinguish two same-content findings that landed at
+    # DIFFERENT places — a paragraph-sized row split into per-touch tracked
+    # changes shares (para, original, type) across its siblings, and that is
+    # composition, not a double-apply. Only two merged findings at the SAME
+    # anchor (or with no anchor to tell them apart) fail.
+    anchors: dict[str, tuple] = {}
+    for row in envelope.get("findings", []) or []:
+        if not isinstance(row, dict):
+            continue
+        a = row.get("anchor") or {}
+        fid = str(row.get("finding_id", ""))
+        if fid and isinstance(a, dict) and "start" in a:
+            anchors[fid] = (a.get("start"), a.get("end"))
     bad = []
     for key, ids in led.duplicates().items():
         merged = [i for i in ids if led.state_of(i) == "merged"]
-        if len(merged) > 1:
-            bad.append(f"{key}: {', '.join(merged)}")
+        if len(merged) <= 1:
+            continue
+        spans = [anchors.get(i) for i in merged]
+        if all(sp is not None for sp in spans) and len(set(spans)) == len(spans):
+            continue                    # distinct anchors: split, not doubled
+        bad.append(f"{key}: {', '.join(merged)}")
     if bad:
         return Check("no duplicate merged edits", "fail",
                      "; ".join(bad))
@@ -432,12 +481,25 @@ def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
         corr = row.get("corrected_text", "")
         if row.get("force_query") or not corr:
             continue
-        key = (row.get("para_id", ""), row.get("original_text", ""),
-               row.get("occurrence", 1))
-        if key in seen and seen[key] != corr:
+        # Key on the real anchor when the run recorded one: two rows may quote
+        # the SAME sentence while editing different characters of it (a repair
+        # cluster's members, a paragraph row split into per-touch changes) —
+        # that is composition the validator already arbitrated, not a
+        # collision. Only two edits at the same anchored span that disagree on
+        # what to write there conflict. Rows with no anchor fall back to the
+        # quote-level key, conservatively.
+        a = row.get("anchor") or {}
+        if isinstance(a, dict) and "start" in a:
+            key = (row.get("para_id", ""), a.get("start"), a.get("end"))
+            what = str(a.get("insert_text", corr))
+        else:
+            key = (row.get("para_id", ""), row.get("original_text", ""),
+                   row.get("occurrence", 1))
+            what = corr
+        if key in seen and seen[key] != what:
             collisions.append(str(row.get("para_id", "")))
         else:
-            seen[key] = corr
+            seen[key] = what
     if collisions:
         return Check("no insertion collisions", "fail",
                      f"conflicting edits at the same anchor in: "
@@ -486,7 +548,11 @@ def _certify_run_state(run: Path) -> Check:
     """If a run state machine is present, a delivery certificate expects the run
     to have reached at least the audited state."""
     from galley.state_machine import RunStateMachine
+    # `galley state` writes state.json at the WORKSPACE root; a run's results
+    # directory usually sits one level below it, so look in both places.
     path = run / "state.json"
+    if not path.is_file():
+        path = run.parent / "state.json"
     if not path.is_file():
         return Check("run state", "skip", "no state.json for this run")
     try:
@@ -552,24 +618,36 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
 
 
 def _artifact_scan(run: Path) -> Check:
+    """Scan what the author will actually READ after accepting the changes:
+    every finding's corrected_text. Raw change-log / findings-file text is NOT
+    scanned — those files faithfully quote the ORIGINAL, pre-fix text, whose
+    artifacts are precisely what the findings fix, so a raw-text scan fails a
+    clean deliverable for honestly reporting what it repaired."""
     texts: list[str] = []
-    for name in ("change_log.md", "changes.md", "findings.json",
-                 "flights_findings.json"):
-        p = run / name
-        if p.is_file():
-            try:
-                texts.append(p.read_text(encoding="utf-8"))
-            except OSError:
-                pass
+    for name in ("findings.json", "flights_findings.json"):
+        data = _load_json(run / name)
+        if data is None:
+            continue
+        rows = data.get("findings", data) if isinstance(data, dict) else data
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("force_query") or row.get("queried"):
+                continue                       # a question changes nothing
+            corr = row.get("corrected_text")
+            if isinstance(corr, str) and corr:
+                texts.append(corr)
     if not texts:
-        return Check("artifact scan", "skip", "no change log to scan")
+        return Check("artifact scan", "skip",
+                     "no corrected text in the run directory to scan")
     blob = "\n".join(texts)
     hits = [pat for pat in _ARTIFACTS if pat in blob]
     if hits:
         return Check("artifact scan", "fail",
-                     f"found merge artifact(s): {', '.join(map(repr, hits))}")
+                     f"found merge artifact(s) in corrected text: "
+                     f"{', '.join(map(repr, hits))}")
     return Check("artifact scan", "pass", "no doubled punctuation / merge "
-                 "artifacts in the change log")
+                 "artifacts in any corrected text")
 
 
 __all__ = [

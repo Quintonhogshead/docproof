@@ -71,6 +71,51 @@ def shrink(original: str, corrected: str) -> tuple[int, str, str]:
     return pre, original[pre:len(original) - suf], corrected[pre:len(corrected) - suf]
 
 
+# Two changed regions closer together than this many equal characters are one
+# conceptual edit ("was going"->"went" leaves a 1-char island); keeping them as
+# one region avoids confetti in the tracked-changes view without re-widening a
+# genuinely separate second fix back into the first one's span.
+_REGION_JOIN_GAP = 3
+
+
+def minimal_regions(original: str, corrected: str
+                    ) -> list[tuple[int, str, str]]:
+    """Split one original->corrected pair into its minimal changed regions.
+
+    Returns ``[(offset_in_original, deleted, inserted), ...]`` in ascending
+    offset order. A single-touch pair returns exactly what `shrink` would; a
+    paragraph-sized row carrying several distant fixes returns one region per
+    fix, so the author reviews "w"->"W", not a 300-character block replace.
+    Regions separated by fewer than `_REGION_JOIN_GAP` unchanged characters are
+    merged, so a tight compound touch still reads as one change."""
+    import difflib
+
+    pre, deleted, inserted = shrink(original, corrected)
+    if not deleted and not inserted:
+        return []
+    # Fast path: a small single touch needs no matcher.
+    if len(deleted) <= _REGION_JOIN_GAP and len(inserted) <= _REGION_JOIN_GAP:
+        return [(pre, deleted, inserted)]
+    sm = difflib.SequenceMatcher(None, deleted, inserted, autojunk=False)
+    regions: list[tuple[int, int, str]] = []       # (start, end, replacement)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        regions.append((i1, i2, inserted[j1:j2]))
+    if not regions:
+        return [(pre, deleted, inserted)]
+    merged: list[tuple[int, int, str]] = [regions[0]]
+    for a, b, repl in regions[1:]:
+        pa, pb, prepl = merged[-1]
+        if a - pb < _REGION_JOIN_GAP:
+            merged[-1] = (pa, b, prepl + deleted[pb:a] + repl)
+        else:
+            merged.append((a, b, repl))
+    if len(merged) > 24:      # confetti guard (and the id-suffix alphabet cap)
+        return [(pre, deleted, inserted)]
+    return [(pre + a, deleted[a:b], repl) for a, b, repl in merged]
+
+
 def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
                       query_types: frozenset[str] = frozenset(),
@@ -233,7 +278,12 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
             out.append(_status(f, "rejected_duplicate", anchor))
             continue
 
-        # 5 — overlap with already-accepted edits in this paragraph
+        # 5 — overlap with already-accepted edits in this paragraph. Claims and
+        # conflicts use the WHOLE shrunk span deliberately, even though the
+        # emission below may split it: two findings quoting one span with
+        # different corrections are alternative versions of that span, and
+        # letting their minimal regions interleave just because they touch
+        # different characters composes a garbled third version no one wrote.
         spans = accepted_spans.setdefault(f.para_id, [])
         if any(_overlaps(start, end, a, b) for a, b in spans):
             out.append(_status(f, "rejected_overlap", anchor))
@@ -241,7 +291,22 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
 
         seen.add(key)
         spans.append((start, end))
-        out.append(_status(f, "validated", anchor))
+
+        # 5.5 — emit, split into minimal regions. A row that quotes a wide span
+        # but touches it in a few distinct places becomes one tracked change
+        # PER touch, so the author reviews "w"->"W", never a block replace
+        # whose actual change is impossible to see. Claiming (above) and the
+        # guard both ruled on the whole span; this is display granularity only.
+        for i, (off, r_del, r_ins) in enumerate(
+                minimal_regions(f.original_text, f.corrected_text)):
+            r_start = s + off
+            r_end = r_start + len(r_del)
+            sub = f if i == 0 else dataclasses.replace(
+                f, finding_id=f"{f.finding_id}{chr(ord('b') + i - 1)}")
+            out.append(_status(sub, "validated",
+                               Anchor(start=r_start, end=r_end,
+                                      delete_text=para.text[r_start:r_end],
+                                      insert_text=r_ins)))
 
     n_ok = sum(1 for f in out if f.status == "validated")
     log.info("Validated %d/%d findings (%s)", n_ok, len(out),

@@ -54,6 +54,18 @@ log = logging.getLogger("docproof.spellscan")
 # compound together is Phase 5's consistency problem, not this one.
 _WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
 
+# Email addresses and URLs are in-world artifacts, not vocabulary: tokenizing
+# LBadgerbones@jhmi.edu into "LBadgerbones" invents a near-duplicate of a real
+# character name, and the near-duplicate hygiene pass then DEMOTES the real
+# name's protection. Mask them before tokenizing (length-preserving, so
+# sentence-initial offsets keep meaning).
+_ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+                      r"|https?://\S+|www\.\S+")
+
+
+def _mask_addresses(text: str) -> str:
+    return _ADDRESS.sub(lambda m: " " * len(m.group(0)), text)
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -386,7 +398,8 @@ def scan(paragraphs: Sequence[ParagraphRef], *, enabled: bool = True,
     seen: dict[str, _Seen] = {}
     tokens = 0
     for para in paragraphs:
-        for m in _WORD.finditer(para.text):
+        masked = _mask_addresses(para.text)
+        for m in _WORD.finditer(masked):
             word = m.group(0).replace("’", "'")
             tokens += 1
             entry = seen.setdefault(word.lower(), _Seen())

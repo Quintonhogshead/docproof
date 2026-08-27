@@ -2099,8 +2099,19 @@ def cache_dir_for(configured: str | None) -> str | None:
 def load_config(path: str | Path) -> Config:
     config_path = Path(path)
     if not config_path.is_file():
-        raise FileNotFoundError(
-            f"Configuration file not found: {config_path.resolve()}")
+        # The conventional default ("config/default.yaml", relative) falls back
+        # to the PACKAGED default when the working directory has no config/ —
+        # a book workspace holds a manuscript and runs, not a copy of the
+        # shipped config tree. An explicit --config path still fails loudly.
+        if not config_path.is_absolute() \
+                and config_path == Path("config") / "default.yaml":
+            packaged = (Path(__file__).resolve().parent.parent
+                        / "config" / "default.yaml")
+            if packaged.is_file():
+                config_path = packaged
+        if not config_path.is_file():
+            raise FileNotFoundError(
+                f"Configuration file not found: {config_path.resolve()}")
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError(

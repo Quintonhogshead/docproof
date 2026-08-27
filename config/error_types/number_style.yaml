@@ -33,7 +33,11 @@ detection_prompt: |
   - Decades: "the '60s", "the 1990s". The apostrophe there belongs to the
     apostrophe_error type; the numerals are correct.
   - Numerals of 101 and above in prose — those are already house style.
-  - Numbers already spelled out.
+  - Numbers already spelled out. NEVER convert a spelled-out number to
+    numerals — not for 101-and-up, not for round quantities ("ten thousand
+    rounds" stays as written; Chicago spells round large numbers), and never
+    inside dialogue or a spoken transcript, where spelled-out numbers are
+    always correct. This type's only direction is numerals → words.
   - A character reciting digits aloud — a phone number, a combination, a
     countdown — where the numerals are the point.
 

@@ -285,8 +285,10 @@ def audit_run(
 
     if result.stop_reason != "ok":
         log.warning(
-            "audit: reply not ok (stop_reason=%s); recording zero hypotheses as a "
-            "loss rather than parsing a truncated answer", result.stop_reason)
+            "audit: reply not ok (stop_reason=%s%s); recording zero hypotheses "
+            "as a loss rather than parsing a truncated answer",
+            result.stop_reason,
+            f" — {result.error}" if getattr(result, "error", None) else "")
         return []
 
     return parse_hypotheses(result.parsed, cap=MAX_HYPOTHESES)

@@ -35,6 +35,14 @@ patch:
     enabled: false
   repair:
     enabled: true
+  # The Wave 1 recipe has always been "the ensemble ... repair, BOTH GATES" —
+  # but the base config ships the gates off, and until v0.132.0 this stage
+  # never turned them on, so a mechanical wave ran ungated while its own
+  # documentation said otherwise. Cheap at wave scale; do not drop.
+  meaning_check:
+    enabled: true
+  fix_check:
+    enabled: true
 
 locks:
   - smoothing.enabled

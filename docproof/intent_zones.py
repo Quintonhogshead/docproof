@@ -59,7 +59,13 @@ PUNCTUATION_SWEEPS = frozenset({
 class IntentZone(BaseModel):
     """One protected region: a selector, a permission class, and a label.
 
-    Exactly one selector field should be set; if several are, they union."""
+    Exactly one selector field should be set; if several are, they union.
+    Unknown keys are REJECTED, not ignored: a zones file written against a
+    guessed schema (``name``/``class``/``selectors``) must fail loudly here,
+    because the silent alternative is five zones that each resolve to zero
+    protected spans — protection that looks configured and is not."""
+    model_config = {"extra": "forbid"}
+
     label: str = ""
     permission: str = "locked"
     category: str = ""               # free-text: scripture | quotation | dialect | ...
@@ -89,6 +95,8 @@ class IntentZone(BaseModel):
 class IntentZones(BaseModel):
     """A manuscript's intent zones. Loads from ``<book>.intent.json`` or a
     config block; resolves against the paragraph list to concrete spans."""
+    model_config = {"extra": "forbid"}
+
     zones: list[IntentZone] = Field(default_factory=list)
 
     @property

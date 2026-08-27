@@ -349,7 +349,13 @@ def write_genre_pack(base_config: str | Path, genre: str, out_path: str | Path,
     data = cfg.model_dump(mode="json")
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+    # Provenance header: a materialized config otherwise carries no trace of
+    # the stage/genre that shaped it, so `galley approve` printed "stage None"
+    # for a config that WAS a stage. Comment-only — invisible to yaml.safe_load.
+    header = (f"# galley: genre={genre}"
+              + (f" stage={stage}" if stage else "") + "\n")
+    out.write_text(header
+                   + yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
                    encoding="utf-8")
     summary["out_path"] = str(out)
     return summary
