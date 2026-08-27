@@ -41,7 +41,12 @@ _MODEL_FIELD = re.compile(r"(^|_)(model)$")
 
 # The deterministic artifact patterns a clean deliverable must not contain —
 # the merge desk's own scan list (doubled comma/space, orphaned punctuation).
-_ARTIFACTS = (",,", '" "', "…\\.", "”.", "”,", "  ")
+_ARTIFACTS = (",,", '" "', "…\\.", "”.", "”,")
+# Double spaces are an artifact only AFTER visible text: leading indentation
+# is spacing normalization deliberately preserves (normalize._SPACE_RUN uses
+# the same lookbehind), so a bare "  " substring test fails hand-centered
+# subtitle/TOC lines that are perfectly clean. NBSP included, as in normalize.
+_POST_TEXT_DOUBLE = re.compile(r"(?<=\S)[  ]{2,}")
 
 
 def sha256_file(path: str | Path) -> str:
@@ -421,7 +426,7 @@ def _certify_text_hygiene(run: Path) -> Check:
             text = paragraph_view_text(wp.element, "accept")
             if not any(c.isalnum() for c in text):
                 continue                          # scene dividers space freely
-            doubles += text.count("  ")
+            doubles += len(_POST_TEXT_DOUBLE.findall(text))
             trails += sum(1 for _ in trailing.finditer(text))
         if doubles or trails:
             problems.append(f"{path.name}: {doubles} double space(s), "
@@ -642,6 +647,8 @@ def _artifact_scan(run: Path) -> Check:
                      "no corrected text in the run directory to scan")
     blob = "\n".join(texts)
     hits = [pat for pat in _ARTIFACTS if pat in blob]
+    if _POST_TEXT_DOUBLE.search(blob):
+        hits.append("  ")
     if hits:
         return Check("artifact scan", "fail",
                      f"found merge artifact(s) in corrected text: "
