@@ -44,7 +44,7 @@ import dataclasses
 import itertools
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .config import Config
 from .error_registry import ErrorType, load_error_types, shipped_keys
@@ -132,7 +132,8 @@ def sanitize_corrected(text: str, variant: Variant | None) -> str:
 def build_findings(rows: list[dict], *, variant: Variant | None,
                    error_dir: str | Path, remap_unchanneled: bool,
                    id_prefix: str = "import",
-                   format_round_trip: bool = False
+                   format_round_trip: bool = False,
+                   paragraphs: Mapping[str, str] | None = None
                    ) -> tuple[list[Finding], list[dict], int]:
     """Rows to `Finding`s. Anchoring is NOT done here — validate_findings (via
     a dry-run report) or finish() (for a real run) does that — this stage is
@@ -181,7 +182,36 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             rejects.append({"index": i, "row": item,
                             "reason": "missing or non-string para_id"})
             continue
-        if not isinstance(original_text, str) or not original_text:
+        if isinstance(original_text, str) and not original_text:
+            # A pure insertion (a sweep's appended period, say) is a legal
+            # finding, but an empty original_text cannot anchor. When the row
+            # carries its serialized anchor and the caller handed us the
+            # canonical paragraphs, re-express it as a whole-paragraph O→C —
+            # the validator reduces that to the minimal insert. Purpura beta:
+            # a run's own findings.json failed to round-trip on exactly this.
+            anchor = item.get("anchor")
+            ptext = (paragraphs or {}).get(para_id)
+            if (isinstance(anchor, dict) and ptext
+                    and isinstance(anchor.get("insert_text"), str)
+                    and anchor.get("insert_text")
+                    and isinstance(anchor.get("start"), int)
+                    and anchor.get("end") == anchor.get("start")
+                    and 0 <= anchor["start"] <= len(ptext)):
+                start = anchor["start"]
+                original_text = ptext
+                corrected_text = (ptext[:start] + anchor["insert_text"]
+                                  + ptext[start:])
+                # The old row's occurrence indexed the empty span, not the
+                # whole paragraph — carrying it over sends the validator
+                # hunting a 38th copy of the paragraph.
+                item = {k: v for k, v in item.items() if k != "occurrence"}
+            else:
+                rejects.append({"index": i, "row": item,
+                                "reason": "empty original_text (pure "
+                                "insertion) with no usable anchor/paragraph "
+                                "to re-express it against"})
+                continue
+        elif not isinstance(original_text, str):
             rejects.append({"index": i, "row": item,
                             "reason": "missing or non-string original_text"})
             continue

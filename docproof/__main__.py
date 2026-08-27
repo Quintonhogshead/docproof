@@ -1807,7 +1807,8 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
     findings, rejects, remapped = build_findings(
         rows, variant=prepared.variant, error_dir=error_dir,
         remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
-        format_round_trip=True)
+        format_round_trip=True,
+        paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
 
     checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
                                 query_types=prepared.query_types,
