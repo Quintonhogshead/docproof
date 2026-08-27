@@ -921,8 +921,11 @@ def cmd_inventory(args) -> int:
         # match and what an intent-zones regex runs against. Tab-separated so
         # it greps and cuts cleanly.
         for para in prepared.doc.paragraphs:
-            preview = para.text[:100].replace("\t", " ")
-            print(f"{para.para_id}\t{len(para.text)}\t{preview}")
+            # Full text, not a preview: rows exist to be matched against.
+            # Tabs/newlines are escaped so the TSV stays one row per paragraph;
+            # the length column is the unescaped canonical length.
+            full = para.text.replace("\t", "\\t").replace("\n", "\\n")
+            print(f"{para.para_id}\t{len(para.text)}\t{full}")
         return 0
 
     doc_tokens = sum(c.est_tokens for c in prepared.chunks)
