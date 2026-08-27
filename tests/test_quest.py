@@ -133,7 +133,7 @@ def test_standalone_site_serves_page_and_rate_limits(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/healthz").json()["ok"] is True
         page = client.get("/")
-        assert page.status_code == 200 and "Spell &amp; Check" in page.text
+        assert page.status_code == 200 and "Galley" in page.text
 
         ok = client.post("/api/quest/skin",
                          files={"file": ("book.txt", b"words " * 40,
@@ -173,3 +173,20 @@ def test_waitlist_signup_dedupes_and_validates(tmp_path, monkeypatch):
         rejoin = client.post("/api/quest/waitlist",
                              json={"email": "author@example.com"})
         assert rejoin.json()["already"] is True
+
+
+def test_papery_pages_serve(monkeypatch, tmp_path):
+    from app import quest_site
+
+    monkeypatch.setattr(quest_site, "WAITLIST_PATH",
+                        str(tmp_path / "waitlist.jsonl"))
+    with TestClient(quest_site.create_app()) as client:
+        for path, marker in [("/", "Bring me your book"),
+                             ("/quote", "Drop your manuscript"),
+                             ("/party", "Meet the Party"),
+                             ("/pricing", "Five ways"),
+                             ("/customize", "The Party Assembles")]:
+            resp = client.get(path)
+            assert resp.status_code == 200 and marker in resp.text, path
+        assert client.get("/assets/sc-shared.css").status_code == 200
+        assert client.get("/assets/sc-shared.js").status_code == 200

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Quote — Spell &amp; Check</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="/assets/sc-shared.css">
+<style>
+  .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);border-radius:16px;
+    background:var(--card);padding:22px 24px;margin-top:24px;cursor:pointer;transition:border-color .2s;box-shadow:var(--shadow)}
+  .drop:hover,.drop.over{border-color:var(--accent)}
+  .drop:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
+  .drop .dicon{flex:0 0 auto;width:46px;height:46px;border-radius:14px;border:1px solid var(--line-strong);
+    display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
+  .drop .dicon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .drop .dtitle{font-family:var(--disp);font-size:19px}
+  .drop .dsub{font-size:13.5px;color:var(--faded);margin-top:2px}
+  .drop.busy{pointer-events:none;opacity:.75}
+  .dropnote{font-size:14px;color:var(--accent);margin-top:10px;min-height:1.2em}
+  .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:12px 18px;box-shadow:var(--shadow)}
+  .bookchip b{font-family:var(--disp);font-size:18px;font-weight:400}
+  .bookchip span{color:var(--faded);font-size:14.5px}
+  .bookchip .redo{margin-left:auto;font-size:13.5px}
+  .quotegrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px;align-items:start;margin-top:8px}
+  @media (max-width:860px){.quotegrid{grid-template-columns:1fr}}
+  .summary{position:sticky;top:16px}
+  .summary .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:15px}
+  .summary .row b{font-variant-numeric:tabular-nums}
+  .summary .total{font-size:20px;font-weight:700;display:flex;justify-content:space-between;padding-top:12px}
+  .emailrow{display:flex;gap:10px;margin-top:14px}
+  .emailrow input{flex:1;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;color:var(--ink);
+    font:15px var(--body);padding:12px 14px;min-width:0}
+  .emailrow input:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+  .fine{font-size:13px;color:var(--dim);margin-top:10px}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>
+    <nav class="nav">
+      <a href="/party">Meet the party</a>
+      <a href="/pricing">Pricing</a>
+      <a class="go now" href="/quote">Your quote</a>
+    </nav>
+  </header>
+
+  <section class="galley">
+    <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
+    <div>
+      <div class="who">Galley · your AI guide</div>
+      <p class="say" id="say"></p>
+    </div>
+  </section>
+
+  <!-- Step 1: the drop -->
+  <div id="step-drop">
+    <div class="drop" id="drop" role="button" tabindex="0" aria-label="Upload your manuscript. Accepts .docx, .txt, or .md.">
+      <div class="dicon"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 20h14"/></svg></div>
+      <div>
+        <div class="dtitle" id="droptitle">Drop your manuscript here, or click to choose</div>
+        <div class="dsub">.docx, .txt, or .md · an AI reads a few pages to size the job and dress the party · read once, never stored</div>
+      </div>
+      <input type="file" id="fileinput" accept=".docx,.txt,.md" hidden>
+    </div>
+    <div class="dropnote" id="dropnote"></div>
+  </div>
+
+  <!-- Step 2: the book + party + recommendation -->
+  <div class="bookchip" id="bookchip">
+    <b id="booktitle"></b><span id="bookmeta"></span>
+    <a class="redo" href="#" id="redo">try a different file</a>
+  </div>
+
+  <div id="step-quote" class="hidden">
+    <h2 id="partyhead">Your party, dressed for your book</h2>
+    <div class="members" id="members"></div>
+
+    <h2>Choose how deep we go</h2>
+    <div class="quotegrid">
+      <div class="tiers" id="tiers" role="radiogroup" aria-label="Choose a tier"></div>
+      <div class="summary card" id="summary">
+        <div class="label" style="margin-bottom:8px">Your quest</div>
+        <div class="row"><span id="sumtier">—</span><b id="sumprice">—</b></div>
+        <div class="row"><span>Manuscript</span><b id="sumwords">—</b></div>
+        <div class="row"><span>Deliverable</span><b>Tracked-changes .docx</b></div>
+        <div class="total"><span>Today</span><span id="sumtotal">—</span></div>
+        <div id="paycopy" class="fine"></div>
+        <div class="emailrow">
+          <input type="email" id="email" maxlength="254" placeholder="raven@yourkeep.com" aria-label="Your email">
+          <button class="btn" id="go">Send the raven</button>
+        </div>
+        <div class="fine" id="gonote"></div>
+        <div class="fine" style="margin-top:14px">Want to hand-pick the party instead?
+          <a href="/customize">Open the workshop</a> (by candlelight).</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span>Spell &amp; Check</span>
+    <a href="/party">Meet the party</a>
+    <a href="/pricing">Pricing</a>
+    <span class="right">Read once · kept 30 days for your re-run · never trained on</span>
+  </footer>
+</div>
+
+<script src="/assets/sc-shared.js"></script>
+<script>
+(function(){
+  var say = document.getElementById('say');
+  var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
+
+  SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> I’ll size the job, and the party will dress for your book while I do.');
+
+  var dropEl = document.getElementById('drop'), fileInput = document.getElementById('fileinput'),
+      dropTitle = document.getElementById('droptitle'), dropNote = document.getElementById('dropnote');
+
+  function renderTiers(){
+    document.getElementById('tiers').innerHTML = SC.TIERS.map(function(t){
+      return '<div class="tier' + (t.id === picked ? ' picked' : '') + '" tabindex="0" role="radio" ' +
+        'aria-checked="' + (t.id === picked) + '" data-tier="' + t.id + '">' +
+        (t.recommended ? '<span class="flag">Galley recommends</span>' : '') +
+        '<div class="tname">' + t.name + '</div>' +
+        '<div class="tsub">' + t.sub + '</div>' +
+        '<div class="tblurb">' + t.blurb + '</div>' +
+        '<div class="tprice">' + SC.tierPrice(t, band) + '</div></div>';
+    }).join('');
+  }
+
+  function renderSummary(){
+    var t = SC.TIERS.find(function(x){ return x.id === picked; });
+    document.getElementById('sumtier').textContent = t.name + ' — ' + t.sub;
+    document.getElementById('sumprice').textContent = SC.tierPrice(t, band);
+    document.getElementById('sumwords').textContent = wordLabel;
+    document.getElementById('sumtotal').textContent = t.bespoke ? 'quoted' : SC.tierPrice(t, band);
+    var pay = document.getElementById('paycopy'), go = document.getElementById('go');
+    if (t.bespoke){
+      pay.textContent = 'The Grand Campaign is scoped book by book. Leave your address and Galley will write to you herself.';
+      go.textContent = 'Request a quote';
+    } else if (t.price === 0){
+      pay.textContent = 'Free. The raven delivers your results by email when quests open.';
+      go.textContent = 'Send the raven';
+    } else {
+      pay.textContent = 'Checkout opens soon — leave your address and we’ll hold your place at this price.';
+      go.textContent = 'Hold my place';
+    }
+  }
+
+  function showQuote(r){
+    skin = r.skin; band = r.band || 1;
+    wordLabel = (r.word_count || 0).toLocaleString() + ' words';
+    SC.applyTint(skin.palette);
+    document.getElementById('step-drop').classList.add('hidden');
+    var chip = document.getElementById('bookchip');
+    chip.style.display = 'flex';
+    document.getElementById('booktitle').textContent = skin.book_title;
+    document.getElementById('bookmeta').textContent = wordLabel + ' · ' + skin.genre;
+    document.getElementById('step-quote').classList.remove('hidden');
+    document.getElementById('members').innerHTML =
+      SC.MEMBERS.map(function(m){ return SC.memberCard(m, skin); }).join('');
+    renderTiers(); renderSummary();
+    SC.galleySay(say, SC.esc(skin.narration) +
+      ' <em>For this book I’d ride with the party of four</em> — but the choice is yours, and the lantern pass is free.');
+  }
+
+  function sendManuscript(file){
+    if(!file) return;
+    if(!/\.(docx|txt|md)$/i.test(file.name || '')){
+      dropNote.textContent = 'Galley reads .docx, .txt, or .md — ' + file.name + ' isn’t one.';
+      return;
+    }
+    dropEl.classList.add('busy');
+    dropTitle.textContent = 'Galley is reading “' + file.name + '”…';
+    dropNote.textContent = '';
+    SC.galleySay(say, 'Reading… a few pages only, and I won’t keep them. <em>The party is getting dressed.</em>');
+    var fd = new FormData(); fd.append('file', file, file.name);
+    fetch('/api/quest/skin', {method:'POST', body:fd})
+      .then(function(resp){
+        return resp.json().catch(function(){ return {}; }).then(function(body){
+          if(!resp.ok) throw new Error(body.detail || ('Upload failed (' + resp.status + ').'));
+          return body;
+        });
+      })
+      .then(showQuote)
+      .catch(function(e){
+        dropNote.textContent = e.message;
+        SC.galleySay(say, 'Hm — that didn’t work. <em>' + SC.esc(e.message) + '</em>');
+      })
+      .then(function(){
+        dropEl.classList.remove('busy');
+        dropTitle.textContent = 'Drop your manuscript here, or click to choose';
+        fileInput.value = '';
+      });
+  }
+
+  dropEl.addEventListener('click', function(){ fileInput.click(); });
+  dropEl.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', function(){ sendManuscript(fileInput.files[0]); });
+  ['dragover','dragenter'].forEach(function(ev){
+    dropEl.addEventListener(ev, function(e){ e.preventDefault(); dropEl.classList.add('over'); });
+  });
+  dropEl.addEventListener('dragleave', function(){ dropEl.classList.remove('over'); });
+  dropEl.addEventListener('drop', function(e){
+    e.preventDefault(); dropEl.classList.remove('over');
+    sendManuscript(e.dataTransfer.files && e.dataTransfer.files[0]);
+  });
+  document.getElementById('redo').addEventListener('click', function(e){
+    e.preventDefault(); location.reload();
+  });
+
+  document.getElementById('tiers').addEventListener('click', function(e){
+    var el = e.target.closest('.tier'); if(!el) return;
+    picked = el.dataset.tier; renderTiers(); renderSummary();
+  });
+  document.getElementById('tiers').addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var el = e.target.closest('.tier'); if(!el) return;
+    e.preventDefault(); picked = el.dataset.tier; renderTiers(); renderSummary();
+  });
+
+  document.getElementById('go').addEventListener('click', function(){
+    var email = document.getElementById('email').value.trim();
+    var note = document.getElementById('gonote');
+    if(!email){ document.getElementById('email').focus(); return; }
+    SC.joinWaitlist(email).then(function(r){
+      var t = SC.TIERS.find(function(x){ return x.id === picked; });
+      note.textContent = r.already
+        ? 'The raven already knows your name — you’re on the list.'
+        : (t.bespoke ? 'Raven away. Galley will write to you about your campaign.'
+                     : 'The raven knows your name. We’ll write the moment quests open.');
+      SC.galleySay(say, '<em>Raven away.</em> The moment quests open, you’ll be the first to know.');
+    }).catch(function(e){ note.textContent = e.message; });
+  });
+})();
+</script>
+</body>
+</html>

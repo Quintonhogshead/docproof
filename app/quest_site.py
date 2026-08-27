@@ -166,15 +166,39 @@ def create_app() -> FastAPI:
     def healthz() -> dict:
         return {"ok": True, "version": __version__}
 
-    @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(static / "quest.html",
+    # The papery pages. /customize is the original candlelit party builder,
+    # kept dark on purpose — the workshop, by candlelight.
+    def _page(name: str) -> FileResponse:
+        return FileResponse(static / name,
                             headers={"Cache-Control": "no-cache"})
 
-    # The page's own asset path keeps working if anything links it directly.
+    @app.get("/")
+    def index() -> FileResponse:
+        return _page("sc-index.html")
+
+    @app.get("/quote")
+    def quote() -> FileResponse:
+        return _page("sc-quote.html")
+
+    @app.get("/party")
+    def party() -> FileResponse:
+        return _page("sc-party.html")
+
+    @app.get("/pricing")
+    def pricing() -> FileResponse:
+        return _page("sc-pricing.html")
+
+    @app.get("/customize")
+    def customize() -> FileResponse:
+        return _page("quest.html")
+
+    # The old front door keeps working for anyone holding the earlier link.
     @app.get("/quest.html")
     def quest_page() -> FileResponse:
-        return index()
+        return _page("quest.html")
+
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/assets", StaticFiles(directory=static), name="assets")
 
     return app
 

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meet the Party — Spell &amp; Check</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="/assets/sc-shared.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>
+    <nav class="nav">
+      <a class="now" href="/party">Meet the party</a>
+      <a href="/pricing">Pricing</a>
+      <a class="go" href="/quote">Bring me your book</a>
+    </nav>
+  </header>
+
+  <section class="galley">
+    <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
+    <div>
+      <div class="who">Galley · your AI guide</div>
+      <p class="say" id="say"></p>
+    </div>
+  </section>
+
+  <div class="members" id="members" style="margin-top:16px"></div>
+
+  <h2>What's actually happening</h2>
+  <div class="card" style="max-width:680px">
+    <p style="margin:0 0 12px">Plainly: Spell &amp; Check runs your manuscript
+    through DocProof, the proofreading engine we built for a real publishing
+    house. Each party member is one of its detection systems — the costume
+    changes, the machinery doesn't. The small print under each card names the
+    real system, always.</p>
+    <p style="margin:0 0 12px"><b>What AI does:</b> reads your pages to find
+    errors, checks its own proposed fixes with a second AI acting as judge, and
+    writes each change as a tracked change you accept or reject in Word. On the
+    deeper tiers, style thoughts arrive only as comments phrased as questions.</p>
+    <p style="margin:0"><b>What AI never does:</b> rewrite your voice, make
+    silent changes, keep your manuscript, or train on it. Your file is read to
+    do the job, held 30 days in case you want the free re-run, then deleted.</p>
+  </div>
+
+  <h2>The promise</h2>
+  <div class="card" style="max-width:680px">
+    <p style="margin:0">Every paid tier: <b>if obvious typos slip through, the
+    party rides again — free.</b> One re-run, no questions, within 30 days.</p>
+  </div>
+
+  <p style="margin-top:36px"><a class="btn" href="/quote">Bring me your book</a></p>
+
+  <footer>
+    <span>Spell &amp; Check</span>
+    <a href="/pricing">Pricing</a>
+    <span class="right">AI does the reading. You keep the pen.</span>
+  </footer>
+</div>
+
+<script src="/assets/sc-shared.js"></script>
+<script>
+  SC.galleySay(document.getElementById('say'),
+    'Six of us, one job each. <em>Nobody touches your voice</em> — we hunt mistakes, and everything we change shows its work.');
+  document.getElementById('members').innerHTML =
+    SC.MEMBERS.map(function(m){ return SC.memberCard(m); }).join('');
+</script>
+</body>
+</html>
