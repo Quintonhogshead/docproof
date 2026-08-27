@@ -19,18 +19,19 @@
   --body:'Alegreya Sans','Gill Sans','Segoe UI',system-ui,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
 }
-/* Skin palettes, re-mixed for a light ground: accent must hold contrast on paper. */
-body.tint-rose{--accent:#b23c64;--accent-hot:#d4638b;--accent-wash:rgba(178,60,100,.08)}
-body.tint-rain{--accent:#54636e;--accent-hot:#7a8b96;--accent-wash:rgba(84,99,110,.08)}
-body.tint-honey{--accent:#a37413;--accent-hot:#c69433;--accent-wash:rgba(163,116,19,.09)}
-body.tint-void{--accent:#5d51b8;--accent-hot:#8177d6;--accent-wash:rgba(93,81,184,.08)}
-body.tint-neon{--accent:#a13c8c;--accent-hot:#c765b1;--accent-wash:rgba(161,60,140,.08)}
-body.tint-verdigris{--accent:#2f7a66;--accent-hot:#55a08b;--accent-wash:rgba(47,122,102,.08)}
-body.tint-bone{--accent:#993a34;--accent-hot:#bb5f58;--accent-wash:rgba(153,58,52,.08)}
-body.tint-gold{--accent:#8f6a10;--accent-hot:#b58c2e;--accent-wash:rgba(143,106,16,.10)}
-body.tint-slate{--accent:#4d6f8f;--accent-hot:#7194b3;--accent-wash:rgba(77,111,143,.08)}
-body.tint-rust{--accent:#a04a1e;--accent-hot:#c26f41;--accent-wash:rgba(160,74,30,.08)}
-body.tint-frost{--accent:#3d7d99;--accent-hot:#62a2bd;--accent-wash:rgba(61,125,153,.08)}
+/* Skin palettes, re-mixed for a light ground: the paper itself takes the
+   book's hue (subtly — ink contrast holds), and the accent carries the rest. */
+body.tint-rose{--accent:#b23c64;--accent-hot:#d4638b;--accent-wash:rgba(178,60,100,.10);--paper:#f8ecea;--card:#fff7f5}
+body.tint-rain{--accent:#54636e;--accent-hot:#7a8b96;--accent-wash:rgba(84,99,110,.10);--paper:#eef0f0;--card:#fafbfb}
+body.tint-honey{--accent:#a37413;--accent-hot:#c69433;--accent-wash:rgba(163,116,19,.11);--paper:#f9f1dd;--card:#fffaea}
+body.tint-void{--accent:#5d51b8;--accent-hot:#8177d6;--accent-wash:rgba(93,81,184,.10);--paper:#f0eef7;--card:#faf9ff}
+body.tint-neon{--accent:#a13c8c;--accent-hot:#c765b1;--accent-wash:rgba(161,60,140,.10);--paper:#f6ecf4;--card:#fdf6fc}
+body.tint-verdigris{--accent:#2f7a66;--accent-hot:#55a08b;--accent-wash:rgba(47,122,102,.10);--paper:#ecf2ee;--card:#f8fcf9}
+body.tint-bone{--accent:#993a34;--accent-hot:#bb5f58;--accent-wash:rgba(153,58,52,.10);--paper:#f3ecea;--card:#fdf7f5}
+body.tint-gold{--accent:#8f6a10;--accent-hot:#b58c2e;--accent-wash:rgba(143,106,16,.12);--paper:#f7f0dc;--card:#fffae8}
+body.tint-slate{--accent:#4d6f8f;--accent-hot:#7194b3;--accent-wash:rgba(77,111,143,.10);--paper:#eef1f4;--card:#f9fbfd}
+body.tint-rust{--accent:#a04a1e;--accent-hot:#c26f41;--accent-wash:rgba(160,74,30,.10);--paper:#f7eee5;--card:#fff8f0}
+body.tint-frost{--accent:#3d7d99;--accent-hot:#62a2bd;--accent-wash:rgba(61,125,153,.10);--paper:#edf3f6;--card:#f9fcfe}
 
 *{box-sizing:border-box}
 body{

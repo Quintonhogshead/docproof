@@ -190,3 +190,15 @@ def test_papery_pages_serve(monkeypatch, tmp_path):
             assert resp.status_code == 200 and marker in resp.text, path
         assert client.get("/assets/sc-shared.css").status_code == 200
         assert client.get("/assets/sc-shared.js").status_code == 200
+
+
+def test_collision_catches_borrowed_surnames(tmp_path):
+    # The book has an Ida Pomeroy; the model names Maple "Maple Pomeroy".
+    path = _write_txt(tmp_path, extra=" Ida Pomeroy ran the knitting circle.")
+    payload = _skin_payload(maple={"alias": "Maple Pomeroy",
+                                   "job": "Keeps the registry.",
+                                   "look": "Precise, bespectacled."})
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=payload, usage=USAGE)])
+    result = generate_skin(path, provider)
+    assert "Maple Pomeroy" in result.alias_collisions
