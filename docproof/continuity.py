@@ -642,6 +642,12 @@ class ChapterUnit:
 _CHAPTER_WORD = re.compile(
     r"^(chapter|prologue|epilogue|interlude|part|book|canto)\b", re.I)
 _BARE_NUMBER = re.compile(r"^\d{1,3}$")
+# "1. Midlife marriage" — the numbered-title convention. Requires the dot/colon
+# AND a following word so a lone year or a price never matches; a numbered
+# LIST item in prose does match, but that false split is a tiny fragment the
+# merge step folds straight back (see the docstring below). The Purpura beta
+# profiled a 13-chapter memoir as 7 chapters for the lack of this form.
+_NUMBERED_TITLE = re.compile(r"^\d{1,3}[.:]\s+\S")
 _CHAPTER_TITLE_MAX = 70
 
 
@@ -657,7 +663,8 @@ def looks_like_chapter_heading(p: ParagraphRef) -> bool:
     t = p.text.strip()
     if not t or len(t) > _CHAPTER_TITLE_MAX:
         return False
-    return bool(_CHAPTER_WORD.match(t) or _BARE_NUMBER.match(t))
+    return bool(_CHAPTER_WORD.match(t) or _BARE_NUMBER.match(t)
+                or _NUMBERED_TITLE.match(t))
 
 
 def _split_on_headings(paragraphs: list[ParagraphRef],
@@ -667,14 +674,35 @@ def _split_on_headings(paragraphs: list[ParagraphRef],
     chapter-marking paragraph and keeping it as the first line of its chapter.
     Paragraphs before the first marker (front matter, an untitled opening) become
     the first group rather than being dropped."""
+    # A break opens a new group only once the CURRENT group holds body text:
+    # a run of consecutive title-shaped lines is a table of contents, not a
+    # series of empty chapters — each TOC entry buying its own unit is how the
+    # Purpura beta profiled a 13-chapter memoir as 31 "chapters".
+    def is_body(p: ParagraphRef) -> bool:
+        # Prose, not furniture: a TOC entry's subtitle line ("The cringe
+        # factor") is short and unterminated, exactly like a heading, and must
+        # not make its TOC group look like a chapter with content.
+        if is_break(p):
+            return False
+        t = p.text.strip()
+        if not t:
+            return False
+        if len(t.split()) >= 8:
+            return True
+        tail = t.rstrip("\"”’')]")
+        return bool(tail) and tail[-1] in ".!?…:—–-"
+
     groups: list[list[ParagraphRef]] = []
     cur: list[ParagraphRef] = []
+    cur_has_body = False
     for p in paragraphs:
-        if is_break(p) and cur:
+        if is_break(p) and cur and cur_has_body:
             groups.append(cur)
             cur = [p]
+            cur_has_body = False
         else:
             cur.append(p)
+            cur_has_body = cur_has_body or is_body(p)
     if cur:
         groups.append(cur)
     return groups

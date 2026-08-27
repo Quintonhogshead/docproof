@@ -146,7 +146,10 @@ def test_repeated_rule_comments_collapse_to_one_counted_note():
     assert validated[1].explanation == why
 
 
-def test_collapse_leaves_small_groups_and_queries_alone():
+def test_collapse_leaves_small_groups_alone_and_collapses_query_types():
+    """Small edit groups stay; queries collapse ONE PER TYPE past the
+    threshold (Quinton, 2026-08-27 — the Purpura margins carried 56 per-site
+    number notes). At or below the threshold a query is its own question."""
     from docproof.models import Anchor, Finding, DocumentModel, ParagraphRef
     from docproof.pipeline import _collapse_repeated_comments
 
@@ -157,13 +160,27 @@ def test_collapse_leaves_small_groups_and_queries_alone():
                      "text", 1, "text2", "same why", "high",
                      status="validated", anchor=Anchor(0, 1, "t", "T"))
              for i in range(3)]
-    queries = [Finding(f"q-{i}", "sweep", f"body-{i:04d}", "unclosed_quote",
-                       "text", 1, "text", "same question", "medium",
-                       status="query", anchor=Anchor(0, 4, "text", ""))
-               for i in range(4)]
-    validated = small + queries
+    few_queries = [Finding(f"q-{i}", "sweep", f"body-{i:04d}", "unclosed_quote",
+                           "text", 1, "text", "same question", "medium",
+                           status="query", anchor=Anchor(0, 4, "text", ""))
+                   for i in range(3)]
+    validated = small + few_queries
     assert _collapse_repeated_comments(validated, doc, threshold=3) == 0
     assert not any(f.silent for f in validated)
+
+    many_queries = [Finding(f"n-{i}", "residual", f"body-{i % 4:04d}",
+                            "number_style", "text", 1, "text",
+                            f"site-specific note {i}", "medium",
+                            status="query", anchor=Anchor(0, 4, "text", ""))
+                    for i in range(5)]
+    validated = small + few_queries + many_queries
+    assert _collapse_repeated_comments(validated, doc, threshold=3) == 4
+    kept = [f for f in validated if f.status == "query"
+            and f.error_type == "number_style" and not f.silent]
+    assert len(kept) == 1
+    assert "5 places" in kept[0].explanation
+    assert not any(f.silent for f in validated
+                   if f.error_type == "unclosed_quote")
 
 
 def test_shipped_default_quiets_edit_explanations_but_not_questions():

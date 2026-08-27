@@ -7,6 +7,25 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.133.0 (Purpura beta round 2)
+
+- `docproof capabilities` now carries **per-verb arg schemas** (flags,
+  required, choices) — you never need `--help` for a signature.
+- `--stage final-replay` now zeroes **every** detector (residuals, spellcheck,
+  consistency, glossary, LT, gates) — "detect nothing new" is real.
+- **Query comments collapse one-per-TYPE** past `comment_collapse` (default 3):
+  a number-policy class or a consistency family leaves ONE counted comment;
+  the report lists every site. Below the threshold a query is its own question.
+- **Intent zones now guard every channel at finish()** — model edits, repair,
+  and replayed/imported rows are downgraded inside protected spans, not just
+  sweeps; zero-width insertions at a zone boundary count as inside.
+- `docproof replay` round-trips pure insertions (empty original_text) via the
+  row's serialized anchor.
+- certify gained a **spellfix sanity** check (truncated-stem signature).
+- A materialized config may write a top-level list at COLUMN 0 under its key
+  (`sweeps:` then `- sweep_x` unindented) — valid YAML; don't misread it as an
+  empty section.
+
 ## The one mechanic that bites
 
 A run config **REPLACES `default.yaml` wholesale** — it is not a patch. Any
@@ -148,7 +167,7 @@ wrongly dropped on a bad grep.)
 | `genre_scans.reading_level` | on w/ pack | Turn off when it's noise for the genre. |
 | `low_confidence` (`confirm`) | on | Recovers stranded low-conf edits (compound_sentence_comma / comma_splice in dialogue). |
 | `repair` | trigger ≥3 flags/sentence | Broken sentences fixed as atomic clusters via Fable. |
-| `meaning_check` / `fix_check` | on | The two gates. `meaning` punctuation/case-only diffs bypass to `fix` only (deterministic) — do not disable to "save a hold". |
+| `meaning_check` / `fix_check` | off in base; ON via `--stage mechanical-wave` | The two gates. The BASE config ships them off; the mechanical-wave stage turns both on (that stage IS the "both gates" recipe). `meaning` punctuation/case-only diffs bypass to `fix` only (deterministic) — do not disable to "save a hold". |
 | `chapter_sweep` | off | ~$18 Fable / ~$3 Sonnet, or $0 as subagents. Plan line, never default. |
 | `sapling` | off | ~$34/long novel, key is FLY-ONLY (no-ops silently local). Explicit char budget or leave off. |
 | `tracked_changes_policy` | `abort` | `accept_all_first` to review a doc that already has tracked changes. |
@@ -160,6 +179,44 @@ wrongly dropped on a bad grep.)
 comments. Curated/replayed edits must ride a custom EDIT-channel type
 (`curated_fix`-style) declared in `error_types`, listed FIRST so composites win
 their spans.
+
+## File contracts (so you never guess a schema by trial and error)
+
+**Paragraph ids** (`body-NNNN`) never map cleanly onto your own text
+extraction (textboxes/tables shift the numbering). Get them from the rack:
+`docproof inventory IN --para-map` prints `para_id<TAB>length<TAB>canonical
+text` for every paragraph — the exact ids and post-normalization text that
+import rows and intent-zone regexes must match. Note the canonical text
+STRIPS paragraph-trailing whitespace; an original_text ending in a space will
+not anchor.
+
+**Intent-zones file** (`intent_zones_file`, `galley intent-zones --zones`):
+JSON, either a bare list of zones or `{"zones": [...]}`. Each zone:
+
+```json
+{"label": "email_headers", "permission": "locked",
+ "para_ids": [], "para_range": [], "terms": [], "regex": "^(To|From|Subject):.*$",
+ "quotes": false}
+```
+
+`permission`: `locked` | `punctuation` | `open`. Selectors union; `quotes` is a
+BOOLEAN (protect quoted spans), not a list. Unknown keys are rejected loudly —
+if your file resolves zero spans, your regex matched nothing, not the schema.
+Only the span the selector MATCHES is protected — anchor a regex over the whole
+line (`.*$`) when the whole line is the zone.
+
+**import-findings / replay rows**: JSON array (or `{"findings": [...]}`). Each
+row: `para_id`, `original_text` (must anchor VERBATIM in the canonical
+paragraph), `corrected_text`, optional `error_type`, `explanation`/`comment`,
+`occurrence`, `confidence`. A row with `queried`/`force_query` true — or whose
+`error_type` is a shipped query-channel type (`general_error` included) — rides
+as a margin comment, never as an edit; `original_text == corrected_text` plus a
+comment is a pure author question. Rows on a shipped format-channel type
+(`title_italics`) replay as italic marks (`corrected_text` = the span inside
+`original_text`). Multi-fix rows are fine: the validator splits each row into
+minimal per-touch tracked changes, so a full-paragraph O→C with three fixes
+lands as three small marks, not a block replace. The edit guard does not apply
+on this path (rows are curated); the word-count delta guard still does.
 
 ## Bespoke sweep contract (so you never read `sweeps.py`)
 

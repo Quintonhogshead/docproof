@@ -207,6 +207,22 @@ def _touched_spans(validated: Sequence[Finding]) -> dict[str, list[tuple[int, in
     return spans
 
 
+def _heading_shape(text: str) -> bool:
+    """A short line with no terminal punctuation reads as a title, subtitle,
+    or TOC entry, whatever style it carries — authors hand-format headings as
+    Normal all the time, so `reviewable` alone does not exclude them. Numerals
+    in a heading are typesetting, not prose: the Purpura beta converted the
+    chapter subtitle "Soul-sucking 8 to 5" into "Soul-sucking eight to 5" (on
+    the TOC line AND the chapter page) before this guard existed."""
+    s = text.strip()
+    if not s:
+        return True
+    if len(s.split()) >= 8:
+        return False
+    tail = s.rstrip("\"”’')]")
+    return not tail or tail[-1] not in ".!?…:—–-"
+
+
 def residual_queries(paragraphs: Sequence[ParagraphRef],
                      validated: Sequence[Finding], *,
                      max_per_rule: int = 150) -> list[Finding]:
@@ -242,6 +258,8 @@ def residual_queries(paragraphs: Sequence[ParagraphRef],
         # are already excluded (they are swept-only, so not reviewable); header
         # and footer paragraphs are reviewable but must be held to the same rule.
         if para.location in ("header", "footer"):
+            continue
+        if _heading_shape(para.text):
             continue
         spans = touched.get(para.para_id, ())
         for rule in _RULES:

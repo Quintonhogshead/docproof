@@ -13,10 +13,20 @@ __all__ = ["BatchRequest", "BatchStatus", "EFFORT_MULTIPLIER", "MODELS",
            "lookup", "provider_for", "strict_json_schema"]
 
 
-def build_provider(cfg, *, api_key: str | None = None) -> Provider:
+def build_provider(cfg, *, api_key: str | None = None,
+                   model: str | None = None) -> Provider:
     """The one place a vendor SDK is chosen. Imports are deferred so a missing
-    optional SDK only breaks the provider that needs it."""
-    name = provider_for(cfg.api.model, cfg.api.provider)
+    optional SDK only breaks the provider that needs it.
+
+    ``model`` overrides which model the provider is chosen FOR: a caller that
+    resolved its own model (the audit's whole-book reader, say) must get that
+    model's vendor, not ``cfg.api.model``'s — sending gpt-5.6-luna to the
+    Anthropic SDK is a guaranteed request-time error. The ``cfg.api.provider``
+    pin applies only to ``cfg.api.model`` itself."""
+    if model is not None and model != cfg.api.model:
+        name = provider_for(model, None)
+    else:
+        name = provider_for(cfg.api.model, cfg.api.provider)
     kwargs = {"api_key": api_key, "max_retries": cfg.api.max_retries,
               "prompt_caching": cfg.api.prompt_caching,
               "effort": cfg.api.effort}

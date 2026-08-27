@@ -29,7 +29,11 @@ not stricter judges.
    - **$0 subagent mode**: run each lens as a session subagent over
      ~24k-char windows with the `[Pn]` paragraph payload, verbatim
      quote→correction JSON, incremental output (dense windows die at the
-     output cap AFTER the full read — split, don't retry bigger). Then
+     output cap AFTER the full read — split, don't retry bigger). Tell
+     every subagent explicitly that it MUST WRITE its findings to the
+     output file and that a reply without the file is a failed task —
+     on the Purpura beta ~20% of subagents narrated their findings into
+     the chat reply instead and the rows were lost. Then
      `flights --judge-only` (or import-findings) to run the paid judge over
      the union.
 2. **Union → clusters.** Per-paragraph transitive span-overlap merge.

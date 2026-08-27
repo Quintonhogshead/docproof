@@ -475,7 +475,12 @@ def _sweep_dialogue_tag(text: str, variant=None) -> list[Hit]:
 # an em dash is an interruption, an ellipsis a trailing-off, a colon a label.
 _ENDS_CLEAN = tuple(".!?…:—–-*")
 _CLOSERS = "”’\"')]"
-_INTERNAL_END = re.compile(r"[.!?…][\"”’')\]]?\s")
+# A mark is an internal sentence END only when what follows opens like a new
+# sentence. An ellipsis (or period) followed by a lowercase word is a pause or
+# an abbreviation, not a break — "F*cking forties… what a dumpster fire" is a
+# sentence-case TITLE, and its ellipsis granting "prose shape" is exactly how
+# the Purpura beta got a period appended to the book's title page.
+_INTERNAL_END = re.compile(r"[.!?…][\"”’')\]]?\s+[\"“‘'(\[]?[A-Z0-9]")
 
 
 def _sweep_terminal_period(text: str, variant=None) -> list[Hit]:

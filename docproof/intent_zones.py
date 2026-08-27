@@ -59,7 +59,13 @@ PUNCTUATION_SWEEPS = frozenset({
 class IntentZone(BaseModel):
     """One protected region: a selector, a permission class, and a label.
 
-    Exactly one selector field should be set; if several are, they union."""
+    Exactly one selector field should be set; if several are, they union.
+    Unknown keys are REJECTED, not ignored: a zones file written against a
+    guessed schema (``name``/``class``/``selectors``) must fail loudly here,
+    because the silent alternative is five zones that each resolve to zero
+    protected spans — protection that looks configured and is not."""
+    model_config = {"extra": "forbid"}
+
     label: str = ""
     permission: str = "locked"
     category: str = ""               # free-text: scripture | quotation | dialect | ...
@@ -89,6 +95,8 @@ class IntentZone(BaseModel):
 class IntentZones(BaseModel):
     """A manuscript's intent zones. Loads from ``<book>.intent.json`` or a
     config block; resolves against the paragraph list to concrete spans."""
+    model_config = {"extra": "forbid"}
+
     zones: list[IntentZone] = Field(default_factory=list)
 
     @property
@@ -194,7 +202,14 @@ class ResolvedZones:
         rank = {"locked": 0, "punctuation": 1, "open": 2}
         best: IntentZone | None = None
         for lo, hi, zone in self._by_para.get(para_id, ()):  # half-open
-            if start < hi and lo < end:
+            # A zero-width span is a pure INSERTION point: appending a period
+            # at the end of a locked title touches [37,37) against a zone of
+            # [0,37) and slips a strict half-open test — the Purpura beta's
+            # title-period bug. An insertion touching either boundary edits
+            # the protected text and counts as inside.
+            hit = (lo <= start <= hi) if start == end \
+                else (start < hi and lo < end)
+            if hit:
                 if best is None or rank[zone.permission] < rank[best.permission]:
                     best = zone
         return best

@@ -33,13 +33,21 @@ skill; follow the skill, record what you learned.
    unless the human sets another. Every paid model call must trace to a line
    in the approved plan. Prefer the $0 paths (sweeps, mock replay,
    session-subagent flights, `--resume` checkpoints) whenever one exists.
-   Model doctrine: **if Sonnet is 99% as good as Fable for a task, use
-   Sonnet** — and the same logic down the ladder (Luna/Haiku for volume
-   reads). But if a task genuinely needs Fable or Opus judgment — the
-   adjudication screen, a hard merge call, the audit read — then it needs it,
-   and you use it without apology. Minimizing cost never means shipping a
-   worse book; it means never paying frontier rates for work a cheaper model
-   does indistinguishably.
+   Model doctrine (Quinton, 2026-08-27): **Claude models never bill — run
+   them as $0 session subagents**, and pick the subagent tier by the
+   DIFFICULTY of the task: **Sonnet for basic detecting, Opus when the read
+   is genuinely difficult, Fable for long-horizon work** (multi-stage
+   reasoning, whole-book threads, the audit/adjudication screens) — always
+   the MINIMUM model you judge will not compromise results. Haiku subagents
+   proved weak on the Purpura beta (low recall, high variance, and they need
+   an explicit "write the output file" instruction); don't reach for them
+   where the result matters. **OpenAI and/or Gemini calls are worth real
+   dollars when you judge you need them — Luna is by far the best detector
+   we have measured**; a cross-family read catches what any single family
+   misses, so plan a paid Luna pass rather than pretending a Claude-only
+   union is equivalent. Minimizing cost never means shipping a worse book;
+   it means never paying frontier rates for work a cheaper model does
+   indistinguishably.
 4. **Respect intent zones.** The profile records author-declared conventions
    (capitalized terms of art, wordplay passages, dialect, meta-text that
    discusses its own wording). Nothing in an intent zone is "corrected." This
@@ -53,6 +61,24 @@ skill; follow the skill, record what you learned.
 5. **Never ship what you haven't audited.** The reject-all round trip must be
    clean, the artifact scan must be clean, and the residual estimate goes in
    the letter — honestly.
+6. **Queries are an absolute LAST resort** (Quinton, 2026-08-27). A margin
+   comment is a claim on the author's attention; a barrage of "this number was
+   left unchanged"-style notes is unacceptable. For every candidate query,
+   first try to DECIDE: apply it as a rejectable tracked change (mechanics),
+   or stay silent (voice). Query only when the answer genuinely requires
+   author knowledge you cannot have (a fact, an intent, an identity) — and
+   collapse any same-rule family to ONE counted comment, never one per site.
+   Policy classes that were queried wholesale (ordinals, measurements,
+   numeral families) are now: pick the house answer, apply it tracked, and
+   note the rule once in the letter. Keep `comment_collapse` on; treat the
+   comment budget (~1/1k words) as a hard ceiling, not a suggestion.
+7. **Vet consistency pairs before they reach the margins.** The
+   spelling-variant and "spelled differently elsewhere" scans pair surface
+   strings, and many pairs are homographs — the same letter sequence meaning
+   two different things (different sense, different part of speech, a name vs
+   a word, part of a longer phrase). Read each pair's sites in context before
+   letting it ride; a pair whose two spellings are both correct in their own
+   sentences is not an inconsistency and must be dropped, not queried.
 
 ## The instrument rack
 

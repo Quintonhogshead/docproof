@@ -5,6 +5,7 @@ import dataclasses
 import itertools
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 
@@ -39,6 +40,10 @@ def main(argv=None) -> int:
     inv.add_argument("input", help="a .docx or .idml file")
     inv.add_argument("--config", default="config/default.yaml")
     inv.add_argument("--model")
+    inv.add_argument("--para-map", action="store_true",
+                     help="print every paragraph's id and the start of its "
+                          "canonical text, then exit — the id/anchor reference "
+                          "for import-findings / replay / intent-zones rows")
     _stage_arg(inv)
     _genre_arg(inv)
     _profile_arg(inv)
@@ -328,10 +333,36 @@ def main(argv=None) -> int:
             "galley": cmd_galley}[args.cmd](args)
 
 
+def _capabilities_args(parser) -> list[dict]:
+    """A verb's arguments — name, flags, required, choices, first line of
+    help. Without these a headless practitioner can learn that a verb EXISTS
+    but not how to call it, and the context-discipline rule bans the big
+    `--help` dumps that would otherwise fill the gap (Purpura beta)."""
+    out: list[dict] = []
+    for a in parser._actions:
+        if isinstance(a, (argparse._SubParsersAction, argparse._HelpAction)):
+            continue
+        entry: dict = {"name": a.dest}
+        if a.option_strings:
+            entry["flags"] = list(a.option_strings)
+            if a.required:
+                entry["required"] = True
+        else:
+            entry["positional"] = True
+            if a.nargs not in ("?", "*"):
+                entry["required"] = True
+        if a.choices:
+            entry["choices"] = [str(c) for c in a.choices]
+        if a.help:
+            entry["help"] = " ".join(a.help.split())[:140]
+        out.append(entry)
+    return out
+
+
 def _capabilities_tree(parser) -> list[dict] | None:
     """Walk an argparse parser's subcommands into a JSON tree of
-    {name, help, subcommands?}. Introspective, so it can never drift from the
-    real verbs the way a hand-maintained list would."""
+    {name, help, args?, subcommands?}. Introspective, so it can never drift
+    from the real verbs the way a hand-maintained list would."""
     action = None
     for a in parser._actions:
         if isinstance(a, argparse._SubParsersAction):
@@ -343,6 +374,9 @@ def _capabilities_tree(parser) -> list[dict] | None:
     out: list[dict] = []
     for name, subparser in action.choices.items():
         entry: dict = {"name": name, "help": help_by_name.get(name, "")}
+        args = _capabilities_args(subparser)
+        if args:
+            entry["args"] = args
         child = _capabilities_tree(subparser)
         if child:
             entry["subcommands"] = child
@@ -909,6 +943,19 @@ def cmd_inventory(args) -> int:
     except (IngestError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+
+    if getattr(args, "para_map", False):
+        # The id/anchor reference: canonical (post-normalization) text, which
+        # is exactly what an import-findings/replay row's original_text must
+        # match and what an intent-zones regex runs against. Tab-separated so
+        # it greps and cuts cleanly.
+        for para in prepared.doc.paragraphs:
+            # Full text, not a preview: rows exist to be matched against.
+            # Tabs/newlines are escaped so the TSV stays one row per paragraph;
+            # the length column is the unescaped canonical length.
+            full = para.text.replace("\t", "\\t").replace("\n", "\\n")
+            print(f"{para.para_id}\t{len(para.text)}\t{full}")
+        return 0
 
     doc_tokens = sum(c.est_tokens for c in prepared.chunks)
     plan = prepared.effective_pass_plan
@@ -1756,6 +1803,30 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         print(f"error: {args.findings}: not valid JSON ({e})", file=sys.stderr)
         return 2
 
+    # Imported/replayed rows are curated input — hand-written, or a prior run's
+    # output that already faced the guard once. The overreach guard's threat
+    # model (a live model fabricating a rewrite mid-run) does not apply, and a
+    # composed multi-fix row legitimately spans more than 64 characters. The
+    # word-count delta guard below stays as the prose-eating backstop.
+    cfg.edit_guard.enabled = False
+
+    # Rows on a SHIPPED format-channel type (title_italics) round-trip by
+    # loading that type into the run, so validate/finish route them down the
+    # format channel — a mark, never a deletion. Detection never runs on this
+    # path, so the extra group costs nothing.
+    from .error_registry import load_error_types as _load_types
+    from .error_registry import shipped_keys as _shipped
+    _registry = _load_types(error_dir, sorted(_shipped(error_dir)))
+    _fmt_in_rows = sorted({str(r.get("error_type") or "") for r in rows
+                           if isinstance(r, dict)
+                           and _registry.get(str(r.get("error_type") or ""))
+                           is not None
+                           and _registry[str(r.get("error_type"))].is_format})
+    _missing_fmt = [k for k in _fmt_in_rows
+                    if k not in set(cfg.error_type_keys)]
+    if _missing_fmt:
+        cfg.error_types = list(cfg.error_types) + [_missing_fmt]
+
     try:
         prepared = prepare(cfg, args.manuscript, error_dir)
     except (IngestError, FileNotFoundError, ValueError) as e:
@@ -1764,7 +1835,9 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
 
     findings, rejects, remapped = build_findings(
         rows, variant=prepared.variant, error_dir=error_dir,
-        remap_unchanneled=remap_unchanneled, id_prefix=id_prefix)
+        remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
+        format_round_trip=True,
+        paragraphs={p.para_id: p.text for p in prepared.doc.paragraphs})
 
     checked = validate_findings(findings, prepared.doc, cfg.min_confidence,
                                 query_types=prepared.query_types,
@@ -2061,10 +2134,12 @@ def _galley_audit(args) -> int:
     setup_logging(out)
 
     # The audit is a whole-book reasoning read, so it wants the strong reader the
-    # continuity pass uses, not the cheap per-chunk detector model.
+    # continuity pass uses, not the cheap per-chunk detector model. The provider
+    # must be built for THAT model's vendor — the resolved model routinely
+    # belongs to a different provider than cfg.api.model.
     model = args.model or cfg.continuity.model or cfg.api.model
     try:
-        provider = build_provider(cfg)
+        provider = build_provider(cfg, model=model)
     except ProviderError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -2093,8 +2168,10 @@ def _galley_audit(args) -> int:
     audit_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False),
                           encoding="utf-8")
 
+    # Four decimals on purpose: one audit call on a cheap model is sub-cent,
+    # and "$0.00" reads exactly like the silently-didn't-run anomaly.
     print(f"\n{len(hyps)} hypothesis/-es about likely missed errors "
-          f"({usage.api_calls} model call(s), ${cost:.2f}).")
+          f"({usage.api_calls} model call(s), ${cost:.4f}).")
     quiet = sorted(densities, key=lambda d: (d.per_1k, d.index))[:5]
     if quiet:
         print("  quietest chapters (a miss most likely hides here):")
@@ -2649,7 +2726,7 @@ def _result_line(outputs) -> str:
     forty questions waiting in it needed nothing looked at."""
     line = f"{outputs.applied} tracked change(s) applied"
     if outputs.queried:
-        line += f", {outputs.queried} question(s) left in the margins"
+        line += f", {outputs.queried} question(s) raised"
     return line
 
 
@@ -2913,6 +2990,12 @@ def _galley_triage_nouns(args) -> int:
     from .genre_profile import Profile
     from .profile_corrections import triage_proper_nouns
 
+    if str(args.profile).lower().endswith((".docx", ".idml")):
+        print(f"error: {args.profile}: triage-nouns takes the profile JSON, "
+              "not the manuscript — run `docproof galley profile IN --json > "
+              "profile.json` first, then pass profile.json here.",
+              file=sys.stderr)
+        return 2
     try:
         profile = Profile.model_validate_json(
             Path(args.profile).read_text(encoding="utf-8"))
@@ -3079,15 +3162,33 @@ def _galley_routes(args) -> int:
     return 0
 
 
+def _sniff_pack_provenance(config_path: str | Path) -> dict[str, str]:
+    """Read the `# galley: genre=… stage=…` header write_genre_pack stamps on a
+    materialized config. Empty dict when there is none (a hand-written config)."""
+    try:
+        with open(config_path, encoding="utf-8") as fh:
+            first = fh.readline()
+    except OSError:
+        return {}
+    m = re.match(r"#\s*galley:\s*(.+)", first)
+    if not m:
+        return {}
+    return dict(pair.split("=", 1) for pair in m.group(1).split()
+                if "=" in pair)
+
+
 def _galley_approve(args) -> int:
     from galley.manifest import build_manifest
 
+    prov = _sniff_pack_provenance(args.config)
     try:
         cfg = _effective_cfg(args)
         manifest = build_manifest(
             source=args.input, config_path=args.config, cfg=cfg,
-            max_spend_usd=args.budget, stage=getattr(args, "stage", None),
-            genre=getattr(args, "genre", None), note=args.note)
+            max_spend_usd=args.budget,
+            stage=getattr(args, "stage", None) or prov.get("stage"),
+            genre=getattr(args, "genre", None) or prov.get("genre"),
+            note=args.note)
     except (FileNotFoundError, ValueError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

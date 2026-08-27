@@ -42,9 +42,12 @@ def test_providers_in_use_is_the_active_provider_set():
 
 def test_disabled_lane_routes_are_marked_inactive():
     routes = {r.role: r for r in model_routes(_mech_cfg())}
-    # meaning_check ships off by default in this config path -> inactive route.
+    # The mechanical-wave stage turns the two gates ON (it IS the "both gates"
+    # recipe) -> active routes; factcheck stays off -> inactive route.
     if "meaning_check.model" in routes:
-        assert routes["meaning_check.model"].active is False
+        assert routes["meaning_check.model"].active is True
+    if "factcheck.model" in routes:
+        assert routes["factcheck.model"].active is False
 
 
 # --- manifest + verify -------------------------------------------------------
@@ -153,15 +156,33 @@ def test_certify_fails_paid_run_missing_checkpoint(tmp_path):
     assert ckpt and ckpt[0].status == "fail"
 
 
-def test_certify_flags_a_merge_artifact_in_the_change_log(tmp_path):
+def test_certify_flags_a_merge_artifact_in_corrected_text(tmp_path):
     run = tmp_path / "run"
     run.mkdir()
     (run / "findings.json").write_text(json.dumps(
-        {"findings": [], "cost": {"total_usd": 0.0}}))
-    (run / "change_log.md").write_text("She paused,, then left.")
+        {"findings": [{"finding_id": "f-0001", "para_id": "body-0001",
+                       "original_text": "She paused then left.",
+                       "corrected_text": "She paused,, then left."}],
+         "cost": {"total_usd": 0.0}}))
     cert = certify_run(run)
     scan = [c for c in cert.checks if c.name == "artifact scan"]
     assert scan and scan[0].status == "fail"
+
+
+def test_certify_does_not_flag_artifacts_quoted_from_the_original(tmp_path):
+    """The change log and findings faithfully quote pre-fix text; the artifacts
+    IN those quotes are what the run fixed, not defects of the deliverable."""
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "findings.json").write_text(json.dumps(
+        {"findings": [{"finding_id": "f-0001", "para_id": "body-0001",
+                       "original_text": "She paused,,  then left. ",
+                       "corrected_text": "She paused, then left."}],
+         "cost": {"total_usd": 0.0}}))
+    (run / "change_log.md").write_text("> She paused,,  then left. ")
+    cert = certify_run(run)
+    scan = [c for c in cert.checks if c.name == "artifact scan"]
+    assert scan and scan[0].status == "pass"
 
 
 def test_import_judgments_run_is_not_a_zero_cost_anomaly(tmp_path):

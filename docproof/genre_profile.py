@@ -86,9 +86,12 @@ class TicSample(BaseModel):
 
 
 class AuthorTic(BaseModel):
-    kind: str                        # a sweep key, or "scene_break_glyph"
-    label: str                       # human-readable
-    count: int
+    # Defaults, not required: a practitioner hand-enriches profile.json (notes,
+    # zones, extra tics), and a strict schema here made triage-nouns refuse the
+    # whole profile over a note-shaped tic. Missing fields degrade to empties.
+    kind: str = ""                   # a sweep key, or "scene_break_glyph"
+    label: str = ""                  # human-readable
+    count: int = 0
     samples: list[TicSample] = Field(default_factory=list)
 
 

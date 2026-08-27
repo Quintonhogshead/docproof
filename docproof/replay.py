@@ -44,7 +44,7 @@ import dataclasses
 import itertools
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .config import Config
 from .error_registry import ErrorType, load_error_types, shipped_keys
@@ -131,7 +131,9 @@ def sanitize_corrected(text: str, variant: Variant | None) -> str:
 
 def build_findings(rows: list[dict], *, variant: Variant | None,
                    error_dir: str | Path, remap_unchanneled: bool,
-                   id_prefix: str = "import"
+                   id_prefix: str = "import",
+                   format_round_trip: bool = False,
+                   paragraphs: Mapping[str, str] | None = None
                    ) -> tuple[list[Finding], list[dict], int]:
     """Rows to `Finding`s. Anchoring is NOT done here — validate_findings (via
     a dry-run report) or finish() (for a real run) does that — this stage is
@@ -144,17 +146,15 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
     well-formed but its quote is not in the manuscript — and shows up later,
     as status "rejected_no_anchor" on the finding validate_findings returns.
 
-    Format-carrying rows are dropped here, unconditionally. A `title_italics`
-    row records `original_text` as the whole sentence and `corrected_text` as
-    just the span to italicise — a shape that only means "mark this span" when
-    it rides the format channel. A row has no format slot the replay Finding
-    preserves, so on a run that has not enabled `title_italics` the same pair
-    routes to the ordinary change channel, where `shrink` reads it as "delete
-    the sentence, keep the title" and eats real prose. The reject-all audit
-    cannot catch it — rejecting a tracked deletion restores the text — so the
-    only safe move is to never let a format row become a replay Finding.
-    Italics are applied through the deliverable's own format channel
-    (`galley.deliverable`), not by replaying a findings file."""
+    Format-carrying rows round-trip ONLY on a shipped format-channel type: a
+    `title_italics` row records `original_text` as the whole sentence and
+    `corrected_text` as just the span to italicise — a shape that only means
+    "mark this span" on the format channel. `_import_or_replay` loads any such
+    type named by the rows into the run so validate/finish route them as marks.
+    A format payload on a type the shipped registry does NOT know as format
+    channel is still rejected here: on the change channel that pair reads as
+    "delete the sentence, keep the title" and eats real prose, which the
+    reject-all audit cannot see (the word-count delta guard is the backstop)."""
     registry: dict[str, ErrorType] = {}
     if remap_unchanneled:
         registry = load_error_types(error_dir, sorted(shipped_keys(error_dir)))
@@ -182,7 +182,36 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             rejects.append({"index": i, "row": item,
                             "reason": "missing or non-string para_id"})
             continue
-        if not isinstance(original_text, str) or not original_text:
+        if isinstance(original_text, str) and not original_text:
+            # A pure insertion (a sweep's appended period, say) is a legal
+            # finding, but an empty original_text cannot anchor. When the row
+            # carries its serialized anchor and the caller handed us the
+            # canonical paragraphs, re-express it as a whole-paragraph O→C —
+            # the validator reduces that to the minimal insert. Purpura beta:
+            # a run's own findings.json failed to round-trip on exactly this.
+            anchor = item.get("anchor")
+            ptext = (paragraphs or {}).get(para_id)
+            if (isinstance(anchor, dict) and ptext
+                    and isinstance(anchor.get("insert_text"), str)
+                    and anchor.get("insert_text")
+                    and isinstance(anchor.get("start"), int)
+                    and anchor.get("end") == anchor.get("start")
+                    and 0 <= anchor["start"] <= len(ptext)):
+                start = anchor["start"]
+                original_text = ptext
+                corrected_text = (ptext[:start] + anchor["insert_text"]
+                                  + ptext[start:])
+                # The old row's occurrence indexed the empty span, not the
+                # whole paragraph — carrying it over sends the validator
+                # hunting a 38th copy of the paragraph.
+                item = {k: v for k, v in item.items() if k != "occurrence"}
+            else:
+                rejects.append({"index": i, "row": item,
+                                "reason": "empty original_text (pure "
+                                "insertion) with no usable anchor/paragraph "
+                                "to re-express it against"})
+                continue
+        elif not isinstance(original_text, str):
             rejects.append({"index": i, "row": item,
                             "reason": "missing or non-string original_text"})
             continue
@@ -192,17 +221,24 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             continue
 
         raw_type = str(item.get("error_type") or "")
-        # A format-carrying row cannot round-trip: its find/replace only mean
-        # "mark this span" on the format channel, and replay has no format slot.
-        # Drop it (by an explicit format field, or a format-channel type) rather
-        # than let it become a prose-eating deletion. See the docstring.
-        if item.get("format") or raw_type in format_keys:
+        is_format_row = bool(item.get("format")) or raw_type in format_keys
+        if is_format_row and not (format_round_trip
+                                  and raw_type in format_keys):
+            # Without `format_round_trip` — a caller that has NOT armed the
+            # format channel — a format row's find/replace pair would route to
+            # the change channel and read as "delete the sentence, keep the
+            # span", eating real prose. The CLI path (`_import_or_replay`)
+            # loads the row's format type into the run and opts in, so
+            # italics DO round-trip there; a format payload on a non-format
+            # type never has a safe route and is always dropped.
             rejects.append({"index": i, "row": item,
                             "reason": f"format-carrying row ({raw_type or 'unknown'}) "
-                            "dropped: formatting cannot round-trip through replay; "
-                            "apply italics via the deliverable's format channel"})
+                            "dropped: formatting cannot round-trip through "
+                            "this caller; shipped format types (e.g. "
+                            "title_italics) round-trip via import-findings/"
+                            "replay, which arm the format channel"})
             continue
-        if remap_unchanneled:
+        if remap_unchanneled and not is_format_row:
             resolved_type, was_remapped = resolve_error_type(
                 raw_type, registry, DEFAULT_IMPORT_TYPE)
         else:
@@ -210,6 +246,18 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             was_remapped = False
         if was_remapped:
             remapped += 1
+
+        # A row that asks rather than corrects rides the query channel as a
+        # margin comment, never as an edit: the author flagged it (queried /
+        # force_query on the row), or its type is query-channel in the SHIPPED
+        # registry — which this run's config may not have loaded (a final-replay
+        # stage zeroes error_types), so without this an unknown query type
+        # falls through to the edit channel and a held-back proposal silently
+        # APPLIES. That inversion is the one outcome a downgrade must never
+        # produce.
+        et_shipped = format_registry.get(resolved_type)
+        force_query = bool(item.get("force_query") or item.get("queried")
+                           or (et_shipped is not None and et_shipped.is_query))
 
         confidence = item.get("confidence", "medium")
         if confidence not in ("high", "medium", "low"):
@@ -227,8 +275,10 @@ def build_findings(rows: list[dict], *, variant: Variant | None,
             original_text=original_text,
             occurrence=occurrence,
             corrected_text=sanitize_corrected(corrected_text, variant),
-            explanation=str(item.get("explanation") or ""),
+            explanation=str(item.get("explanation") or item.get("comment")
+                            or ""),
             confidence=confidence,
+            force_query=force_query,
             # status/anchor are deliberately NOT carried over from the row:
             # they belong to whatever run produced it (a different
             # content_hash may not even hold the same offsets). finish() and

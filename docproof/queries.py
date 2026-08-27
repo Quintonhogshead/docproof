@@ -76,6 +76,8 @@ def shows_margin_comment(f: Finding, *, query_comments: bool,
       what was declined; the change log still records every one. When it is on,
       `query_comments` still decides the below-gate and oversized ones, so
       turning it on restores the prior behaviour exactly."""
+    if f.silent:
+        return False                         # collapsed into a counted sibling
     if f.status == "query" and not f.withheld:
         return True                          # genuine asking-pass query: always
     if not not_applied_comments:

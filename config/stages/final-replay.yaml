@@ -30,6 +30,42 @@ patch:
     enabled: false
   repair:
     enabled: false
+  # "No new detection" means ALL of it, not just the typed passes. The Purpura
+  # beta replayed under this stage and the residual number engine re-detected
+  # (and re-applied) rows the practitioner had deliberately dropped; glossary
+  # would even have made a paid call. Every detector that raises findings —
+  # and every paid gate — is off; the deterministic sweeps alone stay with the
+  # base config (idempotent normalization, not a detection lane).
+  languagetool:
+    enabled: false
+  spellcheck:
+    enabled: false
+  consistency:
+    enabled: false
+  glossary:
+    enabled: false
+  residuals:
+    enabled: false
+  meaning_check:
+    enabled: false
+  fix_check:
+    enabled: false
+  factcheck:
+    enabled: false
+  continuity:
+    enabled: false
+  chapter_continuity:
+    enabled: false
+  chapter_sweep:
+    enabled: false
+  sapling:
+    enabled: false
+  storysheet:
+    enabled: false
+  candidate_screening:
+    mode: 'off'
+  low_confidence:
+    confirm: false
 
 locks:
   - smoothing.enabled
@@ -37,3 +73,5 @@ locks:
   - rewrite.enabled
   - repair.enabled
   - ensemble.verify_policy
+  - sapling.enabled
+  - chapter_sweep.enabled
