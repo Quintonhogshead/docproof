@@ -15,23 +15,26 @@
 
   // The permanent party. `plain` is the no-prior-knowledge sentence; `lane`
   // is the honest machine name underneath.
+  // `role` is the plain job word a stranger scans — the fantasy classes
+  // (Scout, Knight, Bard) live only in the candlelit workshop, where a Cozy
+  // Coastal Mystery won't trip over them.
   var MEMBERS = [
-    { id: 'pip', name: 'Pip', role: 'Scout', icon: 'dagger',
+    { id: 'pip', name: 'Pip', role: 'Typos', icon: 'dagger',
       plain: 'Reads every page hunting typos and misspelled words.',
       lane: 'spelling_sweep · AI ensemble' },
-    { id: 'bram', name: 'Bram', role: 'Knight', icon: 'shield',
+    { id: 'bram', name: 'Bram', role: 'Grammar', icon: 'shield',
       plain: 'Checks grammar and punctuation, sentence by sentence.',
       lane: 'grammar_watch · rules + AI judge' },
-    { id: 'maple', name: 'Maple', role: 'Archivist', icon: 'book',
+    { id: 'maple', name: 'Maple', role: 'Consistency', icon: 'book',
       plain: 'Makes sure names and spellings stay identical from page 12 to page 312.',
       lane: 'consistency_scan · deterministic' },
-    { id: 'cinder', name: 'Cinder', role: 'Blacksmith', icon: 'hammer',
+    { id: 'cinder', name: 'Cinder', role: 'Repairs', icon: 'hammer',
       plain: 'Repairs sentences that came out broken or garbled.',
       lane: 'repair_channel · density-triggered' },
-    { id: 'sage', name: 'Sage', role: 'Wizard', icon: 'staff',
+    { id: 'sage', name: 'Sage', role: 'Continuity', icon: 'staff',
       plain: 'Remembers the whole book — flags it if the timeline or an eye color quietly changes.',
       lane: 'continuity · whole-book pass' },
-    { id: 'lark', name: 'Lark', role: 'Bard', icon: 'lute',
+    { id: 'lark', name: 'Lark', role: 'Style', icon: 'lute',
       plain: 'Suggests where a line could read better — always as a question, never a rewrite.',
       lane: 'smoothing · query-only' }
   ];
@@ -43,7 +46,7 @@
       price: 0, priceLabel: 'Free',
       blurb: 'The mechanical pass: dictionary, house sweeps, and the consistency scans. No AI reads your book. Results by email.',
       party: [] },
-    { id: 'typohunt', name: 'Typo Hunt', sub: 'The Scout rides alone',
+    { id: 'typohunt', name: 'Typo Hunt', sub: 'Pip rides alone',
       price: 9,
       blurb: 'Pip reads every page for typos and misspellings, plus everything in Spellcheck.',
       party: ['pip'] },
@@ -80,23 +83,11 @@
     return '$' + Math.round(tier.price * (band || 1));
   }
 
-  /* Galley types her line(s). Reduced motion gets them instantly. */
+  /* Galley speaks — instantly. The typewriter effect read as the page
+     rewriting itself, so her lines simply appear, finished. */
   function galleySay(el, lines, done) {
-    var text = Array.isArray(lines) ? lines.join(' ') : lines;
-    var reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (reduced) { el.innerHTML = text; if (done) done(); return; }
-    var plain = text.replace(/<[^>]*>/g, '');
-    el.innerHTML = '<span class="typed"></span><span class="caret"></span>';
-    var typed = el.querySelector('.typed'), i = 0;
-    (function step() {
-      if (i <= plain.length) {
-        typed.textContent = plain.slice(0, i++);
-        setTimeout(step, 20);
-      } else {
-        el.innerHTML = text;  // swap in the marked-up version (<em> accents)
-        if (done) done();
-      }
-    })();
+    el.innerHTML = Array.isArray(lines) ? lines.join(' ') : lines;
+    if (done) done();
   }
 
   function applyTint(palette) {

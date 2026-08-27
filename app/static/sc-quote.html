@@ -9,17 +9,37 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
 <link rel="stylesheet" href="/assets/sc-shared.css">
 <style>
+  .consent{margin-top:22px;display:grid;gap:10px;max-width:640px}
+  .consent label{display:flex;gap:12px;align-items:flex-start;font-size:15px;color:var(--faded);cursor:pointer}
+  .consent input{margin-top:4px;width:18px;height:18px;accent-color:var(--accent)}
+  .consent b{color:var(--ink);font-weight:500}
   .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);border-radius:16px;
-    background:var(--card);padding:22px 24px;margin-top:24px;cursor:pointer;transition:border-color .2s;box-shadow:var(--shadow)}
-  .drop:hover,.drop.over{border-color:var(--accent)}
+    background:var(--card);padding:22px 24px;margin-top:16px;cursor:pointer;transition:border-color .2s, opacity .2s;box-shadow:var(--shadow)}
+  .drop.locked{opacity:.55;cursor:not-allowed}
+  .drop:not(.locked):hover,.drop.over{border-color:var(--accent)}
   .drop:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
   .drop .dicon{flex:0 0 auto;width:46px;height:46px;border-radius:14px;border:1px solid var(--line-strong);
     display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
   .drop .dicon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   .drop .dtitle{font-family:var(--disp);font-size:19px}
   .drop .dsub{font-size:13.5px;color:var(--faded);margin-top:2px}
-  .drop.busy{pointer-events:none;opacity:.75}
   .dropnote{font-size:14px;color:var(--accent);margin-top:10px;min-height:1.2em}
+
+  /* the waiting room */
+  .waiting{margin-top:26px;max-width:640px}
+  .waiting .card{display:grid;gap:14px}
+  .wstatus{display:flex;align-items:center;gap:12px;font-family:var(--disp);font-size:19px}
+  .wdots{display:inline-flex;gap:4px}
+  .wdots i{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.3;animation:wpulse 1.4s infinite}
+  .wdots i:nth-child(2){animation-delay:.2s}.wdots i:nth-child(3){animation-delay:.4s}
+  @keyframes wpulse{40%{opacity:1}}
+  .wline{font-size:15.5px;color:var(--faded)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{border:1.5px solid var(--accent);background:none;color:var(--accent);border-radius:999px;
+    padding:7px 16px;font:15px var(--body);cursor:pointer}
+  .chip:hover{background:var(--accent-wash)}
+  .chip:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+
   .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);border:1px solid var(--line);
     border-radius:14px;padding:12px 18px;box-shadow:var(--shadow)}
   .bookchip b{font-family:var(--disp);font-size:18px;font-weight:400}
@@ -37,6 +57,19 @@
   .emailrow input:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
   .fine{font-size:13px;color:var(--dim);margin-top:10px}
   .hidden{display:none !important}
+
+  /* plain-English explainer */
+  .explain{margin-top:18px}
+  .explain .card{max-width:none}
+  .explain h3{font-family:var(--disp);font-weight:400;font-size:19px;margin:0 0 8px}
+  .explain p{margin:0 0 12px;font-size:15.5px;color:var(--faded)}
+  .explain p b{color:var(--ink);font-weight:500}
+  .examples{display:grid;gap:6px}
+  .ex{display:flex;gap:10px;align-items:baseline;font-size:14.5px}
+  .ex .from{font-family:var(--mono);font-size:13px;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap}
+  .ex .to{font-family:var(--mono);font-size:13px;color:var(--good);white-space:nowrap}
+  .ex .why{color:var(--dim);font-size:13px}
+  .lanternmember .sigil{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -59,32 +92,62 @@
     </div>
   </section>
 
-  <!-- Step 1: the drop -->
+  <!-- Step 1: consent, then the drop -->
   <div id="step-drop">
-    <div class="drop" id="drop" role="button" tabindex="0" aria-label="Upload your manuscript. Accepts .docx, .txt, or .md.">
+    <div class="consent">
+      <label><input type="checkbox" id="ok-ai">
+        <span><b>A generative AI will read my manuscript</b> to size the job and do
+        the checking. It's read once, never stored beyond 30 days, never used for
+        training. That's okay with me.</span></label>
+      <label><input type="checkbox" id="ok-terms">
+        <span><b>I accept the Terms of Service</b> <span style="color:var(--dim)">(coming soon — plain-English draft; for now this is a promise both ways)</span>.</span></label>
+    </div>
+    <div class="drop locked" id="drop" role="button" tabindex="0" aria-disabled="true"
+         aria-label="Upload your manuscript. Accepts .docx, .txt, or .md. Check both boxes above first.">
       <div class="dicon"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 20h14"/></svg></div>
       <div>
-        <div class="dtitle" id="droptitle">Drop your manuscript here, or click to choose</div>
-        <div class="dsub">.docx, .txt, or .md · an AI reads a few pages to size the job and dress the party · read once, never stored</div>
+        <div class="dtitle">Drop your manuscript here, or click to choose</div>
+        <div class="dsub">.docx, .txt, or .md · your exact quote appears before you pay anything</div>
       </div>
       <input type="file" id="fileinput" accept=".docx,.txt,.md" hidden>
     </div>
     <div class="dropnote" id="dropnote"></div>
   </div>
 
-  <!-- Step 2: the book + party + recommendation -->
+  <!-- The waiting room: no rewriting text, just patience and small talk -->
+  <div class="waiting hidden" id="waiting">
+    <div class="card">
+      <div class="wstatus"><span class="wdots"><i></i><i></i><i></i></span>
+        <span id="wtitle">Reading your first pages…</span></div>
+      <div class="wline" id="wline">This takes under a minute. Your pages go to the AI once, and nowhere else.</div>
+      <div id="wq">
+        <div class="wline" style="margin-bottom:8px"><b style="color:var(--ink);font-weight:500">While we wait —</b> how long have you been working on this book?</div>
+        <div class="chips" id="wchips">
+          <button class="chip" data-a="months">A few months</button>
+          <button class="chip" data-a="years">Years</button>
+          <button class="chip" data-a="secret">Don't ask</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: the book + party + quote -->
   <div class="bookchip" id="bookchip">
     <b id="booktitle"></b><span id="bookmeta"></span>
     <a class="redo" href="#" id="redo">try a different file</a>
   </div>
 
   <div id="step-quote" class="hidden">
-    <h2 id="partyhead">Your party, dressed for your book</h2>
-    <div class="members" id="members"></div>
-
     <h2>Choose how deep we go</h2>
     <div class="quotegrid">
-      <div class="tiers" id="tiers" role="radiogroup" aria-label="Choose a tier"></div>
+      <div>
+        <div class="tiers" id="tiers" role="radiogroup" aria-label="Choose a tier"></div>
+
+        <div class="explain" id="explain"></div>
+
+        <h2 id="partyhead">Who rides for this tier</h2>
+        <div class="members" id="members"></div>
+      </div>
       <div class="summary card" id="summary">
         <div class="label" style="margin-bottom:8px">Your quest</div>
         <div class="row"><span id="sumtier">—</span><b id="sumprice">—</b></div>
@@ -117,10 +180,93 @@
   var say = document.getElementById('say');
   var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
 
-  SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> I’ll size the job, and the party will dress for your book while I do.');
+  SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> Tick the two boxes so we both know what we’re agreeing to, then hand me your book.');
 
+  /* ---------- plain-English tier explainers, with example catches ---------- */
+  function ex(from, to, why){
+    return '<div class="ex"><span class="from">' + from + '</span><span>→</span>' +
+           '<span class="to">' + to + '</span><span class="why">' + why + '</span></div>';
+  }
+  var EXPLAIN = {
+    spellcheck:
+      '<h3>What Spellcheck actually does</h3>' +
+      '<p>Mechanical checks only — <b>no AI reads your book</b>. A dictionary pass, tidy-up sweeps, and the consistency scans. Results arrive by email as a list.</p>' +
+      '<div class="examples">' +
+      ex('teh', 'the', 'plain misspelling') +
+      ex('It  was', 'It was', 'double space') +
+      ex('Sara / Sarah', 'pick one', 'same character, two spellings — flagged, you decide') +
+      ex('"quotes"', '“quotes”', 'straight marks made curly') + '</div>',
+    typohunt:
+      '<h3>What Typo Hunt actually does</h3>' +
+      '<p>Everything in Spellcheck, <b>plus an AI reads every page</b> hunting the typos a dictionary can’t see — real words in the wrong place.</p>' +
+      '<div class="examples">' +
+      ex('their was a knock', 'there was a knock', 'right spelling, wrong word') +
+      ex('she took a deep breathe', 'breath', 'homophone slip') +
+      ex('he waved the flag franticly', 'frantically', 'the dictionary-adjacent typo') + '</div>',
+    proofread:
+      '<h3>What Proofread actually does</h3>' +
+      '<p>Everything above, <b>plus grammar, punctuation, and broken-sentence repair</b>. Every fix arrives as a tracked change in Word — you accept or reject each one.</p>' +
+      '<div class="examples">' +
+      ex('She ran, she fell.', 'She ran; she fell.', 'comma splice') +
+      ex('"Run" she said.', '"Run," she said.', 'dialogue punctuation') +
+      ex('He picked up the and left.', 'He picked up the bag and left.', 'missing word') +
+      ex('The the door was open.', 'The door was open.', 'doubled word') + '</div>',
+    deep:
+      '<h3>What Deep Proofread actually does</h3>' +
+      '<p>Everything above, <b>read twice</b> — a second pass catches what the first walked past. Plus whole-book memory and gentle style notes, with an AI judge double-checking every change before it reaches you.</p>' +
+      '<div class="examples">' +
+      ex('gray eyes (ch. 2)', 'green eyes (ch. 19)', 'continuity — flagged as a question, never changed') +
+      ex('“Her heart hammered” ×7', 'a comment, not an edit', 'style note, phrased as a question') +
+      ex('Tuesday… two days later… Friday?', 'timeline flagged', 'the math a tired reader feels') + '</div>',
+    campaign:
+      '<h3>What the Grand Campaign actually is</h3>' +
+      '<p><b>Several full expeditions over your book</b>, with Galley herself studying the results between passes and re-planning the next one — the closest thing to a human editor’s obsession that software can offer. Scoped and priced per book; you’ll talk to a person.</p>' +
+      '<div class="examples">' +
+      ex('pass 1', 'pass 2 targets what pass 1 revealed', 'the plan adapts to your book') + '</div>'
+  };
+
+  /* ---------- waiting-room small talk (canned, honest, no rewriting) ---------- */
+  var WLINES = [
+    'This takes under a minute. Your pages go to the AI once, and nowhere else.',
+    'I read fast, but carefully. The party is picking out costumes.',
+    'Whatever genre this is — someone in the party is already excited.',
+    'Nearly there. Good chapter breaks, by the way, make my job easier.'
+  ];
+  var WREPLIES = {
+    months: 'A few months — swift quill! All the more reason not to let typos steal the show.',
+    years: 'Years. It shows — in the good way. Let’s make the polish match.',
+    secret: 'Fair. The book is here now; that’s the part that counts.'
+  };
+  var wtimer = null;
+  function startWaiting(fname){
+    document.getElementById('step-drop').classList.add('hidden');
+    document.getElementById('waiting').classList.remove('hidden');
+    document.getElementById('wtitle').textContent = 'Reading “' + fname + '”…';
+    var i = 0, wline = document.getElementById('wline');
+    wline.textContent = WLINES[0];
+    wtimer = setInterval(function(){ i = (i + 1) % WLINES.length; wline.textContent = WLINES[i]; }, 5000);
+  }
+  function stopWaiting(){
+    clearInterval(wtimer);
+    document.getElementById('waiting').classList.add('hidden');
+  }
+  document.getElementById('wchips').addEventListener('click', function(e){
+    var c = e.target.closest('.chip'); if(!c) return;
+    document.getElementById('wq').innerHTML = '<div class="wline">' + WREPLIES[c.dataset.a] + '</div>';
+  });
+
+  /* ---------- consent gates the drop ---------- */
+  var okAI = document.getElementById('ok-ai'), okTerms = document.getElementById('ok-terms');
   var dropEl = document.getElementById('drop'), fileInput = document.getElementById('fileinput'),
-      dropTitle = document.getElementById('droptitle'), dropNote = document.getElementById('dropnote');
+      dropNote = document.getElementById('dropnote');
+  function consented(){ return okAI.checked && okTerms.checked; }
+  function syncGate(){
+    dropEl.classList.toggle('locked', !consented());
+    dropEl.setAttribute('aria-disabled', String(!consented()));
+    if(consented()) dropNote.textContent = '';
+  }
+  okAI.addEventListener('change', syncGate);
+  okTerms.addEventListener('change', syncGate);
 
   function renderTiers(){
     document.getElementById('tiers').innerHTML = SC.TIERS.map(function(t){
@@ -129,9 +275,25 @@
         (t.recommended ? '<span class="flag">Galley recommends</span>' : '') +
         '<div class="tname">' + t.name + '</div>' +
         '<div class="tsub">' + t.sub + '</div>' +
-        '<div class="tblurb">' + t.blurb + '</div>' +
         '<div class="tprice">' + SC.tierPrice(t, band) + '</div></div>';
     }).join('');
+  }
+
+  var LANTERN_CARD =
+    '<div class="member lanternmember"><div class="sigil">' + SC.svg('lantern') + '</div>' +
+    '<div><div class="mname">Galley<small>The lantern pass</small></div>' +
+    '<div class="mjob">No party rides for the free tier — Galley runs the mechanical toolkit alone: dictionary, sweeps, and the consistency scans.</div>' +
+    '<div class="mlane">lane: deterministic only · no AI reading</div></div></div>';
+
+  function renderParty(){
+    var t = SC.TIERS.find(function(x){ return x.id === picked; });
+    document.getElementById('partyhead').textContent =
+      t.party.length ? 'Who rides for ' + t.name : 'Who rides for ' + t.name + ' — just Galley';
+    document.getElementById('members').innerHTML = t.party.length
+      ? SC.MEMBERS.filter(function(m){ return t.party.indexOf(m.id) >= 0; })
+          .map(function(m){ return SC.memberCard(m, skin); }).join('')
+      : LANTERN_CARD;
+    document.getElementById('explain').innerHTML = '<div class="card">' + EXPLAIN[t.id] + '</div>';
   }
 
   function renderSummary(){
@@ -154,32 +316,31 @@
   }
 
   function showQuote(r){
+    stopWaiting();
     skin = r.skin; band = r.band || 1;
     wordLabel = (r.word_count || 0).toLocaleString() + ' words';
     SC.applyTint(skin.palette);
-    document.getElementById('step-drop').classList.add('hidden');
     var chip = document.getElementById('bookchip');
     chip.style.display = 'flex';
     document.getElementById('booktitle').textContent = skin.book_title;
     document.getElementById('bookmeta').textContent = wordLabel + ' · ' + skin.genre;
     document.getElementById('step-quote').classList.remove('hidden');
-    document.getElementById('members').innerHTML =
-      SC.MEMBERS.map(function(m){ return SC.memberCard(m, skin); }).join('');
-    renderTiers(); renderSummary();
+    renderTiers(); renderParty(); renderSummary();
     SC.galleySay(say, SC.esc(skin.narration) +
-      ' <em>For this book I’d ride with the party of four</em> — but the choice is yours, and the lantern pass is free.');
+      ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
   }
 
   function sendManuscript(file){
     if(!file) return;
+    if(!consented()){
+      dropNote.textContent = 'Tick both boxes above first — I only read with your say-so.';
+      return;
+    }
     if(!/\.(docx|txt|md)$/i.test(file.name || '')){
       dropNote.textContent = 'Galley reads .docx, .txt, or .md — ' + file.name + ' isn’t one.';
       return;
     }
-    dropEl.classList.add('busy');
-    dropTitle.textContent = 'Galley is reading “' + file.name + '”…';
-    dropNote.textContent = '';
-    SC.galleySay(say, 'Reading… a few pages only, and I won’t keep them. <em>The party is getting dressed.</em>');
+    startWaiting(file.name);
     var fd = new FormData(); fd.append('file', file, file.name);
     fetch('/api/quest/skin', {method:'POST', body:fd})
       .then(function(resp){
@@ -190,23 +351,23 @@
       })
       .then(showQuote)
       .catch(function(e){
+        stopWaiting();
+        document.getElementById('step-drop').classList.remove('hidden');
         dropNote.textContent = e.message;
-        SC.galleySay(say, 'Hm — that didn’t work. <em>' + SC.esc(e.message) + '</em>');
-      })
-      .then(function(){
-        dropEl.classList.remove('busy');
-        dropTitle.textContent = 'Drop your manuscript here, or click to choose';
         fileInput.value = '';
       });
   }
 
-  dropEl.addEventListener('click', function(){ fileInput.click(); });
+  dropEl.addEventListener('click', function(){
+    if(!consented()){ dropNote.textContent = 'Tick both boxes above first — I only read with your say-so.'; return; }
+    fileInput.click();
+  });
   dropEl.addEventListener('keydown', function(e){
-    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); dropEl.click(); }
   });
   fileInput.addEventListener('change', function(){ sendManuscript(fileInput.files[0]); });
   ['dragover','dragenter'].forEach(function(ev){
-    dropEl.addEventListener(ev, function(e){ e.preventDefault(); dropEl.classList.add('over'); });
+    dropEl.addEventListener(ev, function(e){ e.preventDefault(); if(consented()) dropEl.classList.add('over'); });
   });
   dropEl.addEventListener('dragleave', function(){ dropEl.classList.remove('over'); });
   dropEl.addEventListener('drop', function(e){
@@ -219,12 +380,12 @@
 
   document.getElementById('tiers').addEventListener('click', function(e){
     var el = e.target.closest('.tier'); if(!el) return;
-    picked = el.dataset.tier; renderTiers(); renderSummary();
+    picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
   });
   document.getElementById('tiers').addEventListener('keydown', function(e){
     if(e.key !== 'Enter' && e.key !== ' ') return;
     var el = e.target.closest('.tier'); if(!el) return;
-    e.preventDefault(); picked = el.dataset.tier; renderTiers(); renderSummary();
+    e.preventDefault(); picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
   });
 
   document.getElementById('go').addEventListener('click', function(){

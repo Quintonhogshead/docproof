@@ -144,7 +144,9 @@ honorific doing the work ("Deacon Bramwell", "Auntie Maple", "Sgt. Bram"), or \
 a bare nickname ("Slim"). Do NOT build trait-compound surnames ("Quickpen", \
 "Rulewright", "Longmemory", "Bluebook") unless the manuscript itself names its \
 people that way. NEVER use the name of an actual character, place, or person \
-appearing in the manuscript.
+appearing in the manuscript — including surnames: if the book has an Ida \
+Pomeroy, no party member may be a Pomeroy. Invent names that BELONG in that \
+world without already being in it.
 - job: ONE sentence in the book's register describing that member's real \
 function (given above). Charming, but never misleading about what it does.
 - look: ONE sentence describing that member's appearance in this book's world, \
@@ -200,14 +202,22 @@ def _user_prompt(ms: Manuscript) -> str:
 
 
 def _collisions(skin: SkinSpec, sample: str) -> tuple[str, ...]:
-    """Aliases that appear verbatim in the sample — likely the book's own
-    characters. True names (Pip, Bram, …) are exempt: staying home is allowed."""
+    """Alias name-parts that appear in the sample — likely borrowed from the
+    book's own people ("Maple Pomeroy" when the book has an Ida Pomeroy).
+    Checked token by token, because the model's favorite dodge is a fresh
+    first name stapled to a stolen surname. True names (Pip, Bram, …) and
+    short words (honorifics, "of", "the") are exempt."""
     true_names = {name for _, name, _, _ in ROLES}
     hits = []
     for key, _, _, _ in ROLES:
         alias = getattr(skin, key).alias.strip()
-        if alias and alias not in true_names and alias in sample:
-            hits.append(alias)
+        if not alias:
+            continue
+        for part in alias.replace(".", " ").split():
+            if (len(part) > 3 and part[0].isupper()
+                    and part not in true_names and part in sample):
+                hits.append(alias)
+                break
     return tuple(hits)
 
 
