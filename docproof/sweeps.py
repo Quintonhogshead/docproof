@@ -564,6 +564,47 @@ def _sweep_quote_punctuation(text: str, variant=None) -> list[Hit]:
             why = ("House style sets periods and commas inside a closing "
                    "quotation mark.")
         hits.append(Hit(m.start(), m.end(), replacement, why))
+    hits += _single_close_punct_hits(text)
+    return hits
+
+
+def _single_close_punct_hits(text: str) -> list[Hit]:
+    """The same rule at a closing SINGLE quote — ‘…alongside me’. — with the
+    extra burden that ’ is also the apostrophe. Only a ’ that CLOSES an open ‘
+    is a quotation mark, so the scan walks the paragraph tracking unmatched ‘
+    openers: a terminal possessive ("the boys’.") has no ‘ open and never
+    matches. An intra-word ’ (don’t) neither closes nor opens anything, and an
+    elision opener (’tis) can at worst swallow one closer — a missed fix, never
+    a wrong one."""
+    hits: list[Hit] = []
+    open_count = 0
+    for i, ch in enumerate(text):
+        if ch == "‘":
+            open_count += 1
+            continue
+        if ch != "’":
+            continue
+        prev = text[i - 1] if i else ""
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if prev.isalpha() and nxt.isalpha():
+            continue                     # apostrophe inside a word
+        if not open_count:
+            continue                     # possessive or stray: not a closer
+        open_count -= 1
+        if nxt not in ".,":
+            continue
+        if not prev or prev.isdigit() or prev.isspace() or prev == ",":
+            continue                     # a minutes mark, or malformed anyway
+        if prev in ".!?…":
+            replacement, why = "’", (
+                "House style sets periods and commas inside a closing "
+                "quotation mark; this quotation already ends with its own "
+                "punctuation, so the mark after the quote is dropped.")
+        else:
+            replacement, why = nxt + "’", (
+                "House style sets periods and commas inside a closing "
+                "quotation mark.")
+        hits.append(Hit(i, i + 2, replacement, why))
     return hits
 
 
@@ -925,6 +966,65 @@ def _sweep_dialogue_splice(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- trailing whitespace --------------------------------------------------------
+
+# Whitespace at the very end of a paragraph. Normalization strips these
+# silently at ingest, so post-normalize the only producer is the speaker-split
+# pass (the boundary space it leaves on each earlier fragment, on purpose — a
+# pre-snapshot pass must not make tracked changes of its own); this sweep
+# deletes them through the ordinary audited channel. It also stands alone as a
+# backstop on runs with normalize.spaces off.
+_TRAILING_WS = re.compile("[ \u00a0]+$")
+
+
+def _sweep_trailing_space(text: str, variant=None) -> list[Hit]:
+    """Delete paragraph-trailing whitespace. Renders as nothing, and if the
+    author later merges two paragraphs it becomes a mid-paragraph double."""
+    if not any(c.isalnum() for c in text):
+        return []                     # scene dividers space as they please
+    m = _TRAILING_WS.search(text)
+    if not m:
+        return []
+    return [Hit(m.start(), m.end(), "",
+                "Trailing spaces at the end of a paragraph are removed.")]
+
+
+# --- initialisms set in capitals ----------------------------------------------
+
+# A short whitelist, not a heuristic: each entry is an initialism with no
+# common-word homograph, safe to capitalize wherever it appears as its own
+# word ("live tv", "the tv show", "tv’s"). Candidates with a homograph (OK,
+# id, us, am, it) can never join this list — they need context a regex does
+# not have. Keys lowercase; matching is case-insensitive so "Tv" corrects too.
+_INITIALISMS = {
+    "tv": "TV",
+}
+_INITIALISM_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(k) for k in _INITIALISMS) + r")\b",
+    re.IGNORECASE)
+
+
+def _sweep_initialism(text: str, variant=None) -> list[Hit]:
+    """A whitelisted initialism set in lowercase — "live tv" — capitalized.
+    The human pass fixed tv→TV where the model pass glided; domains and
+    filenames ("channel4.tv", "tv.com") are left alone."""
+    hits: list[Hit] = []
+    for m in _INITIALISM_RE.finditer(text):
+        fixed = _INITIALISMS[m.group(0).lower()]
+        if m.group(0) == fixed:
+            continue
+        before = text[m.start() - 1] if m.start() else ""
+        after = text[m.end()] if m.end() < len(text) else ""
+        # A dot joined straight to either side reads as a domain or file part.
+        if before == "." or (after == "." and m.end() + 1 < len(text)
+                             and text[m.end() + 1].isalnum()):
+            continue
+        hits.append(Hit(m.start(), m.end(), fixed,
+                        f"House style sets the initialism {fixed} in "
+                        f"capitals."))
+    return hits
+
+
 # --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
@@ -949,6 +1049,10 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_deity_capital),
     Sweep("sweep_dialogue_splice", "Comma splices around a dialogue tag",
           _sweep_dialogue_splice),
+    Sweep("sweep_initialism", "Initialisms set in capitals (TV)",
+          _sweep_initialism),
+    Sweep("sweep_trailing_space", "Paragraph-trailing whitespace",
+          _sweep_trailing_space),
 )
 
 SWEEPS_BY_KEY = {s.key: s for s in SWEEPS}

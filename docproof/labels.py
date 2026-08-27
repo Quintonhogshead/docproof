@@ -54,6 +54,7 @@ FREE_FORM: frozenset[str] = frozenset({
     "name_consistency",   # consistency.py NAME_KEY
     "near_duplicate_name",# pipeline.py — protected-name pairs too close to call
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
+    "speaker_split",      # speakersplit.py — the split's declarative comment
     "heading_case",       # sweeps.py — headings set in title case
     "fact_check",         # factcheck.py — the external-world read
     "copyedit",           # flights.py LANE — the copy-edit flights lane

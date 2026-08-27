@@ -1,27 +1,35 @@
 key: speaker_change
 name: Two speakers in one paragraph
-version: 1
-# Asks, never corrects. The house brief is explicit: flag it, do not
-# restructure. Where a speaker's line belongs is the author's decision, and a
-# paragraph break is not a punctuation fix.
+version: 2
+# Asks, never corrects — for the JUDGMENT cases. The certain pattern (two
+# quote pairs with nothing but whitespace between them) is handled before this
+# type ever reads the text: the speaker-split pass (docproof/speakersplit.py)
+# makes that break as a tracked change with a declarative comment, per the
+# head proofreader's ruling on the Johnson run. What reaches this type is the
+# remainder — a second speaker behind narration, an ambiguous reply — where a
+# break needs the author's judgment, so asking is right.
 channel: query
 
 detection_prompt: |
   Convention gives each speaker their own paragraph. When two people's spoken
-  lines share one, a reader loses track of who is talking — and the fix is a
-  paragraph break, which is the author's to make, not yours.
+  lines share one, a reader loses track of who is talking — and where the
+  split belongs is a judgment the author must confirm, so you ask.
 
   FLAG, as a question:
-  - Two closing-and-opening quote pairs with no narration between them:
-    "“I won't go.” “You will.”" — two people, one paragraph.
   - A paragraph whose dialogue tags change subject: one line tagged "I said"
     and another tagged "he said", or two different named speakers tagged in
     the same paragraph.
   - A reply that plainly answers the line before it, inside the same
     paragraph, with nothing but a comma or a dash between them.
+  - Two quote pairs separated by narration, where the narration reads as the
+    SECOND person acting — the reply's own beat — rather than the first
+    speaker's business.
 
   Do NOT flag — the distinction that matters here is between a second SPEAKER
   and a second PERSON:
+  - Two quote pairs with nothing but whitespace between them: "“I won't go.”
+    “You will.”". The speaker-split pass already made that break as a tracked
+    change; flagging it again would comment twice on one fix.
   - One speaker's dialogue with another character's silent reaction narrated
     between the lines: "“I won't go.” She looked at the floor. “You can't make
     me.”" That is one speaker and one listener, correctly set.
@@ -55,11 +63,7 @@ confidence_guidance: |
 
 examples:
   - text: "“I won't go.” “You will, and you'll thank me.”"
-    finding:
-      original_text: "“I won't go.” “You will, and you'll thank me.”"
-      corrected_text: "“I won't go.” “You will, and you'll thank me.”"
-      explanation: "Two speakers share this paragraph — should the reply start a new one?"
-      confidence: high
+    finding: null
   - text: "“I won't go.” She looked at the floor. “You can't make me.”"
     finding: null
   - text: "“He told me ‘go home’ and hung up,” she said."

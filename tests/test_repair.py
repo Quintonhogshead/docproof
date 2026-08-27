@@ -432,3 +432,36 @@ def test_human_repairs_from_keeps_clusters_drops_lone_tokens():
     assert ("p1", _norm("He run to the store.")) in ref
     assert ref[("p1", _norm("He run to the store."))] == "He ran to the store, quickly."
     assert all(pid != "p2" for pid, _ in ref)
+
+
+# --- the syntax-type widening (Grenada memoir class) --------------------------
+
+def test_syntax_flag_triggers_at_the_lower_bar():
+    para = ParagraphRef("p1", "word/document.xml", "body",
+                        "I came upon, in a face-to-face manner, by the husband.",
+                        "Normal")
+    text = para.text
+    findings = [
+        _edit("p1", text, text.replace("upon,", "upon"),
+              error_type="run_on_sentence"),
+        _edit("p1", text, text.replace("by the", "the"),
+              error_type="unnecessary_comma"),
+    ]
+    # Two flags: under the ordinary threshold of 3…
+    assert triggered_sentences(findings, [para], threshold=3) == []
+    # …but the run_on_sentence flag lets the pair through at the syntax bar.
+    sites = triggered_sentences(
+        findings, [para], threshold=3,
+        syntax_types=("run_on_sentence", "missing_word"), syntax_threshold=2)
+    assert len(sites) == 1 and sites[0].error_count == 2
+    # Without a syntax flag among the reasons, the ordinary bar still holds.
+    plain = [
+        _edit("p1", text, text.replace("upon,", "upon"),
+              error_type="unnecessary_comma"),
+        _edit("p1", text, text.replace("by the", "the"),
+              error_type="serial_comma"),
+    ]
+    assert triggered_sentences(
+        plain, [para], threshold=3,
+        syntax_types=("run_on_sentence", "missing_word"),
+        syntax_threshold=2) == []

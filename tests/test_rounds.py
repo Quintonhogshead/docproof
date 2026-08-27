@@ -183,6 +183,9 @@ def test_later_rounds_drop_the_whole_book_passes_when_reuse_is_on():
     later = _round_config(cfg, 2, True)
     assert not later.languagetool.enabled
     assert not later.glossary.enabled and not later.storysheet.enabled
+    # Splits happened once in round 1; a later round splitting would renumber
+    # para_ids out from under the round-1 edit layers.
+    assert not later.speaker_split.enabled
 
     kept = _round_config(cfg, 2, False)                    # reuse off: nothing dropped
     assert kept.languagetool.enabled

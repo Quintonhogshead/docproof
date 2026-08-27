@@ -173,3 +173,39 @@ def test_import_judgments_run_is_not_a_zero_cost_anomaly(tmp_path):
     cert = certify_run(run)
     anomaly = [c for c in cert.checks if c.name == "zero-cost anomaly"]
     assert anomaly and anomaly[0].status == "pass"
+
+
+# --- delivered text hygiene ---------------------------------------------------
+
+def _docx_in(run, name, *texts):
+    import docx as _docx
+    d = _docx.Document()
+    for t in texts:
+        d.add_paragraph(t)
+    d.save(run / name)
+
+
+def test_certify_text_hygiene_skips_without_a_docx(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    cert = certify_run(run)
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "skip"
+
+
+def test_certify_text_hygiene_fails_on_double_spaces(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_in(run, "book - Atmosphere Press Proofreader.docx",
+             "A clean paragraph.", "Two  spaces survived here.",
+             "Trailing spaces here.  ")
+    cert = certify_run(run)
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "fail"
+    assert "double space" in check.detail
+
+
+def test_certify_text_hygiene_passes_clean_text_and_dividers(tmp_path):
+    run = _run_dir(tmp_path, {"findings": [], "cost": {"total_usd": 0.0}})
+    _docx_in(run, "book.docx", "A clean paragraph.", "*   *   *", "Another.")
+    cert = certify_run(run)
+    check = next(c for c in cert.checks if c.name == "delivered text hygiene")
+    assert check.status == "pass"

@@ -822,3 +822,65 @@ def test_the_shipped_config_enables_the_mechanical_scans():
     assert cfg.consistency.chicago_notes
     assert cfg.consistency.max_queries_per_kind == 40
     assert Config().consistency.spelling_variants
+
+
+# --- deity pronouns (the Grenada memoir's "and he knows") ---------------------
+
+def _reverent_paras():
+    filler = ("God is patient with us! He also sees the struggles we go "
+              "through, for His mercy endures and Him alone we praise, "
+              "and Himself provides; He watches, His hand guides, Him we "
+              "trust, He remains.")
+    return _paras(
+        filler,
+        "The Lord watches; His hand guides us and Jesus walks beside us.",
+        "God is patient with us! He also sees the struggles and challenges "
+        "we go through, and he knows every decision we make.",
+    )
+
+
+def test_deity_pronoun_stray_is_queried():
+    from docproof.consistency import find_deity_pronouns
+    drift = find_deity_pronouns(_reverent_paras(), min_capitalized=8)
+    assert drift is not None
+    assert [o.form for o in drift.outliers] == ["he"]
+    findings = to_findings(
+        find_inconsistencies(_reverent_paras(), min_length=7), _reverent_paras())
+    deity = [f for f in findings if "pronouns referring to God" in f.explanation]
+    assert len(deity) == 1
+    assert deity[0].corrected_text == deity[0].original_text     # query only
+
+
+def test_deity_scan_stays_silent_without_the_convention():
+    from docproof.consistency import find_deity_pronouns
+    secular = _paras(
+        "He walked home and he thought about the game.",
+        "She told him the news and his face fell.",
+    )
+    assert find_deity_pronouns(secular) is None
+
+
+# --- the US variant policy (theatre -> theater) --------------------------------
+
+def test_variant_policy_queries_a_consistently_british_form():
+    paras = _paras(
+        "They met at the theatre after the show closed.",
+        "The theatre was dark by nine, and the theatre sign was off.",
+    )
+    report = find_inconsistencies(paras, variant_policy="us")
+    assert [g.dominant for g in report.policy] == ["theater"]
+    findings = to_findings(report, paras)
+    policy = [f for f in findings if "U.S. spelling" in f.explanation]
+    assert len(policy) == 1 and "theater" in policy[0].explanation
+    assert policy[0].corrected_text == policy[0].original_text   # query only
+
+
+def test_variant_policy_off_by_default_and_skips_mixed_and_accepted():
+    paras = _paras(
+        "They met at the theatre after the show.",
+        "The theater was dark; he walked towards the door.",
+    )
+    assert find_inconsistencies(paras).policy == ()
+    report = find_inconsistencies(paras, variant_policy="us")
+    # Mixed theatre/theater is the mixed-usage scan's; towards is accepted US.
+    assert report.policy == ()

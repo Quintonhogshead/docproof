@@ -49,6 +49,11 @@ class DocumentFormat:
     # skips it — the same facts still reach summary.md and the change log.
     #   annotate_excluded_words(pkg, doc, words, author) -> bool
     annotate_excluded_words: Callable | None = None
+    # Split a paragraph two speakers share, as a tracked change, before the
+    # ingest snapshot. OOXML-shaped (a w:ins on the paragraph mark); a format
+    # without it leaves the case to the speaker_change query.
+    #   speaker_split(pkg, variant, author=, max_splits=) -> [SpeakerSplit]
+    speaker_split: Callable | None = None
 
     # What the press appends to a manuscript it has proofread. The name is the
     # deliverable's identity — the team hands "<book> - Atmosphere Press

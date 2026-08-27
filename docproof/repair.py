@@ -193,9 +193,20 @@ class RepairCluster:
 
 def triggered_sentences(findings: Sequence[Finding],
                         paragraphs: Sequence[ParagraphRef], *,
-                        threshold: int) -> list[BrokenSite]:
+                        threshold: int,
+                        syntax_types: Sequence[str] = (),
+                        syntax_threshold: int | None = None) -> list[BrokenSite]:
     """Sentences carrying at least ``threshold`` separate corrections, each as a
     BrokenSite to route to the repair model.
+
+    ``syntax_types`` widens the net for structurally broken sentences: a
+    sentence flagged by one of these detectors (run_on_sentence, missing_word —
+    the flags that say "this sentence does not parse", not "a comma is
+    missing") triggers at ``syntax_threshold`` instead. The Grenada memoir's
+    "I came upon, in a face-to-face manner, by the husband" accumulates one or
+    two flags, never three; a broken-syntax flag plus any corroborating second
+    is evidence enough to let the judge look. Empty ``syntax_types`` keeps the
+    single-threshold behavior exactly.
 
     Only corrections count — a ``force_query`` finding is a question, not
     evidence a sentence is broken, and a repair member does not count toward
@@ -234,9 +245,14 @@ def triggered_sentences(findings: Sequence[Finding],
         counts[key] += 1
         reasons[key].append(f.error_type)
 
+    syntax = frozenset(syntax_types)
+    floor = syntax_threshold if syntax_threshold is not None else threshold
     sites: list[BrokenSite] = []
     for (para_id, lo, hi), n in counts.items():
-        if n < threshold:
+        bar = (floor if syntax and any(r in syntax
+                                       for r in reasons[(para_id, lo, hi)])
+               else threshold)
+        if n < bar:
             continue
         text = text_of[para_id]
         sentence = text[lo:hi]

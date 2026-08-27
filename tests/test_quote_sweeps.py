@@ -144,3 +144,33 @@ def test_unclosed_check_respects_single_primary_variants():
     uk = load_variant("uk")
     ps = paras('“Never closed at all.', 'Plain narration.')
     assert unclosed_quote_findings(ps, uk) == []
+
+
+# --- punctuation against a closing SINGLE quote (Violyam, DP-Johnson) ---------
+
+@pytest.mark.parametrize("before,after", [
+    ("It meant ‘older sibling was orphaned alongside me’.",
+     "It meant ‘older sibling was orphaned alongside me.’"),
+    ("He called it ‘the long way’, and smiled.",
+     "He called it ‘the long way,’ and smiled."),
+    # Already-terminal quotations drop the mark outside, like doubles do.
+    ("She whispered ‘go!’.", "She whispered ‘go!’"),
+])
+def test_single_close_punctuation_moves_inside(before, after):
+    assert swept("sweep_quote_punctuation", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "That was the boys’.",                  # possessive: no ‘ ever opened
+    "It was the Joneses’, all of it.",      # same, mid-sentence
+    "He is 6’.",                            # a feet mark after a digit
+    "Don’t.",                               # intra-word apostrophe
+])
+def test_single_close_punctuation_leaves_apostrophes(text):
+    assert unchanged("sweep_quote_punctuation", text)
+
+
+def test_single_close_left_alone_for_uk():
+    uk = load_variant("uk")
+    assert unchanged("sweep_quote_punctuation",
+                     "It meant ‘orphaned alongside me’.", uk)
