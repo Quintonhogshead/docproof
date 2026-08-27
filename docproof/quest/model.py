@@ -14,9 +14,11 @@ from pydantic import BaseModel
 
 
 class CharacterSkin(BaseModel):
-    """One party member's costume for this book: a name and a voice."""
+    """One party member's costume for this book: a name, a voice, and what an
+    illustrator would need to draw them in this book's world."""
     alias: str
     job: str
+    look: str
 
 
 class SkinSpec(BaseModel):
@@ -63,19 +65,31 @@ DEFAULT_SKIN = SkinSpec(
     empty_bench="Everyone's been hired!",
     signoff=("we'll send a raven (okay, an email) when the loot is ready."),
     pip=CharacterSkin(alias="Pip",
-                      job="Hunts typos and misspelled words."),
+                      job="Hunts typos and misspelled words.",
+                      look="Small and quick, a young scout in a travel-worn "
+                           "cloak, bright eyes over a knowing grin."),
     bram=CharacterSkin(alias="Bram",
-                       job="Keeps grammar and punctuation lawful."),
+                       job="Keeps grammar and punctuation lawful.",
+                       look="Broad and steady, a knight in plain polished "
+                            "armor with a ledger on his belt."),
     maple=CharacterSkin(alias="Maple",
                         job="Keeps names spelled the same on page 12 "
-                            "and page 312."),
+                            "and page 312.",
+                        look="Precise and ink-stained, spectacles on a chain, "
+                             "a satchel of well-kept records."),
     cinder=CharacterSkin(alias="Cinder",
                          job="Reforges broken sentences. Tangled ones "
-                             "become boss fights."),
+                             "become boss fights.",
+                         look="Strong-armed at a small forge, leather apron, "
+                              "sparks caught mid-air around her hammer."),
     sage=CharacterSkin(alias="Sage",
                        job="Remembers if the queen's eyes changed color "
-                           "between chapters."),
+                           "between chapters.",
+                       look="Old and unhurried, a long coat full of "
+                            "bookmarks, eyes that miss nothing."),
     lark=CharacterSkin(alias="Lark",
                        job="Suggests where a line could sing. Never "
-                           "rewrites without asking."),
+                           "rewrites without asking.",
+                       look="Bright-eyed with an instrument slung on their "
+                            "back and a notebook always half open."),
 )
