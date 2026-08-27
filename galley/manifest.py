@@ -113,8 +113,11 @@ def model_routes(cfg: Any) -> list[ModelRoute]:
         routes.append(ModelRoute(role, model, provider_for(model, "unknown"),
                                  active))
 
-    # The reviewer / single detector, always a live route.
-    add("api.model", getattr(getattr(cfg, "api", None), "model", None), True)
+    # The reviewer / single detector: live only when there are typed passes to
+    # run it through — with `error_types: []` (final-replay, a deterministic
+    # floor config) it is never called, and showing it active reads as spend.
+    add("api.model", getattr(getattr(cfg, "api", None), "model", None),
+        bool(getattr(cfg, "error_type_keys", True)))
 
     # The ensemble: active detectors + the verifier when it actually verifies.
     ens = getattr(cfg, "ensemble", None)
@@ -139,6 +142,15 @@ def model_routes(cfg: Any) -> list[ModelRoute]:
             child_path = f"{path}.{name}" if path else name
             if isinstance(value, BaseModel):
                 child_active = active and bool(getattr(value, "enabled", True))
+                # Sections gated by something other than `enabled`:
+                # candidate_screening runs only when mode != 'off'; the rounds
+                # judge fires only between rounds, so count 1 never calls it.
+                mode = getattr(value, "mode", None)
+                if isinstance(mode, str):
+                    child_active = child_active and mode != "off"
+                if name == "rounds":
+                    child_active = (child_active
+                                    and getattr(value, "count", 1) > 1)
                 walk(value, child_path, child_active)
             elif _MODEL_FIELD.search(name) and isinstance(value, str) and value:
                 add(child_path, value, active)
