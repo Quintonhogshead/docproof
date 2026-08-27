@@ -333,10 +333,36 @@ def main(argv=None) -> int:
             "galley": cmd_galley}[args.cmd](args)
 
 
+def _capabilities_args(parser) -> list[dict]:
+    """A verb's arguments — name, flags, required, choices, first line of
+    help. Without these a headless practitioner can learn that a verb EXISTS
+    but not how to call it, and the context-discipline rule bans the big
+    `--help` dumps that would otherwise fill the gap (Purpura beta)."""
+    out: list[dict] = []
+    for a in parser._actions:
+        if isinstance(a, (argparse._SubParsersAction, argparse._HelpAction)):
+            continue
+        entry: dict = {"name": a.dest}
+        if a.option_strings:
+            entry["flags"] = list(a.option_strings)
+            if a.required:
+                entry["required"] = True
+        else:
+            entry["positional"] = True
+            if a.nargs not in ("?", "*"):
+                entry["required"] = True
+        if a.choices:
+            entry["choices"] = [str(c) for c in a.choices]
+        if a.help:
+            entry["help"] = " ".join(a.help.split())[:140]
+        out.append(entry)
+    return out
+
+
 def _capabilities_tree(parser) -> list[dict] | None:
     """Walk an argparse parser's subcommands into a JSON tree of
-    {name, help, subcommands?}. Introspective, so it can never drift from the
-    real verbs the way a hand-maintained list would."""
+    {name, help, args?, subcommands?}. Introspective, so it can never drift
+    from the real verbs the way a hand-maintained list would."""
     action = None
     for a in parser._actions:
         if isinstance(a, argparse._SubParsersAction):
@@ -348,6 +374,9 @@ def _capabilities_tree(parser) -> list[dict] | None:
     out: list[dict] = []
     for name, subparser in action.choices.items():
         entry: dict = {"name": name, "help": help_by_name.get(name, "")}
+        args = _capabilities_args(subparser)
+        if args:
+            entry["args"] = args
         child = _capabilities_tree(subparser)
         if child:
             entry["subcommands"] = child
@@ -2961,6 +2990,12 @@ def _galley_triage_nouns(args) -> int:
     from .genre_profile import Profile
     from .profile_corrections import triage_proper_nouns
 
+    if str(args.profile).lower().endswith((".docx", ".idml")):
+        print(f"error: {args.profile}: triage-nouns takes the profile JSON, "
+              "not the manuscript — run `docproof galley profile IN --json > "
+              "profile.json` first, then pass profile.json here.",
+              file=sys.stderr)
+        return 2
     try:
         profile = Profile.model_validate_json(
             Path(args.profile).read_text(encoding="utf-8"))
