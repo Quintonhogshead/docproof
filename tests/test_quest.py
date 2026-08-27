@@ -146,3 +146,30 @@ def test_standalone_site_serves_page_and_rate_limits(monkeypatch):
                                               "text/plain")})
         assert limited.status_code == 429
         assert "rest" in limited.json()["detail"]
+
+
+def test_waitlist_signup_dedupes_and_validates(tmp_path, monkeypatch):
+    from app import quest_site
+
+    monkeypatch.setattr(quest_site, "WAITLIST_PATH",
+                        str(tmp_path / "waitlist.jsonl"))
+    app = quest_site.create_app()
+    with TestClient(app) as client:
+        ok = client.post("/api/quest/waitlist",
+                         json={"email": "Author@Example.com"})
+        assert ok.status_code == 200 and ok.json() == {"ok": True,
+                                                       "already": False}
+        # Same address, different case: already aboard, not re-written.
+        again = client.post("/api/quest/waitlist",
+                            json={"email": "author@example.com "})
+        assert again.json() == {"ok": True, "already": True}
+        assert (tmp_path / "waitlist.jsonl").read_text().count("\n") == 1
+
+        bad = client.post("/api/quest/waitlist", json={"email": "not-an-email"})
+        assert bad.status_code == 400
+
+    # A fresh app rereads the file: dedupe survives restarts.
+    with TestClient(quest_site.create_app()) as client:
+        rejoin = client.post("/api/quest/waitlist",
+                             json={"email": "author@example.com"})
+        assert rejoin.json()["already"] is True
