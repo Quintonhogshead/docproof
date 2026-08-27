@@ -1,0 +1,23 @@
+# Spell & Check — the standalone public quest prototype. Tiny on purpose:
+# no Java, no volume, no accounts; just the party page and the skin endpoint.
+# Deploy with `fly deploy -c fly.quest.toml` (the main fly.toml/Dockerfile
+# belong to the DocProof web build and are untouched by this).
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Dependencies first, off the packaging metadata, so a code-only change
+# doesn't reinstall the world on every deploy.
+COPY pyproject.toml ./
+COPY docproof/__init__.py ./docproof/__init__.py
+RUN pip install --no-cache-dir ".[app]" || true
+
+COPY . .
+RUN pip install --no-cache-dir ".[app]"
+
+ENV PORT=8000
+EXPOSE 8000
+
+# OPENAI_API_KEY comes from `fly secrets set`; the server boots without it and
+# says so, rather than crash-looping while secrets are sorted.
+CMD ["spell-and-check"]

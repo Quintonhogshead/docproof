@@ -117,3 +117,32 @@ def test_skin_endpoint_round_trip(tmp_path, monkeypatch):
                           files={"file": ("book.pdf", b"x", "application/pdf")})
         assert bad.status_code == 400
         assert ".docx" in bad.json()["detail"]
+
+
+def test_standalone_site_serves_page_and_rate_limits(monkeypatch):
+    from app import quest_site
+
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_skin_payload(), usage=USAGE)])
+    monkeypatch.setattr("app.routes.quest.build_provider",
+                        lambda cfg, api_key=None: provider)
+    monkeypatch.setattr("app.routes.quest.get_api_key", lambda p: "test-key")
+    monkeypatch.setattr("app.routes.quest._cache", {})
+    monkeypatch.setattr(quest_site, "PER_IP_LIMIT", 1)
+    app = quest_site.create_app()
+    with TestClient(app) as client:
+        assert client.get("/healthz").json()["ok"] is True
+        page = client.get("/")
+        assert page.status_code == 200 and "Spell &amp; Check" in page.text
+
+        ok = client.post("/api/quest/skin",
+                         files={"file": ("book.txt", b"words " * 40,
+                                         "text/plain")})
+        assert ok.status_code == 200
+
+        # Second skin from the same IP inside the window: politely refused.
+        limited = client.post("/api/quest/skin",
+                              files={"file": ("other.txt", b"more words " * 40,
+                                              "text/plain")})
+        assert limited.status_code == 429
+        assert "rest" in limited.json()["detail"]

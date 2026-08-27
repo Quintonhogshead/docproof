@@ -77,6 +77,7 @@ docproof-desktop = "app.desktop:main"
 docproof-watch = "app.watch.cli:main"
 docproof-admin = "app.admin:main"
 docproof-serve = "app.serve:main"
+spell-and-check = "app.quest_site:main"
 
 [build-system]
 requires = ["setuptools>=68"]
