@@ -209,6 +209,20 @@ class NormalizeConfig(BaseModel):
     spaces: bool = True       # runs of two or more spaces collapse to one
 
 
+class SpeakerSplitConfig(BaseModel):
+    """Two quoted speeches sharing one paragraph with nothing but whitespace
+    between them are split so each speaker begins a new line — as a tracked
+    change on the paragraph mark (rejecting it merges the paragraphs back),
+    with a declarative margin comment stating the change. Judgment cases (a
+    second speaker behind narration) stay with the speaker_change query.
+    Whole-document runs only. See docproof/speakersplit.py."""
+    enabled: bool = True
+    # A manuscript that trips this many splits is set in a convention this
+    # pass does not understand (interview transcripts, plays); the cap stops
+    # the restructuring and leaves the rest to the query channel, loudly.
+    max_splits: int = Field(default=300, ge=0)
+
+
 class StyleConfig(BaseModel):
     """House-style conventions the deterministic sweeps enforce where the right
     answer is a publisher's choice rather than a rule. Kept here and not in the
@@ -336,6 +350,20 @@ class ConsistencyConfig(BaseModel):
     spelling_variants: bool = True
     abbreviations: bool = True
     acronym_case: bool = True
+    # "us" also queries words the book spells the British way THROUGHOUT
+    # (theatre, colour) — one query per word, proposing the American form,
+    # restricted to the regular British/American families so a spelling
+    # Merriam-Webster accepts in U.S. prose anyway (towards) is never flagged.
+    # Off by default: whether the house enforces U.S. spellings on a
+    # consistently-British manuscript is a policy call, not a rule.
+    variant_policy: Literal["off", "us"] = "off"
+    # Lowercase he/his/him inside a deity-anchored sentence, in a book that
+    # plainly capitalizes pronouns referring to God ("…and he knows every
+    # decision we make"). Self-gating on the book's own convention
+    # (deity_min_capitalized mid-sentence He/His/Him plus explicit deity
+    # names); query channel only, since pronoun reference is the author's call.
+    deity_pronouns: bool = True
+    deity_min_capitalized: int = Field(default=8, ge=2)
     # Add the Merriam-Webster/Chicago preference to a spelling-variant query.
     # A press proofreading in British English can turn this off.
     chicago_notes: bool = True
@@ -860,6 +888,16 @@ class RepairConfig(BaseModel):
     # a wider net (more sentences routed, more model cost, the judge the backstop);
     # a sentence under the threshold keeps its individual token edits as before.
     error_threshold: int = Field(default=3, ge=2)
+    # The widening for structurally broken sentences: a sentence flagged by one
+    # of these detectors — the flags that say "this does not parse", not "a
+    # comma is missing" — triggers at syntax_error_threshold instead. A garbled
+    # sentence ("I came upon, in a face-to-face manner, by the husband") rarely
+    # accumulates three separate flags; a broken-syntax flag plus any
+    # corroborating second is enough to let the judge look, and the judge still
+    # declines anything merely stylistic. Empty the list to keep the single
+    # threshold exactly.
+    syntax_error_types: tuple[str, ...] = ("run_on_sentence", "missing_word")
+    syntax_error_threshold: int = Field(default=2, ge=1)
     # The repair reader. A repair is a judgment call on the whole sentence, so it
     # defaults to the strongest model; the read is cheap because it is scoped to
     # only the triggered sentences, not the whole book.
@@ -1683,6 +1721,7 @@ class Config(BaseModel):
     prep: PrepConfig = Field(default_factory=PrepConfig)
     promo: PromoConfig = Field(default_factory=PromoConfig)
     normalize: NormalizeConfig = Field(default_factory=NormalizeConfig)
+    speaker_split: SpeakerSplitConfig = Field(default_factory=SpeakerSplitConfig)
     style: StyleConfig = Field(default_factory=StyleConfig)
     edit_guard: EditGuardConfig = Field(default_factory=EditGuardConfig)
     spellcheck: SpellcheckConfig = Field(default_factory=SpellcheckConfig)
