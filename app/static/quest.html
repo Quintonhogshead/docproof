@@ -184,6 +184,12 @@
   .cta:disabled{background:var(--dim); cursor:not-allowed; box-shadow:none; opacity:.6}
   .cta:focus-visible{outline:2px solid var(--ember-hot); outline-offset:3px}
   .ctasub{flex-basis:100%; font-size:12.5px; color:var(--dim); text-align:right; margin-top:-4px}
+  .joinrow{margin-left:auto; display:flex; gap:10px; align-items:center}
+  .joinrow .cta{margin-left:0}
+  .joininput{background:var(--card-2); border:1px solid var(--line-strong); border-radius:12px; color:var(--parchment);
+    font:15px var(--body); padding:13px 16px; min-width:240px}
+  .joininput::placeholder{color:var(--dim)}
+  .joininput:focus-visible{outline:2px solid var(--ember-hot); outline-offset:2px}
 
   /* ---------- upload zone ---------- */
   .drop{display:flex; align-items:center; gap:14px; border:1.5px dashed var(--line-strong); border-radius:16px;
@@ -280,6 +286,11 @@
   <div class="ctainner">
     <span class="status" id="status" aria-live="polite"></span>
     <button class="cta" id="cta">Begin the Quest</button>
+    <span class="joinrow" id="joinrow" hidden>
+      <input class="joininput" id="joinemail" type="email" maxlength="254"
+             placeholder="raven@yourkeep.com" aria-label="Email for the quest waitlist">
+      <button class="cta" id="joinsend">Send the raven</button>
+    </span>
     <span class="ctasub" id="ctasub">Prices are for this manuscript's length · estimated journey 3–5 hours · we'll send a raven (okay, an email) when the loot is ready.</span>
   </div>
 </div>
@@ -663,10 +674,44 @@
     log('<span class="t">galley</span> back to my pick — <span class="k">pip, bram, maple, cinder</span> + my trusty map · $' + (priced(9)+priced(12)+priced(8)+priced(10)));
     render();
   });
+  /* Quests aren't running yet — the button opens the raven waitlist. */
+  var joinRow = document.getElementById('joinrow'),
+      joinEmail = document.getElementById('joinemail'),
+      joinSend = document.getElementById('joinsend');
   cta.addEventListener('click', function(){
     if(cta.disabled) return;
-    statusEl.innerHTML = 'Off they go! — next screen: the map comes alive.';
-    log('<span class="t">quest</span> <span class="g">wave 1 planned</span> · party of '+party.length+' · $'+total());
+    cta.hidden = true;
+    joinRow.hidden = false;
+    statusEl.textContent = 'Quests open soon — leave word where the raven can find you.';
+    log('<span class="t">quest</span> party of '+party.length+' · $'+total()+' · <span class="g">rookery opened</span>');
+    joinEmail.focus();
+  });
+  function sendRaven(){
+    var email = joinEmail.value.trim();
+    if(!email){ joinEmail.focus(); return; }
+    joinSend.disabled = true;
+    fetch('/api/quest/waitlist', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:email})
+    }).then(function(resp){
+      return resp.json().catch(function(){ return {}; }).then(function(body){
+        if(resp.status === 404) throw new Error('The rookery lives on the public site — spell-and-check.fly.dev.');
+        if(!resp.ok) throw new Error(body.detail || 'The raven got lost. Try again?');
+        return body;
+      });
+    }).then(function(r){
+      joinRow.hidden = true;
+      statusEl.textContent = r.already
+        ? 'The raven already knows your name — you’re on the list.'
+        : 'The raven knows your name. We’ll write the moment quests open.';
+      log('<span class="t">quest</span> <span class="g">raven away</span> · you’re on the waitlist');
+    }).catch(function(e){
+      statusEl.textContent = e.message;
+    }).then(function(){ joinSend.disabled = false; });
+  }
+  joinSend.addEventListener('click', sendRaven);
+  joinEmail.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); sendRaven(); }
   });
 
   var skinbarEl = document.getElementById('skinbar');
