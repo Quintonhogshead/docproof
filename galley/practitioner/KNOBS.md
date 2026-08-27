@@ -75,7 +75,7 @@ list, never alone (see the trap above).
 
 ## Paste-ready shipped defaults (you cannot read default.yaml — copy from here)
 
-These are the exact shipped lists as of v0.125.0. If a config wants the typed
+These are the exact shipped lists as of v0.131.0. If a config wants the typed
 passes or the built-in sweeps, paste these blocks in **whole**. The ensemble
 fires **only through `error_types`** — no `error_types`, no ensemble, no typed
 recall (log reads `0 error type(s) in 0 pass(es)`).
@@ -95,7 +95,7 @@ error_types:
   - terminal_mark        # query-channel: asks, never edits
   - unnecessary_comma    # the one comma rule that DELETES; isolated on purpose
 
-# The 13 deterministic $0 sweeps. Omitting the section turns ALL of them off.
+# The 15 deterministic $0 sweeps. Omitting the section turns ALL of them off.
 sweeps:
   - sweep_ellipsis
   - sweep_dash
@@ -110,6 +110,8 @@ sweeps:
   - sweep_time_of_day
   - sweep_deity_capital
   - sweep_dialogue_splice
+  - sweep_initialism
+  - sweep_trailing_space
 ```
 
 To ADD a per-category repeat read or a bespoke sweep, paste the block above and
@@ -120,7 +122,7 @@ wrongly dropped on a bad grep.)
 
 ## Top-level sections (names are exact)
 
-`api · chunking · skip · normalize · spellcheck · consistency · glossary ·`
+`api · chunking · skip · normalize · speaker_split · spellcheck · consistency · glossary ·`
 `factcheck · genre_scans · flights · continuity · chapter_continuity · rounds ·`
 `adjudicate · rewrite · languagetool · sapling · chapter_sweep · repair ·`
 `smoothing · low_confidence · meaning_check · fix_check · error_types · style ·`
@@ -132,11 +134,14 @@ wrongly dropped on a bad grep.)
 | Knob | Default | What it does / when to change |
 |---|---|---|
 | `min_confidence` | `medium` | low\|medium\|high gate for APPLYING a change. |
+| `speaker_split.enabled` | on | Splits "…go.” “You…" two-speaker paragraphs as a TRACKED paragraph break + declarative comment, in prepare (whole-doc runs only). Judgment cases stay with the speaker_change query. |
+| `consistency.variant_policy` | `off` | "us" queries consistently-British spellings (theatre→theater), one per word, regular families only. House policy call. |
+| `consistency.deity_pronouns` | on | Query lowercase he/his/him in deity-anchored sentences when the book capitalizes reverent pronouns (self-gating). |
 | `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. Ready-made as `--stage mechanical-wave` (see the ensemble block above); fires ONLY through `error_types`. |
 | `error_types` | full shipped list | The typed LLM passes. **OMITTING THE SECTION ZEROES EVERY PASS** and makes any `ensemble:` inert (`0 error type(s) in 0 pass(es)`). Restate the full default list to keep them; the ensemble only fires through these. |
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
 | `languagetool.picky` | off | +~1 candidate/44k words; most picky rules are the filtered style class. |
-| `sweeps` | 13 rules | Deterministic $0 rules. OMITTING THE SECTION KILLS ALL OF THEM. Add bespoke `.py`/regex keys here. |
+| `sweeps` | 15 rules | Deterministic $0 rules. OMITTING THE SECTION KILLS ALL OF THEM. Add bespoke `.py`/regex keys here. |
 | `smoothing.max_per_1000_words` | preset (5.0 business) | Copy-edit volume ceiling. Drop toward 2.5 for voice-heavy authors (fragments/profanity/initial conjunctions are the product). |
 | `residuals.max_per_rule` | 150 | Cap on same-rule findings before overflow is DROPPED. Raise (e.g. 300) when a legit high-count class (numerals) would overflow. |
 | `edit_guard.max_added_chars` | 16 | Max chars an edit may ADD before it must ride as a query. Raise ONLY for hand-verified composites. |

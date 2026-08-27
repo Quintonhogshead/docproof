@@ -67,7 +67,19 @@ promo:
 # wrong way ships, because there is no tracked change to reject.
 normalize:
   quotes: true
-  spaces: true
+  spaces: true    # collapse runs to one; strip paragraph-trailing spaces whole
+
+# Two quoted speeches sharing one paragraph with nothing but whitespace between
+# them ("…won't go.” “You will…") are split so each speaker begins a new line —
+# a tracked change on the paragraph mark (rejecting merges the paragraphs back)
+# plus a declarative margin comment stating the change, per the head
+# proofreader's ruling on the Johnson run. Judgment cases (a second speaker
+# behind narration) stay with the speaker_change query. Whole-document runs
+# only; the cap stops the pass on a manuscript set in a convention it does not
+# understand (interviews, plays).
+speaker_split:
+  enabled: true
+  max_splits: 300
 
 # A dictionary scan that never corrects anything. It sorts every unknown word:
 # words written as NAMES become a do-not-flag list sent to every pass (what
@@ -138,6 +150,17 @@ consistency:
   spelling_variants: true   # grey/gray, toward/towards (VarCon + Chicago table)
   abbreviations: true       # U.S./US, a.m./AM
   acronym_case: true        # NASA/Nasa (needs the spell dictionary)
+  # "us" also queries words the book spells the British way THROUGHOUT
+  # (theatre, colour), one query per word proposing the American form —
+  # regular British/American families only, so towards/grey never flag.
+  # Off by default: enforcing U.S. spellings on a consistently-British
+  # manuscript is a house policy call. Flip to "us" when it is.
+  variant_policy: "off"
+  # Lowercase he/his/him inside a deity-anchored sentence, in a book that
+  # plainly capitalizes pronouns referring to God. Self-gating on the book's
+  # own convention; query-only, since pronoun reference is the author's call.
+  deity_pronouns: true
+  deity_min_capitalized: 8
   chicago_notes: true       # add the Merriam-Webster preference to the query
   max_queries_per_kind: 40  # per-scan cap, logged when it bites (no silent loss)
   seeded_names: []          # proper nouns known ahead of the run (typically from
@@ -739,6 +762,8 @@ sweeps:
   - sweep_time_of_day         # 3:40AM -> 3:40 a.m.
   - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
   - sweep_dialogue_splice     # comma splices around a dialogue tag
+  - sweep_initialism          # whitelisted initialisms capitalized (tv -> TV)
+  - sweep_trailing_space      # paragraph-trailing spaces deleted (tracked)
 
 # After every gate has settled which edits stand, re-scan the reviewed text
 # for number-rule trigger sites no edit touched — bare numerals to one

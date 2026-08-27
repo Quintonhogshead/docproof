@@ -601,3 +601,29 @@ def test_terminal_period_is_idempotent():
     text = "The horses bolted at the sudden crack of the whip behind them"
     once = apply_hits(text, _sweep_terminal_period(text))
     assert _sweep_terminal_period(once) == []
+
+
+# --- initialisms set in capitals ----------------------------------------------
+
+def test_initialism_tv_capitalized():
+    from docproof.sweeps import SWEEPS_BY_KEY, apply_hits
+    scan = SWEEPS_BY_KEY["sweep_initialism"].scan
+    assert apply_hits("a bomb on live tv.", scan("a bomb on live tv.")) == \
+        "a bomb on live TV."
+    assert apply_hits("The tv’s remote.", scan("The tv’s remote.")) == \
+        "The TV’s remote."
+    assert apply_hits("Tv dinners again.", scan("Tv dinners again.")) == \
+        "TV dinners again."
+    # Already correct, domains and filenames are left alone.
+    for text in ("watching TV now", "visit channel4.tv today",
+                 "open tv.config first"):
+        assert not scan(text), text
+
+
+def test_trailing_space_sweep_deletes_paragraph_tails():
+    from docproof.sweeps import SWEEPS_BY_KEY, apply_hits
+    scan = SWEEPS_BY_KEY["sweep_trailing_space"].scan
+    assert apply_hits("“I won’t go.” ", scan("“I won’t go.” ")) == "“I won’t go.”"
+    assert apply_hits("The end.  ", scan("The end.  ")) == "The end."
+    assert not scan("Clean already.")
+    assert not scan("*   *   *")          # scene dividers space as they please
