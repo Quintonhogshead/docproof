@@ -13,7 +13,7 @@ from .fakes import FakeProvider, USAGE
 
 
 def _character(alias: str) -> dict:
-    return {"alias": alias, "job": "Does the thing, stylishly."}
+    return {"alias": alias, "job": "Does the thing, stylishly.", "look": "A memorable coat."}
 
 
 def _skin_payload(**over) -> dict:

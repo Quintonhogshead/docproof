@@ -487,7 +487,7 @@
     }).join('');
     var tag = a.role + (s.alias !== a.name ? ' · always ' + a.name : '');
     el.innerHTML =
-      '<div class="sigil">'+svg(a.icon)+'</div>' +
+      '<div class="sigil"'+(s.look ? ' title="'+esc(s.look)+'"' : '')+'>'+svg(a.icon)+'</div>' +
       '<div><div class="aname">'+esc(s.alias)+'<small>'+esc(tag)+'</small></div>' +
       '<div class="ajob">'+esc(s.job)+'</div><div class="alane">lane: '+a.lane+'</div></div>' +
       '<div class="aprice">$'+priced(a.price)+'</div>' +

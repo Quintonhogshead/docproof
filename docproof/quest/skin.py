@@ -142,6 +142,22 @@ home and may stay. NEVER use the name of an actual character, place, or \
 person appearing in the manuscript.
 - job: ONE sentence in the book's register describing that member's real \
 function (given above). Charming, but never misleading about what it does.
+- look: ONE sentence describing that member's appearance in this book's world, \
+written for an illustrator — age impression, build, attire, one memorable \
+detail. Keep each member's permanent silhouette: Pip small and quick; Bram \
+broad and steady; Maple precise and bespectacled; Cinder strong-armed with \
+tools; Sage old and unhurried; Lark bright-eyed with an instrument or notebook. \
+When cultural grounding (below) applies, say plainly and respectfully that the \
+member belongs to that community — an illustrator cannot draw an implication.
+- Cultural grounding: when the manuscript is rooted in a specific culture, \
+community, place, or era that is CENTRAL to the story (a novel of the Black \
+American South, a Lagos family saga, a Punjabi wedding comedy, an Appalachian \
+holler, a Deaf community memoir), let the party belong to that world — names, \
+titles, attire, and idiom that would feel like neighbors inside the book, \
+drawn with the same dignity the manuscript draws its own people. Ground every \
+detail in what the text itself shows. Never use generic ethnic shorthand, \
+dialect imitation, or sacred/religious roles as costume. When the culture is \
+incidental rather than central, dress by genre alone.
 - narration: Galley's greeting, 1–3 sentences. Reference two or three concrete, \
 non-spoiler details from the opening so the author feels the book was actually \
 read. Warm, a little wry. Never quote more than a few words verbatim.
