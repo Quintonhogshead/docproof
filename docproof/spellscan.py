@@ -52,7 +52,12 @@ log = logging.getLogger("docproof.spellscan")
 # Words only: the sweeps own punctuation. Hyphenated compounds are checked as
 # their parts, since no dictionary carries "blood-cursed" — holding the
 # compound together is Phase 5's consistency problem, not this one.
-_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
+# Unicode letters, not [A-Za-z]: an ASCII class splits "cliché" at the accent,
+# the stem "clich" then reads as a misspelling of "cliché", and the fix
+# INSERTS a second é ("clichéé") — six such wrong edits shipped on the
+# Purpura beta (cliché ×3, crudité, voilà, entrée) before the pattern was
+# caught. [^\W\d_] is "any letter" under re's default Unicode semantics.
+_WORD = re.compile(r"[^\W\d_](?:[^\W\d_]|['’])*")
 
 # Email addresses and URLs are in-world artifacts, not vocabulary: tokenizing
 # LBadgerbones@jhmi.edu into "LBadgerbones" invents a near-duplicate of a real

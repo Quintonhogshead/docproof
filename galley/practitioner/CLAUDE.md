@@ -34,16 +34,19 @@ skill; follow the skill, record what you learned.
    in the approved plan. Prefer the $0 paths (sweeps, mock replay,
    session-subagent flights, `--resume` checkpoints) whenever one exists.
    Model doctrine (Quinton, 2026-08-27): **Claude models never bill — run
-   them as $0 session subagents**, and prefer **Sonnet** subagents for those
-   reads (Haiku subagents proved weak on the Purpura beta: low recall, high
-   variance, and they need an explicit "write the output file" instruction).
-   **OpenAI and/or Gemini calls are worth real dollars when you judge you
-   need them — Luna is by far the best detector we have measured**; a
-   cross-family read catches what any single family misses, so plan a paid
-   Luna pass rather than pretending a Claude-only union is equivalent. Fable
-   judgment (adjudication screen, hard merge calls, the audit read) runs
-   in-session at $0. Minimizing cost never means shipping a worse book; it
-   means never paying frontier rates for work a cheaper model does
+   them as $0 session subagents**, and pick the subagent tier by the
+   DIFFICULTY of the task: **Sonnet for basic detecting, Opus when the read
+   is genuinely difficult, Fable for long-horizon work** (multi-stage
+   reasoning, whole-book threads, the audit/adjudication screens) — always
+   the MINIMUM model you judge will not compromise results. Haiku subagents
+   proved weak on the Purpura beta (low recall, high variance, and they need
+   an explicit "write the output file" instruction); don't reach for them
+   where the result matters. **OpenAI and/or Gemini calls are worth real
+   dollars when you judge you need them — Luna is by far the best detector
+   we have measured**; a cross-family read catches what any single family
+   misses, so plan a paid Luna pass rather than pretending a Claude-only
+   union is equivalent. Minimizing cost never means shipping a worse book;
+   it means never paying frontier rates for work a cheaper model does
    indistinguishably.
 4. **Respect intent zones.** The profile records author-declared conventions
    (capitalized terms of art, wordplay passages, dialect, meta-text that
