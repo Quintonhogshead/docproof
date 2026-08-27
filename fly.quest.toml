@@ -1,0 +1,27 @@
+# Fly.io configuration for the standalone Spell & Check prototype site.
+#
+# Create the app with `fly apps create <app>`, set the one secret with
+# `fly secrets set OPENAI_API_KEY=... -a <app>`, and deploy with
+# `fly deploy -c fly.quest.toml`. This is a separate Fly app from
+# atmosphere-docproof; the GitHub Actions auto-deploy does not touch it.
+
+app = "spell-and-check"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile.quest"
+
+[env]
+  PORT = "8000"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Nothing runs in the background here — scale to zero between visitors.
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
