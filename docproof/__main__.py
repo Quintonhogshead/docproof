@@ -236,6 +236,37 @@ def main(argv=None) -> int:
     swp.add_argument("--json", action="store_true",
                      help="also print the machine-readable result to stdout")
 
+    tns = sub.add_parser(
+        "tense", help="whole-book narrative-tense profile (no API): baseline "
+                      "tense and person, per-paragraph verdicts with dialogue "
+                      "stripped, and the contiguous runs that read against "
+                      "the baseline — the scenes a targeted re-read should "
+                      "cover. A whole scene in the historical present is "
+                      "internally consistent and invisible to per-sentence "
+                      "checks; it is only visible from above, against the "
+                      "book's own baseline. Report-only; nothing is edited.")
+    tns.add_argument("input", help="a .docx or .idml file")
+    tns.add_argument("--config", default="config/default.yaml")
+    tns.add_argument("--json", action="store_true",
+                     help="print the machine-readable profile instead of the "
+                          "summary (redirect to a file to keep it)")
+
+    cit = sub.add_parser(
+        "cites", help="citation & cross-reference check (no API, "
+                      "nonfiction/academic): author-date citations matched "
+                      "against the reference list both ways, plus chapter, "
+                      "figure, and table cross-references resolved against "
+                      "the book's own headings and captions. Report-only — "
+                      "raise queries from it; nothing is edited, nothing is "
+                      "fact-checked or restyled. Checks whose scaffolding "
+                      "the book lacks (no reference list, no numbered "
+                      "chapters, no captions) auto-skip.")
+    cit.add_argument("input", help="a .docx or .idml file")
+    cit.add_argument("--config", default="config/default.yaml")
+    cit.add_argument("--json", action="store_true",
+                     help="print the machine-readable report instead of the "
+                          "summary (redirect to a file to keep it)")
+
     mrg = sub.add_parser(
         "merge", help="the merge desk: reconcile a mechanical/proofread "
                       "findings set with a copy-edit/rewrite findings set "
@@ -328,6 +359,7 @@ def main(argv=None) -> int:
             "submit": cmd_submit, "status": cmd_status,
             "collect": cmd_collect, "prep": cmd_prep, "rejudge": cmd_rejudge,
             "eval": cmd_eval, "compare": cmd_compare, "sweep": cmd_sweep,
+            "tense": cmd_tense, "cites": cmd_cites,
             "merge": cmd_merge,
             "import-findings": cmd_import_findings, "replay": cmd_replay,
             "galley": cmd_galley}[args.cmd](args)
@@ -1759,6 +1791,48 @@ def cmd_sweep(args) -> int:
 
 
 # --- import-findings / replay --------------------------------------------------
+
+def _prepared_paragraphs(args):
+    """Ingest via the same prepare() every other $0 verb uses, so the
+    paragraphs these reports see are the canonical (post-normalization) text
+    with the same ids the rest of the rack anchors to."""
+    cfg, error_dir = _configure(args)
+    setup_logging(cfg.output_dir)
+    prepared = prepare(cfg, args.input, error_dir)
+    return prepared.doc.paragraphs
+
+
+def cmd_tense(args) -> int:
+    from .tensecheck import profile as tense_profile
+    from .tensecheck import render as tense_render
+    try:
+        paragraphs = _prepared_paragraphs(args)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    prof = tense_profile(paragraphs)
+    if args.json:
+        print(json.dumps(prof.to_json(), indent=2))
+    else:
+        print(tense_render(prof))
+    return 0
+
+
+def cmd_cites(args) -> int:
+    from .citecheck import check as cite_check
+    from .citecheck import render as cite_render
+    try:
+        paragraphs = _prepared_paragraphs(args)
+    except (IngestError, FileNotFoundError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    report = cite_check(paragraphs)
+    if args.json:
+        print(json.dumps(report.to_json(), indent=2))
+    else:
+        print(cite_render(report))
+    return 0
+
 
 def cmd_import_findings(args) -> int:
     """`docproof import-findings`: the front door for injecting a findings file
