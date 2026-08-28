@@ -50,6 +50,11 @@ def main(argv=None) -> int:
 
     rev = sub.add_parser("review", help="run the full pipeline now")
     _common(rev)
+    rev.add_argument("--dry-run", action="store_true",
+                     help="estimate the cost of this exact config and exit — no "
+                          "API call, no output written (chunks x models x token "
+                          "budgets, plus the continuity reads); the authoritative "
+                          "price for the plan gate")
     rev.add_argument("--max-chunks", type=int,
                      help="review only the first N chunks (cheap smoke test)")
     rev.add_argument("--only", help="review only these sections: "
@@ -318,6 +323,12 @@ def main(argv=None) -> int:
     imf.add_argument("--dry-run", action="store_true",
                      help="anchor and channel every row and report what would "
                           "happen; write nothing")
+    imf.add_argument("--after-sweeps", action="store_true",
+                     help="the rows were captured AFTER the deterministic sweeps "
+                          "ran (an en-dash, a lowered am, an added :00), so "
+                          "re-anchor them against the swept text and rewrite each "
+                          "to the equivalent pre-sweep quote — no hand-built "
+                          "micro-spans")
     imf.add_argument("--json", action="store_true",
                      help="also print the machine-readable result envelope "
                           "to stdout")
@@ -338,6 +349,10 @@ def main(argv=None) -> int:
     rpl.add_argument("--dry-run", action="store_true",
                      help="anchor and channel every row and report what would "
                           "happen; write nothing")
+    rpl.add_argument("--after-sweeps", action="store_true",
+                     help="the rows were captured AFTER the deterministic sweeps "
+                          "ran, so re-anchor them against the swept text and "
+                          "rewrite each to the equivalent pre-sweep quote")
     rpl.add_argument("--json", action="store_true",
                      help="also print the machine-readable result envelope "
                           "to stdout")
@@ -460,6 +475,27 @@ def _galley_parser(sub) -> None:
     ga.add_argument("--out", help="where to write audit.json "
                                   "(default: the results directory)")
     ga.add_argument("--json", action="store_true",
+                    help="also print the machine-readable result to stdout")
+
+    gv = gsub.add_parser(
+        "verify", help="read a finished run's ACCEPTED text for SENSE — the "
+                       "change verifier (each applied edit) + the finished-text "
+                       "walk (residual errors); the gates certify cannot run")
+    gv.add_argument("results", help="the finished run's output directory (the "
+                                    "one holding findings.json and the .docx)")
+    gv.add_argument("--config", default="config/default.yaml")
+    gv.add_argument("--model",
+                    help="the verifying model (default: the continuity reader if "
+                         "one is configured, else the review model)")
+    gv.add_argument("--context", help="a file of house-style / voice notes fed "
+                                      "to both gates (optional; e.g. a BRIEF)")
+    gv.add_argument("--changes-only", action="store_true",
+                    help="run only the change verifier")
+    gv.add_argument("--walk-only", action="store_true",
+                    help="run only the finished-text walk")
+    gv.add_argument("--out", help="where to write change_verify.json and "
+                                  "finished_walk.json (default: the results dir)")
+    gv.add_argument("--json", action="store_true",
                     help="also print the machine-readable result to stdout")
 
     gl = gsub.add_parser(
@@ -914,6 +950,39 @@ def _resolve_error_dir(config_path: str | Path) -> Path:
     return beside
 
 
+def _resolve_stage_genre(config_path, stage, genre) -> tuple[str | None, str | None]:
+    """Which --stage/--genre to actually apply on top of `config_path`.
+
+    A materialized genre-pack config already has its stage and genre baked into
+    the YAML and stamped in a `# galley: genre=… stage=…` header. Re-applying the
+    flag on top of it is the P2-8 trap: it composes a DIFFERENT effective config
+    than the pack materialized, so approve and review disagree on the config hash
+    and `review --approval` refuses (exit 5). So an axis the config already
+    stamps is dropped here — with a warning — for EVERY consumer (review,
+    approve, routes, certify) identically, which is what keeps their hashes equal.
+    A flag that CONFLICTS with the stamp is dropped too, but loudly: the
+    materialized value is what governs, not the stray flag."""
+    prov = _sniff_pack_provenance(config_path)
+    out_stage, out_genre = stage, genre
+    for axis, flag in (("stage", stage), ("genre", genre)):
+        stamped = prov.get(axis)
+        if not stamped or flag is None:
+            continue
+        if flag == stamped:
+            print(f"note: --{axis} {flag} is already materialized into "
+                  f"{config_path} (galley header) — not re-applying it",
+                  file=sys.stderr)
+        else:
+            print(f"warning: {config_path} was materialized with {axis}="
+                  f"{stamped}, but --{axis} {flag} was passed — the materialized "
+                  f"{axis}={stamped} governs; the flag is ignored", file=sys.stderr)
+        if axis == "stage":
+            out_stage = None
+        else:
+            out_genre = None
+    return out_stage, out_genre
+
+
 def _configure(args):
     cfg = load_config(args.config)
     if getattr(args, "error_types", None):
@@ -941,30 +1010,84 @@ def _configure(args):
     # A workflow-stage preset lands BEFORE the genre so its lane locks can be
     # re-asserted AFTER the genre (stage > genre): a genre never turns on a lane
     # the stage forbids. Profile lands last of all (profile > stage > genre).
+    _stage, _genre = _resolve_stage_genre(
+        args.config, getattr(args, "stage", None), getattr(args, "genre", None))
     stage_locks: dict = {}
-    if getattr(args, "stage", None):
+    if _stage:
         from .stages import apply_stage
-        cfg, stage_locks = apply_stage(cfg, args.stage)
+        cfg, stage_locks = apply_stage(cfg, _stage)
     genre_pending = {}
-    if getattr(args, "genre", None):
+    if _genre:
         from .genre import apply_genre
-        cfg, genre_pending = apply_genre(cfg, args.genre)
+        cfg, genre_pending = apply_genre(cfg, _genre)
         for key in genre_pending:
             log.warning("genre %r set %s, which this build cannot apply yet "
-                       "(no matching config section) — ignored", args.genre,
+                       "(no matching config section) — ignored", _genre,
                        key)
     if stage_locks:
         from .stages import enforce_locks
         violated = enforce_locks(cfg, stage_locks)
         for key in violated:
             log.warning("stage %r locks %s; the genre %r tried to change it — "
-                        "the stage lock wins", args.stage, key,
-                        getattr(args, "genre", None))
+                        "the stage lock wins", _stage, key, _genre)
     apply_profile(cfg, getattr(args, "profile", None))
     if getattr(args, "model", None):
         cfg.api.model = args.model
     error_dir = _resolve_error_dir(args.config)
     return cfg, error_dir
+
+
+def _print_cost_estimate(cfg, prepared, doc_tokens: int) -> None:
+    """The no-API cost projection shared by `inventory` and `review --dry-run`:
+    the review reads (chunks x models x token budgets), plus the whole-book
+    continuity and chapter-continuity reads on their own models. Every number is
+    an order-of-magnitude guide from the price table, not a quote — output token
+    counts are unknowable up front."""
+    # Output tokens are unknowable up front; assume a modest cap per request so
+    # the number is an order-of-magnitude guide, not a quote.
+    out_guess = prepared.request_count * 600
+    now = estimate_cost(cfg.api.model, input_tokens=prepared.est_document_tokens,
+                        output_tokens=out_guess)
+    if now is not None:
+        print(f"\nRough cost on {cfg.api.model}: ~${now:.2f} now, "
+              f"~${now / 2:.2f} as a batch (50% cheaper, results within hours)")
+
+    # The continuity read is one whole-book pass on its own model, added on top of
+    # the review above — priced once at the document's own token count, not the
+    # per-chunk total, and not batchable (a different model can't ride the review
+    # batch). The deterministic calendar check is free. Over max_input_tokens the
+    # pipeline skips the read, so the estimate says so rather than quoting a cost
+    # for a call that won't be made.
+    if cfg.continuity.enabled:
+        if doc_tokens > cfg.continuity.max_input_tokens:
+            print(f"  + continuity: book exceeds max_input_tokens "
+                  f"({cfg.continuity.max_input_tokens:,}); the read is skipped, "
+                  f"only the free calendar check runs")
+        else:
+            cont = estimate_cost(cfg.continuity.model, input_tokens=doc_tokens,
+                                 output_tokens=cfg.continuity.max_output_tokens)
+            if cont is not None:
+                print(f"  + continuity read on {cfg.continuity.model}: "
+                      f"~${cont:.2f} (one whole-book read, query-only, "
+                      f"not batchable)")
+
+    # Chapter continuity reads the book once, split across chapters, plus a small
+    # judge — priced at the document's tokens in, and each chapter's output
+    # ceiling out, so the estimate scales with how the book segments.
+    if cfg.chapter_continuity.enabled:
+        from .continuity import chapters as _chapters
+        cc = cfg.chapter_continuity
+        cc_model = cc.model or cfg.continuity.model or cfg.api.model
+        units = _chapters(prepared.doc.paragraphs, cfg.skip.is_sweep_only,
+                          min_tokens=cc.min_chapter_tokens,
+                          max_tokens=cc.max_chapter_tokens)
+        chap = estimate_cost(cc_model, input_tokens=doc_tokens,
+                             output_tokens=len(units) * cc.max_output_tokens)
+        if chap is not None:
+            print(f"  + chapter continuity on {cc_model}: ~${chap:.2f} "
+                  f"({len(units)} chapter read(s), query-only, plus a small "
+                  f"judge on {cc.judge_model}); the reads ride their own batch, "
+                  f"so a batch submission roughly halves this")
 
 
 def cmd_inventory(args) -> int:
@@ -1014,51 +1137,7 @@ def cmd_inventory(args) -> int:
             print(f"  {r.key:<28} {r.flagged:>4} flagged, "
                   f"{r.remaining} remaining")
 
-    # Output tokens are unknowable up front; assume a modest cap per request so
-    # the number is an order-of-magnitude guide, not a quote.
-    out_guess = prepared.request_count * 600
-    now = estimate_cost(cfg.api.model, input_tokens=prepared.est_document_tokens,
-                        output_tokens=out_guess)
-    if now is not None:
-        print(f"\nRough cost on {cfg.api.model}: ~${now:.2f} now, "
-              f"~${now / 2:.2f} as a batch (50% cheaper, results within hours)")
-
-    # The continuity read is one whole-book pass on its own model, added on top of
-    # the review above — priced once at the document's own token count, not the
-    # per-chunk total, and not batchable (a different model can't ride the review
-    # batch). The deterministic calendar check is free. Over max_input_tokens the
-    # pipeline skips the read, so the estimate says so rather than quoting a cost
-    # for a call that won't be made.
-    if cfg.continuity.enabled:
-        if doc_tokens > cfg.continuity.max_input_tokens:
-            print(f"  + continuity: book exceeds max_input_tokens "
-                  f"({cfg.continuity.max_input_tokens:,}); the read is skipped, "
-                  f"only the free calendar check runs")
-        else:
-            cont = estimate_cost(cfg.continuity.model, input_tokens=doc_tokens,
-                                 output_tokens=cfg.continuity.max_output_tokens)
-            if cont is not None:
-                print(f"  + continuity read on {cfg.continuity.model}: "
-                      f"~${cont:.2f} (one whole-book read, query-only, "
-                      f"not batchable)")
-
-    # Chapter continuity reads the book once, split across chapters, plus a small
-    # judge — priced at the document's tokens in, and each chapter's output
-    # ceiling out, so the estimate scales with how the book segments.
-    if cfg.chapter_continuity.enabled:
-        from .continuity import chapters as _chapters
-        cc = cfg.chapter_continuity
-        cc_model = cc.model or cfg.continuity.model or cfg.api.model
-        units = _chapters(prepared.doc.paragraphs, cfg.skip.is_sweep_only,
-                          min_tokens=cc.min_chapter_tokens,
-                          max_tokens=cc.max_chapter_tokens)
-        chap = estimate_cost(cc_model, input_tokens=doc_tokens,
-                             output_tokens=len(units) * cc.max_output_tokens)
-        if chap is not None:
-            print(f"  + chapter continuity on {cc_model}: ~${chap:.2f} "
-                  f"({len(units)} chapter read(s), query-only, plus a small "
-                  f"judge on {cc.judge_model}); the reads ride their own batch, "
-                  f"so a batch submission roughly halves this")
+    _print_cost_estimate(cfg, prepared, doc_tokens)
 
     print("\nSections (pass any of these to --only):")
     for row in chunk_outline(prepared):
@@ -1098,6 +1177,23 @@ def _approval_guard(args, cfg) -> int | None:
 
 def cmd_review(args) -> int:
     cfg, error_dir = _configure(args)
+    if getattr(args, "dry_run", False):
+        # Price the exact config without spending: prepare() reads and chunks the
+        # book but makes no provider call, so its counts drive the same estimate
+        # `inventory` prints. The one authoritative number for the plan gate.
+        try:
+            prepared = prepare(cfg, args.input, error_dir)
+        except (IngestError, FileNotFoundError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        doc_tokens = sum(c.est_tokens for c in prepared.chunks)
+        print(f"dry run — {len(prepared.doc.paragraphs)} reviewable paragraph(s) "
+              f"→ {len(prepared.chunks)} chunk(s), {len(cfg.error_type_keys)} "
+              f"error type(s) in {len(prepared.effective_pass_plan)} pass(es) → "
+              f"{prepared.request_count} API call(s)")
+        _print_cost_estimate(cfg, prepared, doc_tokens)
+        print("\nno API call made, no output written.")
+        return 0
     guard = _approval_guard(args, cfg)
     if guard is not None:
         return guard
@@ -1907,6 +2003,20 @@ def _import_or_replay(args, *, remap_unchanneled: bool, id_prefix: str) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
+    if getattr(args, "after_sweeps", False):
+        # The rows were written against text the sweeps had already touched.
+        # Resolve the sweeps' own spans first (validate_findings assigns their
+        # anchors), then re-express each row from post-sweep to pre-sweep coords
+        # so it anchors against the manuscript the deliverable is tracked against.
+        from .replay import reanchor_after_sweeps
+        swept = validate_findings(
+            list(prepared.sweep_findings), prepared.doc, cfg.min_confidence,
+            query_types=prepared.query_types, format_types=prepared.format_types)
+        rows, adjusted = reanchor_after_sweeps(rows, prepared.doc.paragraphs, swept)
+        if adjusted:
+            print(f"  --after-sweeps: re-anchored {adjusted} row(s) from "
+                  f"post-sweep to pre-sweep text")
+
     findings, rejects, remapped = build_findings(
         rows, variant=prepared.variant, error_dir=error_dir,
         remap_unchanneled=remap_unchanneled, id_prefix=id_prefix,
@@ -2136,7 +2246,8 @@ def cmd_merge(args) -> int:
 def cmd_galley(args) -> int:
     """Dispatch the `galley` sub-verbs. Kept apart from the review commands: these
     read a finished run rather than producing one."""
-    return {"audit": _galley_audit, "letter": _galley_letter,
+    return {"audit": _galley_audit, "verify": _galley_verify,
+            "letter": _galley_letter,
             "seed": _galley_seed, "score": _galley_score,
             "ask": _galley_ask,
             "calibrate": _galley_calibrate,
@@ -2266,24 +2377,138 @@ def _galley_audit(args) -> int:
     return 0
 
 
+def _galley_verify(args) -> int:
+    from galley.verify import (accepted_text, applied_edits, deliverable_docx,
+                               verify_run)
+    from .providers import cost_of_usage
+
+    cfg = load_config(args.config)
+    results = Path(args.results)
+    if not (results / "findings.json").exists():
+        print(f"error: no findings.json in {results} — point the results "
+              f"argument at a finished run's output directory", file=sys.stderr)
+        return 2
+    if deliverable_docx(results) is None:
+        print(f"error: no manuscript .docx in {results} — the finished-text "
+              f"gates read the ACCEPTED deliverable, which is not there",
+              file=sys.stderr)
+        return 2
+    out = Path(args.out) if args.out else results
+    setup_logging(out)
+
+    if args.changes_only and args.walk_only:
+        print("error: --changes-only and --walk-only are mutually exclusive",
+              file=sys.stderr)
+        return 2
+    run_changes = not args.walk_only
+    run_walk = not args.changes_only
+
+    context = ""
+    if args.context:
+        try:
+            context = Path(args.context).read_text(encoding="utf-8")
+        except OSError as e:
+            print(f"error: --context {args.context}: {e}", file=sys.stderr)
+            return 2
+
+    # A whole-book reasoning re-read, so it wants the strong reader the
+    # continuity pass uses — built for THAT model's vendor, not cfg.api.model's.
+    model = args.model or cfg.continuity.model or cfg.api.model
+    try:
+        provider = build_provider(cfg, model=model)
+    except ProviderError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+
+    usage = Usage()
+    edits = applied_edits(results)
+    accepted = accepted_text(results)
+    problems, residuals = verify_run(
+        results, provider, model, usage, context=context,
+        run_changes=run_changes, run_walk=run_walk)
+    cost = cost_of_usage(usage, fallback_model=model) or 0.0
+
+    payload_changes = {
+        "results_dir": str(results), "model": model, "ran": run_changes,
+        "applied_edits": len(edits),
+        "problems": [p.to_json() for p in problems],
+    }
+    payload_walk = {
+        "results_dir": str(results), "model": model, "ran": run_walk,
+        "paragraphs": sum(1 for t in accepted.values() if t.strip()),
+        "residuals": [r.to_json() for r in residuals],
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    cv_path = out / "change_verify.json"
+    fw_path = out / "finished_walk.json"
+    cv_path.write_text(json.dumps(payload_changes, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+    fw_path.write_text(json.dumps(payload_walk, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+
+    # Four decimals: a re-read on a cheap model is sub-cent, and "$0.00" reads
+    # exactly like the silently-didn't-run anomaly.
+    print(f"\nchange verifier: {len(problems)} problem(s) of {len(edits)} "
+          f"applied edit(s); finished-text walk: {len(residuals)} residual(s) "
+          f"({usage.api_calls} model call(s), ${cost:.4f}).")
+    from collections import Counter
+    if problems:
+        counts = Counter(p.verdict for p in problems)
+        print("  change problems: "
+              + ", ".join(f"{v}={n}" for v, n in counts.most_common()))
+        for p in problems[:10]:
+            print(f"    [{p.verdict}] {p.para_id}: {p.original_text!r} -> "
+                  f"{p.corrected_text!r} — {p.detail[:70]}")
+    for r in residuals[:10]:
+        print(f"    ({r.severity}) {r.para_id}: {r.quote!r} — {r.problem[:70]}")
+    print(f"\n  {cv_path}\n  {fw_path}")
+
+    if args.json:
+        print(json.dumps(_envelope(findings=(), usage=usage, model=model,
+                                   extra={"change_verify": payload_changes,
+                                          "finished_walk": payload_walk}),
+                         ensure_ascii=False))
+    # A found problem is a real defect in the deliverable — exit nonzero so the
+    # delivery loop stops here, the way certify's own failure does.
+    return 1 if (problems or residuals) else 0
+
+
 def _galley_letter(args) -> int:
     from galley.casefile import CaseFile
     from galley.letter import render_all
 
     target = Path(args.casefile)
     cf_path = target / "casefile.json" if target.is_dir() else target
-    if not cf_path.exists():
-        print(f"error: {cf_path} not found — pass a casefile.json or a "
-              f"directory holding one", file=sys.stderr)
+    # A bare `review`/`replay` run writes findings.json but no casefile.json.
+    # Fall back to projecting the case file the letter needs from that run's own
+    # findings + cost envelope, so the letter works on any run dir, not only an
+    # orchestrator/app one (P1-6).
+    synth_dir = target if target.is_dir() else target.parent
+    if not cf_path.exists() and not (synth_dir / "findings.json").exists():
+        print(f"error: {cf_path} not found and no findings.json in {synth_dir} "
+              f"to build one from — pass a casefile.json, or a run directory "
+              f"holding one or a findings.json", file=sys.stderr)
         return 2
 
-    out = Path(args.out) if args.out else cf_path.parent
+    out = Path(args.out) if args.out else (
+        cf_path.parent if cf_path.exists() else synth_dir)
     setup_logging(out)
-    try:
-        cf = CaseFile.load(cf_path)
-    except (OSError, ValueError) as e:
-        print(f"error: could not read {cf_path}: {e}", file=sys.stderr)
-        return 2
+    if cf_path.exists():
+        try:
+            cf = CaseFile.load(cf_path)
+        except (OSError, ValueError) as e:
+            print(f"error: could not read {cf_path}: {e}", file=sys.stderr)
+            return 2
+    else:
+        from galley.casefile_synth import casefile_from_run
+        try:
+            cf = casefile_from_run(synth_dir)
+        except (OSError, ValueError) as e:
+            print(f"error: could not build a case file from {synth_dir}: {e}",
+                  file=sys.stderr)
+            return 2
+        print(f"note: no casefile.json — built the letter from "
+              f"{synth_dir / 'findings.json'}", file=sys.stderr)
 
     ms = None
     if args.source:
@@ -3186,13 +3411,15 @@ def _effective_cfg(args):
     the same stage>genre precedence _configure uses. For the read-only galley
     verbs (routes/approve/certify) that need the config a run WOULD use."""
     cfg = load_config(args.config)
+    _stage, _genre = _resolve_stage_genre(
+        args.config, getattr(args, "stage", None), getattr(args, "genre", None))
     stage_locks = {}
-    if getattr(args, "stage", None):
+    if _stage:
         from .stages import apply_stage
-        cfg, stage_locks = apply_stage(cfg, args.stage)
-    if getattr(args, "genre", None):
+        cfg, stage_locks = apply_stage(cfg, _stage)
+    if _genre:
         from .genre import apply_genre
-        cfg, _ = apply_genre(cfg, args.genre)
+        cfg, _ = apply_genre(cfg, _genre)
     if stage_locks:
         from .stages import enforce_locks
         enforce_locks(cfg, stage_locks)

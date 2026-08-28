@@ -1088,9 +1088,15 @@ def _sweep_initialism(text: str, variant=None) -> list[Hit]:
 # apostrophe for the omitted century. Bounded to decade-reading leads (the /
 # early / late / mid) on purpose: "in her 60s" is an AGE the number rules spell
 # out ("her sixties"), and this sweep must not claim it first.
+#
+# `mid` catches the OTHER wrong form — a possessive-style apostrophe before the
+# s ("the 80's" -> "the ’80s"), which the bare-decade pattern missed: Purpura had
+# "’80s" fixed at one site but "80's" left standing at another. The correct form
+# "the ’80s" never matches — the leading apostrophe sits between the gap and the
+# digits, where `dec` expects a digit — so the sweep stays idempotent.
 _DECADE = re.compile(
     r"\b(?P<lead>[Tt]he|[Ee]arly|[Ll]ate|[Mm]id)(?P<gap>[  -])"
-    r"(?P<dec>[1-9]0)s\b")
+    r"(?P<dec>[1-9]0)(?P<mid>['’]?)s\b")
 
 # "temps in the 60s", "scores in the 90s": two-digit ranges that are not years
 # at all. One look-behind window is enough — the marker sits close by.
@@ -1100,16 +1106,20 @@ _DECADE_NOT_YEARS = re.compile(
 
 
 def _sweep_decade_apostrophe(text: str, variant=None) -> list[Hit]:
-    """Insert the apostrophe a two-digit decade drops: "the early 80s" ->
-    "the early ’80s". Idempotent — an apostrophe already there breaks the
-    match — and four-digit decades ("the 1980s") never match at all."""
+    """Insert the apostrophe a two-digit decade drops and move a misplaced one:
+    "the early 80s" and "the 80's" both -> "the early ’80s" / "the ’80s".
+    Idempotent — the correct leading apostrophe breaks the match — and four-digit
+    decades ("the 1980s") never match at all."""
     hits: list[Hit] = []
     for m in _DECADE.finditer(text):
         if _DECADE_NOT_YEARS.search(text[:m.start()]):
             continue
-        hits.append(Hit(m.start("dec"), m.end(), f"’{m.group('dec')}s",
-                        "A decade abbreviated to two digits takes an "
-                        "apostrophe for the omitted century: ’80s."))
+        why = ("A decade abbreviated to two digits takes a LEADING apostrophe "
+               "for the omitted century — ’80s, not 80's."
+               if m.group("mid")
+               else "A decade abbreviated to two digits takes an apostrophe "
+               "for the omitted century: ’80s.")
+        hits.append(Hit(m.start("dec"), m.end(), f"’{m.group('dec')}s", why))
     return hits
 
 

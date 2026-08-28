@@ -402,7 +402,59 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     # the head proofreader's own check caught — whatever path produced the
     # deliverable, this fails loud instead.
     cert.checks.append(_certify_text_hygiene(run))
+
+    # 9. Finished-text SENSE gates. certify itself reads no text for meaning;
+    # `galley verify` does and records its verdict here. A recorded problem fails
+    # delivery; a clean record passes; no record skips loudly (run `galley
+    # verify`) so an unread deliverable never reads as a certified-clean one.
+    cert.checks.append(_certify_change_verify(run))
+    cert.checks.append(_certify_finished_walk(run))
     return cert
+
+
+def _certify_change_verify(run: Path) -> Check:
+    """Read change_verify.json (from `galley verify`): the change verifier's
+    verdict on every applied edit. Any recorded problem fails delivery."""
+    payload = _load_json(run / "change_verify.json")
+    if payload is None:
+        return Check("change verifier", "skip",
+                     "no change_verify.json — run `galley verify` to re-read "
+                     "every applied edit for meaning/grammar/voice damage")
+    problems = payload.get("problems") or []
+    if problems:
+        from collections import Counter
+        counts = Counter(p.get("verdict", "?") for p in problems
+                         if isinstance(p, dict))
+        return Check("change verifier", "fail",
+                     f"{len(problems)} applied edit(s) flagged ("
+                     + ", ".join(f"{v}={n}" for v, n in counts.most_common())
+                     + ") — see change_verify.json")
+    return Check("change verifier", "pass",
+                 f"{payload.get('applied_edits', 0)} applied edit(s) re-read, "
+                 f"no meaning/grammar/voice damage")
+
+
+def _certify_finished_walk(run: Path) -> Check:
+    """Read finished_walk.json (from `galley verify`): a residual-error read over
+    the ACCEPTED text. A high-severity residual fails; lower ones warn but do not
+    block (they are candidates for a next wave, not proof the build is broken)."""
+    payload = _load_json(run / "finished_walk.json")
+    if payload is None:
+        return Check("finished-text walk", "skip",
+                     "no finished_walk.json — run `galley verify` to proofread "
+                     "the accepted text for residual errors")
+    residuals = [r for r in (payload.get("residuals") or []) if isinstance(r, dict)]
+    highs = [r for r in residuals if r.get("severity") == "high"]
+    if highs:
+        return Check("finished-text walk", "fail",
+                     f"{len(highs)} high-severity residual error(s) of "
+                     f"{len(residuals)} — see finished_walk.json")
+    if residuals:
+        return Check("finished-text walk", "pass",
+                     f"{len(residuals)} low/medium residual(s), none high — "
+                     f"review finished_walk.json before the next wave")
+    return Check("finished-text walk", "pass",
+                 "accepted text read, no residual errors")
 
 
 def _certify_text_hygiene(run: Path) -> Check:

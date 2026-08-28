@@ -116,6 +116,20 @@ def minimal_regions(original: str, corrected: str
     return [(pre + a, deleted[a:b], repl) for a, b, repl in merged]
 
 
+# A row that came through the import / replay path — a curated human edit or a
+# replayed prior decision — as opposed to a machine floor/model row generated
+# this run. build_findings stamps every such row's finding_id with an "import"
+# or "replay" prefix and (unless it kept its own type) the "imported_edit" type;
+# either signal identifies it. Used only to give a hand-made decision claim
+# precedence over the machine floor on a contested span (see validate_findings).
+_IMPORT_ID_PREFIXES = ("import", "replay", "curated")
+
+
+def _is_imported(f: Finding) -> bool:
+    return (f.finding_id.split("-", 1)[0] in _IMPORT_ID_PREFIXES
+            or f.error_type == "imported_edit")
+
+
 def validate_findings(findings: list[Finding], doc: DocumentModel,
                       min_confidence: str,
                       query_types: frozenset[str] = frozenset(),
@@ -156,6 +170,22 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
     formatted_spans: dict[str, list[tuple[int, int]]] = {}
     seen: set[tuple] = set()
     out: list[Finding] = []
+
+    # Claim precedence. The loop below is first-come-wins on any contested span,
+    # so INPUT ORDER is precedence — and the caller's order already encodes the
+    # machine hierarchy (sweeps > consistency > repair cluster > sapling > model
+    # > promoted > smoothing). What that order does NOT capture is a hand-made
+    # row: a curated/imported/replayed edit is a human decision and must outrank
+    # any machine floor or model row it contends with — on the Purpura replay a
+    # floor row silently beat a curated fix (terd->turd lost to a junk terd->nerd)
+    # purely because it happened to be listed first. So promote imported rows
+    # ahead of the machine rows here, shorter span first among them (the minimal
+    # fix wins a genuine overlap between two human rows), and keep every other
+    # row in the caller's exact relative position. A run with no imported rows is
+    # therefore reordered by nothing and behaves byte-for-byte as before.
+    findings = sorted(
+        findings, key=lambda f: ((0, len(f.original_text)) if _is_imported(f)
+                                 else (1, 0)))
 
     for f in findings:
         para = paras.get(f.para_id)

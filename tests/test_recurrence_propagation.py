@@ -50,6 +50,32 @@ def test_nonword_typo_propagates_as_edit_everywhere():
     assert "STARED" in fixes["body-0002"]
 
 
+def test_a_curated_import_row_never_seeds_propagation():
+    # P1-4: a curated/imported one-off (a TOC line matched to an epigraph) must
+    # not flood the margin with queries about every ordinary use of a common
+    # word. Purpura: one curated "massive"->"drastic" queried all 9 other uses.
+    ps = paras("A massive overhaul was needed.",         # the curated seed site
+               "It was a massive undertaking.",           # ordinary use — leave it
+               "The massive doors swung open.")           # ordinary use — leave it
+    seed = _edit(ps[0], "massive", "drastic")
+    seed = seed.__class__(**{**seed.__dict__, "finding_id": "import-0001"})
+    assert propagate_recurrences([seed], ps) == []
+
+
+def test_a_machine_row_still_seeds_alongside_an_imported_one():
+    # The gate is provenance-specific: an imported row does not seed, but a
+    # machine detector row in the same set still does.
+    ps = paras("She staired at the wall.",
+               "Later he staired at the floor.",
+               "A massive door.", "Another massive door.")
+    machine = _edit(ps[0], "staired", "stared")          # finding_id "seed"
+    imported = _edit(ps[2], "massive", "drastic")
+    imported = imported.__class__(**{**imported.__dict__,
+                                     "finding_id": "replay-0002"})
+    out = propagate_recurrences([machine, imported], ps)
+    assert {f.para_id for f in out} == {"body-0001"}     # only the typo propagated
+
+
 def test_seed_site_is_not_re_emitted():
     ps = paras("She staired at the wall.")
     seed = _edit(ps[0], "staired", "stared")

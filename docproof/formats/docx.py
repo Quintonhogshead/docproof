@@ -19,11 +19,14 @@ def snapshot(pkg, mode: str = "current") -> dict[str, str]:
     """Every paragraph's text, keyed by para_id.
 
     "current" is what the paragraph says now; "reject" is what it would say
-    with every tracked change rejected. The audit compares the second against
-    a "current" taken before any change was applied."""
+    with every tracked change rejected; "accept" is what it would say with every
+    tracked change accepted — the text the author actually ends up reading, which
+    the finished-text delivery gates (galley/verify.py) walk for residual errors
+    and applied-edit damage. The audit compares the "reject" view against a
+    "current" taken before any change was applied."""
     return {
         wp.para_id: (paragraph_text(wp.element) if mode == "current"
-                     else paragraph_view_text(wp.element, "reject"))
+                     else paragraph_view_text(wp.element, mode))
         for wp in walk_package(pkg)
     }
 

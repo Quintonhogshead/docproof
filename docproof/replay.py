@@ -121,6 +121,107 @@ def resolve_error_type(raw_type: str, registry: dict[str, ErrorType],
     return default_key, True
 
 
+def _swept_and_map(pre: str, edits: list[tuple[int, int, str]]):
+    """Apply `edits` (sorted, non-overlapping (start, end, insert) spans in
+    pre-sweep coordinates) to `pre`, returning the swept text and, for each
+    swept-text index, the pre-sweep index it maps to and whether it is a char an
+    edit INSERTED (so a caller can tell a real overlap from an adjacency).
+
+    The map has one extra trailing entry (== len(pre)) so a half-open end index
+    maps too."""
+    S: list[str] = []
+    sw2pre: list[int] = []
+    inserted: list[bool] = []
+    i = 0
+    for s, e, ins in sorted(edits):
+        for j in range(i, s):
+            S.append(pre[j]); sw2pre.append(j); inserted.append(False)
+        for ch in ins:
+            S.append(ch); sw2pre.append(s); inserted.append(True)
+        i = e
+    for j in range(i, len(pre)):
+        S.append(pre[j]); sw2pre.append(j); inserted.append(False)
+    sw2pre.append(len(pre))
+    return "".join(S), sw2pre, inserted
+
+
+def _minimal_diff(original: str, corrected: str) -> tuple[int, str, str]:
+    """The single (offset, deleted, inserted) that turns `original` into
+    `corrected` by trimming the shared prefix and suffix."""
+    a, b = original, corrected
+    p = 0
+    while p < len(a) and p < len(b) and a[p] == b[p]:
+        p += 1
+    sa, sb = len(a), len(b)
+    while sa > p and sb > p and a[sa - 1] == b[sb - 1]:
+        sa -= 1; sb -= 1
+    return p, a[p:sa], b[p:sb]
+
+
+def reanchor_after_sweeps(rows: list[dict], paragraphs, sweep_findings
+                          ) -> tuple[list[dict], int]:
+    """Re-express imported rows written against POST-sweep text so they anchor
+    against the pre-sweep manuscript (P2-11).
+
+    A curated row whose `original_text` was captured after the deterministic
+    sweeps ran (an ellipsis collapsed, a hyphen turned to an en-dash, a `:00`
+    added before a lowered `am`) will not be found in the pre-sweep canonical
+    text and lands as `rejected_no_anchor` — so the row has to be hand-built as a
+    micro-span against pre-sweep text. This resolves each such row against the
+    swept text instead and rewrites it to the equivalent pre-sweep quote, so a
+    findings file exported after a swept run replays without hand-editing.
+
+    Safe by construction: a row is rewritten ONLY when its own edit lands on
+    characters no sweep touched (the disjoint case — every reported site: a fix
+    ADJACENT to a sweep, never on it). A row whose edit overlaps a sweep is left
+    exactly as it was for the ordinary arbitration to rule on, so this never
+    composes a garbled third version with a sweep. Returns (rows, adjusted)."""
+    by_id = {p.para_id: p.text for p in paragraphs}
+    # Validated sweep edits per paragraph, as (start, end, insert) in pre coords.
+    edits_by_para: dict[str, list[tuple[int, int, str]]] = {}
+    for f in sweep_findings:
+        a = getattr(f, "anchor", None)
+        if a is None or f.status != "validated":
+            continue
+        edits_by_para.setdefault(f.para_id, []).append(
+            (a.start, a.end, a.insert_text))
+    out: list[dict] = []
+    adjusted = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            out.append(row); continue
+        pid = row.get("para_id")
+        original = row.get("original_text")
+        pre = by_id.get(pid)
+        edits = edits_by_para.get(pid)
+        if (not edits or not isinstance(original, str) or not original
+                or pre is None or original in pre):
+            out.append(row); continue          # anchors pre-sweep already, or n/a
+        swept, sw2pre, inserted = _swept_and_map(pre, edits)
+        idx = swept.find(original)
+        if idx == -1:
+            out.append(row); continue          # not a post-sweep quote either
+        d_off, deleted, ins = _minimal_diff(original, row.get("corrected_text", ""))
+        e_lo, e_hi = idx + d_off, idx + d_off + len(deleted)
+        if any(inserted[k] for k in range(e_lo, e_hi)):
+            out.append(row); continue          # edit lands ON a sweep — leave it
+        pre_lo, pre_hi = sw2pre[idx], sw2pre[idx + len(original)]
+        pre_quote = pre[pre_lo:pre_hi]
+        off_in_pre = sw2pre[e_lo] - pre_lo
+        if pre_quote[off_in_pre:off_in_pre + len(deleted)] != deleted:
+            out.append(row); continue          # not the clean disjoint case
+        new_corrected = (pre_quote[:off_in_pre] + ins
+                         + pre_quote[off_in_pre + len(deleted):])
+        occurrence = pre[:pre_lo].count(pre_quote) + 1
+        new = dict(row)
+        new["original_text"] = pre_quote
+        new["corrected_text"] = new_corrected
+        new["occurrence"] = occurrence
+        out.append(new)
+        adjusted += 1
+    return out, adjusted
+
+
 def sanitize_corrected(text: str, variant: Variant | None) -> str:
     """Straight quotes to curly, the same context-aware curler ingest uses.
     Only ever called on corrected_text — never on original_text, which must

@@ -666,6 +666,11 @@ def test_one_sided_hyphen_leaves_broken_compounds_alone(text):
      "a chair from the early ’80s sat there."),
     ("the 90s were wild.", "the ’90s were wild."),
     ("her mid-80s perm.", "her mid-’80s perm."),
+    # P1-5: the possessive-style apostrophe form the bare-decade pattern missed.
+    # Purpura fixed "’80s" at one site but left "80's" at another (body-0346).
+    ("music that only the 80's could appreciate.",
+     "music that only the ’80s could appreciate."),
+    ("the 80’s again.", "the ’80s again."),        # curly interior apostrophe too
 ])
 def test_decade_apostrophe_added(before, after):
     assert swept("sweep_decade_apostrophe", before) == after
