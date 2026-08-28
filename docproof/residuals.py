@@ -46,7 +46,7 @@ _NUMERAL = re.compile(
     r"(?![\w/–—\-'’]|[.,:]\d|\s?%)")
 
 # What follows a numeral that makes it not-a-spelled-word after all: a time's
-# meridiem (Chicago keeps digits with a.m./p.m.), a degree sign, an ordinal
+# meridiem (the house keeps digits with AM/PM), a degree sign, an ordinal
 # suffix (the ordinal rule owns those).
 _NUMERAL_TAIL = re.compile(r"\s?(?:[ap]\.?m\.?\b|°|(?:st|nd|rd|th)\b)",
                            re.IGNORECASE)
@@ -68,7 +68,10 @@ _LABEL_BEFORE = frozenset({
     "fig", "table", "line", "verse", "act", "scene", "section", "part",
     "volume", "vol", "book", "no", "number", "size", "version", "step",
     "item", "question", "rule", "article", "paragraph", "model", "type",
-    "phase", "district", "ward", "precinct", "channel", "aisle", "row",
+    # "stage" stays a label: a cancer stage converts to ROMAN numerals
+    # ("stage IV") in the number_style pass, so spelling it out here would
+    # fight that rule — query, never convert.
+    "stage", "phase", "district", "ward", "precinct", "channel", "aisle", "row",
     "seat", "track", "lane", "platform", "grade", "psalm", "sonnet", "note",
 })
 

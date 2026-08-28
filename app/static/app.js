@@ -2465,10 +2465,10 @@ function priceReview(bundle, files) {
   files.forEach((f) => {
     const kept = f.kept;
     // The staged-file preflight counts the shipped categories. Detector-only
-    // removes the terminal-mark query category, leaving seven edit-capable
+    // removes the terminal-mark query category, leaving nine edit-capable
     // focused reads. Price the card for what the server profile will run.
     const passes = bundle.profile === 'candidate-only' ? 0
-      : (bundle.profile === 'detector-only' ? 7 : (f.passes || 1));
+      : (bundle.profile === 'detector-only' ? 9 : (f.passes || 1));
     const chunks = f.chunks || [];
     let keptTok = 0, keptCount = 0;
     chunks.forEach((c) => {
