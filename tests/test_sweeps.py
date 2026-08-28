@@ -275,20 +275,25 @@ def test_dialogue_tag_leaves_an_action_beat_gerund_alone():
 # --- times of day ------------------------------------------------------------
 
 @pytest.mark.parametrize("before,after", [
-    ("It was 3:40AM.", "It was 3:40 a.m."),
-    ("at 4:15PM.", "at 4:15 p.m."),
-    ("reached the tree at 1:53AM.", "reached the tree at 1:53 a.m."),
-    ("meet at 2:00 AM tonight", "meet at 2:00 a.m. tonight"),
-    ("by 2 PM sharp", "by 2 p.m. sharp"),
+    ("It was 3:40AM.", "It was 3:40 AM."),
+    ("at 4:15pm.", "at 4:15 PM."),
+    ("reached the tree at 1:53am.", "reached the tree at 1:53 AM."),
+    ("already 3:40 a.m. now", "already 3:40 AM now"),
+    ("by 2 PM sharp", "by 2:00 PM sharp"),            # bare hour gains :00
+    ("at 3 p.m. yesterday", "at 3:00 PM yesterday"),  # abbreviation dot drops
+    ("home by 3 p.m.", "home by 3:00 PM."),           # paragraph-final period kept
+    ("“I'll come at 3 p.m.”", "“I'll come at 3:00 PM.”"),  # quote-final too
 ])
 def test_time_of_day_meridiem(before, after):
     assert swept("sweep_time_of_day", before) == after
 
 
 @pytest.mark.parametrize("text", [
-    "already 3:40 a.m. now",          # correct: left alone
+    "already 3:40 AM now",            # correct: left alone
     "I AM here and you are not.",     # "AM" not attached to a digit
     "listening to AM radio",
+    "at 3 p.m. He was already gone.", # dot may be the sentence period: skipped
+    "at 9 a.m. Eastern time",         # or the abbreviation's own: skipped too
 ])
 def test_time_of_day_leaves_these_alone(text):
     assert unchanged("sweep_time_of_day", text)

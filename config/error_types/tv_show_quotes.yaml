@@ -1,0 +1,108 @@
+key: tv_show_quotes
+name: TV shows in quotation marks
+version: 1
+# The affirmative half of the house TV rule. title_italics defends the rule's
+# boundary — it must never italicise a show — but nothing ENFORCED the rule
+# where an author leaves a show bare ("watching Full House") or italicises it
+# in the manuscript. Telling a show from a film in prose is exactly the
+# judgment a model gets wrong in both directions, so this type ASKS (channel:
+# query) rather than editing: the margin gets a question, the text is never
+# touched. It rides the title_italics pass — same paragraphs, read for the
+# same reason.
+channel: query
+
+detection_prompt: |
+  Atmosphere house style sets the title of a TELEVISION show or series in
+  quotation marks — "Peppa Pig", "Full House" — never in italics and never
+  bare. A show named in the text without quotation marks around it is a
+  house-style miss no other pass owns. Because deciding whether a name is a
+  TV show (quotes), a film (italics — a different type's rule), or not a
+  title at all is a judgment, this type asks rather than corrects: it points
+  at the name and leaves the styling to the author.
+
+  You are reading plain text. You CAN see quotation marks — they are
+  characters — but you CANNOT see italics. A show already inside quotation
+  marks is correctly set: stay silent. A show with no quotation marks around
+  it may be bare or may be italicised; either way the house wants quotation
+  marks, so flag it.
+
+  FLAG, as a question, the title of:
+  - A television show or series named without quotation marks: "We spent the
+    evening watching Star Search and Full House." Broadcast, cable, and
+    streaming series all count — the house rule is about the kind of work,
+    not the wire it arrived on.
+  - A named episode of a series without quotation marks, when the text
+    plainly presents it as an episode title. Episodes take quotation marks
+    under the short-work rule too, so the question is the same.
+
+  The default answer for this type is silence. A wrong query — one that asks
+  an author to quote a phrase that was never a title — teaches them to stop
+  reading the margin.
+
+  Do NOT flag:
+  - A show already inside quotation marks — single or double. Inside dialogue
+    a nested title correctly takes single quotes; that is still quoted.
+  - A FILM, play, album, book, or any other long work — those are italicised
+    and belong to title_italics, not here. When you cannot tell whether the
+    work is a film or a series, flag at LOW confidence at most and say the
+    doubt in the comment; when you have no real basis to think it is
+    television, stay silent.
+  - A film named as something watched on television ("A Christmas Story is
+    playing on a loop") — say what it is in the comment and let the author
+    choose; low confidence at most.
+  - A show's name used for something other than the work: a character, a
+    place, a catchphrase, a network, a channel, a franchise named
+    generically ("he watched game shows all day", "reality TV").
+  - A name you are guessing about. Flag only when the text itself treats the
+    words as a title being watched, aired, discussed, or named — not when a
+    phrase merely resembles one.
+  - Anything whose exact extent is unclear. You must be able to quote the
+    title exactly, and only the title.
+
+fix_guidance: |
+  This type never edits. Set corrected_text to the quoted text exactly as it
+  appears — repeat original_text unchanged, character for character, with no
+  quotation marks added — and put the observation in explanation, phrased as
+  a question the author can answer: name the title exactly, say that house
+  style sets TV shows in quotation marks, and ask whether it should be
+  quoted (noting, where relevant, that inside dialogue the quotes would be
+  single). Never write the quoted version into corrected_text; adding the
+  marks is the author's call, which is why this is a query and not a change.
+
+confidence_guidance: |
+  Every finding of this type becomes a comment, whatever its confidence, so
+  confidence describes how sure you are rather than gating anything — but it
+  is read, so let it steer you toward silence when unsure.
+  high   — an unmistakable television series, named as a title, with no
+           quotation marks around it.
+  medium — very likely a show, but the name could be a film or an in-world
+           invention; say the doubt in the comment.
+  low    — the work may be a film (a film on TV included), or the words may
+           not be a title at all. Prefer silence over a low-confidence guess
+           with no textual basis.
+
+examples:
+  - text: "We spent the evening watching Star Search and Full House."
+    finding:
+      original_text: "We spent the evening watching Star Search and Full House."
+      corrected_text: "We spent the evening watching Star Search and Full House."
+      explanation: "House style sets TV shows in quotation marks — should Star Search and Full House be quoted (\"Star Search\", \"Full House\")?"
+      confidence: high
+  - text: "The best of the worst is “Peppa Pig.” I can't stand this show."
+    finding: null
+  - text: "She had never finished Moby-Dick, and never would."
+    finding: null
+  - text: "He watched game shows all day and talk shows all night."
+    finding: null
+  - text: "Every Thursday they argued over Jeopardy like it was a courtroom."
+    finding:
+      original_text: "Every Thursday they argued over Jeopardy like it was a courtroom."
+      corrected_text: "Every Thursday they argued over Jeopardy like it was a courtroom."
+      explanation: "House style sets TV shows in quotation marks — should Jeopardy be quoted (\"Jeopardy\")?"
+      confidence: high
+  - text: "A Christmas Story is playing on a loop again this year."
+    finding:
+      original_text: "A Christmas Story is playing on a loop again this year."
+      corrected_text: "A Christmas Story is playing on a loop again this year."
+      explanation: "A Christmas Story is a film airing on television — house style quotes TV shows, but a film is ordinarily italicised. Which styling do you want here?"
+      confidence: low
