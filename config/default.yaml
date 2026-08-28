@@ -219,6 +219,23 @@ glossary:
 # world on purpose, so a fact is the author's to settle. Cached per draft and
 # priced for its own model, like the glossary. Off by default: a whole extra
 # read, opt-in until proven — flip it here or per run in the app panel.
+# The table of contents checked against the body's own structure: contents
+# wording vs the chapter/part page ("massive" in the contents, "drastic" on
+# the part page), chapter and part numbering, entries listed but absent or
+# present but unlisted. One SMALL model read over a deterministic structure
+# extract (the opening pages + a heading outline) — a few thousand tokens even
+# on a long novel, so it ships ON, unlike the fact check's whole-book read.
+# Every catch is a margin QUERY, never an edit: which copy is right is the
+# author's to settle. Cached per draft. See docproof/toccheck.py.
+toccheck:
+  enabled: true
+  model: gpt-5.6-luna
+  effort: medium
+  max_output_tokens: 8000   # covers the model's thinking; a truncated
+                            # structured reply parses as NOTHING (silent loss)
+  max_queries: 20
+  cache_dir:                # blank = the shared whole-book cache
+
 factcheck:
   enabled: false
   model: gpt-5.6-luna

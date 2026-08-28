@@ -1099,6 +1099,17 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             cfg, prepared.doc.paragraphs, usage, provider_factory,
             coverage=coverage))
 
+    # The contents-vs-body read: one SMALL call over a structure extract,
+    # queries only. Whole-document only — a partial run cannot claim to have
+    # compared the contents against the book.
+    if cfg.toccheck.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("toccheck")
+        from .toccheck import toccheck_findings
+        findings.extend(toccheck_findings(
+            cfg, prepared.doc.paragraphs, usage, provider_factory,
+            coverage=coverage))
+
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         if on_phase:
             on_phase("adjudicate")

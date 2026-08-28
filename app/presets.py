@@ -149,7 +149,8 @@ DETECTOR_ONLY_PRESET = TierPreset(
     min_confidence="medium",
     profile=DETECTOR_ONLY,
     extra_features=(
-        ("factcheck", False), ("chapter_continuity", False),
+        ("factcheck", False), ("toccheck", False),
+        ("chapter_continuity", False),
         ("adjudicate", False), ("consistency", False),
         ("spellcheck", False), ("heading_case", False),
         ("residuals", False), ("smoothing", False),
@@ -176,7 +177,8 @@ CANDIDATE_ONLY_PRESET = TierPreset(
     profile=CANDIDATE_ONLY,
     candidate_screening=True,
     extra_features=(
-        ("factcheck", False), ("chapter_continuity", False),
+        ("factcheck", False), ("toccheck", False),
+        ("chapter_continuity", False),
         ("adjudicate", False), ("consistency", False),
         ("spellcheck", False), ("heading_case", False),
         ("residuals", False), ("smoothing", False),

@@ -3539,6 +3539,9 @@ const STAGE_FLOW = [
     quip: 'One read against the world outside the book — names, history, '
         + 'geography — asking, never editing: fiction bends the world on '
         + 'purpose.' },
+  { id: 'toccheck', label: 'Contents check', optional: true,
+    quip: 'Reading the table of contents against the book itself — titles, '
+        + 'numbers, and the epigraph that quietly changed between the two.' },
   { id: 'adjudicate', label: 'Real-word typos', optional: true,
     quip: 'Weighing the sneaky ones — “form” for “from”, “lead” for “led” — that '
         + 'a spellchecker sails right past.' },

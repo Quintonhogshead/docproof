@@ -992,7 +992,10 @@ def test_an_edited_document_invalidates_the_checkpoint(runner, monkeypatch,
 
     job = store.get("j1")
     assert job.state == "done"
-    assert len(fresh.calls) == job.total      # every call made afresh
+    # Every section call made afresh, plus the one toccheck structure read —
+    # an aux pass outside the section count (nothing of it survived the crash,
+    # so it is paid again too).
+    assert len(fresh.calls) == job.total + 1
 
 
 def test_a_different_model_invalidates_the_checkpoint(runner, monkeypatch):

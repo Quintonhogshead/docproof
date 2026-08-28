@@ -1170,6 +1170,29 @@ class FactcheckConfig(BaseModel):
     cache_dir: str | None = None
 
 
+class TocCheckConfig(BaseModel):
+    """The table of contents checked against the body's own structure —
+    contents wording vs the chapter page (Purpura: "massive" in the contents,
+    "drastic" on the part page), chapter/part numbering, entries listed but
+    absent or present but unlisted. One SMALL model read over a deterministic
+    structure extract (opening pages + heading outline), a few thousand
+    tokens even on a long novel, priced for a cheap model. Every catch is a
+    margin query, never an edit: which copy is right is the author's call.
+    On by default, unlike the fact check, because the read is structure-sized
+    rather than book-sized — pennies on the shipped model. See
+    docproof/toccheck.py."""
+    enabled: bool = True
+    model: str = "gpt-5.6-luna"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    # The ceiling covers the model's thinking too (see the reasoning-model
+    # truncation note on the confirm valve); the extract is small, the answer
+    # list smaller, but a truncated structured reply parses as NOTHING.
+    max_output_tokens: int = Field(default=8000, ge=1)
+    max_queries: int = Field(default=20, ge=1)
+    # None = the shared whole-book cache (see default_cache_dir).
+    cache_dir: str | None = None
+
+
 class AnachronismScanConfig(BaseModel):
     """Query-only: flags vocabulary that reads as later than the manuscript's
     own stated era — the same external-authority risk factcheck carries, so
@@ -1758,6 +1781,7 @@ class Config(BaseModel):
     repair: RepairConfig = Field(default_factory=RepairConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
+    toccheck: TocCheckConfig = Field(default_factory=TocCheckConfig)
     genre_scans: GenreScansConfig = Field(default_factory=GenreScansConfig)
     flights: FlightsConfig = Field(default_factory=FlightsConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)

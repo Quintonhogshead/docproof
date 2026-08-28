@@ -176,8 +176,11 @@ def test_on_phase_cycles_the_stages_each_round_then_writes(tmp_path, cfg):
     run_sync_rounds(cfg, str(src), ERROR_DIR, out_dir=tmp_path,
                     review_provider=review, judge_provider=_ApproveJudge(),
                     on_phase=stages.append)
-    assert stages == ["preparing", "reviewing", "round_judge",
-                      "preparing", "reviewing", "round_judge", "writing"]
+    # toccheck fires each round with the other post-loop passes; the second
+    # round's read is a cache hit on an unchanged structure extract.
+    assert stages == ["preparing", "reviewing", "toccheck", "round_judge",
+                      "preparing", "reviewing", "toccheck", "round_judge",
+                      "writing"]
 
 
 def test_rounds_run_leaves_a_composed_snapshot(tmp_path, cfg):

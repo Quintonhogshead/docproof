@@ -91,6 +91,7 @@ STAGE_STATE = {
     "reviewing": "Reviewing ({done} of {total} sections)",
     "glossary": "Building the glossary for the whole book",
     "factcheck": "Checking the book against the world",
+    "toccheck": "Checking the contents against the book",
     "adjudicate": "Checking for real-word typos",
     "rewrite": "Rewriting and comparing, line by line",
     "languagetool": "Running the mechanical check",

@@ -533,6 +533,17 @@ def collect_findings(job: Job, provider: Provider,
             cfg, prepared.doc.paragraphs, usage, build_provider,
             coverage=coverage)
 
+    # The contents-vs-body read rides collect the same way: one small
+    # synchronous call over the structure extract, queries only.
+    if cfg.toccheck.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("toccheck")
+        from .providers import build_provider
+        from .toccheck import toccheck_findings
+        findings += toccheck_findings(
+            cfg, prepared.doc.paragraphs, usage, build_provider,
+            coverage=coverage)
+
     if cfg.adjudicate.enabled and (prepared.adjudicate_candidates or glossary_cands):
         if on_phase:
             on_phase("adjudicate")

@@ -30,6 +30,7 @@ _TYPE_FAMILIES = {
     "sweep_compound_number": "numbers",
     "sweep_decade_apostrophe": "numbers",
     "heading_vocab": "headings",
+    "toc_check": "headings",
     "number_style": "numbers",
     "currency_style": "currency",
     "heading_case": "headings",
