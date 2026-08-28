@@ -162,7 +162,7 @@ consistency:
   deity_pronouns: true
   deity_min_capitalized: 8
   # Bare clock hours ("around 4", "at 8") in a book whose own style writes
-  # times with minutes ("11:00 a.m."). Query-only, self-gating on the book
+  # times with minutes ("11:00 AM"). Query-only, self-gating on the book
   # carrying time_min_with_minutes H:MM times — the whole-book inconsistency
   # the Purpura head-proofreader pass fixed by hand.
   time_style: true
@@ -704,9 +704,21 @@ error_types:
   # it reads the same paragraphs for the same reason, and asks rather than
   # corrects.
   - [dialogue_tag, speaker_change]
-  # house mechanics — numbers, money, hyphenation, and the one rule that
-  # changes how text is set rather than what it says
-  - [number_style, currency_style, ly_adverb_hyphen, title_italics]
+  # numbers & money — a dedicated pass. Numbers are the house's most
+  # persistent sticking point (field QA keeps surfacing missed spell-outs,
+  # ordinals, and stage labels), so the two number categories read alone:
+  # nothing else shares the model's attention on a number-bearing chunk.
+  # For an extra recall push on a number-heavy manuscript, dial this category
+  # to {passes: 2, token_budget: 1800} on the review panel — the same
+  # per-run trade as the comma note above, and priced the same way (a panel
+  # delta, not the flat base).
+  - [number_style, currency_style]
+  # house mechanics — hyphenation and the one rule that changes how text is
+  # set rather than what it says. tv_show_quotes rides along because it reads
+  # the same paragraphs for the same reason title_italics does, and asks
+  # rather than corrects (query channel): title_italics defends the TV rule's
+  # boundary (never italicise a show), this asks after the bare ones.
+  - [ly_adverb_hyphen, title_italics, tv_show_quotes]
   # sentence grammar — needs parsing, still decidable. compound_sentence_comma
   # rides beside comma_splice so the model reads the two clause-comma rules
   # together: a coordinating conjunction joining two independent clauses wants a
@@ -790,7 +802,7 @@ sweeps:
   - sweep_terminal_period
   - sweep_quote_punctuation   # . and , inside a closing double quote (US)
   - sweep_nested_quote        # doubles inside dialogue demote to singles
-  - sweep_time_of_day         # 3:40AM -> 3:40 a.m.
+  - sweep_time_of_day         # 3:40am -> 3:40 AM; 2 PM -> 2:00 PM (house: 11:00 AM)
   - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
   - sweep_dialogue_splice     # comma splices around a dialogue tag
   - sweep_initialism          # whitelisted initialisms capitalized (tv -> TV)

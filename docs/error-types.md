@@ -16,7 +16,8 @@ error_types:
   - [serial_comma, complex_list_semicolon, introductory_comma,
      direct_address_comma, tag_question_comma]
   - dialogue_tag
-  - [number_style, currency_style, ly_adverb_hyphen]
+  - [number_style, currency_style]   # numbers read alone — the house's sticking point
+  - [ly_adverb_hyphen, title_italics]
   - [comma_splice, run_on_sentence, subject_verb_agreement, that_which]
   - [tense_shift, pronoun_agreement, missing_word, preposition_error]
 ```

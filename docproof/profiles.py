@@ -21,6 +21,7 @@ PROFILE_KEYS = (DETECTOR_ONLY, CANDIDATE_ONLY)
 # no margin-query channel, so they cannot ride an otherwise edit-capable group.
 QUERY_ONLY_TYPES = frozenset({
     "speaker_change", "terminal_mark", "general_error", "word_echo",
+    "tv_show_quotes",
 })
 
 
