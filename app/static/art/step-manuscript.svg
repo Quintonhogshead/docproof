@@ -1,0 +1,3 @@
+<svg viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+  <rect x="120" y="120" width="160" height="60" rx="4" class="kraft"/><rect x="140" y="60" width="120" height="90" class="paper"/><path class="ink" style="stroke-width:2" opacity=".3" d="M156 82h88M156 100h88M156 118h60"/><path class="ac" style="stroke-width:3" d="M140 92 q60 -14 120 0 M200 60 v90"/>
+</svg>

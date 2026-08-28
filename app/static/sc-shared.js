@@ -19,17 +19,34 @@
      <img> — no render-code touched. Files live in /assets/art/. */
   var ART_BASE = '/assets/art/';
   var ART = {
-    // Commissioned watercolour portraits (loader swaps them in as <img>);
-    // the line-art .svg busts remain in art/ as the dark-workshop fallback.
+    // Paper-cutout placeholders (hand-coded SVG; recolour with the skin tint).
+    // Swap any value to a commissioned .png/.webp and the loader renders an
+    // <img> instead — no render-code change. Busts are square; poses 2:3;
+    // scenes 2:1; step spots 2:1.
+    // Commissioned cut-paper portraits (busts, square, opaque cream ground).
     galley: 'galley.webp',
     pip: 'pip.webp', bram: 'bram.webp', maple: 'maple.webp',
     cinder: 'cinder.webp', sage: 'sage.webp', lark: 'lark.webp',
+    // Galley's poses. beckoning/waving reuse the nearest commissioned pose
+    // until their own art lands; lost is still a hand-coded placeholder.
+    galleyHero: 'galley-hero.webp', galleyPresenting: 'galley-presenting.webp',
+    galleyReading: 'galley-reading.webp', galleyBeckoning: 'galley-presenting.webp',
+    galleyWaving: 'galley-hero.webp', galleyLost: 'galley-lost.svg',
+    // Party full-body puppets (the bench).
+    figPip: 'fig-pip.webp', figBram: 'fig-bram.webp', figMaple: 'fig-maple.webp',
+    figCinder: 'fig-cinder.webp', figSage: 'fig-sage.webp', figLark: 'fig-lark.webp',
+    // Diorama scene + how-it-works spots (spots still placeholders) + odds/ends.
+    sceneHills: 'scene-hills.webp', sceneCamp: 'scene-camp.webp', sceneGrass: 'scene-grass.webp',
+    stepManuscript: 'step-manuscript.svg', stepReading: 'step-reading.svg', stepTracked: 'step-tracked.svg',
+    raven: 'raven.svg', lantern: 'lantern.svg',
     crestSpellcheck: 'crest-spellcheck.svg', crestTypohunt: 'crest-typohunt.svg',
     crestProofread: 'crest-proofread.svg', crestDeep: 'crest-deep.svg',
     crestCampaign: 'crest-campaign.svg',
     ornamentDivider: 'ornament-divider.svg', ornamentCorner: 'ornament-corner.svg',
     dropcap: 'dropcap-frame.svg', favicon: 'favicon.svg', og: 'og.svg'
   };
+  // member id -> full-body puppet key
+  function figKey(id) { return 'fig' + id.charAt(0).toUpperCase() + id.slice(1); }
   var ART_PATHS = {};
   Object.keys(ART).forEach(function (k) { ART_PATHS[k] = ART_BASE + ART[k]; });
 
@@ -91,22 +108,34 @@
   var MEMBERS = [
     { id: 'pip', name: 'Pip', role: 'Typos', icon: 'dagger',
       plain: 'Reads every page hunting typos and misspelled words.',
-      lane: 'spelling_sweep · AI ensemble' },
+      lane: 'spelling_sweep · AI ensemble',
+      example: { from: 'teh', to: 'the', why: 'a plain typo' },
+      greet: "I'll take the typos." },
     { id: 'bram', name: 'Bram', role: 'Grammar', icon: 'shield',
       plain: 'Checks grammar and punctuation, sentence by sentence.',
-      lane: 'grammar_watch · rules + AI judge' },
+      lane: 'grammar_watch · rules + AI judge',
+      example: { from: '"Run" she said.', to: '"Run," she said.', why: 'dialogue punctuation' },
+      greet: "Grammar's mine." },
     { id: 'maple', name: 'Maple', role: 'Consistency', icon: 'book',
       plain: 'Makes sure names and spellings stay identical from page 12 to page 312.',
-      lane: 'consistency_scan · deterministic' },
+      lane: 'consistency_scan · deterministic',
+      example: { from: 'Sara / Sarah', to: 'pick one', why: 'one name, two spellings — flagged' },
+      greet: "I'll keep the names straight." },
     { id: 'cinder', name: 'Cinder', role: 'Repairs', icon: 'hammer',
       plain: 'Repairs sentences that came out broken or garbled.',
-      lane: 'repair_channel · density-triggered' },
+      lane: 'repair_channel · density-triggered',
+      example: { from: 'He picked up the and left.', to: 'He picked up the bag and left.', why: 'missing word' },
+      greet: "I'll mend the broken lines." },
     { id: 'sage', name: 'Sage', role: 'Continuity', icon: 'staff',
       plain: 'Remembers the whole book — flags it if the timeline or an eye color quietly changes.',
-      lane: 'continuity · whole-book pass' },
+      lane: 'continuity · whole-book pass',
+      example: { from: 'gray eyes (ch. 2)', to: 'green eyes (ch. 19)', why: 'flagged as a question, never changed' },
+      greet: "I'll hold the whole book in mind." },
     { id: 'lark', name: 'Lark', role: 'Style', icon: 'lute',
       plain: 'Suggests where a line could read better — always as a question, never a rewrite.',
-      lane: 'smoothing · query-only' }
+      lane: 'smoothing · query-only',
+      example: { from: '"her heart hammered" ×7', to: 'a gentle comment', why: 'a question, not an edit' },
+      greet: "I'll whisper where it sings." }
   ];
 
   // The five rungs. Prices anchor a 60–120k-word manuscript; the band from the
@@ -183,26 +212,52 @@
 
   var ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
 
-  /* A tier plate for the storefront pages (home, pricing) — crest on top,
-     printer's-tariff styling from CSS. `opts.typical` appends the anchor note
-     to priced tiers. Links to /quote. */
+  function findMember(id) {
+    for (var i = 0; i < MEMBERS.length; i++) if (MEMBERS[i].id === id) return MEMBERS[i];
+    return null;
+  }
+
+  /* A real before→after catch, rendered as a torn scrap of LIVE text (never a
+     generated image — the words must stay crisp and searchable). */
+  function correctionScrap(m) {
+    if (!m || !m.example) return '';
+    var e = m.example;
+    return '<div class="correction"><span class="from">' + esc(e.from) + '</span>' +
+      '<span class="arrow">→</span><span class="to">' + esc(e.to) + '</span>' +
+      (e.why ? '<span class="why">' + esc(e.why) + '</span>' : '') + '</div>';
+  }
+
+  /* The row of tiny member busts riding on a tier plate (who actually rides). */
+  function riderBusts(party) {
+    if (!party || !party.length) return '<span class="alone">Galley’s lantern, alone</span>';
+    return party.map(function (id) {
+      return '<span class="bust" title="' + esc((findMember(id) || {}).name || '') + '">' +
+        artFigure(id) + '</span>';
+    }).join('');
+  }
+
+  /* A tier plate for the storefront pages (home, pricing) — crest stamp, a row
+     of the busts who ride, and the price. `opts.typical` appends the anchor
+     note to priced tiers. Links to /quote (opts.href overrides). */
   function tierPlate(t, band, opts) {
     opts = opts || {};
     var price = tierPrice(t, band || 1);
-    return '<a class="tier" href="/quote">' +
+    var href = opts.href || '/quote';
+    return '<a class="tier" href="' + href + '">' +
       (t.recommended ? '<span class="flag">Most hired</span>' : '') +
       (t.crest ? '<div class="tcrest">' + artFigure(t.crest) + '</div>' : '') +
       '<div class="tname">' + esc(t.name) + '</div>' +
       '<div class="tsub">' + esc(t.sub) + '</div>' +
       '<div class="tblurb">' + esc(t.blurb) + '</div>' +
+      '<div class="triders" aria-hidden="true">' + riderBusts(t.party) + '</div>' +
       '<div class="tprice">' + price +
       (opts.typical && t.price ? '<small> · typical novel</small>' : '') +
       '</div></a>';
   }
 
-  /* A chapter-style gallery entry for the party page: large portrait, a
-     chapter number + name, the plain sentence, and the honest machine name in
-     an illuminated sidebar. */
+  /* A program-booklet entry for the party page: large portrait sheet, a
+     chapter number + name, the plain sentence, a live correction scrap, and
+     the honest machine name in a pasted sidebar. */
   function memberChapter(m, i) {
     return '<article class="chapter">' +
       '<div class="portrait">' + artFigure(m.id) + '</div>' +
@@ -210,6 +265,7 @@
         '<div class="chapter-no">Chapter ' + (ROMAN[i] || (i + 1)) + '</div>' +
         '<h3 class="chapter-name">' + esc(m.name) + '<small>' + esc(m.role) + '</small></h3>' +
         '<p class="chapter-say">' + esc(m.plain) + '</p>' +
+        correctionScrap(m) +
       '</div>' +
       '<aside class="chapter-lane">' +
         '<div class="label">under the costume</div>' +
@@ -217,16 +273,94 @@
       '</aside></article>';
   }
 
+  /* A stacked member sheet: bust + name + one plain sentence + a live
+     correction scrap + the honest lane. Used on the homepage party act and on
+     the quote page's "who rides" list. */
   function memberCard(m, skinAdv) {
     var s = skinAdv && skinAdv[m.id];
     var alias = s ? s.alias : m.name;
     var job = s ? s.job : m.plain;
     var tag = m.role + (alias !== m.name ? ' · always ' + m.name : '');
-    return '<div class="member">' +
-      '<div class="sigil"' + (s && s.look ? ' title="' + esc(s.look) + '"' : '') + '>' + artFigure(m.id) + '</div>' +
+    return '<div class="member rich">' +
+      '<div class="top"><div class="sigil"' + (s && s.look ? ' title="' + esc(s.look) + '"' : '') + '>' +
+        artFigure(m.id) + '</div>' +
       '<div><div class="mname">' + esc(alias) + '<small>' + esc(tag) + '</small></div>' +
-      '<div class="mjob">' + esc(job) + '</div>' +
-      '<div class="mlane">lane: ' + m.lane + '</div></div></div>';
+      '<div class="mjob">' + esc(job) + '</div></div></div>' +
+      correctionScrap(m) +
+      '<div class="mlane">lane: ' + m.lane + '</div></div>';
+  }
+
+  /* Galley as a lantern-lit paper puppet in a given pose. */
+  var POSES = {
+    hero: 'galleyHero', presenting: 'galleyPresenting', reading: 'galleyReading',
+    beckoning: 'galleyBeckoning', waving: 'galleyWaving', lost: 'galleyLost'
+  };
+  function galleyFig(pose, cls) {
+    var key = POSES[pose] || pose;
+    return '<div class="galley-fig' + (cls ? ' ' + cls : '') + '">' +
+      '<span class="glow" aria-hidden="true"></span>' + artFigure(key) + '</div>';
+  }
+
+  function prefersReduce() {
+    return typeof matchMedia !== 'undefined' &&
+      matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  /* ---- the party bench: join/leave choreography ----------------------------
+     hostEl is the `.troupe` row (its Galley anchor puppet is left in place).
+     .set(partyIds) diffs against what's shown: departures walk off the left
+     wing, arrivals walk on from the right and drop a greeting scrap. Under
+     reduced motion everything swaps instantly but the greeting still appears. */
+  function makeBench(hostEl) {
+    var shown = [];
+    function makePuppet(id) {
+      var m = findMember(id) || { name: '', greet: '' };
+      var el = document.createElement('div');
+      el.className = 'puppet';
+      el.setAttribute('data-member', id);
+      el.innerHTML =
+        '<div class="greet"><b>' + esc(m.name) + '</b> ' + esc(m.greet) + '</div>' +
+        '<div class="fig">' + artFigure(figKey(id)) + '</div>';
+      return el;
+    }
+    function set(party) {
+      party = party || [];
+      var reduce = prefersReduce();
+      // departures
+      shown.forEach(function (id) {
+        if (party.indexOf(id) >= 0) return;
+        var el = hostEl.querySelector('.puppet[data-member="' + id + '"]');
+        if (!el) return;
+        if (reduce) { el.parentNode && el.remove(); return; }
+        el.classList.add('leaving');
+        var gone = function () { if (el.parentNode) el.remove(); };
+        el.addEventListener('animationend', gone, { once: true });
+        setTimeout(gone, 700);
+      });
+      // arrivals
+      var joinIndex = 0;
+      party.forEach(function (id) {
+        if (shown.indexOf(id) >= 0) return;
+        var el = makePuppet(id);
+        hostEl.appendChild(el);
+        var greet = el.querySelector('.greet');
+        var i = joinIndex++;
+        if (reduce) {
+          greet.classList.add('show');
+        } else {
+          el.classList.add('joining');
+          el.style.animationDelay = (i * 90) + 'ms';
+          el.addEventListener('animationend', function () {
+            el.classList.remove('joining');
+            el.style.animationDelay = '';
+            greet.classList.add('show');
+          }, { once: true });
+        }
+        setTimeout(function () { greet.classList.remove('show'); }, 2800 + i * 90);
+      });
+      shown = party.slice();
+    }
+    return { set: set };
   }
 
   /* ---- shared chrome, rendered from here so the pages stop drifting ----
@@ -301,7 +435,10 @@
                 headerHTML: headerHTML, footerHTML: footerHTML,
                 divider: divider, mountChrome: mountChrome,
                 ART: ART_PATHS, injectArt: injectArt, artFigure: artFigure,
-                tierPlate: tierPlate, memberChapter: memberChapter };
+                tierPlate: tierPlate, memberChapter: memberChapter,
+                findMember: findMember, figKey: figKey,
+                correctionScrap: correctionScrap, riderBusts: riderBusts,
+                galleyFig: galleyFig, makeBench: makeBench };
 
   /* ---- motion: scroll reveals + gentle hero parallax --------------------
      Opt-in and progressive: <html> gets .js-motion so the reveal hidden-state
@@ -335,7 +472,7 @@
   }
   function initReveals() {
     // Staggered groups.
-    ['.members', '.tiers', '.gallery', '.journey'].forEach(function (sel) {
+    ['.members', '.tiers', '.gallery', '.strip'].forEach(function (sel) {
       document.querySelectorAll(sel).forEach(function (p) {
         Array.prototype.forEach.call(p.children, function (c, i) {
           tagReveal(c, Math.min(i * 70, 420));
@@ -343,23 +480,27 @@
       });
     });
     // Standalone blocks (skip anything already inside a staggered group).
-    document.querySelectorAll('h2, .lede, .plaque, .card, .divider, .hero-cta').forEach(function (el) {
-      if (el.closest('.members, .tiers, .gallery, .journey')) return;
+    document.querySelectorAll('h2, .lede, .plaque, .card, .divider, .hero-cta, .act-cta, .headline-sheet').forEach(function (el) {
+      if (el.closest('.members, .tiers, .gallery, .strip')) return;
       tagReveal(el, 0);
     });
     window.addEventListener('scroll', scheduleReveals, { passive: true });
     checkReveals();
   }
   function initParallax() {
-    var host = document.querySelector('.hero-art');
-    if (!host || typeof matchMedia === 'undefined' ||
-        matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (prefersReduce()) return;
+    var els = document.querySelectorAll('[data-parallax]');
+    if (!els.length) return;
     var ticking = false;
     window.addEventListener('scroll', function () {
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(function () {
-        host.style.transform = 'translateY(' + (window.scrollY * 0.05) + 'px)';
+        var y = window.scrollY;
+        Array.prototype.forEach.call(els, function (el) {
+          var sp = parseFloat(el.getAttribute('data-parallax')) || 0.05;
+          el.style.transform = 'translateY(' + (y * sp) + 'px)';
+        });
         ticking = false;
       });
     }, { passive: true });

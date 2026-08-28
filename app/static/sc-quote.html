@@ -22,7 +22,11 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,500&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
 <link rel="stylesheet" href="/assets/sc-shared.css">
 <style>
-  .consent{margin-top:var(--s3);display:grid;gap:10px;max-width:640px}
+  /* The signed agreement — a small pasted sheet. */
+  .agreement{position:relative;margin-top:var(--s3);background:var(--card-2);
+    padding:var(--s3);box-shadow:var(--lift);max-width:640px}
+  .agreement > .label{margin-bottom:12px}
+  .consent{display:grid;gap:10px}
   .consent label{display:flex;gap:12px;align-items:flex-start;font-size:var(--fs-ui);color:var(--faded);cursor:pointer;font-family:var(--ui)}
   .consent input{margin-top:4px;width:18px;height:18px;accent-color:var(--accent)}
   .consent b{color:var(--ink);font-weight:600}
@@ -30,19 +34,21 @@
   .strong-ink{color:var(--ink);font-weight:600}
   .mb1{margin-bottom:var(--s1)}
 
-  .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);border-radius:var(--radius);
-    background:var(--card);padding:22px 24px;margin-top:16px;cursor:pointer;transition:border-color .2s, opacity .2s;box-shadow:var(--lift)}
+  /* The drop — a labelled paper tray. */
+  .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);
+    background:var(--card);padding:22px 24px;margin-top:16px;cursor:pointer;
+    transition:border-color .2s, opacity .2s;box-shadow:var(--lift)}
   .drop.locked{opacity:.55;cursor:not-allowed}
   .drop:not(.locked):hover,.drop.over{border-color:var(--accent)}
   .drop:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
-  .drop .dicon{flex:0 0 auto;width:46px;height:46px;border-radius:var(--radius);border:1px solid var(--rule);
+  .drop .dicon{flex:0 0 auto;width:46px;height:46px;clip-path:var(--edge-tab);
     display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
-  .drop .dicon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .drop .dicon svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   .drop .dtitle{font-family:var(--disp);font-size:1.22rem}
   .drop .dsub{font-family:var(--ui);font-size:.86rem;color:var(--faded);margin-top:2px}
   .dropnote{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);margin-top:10px;min-height:1.2em}
 
-  /* the waiting room */
+  /* The waiting room. */
   .waiting{margin-top:26px;max-width:640px}
   .waiting .card{display:grid;gap:14px}
   .wstatus{display:flex;align-items:center;gap:12px;font-family:var(--disp);font-size:1.22rem}
@@ -52,28 +58,30 @@
   @keyframes wpulse{40%{opacity:1}}
   .wline{font-size:1rem;color:var(--faded)}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{border:1.5px solid var(--accent);background:none;color:var(--accent);border-radius:var(--radius-pill);
-    padding:7px 16px;font:1rem var(--ui);cursor:pointer}
+  .chip{border:none;background:var(--card);color:var(--accent);clip-path:var(--edge-tab);
+    padding:7px 16px;font:1rem var(--ui);cursor:pointer;filter:var(--drop-sm)}
   .chip:hover{background:var(--accent-wash)}
   .chip:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
 
-  .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);border:1px solid var(--rule);
-    border-radius:var(--radius);padding:12px 18px;box-shadow:var(--lift)}
+  .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);
+    padding:12px 18px;box-shadow:var(--lift)}
   .bookchip b{font-family:var(--disp);font-size:1.15rem;font-weight:400}
   .bookchip span{color:var(--faded);font-size:.9rem;font-family:var(--ui)}
   .bookchip .redo{margin-left:auto;font-size:.85rem}
+
   .quotegrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px;align-items:start;margin-top:8px}
   @media (max-width:860px){.quotegrid{grid-template-columns:1fr}}
-  .summary{position:sticky;top:16px}
+  .summary{position:sticky;top:16px;text-align:center}
+  .summary .contract-title{font-family:var(--disp);font-size:1.25rem;line-height:1;margin-bottom:12px}
   .summary .label{margin-bottom:8px}
-  .summary .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:var(--fs-ui)}
+  .summary .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:var(--fs-ui);text-align:left}
   .summary .row b{font-variant-numeric:tabular-nums}
-  .summary .total{font-family:var(--ui);font-size:1.28rem;font-weight:700;display:flex;justify-content:space-between;padding-top:12px}
+  .summary .total{font-family:var(--ui);font-size:1.28rem;font-weight:700;display:flex;justify-content:space-between;padding-top:12px;text-align:left}
   .emailrow{display:flex;gap:10px;margin-top:14px}
-  .emailrow input{flex:1;background:var(--paper);border:1px solid var(--line-strong);border-radius:var(--radius);color:var(--ink);
+  .emailrow input{flex:1;background:var(--paper);border:1px solid var(--line-strong);color:var(--ink);
     font:var(--fs-ui) var(--ui);padding:12px 14px;min-width:0}
   .emailrow input:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
-  .fine{font-family:var(--ui);font-size:var(--fs-small);color:var(--dim);margin-top:10px}
+  .fine{font-family:var(--ui);font-size:var(--fs-small);color:var(--dim);margin-top:10px;text-align:left}
   .fine.mt{margin-top:14px}
 
   /* plain-English explainer */
@@ -87,29 +95,17 @@
   .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good);white-space:nowrap}
   .ex .why{color:var(--dim);font-size:.8rem}
   .lanternmember .sigil{color:var(--accent)}
-
-  /* Phase 4 presentation: the agreement, the lectern, the sealed contract */
-  .agreement{position:relative;margin-top:var(--s3);background:var(--card-2);border:1px solid var(--rule);
-    border-radius:var(--radius);padding:var(--s3) var(--s3) var(--s2);box-shadow:var(--lift);max-width:640px}
-  .agreement::before{content:"";position:absolute;inset:6px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
-  .agreement > .label{margin-bottom:12px}
-  .agreement .consent{margin-top:0}
-  .drop .dicon svg{width:26px;height:26px}
-  .contract-title{font-family:var(--disp);font-size:1.25rem;line-height:1;margin-bottom:10px}
-  .waxseal{position:absolute;top:-16px;right:-12px;width:48px;height:48px;color:var(--accent);
-    filter:drop-shadow(0 1px 1px rgba(34,27,16,.18));pointer-events:none}
-  .waxseal svg{width:100%;height:100%;display:block}
-  .go-wrap{position:relative}
 </style>
 </head>
 <body data-page="quote">
 <div class="wrap">
 
-  <section class="galley">
-    <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
-    <div>
+  <!-- Galley persists here, changing pose per step -->
+  <section class="pose-rail">
+    <div class="pose" id="galleypose"><span class="glow" aria-hidden="true"></span><span data-art="galleyHero"></span></div>
+    <div class="speech">
       <div class="who">Galley · your AI guide</div>
-      <p class="say" id="say"></p>
+      <div class="plate"><p class="say" id="say"></p></div>
     </div>
   </section>
 
@@ -138,7 +134,7 @@
     <div class="dropnote" id="dropnote" role="status" aria-live="polite"></div>
   </div>
 
-  <!-- The waiting room: no rewriting text, just patience and small talk -->
+  <!-- The waiting room -->
   <div class="waiting hidden" id="waiting" aria-live="polite">
     <div class="card">
       <div class="wstatus"><span class="wdots"><i></i><i></i><i></i></span>
@@ -167,22 +163,26 @@
       <div>
         <div class="tiers" id="tiers" role="radiogroup" aria-label="Choose a tier"></div>
 
+        <!-- the party bench: puppets walk on for the chosen tier -->
+        <div class="bench" id="bench">
+          <div class="bench-label">Your party for this quest</div>
+          <div class="troupe" id="troupe" aria-live="polite">
+            <div class="puppet galley-anchor"><div class="fig"><span data-art="galleyPresenting"></span></div></div>
+          </div>
+        </div>
+
         <div class="explain" id="explain"></div>
 
         <h2 id="partyhead">Who rides for this tier</h2>
         <div class="members" id="members"></div>
       </div>
       <div class="summary card" id="summary">
-        <div class="waxseal" aria-hidden="true"><svg viewBox="0 0 48 48">
-          <circle cx="24" cy="24" r="18" fill="var(--accent)"/>
-          <circle cx="24" cy="24" r="15.5" fill="none" stroke="var(--accent-hot)" stroke-width="1.4"/>
-          <path d="M24 12l3 7.1 7.6.6-5.8 5 1.8 7.4-6.6-4.1-6.6 4.1 1.8-7.4-5.8-5 7.6-.6z" fill="var(--accent-ink)"/>
-        </svg></div>
+        <div class="stamp" id="stamp" aria-hidden="true"><span data-art="crestProofread"></span></div>
         <div class="contract-title">Your quest</div>
-        <div class="row"><span id="sumtier">—</span><b id="sumprice">—</b></div>
+        <div class="row"><span id="sumtier">—</span><b class="price-flip" id="sumprice">—</b></div>
         <div class="row"><span>Manuscript</span><b id="sumwords">—</b></div>
         <div class="row"><span>Deliverable</span><b>Tracked-changes .docx</b></div>
-        <div class="total"><span>Today</span><span id="sumtotal">—</span></div>
+        <div class="total"><span>Today</span><span class="price-flip" id="sumtotal">—</span></div>
         <div id="paycopy" class="fine"></div>
         <div class="emailrow">
           <input type="email" id="email" maxlength="254" placeholder="raven@yourkeep.com" aria-label="Your email">
@@ -202,6 +202,15 @@
 (function(){
   var say = document.getElementById('say');
   var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var bench = SC.makeBench(document.getElementById('troupe'));
+
+  var POSEKEY = { hero:'galleyHero', reading:'galleyReading',
+                  presenting:'galleyPresenting', waving:'galleyWaving' };
+  function setPose(pose){
+    var host = document.getElementById('galleypose');
+    host.innerHTML = '<span class="glow" aria-hidden="true"></span>' + SC.artFigure(POSEKEY[pose] || pose);
+  }
 
   SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> Tick the two boxes so we both know what we’re agreeing to, then hand me your book.');
 
@@ -248,7 +257,7 @@
       ex('pass 1', 'pass 2 targets what pass 1 revealed', 'the plan adapts to your book') + '</div>'
   };
 
-  /* ---------- waiting-room small talk (canned, honest, no rewriting) ---------- */
+  /* ---------- waiting-room small talk ---------- */
   var WLINES = [
     'This takes under a minute. Your pages go to the AI once, and nowhere else.',
     'I read fast, but carefully. The party is picking out costumes.',
@@ -265,6 +274,8 @@
     document.getElementById('step-drop').classList.add('hidden');
     document.getElementById('waiting').classList.remove('hidden');
     document.getElementById('wtitle').textContent = 'Reading “' + fname + '”…';
+    setPose('reading');
+    SC.galleySay(say, '<em>Reading now.</em> Spectacles on — give me a moment with your first pages.');
     var i = 0, wline = document.getElementById('wline');
     wline.textContent = WLINES[0];
     wtimer = setInterval(function(){ i = (i + 1) % WLINES.length; wline.textContent = WLINES[i]; }, 5000);
@@ -303,10 +314,10 @@
   }
 
   var LANTERN_CARD =
-    '<div class="member lanternmember"><div class="sigil">' + SC.svg('lantern') + '</div>' +
+    '<div class="member rich lanternmember"><div class="top"><div class="sigil">' + SC.svg('lantern') + '</div>' +
     '<div><div class="mname">Galley<small>The lantern pass</small></div>' +
-    '<div class="mjob">No party rides for the free tier — Galley runs the mechanical toolkit alone: dictionary, sweeps, and the consistency scans.</div>' +
-    '<div class="mlane">lane: deterministic only · no AI reading</div></div></div>';
+    '<div class="mjob">No party rides for the free tier — Galley runs the mechanical toolkit alone: dictionary, sweeps, and the consistency scans.</div></div></div>' +
+    '<div class="mlane">lane: deterministic only · no AI reading</div></div>';
 
   function renderParty(){
     var t = SC.TIERS.find(function(x){ return x.id === picked; });
@@ -317,14 +328,25 @@
           .map(function(m){ return SC.memberCard(m, skin); }).join('')
       : LANTERN_CARD;
     document.getElementById('explain').innerHTML = '<div class="card">' + EXPLAIN[t.id] + '</div>';
+    bench.set(t.party);   // the puppets walk on / off for this tier
   }
 
+  function flip(el){
+    if(reduce) return;
+    el.classList.remove('flip'); void el.offsetWidth; el.classList.add('flip');
+  }
   function renderSummary(){
     var t = SC.TIERS.find(function(x){ return x.id === picked; });
     document.getElementById('sumtier').textContent = t.name + ' — ' + t.sub;
-    document.getElementById('sumprice').textContent = SC.tierPrice(t, band);
+    var priceEl = document.getElementById('sumprice'), totalEl = document.getElementById('sumtotal');
+    priceEl.textContent = SC.tierPrice(t, band);
+    totalEl.textContent = t.bespoke ? 'quoted' : SC.tierPrice(t, band);
+    flip(priceEl); flip(totalEl);
     document.getElementById('sumwords').textContent = wordLabel;
-    document.getElementById('sumtotal').textContent = t.bespoke ? 'quoted' : SC.tierPrice(t, band);
+    // re-stamp the crest with a wax thunk
+    var stamp = document.getElementById('stamp');
+    stamp.innerHTML = SC.artFigure(t.crest);
+    if(!reduce){ stamp.classList.remove('thunk'); void stamp.offsetWidth; stamp.classList.add('thunk'); }
     var pay = document.getElementById('paycopy'), go = document.getElementById('go');
     if (t.bespoke){
       pay.textContent = 'The Grand Campaign is scoped book by book. Leave your address and Galley will write to you herself.';
@@ -343,6 +365,7 @@
     skin = r.skin; band = r.band || 1;
     wordLabel = (r.word_count || 0).toLocaleString() + ' words';
     SC.applyTint(skin.palette);
+    setPose('presenting');
     var chip = document.getElementById('bookchip');
     chip.style.display = 'flex';
     document.getElementById('booktitle').textContent = skin.book_title;
@@ -376,6 +399,7 @@
       .catch(function(e){
         stopWaiting();
         document.getElementById('step-drop').classList.remove('hidden');
+        setPose('hero');
         dropNote.textContent = e.message;
         fileInput.value = '';
       });
@@ -435,6 +459,7 @@
         ? 'The raven already knows your name — you’re on the list.'
         : (t.bespoke ? 'Raven away. Galley will write to you about your campaign.'
                      : 'The raven knows your name. We’ll write the moment quests open.');
+      setPose('waving');
       SC.galleySay(say, '<em>Raven away.</em> The moment quests open, you’ll be the first to know.');
     }).catch(function(e){ note.textContent = e.message; });
   });

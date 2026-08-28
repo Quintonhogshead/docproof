@@ -1,112 +1,178 @@
-/* Spell & Check — the papery daylight theme.
+/* Spell & Check — the paper-theater theme.
    ---------------------------------------------------------------------------
-   An illustrated-storybook system: real book typefaces, layered parchment,
-   engraved hairline frames (elevation by ink, never blur), and a paper grain
-   pressed into the ground. The site is warm paper by default; a generated skin
-   tints the accent + parchment variables per uploaded book (see applyTint in
-   sc-shared.js). The candlelit workshop look lives on /customize alone.
+   A cut-paper collage system: flat torn- and scissor-cut construction-paper
+   sheets, a pressed paper grain, and elevation by a hard offset shadow — NEVER
+   blur. Real printed-book typefaces sit against the handmade paper. The site is
+   warm cream by default; a generated skin tints the accent + paper variables
+   per uploaded book (see applyTint in sc-shared.js), re-costuming the whole
+   theater. The candlelit workshop look lives on /customize alone.
 
    Structure:
-     1. Design tokens (colour, type, space, ornament)
+     1. Design tokens (paper palette, type, space)
      2. Skin tints (11 palettes — accent + paper only)
-     3. Base + paper grain
-     4. Typography scale
-     5. Chrome: header, footer
-     6. Galley speaks
-     7. Frames, ornaments, dividers
-     8. Buttons + links
-     9. Components: members, tiers
-    10. Utilities
-    11. Reduced-motion
+     3. Paper system: sheets, torn/cut edges, strata, offset shadow
+     4. Base + paper grain
+     5. Typography scale
+     6. Chrome: header, footer
+     7. Galley speaks (speech plate + lantern) + poses
+     8. Dividers
+     9. Buttons (paper tabs) + links
+    10. Art loader hooks
+    11. Components: members, tiers, crests
+    12. Homepage acts (diorama, party sheets, strip, tier stack, oath)
+    13. Party booklet + pricing sheet
+    14. Quote page: pose rail + party bench
+    15. Utilities
+    16. Motion + reduced-motion
    --------------------------------------------------------------------------- */
 
 /* ------------------------------------------------------------------ tokens */
 :root{
-  /* Parchment — layered, warm, deeper than before so ink contrast holds. */
-  --paper:#f2e9d2;          /* the ground */
-  --paper-2:#ece0c4;        /* recessed panels, table stripes */
-  --card:#fbf5e4;           /* raised leaves of paper */
-  --card-2:#f6eed9;
+  /* Paper — warm cream ground, kraft and card leaves stacked over it. */
+  --paper:#efe4cb;          /* the ground (cream) */
+  --paper-2:#e6d7b6;        /* recessed / kraft-tinted panels */
+  --card:#fbf4e2;           /* a raised leaf of paper */
+  --card-2:#f4ead1;         /* a second, slightly deeper leaf */
+  --kraft:#d8bd8f;          /* kraft-brown paper for straps and trays */
+  --kraft-2:#c9a86f;
+  --stage:#efe7d2;          /* the cream ground baked into the commissioned art;
+                               figure/scene frames use it so the opaque art
+                               blends seamlessly — and it stays put under tints */
 
-  /* Ink — deepened for AA contrast on parchment. */
-  --ink:#221b10;            /* body + display */
-  --ink-soft:#463a26;       /* secondary headings */
-  --faded:#6a5b40;          /* muted prose — passes AA on --paper */
-  --dim:#6f5f3e;            /* fine print — passes AA on --paper (5.1:1) */
+  /* Ink — deep charcoal, warm. Passes AA on every paper tone. */
+  --ink:#241d12;
+  --ink-soft:#463a26;
+  --faded:#655637;          /* muted prose — AA on --paper */
+  --dim:#6b5c3c;            /* fine print — AA on --paper */
 
-  /* Rules — the engraving lives here, not in shadows. */
-  --line:rgba(34,27,16,.16);
-  --line-strong:rgba(34,27,16,.34);
-  --rule:#b6a37c;           /* visible hairline for double-rule frames */
-  --rule-soft:#cabb98;
+  /* Rules — faint; on paper the depth is the shadow, not a line. */
+  --line:rgba(36,29,18,.14);
+  --line-strong:rgba(36,29,18,.30);
+  --rule:#c3ab7f;
+  --rule-soft:#d3c199;
 
-  /* Ember — the primary accent, on paper. */
-  --accent:#a8481a;
-  --accent-hot:#c8632c;
-  --accent-wash:rgba(168,72,26,.09);
-  --accent-ink:#fff6e9;     /* text that sits on an ember fill */
+  /* Terracotta — the primary accent (a dusty cut-paper red-orange). */
+  --accent:#b25022;
+  --accent-hot:#cf6a34;
+  --accent-wash:rgba(178,80,34,.10);
+  --accent-ink:#fdf3e4;     /* text on an accent fill */
 
-  /* Antique gold — the support colour: seals, crests, small flourishes. */
-  --gold:#8a6a1e;
-  --gold-soft:#b8974a;
-  --gold-wash:rgba(138,106,30,.10);
+  /* Muted teal — the single cool accent, used sparingly (scraps, tags). */
+  --teal:#3a7a70;
+  --teal-soft:#5c988e;
+  --teal-wash:rgba(58,122,112,.10);
+
+  /* Ochre — warm support colour for crests and small stamps. */
+  --gold:#9a7420;
+  --gold-soft:#c09733;
+  --gold-wash:rgba(154,116,32,.12);
 
   --good:#356b56;
 
-  /* Type — real book faces. Display is a digitised 17th-c printing face;
-     prose is a serif; UI labels a humanist sans; lane names an honest mono. */
+  /* Paper shadow — a single hard offset, no blur, ever. */
+  --paper-shadow:rgba(36,29,18,.24);
+  --paper-shadow-soft:rgba(36,29,18,.16);
+  --lift:2px 3px 0 var(--paper-shadow);        /* flat offset for rectangles */
+  --lift-sm:1px 2px 0 var(--paper-shadow-soft);
+  --drop:drop-shadow(2px 3px 0 var(--paper-shadow));   /* for clipped sheets */
+  --drop-sm:drop-shadow(1px 2px 0 var(--paper-shadow-soft));
+
+  /* Type — real book faces against the paper. */
   --disp:'IM Fell English','Georgia',serif;
   --disp-sc:'IM Fell English SC','IM Fell English','Georgia',serif;
   --body:'Alegreya','Georgia','Iowan Old Style',serif;
   --ui:'Alegreya Sans','Gill Sans','Segoe UI',system-ui,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
 
-  /* Fluid type scale. */
   --fs-hero:clamp(2.7rem,6.5vw,4.75rem);
   --fs-h1:clamp(2rem,4vw,3rem);
   --fs-h2:clamp(1.55rem,3.2vw,2.15rem);
   --fs-h3:clamp(1.18rem,2vw,1.42rem);
   --fs-lede:clamp(1.14rem,1.5vw,1.32rem);
-  --fs-body:1.0625rem;      /* 17px */
-  --fs-ui:0.9375rem;        /* 15px */
-  --fs-small:0.8125rem;     /* 13px */
+  --fs-body:1.0625rem;
+  --fs-ui:0.9375rem;
+  --fs-small:0.8125rem;
   --fs-label:0.72rem;
 
-  /* 8px spacing scale. */
   --s1:8px;  --s2:16px; --s3:24px; --s4:32px;
   --s5:48px; --s6:64px; --s7:96px; --s8:128px;
 
-  --radius:3px;             /* crisp printed corners, not soft cards */
+  --radius:2px;
   --radius-pill:999px;
   --wrap:1000px;
 
-  /* A faint flat lift — ink, not blur. */
-  --lift:0 1px 0 var(--line), 0 0 0 1px var(--rule-soft);
+  /* Reusable, deliberately-reused cut/torn edges (percent → scale-safe).
+     Only these few exist; lazy random tearing reads as a template. */
+  --edge-torn:polygon(
+    0% 1.4%, 8% 0.2%, 17% 1.6%, 27% 0.4%, 38% 1.5%, 50% 0.3%, 61% 1.6%,
+    72% 0.4%, 83% 1.5%, 92% 0.3%, 100% 1.4%,
+    100% 98.7%, 92% 99.7%, 83% 98.5%, 72% 99.6%, 61% 98.4%, 50% 99.7%,
+    38% 98.5%, 27% 99.6%, 17% 98.4%, 8% 99.7%, 0% 98.6%);
+  --edge-cut:polygon(
+    0.6% 2%, 99% 0%, 100% 97%, 1.4% 100%);
+  --edge-scrap:polygon(
+    1% 3%, 12% 0.6%, 30% 2.4%, 52% 0.4%, 74% 2.6%, 90% 0.5%, 99% 3%,
+    98% 22%, 100% 48%, 98.5% 74%, 99% 97%, 82% 99.5%, 58% 98%, 34% 99.6%,
+    14% 98%, 1% 99%, 2% 72%, 0.4% 46%, 1.6% 20%);
+  --edge-tab:polygon(
+    0% 8%, 3% 0%, 97% 0%, 100% 8%, 100% 92%, 97% 100%, 3% 100%, 0% 92%);
 }
 
 /* ------------------------------------------------------------------- tints */
 /* Each skin takes the paper's hue subtly and carries the rest in the accent.
-   Only accent + paper vars move; ink, rules, and gold stay put so contrast
-   and the engraving read the same on every book. */
-body.tint-rose     {--accent:#a83259;--accent-hot:#c85a81;--accent-wash:rgba(168,50,89,.10);--paper:#f2e2e0;--paper-2:#ecd6d3;--card:#fcf1ef;--card-2:#f7e8e5}
-body.tint-rain     {--accent:#4a5a66;--accent-hot:#6f818d;--accent-wash:rgba(74,90,102,.10);--paper:#e6e9ea;--paper-2:#dadfe0;--card:#f6f8f8;--card-2:#eef1f1}
-body.tint-honey    {--accent:#996b0c;--accent-hot:#c08d28;--accent-wash:rgba(153,107,12,.12);--paper:#f3e8cc;--paper-2:#edddb8;--card:#fdf6df;--card-2:#f8eecb}
-body.tint-void     {--accent:#544ab0;--accent-hot:#7a70d0;--accent-wash:rgba(84,74,176,.10);--paper:#e8e5f1;--paper-2:#ddd9ec;--card:#f6f4fd;--card-2:#efecf9}
-body.tint-neon     {--accent:#973383;--accent-hot:#bd5ca8;--accent-wash:rgba(151,51,131,.10);--paper:#efe1ec;--paper-2:#e8d4e3;--card:#fcf1fa;--card-2:#f6e8f2}
-body.tint-verdigris{--accent:#26725d;--accent-hot:#4f9884;--accent-wash:rgba(38,114,93,.10);--paper:#e2ece5;--paper-2:#d5e2da;--card:#f3faf5;--card-2:#eaf3ec}
-body.tint-bone     {--accent:#8f322c;--accent-hot:#b3554e;--accent-wash:rgba(143,50,44,.10);--paper:#ede2df;--paper-2:#e5d6d1;--card:#fbf2ef;--card-2:#f4e8e4}
-body.tint-gold     {--accent:#856209;--accent-hot:#ab8628;--accent-wash:rgba(133,98,9,.13);--paper:#f1e7c9;--paper-2:#e9dab3;--card:#fcf5db;--card-2:#f6edc7}
-body.tint-slate    {--accent:#436486;--accent-hot:#6a8bad;--accent-wash:rgba(67,100,134,.10);--paper:#e5eaef;--paper-2:#d8e0e7;--card:#f5f9fc;--card-2:#edf2f7}
-body.tint-rust     {--accent:#9c4419;--accent-hot:#bd6739;--accent-wash:rgba(156,68,25,.10);--paper:#f1e5d8;--paper-2:#ead7c3;--card:#fcf4e9;--card-2:#f6ecdb}
-body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,111,143,.10);--paper:#e2ecf1;--paper-2:#d4e2ea;--card:#f3fafd;--card-2:#eaf3f8}
+   Only accent + paper vars move; ink, rules, ochre, and teal stay put so
+   contrast and the collage read the same on every book. */
+body.tint-rose     {--accent:#a83259;--accent-hot:#c85a81;--accent-wash:rgba(168,50,89,.10);--paper:#f0dfdc;--paper-2:#e5cdc9;--card:#fcf1ef;--card-2:#f6e6e2}
+body.tint-rain     {--accent:#4a5a66;--accent-hot:#6f818d;--accent-wash:rgba(74,90,102,.10);--paper:#e3e7e8;--paper-2:#d3dadb;--card:#f6f8f8;--card-2:#eaeeee}
+body.tint-honey    {--accent:#996b0c;--accent-hot:#c08d28;--accent-wash:rgba(153,107,12,.12);--paper:#f1e4c3;--paper-2:#ead4a8;--card:#fdf6df;--card-2:#f7ecc6}
+body.tint-void     {--accent:#544ab0;--accent-hot:#7a70d0;--accent-wash:rgba(84,74,176,.10);--paper:#e5e1f0;--paper-2:#d7d2e8;--card:#f6f4fd;--card-2:#ece9f6}
+body.tint-neon     {--accent:#973383;--accent-hot:#bd5ca8;--accent-wash:rgba(151,51,131,.10);--paper:#eddeea;--paper-2:#e2cddc;--card:#fcf1fa;--card-2:#f4e4f0}
+body.tint-verdigris{--accent:#26725d;--accent-hot:#4f9884;--accent-wash:rgba(38,114,93,.10);--paper:#dfeae2;--paper-2:#cee0d4;--card:#f3faf5;--card-2:#e7f2ea}
+body.tint-bone     {--accent:#8f322c;--accent-hot:#b3554e;--accent-wash:rgba(143,50,44,.10);--paper:#ebe0dc;--paper-2:#e0d0cb;--card:#fbf2ef;--card-2:#f2e6e1}
+body.tint-gold     {--accent:#856209;--accent-hot:#ab8628;--accent-wash:rgba(133,98,9,.13);--paper:#efe4c1;--paper-2:#e6d4a5;--card:#fcf5db;--card-2:#f5ebc4}
+body.tint-slate    {--accent:#436486;--accent-hot:#6a8bad;--accent-wash:rgba(67,100,134,.10);--paper:#e2e8ee;--paper-2:#d2dce4;--card:#f5f9fc;--card-2:#e9f0f5}
+body.tint-rust     {--accent:#9c4419;--accent-hot:#bd6739;--accent-wash:rgba(156,68,25,.10);--paper:#efe2d3;--paper-2:#e6d2bd;--card:#fcf4e9;--card-2:#f5e9d8}
+body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,111,143,.10);--paper:#dfe9ef;--paper-2:#cfe0e8;--card:#f3fafd;--card-2:#e7f2f7}
+
+/* --------------------------------------------------------- paper system */
+/* A sheet of construction paper: flat fill, an optional torn/cut silhouette,
+   and a single hard offset shadow that follows the cut (drop-shadow, no blur).
+   Elevation grows by 1px on hover — the sheet lifts off the table. */
+.sheet{position:relative;background:var(--card);padding:var(--s3);
+  box-shadow:var(--lift)}
+.sheet.edge-torn,.sheet.edge-cut,.sheet.edge-scrap,.sheet.edge-tab{
+  box-shadow:none;filter:var(--drop)}
+.edge-torn{clip-path:var(--edge-torn)}
+.edge-cut{clip-path:var(--edge-cut)}
+.edge-scrap{clip-path:var(--edge-scrap)}
+.edge-tab{clip-path:var(--edge-tab)}
+/* torn sheets need a little more breathing room so the tear never bites text */
+.edge-torn{padding-top:calc(var(--s3) + 4px);padding-bottom:calc(var(--s3) + 4px)}
+.sheet.kraft{background:var(--kraft)}
+.sheet.deep{background:var(--card-2)}
+.sheet.paper2{background:var(--paper-2)}
+
+/* Slight paste-up rotations — a sheet set down not-quite-square. */
+.rot-l{transform:rotate(-.5deg)}
+.rot-r{transform:rotate(.5deg)}
+.rot-l2{transform:rotate(-1deg)}
+.rot-r2{transform:rotate(1deg)}
+
+/* A torn scrap of paper — small note, live text inside. */
+.scrap{position:relative;background:var(--card);padding:12px 16px;
+  clip-path:var(--edge-scrap);filter:var(--drop-sm)}
+.scrap.teal{background:var(--teal-wash)}
+.scrap.accent{background:var(--accent-wash)}
+
+/* Hidden host for the shared <clipPath> defs, injected once by JS. */
+.sc-defs{position:absolute;width:0;height:0;overflow:hidden}
 
 /* --------------------------------------------------------------- base/grain */
 *{box-sizing:border-box}
 html{font-size:100%}
 
-/* Skip link — visible only on keyboard focus. */
 .skip{position:absolute;left:-9999px;top:0;z-index:100;background:var(--accent);color:var(--accent-ink);
-  font-family:var(--ui);font-size:var(--fs-ui);padding:10px 16px;border-radius:0 0 var(--radius) 0;text-decoration:none}
+  font-family:var(--ui);font-size:var(--fs-ui);padding:10px 16px;text-decoration:none}
 .skip:focus{left:0}
 body{
   margin:0;
@@ -116,10 +182,10 @@ body{
   font-size:var(--fs-body);
   line-height:1.62;
   min-height:100vh;
-  /* Ember glow + a pressed paper grain (fractal turbulence, very faint). */
+  /* Warm wash + a pressed paper grain (fractal turbulence, very faint). */
   background-image:
     radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
   transition:background-color .55s ease;
 }
 .wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--s3) var(--s7)}
@@ -142,8 +208,9 @@ small{font-size:var(--fs-small)}
 /* ------------------------------------------------------------------ chrome */
 /* Header + footer are injected from sc-shared.js so the pages stop drifting. */
 .top{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
-  padding:var(--s3) 0;border-bottom:1px solid var(--line);position:relative}
-.top::after{content:"";position:absolute;left:0;right:0;bottom:-4px;height:1px;background:var(--line)}
+  padding:var(--s3) 0 var(--s2);position:relative;margin-bottom:var(--s1)}
+.top::after{content:"";position:absolute;left:-40px;right:-40px;bottom:0;height:8px;
+  background:var(--kraft);clip-path:var(--edge-torn);opacity:.5}
 .wordmark{font-family:var(--disp);font-size:1.7rem;line-height:1;color:var(--ink);
   text-decoration:none;white-space:nowrap;letter-spacing:.01em}
 .wordmark .amp{color:var(--accent);font-style:italic}
@@ -151,8 +218,8 @@ small{font-size:var(--fs-small)}
 .nav a{font-family:var(--ui);font-size:var(--fs-ui);color:var(--faded);text-decoration:none;letter-spacing:.02em}
 .nav a:hover{color:var(--ink)}
 .nav a.now{color:var(--accent)}
-.nav .go{background:var(--accent);color:var(--accent-ink);border-radius:var(--radius);
-  padding:9px 18px;font-weight:600;box-shadow:var(--lift)}
+.nav .go{background:var(--accent);color:var(--accent-ink);clip-path:var(--edge-tab);
+  padding:9px 18px;font-weight:600;filter:var(--drop-sm)}
 .nav .go:hover{background:var(--accent-hot);color:var(--accent-ink)}
 .nav .go.now{color:var(--accent-ink)}
 @media (max-width:520px){
@@ -161,201 +228,336 @@ small{font-size:var(--fs-small)}
   .nav{width:100%;margin-left:0;justify-content:flex-start;gap:var(--s2) var(--s3)}
 }
 
-footer{border-top:1px solid var(--line);margin-top:var(--s7);padding:var(--s4) 0 var(--s2);
+footer{margin-top:var(--s7);padding:var(--s4) 0 var(--s2);position:relative;
   font-family:var(--ui);font-size:var(--fs-small);color:var(--dim)}
-.colophon{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:baseline}
+footer::before{content:"";position:absolute;left:-40px;right:-40px;top:0;height:8px;
+  background:var(--kraft);clip-path:var(--edge-torn);opacity:.5}
+.colophon{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:baseline;padding-top:var(--s2)}
 .colophon a{color:var(--faded);text-decoration:none}
 .colophon a:hover{color:var(--ink)}
 .colophon .mark{font-family:var(--disp);font-size:1.05rem;color:var(--ink-soft)}
 .colophon .right{margin-left:auto;font-style:italic;color:var(--faded)}
 
 /* ------------------------------------------------------------ galley speaks */
+/* The lantern is the page's little light source; the speech sits on a torn
+   paper plate. Both re-tint with the book. */
 .galley{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s5) 0 var(--s1)}
-.lantern{flex:0 0 auto;width:58px;height:58px;border:1px solid var(--rule);border-radius:50%;
-  background:radial-gradient(circle at 50% 62%, var(--accent-wash), transparent 70%),var(--card);
-  display:grid;place-items:center;box-shadow:var(--lift)}
-.flame{width:10px;height:16px;background:var(--accent-hot);border-radius:50% 50% 50% 50%/62% 62% 38% 38%;
-  box-shadow:0 0 14px 3px var(--accent-wash);transform-origin:50% 90%;animation:flick 2.6s ease-in-out infinite}
+.lantern{flex:0 0 auto;width:58px;height:58px;border-radius:50%;position:relative;
+  background:radial-gradient(circle at 50% 60%, var(--accent-hot), var(--accent) 46%, var(--kraft-2) 60%);
+  display:grid;place-items:center;box-shadow:var(--lift);
+  box-shadow:var(--lift),0 0 34px 10px var(--accent-wash)}
+.flame{width:10px;height:16px;background:var(--accent-ink);border-radius:50% 50% 50% 50%/62% 62% 38% 38%;
+  box-shadow:0 0 14px 3px var(--accent-hot);transform-origin:50% 90%;animation:flick 2.6s ease-in-out infinite}
 @keyframes flick{0%,100%{transform:scaleY(1) rotate(-2deg)}30%{transform:scaleY(1.1) rotate(2deg)}60%{transform:scaleY(.95) rotate(-1deg)}}
 .galley .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:6px}
-.galley .say{font-family:var(--disp);font-size:clamp(1.35rem,3vw,1.85rem);line-height:1.4;max-width:56ch;text-wrap:balance;margin:0;min-height:1.4em}
+.galley .plate{position:relative;background:var(--card);padding:14px 20px;clip-path:var(--edge-scrap);
+  filter:var(--drop-sm);max-width:58ch}
+.galley .say{font-family:var(--disp);font-size:clamp(1.3rem,3vw,1.75rem);line-height:1.4;text-wrap:balance;margin:0;min-height:1.4em}
 .galley .say em{color:var(--accent);font-style:italic}
-.caret{display:inline-block;width:9px;height:1.02em;background:var(--accent);vertical-align:-.15em;margin-left:2px;animation:blink 1s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
 
-/* ------------------------------------------------------- frames & ornaments */
-/* The engraved card: a printed leaf with a double rule pressed inside its
-   edge. No blur — depth is the second line, not a shadow. */
-.card{position:relative;background:var(--card);border:1px solid var(--rule);
-  border-radius:var(--radius);padding:var(--s3) var(--s3);box-shadow:var(--lift)}
-.card::before{content:"";position:absolute;inset:5px;border:1px solid var(--line);
-  border-radius:1px;pointer-events:none}
-.card > :last-child{margin-bottom:0}
-.card > :first-child{margin-top:0}
+/* Galley as a walk-on figure (a paper puppet), lantern-lit from within. */
+.galley-fig{position:relative;color:var(--ink);display:block}
+.galley-fig .art-figure{display:block;width:100%}
+.galley-fig .art-figure img{display:block;width:100%;height:auto}
+.galley-fig .glow{position:absolute;inset:-8% -10% -6% -10%;z-index:-1;border-radius:50%;
+  background:radial-gradient(closest-side, var(--accent-wash), transparent 76%)}
 
-/* Corner ornaments — opt-in printer's-frame marks at each corner. */
-.ornate::after{content:"";position:absolute;inset:0;pointer-events:none;
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M1 5V1h4' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M13 5V1H9' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M1 9v4h4' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M13 9v4H9' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E");
-  background-position:9px 9px, right 9px top 9px, left 9px bottom 9px, right 9px bottom 9px;
-  background-repeat:no-repeat;opacity:.5}
-
-/* Deckled / ruled section divider with a centred diamond ornament. */
+/* ------------------------------------------------------- dividers */
 .divider{display:flex;align-items:center;gap:var(--s2);margin:var(--s5) 0;color:var(--rule)}
-.divider::before,.divider::after{content:"";height:1px;flex:1;
-  background:linear-gradient(90deg,transparent,var(--rule) 12%,var(--rule) 88%,transparent)}
+.divider::before,.divider::after{content:"";height:6px;flex:1;background:var(--kraft);
+  clip-path:var(--edge-torn);opacity:.55}
 .divider .di{flex:0 0 auto;color:var(--accent)}
-.divider .di svg{display:block;width:16px;height:16px;fill:currentColor}
+.divider .di svg{display:block;width:18px;height:18px;fill:currentColor}
 
 /* ---------------------------------------------------------- buttons & links */
 a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   text-decoration-color:var(--accent-wash);text-underline-offset:3px}
 a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
+
+/* Buttons are paper tabs: a cut label with a hard offset shadow. */
 .btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:none;
-  border-radius:var(--radius);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
-  cursor:pointer;text-decoration:none;box-shadow:var(--lift);transition:background .18s ease}
-.btn:hover{background:var(--accent-hot);color:var(--accent-ink)}
-.btn.ghost{background:none;color:var(--accent);border:1.5px solid var(--accent);box-shadow:none}
+  clip-path:var(--edge-tab);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
+  cursor:pointer;text-decoration:none;filter:var(--drop-sm);
+  transition:transform .16s ease, background .18s ease, filter .16s ease}
+.btn:hover{background:var(--accent-hot);color:var(--accent-ink);transform:translateY(-2px);
+  filter:drop-shadow(2px 4px 0 var(--paper-shadow))}
+.btn:active{transform:translateY(0)}
+.btn.ghost{background:var(--card);color:var(--accent)}
 .btn.ghost:hover{background:var(--accent-wash);color:var(--accent-hot)}
-.btn:disabled{background:var(--dim);cursor:not-allowed;box-shadow:none}
-.btn:focus-visible,.nav a:focus-visible,a:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
+.btn:disabled{background:var(--kraft-2);color:var(--card);cursor:not-allowed;transform:none;filter:var(--drop-sm)}
+.btn:focus-visible,.nav a:focus-visible,a:focus-visible,.tier:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
 
 /* ------------------------------------------------------------------- art */
-/* Injected engraving artwork. Line work is currentColor (inherits ink); the
-   .ac class carries the skin's accent, so every portrait re-costumes with the
-   book. Swap any .svg for a .png/.webp in SC.ART and the loader falls back to
-   an <img> with no render-code change. */
-.artwork{display:block;width:100%;height:100%}
+/* Injected artwork. Line/flat work is currentColor (inherits ink); the .ac
+   class carries the skin accent, so every placeholder re-costumes with the
+   book. Swap any .svg for a .png/.webp in SC.ART and the loader renders an
+   <img> instead — no render-code change. */
+.artwork{display:block;width:100%;height:auto}
 .artwork .field{fill:var(--card-2)}
+.artwork .paper{fill:var(--card)}
+.artwork .kraft{fill:var(--kraft)}
 .artwork .ink{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .artwork .ink-fill{fill:currentColor;stroke:none}
-.artwork .frame{fill:none;stroke:currentColor;stroke-width:2.4}
-.artwork .frame-in{fill:none;stroke:currentColor;stroke-width:1;opacity:.55}
 .artwork .ac{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .artwork .ac-fill{fill:var(--accent);stroke:none}
-.artwork .hatch{fill:none;stroke:currentColor;stroke-width:1;opacity:.26}
-.artwork .hatch-ac{fill:none;stroke:var(--accent);stroke-width:1;opacity:.3}
+.artwork .teal-fill{fill:var(--teal);stroke:none}
+.artwork .gold-fill{fill:var(--gold);stroke:none}
+.artwork .hatch{fill:none;stroke:currentColor;stroke-width:1;opacity:.24}
+/* legacy crest/ornament frames (fill defaults to black without these) */
+.artwork .frame{fill:none;stroke:currentColor;stroke-width:2.4}
+.artwork .frame-in{fill:none;stroke:currentColor;stroke-width:1;opacity:.55}
 .art-figure{display:block;color:var(--ink)}
-/* Raster portraits are square; cover fills the frame with no letterbox. */
-.art-figure img{display:block;width:100%;height:100%;object-fit:cover}
+/* Commissioned art is opaque cream; show it whole and let its ground blend. */
+.art-figure img{display:block;width:100%;height:auto;object-fit:contain}
+/* Square portrait frames crop-fill instead. */
+.member .sigil .art-figure img,
+.chapter .portrait .art-figure img,
+.tier .triders .bust .art-figure img{height:100%;object-fit:cover}
 
 /* --------------------------------------------------------------- components */
-/* Party member cards (light). */
-.members{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s2)}
-.member{position:relative;display:grid;grid-template-columns:56px 1fr;gap:var(--s2);align-items:start;
-  background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:var(--s2) var(--s3);box-shadow:var(--lift)}
-.member::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
-.member .sigil{width:56px;height:56px;border-radius:var(--radius);border:1px solid var(--rule);
-  display:grid;place-items:center;color:var(--accent);background:var(--accent-wash);overflow:hidden}
-.member .sigil svg{width:30px;height:30px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.member .sigil:has(.art-figure){background:var(--card-2);color:var(--ink);padding:0}
+/* Party member sheets — a paper card per specialist. Torn/cut edges alternate
+   deliberately by position (never random). */
+.members{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s3)}
+.member{position:relative;display:grid;grid-template-columns:58px 1fr;gap:var(--s2);align-items:start;
+  background:var(--card);padding:var(--s2) var(--s3);box-shadow:var(--lift)}
+.members > .member:nth-child(3n+1){transform:rotate(-.5deg)}
+.members > .member:nth-child(3n+2){transform:rotate(.4deg)}
+.member .sigil{width:58px;height:58px;color:var(--accent);background:var(--stage);
+  display:grid;place-items:center;overflow:hidden;clip-path:var(--edge-tab)}
+.member .sigil svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.member .sigil:has(.art-figure){background:var(--stage);color:var(--ink)}
 .member .sigil .art-figure{width:100%;height:100%}
 .member .mname{font-family:var(--disp);font-size:1.22rem;line-height:1.1}
 .member .mname small{font-family:var(--ui);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-left:8px;white-space:nowrap}
 .member .mjob{font-size:.95rem;color:var(--faded);margin-top:6px;line-height:1.45}
 .member .mlane{font:.68rem var(--mono);color:var(--dim);margin-top:8px;letter-spacing:0}
 
-/* Tier plates. */
-.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s2);align-items:stretch}
-.tier{position:relative;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);
-  padding:var(--s3) var(--s2);box-shadow:var(--lift);display:flex;flex-direction:column;gap:6px;
-  cursor:pointer;transition:transform .15s ease, border-color .2s ease;color:inherit;text-decoration:none}
-.tier::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
-.tier:hover{transform:translateY(-2px);border-color:var(--accent)}
-.tier.picked{border-color:var(--accent)}
-.tier.picked::before{border-color:var(--accent);inset:6px}
-.tier:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
+/* Tier plates — sheets of paper stamped with a crest. */
+.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s3);align-items:stretch}
+.tier{position:relative;background:var(--card);padding:var(--s3) var(--s2);box-shadow:var(--lift);
+  display:flex;flex-direction:column;gap:6px;cursor:pointer;color:inherit;text-decoration:none;
+  transition:transform .15s ease, box-shadow .15s ease}
+.tier:hover{transform:translateY(-3px);box-shadow:3px 5px 0 var(--paper-shadow)}
+.tier.picked{background:var(--card-2);box-shadow:0 0 0 2px var(--accent),var(--lift)}
+.tier:nth-child(even){transform:rotate(.4deg)}
+.tier:nth-child(even):hover{transform:translateY(-3px) rotate(.4deg)}
 .tier .tname{font-family:var(--disp);font-size:1.28rem;line-height:1.1}
 .tier .tsub{font-family:var(--body);font-size:.82rem;color:var(--accent);letter-spacing:.02em;font-style:italic}
 .tier .tprice{font-family:var(--ui);font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums;margin-top:auto;color:var(--ink)}
 .tier .tprice small{font-size:.78rem;color:var(--dim);font-weight:400}
 .tier .tblurb{font-size:.9rem;color:var(--faded);line-height:1.45}
-.tier .flag{position:absolute;top:-11px;left:var(--s2);z-index:1;background:var(--accent);color:var(--accent-ink);
-  border-radius:var(--radius-pill);font-family:var(--ui);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;padding:3px 11px}
+.tier .flag{position:absolute;top:-12px;left:var(--s2);z-index:1;background:var(--accent);color:var(--accent-ink);
+  clip-path:var(--edge-tab);font-family:var(--ui);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;padding:4px 12px;filter:var(--drop-sm)}
+/* The row of tiny member busts riding on a tier plate. */
+.tier .triders{display:flex;gap:4px;margin-top:2px;min-height:26px;align-items:center}
+.tier .triders .bust{width:26px;height:26px;clip-path:var(--edge-tab);background:var(--stage);
+  overflow:hidden;color:var(--ink)}
+.tier .triders .bust .art-figure{width:100%;height:100%}
+.tier .triders .alone{font-family:var(--ui);font-size:.72rem;color:var(--dim);font-style:italic}
 
-/* -------------------------------------------------------------- hero (home) */
-.hero{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:var(--s5);align-items:center;
-  padding:var(--s6) 0 var(--s4)}
-.hero .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:var(--s2)}
-.hero .say{font-family:var(--disp);font-size:var(--fs-hero);line-height:1.05;margin:0;text-wrap:balance}
-.hero .say em{color:var(--accent);font-style:italic}
-.hero-art{position:relative;color:var(--ink)}
-.hero-art .art-figure{display:block;width:100%;aspect-ratio:1;filter:drop-shadow(0 2px 0 var(--line))}
-.hero-art .art-figure img{border-radius:var(--radius)}
-.hero-art .glow{position:absolute;inset:-12% -8% -8% -8%;z-index:-1;border-radius:50%;
-  background:radial-gradient(closest-side, var(--accent-wash), transparent 78%)}
+.tcrest{width:54px;height:54px;margin:0 0 4px;color:var(--gold)}
+.tcrest .art-figure{display:block;width:100%;height:100%}
+
+/* --------------------------------------------------------- homepage acts */
+.act{position:relative;padding:var(--s6) 0}
+.act-label{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.24em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:var(--s2)}
+
+/* A generic torn speech plate. */
+.plate{position:relative;background:var(--card);padding:14px 20px;clip-path:var(--edge-scrap);filter:var(--drop-sm)}
+.plate > :last-child{margin-bottom:0}
+.plate .say{font-family:var(--disp);font-size:clamp(1.2rem,2.4vw,1.5rem);line-height:1.4;margin:0}
+.plate .say em{color:var(--accent);font-style:italic}
+
+/* Act I — Galley walks on beside a short headline; the campfire scene is the
+   stage floor below. (The commissioned scenes are opaque cream, so one scene
+   is the stage rather than three stacked layers.) */
+.curtain{position:relative;padding:var(--s5) 0 0;background:var(--stage);
+  margin:var(--s2) calc(-1 * var(--s3)) 0;padding-left:var(--s3);padding-right:var(--s3);
+  box-shadow:var(--lift)}
+.curtain .cast{display:grid;grid-template-columns:minmax(0,1fr) clamp(180px,24vw,268px);
+  gap:var(--s4);align-items:center}
+.cast-copy{padding-bottom:var(--s2)}
+.headline-sheet{display:inline-block;background:var(--card);padding:var(--s3) var(--s4);
+  clip-path:var(--edge-torn);filter:var(--drop);transform:rotate(-1deg);margin-bottom:var(--s3)}
+.headline-sheet .say{font-family:var(--disp);font-size:var(--fs-h1);line-height:1.04;margin:0;text-wrap:balance}
+.headline-sheet .say em{color:var(--accent);font-style:italic}
+.cast-copy .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:6px}
+.galley-greet{max-width:46ch}
+.curtain-galley{position:relative;align-self:end}
+.curtain-galley .art-figure{display:block;width:100%}
+.curtain-galley .glow{position:absolute;inset:auto -14% 8% -14%;height:60%;z-index:0;border-radius:50%;
+  background:radial-gradient(closest-side, var(--accent-wash), transparent 74%)}
+.curtain-galley .art-figure{position:relative;z-index:1}
+/* The three escape hatches beneath Galley's opening line. */
+.hatches{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);align-items:center}
+.hatch-link{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);text-decoration:none;
+  background:var(--card);padding:7px 14px;clip-path:var(--edge-tab);filter:var(--drop-sm)}
+.hatch-link:hover{color:var(--accent-hot);background:var(--card-2)}
+/* The campfire scene as the stage floor — cropped to the lit lower strip so
+   the empty cream sky above doesn't balloon the hero. */
+.scene-band{position:relative;height:clamp(180px,24vw,300px);overflow:hidden}
+.scene-band .art-figure{display:block;width:100%;height:100%}
+.scene-band .art-figure img{width:100%;height:100%;object-fit:cover;object-position:50% 92%}
 @media (max-width:760px){
-  .hero{grid-template-columns:1fr;gap:var(--s3);padding-top:var(--s4)}
-  .hero-art{max-width:180px;order:-1}
+  .curtain .cast{grid-template-columns:1fr;gap:var(--s2)}
+  .curtain-galley{max-width:220px;order:-1;justify-self:start}
 }
 
-/* ------------------------------------------------------ how-it-works journey */
-.journey{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:var(--s3);
-  border:1px solid var(--rule);border-radius:var(--radius);background:var(--card);box-shadow:var(--lift);overflow:hidden}
-.step{position:relative;padding:var(--s3) var(--s2);text-align:center}
-.step + .step{border-left:1px dashed var(--line-strong)}
-.step .sno{font-family:var(--mono);font-size:var(--fs-small);color:var(--accent);letter-spacing:.1em}
-.step .sh{font-family:var(--disp);font-size:1.18rem;margin:6px 0 4px}
-.step .sp{font-family:var(--ui);font-size:.86rem;color:var(--faded);line-height:1.4;margin:0}
-@media (max-width:680px){.journey{grid-template-columns:1fr 1fr}.step:nth-child(2){border-left:0}
-  .step:nth-child(3),.step:nth-child(4){border-top:1px dashed var(--line-strong)}
-  .step:nth-child(3){border-left:0}}
+/* A repeated primary CTA that closes each act. */
+.act-cta{margin-top:var(--s4);display:flex;align-items:center;gap:var(--s2) var(--s3);flex-wrap:wrap}
+.act-cta .trust{font-family:var(--ui);font-size:var(--fs-ui);color:var(--faded)}
+.act-cta .trust b{color:var(--ink);font-weight:600}
 
-/* --------------------------------------------------------- oath plaque (home) */
-.plaque{position:relative;background:var(--card-2);border:1px solid var(--rule);border-radius:var(--radius);
-  padding:var(--s4) var(--s4);box-shadow:var(--lift)}
-.plaque::before{content:"";position:absolute;inset:6px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+/* Act II — party sheets that rotate-and-settle in. */
+.act-party .members{margin-top:var(--s3)}
+.correction{margin-top:10px;display:inline-flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;
+  background:var(--card-2);padding:8px 12px;clip-path:var(--edge-scrap);font-size:.86rem}
+.correction .from{font-family:var(--mono);font-size:.78rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px}
+.correction .to{font-family:var(--mono);font-size:.78rem;color:var(--good)}
+.correction .arrow{color:var(--dim)}
+.correction .why{font-family:var(--ui);color:var(--dim);font-size:.78rem}
+.member.rich{grid-template-columns:1fr;gap:0}
+.member.rich .top{display:grid;grid-template-columns:58px 1fr;gap:var(--s2);align-items:start}
+
+/* Act III — the three-scene paper strip. */
+.strip{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s3);margin-top:var(--s3)}
+.strip .scene-card{position:relative;background:var(--card);padding:0 0 var(--s3);box-shadow:var(--lift);text-align:center}
+.strip .scene-card:nth-child(2){transform:rotate(-.6deg)}
+.strip .scene-art{display:block;width:100%;aspect-ratio:2/1;background:var(--card-2);overflow:hidden;color:var(--ink)}
+.strip .scene-art .art-figure{width:100%;height:100%}
+.strip .sno{font-family:var(--mono);font-size:var(--fs-small);color:var(--accent);letter-spacing:.1em;margin-top:var(--s2)}
+.strip .sh{font-family:var(--disp);font-size:1.2rem;margin:4px 0 6px}
+.strip .sp{font-family:var(--ui);font-size:.9rem;color:var(--faded);line-height:1.45;margin:0;padding:0 var(--s2)}
+@media (max-width:680px){.strip{grid-template-columns:1fr}}
+
+/* Act IV — the tier stack (uses .tiers). */
+/* Act V — the oath, a pasted pledge sheet. */
+.plaque{position:relative;background:var(--card-2);padding:var(--s4) var(--s4);
+  clip-path:var(--edge-torn);filter:var(--drop);transform:rotate(-.5deg)}
 .plaque .oath{font-family:var(--disp);font-size:1.35rem;line-height:1.4;margin:0 0 var(--s2);max-width:52ch}
 .plaque .flow{font-family:var(--mono);font-size:var(--fs-small);color:var(--dim);margin:0}
+.oath-scene{display:grid;grid-template-columns:minmax(0,1fr) clamp(150px,20vw,220px);gap:var(--s4);align-items:center}
+.oath-galley{position:relative}
+.oath-galley .art-figure{display:block;width:100%;filter:var(--drop)}
+@media (max-width:680px){.oath-scene{grid-template-columns:1fr}.oath-galley{max-width:180px}}
 
-/* -------------------------------------------------- party portrait gallery */
-.gallery{display:grid;gap:var(--s4);margin-top:var(--s3)}
-.chapter{display:grid;grid-template-columns:132px minmax(0,1fr) 190px;gap:var(--s4);align-items:start}
-.chapter .portrait{color:var(--ink);background:var(--card-2);border:1px solid var(--rule);border-radius:var(--radius);
-  box-shadow:var(--lift);overflow:hidden;aspect-ratio:1}
-.chapter .portrait .art-figure{display:block;width:100%}
+/* -------------------------------------------------- party booklet page */
+.gallery{display:grid;gap:var(--s5);margin-top:var(--s3)}
+.chapter{position:relative;display:grid;grid-template-columns:150px minmax(0,1fr) 200px;gap:var(--s4);align-items:start;
+  background:var(--card);padding:var(--s3);box-shadow:var(--lift)}
+.gallery > .chapter:nth-child(odd){transform:rotate(-.4deg)}
+.gallery > .chapter:nth-child(even){transform:rotate(.4deg)}
+.chapter .portrait{color:var(--ink);background:var(--stage);overflow:hidden;aspect-ratio:1;clip-path:var(--edge-tab)}
+.chapter .portrait .art-figure{display:block;width:100%;height:100%}
 .chapter-body{padding-top:var(--s1)}
 .chapter-no{font-family:var(--disp);font-size:1rem;color:var(--accent);letter-spacing:.1em;font-style:italic}
 .chapter-name{font-family:var(--disp);font-size:1.7rem;margin:2px 0 8px;line-height:1.05}
 .chapter-name small{font-family:var(--ui);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-left:10px;vertical-align:middle}
-.chapter-say{font-size:1.08rem;color:var(--ink-soft);margin:0;max-width:46ch}
-.chapter-lane{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:var(--s2);position:relative;box-shadow:var(--lift)}
-.chapter-lane::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+.chapter-say{font-size:1.08rem;color:var(--ink-soft);margin:0 0 10px;max-width:46ch}
+.chapter .correction{margin-top:2px}
+.chapter-lane{background:var(--card-2);padding:var(--s2);position:relative;clip-path:var(--edge-tab)}
 .chapter-lane .label{margin-bottom:6px}
 .chapter-lane .mono{color:var(--faded)}
 @media (max-width:720px){
-  .chapter{grid-template-columns:96px minmax(0,1fr);gap:var(--s3)}
+  .chapter{grid-template-columns:104px minmax(0,1fr);gap:var(--s3)}
   .chapter-lane{grid-column:1 / -1}
 }
 
-/* ----------------------------------------------------------- tier crests */
-.tier .tcrest{width:54px;height:54px;margin:0 0 4px;color:var(--ink)}
-.tier .tcrest .art-figure{display:block;width:100%;height:100%}
+/* ---------------------------------------------------- pricing sheet page */
+.tariff{border-collapse:collapse;width:100%;max-width:680px;font-family:var(--ui);font-size:var(--fs-ui);
+  background:var(--card);box-shadow:var(--lift)}
+.tariff th,.tariff td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+.tariff th{font-size:var(--fs-label);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:500}
+.tariff tr:nth-child(even) td{background:var(--card-2)}
+.tariff td b{font-variant-numeric:tabular-nums;color:var(--ink)}
 
-/* --------------------------------------------------------------- utilities */
+/* ------------------------------------------------ quote: pose rail + bench */
+/* Galley persists top-left through the quote flow, changing pose per step. */
+.pose-rail{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s4) 0 var(--s1)}
+.pose-rail .pose{flex:0 0 auto;width:clamp(96px,14vw,132px);position:relative}
+.pose-rail .pose .art-figure{display:block;width:100%;filter:var(--drop)}
+.pose-rail .pose .glow{position:absolute;inset:auto -16% 2% -16%;height:64%;z-index:-1;border-radius:50%;
+  background:radial-gradient(closest-side,var(--accent-wash),transparent 74%)}
+.pose-rail .speech{flex:1 1 auto;min-width:0}
+.pose-rail .speech .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:6px}
+.pose-rail .speech .plate{position:relative;background:var(--card);padding:14px 20px;clip-path:var(--edge-scrap);filter:var(--drop-sm)}
+.pose-rail .speech .say{font-family:var(--disp);font-size:clamp(1.25rem,2.6vw,1.6rem);line-height:1.4;margin:0;min-height:1.4em}
+.pose-rail .speech .say em{color:var(--accent);font-style:italic}
+@media (max-width:560px){.pose-rail{gap:var(--s2)}.pose-rail .pose{width:84px}}
+
+/* The party bench — the centerpiece. A paper stage; puppets walk on from the
+   wing, settle with a bounce, and drop a greeting scrap. */
+.bench{position:relative;background:var(--stage);padding:var(--s3) var(--s2) 0;
+  box-shadow:var(--lift);overflow:hidden;margin-top:var(--s2)}
+.bench::after{content:"";position:absolute;left:0;right:0;bottom:0;height:14px;background:var(--kraft);
+  clip-path:var(--edge-torn)}
+.bench .bench-label{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-bottom:var(--s1)}
+.troupe{display:flex;align-items:flex-end;gap:clamp(4px,1.4vw,14px);min-height:190px;padding-bottom:18px;flex-wrap:nowrap;overflow-x:auto}
+.puppet{flex:0 0 auto;width:clamp(84px,13vw,120px);position:relative;text-align:center}
+.puppet .fig{display:block;width:100%;color:var(--ink)}
+.puppet .fig .art-figure{width:100%;filter:var(--drop-sm)}
+.puppet.galley-anchor .fig .art-figure{filter:var(--drop)}
+.puppet .greet{position:absolute;left:50%;top:-6px;transform:translate(-50%,-100%);
+  background:var(--card);padding:6px 11px;clip-path:var(--edge-scrap);filter:var(--drop-sm);
+  font-family:var(--ui);font-size:.74rem;color:var(--ink);white-space:nowrap;z-index:3;
+  opacity:0;pointer-events:none}
+.puppet .greet.show{opacity:1}
+.puppet .greet b{color:var(--accent);font-weight:600}
+@media (prefers-reduced-motion:no-preference){
+  .puppet .greet.show{animation:greet-pop .35s ease both}
+  @keyframes greet-pop{from{opacity:0;transform:translate(-50%,-84%)}to{opacity:1;transform:translate(-50%,-100%)}}
+  /* walk-on from the right wing, settle with a small bounce */
+  .puppet.joining{animation:walk-on .5s cubic-bezier(.2,.8,.3,1.2) both}
+  @keyframes walk-on{0%{opacity:0;transform:translateX(60px)}60%{opacity:1;transform:translateX(-6px)}100%{transform:translateX(0)}}
+  .puppet.leaving{animation:walk-off .38s ease-in both}
+  @keyframes walk-off{to{opacity:0;transform:translateX(-56px)}}
+}
+@media (prefers-reduced-motion:reduce){
+  .puppet.joining{animation:none;outline:2px solid var(--accent);outline-offset:3px}
+}
+
+/* The contract crest stamp + the flipping price tag (quote summary). */
+.summary .stamp{width:52px;height:52px;color:var(--gold);margin:0 auto 4px}
+.summary .stamp .art-figure{display:block;width:100%;height:100%}
+@media (prefers-reduced-motion:no-preference){
+  .summary .stamp.thunk{animation:wax-thunk .4s cubic-bezier(.2,.8,.3,1.3) both}
+  @keyframes wax-thunk{0%{opacity:0;transform:scale(1.7) rotate(-8deg)}70%{opacity:1;transform:scale(.92)}100%{transform:scale(1)}}
+  .price-flip.flip{animation:tag-flip .4s ease both}
+  @keyframes tag-flip{0%{transform:rotateX(0)}45%{transform:rotateX(90deg);opacity:.3}100%{transform:rotateX(0);opacity:1}}
+}
+.price-flip{display:inline-block;transform-origin:50% 0}
+
+/* --------------------------------------------------------- utilities */
 .wide{max-width:none}
 .narrow{max-width:640px}
 .narrow-lg{max-width:680px}
-.hero-cta{margin-top:var(--s4);display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.hero-cta{margin-top:var(--s4);display:flex;align-items:center;gap:var(--s2) var(--s3);flex-wrap:wrap}
 .stack-s{margin-top:var(--s2)}
 .stack-m{margin-top:var(--s3)}
 .stack-l{margin-top:var(--s4)}
 .hidden{display:none !important}
+.card{position:relative;background:var(--card);padding:var(--s3);box-shadow:var(--lift)}
+.card > :last-child{margin-bottom:0}
+.card > :first-child{margin-top:0}
 
 /* ------------------------------------------------------------------ motion */
 /* All motion is opt-in through prefers-reduced-motion and touches only
    transform/opacity. The reveal base state hides content, so it is applied by
    JS (.js-motion on <html>) — never on a no-JS page, which must stay visible. */
-.js-motion [data-reveal]{opacity:0;transform:translateY(16px);
+.js-motion [data-reveal]{opacity:0;transform:translateY(18px) rotate(-1.5deg);
   transition:opacity .7s ease, transform .7s cubic-bezier(.2,.7,.2,1)}
 .js-motion [data-reveal].in{opacity:1;transform:none}
+/* Preserve deliberate paste-up tilt through the settle. */
+.js-motion .members > .member[data-reveal].in:nth-child(3n+1){transform:rotate(-.5deg)}
+.js-motion .members > .member[data-reveal].in:nth-child(3n+2){transform:rotate(.4deg)}
+.js-motion .tiers > [data-reveal].in:nth-child(even){transform:rotate(.4deg)}
+.js-motion .gallery > .chapter[data-reveal].in:nth-child(odd){transform:rotate(-.4deg)}
+.js-motion .gallery > .chapter[data-reveal].in:nth-child(even){transform:rotate(.4deg)}
 
 @media (prefers-reduced-motion:no-preference){
-  .hero-art .art-figure{animation:idle-float 7s ease-in-out infinite}
-  .hero-art .glow{animation:idle-glow 7s ease-in-out infinite}
+  .curtain-galley .art-figure{animation:idle-float 7s ease-in-out infinite}
+  .curtain-galley .glow{animation:idle-glow 7s ease-in-out infinite}
   @keyframes idle-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
   @keyframes idle-glow{0%,100%{opacity:.85}50%{opacity:1}}
 }
@@ -368,19 +570,18 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
   @keyframes tint-bloom{0%{opacity:0;transform:scale(.55)}38%{opacity:1}100%{opacity:0;transform:scale(1.7)}}
 }
 
-/* View Transitions: a soft cross-document wipe between pages (opt-in via the
-   MPA rule; browsers without support simply navigate as normal). */
+/* View Transitions: a soft paper-slide between pages. */
 @view-transition{navigation:auto}
 @media (prefers-reduced-motion:no-preference){
   ::view-transition-old(root){animation:vt-out .28s ease both}
   ::view-transition-new(root){animation:vt-in .42s ease both}
-  @keyframes vt-out{to{opacity:0}}
-  @keyframes vt-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes vt-out{to{opacity:0;transform:translateY(-6px)}}
+  @keyframes vt-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 }
 
 @media (prefers-reduced-motion:reduce){
-  .flame,.caret,.wdots i{animation:none}
-  .tier,body{transition:none}
+  .flame,.wdots i{animation:none}
+  .tier,body,.btn{transition:none}
   .js-motion [data-reveal]{opacity:1;transform:none;transition:none}
-  .hero-art .art-figure,.hero-art .glow{animation:none}
+  .curtain-galley .art-figure,.curtain-galley .glow{animation:none}
 }
