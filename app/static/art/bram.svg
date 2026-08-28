@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Bram, the grammar knight">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- FIGURE: Bram, the grammar knight -->
+  <!-- Broad armored shoulders -->
+  <path class="ink" d="M18,116 C18,96 30,84 42,80 M82,116 C82,96 70,84 58,80"/>
+  <path class="ink" d="M42,80 L42,74 M58,80 L58,74"/>
+  <!-- Rounded knight's helm (smooth dome) -->
+  <path class="ink" d="M37,58 C37,42 43,36 50,36 C57,36 63,42 63,58 C63,66 58,72 50,72 C42,72 37,66 37,58 Z"/>
+  <!-- Helm brow rim -->
+  <path class="ink" d="M38,52 C42,49 58,49 62,52"/>
+  <!-- Nasal bar down the face -->
+  <path class="ink" d="M50,52 L50,68"/>
+  <!-- Narrow eye slit -->
+  <path class="ink" d="M40,57 L47,57 M53,57 L60,57"/>
+  <!-- Shield prop (accent) at viewer's left -->
+  <path class="ac" d="M20,84 L36,84 L36,96 C36,104 28,108 28,108 C28,108 20,104 20,96 Z"/>
+  <!-- Shield emblem: checkmark -->
+  <path class="ac" d="M24,94 L27,99 L33,89"/>
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

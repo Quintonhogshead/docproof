@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Galley, the guide">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- hooded guide -->
+  <path class="ink" d="M22,116 C24,90 34,82 50,82 C66,82 76,90 78,116"/>
+  <path class="ink" d="M32,86 C28,58 34,40 50,40 C66,40 72,58 68,86"/>
+  <path class="ink" d="M40,55 C40,68 46,74 50,74 C54,74 60,68 60,55"/>
+  <path class="ink" d="M39,54 C42,46 58,46 61,54"/>
+  <path class="ink" d="M44.5,60 h2.4 M53,60 h2.4"/>
+  <!-- lantern, held (accent) -->
+  <g class="ac">
+    <path d="M68,92 h13 v14 h-13 z"/>
+    <path d="M70.5,92 v-3 a4,4 0 0,1 8,0 v3"/>
+    <path d="M74.5,90 v-6"/>
+  </g>
+  <path class="ac-fill" d="M74.5,96 c2.4,2.2 2.4,5 0,7 c-2.4,-2 -2.4,-4.8 0,-7 z"/>
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

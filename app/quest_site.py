@@ -23,6 +23,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from docproof import __version__
 
@@ -161,6 +162,16 @@ def create_app() -> FastAPI:
         added = waitlist.add(email)
         log.info("Waitlist %s: %s", "signup" if added else "repeat", email)
         return {"ok": True, "already": not added}
+
+    @app.exception_handler(StarletteHTTPException)
+    async def not_found(request: Request, exc: StarletteHTTPException):
+        """A wandered-off-the-map page for stray URLs. API and asset misses keep
+        their plain JSON 404 so nothing programmatic changes."""
+        if exc.status_code == 404 and not request.url.path.startswith(
+                ("/api", "/assets", "/healthz")):
+            return FileResponse(static / "sc-404.html", status_code=404,
+                                headers={"Cache-Control": "no-cache"})
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
     @app.get("/healthz")
     def healthz() -> dict:

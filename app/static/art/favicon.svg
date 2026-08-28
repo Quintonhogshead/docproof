@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Spell &amp; Check">
+  <rect width="64" height="64" rx="12" fill="#f2e9d2"/>
+  <rect x="4.5" y="4.5" width="55" height="55" rx="9.5" fill="none" stroke="#b6a37c" stroke-width="1.5"/>
+  <g fill="none" stroke="#221b10" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="22" y="26" width="20" height="24" rx="3"/>
+    <path d="M27,26 v-4 a5,5 0 0,1 10,0 v4"/>
+    <path d="M32,18 v-7"/>
+    <path d="M22,50 h20"/>
+  </g>
+  <path d="M32,31 c4,3.4 4,8 0,11.4 c-4,-3.4 -4,-8 0,-11.4 z" fill="#c8632c"/>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Proofread crest — the shield">
+  <circle class="field" cx="50" cy="50" r="44"/>
+  <g class="hatch"><path d="M22,52 A28,28 0 0,1 34,28"/><path d="M26,56 A26,26 0 0,1 37,34"/></g>
+  <path class="ac" d="M50,28 L68,34 V50 C68,64 60,70 50,74 C40,70 32,64 32,50 V34 Z"/>
+  <path class="ink" d="M42,50 L48,57 L60,42"/>
+  <circle class="frame" cx="50" cy="50" r="44"/>
+  <circle class="frame-in" cx="50" cy="50" r="39"/>
+</svg>

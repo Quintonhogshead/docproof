@@ -4,9 +4,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spell &amp; Check — The Party Assembles</title>
-<link rel="icon" href="data:,">
+<meta name="description" content="Hand-pick your proofreading party by candlelight — drag adventurers, add trinkets, choose Galley's brain.">
+<link rel="icon" href="/assets/art/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/assets/art/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/art/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Spell &amp; Check">
+<meta property="og:title" content="The Party Assembles — Spell &amp; Check">
+<meta property="og:description" content="Hand-pick your proofreading party by candlelight — drag adventurers, add trinkets, choose Galley's brain.">
+<meta property="og:url" content="https://spell-and-check.fly.dev/customize">
+<meta property="og:image" content="https://spell-and-check.fly.dev/assets/art/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
 <style>
   /* Committed single-theme design: a cozy campfire at dusk. All colors explicit. */
   :root{
@@ -21,8 +34,9 @@
     --arcane:#8fbcab;
     --line:rgba(242,230,205,.14);
     --line-strong:rgba(242,230,205,.3);
-    --disp:'Macondo', 'Comic Sans MS', cursive;
+    --disp:'IM Fell English', 'Georgia', serif;
     --body:'Alegreya Sans', 'Gill Sans', 'Segoe UI', system-ui, sans-serif;
+    --accent:var(--ember);
     --mono:'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
   }
   *{box-sizing:border-box}
@@ -206,6 +220,19 @@
   @keyframes spinpulse{50%{transform:rotate(8deg) scale(1.08)}}
   .dropnote{font:11.5px var(--mono); color:var(--dim); margin-top:8px}
   .dropnote b{color:var(--ember); font-weight:400}
+
+  /* woodcut cast — same registry as the daylight pages, tinted for candlelight */
+  .sigil{overflow:hidden}
+  .sigil .art-figure{display:block; width:100%; height:100%}
+  .artwork{display:block; width:100%; height:100%}
+  .artwork .field{fill:var(--card-2)}
+  .artwork .ink{fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+  .artwork .ink-fill{fill:currentColor; stroke:none}
+  .artwork .frame{fill:none; stroke:currentColor; stroke-width:2.4}
+  .artwork .frame-in{fill:none; stroke:currentColor; stroke-width:1; opacity:.55}
+  .artwork .ac{fill:none; stroke:var(--accent); stroke-width:2; stroke-linecap:round; stroke-linejoin:round}
+  .artwork .ac-fill{fill:var(--accent); stroke:none}
+  .artwork .hatch{fill:none; stroke:currentColor; stroke-width:1; opacity:.26}
 
   @media (prefers-reduced-motion:reduce){
     .flame{animation:none}
@@ -498,7 +525,7 @@
     }).join('');
     var tag = a.role + (s.alias !== a.name ? ' · always ' + a.name : '');
     el.innerHTML =
-      '<div class="sigil"'+(s.look ? ' title="'+esc(s.look)+'"' : '')+'>'+svg(a.icon)+'</div>' +
+      '<div class="sigil"'+(s.look ? ' title="'+esc(s.look)+'"' : '')+'><span class="art-figure" data-art="'+a.id+'"></span></div>' +
       '<div><div class="aname">'+esc(s.alias)+'<small>'+esc(tag)+'</small></div>' +
       '<div class="ajob">'+esc(s.job)+'</div><div class="alane">lane: '+a.lane+'</div></div>' +
       '<div class="aprice">$'+priced(a.price)+'</div>' +
@@ -837,6 +864,38 @@
   applySkin(SKINS[0], true);
   log('<span class="t">ingest</span> <span class="k">the-ashen-crown.docx</span> · 98,400 words');
   log('<span class="t">galley</span> suggests a party of 4 · <span class="k">$39</span>');
+})();
+</script>
+<script>
+/* Woodcut-cast loader for the workshop. Self-contained (the daylight
+   sc-shared.js is not loaded here — it would mount light chrome). Inlines
+   /assets/art/<id>.svg into any [data-art] host and watches for the builder's
+   re-renders on drag/drop. */
+(function(){
+  var BASE = '/assets/art/', cache = {};
+  function fetchArt(p){ if(!cache[p]) cache[p] = fetch(p).then(function(r){return r.ok?r.text():null;}).catch(function(){return null;}); return cache[p]; }
+  function inject(host){
+    if(!host || host.dataset.artLoaded) return;
+    var id = host.dataset.art; if(!id) return;
+    host.dataset.artLoaded = '1';
+    fetchArt(BASE + id + '.svg').then(function(txt){
+      if(!txt){ host.dataset.artLoaded = ''; return; }
+      host.innerHTML = txt;
+      var s = host.querySelector('svg');
+      if(s){ s.setAttribute('aria-hidden','true'); s.classList.add('artwork'); }
+    });
+  }
+  function scan(root){ (root||document).querySelectorAll('[data-art]').forEach(inject); }
+  if(typeof MutationObserver !== 'undefined'){
+    new MutationObserver(function(muts){
+      muts.forEach(function(m){ m.addedNodes.forEach(function(n){
+        if(n.nodeType!==1) return;
+        if(n.matches && n.matches('[data-art]')) inject(n);
+        if(n.querySelectorAll) n.querySelectorAll('[data-art]').forEach(inject);
+      }); });
+    }).observe(document.documentElement, {childList:true, subtree:true});
+  }
+  scan(document);
 })();
 </script>
 </body>

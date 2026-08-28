@@ -4,85 +4,106 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Your Quote — Spell &amp; Check</title>
-<link rel="icon" href="data:,">
+<meta name="description" content="Hand Galley your manuscript for a free first look, an exact quote, and a party dressed for your book.">
+<link rel="icon" href="/assets/art/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/assets/art/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/art/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Spell &amp; Check">
+<meta property="og:title" content="Your Quote — Spell &amp; Check">
+<meta property="og:description" content="Hand Galley your manuscript for a free first look, an exact quote, and a party dressed for your book.">
+<meta property="og:url" content="https://spell-and-check.fly.dev/quote">
+<meta property="og:image" content="https://spell-and-check.fly.dev/assets/art/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,500&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
 <link rel="stylesheet" href="/assets/sc-shared.css">
 <style>
-  .consent{margin-top:22px;display:grid;gap:10px;max-width:640px}
-  .consent label{display:flex;gap:12px;align-items:flex-start;font-size:15px;color:var(--faded);cursor:pointer}
+  .consent{margin-top:var(--s3);display:grid;gap:10px;max-width:640px}
+  .consent label{display:flex;gap:12px;align-items:flex-start;font-size:var(--fs-ui);color:var(--faded);cursor:pointer;font-family:var(--ui)}
   .consent input{margin-top:4px;width:18px;height:18px;accent-color:var(--accent)}
-  .consent b{color:var(--ink);font-weight:500}
-  .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);border-radius:16px;
-    background:var(--card);padding:22px 24px;margin-top:16px;cursor:pointer;transition:border-color .2s, opacity .2s;box-shadow:var(--shadow)}
+  .consent b{color:var(--ink);font-weight:600}
+  .muted{color:var(--dim)}
+  .strong-ink{color:var(--ink);font-weight:600}
+  .mb1{margin-bottom:var(--s1)}
+
+  .drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);border-radius:var(--radius);
+    background:var(--card);padding:22px 24px;margin-top:16px;cursor:pointer;transition:border-color .2s, opacity .2s;box-shadow:var(--lift)}
   .drop.locked{opacity:.55;cursor:not-allowed}
   .drop:not(.locked):hover,.drop.over{border-color:var(--accent)}
   .drop:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
-  .drop .dicon{flex:0 0 auto;width:46px;height:46px;border-radius:14px;border:1px solid var(--line-strong);
+  .drop .dicon{flex:0 0 auto;width:46px;height:46px;border-radius:var(--radius);border:1px solid var(--rule);
     display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
   .drop .dicon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-  .drop .dtitle{font-family:var(--disp);font-size:19px}
-  .drop .dsub{font-size:13.5px;color:var(--faded);margin-top:2px}
-  .dropnote{font-size:14px;color:var(--accent);margin-top:10px;min-height:1.2em}
+  .drop .dtitle{font-family:var(--disp);font-size:1.22rem}
+  .drop .dsub{font-family:var(--ui);font-size:.86rem;color:var(--faded);margin-top:2px}
+  .dropnote{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);margin-top:10px;min-height:1.2em}
 
   /* the waiting room */
   .waiting{margin-top:26px;max-width:640px}
   .waiting .card{display:grid;gap:14px}
-  .wstatus{display:flex;align-items:center;gap:12px;font-family:var(--disp);font-size:19px}
+  .wstatus{display:flex;align-items:center;gap:12px;font-family:var(--disp);font-size:1.22rem}
   .wdots{display:inline-flex;gap:4px}
   .wdots i{width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.3;animation:wpulse 1.4s infinite}
   .wdots i:nth-child(2){animation-delay:.2s}.wdots i:nth-child(3){animation-delay:.4s}
   @keyframes wpulse{40%{opacity:1}}
-  .wline{font-size:15.5px;color:var(--faded)}
+  .wline{font-size:1rem;color:var(--faded)}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{border:1.5px solid var(--accent);background:none;color:var(--accent);border-radius:999px;
-    padding:7px 16px;font:15px var(--body);cursor:pointer}
+  .chip{border:1.5px solid var(--accent);background:none;color:var(--accent);border-radius:var(--radius-pill);
+    padding:7px 16px;font:1rem var(--ui);cursor:pointer}
   .chip:hover{background:var(--accent-wash)}
   .chip:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
 
-  .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);border:1px solid var(--line);
-    border-radius:14px;padding:12px 18px;box-shadow:var(--shadow)}
-  .bookchip b{font-family:var(--disp);font-size:18px;font-weight:400}
-  .bookchip span{color:var(--faded);font-size:14.5px}
-  .bookchip .redo{margin-left:auto;font-size:13.5px}
+  .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);border:1px solid var(--rule);
+    border-radius:var(--radius);padding:12px 18px;box-shadow:var(--lift)}
+  .bookchip b{font-family:var(--disp);font-size:1.15rem;font-weight:400}
+  .bookchip span{color:var(--faded);font-size:.9rem;font-family:var(--ui)}
+  .bookchip .redo{margin-left:auto;font-size:.85rem}
   .quotegrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px;align-items:start;margin-top:8px}
   @media (max-width:860px){.quotegrid{grid-template-columns:1fr}}
   .summary{position:sticky;top:16px}
-  .summary .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-size:15px}
+  .summary .label{margin-bottom:8px}
+  .summary .row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:var(--fs-ui)}
   .summary .row b{font-variant-numeric:tabular-nums}
-  .summary .total{font-size:20px;font-weight:700;display:flex;justify-content:space-between;padding-top:12px}
+  .summary .total{font-family:var(--ui);font-size:1.28rem;font-weight:700;display:flex;justify-content:space-between;padding-top:12px}
   .emailrow{display:flex;gap:10px;margin-top:14px}
-  .emailrow input{flex:1;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;color:var(--ink);
-    font:15px var(--body);padding:12px 14px;min-width:0}
+  .emailrow input{flex:1;background:var(--paper);border:1px solid var(--line-strong);border-radius:var(--radius);color:var(--ink);
+    font:var(--fs-ui) var(--ui);padding:12px 14px;min-width:0}
   .emailrow input:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
-  .fine{font-size:13px;color:var(--dim);margin-top:10px}
-  .hidden{display:none !important}
+  .fine{font-family:var(--ui);font-size:var(--fs-small);color:var(--dim);margin-top:10px}
+  .fine.mt{margin-top:14px}
 
   /* plain-English explainer */
   .explain{margin-top:18px}
-  .explain .card{max-width:none}
-  .explain h3{font-family:var(--disp);font-weight:400;font-size:19px;margin:0 0 8px}
-  .explain p{margin:0 0 12px;font-size:15.5px;color:var(--faded)}
+  .explain h3{font-family:var(--disp);font-weight:400;font-size:1.18rem;margin:0 0 8px}
+  .explain p{margin:0 0 12px;font-size:1rem;color:var(--faded)}
   .explain p b{color:var(--ink);font-weight:500}
   .examples{display:grid;gap:6px}
-  .ex{display:flex;gap:10px;align-items:baseline;font-size:14.5px}
-  .ex .from{font-family:var(--mono);font-size:13px;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap}
-  .ex .to{font-family:var(--mono);font-size:13px;color:var(--good);white-space:nowrap}
-  .ex .why{color:var(--dim);font-size:13px}
+  .ex{display:flex;gap:10px;align-items:baseline;font-size:.9rem}
+  .ex .from{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap}
+  .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good);white-space:nowrap}
+  .ex .why{color:var(--dim);font-size:.8rem}
   .lanternmember .sigil{color:var(--accent)}
+
+  /* Phase 4 presentation: the agreement, the lectern, the sealed contract */
+  .agreement{position:relative;margin-top:var(--s3);background:var(--card-2);border:1px solid var(--rule);
+    border-radius:var(--radius);padding:var(--s3) var(--s3) var(--s2);box-shadow:var(--lift);max-width:640px}
+  .agreement::before{content:"";position:absolute;inset:6px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+  .agreement > .label{margin-bottom:12px}
+  .agreement .consent{margin-top:0}
+  .drop .dicon svg{width:26px;height:26px}
+  .contract-title{font-family:var(--disp);font-size:1.25rem;line-height:1;margin-bottom:10px}
+  .waxseal{position:absolute;top:-16px;right:-12px;width:48px;height:48px;color:var(--accent);
+    filter:drop-shadow(0 1px 1px rgba(34,27,16,.18));pointer-events:none}
+  .waxseal svg{width:100%;height:100%;display:block}
+  .go-wrap{position:relative}
 </style>
 </head>
-<body>
+<body data-page="quote">
 <div class="wrap">
-
-  <header class="top">
-    <a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>
-    <nav class="nav">
-      <a href="/party">Meet the party</a>
-      <a href="/pricing">Pricing</a>
-      <a class="go now" href="/quote">Your quote</a>
-    </nav>
-  </header>
 
   <section class="galley">
     <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
@@ -94,34 +115,37 @@
 
   <!-- Step 1: consent, then the drop -->
   <div id="step-drop">
-    <div class="consent">
+    <div class="agreement">
+      <div class="label">The terms, plainly — signed both ways</div>
+      <div class="consent">
       <label><input type="checkbox" id="ok-ai">
         <span><b>A generative AI will read my manuscript</b> to size the job and do
         the checking. It's read once, never stored beyond 30 days, never used for
         training. That's okay with me.</span></label>
       <label><input type="checkbox" id="ok-terms">
-        <span><b>I accept the Terms of Service</b> <span style="color:var(--dim)">(coming soon — plain-English draft; for now this is a promise both ways)</span>.</span></label>
+        <span><b>I accept the Terms of Service</b> <span class="muted">(coming soon — plain-English draft; for now this is a promise both ways)</span>.</span></label>
+      </div>
     </div>
     <div class="drop locked" id="drop" role="button" tabindex="0" aria-disabled="true"
          aria-label="Upload your manuscript. Accepts .docx, .txt, or .md. Check both boxes above first.">
-      <div class="dicon"><svg viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 20h14"/></svg></div>
+      <div class="dicon"><svg viewBox="0 0 24 24"><path d="M12 6c-2-1.4-5-1.4-7-.4v11c2-1 5-1 7 .4 2-1.4 5-1.4 7-.4v-11c-2-1-5-1-7 .4z"/><path d="M12 6v11.6"/><path d="M6 20.5l6 1 6-1"/></svg></div>
       <div>
         <div class="dtitle">Drop your manuscript here, or click to choose</div>
         <div class="dsub">.docx, .txt, or .md · your exact quote appears before you pay anything</div>
       </div>
       <input type="file" id="fileinput" accept=".docx,.txt,.md" hidden>
     </div>
-    <div class="dropnote" id="dropnote"></div>
+    <div class="dropnote" id="dropnote" role="status" aria-live="polite"></div>
   </div>
 
   <!-- The waiting room: no rewriting text, just patience and small talk -->
-  <div class="waiting hidden" id="waiting">
+  <div class="waiting hidden" id="waiting" aria-live="polite">
     <div class="card">
       <div class="wstatus"><span class="wdots"><i></i><i></i><i></i></span>
         <span id="wtitle">Reading your first pages…</span></div>
       <div class="wline" id="wline">This takes under a minute. Your pages go to the AI once, and nowhere else.</div>
       <div id="wq">
-        <div class="wline" style="margin-bottom:8px"><b style="color:var(--ink);font-weight:500">While we wait —</b> how long have you been working on this book?</div>
+        <div class="wline mb1"><b class="strong-ink">While we wait —</b> how long have you been working on this book?</div>
         <div class="chips" id="wchips">
           <button class="chip" data-a="months">A few months</button>
           <button class="chip" data-a="years">Years</button>
@@ -149,7 +173,12 @@
         <div class="members" id="members"></div>
       </div>
       <div class="summary card" id="summary">
-        <div class="label" style="margin-bottom:8px">Your quest</div>
+        <div class="waxseal" aria-hidden="true"><svg viewBox="0 0 48 48">
+          <circle cx="24" cy="24" r="18" fill="var(--accent)"/>
+          <circle cx="24" cy="24" r="15.5" fill="none" stroke="var(--accent-hot)" stroke-width="1.4"/>
+          <path d="M24 12l3 7.1 7.6.6-5.8 5 1.8 7.4-6.6-4.1-6.6 4.1 1.8-7.4-5.8-5 7.6-.6z" fill="var(--accent-ink)"/>
+        </svg></div>
+        <div class="contract-title">Your quest</div>
         <div class="row"><span id="sumtier">—</span><b id="sumprice">—</b></div>
         <div class="row"><span>Manuscript</span><b id="sumwords">—</b></div>
         <div class="row"><span>Deliverable</span><b>Tracked-changes .docx</b></div>
@@ -159,19 +188,13 @@
           <input type="email" id="email" maxlength="254" placeholder="raven@yourkeep.com" aria-label="Your email">
           <button class="btn" id="go">Send the raven</button>
         </div>
-        <div class="fine" id="gonote"></div>
-        <div class="fine" style="margin-top:14px">Want to hand-pick the party instead?
+        <div class="fine" id="gonote" role="status" aria-live="polite"></div>
+        <div class="fine mt">Want to hand-pick the party instead?
           <a href="/customize">Open the workshop</a> (by candlelight).</div>
       </div>
     </div>
   </div>
 
-  <footer>
-    <span>Spell &amp; Check</span>
-    <a href="/party">Meet the party</a>
-    <a href="/pricing">Pricing</a>
-    <span class="right">Read once · kept 30 days for your re-run · never trained on</span>
-  </footer>
 </div>
 
 <script src="/assets/sc-shared.js"></script>
@@ -270,7 +293,7 @@
 
   function renderTiers(){
     document.getElementById('tiers').innerHTML = SC.TIERS.map(function(t){
-      return '<div class="tier' + (t.id === picked ? ' picked' : '') + '" tabindex="0" role="radio" ' +
+      return '<div class="tier' + (t.id === picked ? ' picked' : '') + '" tabindex="' + (t.id === picked ? '0' : '-1') + '" role="radio" ' +
         'aria-checked="' + (t.id === picked) + '" data-tier="' + t.id + '">' +
         (t.recommended ? '<span class="flag">Galley recommends</span>' : '') +
         '<div class="tname">' + t.name + '</div>' +
@@ -382,10 +405,24 @@
     var el = e.target.closest('.tier'); if(!el) return;
     picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
   });
+  function focusTier(id){
+    var t = document.querySelector('.tier[data-tier="' + id + '"]');
+    if(t) t.focus();
+  }
   document.getElementById('tiers').addEventListener('keydown', function(e){
-    if(e.key !== 'Enter' && e.key !== ' ') return;
     var el = e.target.closest('.tier'); if(!el) return;
-    e.preventDefault(); picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
+    if(e.key === 'Enter' || e.key === ' '){
+      e.preventDefault(); picked = el.dataset.tier;
+      renderTiers(); renderParty(); renderSummary(); focusTier(picked); return;
+    }
+    var dir = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1
+            : (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  ? -1 : 0;
+    if(!dir) return;
+    e.preventDefault();
+    var ids = SC.TIERS.map(function(t){ return t.id; });
+    var ni = (ids.indexOf(el.dataset.tier) + dir + ids.length) % ids.length;
+    picked = ids[ni];
+    renderTiers(); renderParty(); renderSummary(); focusTier(picked);
   });
 
   document.getElementById('go').addEventListener('click', function(){

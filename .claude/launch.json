@@ -14,6 +14,13 @@
       "runtimeArgs": ["-c",
         "DOCPROOF_SESSION_SECRET=preview-secret ANTHROPIC_API_KEY=sk-preview .venv/bin/python -m app.serve --home /tmp/docproof-web-preview --host 127.0.0.1 --port 8788 --insecure-cookies"],
       "port": 8788
+    },
+    {
+      "name": "spell-and-check",
+      "runtimeExecutable": "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/bin/python",
+      "runtimeArgs": ["-m", "app.quest_site"],
+      "port": 8000,
+      "autoPort": true
     }
   ]
 }

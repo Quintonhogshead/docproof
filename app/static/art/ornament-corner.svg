@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Corner flourish">
+  <g class="ink">
+    <path d="M6,6 H30"/>
+    <path d="M6,6 V30"/>
+    <path d="M6,6 C18,8 22,12 24,24"/>
+    <path d="M6,6 C8,18 12,22 24,24"/>
+  </g>
+  <circle class="ac-fill" cx="24" cy="24" r="2.6"/>
+</svg>
