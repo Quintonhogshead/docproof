@@ -248,6 +248,7 @@
   var say = document.getElementById('say');
   var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
   var skinPayload = null, anyScrap = false;
+  var lanesSeen = {};   // member id -> catches from this book's first pages
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var bench = SC.makeBench(document.getElementById('troupe'));
 
@@ -260,10 +261,16 @@
 
   SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> Tick the two boxes so we both know what we’re agreeing to, then hand me your book.');
 
-  /* ---------- plain-English tier explainers, with example catches ---------- */
+  /* ---------- plain-English tier explainers, with example catches ----------
+     Rendered as a tracked change (exact words struck, replacements marked in)
+     whenever the pair really is a replacement; from→to otherwise. Takes RAW
+     strings — escaping happens in here (and inside the diff), never before. */
   function ex(from, to, why){
-    return '<div class="ex"><span class="from">' + from + '</span><span>→</span>' +
-           '<span class="to">' + to + '</span><span class="why">' + why + '</span></div>';
+    var d = SC.diffHTML(from, to);
+    var body = d ? '<span class="df">' + d + '</span>'
+                 : '<span class="from">' + SC.esc(from) + '</span><span>→</span>' +
+                   '<span class="to">' + SC.esc(to) + '</span>';
+    return '<div class="ex">' + body + '<span class="why">' + SC.esc(why) + '</span></div>';
   }
   var EXPLAIN = {
     spellcheck:
@@ -444,6 +451,20 @@
     document.getElementById('booktitle').textContent = skin.book_title;
     document.getElementById('bookmeta').textContent = wordLabel + ' · ' + skin.genre;
     document.getElementById('covertitle').textContent = skin.book_title;
+    // A restored quote rebuilds the first-look scraps from the saved catches,
+    // so the finds survive a reload just like the rest of the quote.
+    if (restored && r.lanes){
+      lanesSeen = r.lanes;
+      var sweepBox = document.getElementById('sweep');
+      if (!sweepBox.children.length){
+        SC.MEMBERS.forEach(function(m){
+          if (!(m.id in lanesSeen)) return;
+          sweepBox.insertAdjacentHTML('beforeend',
+            scrapCard({key: m.id, catches: lanesSeen[m.id]}));
+          if (lanesSeen[m.id].length) anyScrap = true;
+        });
+      }
+    }
     // Carry the first-pages scraps up into the quote as a lasting "first look".
     var fl = document.getElementById('firstlook');
     if(anyScrap){ fl.appendChild(document.getElementById('sweep')); fl.classList.remove('hidden'); }
@@ -456,8 +477,10 @@
       SC.galleySay(say, SC.esc(skin.narration) +
         ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
     }
-    // The dropped book survives a wander to any other page (one tab, one visit).
-    SC.saveQuote({skin: skin, band: band, word_count: r.word_count || 0, picked: picked});
+    // The dropped book survives a wander to any other page (one tab, one visit)
+    // — catches included, so every page can show what the party found.
+    SC.saveQuote({skin: skin, band: band, word_count: r.word_count || 0,
+                  picked: picked, lanes: lanesSeen});
   }
 
   /* ---------- the sample-sweep: scraps the party pins up as they read ------- */
@@ -479,7 +502,7 @@
              '</b> — ' + emptyLine(lane.key) + '</div>';
     }
     var finds = lane.catches.map(function(c){
-      return ex(SC.esc(c.before), SC.esc(c.after), SC.esc(c.why));
+      return ex(c.before, c.after, c.why);
     }).join('');
     return '<div class="scrap" data-key="' + lane.key + '">' +
       '<div class="scraphead"><span class="portrait">' + SC.artFigure(m.id) + '</span>' +
@@ -511,6 +534,7 @@
             document.getElementById('sweepintro').classList.remove('hidden');
           } else if(ev === 'lane'){
             sweepEl.insertAdjacentHTML('beforeend', scrapCard(data));
+            lanesSeen[data.key] = data.catches || [];
             if(data.catches && data.catches.length) anyScrap = true;
           } else if(ev === 'done'){
             resolve(skinPayload);

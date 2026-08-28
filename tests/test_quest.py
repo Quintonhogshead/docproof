@@ -233,9 +233,14 @@ class _SweepProvider:
                                   usage=USAGE)
         if who in self.empty_lanes:
             return ProviderResult(parsed={"catches": []}, usage=USAGE)
-        return ProviderResult(parsed={"catches": [
-            {"before": who, "after": f"{who}-after",
-             "why": "test catch"}]}, usage=USAGE)
+        catches = [{"before": who, "after": f"{who}-after",
+                    "why": "test catch"}]
+        if who == "Pip":
+            # Pip promises two — hand her a second real quote from the sample
+            # so the generic tests never trip her keep-looking retries.
+            catches.append({"before": "rode out", "after": "rode home",
+                            "why": "second catch"})
+        return ProviderResult(parsed={"catches": catches}, usage=USAGE)
 
 
 # A sample every fake lane's catch quotes honestly: it contains each member's
@@ -441,3 +446,49 @@ def test_first_look_dedupes_containment_between_lanes():
         {"before": "a", "after": "an", "why": "article"},
     ], seen)
     assert [c["before"] for c in later] == ["a"]
+
+
+def test_pip_keeps_looking_until_she_has_two():
+    """A one-catch first pass triggers a nudged re-read; the passes merge
+    (deduped) until Pip has her promised two."""
+    from docproof.quest.sweep import run_pip
+
+    text = "very wet prose indeed, and the rain kept on falling all night"
+    first = {"catches": [{"before": "wet prose", "after": "dry prose",
+                          "why": "typo"}]}
+    second = {"catches": [
+        {"before": "wet prose", "after": "dry prose", "why": "typo"},
+        {"before": "kept on falling", "after": "kept falling", "why": "filler"}]}
+    fake = FakeProvider(results=[
+        ProviderResult(parsed=first, usage=USAGE),
+        ProviderResult(parsed={"keep": [True]}, usage=USAGE),      # judge 1
+        ProviderResult(parsed=second, usage=USAGE),
+        ProviderResult(parsed={"keep": [True, True]}, usage=USAGE)])  # judge 2
+    result = run_pip(text, fake)
+    assert [c["before"] for c in result.catches] == ["wet prose",
+                                                     "kept on falling"]
+    assert result.error is None
+    # The second lane read carried the keep-looking nudge; the first did not.
+    lane_calls = [c for c in fake.calls
+                  if c["schema_name"] == "quest_sweep_lane"]
+    assert "found almost nothing" not in lane_calls[0]["system"]
+    assert "found almost nothing" in lane_calls[1]["system"]
+
+
+def test_pip_stops_rereading_when_the_text_runs_out():
+    """On a short manuscript the sample cannot widen, so Pip gets exactly one
+    nudged re-read — never an endless loop — and keeps what she found."""
+    from docproof.quest.sweep import run_pip
+
+    text = "very wet prose indeed"
+    one = {"catches": [{"before": "wet prose", "after": "dry prose",
+                        "why": "typo"}]}
+    keep = {"keep": [True]}
+    fake = FakeProvider(results=[
+        ProviderResult(parsed=one, usage=USAGE), ProviderResult(parsed=keep, usage=USAGE),
+        ProviderResult(parsed=one, usage=USAGE), ProviderResult(parsed=keep, usage=USAGE)])
+    result = run_pip(text, fake)
+    assert [c["before"] for c in result.catches] == ["wet prose"]
+    lane_calls = [c for c in fake.calls
+                  if c["schema_name"] == "quest_sweep_lane"]
+    assert len(lane_calls) == 2

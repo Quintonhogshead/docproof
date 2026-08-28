@@ -2,14 +2,12 @@
    ---------------------------------------------------------------------------
    A cut-paper collage system: flat torn- and scissor-cut construction-paper
    sheets, a pressed paper grain, and elevation by a hard offset shadow — NEVER
-   blur. Real printed-book typefaces sit against the handmade paper. The site is
-   warm cream by default; a generated skin tints the accent + paper variables
-   per uploaded book (see applyTint in sc-shared.js), re-costuming the whole
-   theater. The candlelit workshop look lives on /customize alone.
+   blur. Real printed-book typefaces sit against the handmade paper. ONE warm
+   cream palette for every book and every genre — per-book tints were retired
+   (Quinton, 2026-08-28). The candlelit workshop look lives on /customize alone.
 
    Structure:
      1. Design tokens (paper palette, type, space)
-     2. Skin tints (11 palettes — accent + paper only)
      3. Paper system: sheets, torn/cut edges, strata, offset shadow
      4. Base + paper grain
      5. Typography scale
@@ -118,21 +116,7 @@
     0% 8%, 3% 0%, 97% 0%, 100% 8%, 100% 92%, 97% 100%, 3% 100%, 0% 92%);
 }
 
-/* ------------------------------------------------------------------- tints */
-/* Each skin takes the paper's hue subtly and carries the rest in the accent.
-   Only accent + paper vars move; ink, rules, ochre, and teal stay put so
-   contrast and the collage read the same on every book. */
-body.tint-rose     {--accent:#a83259;--accent-hot:#c85a81;--accent-wash:rgba(168,50,89,.10);--paper:#f0dfdc;--paper-2:#e5cdc9;--card:#fcf1ef;--card-2:#f6e6e2}
-body.tint-rain     {--accent:#4a5a66;--accent-hot:#6f818d;--accent-wash:rgba(74,90,102,.10);--paper:#e3e7e8;--paper-2:#d3dadb;--card:#f6f8f8;--card-2:#eaeeee}
-body.tint-honey    {--accent:#996b0c;--accent-hot:#c08d28;--accent-wash:rgba(153,107,12,.12);--paper:#f1e4c3;--paper-2:#ead4a8;--card:#fdf6df;--card-2:#f7ecc6}
-body.tint-void     {--accent:#544ab0;--accent-hot:#7a70d0;--accent-wash:rgba(84,74,176,.10);--paper:#e5e1f0;--paper-2:#d7d2e8;--card:#f6f4fd;--card-2:#ece9f6}
-body.tint-neon     {--accent:#973383;--accent-hot:#bd5ca8;--accent-wash:rgba(151,51,131,.10);--paper:#eddeea;--paper-2:#e2cddc;--card:#fcf1fa;--card-2:#f4e4f0}
-body.tint-verdigris{--accent:#26725d;--accent-hot:#4f9884;--accent-wash:rgba(38,114,93,.10);--paper:#dfeae2;--paper-2:#cee0d4;--card:#f3faf5;--card-2:#e7f2ea}
-body.tint-bone     {--accent:#8f322c;--accent-hot:#b3554e;--accent-wash:rgba(143,50,44,.10);--paper:#ebe0dc;--paper-2:#e0d0cb;--card:#fbf2ef;--card-2:#f2e6e1}
-body.tint-gold     {--accent:#856209;--accent-hot:#ab8628;--accent-wash:rgba(133,98,9,.13);--paper:#efe4c1;--paper-2:#e6d4a5;--card:#fcf5db;--card-2:#f5ebc4}
-body.tint-slate    {--accent:#436486;--accent-hot:#6a8bad;--accent-wash:rgba(67,100,134,.10);--paper:#e2e8ee;--paper-2:#d2dce4;--card:#f5f9fc;--card-2:#e9f0f5}
-body.tint-rust     {--accent:#9c4419;--accent-hot:#bd6739;--accent-wash:rgba(156,68,25,.10);--paper:#efe2d3;--paper-2:#e6d2bd;--card:#fcf4e9;--card-2:#f5e9d8}
-body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,111,143,.10);--paper:#dfe9ef;--paper-2:#cfe0e8;--card:#f3fafd;--card-2:#e7f2f7}
+/* One palette for every book — per-genre tints retired (Quinton, 2026-08-28). */
 
 /* --------------------------------------------------------- paper system */
 /* A sheet of construction paper: flat fill, an optional torn/cut silhouette,
@@ -443,6 +427,19 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .correction .to{font-family:var(--mono);font-size:.78rem;color:var(--good)}
 .correction .arrow{color:var(--dim)}
 .correction .why{font-family:var(--ui);color:var(--dim);font-size:.78rem}
+.correction .live-tag{font-family:var(--ui);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-wash);padding:2px 8px;clip-path:var(--edge-tab)}
+
+/* Tracked-change scraps: the exact wrong words carry one clean strike; the
+   replacement is marked in. Reads like a tracked change in Word. */
+.df{font-family:var(--mono);font-size:.78rem;color:var(--ink-soft);line-height:1.9;
+  overflow-wrap:anywhere;min-width:0}
+.df .df-keep{color:var(--ink-soft)}
+.df .df-del{color:var(--accent);text-decoration-line:line-through;text-decoration-thickness:2px;
+  text-decoration-color:var(--accent);background:var(--accent-wash);padding:1px 3px;font-style:normal}
+.df .df-add{color:var(--good);background:rgba(53,107,86,.10);padding:1px 3px;
+  text-decoration:none;font-weight:600;font-style:normal}
+
 .member.rich{grid-template-columns:1fr;gap:0}
 .member.rich .top{display:grid;grid-template-columns:58px 1fr;gap:var(--s2);align-items:start}
 

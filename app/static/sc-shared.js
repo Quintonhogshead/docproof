@@ -161,13 +161,6 @@
       party: ['pip', 'bram', 'maple', 'cinder', 'sage', 'lark'] }
   ];
 
-  var PALETTE_TINTS = {
-    ember: '', rose: 'tint-rose', rain: 'tint-rain', honey: 'tint-honey',
-    void: 'tint-void', neon: 'tint-neon', verdigris: 'tint-verdigris',
-    bone: 'tint-bone', gold: 'tint-gold', slate: 'tint-slate',
-    rust: 'tint-rust', frost: 'tint-frost'
-  };
-
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -200,12 +193,12 @@
     setTimeout(kill, 1400);
   }
 
+  /* The site keeps ONE palette — warm cream and terracotta — for every book
+     and every genre (Quinton, 2026-08-28: per-book colour shifts read as
+     weird, not delightful). The reveal flourish survives as a brief wash;
+     the colours never change. */
   function applyTint(palette, quiet) {
-    var cls = PALETTE_TINTS[palette] || '';
-    document.body.className = document.body.className
-      .split(/\s+/).filter(function (c) { return c.indexOf('tint-') !== 0; })
-      .concat(cls ? [cls] : []).join(' ').trim();
-    if (!quiet) tintSweep();   // the payoff: the book's colour sweeps the page
+    if (!quiet) tintSweep();
   }
 
   /* ---- the book on Galley's desk -------------------------------------
@@ -234,14 +227,79 @@
     return null;
   }
 
-  /* A real before→after catch, rendered as a torn scrap of LIVE text (never a
-     generated image — the words must stay crisp and searchable). */
+  /* ---- tracked-change renderer ---------------------------------------
+     A word-level diff of before→after, so a scrap reads like a tracked
+     change in Word: untouched words plain, cut words cleanly struck, new
+     words marked in — the author sees exactly what's wrong. Returns null
+     when a pair isn't really a replacement (a "grey / gray" listing, a
+     continuity question) so callers fall back to the from→to layout. */
+  function diffHTML(before, after) {
+    if (!before || !after) return null;
+    if (before.indexOf(' / ') >= 0) return null;
+    var a = String(before).split(/\s+/).filter(Boolean);
+    var b = String(after).split(/\s+/).filter(Boolean);
+    if (!a.length || !b.length || a.length > 60 || b.length > 60) return null;
+    // LCS table over exact tokens — punctuation differences count, on purpose.
+    var i, j, L = [];
+    for (i = 0; i <= a.length; i++) { L.push(new Array(b.length + 1).fill(0)); }
+    for (i = a.length - 1; i >= 0; i--) {
+      for (j = b.length - 1; j >= 0; j--) {
+        L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1
+                                : Math.max(L[i + 1][j], L[i][j + 1]);
+      }
+    }
+    var common = L[0][0];
+    if (common * 2 < Math.min(a.length, b.length)) return null;  // a rewrite, not a fix
+    var ops = [];   // [type, word] — type: '' keep, '-' cut, '+' added
+    i = 0; j = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { ops.push(['', a[i]]); i++; j++; }
+      else if (L[i + 1][j] >= L[i][j + 1]) { ops.push(['-', a[i]]); i++; }
+      else { ops.push(['+', b[j]]); j++; }
+    }
+    while (i < a.length) { ops.push(['-', a[i++]]); }
+    while (j < b.length) { ops.push(['+', b[j++]]); }
+    // Merge neighbouring words of one kind so a cut phrase gets ONE clean
+    // strike, not a strike per word.
+    var out = [], run = null;
+    ops.forEach(function (op) {
+      if (run && run[0] === op[0]) { run[1] += ' ' + op[1]; return; }
+      if (run) out.push(run);
+      run = [op[0], op[1]];
+    });
+    if (run) out.push(run);
+    return out.map(function (r) {
+      var text = esc(r[1]);
+      if (r[0] === '-') return '<del class="df-del">' + text + '</del>';
+      if (r[0] === '+') return '<ins class="df-add">' + text + '</ins>';
+      return '<span class="df-keep">' + text + '</span>';
+    }).join(' ');
+  }
+
+  /* The freshest real catch for a member — pinned when a book is on the desk,
+     so the whole site shows what the party actually found in YOUR pages. */
+  function liveCatch(id) {
+    var held = loadQuote();
+    var list = held && held.lanes && held.lanes[id];
+    return (list && list.length) ? list[0] : null;
+  }
+
+  /* A before→after catch, rendered as a torn scrap of LIVE text (never a
+     generated image — the words must stay crisp and searchable). Prefers a
+     real catch from the visitor's own manuscript over the canned example. */
   function correctionScrap(m) {
-    if (!m || !m.example) return '';
-    var e = m.example;
-    return '<div class="correction"><span class="from">' + esc(e.from) + '</span>' +
-      '<span class="arrow">→</span><span class="to">' + esc(e.to) + '</span>' +
-      (e.why ? '<span class="why">' + esc(e.why) + '</span>' : '') + '</div>';
+    if (!m) return '';
+    var live = liveCatch(m.id);
+    var e = live ? { from: live.before, to: live.after, why: live.why }
+                 : m.example;
+    if (!e) return '';
+    var d = diffHTML(e.from, e.to);
+    var body = d ? '<span class="df">' + d + '</span>'
+      : '<span class="from">' + esc(e.from) + '</span>' +
+        '<span class="arrow">→</span><span class="to">' + esc(e.to) + '</span>';
+    return '<div class="correction' + (live ? ' from-book' : '') + '">' + body +
+      (e.why ? '<span class="why">' + esc(e.why) + '</span>' : '') +
+      (live ? '<span class="live-tag">from your pages</span>' : '') + '</div>';
   }
 
   /* The row of tiny member busts riding on a tier plate (who actually rides). */
@@ -461,6 +519,7 @@
                 tierPlate: tierPlate, memberChapter: memberChapter,
                 findMember: findMember, figKey: figKey,
                 correctionScrap: correctionScrap, riderBusts: riderBusts,
+                diffHTML: diffHTML, liveCatch: liveCatch,
                 galleyFig: galleyFig, makeBench: makeBench,
                 saveQuote: saveQuote, loadQuote: loadQuote, clearQuote: clearQuote };
 
@@ -540,10 +599,6 @@
   }
 
   function boot() {
-    // A book already on the desk keeps its costume on every page — quietly,
-    // with no sweep: the reveal already happened when it was dropped.
-    var held = loadQuote();
-    if (held && held.skin && held.skin.palette) applyTint(held.skin.palette, true);
     mountChrome(); injectArt(document); initMotion();
   }
   if (document.readyState === 'loading') {
