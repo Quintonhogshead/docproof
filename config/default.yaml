@@ -714,8 +714,11 @@ error_types:
   # delta, not the flat base).
   - [number_style, currency_style]
   # house mechanics — hyphenation and the one rule that changes how text is
-  # set rather than what it says
-  - [ly_adverb_hyphen, title_italics]
+  # set rather than what it says. tv_show_quotes rides along because it reads
+  # the same paragraphs for the same reason title_italics does, and asks
+  # rather than corrects (query channel): title_italics defends the TV rule's
+  # boundary (never italicise a show), this asks after the bare ones.
+  - [ly_adverb_hyphen, title_italics, tv_show_quotes]
   # sentence grammar — needs parsing, still decidable. compound_sentence_comma
   # rides beside comma_splice so the model reads the two clause-comma rules
   # together: a coordinating conjunction joining two independent clauses wants a
