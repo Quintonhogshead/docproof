@@ -7,6 +7,24 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.141–0.142 (Purpura head-proofreader review)
+
+- **`sweep_decade_apostrophe`** joined the sweeps (the 80s → the ’80s;
+  the/early/late/mid leads only — ages and temperature ranges left alone).
+  The paste-ready block below already includes it.
+- **`toccheck:`** is a new top-level section — the contents-vs-body structure
+  read (Luna over a small extract, ~pennies, ON by default, query-only).
+- **`consistency.time_style`** (on) queries bare clock hours in a book that
+  writes 11:00-style times; **`consistency.accent_loanwords`** (on) queries
+  Si→Sí-class bare loanwords.
+- **`style.heading_vocab_queries`** (on) queries AFTERWARD/FOREWARD headings.
+- **The validator demotes pure space-deletion merges to queries** ("blood
+  work"→"bloodwork" never auto-applies — compound styling is the author's
+  call). A replayed row whose whole effect is deleting one inter-word space
+  rides as a comment; don't fight it, hand-fix if the merge is truly wanted.
+- **title_italics never touches TV shows** (house sets them in quotes), and
+  number_style leaves stage/type/grade labels and bare clock hours alone.
+
 ## What changed in v0.133.0 (Purpura beta round 2)
 
 - `docproof capabilities` now carries **per-verb arg schemas** (flags,
@@ -114,7 +132,7 @@ error_types:
   - terminal_mark        # query-channel: asks, never edits
   - unnecessary_comma    # the one comma rule that DELETES; isolated on purpose
 
-# The 15 deterministic $0 sweeps. Omitting the section turns ALL of them off.
+# The 16 deterministic $0 sweeps. Omitting the section turns ALL of them off.
 sweeps:
   - sweep_ellipsis
   - sweep_dash
@@ -130,6 +148,7 @@ sweeps:
   - sweep_deity_capital
   - sweep_dialogue_splice
   - sweep_initialism
+  - sweep_decade_apostrophe
   - sweep_trailing_space
 ```
 
@@ -142,7 +161,7 @@ wrongly dropped on a bad grep.)
 ## Top-level sections (names are exact)
 
 `api · chunking · skip · normalize · speaker_split · spellcheck · consistency · glossary ·`
-`factcheck · genre_scans · flights · continuity · chapter_continuity · rounds ·`
+`factcheck · toccheck · genre_scans · flights · continuity · chapter_continuity · rounds ·`
 `adjudicate · rewrite · languagetool · sapling · chapter_sweep · repair ·`
 `smoothing · low_confidence · meaning_check · fix_check · error_types · style ·`
 `edit_guard · sweeps · residuals · recurrence · candidate_screening · ensemble ·`
@@ -156,6 +175,10 @@ wrongly dropped on a bad grep.)
 | `speaker_split.enabled` | on | Splits "…go.” “You…" two-speaker paragraphs as a TRACKED paragraph break + declarative comment, in prepare (whole-doc runs only). Judgment cases stay with the speaker_change query. |
 | `consistency.variant_policy` | `off` | "us" queries consistently-British spellings (theatre→theater), one per word, regular families only. House policy call. |
 | `consistency.deity_pronouns` | on | Query lowercase he/his/him in deity-anchored sentences when the book capitalizes reverent pronouns (self-gating). |
+| `consistency.time_style` | on | Query bare clock hours ("around 4") in a book that writes 11:00-style times. Self-gating on ≥3 H:MM times (`time_min_with_minutes`). |
+| `consistency.accent_loanwords` | on | Query bare loanwords the dictionary accents (Si→Sí, senor→señor); curated table, one query per word, protected names skipped. |
+| `toccheck.enabled` | on | Contents-vs-body read (Luna over a small structure extract, ~pennies): entry wording vs the chapter page, part/chapter numbering, listed-but-missing entries. Query-only, cached per draft. |
+| `style.heading_vocab_queries` | on | Query AFTERWARD/FOREWARD-class headings (standard label is AFTERWORD/FOREWORD). |
 | `ensemble` | off | Luna+Haiku union + a verifier — the recall wave-1 recipe. Ready-made as `--stage mechanical-wave` (see the ensemble block above); fires ONLY through `error_types`. |
 | `error_types` | full shipped list | The typed LLM passes. **OMITTING THE SECTION ZEROES EVERY PASS** and makes any `ensemble:` inert (`0 error type(s) in 0 pass(es)`). Restate the full default list to keep them; the ensemble only fires through these. |
 | `error_types[key]` | `{group,passes,token_budget}` | Per-category repeat reads. `passes:2` = union re-read (house-comma recipe); costs ~2× that category. Custom EDIT-channel replay types go here (see below). |
@@ -172,6 +195,55 @@ wrongly dropped on a bad grep.)
 | `sapling` | off | ~$34/long novel, key is FLY-ONLY (no-ops silently local). Explicit char budget or leave off. |
 | `tracked_changes_policy` | `abort` | `accept_all_first` to review a doc that already has tracked changes. |
 | `recurrence` | on | Propagates a fix to identical surfaces — degenerate-surface flood guard is in ≥v0.116. |
+
+## The judgment subagent — a $0 Opus/Fable read for whole-book judgment
+
+The Purpura head-proofreader comparison drew the line precisely: the rack's
+chunked passes win the mechanical tail (deity caps, that→who, tense slips —
+all "Claude missed this"), and a single frontier context wins the JUDGMENT
+tail (a "lower" that should be "higher", a sentence repeated from earlier in
+the paragraph, wording that drifted between two copies of itself). A frontier
+model degrades as you widen its mandate over a long, error-dense book — so
+the recipe is a **session subagent with a deliberately narrow mandate**, per
+the model doctrine (Claude subagents never bill; Opus for the difficult read,
+Fable for long-horizon threads; never Haiku here).
+
+**Mandate (verbatim, keep it this narrow).** The subagent hunts ONLY:
+- **wrong-direction words** — a word whose opposite is plainly meant
+  ("bilirubin levels will be much *lower*" the morning after a decline);
+- **in-scene sense breaks** a grammar pass can't see (an action or claim the
+  surrounding paragraph contradicts);
+- **self-repetition** — a sentence or clause repeating from earlier on the
+  page with no rhetorical purpose;
+- **wording drift between two copies of one line** (an epigraph, a refrain, a
+  quoted callback) — beyond what `toccheck` already covers for the contents.
+
+It does NOT flag spelling, punctuation, numbers, style, or anything a typed
+pass owns — every mechanical catch it reports is noise that erodes the audit.
+
+**Shape.** Chapter-scoped windows (the chapter_sweep window discipline: ~24k
+chars, incremental output), each prompt carrying a ~1-page rolling casefile of
+whole-book facts (names, established directions/quantities, refrains seen) —
+never the whole book in one context. One Opus subagent per window is the
+default; use Fable when a thread genuinely spans the book. Require each
+subagent to WRITE its rows to a file (subagents that answer inline lose work).
+
+**Output contract.** Verbatim quote→correction rows, `import-findings`
+schema, on the **EDIT-channel `galley_read` type** (declared in
+`error_types`, listed first) when the fix is decidable — a wrong-direction
+word is mechanics, apply it tracked. A genuine author-knowledge question
+rides a query row instead, under the queries-last-resort doctrine (decide or
+stay silent first; collapse families). Same adjudication, artifact scan, and
+reject-all audit as every other lane — this is the "Your own pen" path run
+as a fleet, not a new channel.
+
+**Plan line.** $0 (session subagents), but it is still a plan line with an
+expected-yield note, and its rows are attributed to `galley_read` in the
+ledger so the audit can see what the judgment lane contributed. Redding
+calibration: chapter reads of this shape found ~57 real fixes the rack
+missed; Purpura's judgment misses (lower/higher, the repeated sentence) are
+the acceptance test — a run of this lane that would not have caught those
+two is mis-prompted.
 
 ## Channels (the demotion trap)
 
