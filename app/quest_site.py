@@ -178,6 +178,12 @@ def create_app() -> FastAPI:
     def healthz() -> dict:
         return {"ok": True, "version": __version__}
 
+    # Browsers ask for /favicon.ico regardless of what the pages declare;
+    # answer with the raster favicon instead of a 404 on every visit.
+    @app.get("/favicon.ico")
+    def favicon() -> FileResponse:
+        return FileResponse(static / "art" / "favicon-32.png")
+
     # The papery pages. /customize is the original candlelit party builder,
     # kept dark on purpose — the workshop, by candlelight.
     def _page(name: str) -> FileResponse:

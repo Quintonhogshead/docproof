@@ -342,3 +342,39 @@ def test_collision_catches_borrowed_surnames(tmp_path):
         results=[ProviderResult(parsed=payload, usage=USAGE)])
     result = generate_skin(path, provider)
     assert "Maple Pomeroy" in result.alias_collisions
+
+
+def test_first_look_dedupes_repeat_snags_across_lanes():
+    """Two members quoting the same snag show it once — keyed on the author's
+    words, tolerant of quote marks, case, and spacing."""
+    from app.routes.quest import _dedupe_catches
+
+    seen: set[str] = set()
+    first = _dedupe_catches([
+        {"before": "teh door", "after": "the door", "why": "typo"},
+        {"before": '"Teh  door"', "after": "fix it", "why": "typo again"},
+    ], seen)
+    assert len(first) == 1
+    later = _dedupe_catches([
+        {"before": "TEH DOOR.", "after": "the door", "why": "typo"},
+        {"before": "a fresh snag", "after": "fixed", "why": "new"},
+        {"before": "", "after": "x", "why": "empty never shown"},
+    ], seen)
+    assert [c["before"] for c in later] == ["a fresh snag"]
+
+
+def test_first_look_dedupes_containment_between_lanes():
+    """Pip pins up the doubled word; Bram quoting the whole sentence around it
+    is the same snag to the reader and stays down. Short keys ("a") only ever
+    match exactly."""
+    from app.routes.quest import _dedupe_catches
+
+    seen: set[str] = set()
+    _dedupe_catches([{"before": "and and", "after": "and", "why": "doubled"}],
+                    seen)
+    later = _dedupe_catches([
+        {"before": "The rain stopped, and and the river rose.",
+         "after": "…and the river rose.", "why": "doubled word"},
+        {"before": "a", "after": "an", "why": "article"},
+    ], seen)
+    assert [c["before"] for c in later] == ["a"]

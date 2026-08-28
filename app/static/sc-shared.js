@@ -19,29 +19,27 @@
      <img> — no render-code touched. Files live in /assets/art/. */
   var ART_BASE = '/assets/art/';
   var ART = {
-    // Paper-cutout placeholders (hand-coded SVG; recolour with the skin tint).
-    // Swap any value to a commissioned .png/.webp and the loader renders an
-    // <img> instead — no render-code change. Busts are square; poses 2:3;
-    // scenes 2:1; step spots 2:1.
-    // Commissioned cut-paper portraits (busts, square, opaque cream ground).
+    // Commissioned cut-paper art, background removed — every cutout sits
+    // directly on the page's paper (transparent webp). Busts are square;
+    // poses/figures ~2:3; scenes, steps, and the group shot are full-bleed.
     galley: 'galley.webp',
     pip: 'pip.webp', bram: 'bram.webp', maple: 'maple.webp',
     cinder: 'cinder.webp', sage: 'sage.webp', lark: 'lark.webp',
-    // Galley's poses. beckoning/waving reuse the nearest commissioned pose
-    // until their own art lands; lost is still a hand-coded placeholder.
+    // Galley's poses — each now has its own commissioned cutout.
     galleyHero: 'galley-hero.webp', galleyPresenting: 'galley-presenting.webp',
-    galleyReading: 'galley-reading.webp', galleyBeckoning: 'galley-presenting.webp',
-    galleyWaving: 'galley-hero.webp', galleyLost: 'galley-lost.svg',
+    galleyReading: 'galley-reading.webp', galleyBeckoning: 'galley-beckoning.webp',
+    galleyWaving: 'galley-waving.webp', galleyLost: 'galley-lost.webp',
     // Party full-body puppets (the bench).
     figPip: 'fig-pip.webp', figBram: 'fig-bram.webp', figMaple: 'fig-maple.webp',
     figCinder: 'fig-cinder.webp', figSage: 'fig-sage.webp', figLark: 'fig-lark.webp',
-    // Diorama scene + how-it-works spots (spots still placeholders) + odds/ends.
+    // Diorama scenes, how-it-works spots, the whole-party group shot, odds/ends.
     sceneHills: 'scene-hills.webp', sceneCamp: 'scene-camp.webp', sceneGrass: 'scene-grass.webp',
-    stepManuscript: 'step-manuscript.svg', stepReading: 'step-reading.svg', stepTracked: 'step-tracked.svg',
-    raven: 'raven.svg', lantern: 'lantern.svg',
-    crestSpellcheck: 'crest-spellcheck.svg', crestTypohunt: 'crest-typohunt.svg',
-    crestProofread: 'crest-proofread.svg', crestDeep: 'crest-deep.svg',
-    crestCampaign: 'crest-campaign.svg',
+    stepManuscript: 'step-manuscript.webp', stepReading: 'step-reading.webp', stepTracked: 'step-tracked.webp',
+    party: 'party.webp',
+    raven: 'raven.webp', lantern: 'lantern.webp',
+    crestSpellcheck: 'crest-spellcheck.webp', crestTypohunt: 'crest-typohunt.webp',
+    crestProofread: 'crest-proofread.webp', crestDeep: 'crest-deep.webp',
+    crestCampaign: 'crest-campaign.webp',
     ornamentDivider: 'ornament-divider.svg', ornamentCorner: 'ornament-corner.svg',
     dropcap: 'dropcap-frame.svg', favicon: 'favicon.svg', og: 'og.svg'
   };
@@ -444,23 +442,26 @@
      Opt-in and progressive: <html> gets .js-motion so the reveal hidden-state
      only exists when JS runs; a no-JS page stays fully visible. All movement is
      transform/opacity, and the CSS honours prefers-reduced-motion. */
-  var revealScheduled = false;
   function vh() { return window.innerHeight || document.documentElement.clientHeight || 0; }
-  function checkReveals() {
-    revealScheduled = false;
-    var line = vh() * 0.9, left = 0;
+  /* One observer reveals blocks however they reach the viewport — scrolling,
+     a window resize, layout settling as images land. A scroll-line check
+     alone stranded already-in-view sections invisible whenever no scroll
+     event ever fired (large windows, resizes, restored positions). */
+  var revealIO = null;
+  function watchReveals() {
+    if (!revealIO && 'IntersectionObserver' in window) {
+      revealIO = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          en.target.classList.add('in');
+          revealIO.unobserve(en.target);
+        });
+      }, { threshold: 0.05 });
+    }
     document.querySelectorAll('[data-reveal]:not(.in)').forEach(function (el) {
-      // top < line catches both entering AND already-scrolled-past elements
-      // (top < 0), so anchor/keyboard jumps never strand a hidden block.
-      if (el.getBoundingClientRect().top < line) el.classList.add('in');
-      else left++;
+      if (revealIO) revealIO.observe(el);
+      else el.classList.add('in');   // no observer support: never hide content
     });
-    if (left === 0) window.removeEventListener('scroll', scheduleReveals);
-  }
-  function scheduleReveals() {
-    if (revealScheduled) return;
-    revealScheduled = true;
-    requestAnimationFrame(checkReveals);
   }
   function tagReveal(el, delay) {
     if (el.hasAttribute('data-reveal')) return;
@@ -484,8 +485,7 @@
       if (el.closest('.members, .tiers, .gallery, .strip')) return;
       tagReveal(el, 0);
     });
-    window.addEventListener('scroll', scheduleReveals, { passive: true });
-    checkReveals();
+    watchReveals();
   }
   function initParallax() {
     if (prefersReduce()) return;

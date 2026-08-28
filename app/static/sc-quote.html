@@ -90,9 +90,11 @@
   .explain p{margin:0 0 12px;font-size:1rem;color:var(--faded)}
   .explain p b{color:var(--ink);font-weight:500}
   .examples{display:grid;gap:6px}
-  .ex{display:flex;gap:10px;align-items:baseline;font-size:.9rem}
-  .ex .from{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap}
-  .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good);white-space:nowrap}
+  .ex{display:flex;gap:10px;align-items:baseline;font-size:.9rem;flex-wrap:wrap}
+  .ex .from{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px}
+  .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good)}
+  /* Real scraps quote whole clauses — wrap them rather than run off the page. */
+  .ex .from,.ex .to{white-space:normal;overflow-wrap:anywhere;min-width:0}
   .ex .why{color:var(--dim);font-size:.8rem}
   .lanternmember .sigil{color:var(--accent)}
 
