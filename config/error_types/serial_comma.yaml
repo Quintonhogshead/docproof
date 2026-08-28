@@ -1,6 +1,6 @@
 key: serial_comma
 name: Serial comma
-version: 1
+version: 2
 
 detection_prompt: |
   The Atmosphere house guide requires the serial (Oxford) comma: in a list of
@@ -24,6 +24,12 @@ detection_prompt: |
     Brown, LLP" is spelled the way its owner spells it.
   - Lists whose items themselves contain commas. Those need semicolons, not
     another comma, and the complex_list_semicolon type owns them.
+  - Polysyndeton — a chain that repeats the conjunction between EVERY pair of
+    items with no commas at all: "guilt and grief and fury", "they ran and
+    stumbled and ran again". The repeated conjunction is the author's rhythm,
+    not a list missing its commas; a serial comma before only the last "and"
+    of such a chain is wrong in both directions. The rule applies only where
+    the author is already separating items with commas.
   - Verbatim quoted material from a real published source, where the
     punctuation is the source's.
 
@@ -58,4 +64,6 @@ examples:
       explanation: "House style takes the serial comma, in dialogue as well."
       confidence: medium
   - text: "She invited Maria, her sister, Tom, her neighbour and Priya."
+    finding: null
+  - text: "The sea took the boat and the nets and the last of the light."
     finding: null

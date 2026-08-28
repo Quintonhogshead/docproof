@@ -7,6 +7,24 @@ cache-read cost we've measured. Everything you need to write a run config is
 here. If a knob you need genuinely isn't documented here, that is an
 ESCALATION (the knob may not exist), not a reason to go read the source.
 
+## What changed in v0.143.0 (tense/cites verbs + serial-comma guard)
+
+- **`docproof tense IN --config C`** — new $0 report-only verb: whole-book
+  narrative-tense profile (baseline tense + person, per-paragraph verdicts
+  with dialogue stripped, contiguous against-the-baseline runs, headline
+  present share). Run it at profile time on EVERY book; the runs are the
+  read-first list for a planned conversion read. `--json` for the
+  machine-readable profile. No config section — it is a verb, not a lane.
+- **`docproof cites IN --config C`** — new $0 report-only verb
+  (nonfiction/academic): author-date citations vs the reference list both
+  ways, chapter/figure/table cross-refs vs the book's own headings and
+  captions. Auto-skips checks whose scaffolding the book lacks. Raise queries
+  from the report yourself; nothing auto-applies. `--json` available.
+- **`serial_comma` (type v2) no longer proposes a comma on polysyndeton** —
+  an "A and B and C" chain with no commas is the author's rhythm (35 of 38
+  such flags were wrong on Paik 2); the rule now applies only where the
+  author is already separating items with commas.
+
 ## What changed in v0.141–0.142 (Purpura head-proofreader review)
 
 - **`sweep_decade_apostrophe`** joined the sweeps (the 80s → the ’80s;

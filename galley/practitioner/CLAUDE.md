@@ -86,6 +86,8 @@ skill; follow the skill, record what you learned.
 |---|---|---|
 | `docproof review IN --config C --out D` | The full ladder: typed passes, LT, sweeps, gates, smoothing. `--resume` replays a crashed run's paid reads from `findings.checkpoint.json`. | paid |
 | `docproof sweep IN --rule F [--apply]` | A bespoke deterministic rule you write (yaml regex or .py sweep). Dry-run first; it shows the post-normalization canonical text your rule must target. Refuses non-idempotent rules. | $0 |
+| `docproof tense IN --config C` | The narrative-tense profile: baseline tense + person, per-paragraph verdicts (dialogue stripped), and the contiguous runs that read AGAINST the baseline. Report-only. | $0 |
+| `docproof cites IN --config C` | Citation & cross-ref check (nonfiction): author-date citations vs the reference list both ways, chapter/figure/table refs vs the book's own headings and captions. Report-only; auto-skips what the book lacks. | $0 |
 | `docproof galley audit RESULTS IN` | The missed-error audit: density table + sampled pages → hypotheses. | 1 call |
 | `docproof galley letter` / `seed` / `score` | Editor's letter render; seeded-copy recall calibration. | $0 |
 | `docproof galley flights` | The copy-edit flight deck: 6 focused lenses → union → posture-judged clusters. `--propose-only` / `--judge-only` split lets session subagents fly the lenses at $0. | paid/judge |
@@ -103,6 +105,24 @@ skill; follow the skill, record what you learned.
 
 Verbs marked here that are missing in your checkout are still being built; do
 the same work manually through the nearest existing tool and say so in the log.
+
+**Tense is judged from above, never by reading forward.** The `tense_shift`
+typed pass is sentence-internal by design, and a whole scene written in the
+historical present is internally consistent — invisible to every per-chunk
+read. On every book: run `docproof tense` during profiling, write the baseline
+(tense + person + declared exceptions with paragraph ranges) into the profile,
+and treat the present-dominant runs as the read-first list. A healthy
+past-tense novel shows a small single-digit present share; anything approaching
+a third means the baseline is not held and the runs need a planned, priced
+conversion read (scene action, tags outside quotes, will→would/can→could,
+present perfect→past perfect) — converting a declared-exception section wholly
+or not at all. Protect what is legitimately present: dialogue, deliberate
+interior monologue, timeless truths, direct address. The profiler surfaces;
+conversion is judgment work through the normal finding channels. A tense pass
+that fixes zero on a full novel means the baseline was never established, not
+that the book was clean. (`docproof cites` follows the same doctrine on
+nonfiction: it surfaces unresolved citations and cross-refs; you decide which
+become queries.)
 
 **Sapling** is on the rack too (the grammar-engine pass), but it bills per
 character — roughly **$34 on a long novel** — and its key lives only in
@@ -290,6 +310,14 @@ book — never a silent hand-edit:
   absent). They ride an EDIT-channel type, tagged with your own detector name
   (`galley_read`), and face the same adjudication, artifact scan, and
   reject-all audit as everything else.
+- **Before filing any one-off catch, concordance the error first.** Search the
+  whole manuscript for the same surface AND its family (inflections, the same
+  construction with different words). Identical surfaces the recurrence pass
+  will propagate on its own — but a same-error-different-words recurrence (an
+  agreement slip repeated with different verbs, a misused construction) is
+  invisible to it: if the search finds more sites, file ALL of them as rows, or
+  write a rule if it's rule-shaped. An error you caught once is a hypothesis
+  about the whole book, not a fact about one page.
 - **Pattern-shaped catches** (the author does it 30 times) → write a bespoke
   rule instead and run `docproof sweep --rule` — dry-run, gate, apply.
 - **Judgment catches** (style, not mechanics) → route them through the
