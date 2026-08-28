@@ -884,3 +884,78 @@ def test_variant_policy_off_by_default_and_skips_mixed_and_accepted():
     report = find_inconsistencies(paras, variant_policy="us")
     # Mixed theatre/theater is the mixed-usage scan's; towards is accepted US.
     assert report.policy == ()
+
+
+# --- clock-time style (bare hours in an H:MM book) -----------------------------
+
+def _time_paras():
+    return _paras(
+        "He calls me around 2 p.m. on a Saturday to ask about plans.",
+        "Around 11:00 a.m., she shows signs of life.",
+        "The alarm was set for 6:30 and again for 7:15.",
+        "Someone started the meeting at 8. It starts at 8:10, dummy.",
+        "We will start getting ready around 4.",
+    )
+
+
+def test_time_style_flags_bare_hours_in_an_hmm_book():
+    from docproof.consistency import find_time_style
+    drift = find_time_style(_time_paras())
+    assert drift is not None and drift.with_minutes >= 3
+    assert sorted(o.form for o in drift.outliers) == ["2", "4", "8"]
+
+
+def test_time_style_stays_quiet_without_hmm_evidence():
+    from docproof.consistency import find_time_style
+    paras = _paras(
+        "We will start getting ready around 4.",
+        "Someone started the meeting at 8.",
+    )
+    assert find_time_style(paras) is None
+
+
+def test_time_style_skips_quantities_and_spelled_styles():
+    from docproof.consistency import find_time_style
+    paras = _paras(
+        "It was 6:30, then 7:15, then 11:00 before she stirred.",
+        "I waited 10 minutes and left by 5 percent margins at 2 o'clock.",
+        "He arrived after 3 days at 14 Elm Street.",
+    )
+    assert find_time_style(paras) is None
+
+
+def test_time_style_findings_are_queries_citing_the_books_style():
+    report = find_inconsistencies(_time_paras())
+    findings = to_findings(report, _time_paras())
+    times = [f for f in findings if "clock times with minutes" in f.explanation]
+    assert len(times) == 3
+    for f in times:
+        assert f.corrected_text == f.original_text          # query only
+        assert ":00" in f.explanation
+
+
+# --- accented loanwords (Si -> Sí) ---------------------------------------------
+
+def test_accent_loanword_queried_at_first_bare_occurrence():
+    paras = _paras(
+        "Without hesitation, I reply, “Si!”",
+        "I respond with another, “Sí!” FAHK!",
+    )
+    report = find_inconsistencies(paras)
+    assert [g.key for g in report.accents] == ["sí"]
+    findings = to_findings(report, paras)
+    accent = [f for f in findings if "loanword" in f.explanation]
+    assert len(accent) == 1
+    assert "sí" in accent[0].explanation
+    assert accent[0].corrected_text == accent[0].original_text   # query only
+
+
+def test_accent_loanword_respects_protection_and_accented_books():
+    from docproof.consistency import find_accent_loanwords
+    # "Si" is a character's name: protected, no query.
+    paras = _paras("Si nodded at the counter and said nothing.")
+    assert find_accent_loanwords(paras, protected=("Si",)) == ()
+    # A book that always writes the accent has nothing to ask about.
+    assert find_accent_loanwords(_paras("“Sí!” she said.")) == ()
+    # An ordinary book mentions none of the table's words.
+    assert find_accent_loanwords(_paras("The theater was dark.")) == ()

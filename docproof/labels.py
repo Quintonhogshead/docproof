@@ -56,7 +56,9 @@ FREE_FORM: frozenset[str] = frozenset({
     "unclosed_quote",     # sweeps.py — unbalanced-quotation queries
     "speaker_split",      # speakersplit.py — the split's declarative comment
     "heading_case",       # sweeps.py — headings set in title case
+    "heading_vocab",      # sweeps.py — AFTERWARD/FOREWORD label queries
     "fact_check",         # factcheck.py — the external-world read
+    "toc_check",          # toccheck.py — contents-vs-body structure queries
     "copyedit",           # flights.py LANE — the copy-edit flights lane
     "anachronism",        # genrescans.py — genre-pack query-only scan
     "citation_format",    # genrescans.py — genre-pack query-only scan
@@ -91,6 +93,7 @@ _SWITCH: dict[str, str] = {
     # switch is the one that governs whether they can exist.
     "near_duplicate_name": "spellcheck",
     "fact_check": "factcheck",
+    "toc_check": "toccheck",
 }
 
 
@@ -136,6 +139,8 @@ def will_produce(cfg, label: str, *, known_types=None) -> str:
         return RAN if cfg.style.unclosed_quote_queries else DID_NOT_RUN
     if label == "heading_case":
         return RAN if cfg.style.heading_title_case else DID_NOT_RUN
+    if label == "heading_vocab":
+        return RAN if cfg.style.heading_vocab_queries else DID_NOT_RUN
     if label in ("anachronism", "citation_format", "reading_level"):
         # One level deeper than `_SWITCH` supports: each lives under
         # cfg.genre_scans.<label>.enabled, not a bare cfg.<label>.enabled.

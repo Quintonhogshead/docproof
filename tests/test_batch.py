@@ -99,7 +99,8 @@ def test_collect_names_its_stages_for_the_step_tracker(tmp_path):
     outputs = batchlib.collect(batchlib.load(tmp_path, job.job_id), provider,
                                ERROR_DIR, tmp_path, on_phase=stages.append)
     assert outputs.applied == 1                  # the review itself still lands
-    assert stages == ["preparing", "reviewing", "glossary", "writing"]
+    assert stages == ["preparing", "reviewing", "glossary", "toccheck",
+                      "writing"]
 
 
 def test_collect_names_the_factcheck_stage_when_the_pass_is_on(tmp_path):
@@ -116,7 +117,7 @@ def test_collect_names_the_factcheck_stage_when_the_pass_is_on(tmp_path):
     batchlib.collect(batchlib.load(tmp_path, job.job_id), provider,
                      ERROR_DIR, tmp_path, on_phase=stages.append)
     assert stages == ["preparing", "reviewing", "glossary", "factcheck",
-                      "writing"]
+                      "toccheck", "writing"]
 
 
 def test_collect_refuses_an_edited_source(tmp_path):

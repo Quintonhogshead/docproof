@@ -250,6 +250,12 @@ class StyleConfig(BaseModel):
     # carrying their own capitals (McCoy, EVTOL) are left as styled. This is
     # the typesetting half of a heading pass — no model ever reads one.
     heading_title_case: bool = True
+    # A heading that reads as the near-homophone of a standard book-part label
+    # — AFTERWARD for AFTERWORD, FOREWARD for FOREWORD — gets a margin query.
+    # A question, never an edit: "Afterward" is also a legitimate chapter
+    # title meaning "in the time after". The Purpura human pass caught the
+    # AFTERWARD; no model pass ever reads a heading.
+    heading_vocab_queries: bool = True
 
 
 class EditGuardConfig(BaseModel):
@@ -364,6 +370,19 @@ class ConsistencyConfig(BaseModel):
     # names); query channel only, since pronoun reference is the author's call.
     deity_pronouns: bool = True
     deity_min_capitalized: int = Field(default=8, ge=2)
+    # Bare clock hours ("around 4", "at 8") in a book whose own style writes
+    # times with minutes ("11:00 a.m."). The head proofreader added ":00" by
+    # hand throughout the Purpura run — a whole-book inconsistency no
+    # per-paragraph pass can see. Self-gating on time_min_with_minutes H:MM
+    # times in the book; query channel only, since a bare hour can be a
+    # deliberate register.
+    time_style: bool = True
+    time_min_with_minutes: int = Field(default=3, ge=1)
+    # Loanwords written without the accent the dictionary gives them (Si/Sí,
+    # senor/señor), from a short curated table of words whose bare spelling is
+    # not accepted English on its own. One query per word, at its first bare
+    # occurrence; protected (author-owned) words are left alone.
+    accent_loanwords: bool = True
     # Add the Merriam-Webster/Chicago preference to a spelling-variant query.
     # A press proofreading in British English can turn this off.
     chicago_notes: bool = True
@@ -1151,6 +1170,29 @@ class FactcheckConfig(BaseModel):
     cache_dir: str | None = None
 
 
+class TocCheckConfig(BaseModel):
+    """The table of contents checked against the body's own structure —
+    contents wording vs the chapter page (Purpura: "massive" in the contents,
+    "drastic" on the part page), chapter/part numbering, entries listed but
+    absent or present but unlisted. One SMALL model read over a deterministic
+    structure extract (opening pages + heading outline), a few thousand
+    tokens even on a long novel, priced for a cheap model. Every catch is a
+    margin query, never an edit: which copy is right is the author's call.
+    On by default, unlike the fact check, because the read is structure-sized
+    rather than book-sized — pennies on the shipped model. See
+    docproof/toccheck.py."""
+    enabled: bool = True
+    model: str = "gpt-5.6-luna"
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = "medium"
+    # The ceiling covers the model's thinking too (see the reasoning-model
+    # truncation note on the confirm valve); the extract is small, the answer
+    # list smaller, but a truncated structured reply parses as NOTHING.
+    max_output_tokens: int = Field(default=8000, ge=1)
+    max_queries: int = Field(default=20, ge=1)
+    # None = the shared whole-book cache (see default_cache_dir).
+    cache_dir: str | None = None
+
+
 class AnachronismScanConfig(BaseModel):
     """Query-only: flags vocabulary that reads as later than the manuscript's
     own stated era — the same external-authority risk factcheck carries, so
@@ -1739,6 +1781,7 @@ class Config(BaseModel):
     repair: RepairConfig = Field(default_factory=RepairConfig)
     smoothing: SmoothingConfig = Field(default_factory=SmoothingConfig)
     factcheck: FactcheckConfig = Field(default_factory=FactcheckConfig)
+    toccheck: TocCheckConfig = Field(default_factory=TocCheckConfig)
     genre_scans: GenreScansConfig = Field(default_factory=GenreScansConfig)
     flights: FlightsConfig = Field(default_factory=FlightsConfig)
     residuals: ResidualsConfig = Field(default_factory=ResidualsConfig)

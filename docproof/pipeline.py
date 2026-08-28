@@ -554,6 +554,12 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
                 swept, cfg.skip)
             sweep_findings += heading_findings
             sweep_reports.append(heading_report)
+        # A heading that reads as the near-homophone of a book-part label
+        # (AFTERWARD for AFTERWORD) — a query, riding the sweeps' channel the
+        # way the unclosed-quote questions do.
+        if cfg.style.heading_vocab_queries:
+            from .sweeps import heading_vocab_findings
+            sweep_findings += heading_vocab_findings(swept, cfg.skip)
 
         # Intent zones consulted BEFORE these deterministic findings reach the
         # author: a sweep whose edit lands inside a protected span, of a kind
@@ -613,6 +619,9 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             variant_policy=cfg.consistency.variant_policy,
             deity_pronouns=cfg.consistency.deity_pronouns,
             deity_min_capitalized=cfg.consistency.deity_min_capitalized,
+            time_style=cfg.consistency.time_style,
+            time_min_with_minutes=cfg.consistency.time_min_with_minutes,
+            accent_loanwords=cfg.consistency.accent_loanwords,
             max_queries_per_kind=cfg.consistency.max_queries_per_kind,
             # The variant's respell map (grey->gray on a U.S. run) and the spell
             # scan's lexicon feed the guards, so a form already enforced or owned
@@ -1087,6 +1096,17 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
             on_phase("factcheck")
         from .factcheck import factcheck_findings
         findings.extend(factcheck_findings(
+            cfg, prepared.doc.paragraphs, usage, provider_factory,
+            coverage=coverage))
+
+    # The contents-vs-body read: one SMALL call over a structure extract,
+    # queries only. Whole-document only — a partial run cannot claim to have
+    # compared the contents against the book.
+    if cfg.toccheck.enabled and prepared.whole_document:
+        if on_phase:
+            on_phase("toccheck")
+        from .toccheck import toccheck_findings
+        findings.extend(toccheck_findings(
             cfg, prepared.doc.paragraphs, usage, provider_factory,
             coverage=coverage))
 

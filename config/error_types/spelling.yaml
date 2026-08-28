@@ -32,6 +32,14 @@ detection_prompt: |
   - Deliberate misspelling that characterizes a speaker or a written artifact
     inside the story (a child's note, a ransom letter, a sign).
   - Technical jargon, foreign-language words, and Latin phrases.
+  - Two correctly spelled words that could also be written as one: "blood
+    work", "any more", "a while". NEVER merge two words into one — whether a
+    compound is open or closed is a house-style judgment, not a spelling
+    error, and the whole-book consistency scan owns it.
+  - A nonce coinage the author built on purpose, especially a hyphenated
+    participle from a noun: "the heavily lip-sticked saleswomen", "a
+    be-ringed hand". Do not "correct" it to a different real word
+    ("lip-stuck") — the invented form is the voice.
 
   If you are unsure whether a word is a real word or an invented one, do not
   flag it. A missed typo costs the author nothing; a "corrected" character
@@ -71,3 +79,7 @@ examples:
       corrected_text: "It was definitely the wrong hosue to enter."
       explanation: "\"definately\" should be \"definitely\"."
       confidence: high
+  - text: "Standard ER procedures are underway: questions, blood work, and imaging."
+    finding: null
+  - text: "I will deliver the customers to the heavily lip-sticked saleswomen."
+    finding: null

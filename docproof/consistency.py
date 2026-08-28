@@ -166,6 +166,18 @@ class VariantGroup:
 
 
 @dataclass(frozen=True)
+class TimeStyleDrift:
+    """A book that writes clock times with minutes (11:00 a.m., 8:30), and the
+    bare-hour strays ("around 4", "at 8") the head proofreader was adding :00
+    to by hand on the Purpura run. Queries only: a bare hour can be deliberate
+    ("she was in bed by nine"-style books exist), so the book's own majority
+    style is evidence to cite, never a rule to enforce silently."""
+    with_minutes: int                     # H:MM times seen in the book
+    example: str                          # a representative H:MM form
+    outliers: tuple[Occurrence, ...]      # bare-hour sites; form is the digits
+
+
+@dataclass(frozen=True)
 class DeityPronounDrift:
     """A book that capitalizes pronouns referring to God, and the lowercase
     strays inside deity-anchored sentences. Queries only: pronoun reference is
@@ -182,21 +194,25 @@ class ConsistencyReport:
     variants: tuple[VariantGroup, ...] = ()        # spelling variants (VarCon)
     abbreviations: tuple[VariantGroup, ...] = ()   # U.S. vs US, a.m. vs AM
     casings: tuple[VariantGroup, ...] = ()         # NASA vs Nasa
+    accents: tuple[VariantGroup, ...] = ()         # si vs sí, senor vs señor
     policy: tuple[VariantGroup, ...] = ()          # non-US forms, policy "us"
     deity: DeityPronounDrift | None = None         # he->He in a reverent book
+    times: TimeStyleDrift | None = None            # "at 8" in an "11:00" book
 
     @property
     def _mechanical(self) -> tuple[VariantGroup, ...]:
-        return self.variants + self.abbreviations + self.casings
+        return self.variants + self.abbreviations + self.casings + self.accents
 
     @property
     def flagged(self) -> int:
-        # Terms, non-enforced names and deity strays are per-occurrence; the
-        # mechanical and policy scans are one query per group.
+        # Terms, non-enforced names, deity strays and time strays are
+        # per-occurrence; the mechanical and policy scans are one query per
+        # group.
         return (sum(len(t.outliers) for t in self.terms)
                 + sum(len(n.outliers) for n in self.names if not n.enforce)
                 + len(self._mechanical) + len(self.policy)
-                + (len(self.deity.outliers) if self.deity else 0))
+                + (len(self.deity.outliers) if self.deity else 0)
+                + (len(self.times.outliers) if self.times else 0))
 
     @property
     def corrected(self) -> int:
@@ -656,6 +672,140 @@ def find_deity_pronouns(paragraphs: Sequence[ParagraphRef], *,
     return DeityPronounDrift(capitalized, tuple(outliers))
 
 
+# --- clock-time style ----------------------------------------------------------
+
+# An H:MM time anywhere in the book: the style evidence.
+_TIME_WITH_MINUTES = re.compile(r"\b\d{1,2}:[0-5]\d\b")
+# A bare hour with a meridiem attached ("11 a.m.", "2 PM") — the digits must
+# not continue an H:MM form, so ":00 a.m." never matches its own minutes.
+_BARE_HOUR_MERIDIEM = re.compile(
+    r"(?<![\d:.])\b(\d{1,2})[  ]*(?=(?:[ap]\.m\.|[AP]\.?M\.?|[ap]m\b))")
+# A bare hour a time preposition introduces ("around 4", "at 8"). The digits
+# must not open an H:MM form, a number range, an ordinal, or a counted noun.
+_BARE_HOUR_PREP = re.compile(
+    r"\b(?:at|around|by|until|till|before|after|past)[  ]+(\d{1,2})\b"
+    r"(?![  ]*[:%\d–-])(?!(?:st|nd|rd|th))")
+# The word after the digits that says "this is a quantity, not a clock":
+# "after 10 minutes", "by 5 percent", "at 8 years old", "at 2 o'clock" (a
+# deliberate spelled style this scan must not fight).
+_HOUR_NOT_CLOCK = re.compile(
+    r"^[  ]*(?:minutes?|mins?|hours?|hrs?|seconds?|days?|weeks?|months?|"
+    r"years?|miles?|blocks?|percent|dollars?|bucks?|cents?|pounds?|kids?|"
+    r"people|times?|more|of|o['’]clock)\b", re.IGNORECASE)
+
+
+def find_time_style(paragraphs: Sequence[ParagraphRef], *,
+                    min_with_minutes: int = 3,
+                    max_queries: int = 25) -> TimeStyleDrift | None:
+    """Bare clock hours in a book whose own style writes times with minutes.
+
+    The Purpura head-proofreader pass added ":00" by hand to "around 4"-style
+    hours because the book writes "11:00 a.m." everywhere else — an
+    inconsistency only a whole-book read can see, which is exactly what this
+    module is for. Self-gating: the scan speaks only when the book carries at
+    least `min_with_minutes` H:MM times, and every catch is a query — a bare
+    hour can be a deliberate register, so the book's own majority style is
+    cited as evidence, never enforced silently."""
+    with_minutes = 0
+    example = ""
+    candidates: list[Occurrence] = []
+    seen_spans: set[tuple[str, int]] = set()
+    for para in paragraphs:
+        text = para.text
+        for m in _TIME_WITH_MINUTES.finditer(text):
+            with_minutes += 1
+            example = example or m.group(0)
+        for pat, group in ((_BARE_HOUR_MERIDIEM, 1), (_BARE_HOUR_PREP, 1)):
+            for m in pat.finditer(text):
+                digits = m.group(group)
+                if not 1 <= int(digits) <= 12:
+                    continue
+                start = m.start(group)
+                if (para.para_id, start) in seen_spans:
+                    continue
+                if (pat is _BARE_HOUR_PREP
+                        and _HOUR_NOT_CLOCK.match(text[m.end(group):])):
+                    continue
+                seen_spans.add((para.para_id, start))
+                candidates.append(Occurrence(
+                    para.para_id, start, start + len(digits), digits))
+    if with_minutes < min_with_minutes or not candidates:
+        return None
+    if len(candidates) > max_queries:
+        log.info("Time-style queries capped at %d (%d found).",
+                 max_queries, len(candidates))
+        candidates = candidates[:max_queries]
+    return TimeStyleDrift(with_minutes, example, tuple(candidates))
+
+
+# --- accented loanwords ---------------------------------------------------------
+
+# Loanwords whose unaccented spelling is not an English word of its own, mapped
+# to the accented form Merriam-Webster sets. Deliberately short: a pair where
+# the bare spelling is accepted English (cafe, naive, resume) is a style choice
+# this scan has no business flagging, and "ole" (good ole boy) is dialect.
+# One query per word, at its first bare occurrence.
+_ACCENT_LOANWORDS = {
+    "si": "sí",
+    "senor": "señor",
+    "senora": "señora",
+    "senorita": "señorita",
+    "adios": "adiós",
+    "manana": "mañana",
+    "jalapeno": "jalapeño",
+    "jalapenos": "jalapeños",
+    "pinata": "piñata",
+    "pinatas": "piñatas",
+    "quinceanera": "quinceañera",
+    "voila": "voilà",
+    "touche": "touché",
+    "fiance": "fiancé",
+    "fiancee": "fiancée",
+}
+
+
+def find_accent_loanwords(paragraphs: Sequence[ParagraphRef], *,
+                          protected: Sequence[str] = (),
+                          max_queries: int = 40) -> tuple[VariantGroup, ...]:
+    """A loanword written without the accent it wears in the dictionary —
+    "Si!" for "Sí!", "senor" for "señor". The human pass restored the accent
+    the model passes glided over (Purpura: Si -> Sí); this scan asks instead
+    of correcting, because a bare spelling can be a romanization choice.
+    A word in `protected` (the manuscript's own lexicon — "Si" as a name) is
+    left alone. Counts of the accented spelling, when the book also uses it,
+    ride along in the query as evidence."""
+    protected_l = {w.lower() for w in protected}
+    accented_of = dict(_ACCENT_LOANWORDS)
+    bare_of = {v: k for k, v in _ACCENT_LOANWORDS.items()}
+    groups: dict[str, dict] = {}
+    for para in paragraphs:
+        for m in _WORD.finditer(para.text):
+            raw = m.group(0)
+            w = unicodedata.normalize("NFC", raw.lower().strip("’'"))
+            if w in accented_of and w not in protected_l:
+                key = accented_of[w]
+                g = groups.setdefault(key, {"counts": Counter(), "sites": []})
+                g["counts"][w] += 1
+                g["sites"].append(Occurrence(
+                    para.para_id, m.start(), m.start() + len(raw), raw))
+            elif w in bare_of:
+                key = w
+                g = groups.setdefault(key, {"counts": Counter(), "sites": []})
+                g["counts"][w] += 1
+
+    out: list[VariantGroup] = []
+    for key in sorted(groups):
+        g = groups[key]
+        counts: Counter = g["counts"]
+        bare = bare_of[key]
+        if not counts.get(bare) or not g["sites"]:
+            continue                      # only the accented form appears
+        out.append(VariantGroup(
+            "accent", key, Counter(counts), key,
+            True, g["sites"][0], counts[bare]))
+    return tuple(_cap(out, "accent-loanword", max_queries))
+
+
 # A run of letter-then-dot (U.S., a.m., Ph.D.) with no spaces between the units,
 # so spaced personal initials ("J. R. R.") never match as one token.
 _DOTTED = re.compile(r"(?:[A-Za-z]\.){2,}")
@@ -808,6 +958,9 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          variant_policy: str = "off",
                          deity_pronouns: bool = True,
                          deity_min_capitalized: int = 8,
+                         time_style: bool = True,
+                         time_min_with_minutes: int = 3,
+                         accent_loanwords: bool = True,
                          max_queries_per_kind: int = 40) -> ConsistencyReport:
     """Terms this manuscript writes more than one way.
 
@@ -908,15 +1061,24 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     deity = (find_deity_pronouns(
         paragraphs, min_capitalized=deity_min_capitalized,
         max_queries=max_queries_per_kind) if deity_pronouns else None)
+    times = (find_time_style(
+        paragraphs, min_with_minutes=time_min_with_minutes,
+        max_queries=max_queries_per_kind) if time_style else None)
+    accents = (find_accent_loanwords(
+        paragraphs, protected=protected,
+        max_queries=max_queries_per_kind) if accent_loanwords else ())
     report = ConsistencyReport(ran=True, terms=tuple(terms), names=drift,
                                variants=variants, abbreviations=abbrevs,
-                               casings=cases, policy=policy, deity=deity)
+                               casings=cases, accents=accents, policy=policy,
+                               deity=deity, times=times)
     log.info("Consistency scan: %d term(s), %d spelling-variant(s), "
-             "%d abbreviation(s), %d acronym-case(s), %d policy form(s), "
-             "%d deity-pronoun stray(s), and %d name(s) with "
-             "diacritic drift — %d occurrence(s) to correct, %d to ask about",
-             len(terms), len(variants), len(abbrevs), len(cases), len(policy),
-             len(deity.outliers) if deity else 0, len(drift),
+             "%d abbreviation(s), %d acronym-case(s), %d accent(s), "
+             "%d policy form(s), %d deity-pronoun stray(s), %d bare-hour "
+             "time(s), and %d name(s) with diacritic drift — %d occurrence(s) "
+             "to correct, %d to ask about",
+             len(terms), len(variants), len(abbrevs), len(cases), len(accents),
+             len(policy), len(deity.outliers) if deity else 0,
+             len(times.outliers) if times else 0, len(drift),
              report.corrected, report.flagged)
     return report
 
@@ -1027,6 +1189,29 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             para.text, vg.site.start, vg.site.end)
         forms = ", ".join(f"“{f}” ({c})" for f, c in vg.forms)
         note = f" {vg.note}" if vg.note else ""
+        if vg.kind == "accent":
+            # The recommendation is the dictionary's accented form, not the
+            # book's majority, so the shared majority template does not fit.
+            both = (f" The book itself also writes “{vg.dominant}” "
+                    f"({vg.counts[vg.dominant]} time(s))."
+                    if vg.counts.get(vg.dominant) else "")
+            findings.append(Finding(
+                finding_id=f"c-{n:04d}",
+                chunk_id="consistency",
+                para_id=vg.site.para_id,
+                error_type=CONSISTENCY_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window,          # a query changes nothing
+                explanation=(
+                    f"“{vg.site.form}” is a loanword the dictionary sets "
+                    f"with its accent: “{vg.dominant}”.{both} Change here "
+                    f"(and anywhere else it appears bare), unless the plain "
+                    f"spelling is deliberate?"),
+                confidence="high",
+            ))
+            n += 1
+            continue
         if vg.kind == "spelling":
             lead = "This manuscript spells one word more than one way"
         elif vg.kind == "abbreviation":
@@ -1101,6 +1286,30 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                     f"book's own convention makes it "
                     f"“{o.form[:1].upper()}{o.form[1:]}”; if it refers to "
                     f"someone else, please ignore this note."),
+                confidence="medium",
+            ))
+            n += 1
+
+    # Bare clock hours: one query per site, citing the book's own H:MM style.
+    if report.times:
+        for o in report.times.outliers:
+            para = by_id.get(o.para_id)
+            if para is None:
+                continue
+            window, _, occurrence = sentence_window(para.text, o.start, o.end)
+            findings.append(Finding(
+                finding_id=f"c-{n:04d}",
+                chunk_id="consistency",
+                para_id=o.para_id,
+                error_type=CONSISTENCY_KEY,
+                original_text=window,
+                occurrence=occurrence,
+                corrected_text=window,          # a query changes nothing
+                explanation=(
+                    f"This book writes clock times with minutes — "
+                    f"“{report.times.example}”, {report.times.with_minutes} "
+                    f"time(s) — but this hour stands bare. Should it be "
+                    f"“{o.form}:00” to match?"),
                 confidence="medium",
             ))
             n += 1

@@ -53,6 +53,7 @@ _EDIT_KINDS = ("wording", "punctuation")
 PUNCTUATION_SWEEPS = frozenset({
     "sweep_ellipsis", "sweep_dash", "sweep_stacked_punctuation",
     "sweep_terminal_period", "sweep_quote_punctuation", "sweep_nested_quote",
+    "sweep_decade_apostrophe",
 })
 
 

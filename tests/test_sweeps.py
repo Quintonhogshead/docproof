@@ -627,3 +627,81 @@ def test_trailing_space_sweep_deletes_paragraph_tails():
     assert apply_hits("The end.  ", scan("The end.  ")) == "The end."
     assert not scan("Clean already.")
     assert not scan("*   *   *")          # scene dividers space as they please
+
+
+# --- one-sided dashes (Purpura head-proofreader pass) -------------------------
+#
+# The human pass converted "word- word" hyphens to em dashes throughout the
+# Purpura run; the sweep used to require a space on BOTH sides and missed all
+# of them.
+
+@pytest.mark.parametrize("before,after", [
+    ("called Garbage- I mean, Garage.", "called Garbage—I mean, Garage."),
+    ("that is now on us- well, me- to chase down.",
+     "that is now on us—well, me—to chase down."),
+    ("the explosions- none of this is their fault.",
+     "the explosions—none of this is their fault."),
+    ("it was late -too late.", "it was late—too late."),
+])
+def test_one_sided_hyphen_reads_as_a_dash(before, after):
+    assert swept("sweep_dash", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "a co- worker of mine",            # broken compound: prefix stays attached
+    "a well- known author",            # compound-modifier lead
+    "a T- shirt cannon",               # single-letter compounds (T-shirt, X-ray)
+    "the 5- and 10-mile options",      # suspended pair
+    "twenty- five dollars",            # broken compound number
+    "a well-known author",             # unspaced: a correct compound
+])
+def test_one_sided_hyphen_leaves_broken_compounds_alone(text):
+    assert unchanged("sweep_dash", text)
+
+
+# --- two-digit decades --------------------------------------------------------
+
+@pytest.mark.parametrize("before,after", [
+    ("a chair from the early 80s sat there.",
+     "a chair from the early ’80s sat there."),
+    ("the 90s were wild.", "the ’90s were wild."),
+    ("her mid-80s perm.", "her mid-’80s perm."),
+])
+def test_decade_apostrophe_added(before, after):
+    assert swept("sweep_decade_apostrophe", before) == after
+
+
+@pytest.mark.parametrize("text", [
+    "frozen her in my mind in her 60s.",   # an AGE — number_style spells it out
+    "temps in the 60s today.",             # temperature range, not years
+    "test scores in the 90s.",             # a score range, not years
+    "the 1980s.",                          # four digits carry their century
+    "the ’80s already right.",        # idempotent
+])
+def test_decade_apostrophe_leaves_these_alone(text):
+    assert unchanged("sweep_decade_apostrophe", text)
+
+
+# --- heading vocabulary (AFTERWARD -> AFTERWORD) ------------------------------
+
+def test_heading_vocab_queries_afterward():
+    from docproof.sweeps import heading_vocab_findings
+    ps = [
+        ParagraphRef("body-0000", "word/document.xml", "body", "AFTERWARD",
+                     "Heading1"),
+        ParagraphRef("body-0001", "word/document.xml", "body",
+                     "Afterward, we drove home in silence.", "Normal"),
+    ]
+    findings = heading_vocab_findings(ps, Config().skip)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.para_id == "body-0000"
+    assert f.force_query and f.corrected_text == f.original_text
+    assert "AFTERWORD" in f.explanation
+
+
+def test_heading_vocab_leaves_ordinary_headings_alone():
+    from docproof.sweeps import heading_vocab_findings
+    ps = [ParagraphRef("body-0000", "word/document.xml", "body",
+                       "The Long Road Home", "Heading1")]
+    assert heading_vocab_findings(ps, Config().skip) == []

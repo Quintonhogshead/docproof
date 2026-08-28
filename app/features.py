@@ -108,6 +108,15 @@ FEATURES: tuple[FeatureSpec, ...] = (
         "purpose. Adds a whole-book read at the glossary's price.",
         "pass", ("factcheck", "enabled"), heavy=True),
     FeatureSpec(
+        "toccheck", "Contents check — the book against its own contents",
+        "One small read comparing the table of contents against the body: "
+        "entry wording vs the chapter page, chapter and part numbering, "
+        "entries listed but missing or present but unlisted. Every catch is a "
+        "margin question, never an edit — which copy is right is the "
+        "author's call. Reads a structure extract, not the book, so it costs "
+        "pennies.",
+        "pass", ("toccheck", "enabled")),
+    FeatureSpec(
         "rewrite", "Rewrite-and-compare pass",
         "The model retypes each paragraph with the smallest possible edits, and "
         "the differences become candidates a skeptical confirm step rules on. A "
