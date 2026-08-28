@@ -1,0 +1,15 @@
+<svg viewBox="0 0 200 300" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+  <ellipse cx="100" cy="291" rx="52" ry="8" class="ink-fill" opacity=".12"/>
+  <path class="kraft" d="M70 150 q-12 74 -20 130 l30 0 l6-52 6 52 l30 0 q-8-56 -18-130 q-22-14 -44 0z"/>
+  <path class="ac-fill" d="M64 150 q36 -30 72 0 q-8 20 -16 30 q-20 -12 -40 0 q-8-14 -16-30z"/>
+  <rect x="92" y="108" width="16" height="20" fill="#e0b489"/>
+  <path class="ac-fill" d="M72 116 q4-40 28-40 q24 0 28 40 q-28-16 -56 0z"/>
+  <circle cx="100" cy="98" r="26" fill="#e0b489"/>
+  <path class="ink-fill" opacity=".82" d="M75 92 q2-32 25-32 q23 0 25 32 q-25-14 -50 0z"/>
+  <circle cx="91" cy="98" r="2.4" class="ink-fill"/>
+  <circle cx="109" cy="98" r="2.4" class="ink-fill"/>
+  <path class="ink" style="stroke-width:2" d="M93 110 q7 5 14 0"/>
+  <rect x="66" y="132" width="66" height="46" rx="2" class="paper" transform="rotate(-6 99 155)"/><path class="ac" style="stroke-width:2;stroke-dasharray:5 5" d="M74 152 q22 -8 44 6" transform="rotate(-6 99 155)"/>
+  <g class="ink" style="stroke-width:2"><circle cx="91" cy="98" r="7" fill="none"/><circle cx="109" cy="98" r="7" fill="none"/><path d="M98 98 h4"/></g>
+  
+</svg>

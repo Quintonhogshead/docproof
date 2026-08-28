@@ -25,54 +25,98 @@
 <body data-page="home">
 <div class="wrap">
 
-  <section class="hero">
-    <div>
-      <div class="who">Galley · your AI guide</div>
-      <p class="say" id="say1"></p>
-      <p class="lede stack-m">A proofread for self-publishing authors: typos, grammar,
-      and the name you spelled two ways — found across your whole novel and handed
-      back as tracked changes you accept or reject in Word. The reading is done by
-      AI (we're upfront about that); the checking is shown as a small adventuring
-      party working through your book; and the whole thing costs less than dinner.</p>
-      <p class="hero-cta"><a class="btn" href="/quote">Bring me your book — the first look is free</a>
-      <span class="note">.docx, .txt, or .md · read once, never stored</span></p>
+  <!-- ACT I — the curtain: Galley walks on beside a short headline; the
+       campfire scene is the stage floor below -->
+  <section class="act curtain">
+    <div class="cast">
+      <div class="cast-copy">
+        <div class="headline-sheet"><p class="say">Your whole novel, <em>proofread</em>.</p></div>
+        <div class="who">Galley · your AI guide</div>
+        <div class="plate galley-greet"><p class="say" id="say1"></p></div>
+        <div class="hatches">
+          <a class="hatch-link" href="/party">meet the party</a>
+          <a class="hatch-link" href="/pricing">see the price</a>
+          <a class="hatch-link" href="/quote">just bring me your book</a>
+        </div>
+      </div>
+      <div class="curtain-galley"><span class="glow" aria-hidden="true"></span><span data-art="galleyHero"></span></div>
     </div>
-    <div class="hero-art"><span class="glow"></span><span class="art-figure" data-art="galley"></span></div>
+    <div class="scene-band" aria-hidden="true"><span data-art="sceneCamp"></span></div>
   </section>
 
-  <h2>How the proofread works</h2>
-  <div class="journey">
-    <div class="step"><div class="sno">i</div><div class="sh">You hand it over</div>
-      <p class="sp">Drop your manuscript. Galley reads a few pages and quotes you — free, before you pay anything.</p></div>
-    <div class="step"><div class="sno">ii</div><div class="sh">The party reads</div>
-      <p class="sp">Each specialist sweeps the whole book for the one thing they hunt — typos, grammar, consistency, breaks.</p></div>
-    <div class="step"><div class="sno">iii</div><div class="sh">Every change shows its work</div>
-      <p class="sp">A second AI judges each fix, then writes it as a tracked change — nothing silent, nothing hidden.</p></div>
-    <div class="step"><div class="sno">iv</div><div class="sh">You keep the pen</div>
-      <p class="sp">Open the .docx in Word and accept or reject each mark. Your voice is never touched.</p></div>
+  <p class="lede stack-m">A proofread for self-publishing authors: typos, grammar,
+  and the name you spelled two ways — found across your whole novel and handed
+  back as tracked changes you accept or reject in Word. The reading is done by
+  AI (we're upfront about that); the checking is shown as a small adventuring
+  party working through your book; and the whole thing costs less than dinner.</p>
+  <div class="act-cta">
+    <a class="btn" href="/quote">Bring me your book — the first look is free</a>
+    <span class="trust">Tracked changes · <b>you keep the pen</b> · .docx, .txt, or .md · read once, never stored</span>
   </div>
 
   <div class="divider" aria-hidden="true"><span class="di"><svg viewBox="0 0 16 16"><path d="M8 1l2.2 4.8L15 8l-4.8 2.2L8 15l-2.2-4.8L1 8l4.8-2.2z"/></svg></span></div>
 
-  <h2>The party</h2>
-  <p class="lede lede-sm">Six specialists, each with one job. When you share your
-  manuscript, they dress for <em>your</em> book — a noir crew for your thriller,
-  the county clerk's office for your Southern family saga.</p>
-  <div class="members stack-m" id="members"></div>
+  <!-- ACT II — the party, one at a time -->
+  <section class="act act-party">
+    <div class="act-label">The party, one at a time</div>
+    <h2>Six specialists, one job each</h2>
+    <p class="lede lede-sm">When you share your manuscript, they dress for
+    <em>your</em> book — a noir crew for your thriller, the county clerk's office
+    for your Southern family saga. The costume changes; the job never does.</p>
+    <div class="members stack-m" id="members"></div>
+    <div class="act-cta"><a class="btn ghost" href="/party">Meet them properly →</a></div>
+  </section>
 
-  <h2>Five ways to hire us</h2>
-  <div class="tiers stack-s" id="tiers"></div>
-  <p class="note stack-s">Prices anchor a
-  60–120k-word manuscript; shorter books cost less, epics a little more. Every
-  paid tier includes our promise: if we missed obvious typos, the party rides
-  again free. <a href="/pricing">Full pricing →</a></p>
+  <!-- ACT III — how it works -->
+  <section class="act">
+    <div class="act-label">How it works</div>
+    <h2>Three steps, then it's back in your hands</h2>
+    <div class="strip">
+      <div class="scene-card">
+        <div class="scene-art"><span data-art="stepManuscript"></span></div>
+        <div class="sno">i</div><div class="sh">Your book arrives</div>
+        <p class="sp">Drop your manuscript. Galley reads a few pages and quotes you — free, before you pay anything.</p>
+      </div>
+      <div class="scene-card">
+        <div class="scene-art"><span data-art="stepReading"></span></div>
+        <div class="sno">ii</div><div class="sh">The party reads by lantern-light</div>
+        <p class="sp">Each specialist sweeps the whole book for the one thing they hunt, and a second AI judges every fix.</p>
+      </div>
+      <div class="scene-card">
+        <div class="scene-art"><span data-art="stepTracked"></span></div>
+        <div class="sno">iii</div><div class="sh">Tracked changes come home</div>
+        <p class="sp">Open the .docx in Word and accept or reject each mark. Nothing silent, nothing hidden — your voice untouched.</p>
+      </div>
+    </div>
+  </section>
 
-  <h2>What happens to your manuscript</h2>
-  <div class="plaque ornate narrow-lg">
-    <p class="oath">Read to do the work, then let go. Your pages are never used to
-    train anything, and never seen by another author's party.</p>
-    <p class="flow">ingest → review → tracked-changes .docx → kept 30 days for your re-run → deleted</p>
-  </div>
+  <!-- ACT IV — five ways to hire us -->
+  <section class="act">
+    <div class="act-label">Five ways to hire us</div>
+    <h2>Pick the depth; see exactly who rides</h2>
+    <div class="tiers stack-s" id="tiers"></div>
+    <p class="note stack-s">Prices anchor a 60–120k-word manuscript; shorter books
+    cost less, epics a little more. Every paid tier includes our promise: if we
+    missed obvious typos, the party rides again free. <a href="/pricing">Full pricing →</a></p>
+  </section>
+
+  <!-- ACT V — the oath -->
+  <section class="act">
+    <div class="act-label">The oath</div>
+    <h2>What happens to your manuscript</h2>
+    <div class="oath-scene stack-m">
+      <div class="plaque">
+        <p class="oath">Read to do the work, then let go. Your pages are never used
+        to train anything, and never seen by another author's party.</p>
+        <p class="flow">ingest → review → tracked-changes .docx → kept 30 days for your re-run → deleted</p>
+      </div>
+      <div class="oath-galley"><span data-art="galleyBeckoning"></span></div>
+    </div>
+    <div class="act-cta">
+      <a class="btn" href="/quote">Bring me your book</a>
+      <span class="trust">The first look is <b>free</b>.</span>
+    </div>
+  </section>
 
 </div>
 

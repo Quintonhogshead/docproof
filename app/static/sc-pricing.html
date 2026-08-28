@@ -21,26 +21,20 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,500&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
 <link rel="stylesheet" href="/assets/sc-shared.css">
-<style>
-  .tariff{border-collapse:collapse;width:100%;max-width:680px;font-family:var(--ui);font-size:var(--fs-ui)}
-  .tariff th,.tariff td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
-  .tariff th{font-size:var(--fs-label);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:500}
-  .tariff tr:nth-child(even) td{background:var(--paper-2)}
-  .tariff td b{font-variant-numeric:tabular-nums;color:var(--ink)}
-</style>
 </head>
 <body data-page="pricing">
 <div class="wrap">
 
-  <section class="galley">
-    <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
-    <div>
+  <section class="pose-rail">
+    <div class="pose"><span class="glow" aria-hidden="true"></span><span data-art="galleyPresenting"></span></div>
+    <div class="speech">
       <div class="who">Galley · your AI guide</div>
-      <p class="say" id="say"></p>
+      <div class="plate"><p class="say" id="say"></p></div>
     </div>
   </section>
 
-  <div class="tiers stack-m" id="tiers"></div>
+  <div class="act-label stack-m">The price sheet</div>
+  <div class="tiers stack-s" id="tiers"></div>
 
   <h2>Length changes the price</h2>
   <p class="lede lede-sm">The prices above anchor a typical novel
@@ -61,7 +55,8 @@
     manuscript read once, kept 30 days, deleted, never trained on.</p>
   </div>
 
-  <p class="hero-cta"><a class="btn" href="/quote">Get your exact quote</a></p>
+  <div class="act-cta"><a class="btn" href="/quote">Get your exact quote</a>
+    <span class="trust">One book, one price. <b>No subscriptions.</b></span></div>
 
 </div>
 

@@ -16,9 +16,10 @@
 <style>
   .lost{display:grid;grid-template-columns:200px minmax(0,1fr);gap:var(--s5);align-items:center;
     padding:var(--s7) 0 var(--s5)}
-  .lost .lantern-art{color:var(--ink)}
-  .lost .lantern-art .art-figure{display:block;width:100%;aspect-ratio:1;filter:drop-shadow(0 2px 0 var(--line))}
-  .lost .lantern-art img{border-radius:var(--radius)}
+  .lost .lantern-art{color:var(--ink);position:relative}
+  .lost .lantern-art .art-figure{display:block;width:100%;filter:var(--drop)}
+  .lost .lantern-art .glow{position:absolute;inset:auto -12% 2% -12%;height:60%;z-index:-1;border-radius:50%;
+    background:radial-gradient(closest-side,var(--accent-wash),transparent 74%)}
   .lost .code{font-family:var(--mono);font-size:var(--fs-label);letter-spacing:.22em;color:var(--dim)}
   .lost h1{font-size:var(--fs-h1);margin:8px 0 12px}
   @media (max-width:640px){.lost{grid-template-columns:1fr;gap:var(--s3);text-align:left}.lost .lantern-art{max-width:150px}}
@@ -28,7 +29,7 @@
 <div class="wrap">
 
   <section class="lost">
-    <div class="lantern-art"><span class="art-figure" data-art="galley"></span></div>
+    <div class="lantern-art"><span class="glow" aria-hidden="true"></span><span data-art="galleyLost"></span></div>
     <div>
       <div class="code">Error 404 · off the map</div>
       <h1>This page wandered off.</h1>
