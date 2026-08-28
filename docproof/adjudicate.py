@@ -409,11 +409,23 @@ def propagate_recurrences(validated: Sequence[Finding],
     # Seeds: each propagatable surface, and the set of distinct fixes the
     # validated edits proposed for it. A surface with more than one distinct fix
     # is context-dependent and dropped below.
+    from .validator import _is_imported     # provenance test; no import cycle
     fixes: dict[str, set[str]] = {}
     base: dict[str, str] = {}     # a fix in its natural casing, for _match_case
     for f in validated:
         if (f.status != "validated" or f.anchor is None or f.format
                 or f.force_query):
+            continue
+        # A curated / imported / replayed row is a HUMAN one-off decision for one
+        # site (a TOC line matched to an epigraph, a single word-choice), not a
+        # surface-general typo the same everywhere — propagating it floods the
+        # margin with queries about every ordinary use of a common word (Purpura:
+        # one curated "massive"->"drastic" queried all 9 other "massive"s; okay->OK
+        # spawned 4). It must never SEED propagation. (Consistency-choice rows are
+        # already skipped above: they are force_query'd, so they never seed
+        # either.) A machine detector/sweep row still seeds — that is the recurring
+        # typo the pass exists to catch.
+        if _is_imported(f):
             continue
         d, ins = f.anchor.delete_text, f.anchor.insert_text
         if not _propagatable(d, ins):

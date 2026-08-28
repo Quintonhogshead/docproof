@@ -924,14 +924,45 @@ def test_time_style_skips_quantities_and_spelled_styles():
     assert find_time_style(paras) is None
 
 
-def test_time_style_findings_are_queries_citing_the_books_style():
+def test_open_vs_hyphen_compound_verb_noun_split_is_not_flagged():
+    # P1-7: "check in" (phrasal verb) and "check-in" (noun) are two correct
+    # forms, not one term spelled two ways. The part-of-speech gate suppresses
+    # the query the term scan used to raise.
+    paras = _paras(
+        "Please check in at the desk when you arrive.",
+        "You should check in early for the flight.",
+        "We reached the check-in desk at noon.",
+        "The check-in was slow that morning.",
+    )
+    report = find_inconsistencies(paras)
+    keys = {t.key for t in report.terms}
+    assert "checkin" not in keys
+
+
+def test_a_genuine_compound_typo_is_still_flagged():
+    # No verb/noun split here — one spelling simply dominates, so it stays a
+    # query. "underway" (x3) vs a lone "under way" reads as a slip.
+    paras = _paras(
+        "The project is underway.",
+        "Repairs are underway now.",
+        "Construction is underway again.",
+        "The plan is under way at last.",
+    )
+    report = find_inconsistencies(paras)
+    assert any(t.key == "underway" for t in report.terms)
+
+
+def test_time_style_findings_are_one_book_level_query():
+    # P1-7: bare clock hours are ONE book-level question, not one per site — the
+    # decision (write :00 on bare hours?) is a single style call for the book.
     report = find_inconsistencies(_time_paras())
     findings = to_findings(report, _time_paras())
     times = [f for f in findings if "clock times with minutes" in f.explanation]
-    assert len(times) == 3
-    for f in times:
-        assert f.corrected_text == f.original_text          # query only
-        assert ":00" in f.explanation
+    assert len(times) == 1
+    (f,) = times
+    assert f.corrected_text == f.original_text              # query only
+    assert ":00" in f.explanation
+    assert "stand bare" in f.explanation                    # names the count
 
 
 # --- accented loanwords (Si -> Sí) ---------------------------------------------

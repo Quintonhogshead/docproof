@@ -433,6 +433,16 @@ languagetool:
   disabled_rules: []        # extra rule ids to drop, atop the built-in
                             # artifact/style denylist (unpaired-quote, caps-start,
                             # whitespace, style advice)
+  edit_word_replacements: false  # may a LanguageTool suggestion that swaps one
+                            # WORD for another (boop->book, sesh->mesh — not a
+                            # comma/hyphen/en-dash/capital) become a tracked edit?
+                            # OFF: on voice-heavy prose LanguageTool spells
+                            # coinages/slang/brands into real words (Purpura: 35
+                            # auto-applied corruptions). Off routes every real-word
+                            # swap to a margin QUERY — punctuation/spacing/casing
+                            # still edit blind, a word change still asks, but never
+                            # applies silently. Turn on only for a house that has
+                            # measured LanguageTool word edits safe on its books.
   workers: 0               # scan threads; 0 = auto (one per usable core). The
                             # pass caps this at the CPU count, so on a single-core
                             # VM the scan stays serial. Raise nothing to speed it

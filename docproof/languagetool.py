@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import unicodedata
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Sequence
@@ -71,6 +72,48 @@ DEFAULT_DISABLED_ISSUE_TYPES = frozenset({
 def all_disabled_rules(extra: Sequence[str] = ()) -> frozenset[str]:
     """The built-in artifact/whitespace denylist plus any config extras."""
     return DEFAULT_DISABLED_RULES | frozenset(extra)
+
+
+def _fold_accents(s: str) -> str:
+    """`s` with every combining diacritic stripped (café -> cafe)."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s)
+                   if not unicodedata.combining(c))
+
+
+def _mech_key(s: str) -> str:
+    """Letters and digits only, accent-preserving, casefolded — so two strings
+    that differ only in whitespace, punctuation, or letter case share a key
+    (`5-6` and `5–6`; `Bf` and `BF`; `anymore` and `any more`)."""
+    return "".join(ch for ch in s.casefold() if ch.isalnum())
+
+
+def classify_replacement(original: str, replacement: str) -> str:
+    """How a LanguageTool replacement differs from the text it replaces. This is
+    the guard that keeps LanguageTool from spelling a voice coinage into a real
+    word and applying it as a blind tracked edit (Purpura: boop->book, sesh->mesh,
+    crudité->erudite — 35 real-word corruptions auto-applied and passed every
+    gate).
+
+    - "mechanical": only whitespace, punctuation, or letter case changed — a
+      comma, a hyphen to an en-dash, a capital, a closed compound. LanguageTool's
+      reliable territory; safe to route as a possible tracked edit.
+    - "deaccent": the same letters with a diacritic STRIPPED (cliché -> cliche).
+      Never a proofreading fix we want: house style keeps the accent Merriam-
+      Webster sets, so these are dropped outright.
+    - "word": the letters themselves changed (boop -> book). A real-word
+      substitution LanguageTool is not trusted to make blind on voice-heavy
+      prose; routed to a margin query so a human rules, never applied silently.
+    """
+    o, r = _mech_key(original), _mech_key(replacement)
+    if o == r:
+        return "mechanical"
+    fo, fr = _fold_accents(o), _fold_accents(r)
+    if fo == fr:
+        # Letters match once accents are folded away → an accent-only change.
+        # Stripping an accent the original carried is a de-accent; adding one (or
+        # a pure case/punct shuffle around the accent) is mechanical.
+        return "deaccent" if o != fo and r == fr else "mechanical"
+    return "word"
 
 
 _tool_cache: dict[str, object] = {}
@@ -188,6 +231,7 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
             picky: bool = False,
             disabled_rules: frozenset[str] = DEFAULT_DISABLED_RULES,
             disabled_issue_types: frozenset[str] = DEFAULT_DISABLED_ISSUE_TYPES,
+            edit_word_replacements: bool = False,
             workers: int = 0,
             scan_chars: int = 20000,
             coverage=None,
@@ -283,7 +327,8 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
 
     cands: list[RewriteCandidate] = []
     seen: set[tuple[str, int, int]] = set()
-    dropped = {"rule": 0, "issue": 0, "name": 0, "no_fix": 0}
+    dropped = {"rule": 0, "issue": 0, "name": 0, "no_fix": 0, "deaccent": 0}
+    queried_word = 0
     for i, p in enumerate(reviewable):
         for m in matches_by_idx.get(i, ()):
             issue = m.rule_issue_type
@@ -292,11 +337,30 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
             if issue in disabled_issue_types:
                 dropped["issue"] += 1; continue
             original = m.matched_text
-            if issue == "misspelling" and original.strip("'’\".,").lower() in lex:
+            # Protected names/coinages/brands (the manuscript's own lexicon plus
+            # the house allowlist) are off-limits to EVERY LanguageTool rule, not
+            # just the misspelling class — a "grammar" or "typography" rule read
+            # UGGs/Skechers as an error and "fixed" them past the old
+            # misspelling-only guard.
+            if original.strip("'’\".,").lower() in lex:
                 dropped["name"] += 1; continue
             reps = [r for r in (m.replacements or []) if r is not None]
             if not reps:
                 dropped["no_fix"] += 1; continue
+            replacement = reps[0]
+            kind = classify_replacement(original, replacement)
+            if kind == "deaccent":
+                # House style keeps the accent Merriam-Webster sets (cliché,
+                # crudité); LanguageTool must never strip it.
+                dropped["deaccent"] += 1; continue
+            # A real-word substitution (boop->book) is where LanguageTool corrupts
+            # voice on this kind of book. It may still be worth a question, but it
+            # can never ride the edit channel blind: force it to a margin query
+            # regardless of the confirm verdict (edit_word_replacements re-opens
+            # the old behaviour for a house that trusts it).
+            force_query = kind == "word" and not edit_word_replacements
+            if force_query:
+                queried_word += 1
             start, end = m.offset, m.offset + m.error_length
             key = (p.para_id, start, end)
             if key in seen:
@@ -304,10 +368,13 @@ def propose(paragraphs: Sequence[ParagraphRef], *,
             seen.add(key)
             cands.append(RewriteCandidate(
                 para_id=p.para_id, start=start, end=end,
-                original=p.text[start:end], replacement=reps[0]))
+                original=p.text[start:end], replacement=replacement,
+                force_query=force_query))
 
     log.info("LanguageTool: %d candidate(s) after filter "
-             "(dropped %d name, %d style, %d artifact-rule, %d no-fix)",
-             len(cands), dropped["name"], dropped["issue"],
-             dropped["rule"], dropped["no_fix"])
+             "(dropped %d name, %d style, %d artifact-rule, %d de-accent, "
+             "%d no-fix; %d real-word swap%s query-only)",
+             len(cands), dropped["name"], dropped["issue"], dropped["rule"],
+             dropped["deaccent"], dropped["no_fix"], queried_word,
+             "" if queried_word == 1 else "s")
     return cands

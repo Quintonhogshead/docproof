@@ -943,6 +943,55 @@ def find_acronym_case(paragraphs: Sequence[ParagraphRef], *,
     return tuple(_cap(out, "acronym-case", max_queries))
 
 
+# A cheap, deterministic part-of-speech gate for the one compound false-positive
+# the term scan floods on: an OPEN two-word compound used as a phrasal verb
+# ("check in", "follow up") against its HYPHENATED twin used as a noun/modifier
+# ("check-in", "follow-up"). Both are correct; they are not one term spelled two
+# ways, and asking about each is noise (Purpura beta: ~24 such queries). A full
+# POS tagger is not in the base install, so this reads the word immediately
+# before each occurrence: a verb leader before the open form marks it a verb, a
+# determiner before the hyphen form marks it a noun.
+_VERB_LEADERS = frozenset("""
+i you we they he she it who to please let will would can could shall should may
+might must do does did been be being am is are was were and or then just gonna
+wanna
+""".split())
+_DETERMINERS = frozenset("""
+a an the this that these those my your our his her its their no any some each
+every another one first second last next new same whole
+""".split())
+
+
+def _word_before(text: str, start: int) -> str:
+    j = start
+    while j > 0 and not text[j - 1].isalpha():
+        j -= 1
+    k = j
+    while k > 0 and (text[k - 1].isalpha() or text[k - 1] in "'’-"):
+        k -= 1
+    return text[k:j].lower()
+
+
+def _compound_pos_split(structs: dict, text_by_id: dict) -> bool:
+    """True when the competing structures are exactly an OPEN vs HYPHENATED
+    compound that reads as a verb/noun pair (check in / check-in) — a legitimate
+    coexistence the scan must not flag. `structs` maps a `_structure` string to
+    its list of Occurrences."""
+    open_s = [s for s in structs if " " in s and "-" not in s]
+    hyph_s = [s for s in structs if "-" in s and " " not in s]
+    # Only the clean two-way open/hyphen contest — a third (closed) form could be
+    # a real typo, so leave anything else to the ordinary dominance test.
+    if len(structs) != 2 or not open_s or not hyph_s:
+        return False
+    verbal = any(_word_before(text_by_id.get(o.para_id, ""), o.start)
+                 in _VERB_LEADERS
+                 for s in open_s for o in structs[s])
+    nominal = any(_word_before(text_by_id.get(o.para_id, ""), o.start)
+                  in _DETERMINERS
+                  for s in hyph_s for o in structs[s])
+    return verbal and nominal
+
+
 def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
                          enabled: bool = True, min_length: int = 7,
                          min_dominance: int = 2, names: bool = True,
@@ -983,6 +1032,9 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
     if not enabled:
         return ConsistencyReport(ran=False)
 
+    # Paragraph text by id, for the compound part-of-speech gate below (it reads
+    # the word before each occurrence to tell a phrasal verb from its noun twin).
+    _text_by_id = {p.para_id: p.text for p in paragraphs}
     groups: dict[str, _Group] = defaultdict(_Group)
     for para in paragraphs:
         # Trim closing-quote artifacts up front, so both the single-token form
@@ -1034,6 +1086,13 @@ def find_inconsistencies(paragraphs: Sequence[ParagraphRef], *,
         if not minority_structs:
             # No structure clearly dominates, so this is two deliberate choices
             # or a word this scan should not be guessing about.
+            continue
+        # Suppress a legitimate verb/noun compound split (check in / check-in)
+        # before it becomes a query — part-of-speech, not one term two ways.
+        occs_by_struct: dict[str, list] = defaultdict(list)
+        for o in g.where:
+            occs_by_struct[_structure(o.form)].append(o)
+        if _compound_pos_split(occs_by_struct, _text_by_id):
             continue
         outliers = tuple(o for o in g.where
                          if _structure(o.form) in minority_structs)
@@ -1290,17 +1349,27 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
             ))
             n += 1
 
-    # Bare clock hours: one query per site, citing the book's own H:MM style.
-    if report.times:
-        for o in report.times.outliers:
-            para = by_id.get(o.para_id)
-            if para is None:
-                continue
-            window, _, occurrence = sentence_window(para.text, o.start, o.end)
+    # Bare clock hours: ONE book-level question, not one per site. Whether to
+    # write minutes on the bare hours is a single style decision for the whole
+    # book — asking it once per site buried the Purpura margin under 25 near-
+    # identical queries (P1-7). The one query anchors at the first bare hour and
+    # lists the rest, so the author still sees every site but answers once.
+    if report.times and report.times.outliers:
+        sites = [o for o in report.times.outliers if by_id.get(o.para_id)]
+        if sites:
+            first = sites[0]
+            para = by_id[first.para_id]
+            window, _, occurrence = sentence_window(para.text, first.start, first.end)
+            forms = []
+            for o in sites:
+                if o.form not in forms:
+                    forms.append(o.form)
+            others = (f" The other bare hour(s): {', '.join(forms[1:])}."
+                      if len(forms) > 1 else "")
             findings.append(Finding(
                 finding_id=f"c-{n:04d}",
                 chunk_id="consistency",
-                para_id=o.para_id,
+                para_id=first.para_id,
                 error_type=CONSISTENCY_KEY,
                 original_text=window,
                 occurrence=occurrence,
@@ -1308,8 +1377,9 @@ def to_findings(report: ConsistencyReport, paragraphs: Sequence[ParagraphRef],
                 explanation=(
                     f"This book writes clock times with minutes — "
                     f"“{report.times.example}”, {report.times.with_minutes} "
-                    f"time(s) — but this hour stands bare. Should it be "
-                    f"“{o.form}:00” to match?"),
+                    f"time(s) — but {len(sites)} clock hour(s) stand bare, "
+                    f"starting here with “{first.form}”. Add “:00” to the bare "
+                    f"hours to match?{others}"),
                 confidence="medium",
             ))
             n += 1

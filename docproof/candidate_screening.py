@@ -851,6 +851,7 @@ def _grammar_findings(cfg, doc: DocumentModel, rows,
                   or "en-US")
     cands = propose(rows, lexicon=lexicon, dictionary=dictionary,
                     disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
+                    edit_word_replacements=cfg.languagetool.edit_word_replacements,
                     picky=cfg.languagetool.picky)
     by_id = index_paragraphs(doc)
     findings: list[Finding] = []
@@ -866,6 +867,10 @@ def _grammar_findings(cfg, doc: DocumentModel, rows,
             para_id=rc.para_id, error_type="languagetool",
             original_text=para.text, occurrence=1, corrected_text=corrected,
             explanation=rc.note or "LanguageTool flagged a mechanical issue.",
+            # A real-word swap LanguageTool proposed stays a query even here — the
+            # candidate carries the same never-apply-blind flag it does through the
+            # confirm valve.
+            force_query=rc.force_query,
             confidence="medium"))
     return findings
 

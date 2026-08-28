@@ -157,6 +157,98 @@ def test_propose_is_deterministic_and_reports_progress(monkeypatch, scan_chars):
     assert [d for d, _ in seen] == sorted(d for d, _ in seen)  # monotonic
 
 
+# --- P0-1 real-word-corruption guard (Purpura beta run 3) ---------------------
+
+# The 35 real-word substitutions LanguageTool (picky) auto-applied as tracked
+# edits on a voice-heavy memoir and that passed every gate. Each is a coinage,
+# slang, brand, or accented loanword spelled into an unrelated real word. None
+# may ride the edit channel — classify_replacement must read every one as "word"
+# (a real-word swap → margin query) or, for the de-accents, "deaccent" (dropped).
+PURPURA_CORRUPTIONS = [
+    ("boop", "book"), ("queso", "quest"), ("bloodwork", "bloodworm"),
+    ("sesh", "mesh"), ("UGGs", "Eggs"), ("Skechers", "Sketchers"),
+    ("kahuna", "Kaduna"), ("petri", "Petra"), ("tchotchkes", "hotcakes"),
+    ("comfies", "comfits"), ("terd", "term"), ("terd", "nerd"),
+    ("Peppa", "Peppy"), ("whaps", "wraps"), ("goo", "good"),
+    ("spinny", "spiny"), ("life-ruiner", "life-runner"), ("placemat", "placeman"),
+    ("athleisure", "leisure"), ("hangry", "angry"), ("slushie", "slushier"),
+    ("schmear", "share"), ("oi", "of"), ("MIL", "MID"),
+    ("Fan-fucking-tastic", "Fan-fucking-tactic"), ("crudité", "erudite"),
+]
+
+# Changes LanguageTool SHOULD still be free to apply blind: they touch only
+# whitespace, punctuation, hyphenation, or case — never the letters of a word.
+LEGIT_MECHANICAL = [
+    ("5-6", "5–6"), ("10-12", "10–12"), ("2-3", "2–3"),
+    ("Bf", "BF"), ("anymore", "any more"), ("lip-sticked", "lipsticked"),
+    ("80's", "80s"), ("cafe", "café"),      # adding an accent is fine, stripping is not
+]
+
+
+@pytest.mark.parametrize("original,replacement", PURPURA_CORRUPTIONS)
+def test_real_word_swaps_classified_as_word(original, replacement):
+    assert lt.classify_replacement(original, replacement) == "word"
+
+
+@pytest.mark.parametrize("original,replacement", [
+    ("cliché", "cliche"), ("crème", "creme"), ("café", "cafe"),
+    ("crudité", "crudite"), ("résumé", "resume"),
+])
+def test_stripping_an_accent_classified_as_deaccent(original, replacement):
+    assert lt.classify_replacement(original, replacement) == "deaccent"
+
+
+@pytest.mark.parametrize("original,replacement", LEGIT_MECHANICAL)
+def test_mechanical_changes_stay_mechanical(original, replacement):
+    assert lt.classify_replacement(original, replacement) == "mechanical"
+
+
+def test_propose_forces_real_word_swaps_to_query_not_edit(monkeypatch):
+    #        0         1
+    #        0123456789012345
+    text = "I ate queso here"      # queso 6:11
+    _install(monkeypatch, {text: [
+        _match("MORFOLOGIK_RULE", "misspelling", 6, 5, ["quest"], "queso")]})
+    (c,) = lt.propose([_para("body-0", text)])
+    assert c.original == "queso" and c.replacement == "quest"
+    # The candidate survives (a human may want the question) but can NEVER apply
+    # blind — force_query rides through the confirm valve to the margin.
+    assert c.force_query is True
+
+
+def test_propose_still_edits_a_mechanical_fix_blind(monkeypatch):
+    text = "from 5-6 times"        # 5-6 at 5:8
+    _install(monkeypatch, {text: [
+        _match("DASH_RULE", "typographical", 5, 3, ["5–6"], "5-6")]})
+    (c,) = lt.propose([_para("body-0", text)])
+    assert c.replacement == "5–6"
+    assert c.force_query is False   # en-dash is LanguageTool's reliable territory
+
+
+def test_propose_drops_a_deaccent_entirely(monkeypatch):
+    text = "a total cliché move"   # cliché 8:14
+    _install(monkeypatch, {text: [
+        _match("FR_ACCENT", "typographical", 8, 6, ["cliche"], "cliché")]})
+    assert lt.propose([_para("body-0", text)]) == []
+
+
+def test_propose_protects_an_allowlisted_brand_for_any_rule(monkeypatch):
+    # UGGs was on the allowlist yet a non-misspelling rule "fixed" it before —
+    # the lexicon guard now covers every rule class, not just "misspelling".
+    text = "my UGGs are warm"      # UGGs 3:7
+    _install(monkeypatch, {text: [
+        _match("GRAMMAR_RULE", "grammar", 3, 4, ["Eggs"], "UGGs")]})
+    assert lt.propose([_para("body-0", text)], lexicon=["UGGs"]) == []
+
+
+def test_edit_word_replacements_reopens_the_old_behaviour(monkeypatch):
+    text = "I ate queso here"
+    _install(monkeypatch, {text: [
+        _match("MORFOLOGIK_RULE", "misspelling", 6, 5, ["quest"], "queso")]})
+    (c,) = lt.propose([_para("body-0", text)], edit_word_replacements=True)
+    assert c.force_query is False   # a house that has opted in gets word edits back
+
+
 def test_a_match_that_straddles_a_batch_join_is_dropped(monkeypatch):
     """Paragraphs share a request, so a rule could in principle span the blank
     line between two of them. A per-paragraph check could not have produced such

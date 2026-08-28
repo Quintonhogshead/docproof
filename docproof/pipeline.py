@@ -1175,6 +1175,7 @@ def run_sync(cfg: Config, prepared: Prepared, provider: Provider | None = None,
                 dictionary=cfg.languagetool.dictionary,
                 picky=cfg.languagetool.picky,
                 disabled_rules=all_disabled_rules(cfg.languagetool.disabled_rules),
+                edit_word_replacements=cfg.languagetool.edit_word_replacements,
                 workers=cfg.languagetool.workers,
                 scan_chars=cfg.languagetool.scan_chars, progress=progress,
                 coverage=coverage)
