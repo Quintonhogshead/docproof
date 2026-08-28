@@ -250,6 +250,12 @@ class StyleConfig(BaseModel):
     # carrying their own capitals (McCoy, EVTOL) are left as styled. This is
     # the typesetting half of a heading pass — no model ever reads one.
     heading_title_case: bool = True
+    # A heading that reads as the near-homophone of a standard book-part label
+    # — AFTERWARD for AFTERWORD, FOREWARD for FOREWORD — gets a margin query.
+    # A question, never an edit: "Afterward" is also a legitimate chapter
+    # title meaning "in the time after". The Purpura human pass caught the
+    # AFTERWARD; no model pass ever reads a heading.
+    heading_vocab_queries: bool = True
 
 
 class EditGuardConfig(BaseModel):
@@ -364,6 +370,19 @@ class ConsistencyConfig(BaseModel):
     # names); query channel only, since pronoun reference is the author's call.
     deity_pronouns: bool = True
     deity_min_capitalized: int = Field(default=8, ge=2)
+    # Bare clock hours ("around 4", "at 8") in a book whose own style writes
+    # times with minutes ("11:00 a.m."). The head proofreader added ":00" by
+    # hand throughout the Purpura run — a whole-book inconsistency no
+    # per-paragraph pass can see. Self-gating on time_min_with_minutes H:MM
+    # times in the book; query channel only, since a bare hour can be a
+    # deliberate register.
+    time_style: bool = True
+    time_min_with_minutes: int = Field(default=3, ge=1)
+    # Loanwords written without the accent the dictionary gives them (Si/Sí,
+    # senor/señor), from a short curated table of words whose bare spelling is
+    # not accepted English on its own. One query per word, at its first bare
+    # occurrence; protected (author-owned) words are left alone.
+    accent_loanwords: bool = True
     # Add the Merriam-Webster/Chicago preference to a spelling-variant query.
     # A press proofreading in British English can turn this off.
     chicago_notes: bool = True

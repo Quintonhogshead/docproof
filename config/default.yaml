@@ -161,6 +161,16 @@ consistency:
   # own convention; query-only, since pronoun reference is the author's call.
   deity_pronouns: true
   deity_min_capitalized: 8
+  # Bare clock hours ("around 4", "at 8") in a book whose own style writes
+  # times with minutes ("11:00 a.m."). Query-only, self-gating on the book
+  # carrying time_min_with_minutes H:MM times — the whole-book inconsistency
+  # the Purpura head-proofreader pass fixed by hand.
+  time_style: true
+  time_min_with_minutes: 3
+  # Loanwords written without the dictionary's accent (Si/Sí, senor/señor),
+  # from a short curated table of words whose bare spelling is not accepted
+  # English on its own. One query per word, at its first bare occurrence.
+  accent_loanwords: true
   chicago_notes: true       # add the Merriam-Webster preference to the query
   max_queries_per_kind: 40  # per-scan cap, logged when it bites (no silent loss)
   seeded_names: []          # proper nouns known ahead of the run (typically from
@@ -732,6 +742,10 @@ style:
   # carrying their own capitals (McCoy, EVTOL) are left as styled. Free: no
   # API call, and no model ever reads a heading.
   heading_title_case: true
+  # A heading that reads as the near-homophone of a standard book-part label
+  # (AFTERWARD for AFTERWORD, FOREWARD for FOREWORD) gets a margin query.
+  # A question, never an edit — "Afterward" is also a legitimate title.
+  heading_vocab_queries: true
 
 # A safety net against a model pass overstepping proofreading into rewriting.
 # A proofreading fix is minimal by contract, so an edit that replaces a large
@@ -763,6 +777,7 @@ sweeps:
   - sweep_deity_capital       # oh my god -> oh my God (set interjections only)
   - sweep_dialogue_splice     # comma splices around a dialogue tag
   - sweep_initialism          # whitelisted initialisms capitalized (tv -> TV)
+  - sweep_decade_apostrophe   # the 80s -> the ’80s (the/early/late/mid leads only)
   - sweep_trailing_space      # paragraph-trailing spaces deleted (tracked)
 
 # After every gate has settled which edits stand, re-scan the reviewed text

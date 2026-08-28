@@ -179,6 +179,52 @@ def _sweep_ellipsis(text: str, variant=None, style: str = "nbsp") -> list[Hit]:
 _DASHES = re.compile(r"(?P<pre>[ \t\u00a0]*)(?P<run>-{2,}|–|—|-)(?P<post>[ \t\u00a0]*)")
 
 
+# Word prefixes that hyphenate in compounds — true prefixes plus the common
+# compound-modifier leads ("well-known", "much-loved"). A hyphen after one of
+# these with a space on only ONE side ("co- worker", "well- known") is a
+# broken compound, not a sentence-break dash, and none of this sweep's
+# business.
+_HYPHEN_PREFIXES = frozenset("""
+co pre re non anti semi ex mid self all half quasi multi inter intra over
+under sub super counter cross extra post pro vice de un dis mis out up
+well much far long high low full best worst top
+""".split())
+
+# Spelled numbers on either side of a one-sided hyphen ("twenty- five") are a
+# broken compound number, which sweep_compound_number owns.
+_NUMBER_WORDS = frozenset(
+    ("twenty thirty forty fifty sixty seventy eighty ninety "
+     "one two three four five six seven eight nine").split())
+
+_WORD_BEFORE = re.compile(r"[A-Za-z][A-Za-z'’]*$")
+_WORD_AFTER = re.compile(r"[\"“‘']?([A-Za-z][A-Za-z'’]*)")
+
+
+def _one_sided_dash(text: str, m: re.Match) -> bool:
+    """Whether a single hyphen with a space on only one side reads as a
+    sentence-break dash: "Garbage- I mean, Garage", "it was late -too late".
+    The alternative reading is a compound broken around its hyphen
+    ("co- worker", "twenty- five", "5- and 10-mile"), so whole words must
+    flank it and the compound patterns are excluded by name."""
+    wb = _WORD_BEFORE.search(text[:m.start("run")].rstrip(_SP))
+    wa = _WORD_AFTER.match(text[m.end("run"):].lstrip(_SP))
+    if wb is None or wa is None:
+        return False
+    prev_word = wb.group(0).lower().strip("'’")
+    next_word = wa.group(1).lower().strip("'’")
+    if m.group("post") and not m.group("pre"):
+        # "word- word": a broken compound keeps its prefix attached — a known
+        # hyphenating prefix, or a single letter ("T- shirt", "X- ray").
+        if prev_word in _HYPHEN_PREFIXES or len(prev_word) == 1:
+            return False
+        # "5- and 10-mile", "twenty- and thirty-somethings": suspended pairs.
+        if next_word in ("and", "or"):
+            return False
+    if prev_word in _NUMBER_WORDS and next_word in _NUMBER_WORDS:
+        return False
+    return True
+
+
 def _sweep_dash(text: str, variant=None) -> list[Hit]:
     hits: list[Hit] = []
     stripped = text.strip()
@@ -203,12 +249,18 @@ def _sweep_dash(text: str, variant=None) -> list[Hit]:
             replacement, why = "—", ("House style sets a sentence-break dash "
                                      "as an unspaced em dash.")
         elif run == "-":
-            # A single hyphen reads as a dash ONLY standing alone between
-            # words: "it was late - too late". Unspaced it is a compound
-            # (well-known) and none of this sweep's business; between digits
-            # it is arithmetic or a loose range, both judgment calls; at a
-            # line edge it is a bullet or a dangling mark.
-            if not (m.group("pre") and m.group("post")):
+            # A single hyphen reads as a dash standing alone between words
+            # ("it was late - too late") — or attached to one word with a
+            # space on the other side ("Garbage- I mean, Garage"), the typed
+            # form the Purpura human pass fixed throughout. Unspaced on both
+            # sides it is a compound (well-known) and none of this sweep's
+            # business; between digits it is arithmetic or a loose range,
+            # both judgment calls; at a line edge it is a bullet or a
+            # dangling mark.
+            if not (m.group("pre") or m.group("post")):
+                continue
+            if not (m.group("pre") and m.group("post")) \
+                    and not _one_sided_dash(text, m):
                 continue
             if not before or not after:
                 continue
@@ -1030,6 +1082,89 @@ def _sweep_initialism(text: str, variant=None) -> list[Hit]:
     return hits
 
 
+# --- two-digit decades ---------------------------------------------------------
+
+# "the 80s" -> "the ’80s": a decade abbreviated to two digits takes an
+# apostrophe for the omitted century. Bounded to decade-reading leads (the /
+# early / late / mid) on purpose: "in her 60s" is an AGE the number rules spell
+# out ("her sixties"), and this sweep must not claim it first.
+_DECADE = re.compile(
+    r"\b(?P<lead>[Tt]he|[Ee]arly|[Ll]ate|[Mm]id)(?P<gap>[  -])"
+    r"(?P<dec>[1-9]0)s\b")
+
+# "temps in the 60s", "scores in the 90s": two-digit ranges that are not years
+# at all. One look-behind window is enough — the marker sits close by.
+_DECADE_NOT_YEARS = re.compile(
+    r"\b(temperature|temperatures|temps|degrees|heat|wind|winds|scores?|"
+    r"grades?|IQ)\b[^.!?]{0,40}$", re.IGNORECASE)
+
+
+def _sweep_decade_apostrophe(text: str, variant=None) -> list[Hit]:
+    """Insert the apostrophe a two-digit decade drops: "the early 80s" ->
+    "the early ’80s". Idempotent — an apostrophe already there breaks the
+    match — and four-digit decades ("the 1980s") never match at all."""
+    hits: list[Hit] = []
+    for m in _DECADE.finditer(text):
+        if _DECADE_NOT_YEARS.search(text[:m.start()]):
+            continue
+        hits.append(Hit(m.start("dec"), m.end(), f"’{m.group('dec')}s",
+                        "A decade abbreviated to two digits takes an "
+                        "apostrophe for the omitted century: ’80s."))
+    return hits
+
+
+# --- front-/back-matter labels (a question, never an edit) ---------------------
+
+# A heading that reads as the near-homophone of the standard book-part label.
+# AFTERWARD for AFTERWORD is the classic; each is raised as a query because
+# "Afterward" is also a legitimate chapter title meaning "in the time after".
+_HEADING_VOCAB = {
+    "afterward": "Afterword",
+    "afterwards": "Afterword",
+    "foreward": "Foreword",
+    "forword": "Foreword",
+    "forward": "Foreword",
+}
+
+
+def heading_vocab_findings(paragraphs: Sequence[ParagraphRef],
+                           skip) -> list[Finding]:
+    """A heading-styled paragraph whose whole text is a near-miss of a book-part
+    label (AFTERWARD / FOREWARD), queried. Uses the same structural-heading
+    predicate as the title-case sweep, so a body sentence that happens to open
+    with "Afterward" is never touched — only a standalone heading line is."""
+    from .headings import is_structural_heading
+    findings: list[Finding] = []
+    n = 0
+    for para in paragraphs:
+        if not is_structural_heading(para, skip.is_sweep_only):
+            continue
+        word = para.text.strip()
+        proper = _HEADING_VOCAB.get(word.lower())
+        if proper is None:
+            continue
+        fixed = proper.upper() if word.isupper() else proper
+        n += 1
+        findings.append(Finding(
+            finding_id=f"hv-{n:04d}",
+            chunk_id="sweep",
+            para_id=para.para_id,
+            error_type="heading_vocab",
+            original_text=word,
+            occurrence=1,
+            corrected_text=word,
+            explanation=(
+                f"This heading reads “{word}”. If it labels the book part, "
+                f"the standard label is “{fixed}” (“{word.lower()}” is the "
+                f"adverb); if the title is deliberate, please ignore this "
+                f"note."),
+            confidence="medium",
+            force_query=True))
+    if findings:
+        log.info("Heading vocabulary: %d label(s) queried.", len(findings))
+    return findings
+
+
 # --- registry ----------------------------------------------------------------
 
 SWEEPS: tuple[Sweep, ...] = (
@@ -1056,6 +1191,8 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_dialogue_splice),
     Sweep("sweep_initialism", "Initialisms set in capitals (TV)",
           _sweep_initialism),
+    Sweep("sweep_decade_apostrophe", "Two-digit decades take an apostrophe",
+          _sweep_decade_apostrophe),
     Sweep("sweep_trailing_space", "Paragraph-trailing whitespace",
           _sweep_trailing_space),
 )

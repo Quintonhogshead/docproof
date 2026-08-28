@@ -28,6 +28,8 @@ _TYPE_FAMILIES = {
     "sweep_doubled_word": "repeated_words",
     "sweep_century": "numbers",
     "sweep_compound_number": "numbers",
+    "sweep_decade_apostrophe": "numbers",
+    "heading_vocab": "headings",
     "number_style": "numbers",
     "currency_style": "currency",
     "heading_case": "headings",

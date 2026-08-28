@@ -128,7 +128,12 @@ def write_findings_json(path: Path, *, doc: DocumentModel,
                                    for n in consistency.names],
                          "variants": _variant_rows(consistency.variants),
                          "abbreviations": _variant_rows(consistency.abbreviations),
-                         "casings": _variant_rows(consistency.casings)}
+                         "casings": _variant_rows(consistency.casings),
+                         "accents": _variant_rows(consistency.accents),
+                         "times": ({"with_minutes": consistency.times.with_minutes,
+                                    "example": consistency.times.example,
+                                    "outliers": len(consistency.times.outliers)}
+                                   if consistency.times else None)}
                         if consistency is not None else None),
         "spell_scan": ({"available": spell.available, "tokens": spell.tokens,
                         "unique": spell.unique, "unknown": spell.unknown,
@@ -608,6 +613,22 @@ def write_summary_md(path: Path, *, doc: DocumentModel,
         "Acronym capitalization",
         "Initialisms set in capitals in one place and as an ordinary word in "
         "another.")
+    _variant_section(
+        L, consistency.accents if consistency is not None else (),
+        "Accented loanwords",
+        "Loanwords written without the accent the dictionary gives them "
+        "(Si/Sí, senor/señor). Each is a question at the word's first bare "
+        "occurrence; the recommendation is the dictionary's accented form.")
+
+    if consistency is not None and consistency.times:
+        t = consistency.times
+        L.append("## Clock-time style\n")
+        L.append(f"This book writes clock times with minutes "
+                 f"(`{t.example}`, {t.with_minutes} time(s)), but "
+                 f"{len(t.outliers)} bare hour(s) — “around 4”, “at 8” — "
+                 f"stand without them. Each is asked about in the margins; "
+                 f"no edit is made, since a bare hour can be a deliberate "
+                 f"register.\n")
 
     rows = scripted_check_rows(sweeps, findings, applied_ids)
     if rows:

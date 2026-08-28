@@ -125,3 +125,32 @@ def test_shipped_config_enables_the_guard():
     assert cfg.edit_guard.enabled
     assert cfg.edit_guard.max_edit_chars == 64
     assert cfg.edit_guard.max_added_chars == 16
+
+
+# --- the compound-merge guard --------------------------------------------------
+#
+# The Purpura head proofreader reversed exactly one kind of "fix": the space in
+# "blood work" deleted to make "bloodwork". Whether a compound is open or
+# closed is the author's call — the consistency scan asks about it — so an
+# edit whose whole effect is deleting one inter-word space is demoted to a
+# margin query, never applied.
+
+def test_a_space_deletion_merge_is_demoted_to_a_query():
+    original = "Standard procedures include questions, blood work, and imaging."
+    corrected = "Standard procedures include questions, bloodwork, and imaging."
+    doc = _doc(original)
+    out = validate_findings([_finding(original, corrected)], doc, "medium",
+                            edit_guard=GUARD)
+    assert out[0].status == "query"
+    assert out[0].force_query
+
+
+def test_a_space_deletion_beside_punctuation_is_not_a_merge():
+    """Deleting a doubled space, or a space before punctuation, is an ordinary
+    typographic fix — only a deletion that JOINS two words is a compound call."""
+    original = "She left ,and the door closed."
+    corrected = "She left,and the door closed."
+    doc = _doc(original)
+    out = validate_findings([_finding(original, corrected)], doc, "medium",
+                            edit_guard=GUARD)
+    assert out[0].status == "validated"

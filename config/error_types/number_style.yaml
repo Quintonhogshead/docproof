@@ -11,7 +11,17 @@ detection_prompt: |
   FLAG:
   - A bare integer from 1 to 100 in ordinary prose: "She waited 20 minutes.",
     "There were 8 of them."
-  - Ages: "a 50-year-old woman", "over 50 years old".
+  - A hyphenated duration, distance, or weight modifier in narration: "a
+    25-minute wait" -> "a twenty-five-minute wait", "a 30-minute ride", "a
+    5-mile radius", "a 5-pound bag". These are prose, not measurements — the
+    measurement carve-out below is for abbreviated technical units only.
+  - Day, week, and grade counters in narration: "day 1" -> "day one", "It's
+    day 2" -> "It's day two", "in week 7" -> "in week seven". These read as
+    prose counters, not labels, in a memoir or novel.
+  - A quantity with a trailing plus: "5+ glasses" -> "five-plus glasses".
+  - Ages, including a decade of life: "a 50-year-old woman", "over 50 years
+    old", "in her 60s" -> "in her sixties". (A CALENDAR decade — "the ’80s",
+    "the 1990s" — keeps its numerals; see below.)
   - Centuries written with an ordinal numeral: "20th century",
     "21st-century medicine".
   - Simple fractions as digits in prose: "2/3 of the class".
@@ -21,17 +31,27 @@ detection_prompt: |
   Do NOT flag — these are legitimate numeral contexts and the house guide
   leaves them alone:
   - Dates and years: "July 14, 1989", "in 1997", "the 1990s".
-  - Times: "8:30 a.m.", "at 5:00".
+  - Times, including a BARE clock hour: "8:30 a.m.", "at 5:00", "around 4",
+    "the meeting starts at 8". A bare hour is a time-format question (should
+    it be "4:00"?), not a spell-out — the whole-book consistency scan owns
+    it, and spelling it out fights the book's own clock style.
   - Money, which the currency_style type owns entirely.
   - Percentages: "40 percent".
   - Addresses, house and room numbers: "12 Oak Street", "room 4".
   - Chapter, page, verse, section, and figure numbers.
-  - Measurements and data with units: "10 kg", "30°C", "a 9mm round".
+  - Medical and technical stage/type/grade labels: "stage 4 cancer",
+    "type 2 diabetes", "grade 3". The numeral IS the label; spelling it out
+    is a wrong edit the head proofreader reverses.
+  - Measurements and data with ABBREVIATED or technical units: "10 kg",
+    "30°C", "a 9mm round". A spelled-out everyday unit in narration
+    ("20 minutes", "a 5-mile radius") is prose and IS flagged — see above.
   - Phone numbers, serial numbers, ID numbers, scores, and statistics.
   - Form fields, dossiers, tables, inventories, and any quoted document where
     the numerals are part of the artifact.
-  - Decades: "the '60s", "the 1990s". The apostrophe there belongs to the
-    apostrophe_error type; the numerals are correct.
+  - CALENDAR decades: "the '60s", "the 1990s". The numerals are correct, and
+    a missing apostrophe ("the 80s") is the decade sweep's to add. A decade
+    of someone's AGE ("in her 60s") is not a calendar decade — that one is
+    spelled out; see FLAG above.
   - Numerals of 101 and above in prose — those are already house style.
   - Numbers already spelled out. NEVER convert a spelled-out number to
     numerals — not for 101-and-up, not for round quantities ("ten thousand
@@ -80,4 +100,20 @@ examples:
       explanation: "Ages are spelled out and hyphenated before the noun."
       confidence: high
   - text: "The recipe called for 250 grams of flour."
+    finding: null
+  - text: "I'm standing for this 25-minute wait."
+    finding:
+      original_text: "I'm standing for this 25-minute wait."
+      corrected_text: "I'm standing for this twenty-five-minute wait."
+      explanation: "A duration modifier in prose is spelled out and hyphenated."
+      confidence: high
+  - text: "Day 1 is here, and I'm pumped."
+    finding:
+      original_text: "Day 1 is here, and I'm pumped."
+      corrected_text: "Day one is here, and I'm pumped."
+      explanation: "A day counter in narration is spelled out."
+      confidence: high
+  - text: "He has stage 4 liver cancer."
+    finding: null
+  - text: "We will start getting ready around 4."
     finding: null

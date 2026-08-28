@@ -42,6 +42,11 @@ detection_prompt: |
     the money until midnight."
   - A crowd, a chorus, or an unattributed line the author clearly means to
     float: "“Fire!” someone shouted, and then everyone was shouting."
+  - A paragraph with only ONE quoted utterance. Reported speech is narration,
+    not a speaker: in "The nurse asks whether he would like a priest. My dad
+    quickly replies, “Yes.”" only Dad speaks on the page — the nurse's
+    question is narrated, and there is nothing to split. Never describe a
+    narrated question or statement as a second speaker.
   - Any paragraph where you are guessing. A wrong query costs a moment of the
     author's attention; a wrong edit costs their trust. When it is genuinely
     ambiguous, ask — but say in the explanation that it is ambiguous.
@@ -76,3 +81,5 @@ examples:
       corrected_text: "“Where were you?” I asked, and “None of your business,” he said."
       explanation: "Two tagged speakers in one paragraph — does the reply want its own?"
       confidence: high
+  - text: "The nurse asks whether he would like a priest to pray with him. My dad has never been religious, but he quickly replies, “Yes.”"
+    finding: null

@@ -9,8 +9,10 @@ format: italic
 
 detection_prompt: |
   House style sets the title of a long or standalone work in italics: books,
-  films, plays, albums, television series, newspapers, magazines, paintings,
-  and video games. Book titles in particular must be italicised.
+  films, plays, albums, newspapers, magazines, paintings, and video games.
+  Book titles in particular must be italicised. Television programs are the
+  exception — Atmosphere house style sets TV shows in QUOTATION MARKS, not
+  italics, so this type must never touch them.
 
   IMPORTANT — you are reading plain text and CANNOT see which words are
   already italic. Report every long-work title you find. docproof checks the
@@ -21,13 +23,20 @@ detection_prompt: |
   FLAG the title of:
   - A book: "She had never finished Moby-Dick."
   - A film, play, opera or ballet: "They saw Hamlet on the Thursday."
-  - An album, a television series, a newspaper or magazine, a painting, a
-    long poem published on its own, a video game.
+  - An album, a newspaper or magazine, a painting, a long poem published on
+    its own, a video game.
 
   Do NOT flag:
+  - A TELEVISION show or series, ever — house style sets TV shows in
+    quotation marks, and italicising "Peppa Pig" or "Full House" is a wrong
+    edit the head proofreader reverses. A film named as something watched ON
+    television ("A Christmas Story is playing on a loop") follows the same
+    house rule: leave it alone.
   - Short works, which take quotation marks instead and are a different rule:
     a short story, a song, a single poem in a collection, an article, a
     chapter, an episode of a series.
+  - A named tune, bugle call, or piece of generic music: "taps" is lowercase
+    roman, not a title at all.
   - The name of a person, place, company, ship, product, or building, however
     title-like it looks.
   - A book of the Bible, or the Bible, Torah or Quran themselves — scripture
@@ -84,3 +93,7 @@ examples:
       corrected_text: "The Great Gatsby"
       explanation: "A book title, with its leading article, is set in italics."
       confidence: high
+  - text: "The best of the worst is “Peppa Pig.” I can't stand this show."
+    finding: null
+  - text: "We spent the evening watching Star Search and Full House."
+    finding: null

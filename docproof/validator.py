@@ -264,6 +264,32 @@ def validate_findings(findings: list[Finding], doc: DocumentModel,
                         f.finding_id, f.error_type, len(deleted), len(inserted))
             continue
 
+        # 2.6 — compound-merge guard. An edit whose whole effect is deleting
+        # one space between two words ("blood work" -> "bloodwork") is a
+        # compound-styling judgment, not a proofreading fix — the consistency
+        # scan exists precisely to ASK about open-versus-closed compounds, and
+        # which form a book uses is the author's to settle. Demoted to a
+        # margin query, never silently applied. (The Purpura head proofreader
+        # reversed exactly this merge.)
+        if (not inserted and deleted in (" ", " ")
+                and start > 0 and end < len(para.text)
+                and para.text[start - 1].isalpha()
+                and para.text[end].isalpha()):
+            key = (f.para_id, s, "query", f.error_type, f.corrected_text)
+            if key in seen:
+                out.append(_status(f, "rejected_duplicate", anchor))
+                continue
+            seen.add(key)
+            qend = s + len(f.original_text)
+            out.append(_status(
+                dataclasses.replace(f, force_query=True), "query",
+                Anchor(start=s, end=qend, delete_text=para.text[s:qend],
+                       insert_text="")))
+            log.info("%s (%s): space-deletion merge demoted to a query — "
+                     "closing an open compound is the author's call",
+                     f.finding_id, f.error_type)
+            continue
+
         # 3 — confidence gate (anchored first, so the report stays informative)
         if CONFIDENCE_RANK[f.confidence] < threshold:
             out.append(_status(f, "skipped_low_confidence", anchor))
