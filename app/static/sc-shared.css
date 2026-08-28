@@ -239,7 +239,8 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .artwork .hatch{fill:none;stroke:currentColor;stroke-width:1;opacity:.26}
 .artwork .hatch-ac{fill:none;stroke:var(--accent);stroke-width:1;opacity:.3}
 .art-figure{display:block;color:var(--ink)}
-.art-figure img{width:100%;height:100%;object-fit:contain}
+/* Raster portraits are square; cover fills the frame with no letterbox. */
+.art-figure img{display:block;width:100%;height:100%;object-fit:cover}
 
 /* --------------------------------------------------------------- components */
 /* Party member cards (light). */
@@ -282,7 +283,8 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .hero .say{font-family:var(--disp);font-size:var(--fs-hero);line-height:1.05;margin:0;text-wrap:balance}
 .hero .say em{color:var(--accent);font-style:italic}
 .hero-art{position:relative;color:var(--ink)}
-.hero-art .art-figure{display:block;width:100%;filter:drop-shadow(0 2px 0 var(--line))}
+.hero-art .art-figure{display:block;width:100%;aspect-ratio:1;filter:drop-shadow(0 2px 0 var(--line))}
+.hero-art .art-figure img{border-radius:var(--radius)}
 .hero-art .glow{position:absolute;inset:-12% -8% -8% -8%;z-index:-1;border-radius:50%;
   background:radial-gradient(closest-side, var(--accent-wash), transparent 78%)}
 @media (max-width:760px){
@@ -313,7 +315,7 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .gallery{display:grid;gap:var(--s4);margin-top:var(--s3)}
 .chapter{display:grid;grid-template-columns:132px minmax(0,1fr) 190px;gap:var(--s4);align-items:start}
 .chapter .portrait{color:var(--ink);background:var(--card-2);border:1px solid var(--rule);border-radius:var(--radius);
-  box-shadow:var(--lift);overflow:hidden}
+  box-shadow:var(--lift);overflow:hidden;aspect-ratio:1}
 .chapter .portrait .art-figure{display:block;width:100%}
 .chapter-body{padding-top:var(--s1)}
 .chapter-no{font-family:var(--disp);font-size:1rem;color:var(--accent);letter-spacing:.1em;font-style:italic}

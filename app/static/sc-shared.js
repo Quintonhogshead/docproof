@@ -19,9 +19,11 @@
      <img> — no render-code touched. Files live in /assets/art/. */
   var ART_BASE = '/assets/art/';
   var ART = {
-    galley: 'galley.svg',
-    pip: 'pip.svg', bram: 'bram.svg', maple: 'maple.svg',
-    cinder: 'cinder.svg', sage: 'sage.svg', lark: 'lark.svg',
+    // Commissioned watercolour portraits (loader swaps them in as <img>);
+    // the line-art .svg busts remain in art/ as the dark-workshop fallback.
+    galley: 'galley.webp',
+    pip: 'pip.webp', bram: 'bram.webp', maple: 'maple.webp',
+    cinder: 'cinder.webp', sage: 'sage.webp', lark: 'lark.webp',
     crestSpellcheck: 'crest-spellcheck.svg', crestTypohunt: 'crest-typohunt.svg',
     crestProofread: 'crest-proofread.svg', crestDeep: 'crest-deep.svg',
     crestCampaign: 'crest-campaign.svg',
