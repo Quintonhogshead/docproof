@@ -65,7 +65,8 @@ def test_generate_skin_happy_path(tmp_path):
     result = generate_skin(_write_txt(tmp_path), provider)
     assert not result.fallback and result.error is None
     assert result.skin.genre == "noir thriller"
-    assert result.skin.pip.alias == "Slim"
+    # Names are permanent: whatever the model wrote, the party keeps its own.
+    assert result.skin.pip.alias == "Pip"
     assert result.band == 0.7 and result.word_count > 0
     assert result.cost is not None and result.cost > 0
     # The call went out with the strict schema and the sample, not the raw file.
@@ -82,13 +83,18 @@ def test_generate_skin_falls_back_on_junk(tmp_path):
     assert result.skin == DEFAULT_SKIN          # the page still renders
 
 
-def test_generate_skin_flags_alias_collisions(tmp_path):
-    # "Slim" appears in the book itself — likely a real character's name.
-    path = _write_txt(tmp_path, extra=" Slim lit a cigarette.")
+def test_generate_skin_names_are_permanent(tmp_path):
+    # The model dressed the whole party in invented names; every one is
+    # overwritten with the true first name. Job and look survive untouched.
     provider = FakeProvider(
         results=[ProviderResult(parsed=_skin_payload(), usage=USAGE)])
-    result = generate_skin(path, provider)
-    assert result.alias_collisions == ("Slim",)
+    result = generate_skin(_write_txt(tmp_path), provider)
+    for key, name in [("pip", "Pip"), ("bram", "Bram"), ("maple", "Maple"),
+                      ("cinder", "Cinder"), ("sage", "Sage"), ("lark", "Lark")]:
+        character = getattr(result.skin, key)
+        assert character.alias == name
+        assert character.job == "Does the thing, stylishly."
+    assert result.alias_collisions == ()
 
 
 def test_skin_endpoint_round_trip(tmp_path, monkeypatch):
@@ -105,7 +111,7 @@ def test_skin_endpoint_round_trip(tmp_path, monkeypatch):
                            files={"file": ("book.txt", body, "text/plain")})
         assert resp.status_code == 200
         data = resp.json()
-        assert data["skin"]["pip"]["alias"] == "Slim"
+        assert data["skin"]["pip"]["alias"] == "Pip"
         assert data["band"] == 0.7 and not data["fallback"]
         assert data["cached"] is False
 
@@ -348,7 +354,8 @@ def test_sweep_endpoint_streams_skin_then_lanes(tmp_path, monkeypatch):
         assert kinds[0] == "skin" and kinds[-1] == "done"
         assert kinds.count("lane") == len(LANES)
         skin = next(d for e, d in events if e == "skin")
-        assert skin["skin"]["pip"]["alias"] == "Slim"
+        # Names are permanent: the model's "Slim" never reaches the wire.
+        assert skin["skin"]["pip"]["alias"] == "Pip"
         lanes = {d["key"]: d for e, d in events if e == "lane"}
         assert set(lanes) == {key for key, *_ in LANES}
         assert lanes["maple"]["catches"] == []
@@ -386,8 +393,9 @@ def test_sweep_endpoint_reports_unreadable_as_error_event(tmp_path, monkeypatch)
             assert resp.status_code == 400
 
 
-def test_collision_catches_borrowed_surnames(tmp_path):
-    # The book has an Ida Pomeroy; the model names Maple "Maple Pomeroy".
+def test_borrowed_names_cannot_reach_the_page(tmp_path):
+    # The book has an Ida Pomeroy and the model names Maple after her; the
+    # permanent-names rule flattens it before anything renders.
     path = _write_txt(tmp_path, extra=" Ida Pomeroy ran the knitting circle.")
     payload = _skin_payload(maple={"alias": "Maple Pomeroy",
                                    "job": "Keeps the registry.",
@@ -395,7 +403,8 @@ def test_collision_catches_borrowed_surnames(tmp_path):
     provider = FakeProvider(
         results=[ProviderResult(parsed=payload, usage=USAGE)])
     result = generate_skin(path, provider)
-    assert "Maple Pomeroy" in result.alias_collisions
+    assert result.skin.maple.alias == "Maple"
+    assert result.alias_collisions == ()
 
 
 def test_first_look_dedupes_repeat_snags_across_lanes():
