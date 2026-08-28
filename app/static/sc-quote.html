@@ -117,6 +117,11 @@
   .firstlook{margin:4px 0 22px}
   .firstlook .fl-title{font-family:var(--disp);font-size:1.18rem;margin-bottom:4px}
   .firstlook .fl-sub{font-family:var(--ui);font-size:.86rem;color:var(--dim);margin-bottom:12px}
+  /* Scraps follow the picked tier: a member off the ride takes their finds
+     with them. */
+  .scrap.benched{display:none}
+  .fl-note{font-family:var(--ui);font-size:.86rem;color:var(--faded);
+    background:var(--card-2);padding:10px 14px;clip-path:var(--edge-tab)}
 </style>
 </head>
 <body data-page="quote">
@@ -187,7 +192,8 @@
   <div id="step-quote" class="hidden">
     <div class="firstlook hidden" id="firstlook">
       <div class="fl-title">What we already spotted in your first pages</div>
-      <div class="fl-sub">A taste, not the full read — this is the kind of thing each of us catches.</div>
+      <div class="fl-sub">A taste, not the full read — each rider on your quest shows what they caught.</div>
+      <div class="fl-note hidden" id="flnote"></div>
     </div>
     <h2>Choose how deep we go</h2>
     <div class="quotegrid">
@@ -395,6 +401,29 @@
     }
   }
 
+  /* Scraps follow the picked tier: only riders' finds stay pinned up, and the
+     free tier explains where the finds went. */
+  function updateFirstLook(){
+    var fl = document.getElementById('firstlook');
+    if(fl.classList.contains('hidden')) return;
+    var t = SC.TIERS.find(function(x){ return x.id === picked; });
+    var visible = 0;
+    document.querySelectorAll('#sweep .scrap').forEach(function(s){
+      var riding = t.party.indexOf(s.dataset.key) >= 0;
+      s.classList.toggle('benched', !riding);
+      if(riding) visible++;
+    });
+    var note = document.getElementById('flnote');
+    if(!visible){
+      note.textContent = t.party.length
+        ? 'The riders on this tier came up clean on your first pages.'
+        : 'No party rides for the free tier — pick a tier with riders to see what they already spotted in your first pages.';
+      note.classList.remove('hidden');
+    } else {
+      note.classList.add('hidden');
+    }
+  }
+
   function showQuote(r){
     stopWaiting();
     skin = r.skin; band = r.band || 1;
@@ -409,7 +438,7 @@
     var fl = document.getElementById('firstlook');
     if(anyScrap){ fl.appendChild(document.getElementById('sweep')); fl.classList.remove('hidden'); }
     document.getElementById('step-quote').classList.remove('hidden');
-    renderTiers(); renderParty(); renderSummary();
+    renderTiers(); renderParty(); renderSummary(); updateFirstLook();
     SC.galleySay(say, SC.esc(skin.narration) +
       ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
   }
@@ -541,7 +570,7 @@
 
   document.getElementById('tiers').addEventListener('click', function(e){
     var el = e.target.closest('.tier'); if(!el) return;
-    picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
+    picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary(); updateFirstLook();
   });
   function focusTier(id){
     var t = document.querySelector('.tier[data-tier="' + id + '"]');
@@ -551,7 +580,7 @@
     var el = e.target.closest('.tier'); if(!el) return;
     if(e.key === 'Enter' || e.key === ' '){
       e.preventDefault(); picked = el.dataset.tier;
-      renderTiers(); renderParty(); renderSummary(); focusTier(picked); return;
+      renderTiers(); renderParty(); renderSummary(); updateFirstLook(); focusTier(picked); return;
     }
     var dir = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1
             : (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  ? -1 : 0;
@@ -560,7 +589,7 @@
     var ids = SC.TIERS.map(function(t){ return t.id; });
     var ni = (ids.indexOf(el.dataset.tier) + dir + ids.length) % ids.length;
     picked = ids[ni];
-    renderTiers(); renderParty(); renderSummary(); focusTier(picked);
+    renderTiers(); renderParty(); renderSummary(); updateFirstLook(); focusTier(picked);
   });
 
   document.getElementById('go').addEventListener('click', function(){

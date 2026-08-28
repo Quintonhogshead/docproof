@@ -400,8 +400,8 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .scene-band .art-figure{display:block;width:100%;height:100%}
 .scene-band .art-figure img{width:100%;height:100%;object-fit:cover;object-position:50% 92%}
 /* The whole-party group shot on /party — taller band, faces centred. */
-.scene-band.party-band{height:clamp(220px,30vw,380px);margin-top:var(--s3);box-shadow:var(--lift)}
-.scene-band.party-band .art-figure img{object-position:50% 58%}
+.scene-band.party-band{height:clamp(250px,36vw,440px);margin-top:var(--s3);box-shadow:var(--lift)}
+.scene-band.party-band .art-figure img{object-position:50% 52%}
 @media (max-width:760px){
   .curtain .cast{grid-template-columns:1fr;gap:var(--s2)}
   .curtain-galley{max-width:220px;order:-1;justify-self:start}
@@ -427,8 +427,11 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .strip{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s3);margin-top:var(--s3)}
 .strip .scene-card{position:relative;background:var(--card);padding:0 0 var(--s3);box-shadow:var(--lift);text-align:center}
 .strip .scene-card:nth-child(2){transform:rotate(-.6deg)}
-.strip .scene-art{display:block;width:100%;aspect-ratio:2/1;background:var(--card-2);overflow:hidden;color:var(--ink)}
+/* The commissioned step spots are 3:2 — match the frame so nothing is
+   lopped off, and cover-crop anything that isn't exactly 3:2. */
+.strip .scene-art{display:block;width:100%;aspect-ratio:3/2;background:var(--card-2);overflow:hidden;color:var(--ink)}
 .strip .scene-art .art-figure{width:100%;height:100%}
+.strip .scene-art .art-figure img{width:100%;height:100%;object-fit:cover}
 .strip .sno{font-family:var(--mono);font-size:var(--fs-small);color:var(--accent);letter-spacing:.1em;margin-top:var(--s2)}
 .strip .sh{font-family:var(--disp);font-size:1.2rem;margin:4px 0 6px}
 .strip .sp{font-family:var(--ui);font-size:.9rem;color:var(--faded);line-height:1.45;margin:0;padding:0 var(--s2)}
@@ -497,7 +500,9 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
   clip-path:var(--edge-torn)}
 .bench .bench-label{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-bottom:var(--s1)}
 .troupe{display:flex;align-items:flex-end;gap:clamp(4px,1.4vw,14px);min-height:190px;padding-bottom:18px;flex-wrap:nowrap;overflow-x:auto}
-.puppet{flex:0 0 auto;width:clamp(84px,13vw,120px);position:relative;text-align:center}
+/* Puppets share the bench: they shrink together as riders join, so the whole
+   party stays on stage instead of the last rider sliding out of view. */
+.puppet{flex:1 1 0;max-width:clamp(84px,13vw,120px);min-width:54px;position:relative;text-align:center}
 .puppet .fig{display:block;width:100%;color:var(--ink)}
 .puppet .fig .art-figure{width:100%;filter:var(--drop-sm)}
 .puppet.galley-anchor .fig .art-figure{filter:var(--drop)}

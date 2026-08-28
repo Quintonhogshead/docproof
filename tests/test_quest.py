@@ -195,20 +195,31 @@ def test_papery_pages_serve(monkeypatch, tmp_path):
 
 
 class _SweepProvider:
-    """Answers both questions the sweep asks, by schema: the skin call gets a
-    costume, every lane call gets one scrap. Thread-safe enough for the parallel
-    sweep — it never pops from a shared list, it answers by what it was asked."""
+    """Answers all three questions the sweep asks, by schema: the skin call
+    gets a costume, every lane call gets one scrap quoting the member's own
+    name (so the verbatim gate passes when the sample contains the names), and
+    every judge call keeps everything unless told to drop that member. Thread-
+    safe enough for the parallel sweep — it answers by what it was asked."""
 
     name = "fake-sweep"
 
-    def __init__(self, *, empty_lanes=(), fail_lanes=()):
+    def __init__(self, *, empty_lanes=(), fail_lanes=(), judge_drops=()):
         self.empty_lanes = set(empty_lanes)   # keyed by member name in the prompt
         self.fail_lanes = set(fail_lanes)
+        self.judge_drops = set(judge_drops)
         self.lane_calls = 0
+        self.judge_calls = 0
 
-    def complete_structured(self, *, schema_name, system, **kwargs):
+    def complete_structured(self, *, schema_name, system, user="", **kwargs):
         if schema_name == "quest_skin":
             return ProviderResult(parsed=_skin_payload(), usage=USAGE)
+        if schema_name == "quest_sweep_judge":
+            self.judge_calls += 1
+            who = next((n for _, n, *_ in LANES
+                        if f"proposed by {n}," in system), "?")
+            n = user.count("before:")
+            keep = [who not in self.judge_drops] * n
+            return ProviderResult(parsed={"keep": keep}, usage=USAGE)
         self.lane_calls += 1
         who = next((n for _, n, *_ in LANES if f"You are {n}," in system), "?")
         if who in self.fail_lanes:
@@ -217,8 +228,14 @@ class _SweepProvider:
         if who in self.empty_lanes:
             return ProviderResult(parsed={"catches": []}, usage=USAGE)
         return ProviderResult(parsed={"catches": [
-            {"before": f"{who}-before", "after": f"{who}-after",
+            {"before": who, "after": f"{who}-after",
              "why": "test catch"}]}, usage=USAGE)
+
+
+# A sample every fake lane's catch quotes honestly: it contains each member's
+# name, so the verbatim gate passes and the cross-lane dedupe sees six
+# distinct snags.
+_SWEEP_SAMPLE = "Pip and Bram and Maple and Cinder and Sage and Lark rode out."
 
 
 def test_sweep_sample_is_the_first_pages_only():
@@ -236,27 +253,64 @@ def test_run_lane_swallows_a_failed_call():
 
 
 def test_run_lane_caps_catches_at_three():
-    over = {"catches": [{"before": str(i), "after": str(i), "why": "x"}
+    over = {"catches": [{"before": "wet prose", "after": str(i), "why": "x"}
                         for i in range(5)]}
-    result = run_lane("prose", LANES[0],
-                      FakeProvider(results=[ProviderResult(parsed=over,
-                                                           usage=USAGE)]))
+    keep = {"keep": [True, True, True]}
+    result = run_lane("very wet prose indeed", LANES[0],
+                      FakeProvider(results=[
+                          ProviderResult(parsed=over, usage=USAGE),
+                          ProviderResult(parsed=keep, usage=USAGE)]))
     assert len(result.catches) == MAX_CATCHES
+
+
+def test_run_lane_verbatim_gate_drops_invented_quotes():
+    """A catch whose "before" is not the author's own words never reaches the
+    page — and with nothing left, no judge call is spent."""
+    fake = FakeProvider(results=[ProviderResult(parsed={"catches": [
+        {"before": "teh watchtower", "after": "the watchtower",
+         "why": "invented"}]}, usage=USAGE)])
+    result = run_lane("A clean page about a lighthouse.", LANES[0], fake)
+    assert result.catches == [] and result.error is None
+    assert len(fake.calls) == 1   # the lane read; no judge for zero catches
+
+
+def test_run_lane_judge_drops_bad_fixes_and_failure_keeps():
+    """The judge's drop verdicts land; a judge that dies keeps the
+    verbatim-checked catches instead of sinking the lane."""
+    catches = {"catches": [
+        {"before": "wet prose", "after": "dry prose", "why": "fine"},
+        {"before": "very wet", "after": "worse", "why": "bad fix"}]}
+    judged = run_lane("very wet prose indeed", LANES[0], FakeProvider(results=[
+        ProviderResult(parsed=catches, usage=USAGE),
+        ProviderResult(parsed={"keep": [True, False]}, usage=USAGE)]))
+    assert [c["before"] for c in judged.catches] == ["wet prose"]
+    unjudged = run_lane("very wet prose indeed", LANES[0], FakeProvider(results=[
+        ProviderResult(parsed=catches, usage=USAGE),
+        ProviderResult(stop_reason="error", error="judge down", usage=USAGE)]))
+    assert len(unjudged.catches) == 2
 
 
 def test_sweep_runs_every_lane_once_and_keys_each():
     provider = _SweepProvider(empty_lanes={"Sage"}, fail_lanes={"Lark"})
-    results = sweep("the manuscript prose goes here", provider)
+    results = sweep(_SWEEP_SAMPLE, provider)
     assert [r.key for r in results] == [key for key, *_ in LANES]
     assert provider.lane_calls == len(LANES)
     by_key = {r.key: r for r in results}
-    assert by_key["pip"].catches[0]["before"] == "Pip-before"
+    assert by_key["pip"].catches[0]["before"] == "Pip"
     assert by_key["sage"].catches == []           # empty is honest, not an error
     assert by_key["lark"].catches == [] and by_key["lark"].error
 
 
+def test_sweep_judge_drop_reaches_the_result():
+    provider = _SweepProvider(judge_drops={"Cinder"})
+    by_key = {r.key: r for r in sweep(_SWEEP_SAMPLE, provider)}
+    assert by_key["cinder"].catches == []
+    assert by_key["pip"].catches           # everyone else keeps theirs
+    assert provider.judge_calls == len(LANES)
+
+
 def test_iter_sweep_yields_every_lane():
-    keys = {r.key for r in iter_sweep("prose here", _SweepProvider())}
+    keys = {r.key for r in iter_sweep(_SWEEP_SAMPLE, _SweepProvider())}
     assert keys == {key for key, *_ in LANES}
 
 
@@ -284,7 +338,7 @@ def test_sweep_endpoint_streams_skin_then_lanes(tmp_path, monkeypatch):
     monkeypatch.setattr("app.routes.quest.get_api_key", lambda p: "test-key")
     monkeypatch.setattr("app.routes.quest._sweep_cache", {})
     app = create_app(tmp_path, start_runner=False)
-    body = b"It rained on the city. " * 60
+    body = (_SWEEP_SAMPLE + " It rained on the city. ").encode() * 30
     with TestClient(app) as client:
         resp = client.post("/api/quest/sweep",
                            files={"file": ("book.txt", body, "text/plain")})

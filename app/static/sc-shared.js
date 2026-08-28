@@ -348,11 +348,14 @@
         } else {
           el.classList.add('joining');
           el.style.animationDelay = (i * 90) + 'ms';
-          el.addEventListener('animationend', function () {
+          var landed = function () {
             el.classList.remove('joining');
             el.style.animationDelay = '';
             greet.classList.add('show');
-          }, { once: true });
+          };
+          el.addEventListener('animationend', landed, { once: true });
+          // Animations stall in hidden tabs; never leave a puppet mid-walk.
+          setTimeout(landed, 800 + i * 90);
         }
         setTimeout(function () { greet.classList.remove('show'); }, 2800 + i * 90);
       });
