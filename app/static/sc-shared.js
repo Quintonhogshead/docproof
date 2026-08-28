@@ -202,12 +202,31 @@
     setTimeout(kill, 1400);
   }
 
-  function applyTint(palette) {
+  function applyTint(palette, quiet) {
     var cls = PALETTE_TINTS[palette] || '';
     document.body.className = document.body.className
       .split(/\s+/).filter(function (c) { return c.indexOf('tint-') !== 0; })
       .concat(cls ? [cls] : []).join(' ').trim();
-    tintSweep();   // the payoff: a wash of the book's colour sweeps the page
+    if (!quiet) tintSweep();   // the payoff: the book's colour sweeps the page
+  }
+
+  /* ---- the book on Galley's desk -------------------------------------
+     The quote (skin + band + word count) rides sessionStorage, so wandering
+     to the party or pricing page — or back — never loses the dropped book.
+     One tab, one reading session; closing the browser clears the desk. */
+  var QUOTE_KEY = 'sc-quote';
+  function saveQuote(state) {
+    try { sessionStorage.setItem(QUOTE_KEY, JSON.stringify(state)); }
+    catch (e) { /* private mode: the quote simply doesn't persist */ }
+  }
+  function loadQuote() {
+    try {
+      var s = JSON.parse(sessionStorage.getItem(QUOTE_KEY) || 'null');
+      return (s && s.skin) ? s : null;
+    } catch (e) { return null; }
+  }
+  function clearQuote() {
+    try { sessionStorage.removeItem(QUOTE_KEY); } catch (e) { /* ditto */ }
   }
 
   var ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
@@ -306,11 +325,12 @@
       matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  /* ---- the party bench: join/leave choreography ----------------------------
-     hostEl is the `.troupe` row (its Galley anchor puppet is left in place).
-     .set(partyIds) diffs against what's shown: departures walk off the left
-     wing, arrivals walk on from the right and drop a greeting scrap. Under
-     reduced motion everything swaps instantly but the greeting still appears. */
+  /* ---- the cover cast: join/leave choreography -----------------------------
+     hostEl is the `.cover-cast` layer (its Galley anchor puppet stays put).
+     .set(partyIds) diffs against what's shown: departures peel off the cover,
+     arrivals are pasted into their spot in the scene and drop a greeting
+     scrap. Under reduced motion everything swaps instantly but the greeting
+     still appears. */
   function makeBench(hostEl) {
     var shown = [];
     function makePuppet(id) {
@@ -323,7 +343,7 @@
         '<div class="fig">' + artFigure(figKey(id)) + '</div>';
       return el;
     }
-    function set(party) {
+    function set(party, quiet) {
       party = party || [];
       var reduce = prefersReduce();
       // departures
@@ -345,18 +365,20 @@
         hostEl.appendChild(el);
         var greet = el.querySelector('.greet');
         var i = joinIndex++;
-        if (reduce) {
-          greet.classList.add('show');
-        } else {
+        if (!reduce) {
           el.classList.add('joining');
           el.style.animationDelay = (i * 90) + 'ms';
           el.addEventListener('animationend', function () {
             el.classList.remove('joining');
             el.style.animationDelay = '';
-            greet.classList.add('show');
           }, { once: true });
         }
-        setTimeout(function () { greet.classList.remove('show'); }, 2800 + i * 90);
+        if (!quiet) {
+          // A roll call: one greeting scrap at a time, so a full company
+          // joining at once never piles its hellos into a heap.
+          setTimeout(function () { greet.classList.add('show'); }, 420 + i * 700);
+          setTimeout(function () { greet.classList.remove('show'); }, 2020 + i * 700);
+        }
       });
       shown = party.slice();
     }
@@ -370,7 +392,8 @@
 
   function headerHTML(page) {
     var onQuote = page === 'quote' || page === 'quote-active';
-    var goLabel = onQuote ? 'Your quote' : 'Bring me your book';
+    // Once a book is on the desk, every page's CTA points at the open quote.
+    var goLabel = (onQuote || loadQuote()) ? 'Your quote' : 'Bring me your book';
     return '<header class="top">' +
       '<a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>' +
       '<nav class="nav" aria-label="Primary">' +
@@ -438,7 +461,8 @@
                 tierPlate: tierPlate, memberChapter: memberChapter,
                 findMember: findMember, figKey: figKey,
                 correctionScrap: correctionScrap, riderBusts: riderBusts,
-                galleyFig: galleyFig, makeBench: makeBench };
+                galleyFig: galleyFig, makeBench: makeBench,
+                saveQuote: saveQuote, loadQuote: loadQuote, clearQuote: clearQuote };
 
   /* ---- motion: scroll reveals + gentle hero parallax --------------------
      Opt-in and progressive: <html> gets .js-motion so the reveal hidden-state
@@ -513,7 +537,13 @@
     requestAnimationFrame(initReveals);
   }
 
-  function boot() { mountChrome(); injectArt(document); initMotion(); }
+  function boot() {
+    // A book already on the desk keeps its costume on every page — quietly,
+    // with no sweep: the reveal already happened when it was dropped.
+    var held = loadQuote();
+    if (held && held.skin && held.skin.palette) applyTint(held.skin.palette, true);
+    mountChrome(); injectArt(document); initMotion();
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
   } else {
