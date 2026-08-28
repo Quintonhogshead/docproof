@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Pip, the typo scout">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- FIGURE: Pip, the typo scout -->
+  <g class="ink">
+    <!-- lean shoulders, tilted slightly -->
+    <path d="M23,116 C24,94 33,82 42,80 L58,79 C67,81 75,93 77,116"/>
+    <!-- neck -->
+    <path d="M46,80 V72"/><path d="M54,80 V72"/>
+    <!-- face -->
+    <path d="M40,60 C40,52 44,48 50,48 C56,48 60,52 60,60 C60,67 56,72 50,72 C44,72 40,67 40,60 Z"/>
+    <!-- peaked cap: rounded brim + a horn flopping up-right -->
+    <path d="M39,51 C39,44 44,41 50,41 C56,41 61,44 61,51"/>
+    <path d="M39,51 L61,51"/>
+    <path d="M58,45 C64,37 70,32 75,29"/>
+    <!-- alert eyes -->
+    <path d="M45,59 h3"/><path d="M52,59 h3"/>
+  </g>
+  <g class="ink-fill">
+    <!-- pom at the cap's tip -->
+    <circle cx="75" cy="29" r="2.4"/>
+  </g>
+  <!-- SIGNATURE PROP: slim upright dagger at viewer's right -->
+  <g class="ac">
+    <!-- narrow blade pointing up -->
+    <path d="M72,52 L72,78"/>
+    <!-- crossguard -->
+    <path d="M66,80 L78,80"/>
+    <!-- grip -->
+    <path d="M72,80 L72,90"/>
+    <!-- pommel -->
+    <path d="M70,90 L74,90"/>
+  </g>
+  <g class="ac-fill">
+    <!-- blade tip highlight -->
+    <path d="M72,50 L70,55 L74,55 Z"/>
+  </g>
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

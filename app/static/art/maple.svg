@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Maple, the consistency scholar">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- FIGURE: Maple, the consistency scholar -->
+  <g class="ink">
+    <!-- shoulders -->
+    <path d="M24,116 V102 C24,88 35,82 50,82 C65,82 76,88 76,102 V116"/>
+    <!-- collar -->
+    <path d="M40,84 L50,94 L60,84"/>
+    <!-- neck -->
+    <path d="M44,82 V76"/><path d="M56,82 V76"/>
+    <!-- head -->
+    <path d="M50,44 C42,44 37,50 37,58 C37,67 43,73 50,73 C57,73 63,67 63,58 C63,50 58,44 50,44 Z"/>
+    <!-- neat hair framing brow -->
+    <path d="M38,56 C39,47 44,44 50,44 C56,44 61,47 62,56"/>
+    <path d="M40,54 C42,49 46,47 50,47 C54,47 58,49 60,54"/>
+    <!-- gathered bun at crown -->
+    <path d="M38,50 C40,44 45,41 50,41 C55,41 60,44 62,50"/>
+    <!-- brow / eyes -->
+    <path d="M43,58 h5"/><path d="M52,58 h5"/>
+  </g>
+  <g class="ink-fill">
+    <!-- bun -->
+    <ellipse cx="50" cy="40" rx="6" ry="5"/>
+  </g>
+  <!-- SIGNATURE PROP: open book -->
+  <g class="ac">
+    <!-- left page -->
+    <path d="M50,90 C46,86 42,85 38,86 V102 C42,101 46,102 50,105"/>
+    <!-- right page -->
+    <path d="M50,90 C54,86 58,85 62,86 V102 C58,101 54,102 50,105"/>
+    <!-- spine -->
+    <path d="M50,90 V105"/>
+    <!-- text lines -->
+    <path d="M41,91 h6"/><path d="M41,94 h6"/><path d="M41,97 h6"/>
+    <path d="M53,91 h6"/><path d="M53,94 h6"/><path d="M53,97 h6"/>
+  </g>
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

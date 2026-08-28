@@ -4,28 +4,33 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pricing — Spell &amp; Check</title>
-<link rel="icon" href="data:,">
+<meta name="description" content="Five ways to hire the party — from a free lantern pass to a full campaign. One book, one price, no subscriptions.">
+<link rel="icon" href="/assets/art/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/assets/art/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/art/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Spell &amp; Check">
+<meta property="og:title" content="Pricing — Spell &amp; Check">
+<meta property="og:description" content="Five ways to hire the party — from a free lantern pass to a full campaign. One book, one price, no subscriptions.">
+<meta property="og:url" content="https://spell-and-check.fly.dev/pricing">
+<meta property="og:image" content="https://spell-and-check.fly.dev/assets/art/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Macondo&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,500&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
 <link rel="stylesheet" href="/assets/sc-shared.css">
 <style>
-  table{border-collapse:collapse;width:100%;max-width:680px;font-size:15px}
-  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
-  th{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:500}
-  td b{font-variant-numeric:tabular-nums}
+  .tariff{border-collapse:collapse;width:100%;max-width:680px;font-family:var(--ui);font-size:var(--fs-ui)}
+  .tariff th,.tariff td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+  .tariff th{font-size:var(--fs-label);letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-weight:500}
+  .tariff tr:nth-child(even) td{background:var(--paper-2)}
+  .tariff td b{font-variant-numeric:tabular-nums;color:var(--ink)}
 </style>
 </head>
-<body>
+<body data-page="pricing">
 <div class="wrap">
-
-  <header class="top">
-    <a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>
-    <nav class="nav">
-      <a href="/party">Meet the party</a>
-      <a class="now" href="/pricing">Pricing</a>
-      <a class="go" href="/quote">Bring me your book</a>
-    </nav>
-  </header>
 
   <section class="galley">
     <div class="lantern" aria-hidden="true"><div class="flame"></div></div>
@@ -35,49 +40,37 @@
     </div>
   </section>
 
-  <div class="tiers" id="tiers" style="margin-top:20px"></div>
+  <div class="tiers stack-m" id="tiers"></div>
 
   <h2>Length changes the price</h2>
-  <p class="lede" style="font-size:16px">The prices above anchor a typical novel
+  <p class="lede lede-sm">The prices above anchor a typical novel
   (60,000–120,000 words). Shorter and longer books scale:</p>
-  <table>
+  <table class="tariff stack-s">
     <tr><th>Manuscript</th><th>Multiplier</th><th>Proofread costs</th></tr>
     <tr><td>Under 60,000 words</td><td>&times;0.7</td><td><b>$20</b></td></tr>
     <tr><td>60,000–120,000 words</td><td>&times;1.0</td><td><b>$29</b></td></tr>
     <tr><td>Over 120,000 words</td><td>&times;1.5</td><td><b>$44</b></td></tr>
   </table>
-  <p style="font-size:14px;color:var(--dim)">Exact quote appears the moment
+  <p class="note stack-s">Exact quote appears the moment
   Galley reads your file — before you pay anything.</p>
 
   <h2>Included in every paid tier</h2>
-  <div class="card" style="max-width:640px">
-    <p style="margin:0">Tracked-changes .docx you accept or reject in Word ·
+  <div class="card narrow">
+    <p>Tracked-changes .docx you accept or reject in Word ·
     the free ride-again re-run if obvious typos slipped through · your
     manuscript read once, kept 30 days, deleted, never trained on.</p>
   </div>
 
-  <p style="margin-top:36px"><a class="btn" href="/quote">Get your exact quote</a></p>
+  <p class="hero-cta"><a class="btn" href="/quote">Get your exact quote</a></p>
 
-  <footer>
-    <span>Spell &amp; Check</span>
-    <a href="/party">Meet the party</a>
-    <span class="right">No subscriptions. One book, one price.</span>
-  </footer>
 </div>
 
 <script src="/assets/sc-shared.js"></script>
 <script>
   SC.galleySay(document.getElementById('say'),
     'No riddles here. <em>Five ways to hire us</em> — from my free lantern pass to a full campaign.');
-  document.getElementById('tiers').innerHTML = SC.TIERS.map(function(t){
-    return '<a class="tier" href="/quote" style="text-decoration:none;color:inherit">' +
-      (t.recommended ? '<span class="flag">Most hired</span>' : '') +
-      '<div class="tname">' + t.name + '</div>' +
-      '<div class="tsub">' + t.sub + '</div>' +
-      '<div class="tblurb">' + t.blurb + '</div>' +
-      '<div class="tprice">' + SC.tierPrice(t, 1) +
-      (t.price ? '<small> · typical novel</small>' : '') + '</div></a>';
-  }).join('');
+  document.getElementById('tiers').innerHTML =
+    SC.TIERS.map(function(t){ return SC.tierPlate(t, 1, {typical:true}); }).join('');
 </script>
 </body>
 </html>

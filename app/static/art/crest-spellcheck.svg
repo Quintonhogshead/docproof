@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Spellcheck crest — the lantern">
+  <circle class="field" cx="50" cy="50" r="44"/>
+  <g class="hatch"><path d="M22,52 A28,28 0 0,1 34,28"/><path d="M26,56 A26,26 0 0,1 37,34"/></g>
+  <g class="ac">
+    <rect x="41" y="46" width="18" height="22" rx="2"/>
+    <path d="M45,46 v-4 a5,5 0 0,1 10,0 v4"/>
+    <path d="M50,42 v-8"/>
+    <path d="M41,68 h18"/>
+  </g>
+  <path class="ac-fill" d="M50,50 c3.2,2.8 3.2,6.6 0,9.4 c-3.2,-2.8 -3.2,-6.6 0,-9.4 z"/>
+  <circle class="frame" cx="50" cy="50" r="44"/>
+  <circle class="frame-in" cx="50" cy="50" r="39"/>
+</svg>

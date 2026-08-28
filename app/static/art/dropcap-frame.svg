@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" role="img" aria-label="Illuminated initial frame">
+  <rect class="field" x="4" y="4" width="72" height="72" rx="3"/>
+  <rect class="frame" x="4" y="4" width="72" height="72" rx="3"/>
+  <rect class="frame-in" x="9" y="9" width="62" height="62" rx="2"/>
+  <g class="hatch">
+    <path d="M12,20 L20,12"/><path d="M12,28 L28,12"/>
+    <path d="M68,60 L60,68"/><path d="M68,52 L52,68"/>
+  </g>
+  <g class="ac-fill">
+    <circle cx="14" cy="14" r="2.2"/><circle cx="66" cy="14" r="2.2"/>
+    <circle cx="14" cy="66" r="2.2"/><circle cx="66" cy="66" r="2.2"/>
+  </g>
+</svg>

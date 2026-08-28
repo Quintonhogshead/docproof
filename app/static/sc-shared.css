@@ -1,123 +1,384 @@
 /* Spell & Check — the papery daylight theme.
-   The site is warm paper by default; a generated skin tints the accent
-   variables only (see applyTint in sc-shared.js). The candlelit look lives on
-   /customize alone, on purpose. */
+   ---------------------------------------------------------------------------
+   An illustrated-storybook system: real book typefaces, layered parchment,
+   engraved hairline frames (elevation by ink, never blur), and a paper grain
+   pressed into the ground. The site is warm paper by default; a generated skin
+   tints the accent + parchment variables per uploaded book (see applyTint in
+   sc-shared.js). The candlelit workshop look lives on /customize alone.
+
+   Structure:
+     1. Design tokens (colour, type, space, ornament)
+     2. Skin tints (11 palettes — accent + paper only)
+     3. Base + paper grain
+     4. Typography scale
+     5. Chrome: header, footer
+     6. Galley speaks
+     7. Frames, ornaments, dividers
+     8. Buttons + links
+     9. Components: members, tiers
+    10. Utilities
+    11. Reduced-motion
+   --------------------------------------------------------------------------- */
+
+/* ------------------------------------------------------------------ tokens */
 :root{
-  --paper:#f7f0e1;
-  --card:#fffaf0;
-  --ink:#2a2216;
-  --faded:#7a6c58;
-  --dim:#a3947d;
-  --line:rgba(42,34,22,.14);
-  --line-strong:rgba(42,34,22,.30);
-  --accent:#b4551f;            /* ember, on paper */
-  --accent-hot:#d97b3f;
-  --accent-wash:rgba(180,85,31,.08);
-  --good:#3f7a64;
-  --shadow:0 10px 30px rgba(42,34,22,.08);
-  --disp:'Macondo','Comic Sans MS',cursive;
-  --body:'Alegreya Sans','Gill Sans','Segoe UI',system-ui,sans-serif;
+  /* Parchment — layered, warm, deeper than before so ink contrast holds. */
+  --paper:#f2e9d2;          /* the ground */
+  --paper-2:#ece0c4;        /* recessed panels, table stripes */
+  --card:#fbf5e4;           /* raised leaves of paper */
+  --card-2:#f6eed9;
+
+  /* Ink — deepened for AA contrast on parchment. */
+  --ink:#221b10;            /* body + display */
+  --ink-soft:#463a26;       /* secondary headings */
+  --faded:#6a5b40;          /* muted prose — passes AA on --paper */
+  --dim:#6f5f3e;            /* fine print — passes AA on --paper (5.1:1) */
+
+  /* Rules — the engraving lives here, not in shadows. */
+  --line:rgba(34,27,16,.16);
+  --line-strong:rgba(34,27,16,.34);
+  --rule:#b6a37c;           /* visible hairline for double-rule frames */
+  --rule-soft:#cabb98;
+
+  /* Ember — the primary accent, on paper. */
+  --accent:#a8481a;
+  --accent-hot:#c8632c;
+  --accent-wash:rgba(168,72,26,.09);
+  --accent-ink:#fff6e9;     /* text that sits on an ember fill */
+
+  /* Antique gold — the support colour: seals, crests, small flourishes. */
+  --gold:#8a6a1e;
+  --gold-soft:#b8974a;
+  --gold-wash:rgba(138,106,30,.10);
+
+  --good:#356b56;
+
+  /* Type — real book faces. Display is a digitised 17th-c printing face;
+     prose is a serif; UI labels a humanist sans; lane names an honest mono. */
+  --disp:'IM Fell English','Georgia',serif;
+  --disp-sc:'IM Fell English SC','IM Fell English','Georgia',serif;
+  --body:'Alegreya','Georgia','Iowan Old Style',serif;
+  --ui:'Alegreya Sans','Gill Sans','Segoe UI',system-ui,sans-serif;
   --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,monospace;
-}
-/* Skin palettes, re-mixed for a light ground: the paper itself takes the
-   book's hue (subtly — ink contrast holds), and the accent carries the rest. */
-body.tint-rose{--accent:#b23c64;--accent-hot:#d4638b;--accent-wash:rgba(178,60,100,.10);--paper:#f8ecea;--card:#fff7f5}
-body.tint-rain{--accent:#54636e;--accent-hot:#7a8b96;--accent-wash:rgba(84,99,110,.10);--paper:#eef0f0;--card:#fafbfb}
-body.tint-honey{--accent:#a37413;--accent-hot:#c69433;--accent-wash:rgba(163,116,19,.11);--paper:#f9f1dd;--card:#fffaea}
-body.tint-void{--accent:#5d51b8;--accent-hot:#8177d6;--accent-wash:rgba(93,81,184,.10);--paper:#f0eef7;--card:#faf9ff}
-body.tint-neon{--accent:#a13c8c;--accent-hot:#c765b1;--accent-wash:rgba(161,60,140,.10);--paper:#f6ecf4;--card:#fdf6fc}
-body.tint-verdigris{--accent:#2f7a66;--accent-hot:#55a08b;--accent-wash:rgba(47,122,102,.10);--paper:#ecf2ee;--card:#f8fcf9}
-body.tint-bone{--accent:#993a34;--accent-hot:#bb5f58;--accent-wash:rgba(153,58,52,.10);--paper:#f3ecea;--card:#fdf7f5}
-body.tint-gold{--accent:#8f6a10;--accent-hot:#b58c2e;--accent-wash:rgba(143,106,16,.12);--paper:#f7f0dc;--card:#fffae8}
-body.tint-slate{--accent:#4d6f8f;--accent-hot:#7194b3;--accent-wash:rgba(77,111,143,.10);--paper:#eef1f4;--card:#f9fbfd}
-body.tint-rust{--accent:#a04a1e;--accent-hot:#c26f41;--accent-wash:rgba(160,74,30,.10);--paper:#f7eee5;--card:#fff8f0}
-body.tint-frost{--accent:#3d7d99;--accent-hot:#62a2bd;--accent-wash:rgba(61,125,153,.10);--paper:#edf3f6;--card:#f9fcfe}
 
+  /* Fluid type scale. */
+  --fs-hero:clamp(2.7rem,6.5vw,4.75rem);
+  --fs-h1:clamp(2rem,4vw,3rem);
+  --fs-h2:clamp(1.55rem,3.2vw,2.15rem);
+  --fs-h3:clamp(1.18rem,2vw,1.42rem);
+  --fs-lede:clamp(1.14rem,1.5vw,1.32rem);
+  --fs-body:1.0625rem;      /* 17px */
+  --fs-ui:0.9375rem;        /* 15px */
+  --fs-small:0.8125rem;     /* 13px */
+  --fs-label:0.72rem;
+
+  /* 8px spacing scale. */
+  --s1:8px;  --s2:16px; --s3:24px; --s4:32px;
+  --s5:48px; --s6:64px; --s7:96px; --s8:128px;
+
+  --radius:3px;             /* crisp printed corners, not soft cards */
+  --radius-pill:999px;
+  --wrap:1000px;
+
+  /* A faint flat lift — ink, not blur. */
+  --lift:0 1px 0 var(--line), 0 0 0 1px var(--rule-soft);
+}
+
+/* ------------------------------------------------------------------- tints */
+/* Each skin takes the paper's hue subtly and carries the rest in the accent.
+   Only accent + paper vars move; ink, rules, and gold stay put so contrast
+   and the engraving read the same on every book. */
+body.tint-rose     {--accent:#a83259;--accent-hot:#c85a81;--accent-wash:rgba(168,50,89,.10);--paper:#f2e2e0;--paper-2:#ecd6d3;--card:#fcf1ef;--card-2:#f7e8e5}
+body.tint-rain     {--accent:#4a5a66;--accent-hot:#6f818d;--accent-wash:rgba(74,90,102,.10);--paper:#e6e9ea;--paper-2:#dadfe0;--card:#f6f8f8;--card-2:#eef1f1}
+body.tint-honey    {--accent:#996b0c;--accent-hot:#c08d28;--accent-wash:rgba(153,107,12,.12);--paper:#f3e8cc;--paper-2:#edddb8;--card:#fdf6df;--card-2:#f8eecb}
+body.tint-void     {--accent:#544ab0;--accent-hot:#7a70d0;--accent-wash:rgba(84,74,176,.10);--paper:#e8e5f1;--paper-2:#ddd9ec;--card:#f6f4fd;--card-2:#efecf9}
+body.tint-neon     {--accent:#973383;--accent-hot:#bd5ca8;--accent-wash:rgba(151,51,131,.10);--paper:#efe1ec;--paper-2:#e8d4e3;--card:#fcf1fa;--card-2:#f6e8f2}
+body.tint-verdigris{--accent:#26725d;--accent-hot:#4f9884;--accent-wash:rgba(38,114,93,.10);--paper:#e2ece5;--paper-2:#d5e2da;--card:#f3faf5;--card-2:#eaf3ec}
+body.tint-bone     {--accent:#8f322c;--accent-hot:#b3554e;--accent-wash:rgba(143,50,44,.10);--paper:#ede2df;--paper-2:#e5d6d1;--card:#fbf2ef;--card-2:#f4e8e4}
+body.tint-gold     {--accent:#856209;--accent-hot:#ab8628;--accent-wash:rgba(133,98,9,.13);--paper:#f1e7c9;--paper-2:#e9dab3;--card:#fcf5db;--card-2:#f6edc7}
+body.tint-slate    {--accent:#436486;--accent-hot:#6a8bad;--accent-wash:rgba(67,100,134,.10);--paper:#e5eaef;--paper-2:#d8e0e7;--card:#f5f9fc;--card-2:#edf2f7}
+body.tint-rust     {--accent:#9c4419;--accent-hot:#bd6739;--accent-wash:rgba(156,68,25,.10);--paper:#f1e5d8;--paper-2:#ead7c3;--card:#fcf4e9;--card-2:#f6ecdb}
+body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,111,143,.10);--paper:#e2ecf1;--paper-2:#d4e2ea;--card:#f3fafd;--card-2:#eaf3f8}
+
+/* --------------------------------------------------------------- base/grain */
 *{box-sizing:border-box}
-body{
-  margin:0;background:var(--paper);color:var(--ink);
-  font-family:var(--body);font-size:17px;line-height:1.6;
-  background-image:radial-gradient(900px 420px at 80% -8%, var(--accent-wash), transparent 65%);
-  min-height:100vh;transition:background .5s;
-}
-a{color:var(--accent);text-decoration:underline dotted;text-underline-offset:3px}
-a:hover{color:var(--accent-hot)}
-.wrap{max-width:1000px;margin:0 auto;padding:0 24px 100px}
+html{font-size:100%}
 
-/* ---------- header ---------- */
-.top{display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:20px 0;border-bottom:1px solid var(--line)}
-.wordmark{font-family:var(--disp);font-size:26px;color:var(--ink);text-decoration:none;white-space:nowrap}
-.wordmark .amp{color:var(--accent)}
-.nav{display:flex;gap:20px;margin-left:auto;align-items:center}
-.nav a{font-size:15px;color:var(--faded);text-decoration:none;letter-spacing:.02em}
+/* Skip link — visible only on keyboard focus. */
+.skip{position:absolute;left:-9999px;top:0;z-index:100;background:var(--accent);color:var(--accent-ink);
+  font-family:var(--ui);font-size:var(--fs-ui);padding:10px 16px;border-radius:0 0 var(--radius) 0;text-decoration:none}
+.skip:focus{left:0}
+body{
+  margin:0;
+  background-color:var(--paper);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:var(--fs-body);
+  line-height:1.62;
+  min-height:100vh;
+  /* Ember glow + a pressed paper grain (fractal turbulence, very faint). */
+  background-image:
+    radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  transition:background-color .55s ease;
+}
+.wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--s3) var(--s7)}
+
+/* ------------------------------------------------------------- typography */
+h1,h2,h3{font-family:var(--disp);font-weight:400;color:var(--ink);line-height:1.14;text-wrap:balance;margin:0}
+h1{font-size:var(--fs-h1)}
+h2{font-size:var(--fs-h2);margin:var(--s6) 0 var(--s2)}
+h3{font-size:var(--fs-h3);line-height:1.25}
+p{margin:0 0 var(--s2)}
+.eyebrow{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+.lede{font-family:var(--body);font-size:var(--fs-lede);color:var(--faded);max-width:62ch;line-height:1.5}
+.lede-sm{font-size:1.02rem;line-height:1.55}
+.label{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+.mono{font-family:var(--mono);font-size:var(--fs-small);color:var(--dim);letter-spacing:-.01em}
+.note{font-family:var(--ui);font-size:var(--fs-ui);color:var(--dim)}
+.note-accent{color:var(--accent)}
+small{font-size:var(--fs-small)}
+
+/* ------------------------------------------------------------------ chrome */
+/* Header + footer are injected from sc-shared.js so the pages stop drifting. */
+.top{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+  padding:var(--s3) 0;border-bottom:1px solid var(--line);position:relative}
+.top::after{content:"";position:absolute;left:0;right:0;bottom:-4px;height:1px;background:var(--line)}
+.wordmark{font-family:var(--disp);font-size:1.7rem;line-height:1;color:var(--ink);
+  text-decoration:none;white-space:nowrap;letter-spacing:.01em}
+.wordmark .amp{color:var(--accent);font-style:italic}
+.nav{display:flex;gap:var(--s3);margin-left:auto;align-items:center;flex-wrap:wrap}
+.nav a{font-family:var(--ui);font-size:var(--fs-ui);color:var(--faded);text-decoration:none;letter-spacing:.02em}
 .nav a:hover{color:var(--ink)}
 .nav a.now{color:var(--accent)}
-.nav .go{background:var(--accent);color:#fff8ee;border-radius:12px;padding:9px 18px;font-weight:700;text-decoration:none}
-.nav .go:hover{background:var(--accent-hot);color:#fff8ee}
+.nav .go{background:var(--accent);color:var(--accent-ink);border-radius:var(--radius);
+  padding:9px 18px;font-weight:600;box-shadow:var(--lift)}
+.nav .go:hover{background:var(--accent-hot);color:var(--accent-ink)}
+.nav .go.now{color:var(--accent-ink)}
+@media (max-width:520px){
+  .top{gap:var(--s2)}
+  .wordmark{font-size:1.5rem}
+  .nav{width:100%;margin-left:0;justify-content:flex-start;gap:var(--s2) var(--s3)}
+}
 
-/* ---------- Galley speaks ---------- */
-.galley{display:flex;gap:18px;align-items:flex-start;padding:36px 0 8px}
-.lantern{flex:0 0 auto;width:54px;height:54px;border:1px solid var(--line-strong);border-radius:50%;
+footer{border-top:1px solid var(--line);margin-top:var(--s7);padding:var(--s4) 0 var(--s2);
+  font-family:var(--ui);font-size:var(--fs-small);color:var(--dim)}
+.colophon{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:baseline}
+.colophon a{color:var(--faded);text-decoration:none}
+.colophon a:hover{color:var(--ink)}
+.colophon .mark{font-family:var(--disp);font-size:1.05rem;color:var(--ink-soft)}
+.colophon .right{margin-left:auto;font-style:italic;color:var(--faded)}
+
+/* ------------------------------------------------------------ galley speaks */
+.galley{display:flex;gap:var(--s3);align-items:flex-start;padding:var(--s5) 0 var(--s1)}
+.lantern{flex:0 0 auto;width:58px;height:58px;border:1px solid var(--rule);border-radius:50%;
   background:radial-gradient(circle at 50% 62%, var(--accent-wash), transparent 70%),var(--card);
-  display:grid;place-items:center;box-shadow:var(--shadow)}
+  display:grid;place-items:center;box-shadow:var(--lift)}
 .flame{width:10px;height:16px;background:var(--accent-hot);border-radius:50% 50% 50% 50%/62% 62% 38% 38%;
-  box-shadow:0 0 12px 2px var(--accent-wash);transform-origin:50% 90%;animation:flick 2.6s ease-in-out infinite}
+  box-shadow:0 0 14px 3px var(--accent-wash);transform-origin:50% 90%;animation:flick 2.6s ease-in-out infinite}
 @keyframes flick{0%,100%{transform:scaleY(1) rotate(-2deg)}30%{transform:scaleY(1.1) rotate(2deg)}60%{transform:scaleY(.95) rotate(-1deg)}}
-.galley .who{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:4px}
-.galley .say{font-family:var(--disp);font-size:clamp(20px,3vw,27px);line-height:1.45;max-width:56ch;text-wrap:balance;margin:0;min-height:1.4em}
-.galley .say em{color:var(--accent);font-style:normal}
+.galley .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:6px}
+.galley .say{font-family:var(--disp);font-size:clamp(1.35rem,3vw,1.85rem);line-height:1.4;max-width:56ch;text-wrap:balance;margin:0;min-height:1.4em}
+.galley .say em{color:var(--accent);font-style:italic}
 .caret{display:inline-block;width:9px;height:1.02em;background:var(--accent);vertical-align:-.15em;margin-left:2px;animation:blink 1s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
 
-/* ---------- common blocks ---------- */
-.lede{font-size:19px;color:var(--faded);max-width:62ch}
-h2{font-family:var(--disp);font-weight:400;font-size:26px;margin:48px 0 12px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px 24px;box-shadow:var(--shadow)}
-.label{font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
-.mono{font:12px var(--mono);color:var(--dim)}
-.btn{display:inline-block;background:var(--accent);color:#fff8ee;border:none;border-radius:12px;
-  padding:14px 28px;font:700 16px var(--body);letter-spacing:.03em;cursor:pointer;text-decoration:none}
-.btn:hover{background:var(--accent-hot);color:#fff8ee}
-.btn.ghost{background:none;color:var(--accent);border:1.5px solid var(--accent)}
-.btn.ghost:hover{background:var(--accent-wash)}
-.btn:disabled{background:var(--dim);cursor:not-allowed}
+/* ------------------------------------------------------- frames & ornaments */
+/* The engraved card: a printed leaf with a double rule pressed inside its
+   edge. No blur — depth is the second line, not a shadow. */
+.card{position:relative;background:var(--card);border:1px solid var(--rule);
+  border-radius:var(--radius);padding:var(--s3) var(--s3);box-shadow:var(--lift)}
+.card::before{content:"";position:absolute;inset:5px;border:1px solid var(--line);
+  border-radius:1px;pointer-events:none}
+.card > :last-child{margin-bottom:0}
+.card > :first-child{margin-top:0}
+
+/* Corner ornaments — opt-in printer's-frame marks at each corner. */
+.ornate::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M1 5V1h4' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M13 5V1H9' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M1 9v4h4' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M13 9v4H9' fill='none' stroke='%23a8481a' stroke-width='1'/%3E%3C/svg%3E");
+  background-position:9px 9px, right 9px top 9px, left 9px bottom 9px, right 9px bottom 9px;
+  background-repeat:no-repeat;opacity:.5}
+
+/* Deckled / ruled section divider with a centred diamond ornament. */
+.divider{display:flex;align-items:center;gap:var(--s2);margin:var(--s5) 0;color:var(--rule)}
+.divider::before,.divider::after{content:"";height:1px;flex:1;
+  background:linear-gradient(90deg,transparent,var(--rule) 12%,var(--rule) 88%,transparent)}
+.divider .di{flex:0 0 auto;color:var(--accent)}
+.divider .di svg{display:block;width:16px;height:16px;fill:currentColor}
+
+/* ---------------------------------------------------------- buttons & links */
+a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
+  text-decoration-color:var(--accent-wash);text-underline-offset:3px}
+a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
+.btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:none;
+  border-radius:var(--radius);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
+  cursor:pointer;text-decoration:none;box-shadow:var(--lift);transition:background .18s ease}
+.btn:hover{background:var(--accent-hot);color:var(--accent-ink)}
+.btn.ghost{background:none;color:var(--accent);border:1.5px solid var(--accent);box-shadow:none}
+.btn.ghost:hover{background:var(--accent-wash);color:var(--accent-hot)}
+.btn:disabled{background:var(--dim);cursor:not-allowed;box-shadow:none}
 .btn:focus-visible,.nav a:focus-visible,a:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
 
-/* ---------- party member cards (light) ---------- */
-.members{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
-.member{display:grid;grid-template-columns:52px 1fr;gap:14px;align-items:start;
-  background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
-.member .sigil{width:52px;height:52px;border-radius:14px;border:1px solid var(--line-strong);
-  display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
-.member .sigil svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.member .mname{font-family:var(--disp);font-size:19px}
-.member .mname small{font-family:var(--body);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-left:8px}
-.member .mjob{font-size:14.5px;color:var(--faded);margin-top:4px}
-.member .mlane{font:11px var(--mono);color:var(--dim);margin-top:6px}
+/* ------------------------------------------------------------------- art */
+/* Injected engraving artwork. Line work is currentColor (inherits ink); the
+   .ac class carries the skin's accent, so every portrait re-costumes with the
+   book. Swap any .svg for a .png/.webp in SC.ART and the loader falls back to
+   an <img> with no render-code change. */
+.artwork{display:block;width:100%;height:100%}
+.artwork .field{fill:var(--card-2)}
+.artwork .ink{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.artwork .ink-fill{fill:currentColor;stroke:none}
+.artwork .frame{fill:none;stroke:currentColor;stroke-width:2.4}
+.artwork .frame-in{fill:none;stroke:currentColor;stroke-width:1;opacity:.55}
+.artwork .ac{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.artwork .ac-fill{fill:var(--accent);stroke:none}
+.artwork .hatch{fill:none;stroke:currentColor;stroke-width:1;opacity:.26}
+.artwork .hatch-ac{fill:none;stroke:var(--accent);stroke-width:1;opacity:.3}
+.art-figure{display:block;color:var(--ink)}
+.art-figure img{width:100%;height:100%;object-fit:contain}
 
-/* ---------- tier cards ---------- */
-.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;align-items:stretch}
-.tier{background:var(--card);border:1.5px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow);
-  display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:border-color .2s, transform .15s;position:relative}
-.tier:hover{transform:translateY(-2px);border-color:var(--line-strong)}
-.tier.picked{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-wash), var(--shadow)}
+/* --------------------------------------------------------------- components */
+/* Party member cards (light). */
+.members{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s2)}
+.member{position:relative;display:grid;grid-template-columns:56px 1fr;gap:var(--s2);align-items:start;
+  background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:var(--s2) var(--s3);box-shadow:var(--lift)}
+.member::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+.member .sigil{width:56px;height:56px;border-radius:var(--radius);border:1px solid var(--rule);
+  display:grid;place-items:center;color:var(--accent);background:var(--accent-wash);overflow:hidden}
+.member .sigil svg{width:30px;height:30px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.member .sigil:has(.art-figure){background:var(--card-2);color:var(--ink);padding:0}
+.member .sigil .art-figure{width:100%;height:100%}
+.member .mname{font-family:var(--disp);font-size:1.22rem;line-height:1.1}
+.member .mname small{font-family:var(--ui);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-left:8px;white-space:nowrap}
+.member .mjob{font-size:.95rem;color:var(--faded);margin-top:6px;line-height:1.45}
+.member .mlane{font:.68rem var(--mono);color:var(--dim);margin-top:8px;letter-spacing:0}
+
+/* Tier plates. */
+.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--s2);align-items:stretch}
+.tier{position:relative;background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);
+  padding:var(--s3) var(--s2);box-shadow:var(--lift);display:flex;flex-direction:column;gap:6px;
+  cursor:pointer;transition:transform .15s ease, border-color .2s ease;color:inherit;text-decoration:none}
+.tier::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+.tier:hover{transform:translateY(-2px);border-color:var(--accent)}
+.tier.picked{border-color:var(--accent)}
+.tier.picked::before{border-color:var(--accent);inset:6px}
 .tier:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
-.tier .tname{font-family:var(--disp);font-size:20px}
-.tier .tsub{font-size:12.5px;color:var(--accent);letter-spacing:.04em;font-style:italic}
-.tier .tprice{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:auto}
-.tier .tprice small{font-size:12.5px;color:var(--dim);font-weight:400}
-.tier .tblurb{font-size:14px;color:var(--faded)}
-.tier .flag{position:absolute;top:-11px;left:16px;background:var(--accent);color:#fff8ee;border-radius:999px;
-  font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:3px 10px}
+.tier .tname{font-family:var(--disp);font-size:1.28rem;line-height:1.1}
+.tier .tsub{font-family:var(--body);font-size:.82rem;color:var(--accent);letter-spacing:.02em;font-style:italic}
+.tier .tprice{font-family:var(--ui);font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums;margin-top:auto;color:var(--ink)}
+.tier .tprice small{font-size:.78rem;color:var(--dim);font-weight:400}
+.tier .tblurb{font-size:.9rem;color:var(--faded);line-height:1.45}
+.tier .flag{position:absolute;top:-11px;left:var(--s2);z-index:1;background:var(--accent);color:var(--accent-ink);
+  border-radius:var(--radius-pill);font-family:var(--ui);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;padding:3px 11px}
 
-/* ---------- footer ---------- */
-footer{border-top:1px solid var(--line);margin-top:80px;padding:22px 0;display:flex;gap:18px;flex-wrap:wrap;
-  font-size:13.5px;color:var(--dim)}
-footer a{color:var(--faded)}
-footer .right{margin-left:auto}
+/* -------------------------------------------------------------- hero (home) */
+.hero{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:var(--s5);align-items:center;
+  padding:var(--s6) 0 var(--s4)}
+.hero .who{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--faded);margin-bottom:var(--s2)}
+.hero .say{font-family:var(--disp);font-size:var(--fs-hero);line-height:1.05;margin:0;text-wrap:balance}
+.hero .say em{color:var(--accent);font-style:italic}
+.hero-art{position:relative;color:var(--ink)}
+.hero-art .art-figure{display:block;width:100%;filter:drop-shadow(0 2px 0 var(--line))}
+.hero-art .glow{position:absolute;inset:-12% -8% -8% -8%;z-index:-1;border-radius:50%;
+  background:radial-gradient(closest-side, var(--accent-wash), transparent 78%)}
+@media (max-width:760px){
+  .hero{grid-template-columns:1fr;gap:var(--s3);padding-top:var(--s4)}
+  .hero-art{max-width:180px;order:-1}
+}
+
+/* ------------------------------------------------------ how-it-works journey */
+.journey{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:var(--s3);
+  border:1px solid var(--rule);border-radius:var(--radius);background:var(--card);box-shadow:var(--lift);overflow:hidden}
+.step{position:relative;padding:var(--s3) var(--s2);text-align:center}
+.step + .step{border-left:1px dashed var(--line-strong)}
+.step .sno{font-family:var(--mono);font-size:var(--fs-small);color:var(--accent);letter-spacing:.1em}
+.step .sh{font-family:var(--disp);font-size:1.18rem;margin:6px 0 4px}
+.step .sp{font-family:var(--ui);font-size:.86rem;color:var(--faded);line-height:1.4;margin:0}
+@media (max-width:680px){.journey{grid-template-columns:1fr 1fr}.step:nth-child(2){border-left:0}
+  .step:nth-child(3),.step:nth-child(4){border-top:1px dashed var(--line-strong)}
+  .step:nth-child(3){border-left:0}}
+
+/* --------------------------------------------------------- oath plaque (home) */
+.plaque{position:relative;background:var(--card-2);border:1px solid var(--rule);border-radius:var(--radius);
+  padding:var(--s4) var(--s4);box-shadow:var(--lift)}
+.plaque::before{content:"";position:absolute;inset:6px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+.plaque .oath{font-family:var(--disp);font-size:1.35rem;line-height:1.4;margin:0 0 var(--s2);max-width:52ch}
+.plaque .flow{font-family:var(--mono);font-size:var(--fs-small);color:var(--dim);margin:0}
+
+/* -------------------------------------------------- party portrait gallery */
+.gallery{display:grid;gap:var(--s4);margin-top:var(--s3)}
+.chapter{display:grid;grid-template-columns:132px minmax(0,1fr) 190px;gap:var(--s4);align-items:start}
+.chapter .portrait{color:var(--ink);background:var(--card-2);border:1px solid var(--rule);border-radius:var(--radius);
+  box-shadow:var(--lift);overflow:hidden}
+.chapter .portrait .art-figure{display:block;width:100%}
+.chapter-body{padding-top:var(--s1)}
+.chapter-no{font-family:var(--disp);font-size:1rem;color:var(--accent);letter-spacing:.1em;font-style:italic}
+.chapter-name{font-family:var(--disp);font-size:1.7rem;margin:2px 0 8px;line-height:1.05}
+.chapter-name small{font-family:var(--ui);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-left:10px;vertical-align:middle}
+.chapter-say{font-size:1.08rem;color:var(--ink-soft);margin:0;max-width:46ch}
+.chapter-lane{background:var(--card);border:1px solid var(--rule);border-radius:var(--radius);padding:var(--s2);position:relative;box-shadow:var(--lift)}
+.chapter-lane::before{content:"";position:absolute;inset:4px;border:1px solid var(--line);border-radius:1px;pointer-events:none}
+.chapter-lane .label{margin-bottom:6px}
+.chapter-lane .mono{color:var(--faded)}
+@media (max-width:720px){
+  .chapter{grid-template-columns:96px minmax(0,1fr);gap:var(--s3)}
+  .chapter-lane{grid-column:1 / -1}
+}
+
+/* ----------------------------------------------------------- tier crests */
+.tier .tcrest{width:54px;height:54px;margin:0 0 4px;color:var(--ink)}
+.tier .tcrest .art-figure{display:block;width:100%;height:100%}
+
+/* --------------------------------------------------------------- utilities */
+.wide{max-width:none}
+.narrow{max-width:640px}
+.narrow-lg{max-width:680px}
+.hero-cta{margin-top:var(--s4);display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.stack-s{margin-top:var(--s2)}
+.stack-m{margin-top:var(--s3)}
+.stack-l{margin-top:var(--s4)}
+.hidden{display:none !important}
+
+/* ------------------------------------------------------------------ motion */
+/* All motion is opt-in through prefers-reduced-motion and touches only
+   transform/opacity. The reveal base state hides content, so it is applied by
+   JS (.js-motion on <html>) — never on a no-JS page, which must stay visible. */
+.js-motion [data-reveal]{opacity:0;transform:translateY(16px);
+  transition:opacity .7s ease, transform .7s cubic-bezier(.2,.7,.2,1)}
+.js-motion [data-reveal].in{opacity:1;transform:none}
+
+@media (prefers-reduced-motion:no-preference){
+  .hero-art .art-figure{animation:idle-float 7s ease-in-out infinite}
+  .hero-art .glow{animation:idle-glow 7s ease-in-out infinite}
+  @keyframes idle-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes idle-glow{0%,100%{opacity:.85}50%{opacity:1}}
+}
+
+/* Skin-reveal payoff: a wash of the book's colour blooms across the page. */
+.tint-sweep{position:fixed;inset:0;z-index:60;pointer-events:none;
+  background:radial-gradient(circle at 50% 38%, var(--accent-wash), transparent 62%)}
+@media (prefers-reduced-motion:no-preference){
+  .tint-sweep{animation:tint-bloom 1s ease forwards}
+  @keyframes tint-bloom{0%{opacity:0;transform:scale(.55)}38%{opacity:1}100%{opacity:0;transform:scale(1.7)}}
+}
+
+/* View Transitions: a soft cross-document wipe between pages (opt-in via the
+   MPA rule; browsers without support simply navigate as normal). */
+@view-transition{navigation:auto}
+@media (prefers-reduced-motion:no-preference){
+  ::view-transition-old(root){animation:vt-out .28s ease both}
+  ::view-transition-new(root){animation:vt-in .42s ease both}
+  @keyframes vt-out{to{opacity:0}}
+  @keyframes vt-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+}
 
 @media (prefers-reduced-motion:reduce){
-  .flame{animation:none}
-  .caret{animation:none}
-  .tier{transition:none}
+  .flame,.caret,.wdots i{animation:none}
+  .tier,body{transition:none}
+  .js-motion [data-reveal]{opacity:1;transform:none;transition:none}
+  .hero-art .art-figure,.hero-art .glow{animation:none}
 }

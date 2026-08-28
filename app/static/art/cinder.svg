@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Cinder, the repair smith">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- FIGURE: Cinder, the repair smith -->
+  <g class="ink">
+    <!-- Solid, grounded shoulders -->
+    <path d="M22,116 V96 C22,84 32,80 40,79 L60,79 C68,80 78,84 78,96 V116"/>
+    <!-- Neck -->
+    <path d="M44,79 V71"/><path d="M56,79 V71"/>
+    <!-- Head / jaw -->
+    <path d="M38,58 C38,68 43,73 50,73 C57,73 62,68 62,58"/>
+    <!-- Ears -->
+    <path d="M37,58 C35,58 35,62 38,62"/>
+    <path d="M63,58 C65,58 65,62 62,62"/>
+    <!-- Brow / eyes -->
+    <path d="M42,57 L47,57"/><path d="M53,57 L58,57"/>
+    <!-- Nose -->
+    <path d="M50,58 L50,63"/>
+    <!-- Set mouth -->
+    <path d="M45,67 L55,67"/>
+    <!-- Flat cap: brow band + soft rounded crown with a jaunty peak -->
+    <path d="M37,54 C37,44 42,39 50,39 C58,39 63,44 63,54"/>
+    <path d="M37,54 L63,54"/>
+    <path d="M63,54 C69,54 71,52 70,50 L63,51"/>
+    <!-- Cap crease -->
+    <path d="M44,40 C46,46 54,46 56,40"/>
+    <!-- Collar / shirt fold -->
+    <path d="M44,80 L50,86 L56,80"/>
+  </g>
+  <!-- SIGNATURE PROP: smith's hammer over the viewer's right shoulder -->
+  <g class="ac">
+    <!-- Handle running diagonally up to the head -->
+    <path d="M58,116 L74,88"/>
+    <!-- Rectangular hammer head at top-right -->
+    <path d="M67,96 L79,82 L86,88 L74,102 Z"/>
+    <!-- Head banding -->
+    <path d="M72,91 L80,98"/>
+  </g>
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

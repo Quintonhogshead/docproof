@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" role="img" aria-label="Sage, the continuity elder">
+  <path class="field" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116 Z"/>
+  <g class="hatch">
+    <path d="M18,42 L30,28"/><path d="M18,50 L34,31"/><path d="M20,58 L37,39"/>
+    <path d="M82,42 L70,28"/><path d="M82,50 L66,31"/><path d="M80,58 L63,39"/>
+  </g>
+  <!-- FIGURE: Sage, the continuity elder -->
+  <g class="ink">
+    <!-- shoulders / robe -->
+    <path d="M22,116 V96 C22,86 30,80 40,79 L44,90 H56 L60,79 C70,80 78,86 78,96 V116" />
+    <!-- robe fold lines -->
+    <path d="M42,116 V98" />
+    <path d="M58,116 V98" />
+    <!-- neck -->
+    <path d="M45,90 V80" />
+    <path d="M55,90 V80" />
+    <!-- pointed elder's hood over the head -->
+    <path d="M34,58 C34,40 40,30 50,28 C60,30 66,40 66,58" />
+    <path d="M50,28 C50,22 51,19 52,17" />
+    <!-- face outline (jaw hidden by beard) -->
+    <path d="M38,54 C38,64 42,72 50,73 C58,72 62,64 62,54" />
+    <!-- brow / hairline under hood -->
+    <path d="M40,54 C40,50 44,48 50,48 C56,48 60,50 60,54" />
+    <!-- eyes -->
+    <path d="M43,57 h4" />
+    <path d="M53,57 h4" />
+    <!-- flowing beard below the chin — light, tapering -->
+    <path d="M41,66 C40,80 43,94 48,102" />
+    <path d="M59,66 C60,80 57,94 52,102" />
+    <path d="M50,71 V100" />
+  </g>
+  <!-- SIGNATURE PROP: staff with orb -->
+  <path class="ac" d="M74,48 V110" />
+  <path class="ac" d="M74,48 m-4,-4 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+  <circle class="ac-fill" cx="74" cy="44" r="2" />
+  <path class="frame" d="M12,116 V44 C12,20 30,10 50,10 C70,10 88,20 88,44 V116"/>
+  <path class="frame-in" d="M17,114 V46 C17,26 33,17 50,17 C67,17 83,26 83,46 V114"/>
+</svg>

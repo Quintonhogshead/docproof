@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Spell &amp; Check — a proofreading adventure">
+  <defs>
+    <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+    <radialGradient id="glow" cx="82%" cy="8%" r="70%">
+      <stop offset="0%" stop-color="#c8632c" stop-opacity="0.14"/>
+      <stop offset="60%" stop-color="#c8632c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#f2e9d2"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <rect width="1200" height="630" filter="url(#grain)" opacity="0.04"/>
+  <rect x="24" y="24" width="1152" height="582" rx="6" fill="none" stroke="#b6a37c" stroke-width="2"/>
+  <rect x="34" y="34" width="1132" height="562" rx="4" fill="none" stroke="#221b10" stroke-opacity="0.16" stroke-width="1"/>
+
+  <!-- eyebrow -->
+  <text x="90" y="150" font-family="'Alegreya Sans','Gill Sans',sans-serif" font-size="26" letter-spacing="6" fill="#6f5f3e">A PROOFREADING ADVENTURE</text>
+  <!-- wordmark -->
+  <text x="86" y="270" font-family="'IM Fell English','Georgia',serif" font-size="118" fill="#221b10">Spell <tspan fill="#a8481a" font-style="italic">&amp;</tspan> Check</text>
+  <!-- tagline -->
+  <text x="90" y="352" font-family="'Alegreya','Georgia',serif" font-size="40" fill="#6a5b40">A careful, AI-powered proofread of your whole novel,</text>
+  <text x="90" y="404" font-family="'Alegreya','Georgia',serif" font-size="40" fill="#6a5b40">delivered by a tiny adventuring party, led by Galley.</text>
+  <text x="90" y="500" font-family="'Alegreya Sans','Gill Sans',sans-serif" font-size="27" fill="#a8481a" letter-spacing="1">AI does the reading. You keep the pen.</text>
+
+  <!-- lantern motif, far right — clear of the tagline in serif or sans -->
+  <g transform="translate(1070,300)">
+    <g fill="none" stroke="#221b10" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="-46" y="-52" width="92" height="116" rx="12"/>
+      <path d="M-26,-52 v-19 a26,26 0 0,1 52,0 v19"/>
+      <path d="M0,-90 v-30"/>
+      <path d="M-46,64 h92"/>
+    </g>
+    <path d="M0,-30 c19,17 19,40 0,56 c-19,-16 -19,-39 0,-56 z" fill="#c8632c"/>
+  </g>
+</svg>
