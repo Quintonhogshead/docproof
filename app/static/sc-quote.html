@@ -95,6 +95,26 @@
   .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good);white-space:nowrap}
   .ex .why{color:var(--dim);font-size:.8rem}
   .lanternmember .sigil{color:var(--accent)}
+
+  /* The sample-sweep: scraps the party pins up while we wait. */
+  .sweep{display:grid;gap:12px;margin-top:6px}
+  .sweep-intro{font-family:var(--ui);font-size:.9rem;color:var(--faded);margin-top:6px}
+  .sweep-intro b{color:var(--ink)}
+  .scrap{background:var(--paper);border:1px solid var(--line);box-shadow:var(--drop-sm);
+    padding:12px 14px;clip-path:var(--edge-tab);animation:scrapin .45s ease both}
+  .scrap.empty{opacity:.72;font-family:var(--ui);font-size:.88rem;color:var(--faded)}
+  .scrap.empty b{color:var(--ink)}
+  @keyframes scrapin{from{opacity:0;transform:translateY(8px) rotate(-.4deg)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){.scrap{animation:none}}
+  .scraphead{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .scraphead .portrait{flex:0 0 auto;width:34px;height:34px;display:grid;place-items:center;color:var(--accent)}
+  .scraphead .portrait svg{width:26px;height:26px}
+  .scraphead .who b{font-family:var(--disp);font-size:1.02rem;font-weight:400;display:block;line-height:1.1}
+  .scraphead .who small{font-family:var(--ui);font-size:.72rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+  .scrap .finds{display:grid;gap:7px}
+  .firstlook{margin:4px 0 22px}
+  .firstlook .fl-title{font-family:var(--disp);font-size:1.18rem;margin-bottom:4px}
+  .firstlook .fl-sub{font-family:var(--ui);font-size:.86rem;color:var(--dim);margin-bottom:12px}
 </style>
 </head>
 <body data-page="quote">
@@ -148,6 +168,11 @@
           <button class="chip" data-a="secret">Don't ask</button>
         </div>
       </div>
+      <div class="sweep-intro hidden" id="sweepintro">
+        <b>A taste from your first pages.</b> Each of us takes a quick look — here’s
+        the kind of thing we each catch (not the full read, just a peek).
+      </div>
+      <div class="sweep" id="sweep" aria-live="polite"></div>
     </div>
   </div>
 
@@ -158,6 +183,10 @@
   </div>
 
   <div id="step-quote" class="hidden">
+    <div class="firstlook hidden" id="firstlook">
+      <div class="fl-title">What we already spotted in your first pages</div>
+      <div class="fl-sub">A taste, not the full read — this is the kind of thing each of us catches.</div>
+    </div>
     <h2>Choose how deep we go</h2>
     <div class="quotegrid">
       <div>
@@ -202,6 +231,7 @@
 (function(){
   var say = document.getElementById('say');
   var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
+  var skinPayload = null, anyScrap = false;
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var bench = SC.makeBench(document.getElementById('troupe'));
 
@@ -273,6 +303,9 @@
   function startWaiting(fname){
     document.getElementById('step-drop').classList.add('hidden');
     document.getElementById('waiting').classList.remove('hidden');
+    document.getElementById('sweep').innerHTML = '';
+    document.getElementById('sweepintro').classList.add('hidden');
+    anyScrap = false;
     document.getElementById('wtitle').textContent = 'Reading “' + fname + '”…';
     setPose('reading');
     SC.galleySay(say, '<em>Reading now.</em> Spectacles on — give me a moment with your first pages.');
@@ -370,10 +403,96 @@
     chip.style.display = 'flex';
     document.getElementById('booktitle').textContent = skin.book_title;
     document.getElementById('bookmeta').textContent = wordLabel + ' · ' + skin.genre;
+    // Carry the first-pages scraps up into the quote as a lasting "first look".
+    var fl = document.getElementById('firstlook');
+    if(anyScrap){ fl.appendChild(document.getElementById('sweep')); fl.classList.remove('hidden'); }
     document.getElementById('step-quote').classList.remove('hidden');
     renderTiers(); renderParty(); renderSummary();
     SC.galleySay(say, SC.esc(skin.narration) +
       ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
+  }
+
+  /* ---------- the sample-sweep: scraps the party pins up as they read ------- */
+  function memberByKey(k){
+    for(var i=0;i<SC.MEMBERS.length;i++){ if(SC.MEMBERS[i].id === k) return SC.MEMBERS[i]; }
+    return null;
+  }
+  function emptyLine(k){
+    if(k === 'sage') return 'nothing snagged here — Sage reads the whole book, not just these pages.';
+    if(k === 'maple') return 'nothing to reconcile yet — the consistency scan spans the whole book.';
+    return 'a clean pass on your first pages.';
+  }
+  function alias(k, m){ return (skin && skin[k] && skin[k].alias) || m.name; }
+  function scrapCard(lane){
+    var m = memberByKey(lane.key); if(!m) return '';
+    var who = SC.esc(alias(lane.key, m));
+    if(!lane.catches || !lane.catches.length){
+      return '<div class="scrap empty" data-key="' + lane.key + '"><b>' + who +
+             '</b> — ' + emptyLine(lane.key) + '</div>';
+    }
+    var finds = lane.catches.map(function(c){
+      return ex(SC.esc(c.before), SC.esc(c.after), SC.esc(c.why));
+    }).join('');
+    return '<div class="scrap" data-key="' + lane.key + '">' +
+      '<div class="scraphead"><span class="portrait">' + SC.artFigure(m.id) + '</span>' +
+      '<span class="who"><b>' + who + '</b><small>' + SC.esc(m.role) + '</small></span></div>' +
+      '<div class="finds">' + finds + '</div></div>';
+  }
+
+  /* Stream /api/quest/sweep: the costume arrives first, then each member's
+     scraps as their call lands. Resolves with the skin payload once we have
+     enough to show the quote; rejects only when nothing usable arrived. */
+  function runSweep(file){
+    return new Promise(function(resolve, reject){
+      var fd = new FormData(); fd.append('file', file, file.name);
+      var sweepEl = document.getElementById('sweep');
+      var gotSkin = false;
+      fetch('/api/quest/sweep', {method:'POST', body:fd}).then(function(resp){
+        if(!resp.ok || !resp.body){
+          return resp.json().catch(function(){ return {}; }).then(function(b){
+            reject(new Error(b.detail || ('Upload failed (' + resp.status + ').')));
+          });
+        }
+        function handle(ev, data){
+          if(ev === 'skin'){
+            gotSkin = true; skinPayload = data; skin = data.skin; band = data.band || 1;
+            wordLabel = (data.word_count || 0).toLocaleString() + ' words';
+            SC.applyTint(skin.palette);
+            document.getElementById('wtitle').textContent =
+              'The party is reading “' + (skin.book_title || file.name) + '”…';
+            document.getElementById('sweepintro').classList.remove('hidden');
+          } else if(ev === 'lane'){
+            sweepEl.insertAdjacentHTML('beforeend', scrapCard(data));
+            if(data.catches && data.catches.length) anyScrap = true;
+          } else if(ev === 'done'){
+            resolve(skinPayload);
+          } else if(ev === 'error'){
+            reject(new Error(data.detail || 'The read failed.'));
+          }
+        }
+        var reader = resp.body.getReader(), dec = new TextDecoder(), buf = '';
+        function pump(){
+          return reader.read().then(function(r){
+            if(r.done){
+              if(gotSkin) resolve(skinPayload); else reject(new Error('The read ended early.'));
+              return;
+            }
+            buf += dec.decode(r.value, {stream:true});
+            var frames = buf.split('\n\n'); buf = frames.pop();
+            frames.forEach(function(f){
+              var ev = null, data = null;
+              f.split('\n').forEach(function(line){
+                if(line.indexOf('event: ') === 0) ev = line.slice(7);
+                else if(line.indexOf('data: ') === 0){ try{ data = JSON.parse(line.slice(6)); }catch(e){} }
+              });
+              if(ev && data) handle(ev, data);
+            });
+            return pump();
+          });
+        }
+        return pump();
+      }).catch(function(e){ if(gotSkin) resolve(skinPayload); else reject(e); });
+    });
   }
 
   function sendManuscript(file){
@@ -387,14 +506,7 @@
       return;
     }
     startWaiting(file.name);
-    var fd = new FormData(); fd.append('file', file, file.name);
-    fetch('/api/quest/skin', {method:'POST', body:fd})
-      .then(function(resp){
-        return resp.json().catch(function(){ return {}; }).then(function(body){
-          if(!resp.ok) throw new Error(body.detail || ('Upload failed (' + resp.status + ').'));
-          return body;
-        });
-      })
+    runSweep(file)
       .then(showQuote)
       .catch(function(e){
         stopWaiting();

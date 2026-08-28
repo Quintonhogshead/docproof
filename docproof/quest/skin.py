@@ -222,14 +222,18 @@ def _collisions(skin: SkinSpec, sample: str) -> tuple[str, ...]:
 
 
 def generate_skin(path: str | Path, provider: Provider, *,
-                  model: str = LUNA_MODEL) -> SkinResult:
+                  model: str = LUNA_MODEL,
+                  ms: Manuscript | None = None) -> SkinResult:
     """Read a sample of the manuscript and costume the party for it.
 
     Raises SkinError (via IngestError passthrough at the caller's choice) only
     when the file itself cannot be read. A model that fails, refuses, or
     returns junk is not an error the author should ever see: those paths return
-    DEFAULT_SKIN with `fallback=True` and the reason in `error`."""
-    ms = read_sample_source(path)
+    DEFAULT_SKIN with `fallback=True` and the reason in `error`. Pass an
+    already-read `ms` to skip a second parse when the caller (the sweep) has it
+    in hand."""
+    if ms is None:
+        ms = read_sample_source(path)
     if not ms.text.strip():
         raise SkinError(f"{Path(path).name} contains no readable text.")
     user = _user_prompt(ms)
