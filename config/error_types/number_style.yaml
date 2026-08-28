@@ -1,16 +1,22 @@
 key: number_style
 name: Number style
-version: 1
+version: 2
 
 detection_prompt: |
   The Atmosphere house guide spells out one through one hundred in prose and
-  uses numerals from 101 up. Centuries are always spelled out. Simple
+  uses numerals from 101 up. Ordinals in prose are spelled out too. Centuries
+  are always spelled out. Cancer stages are set in ROMAN numerals. Clock times
+  are set as digits with minutes and a capital meridiem ("11:00 AM"). Simple
   fractions are spelled out and hyphenated when adjectival. Thousands take a
   comma.
 
   FLAG:
   - A bare integer from 1 to 100 in ordinary prose: "She waited 20 minutes.",
     "There were 8 of them."
+  - An ordinal numeral in ordinary prose: "the 4th floor" -> "the fourth
+    floor", "his 3rd attempt" -> "his third attempt", "the 42nd day" -> "the
+    forty-second day". Word often sets the suffix ("th", "st") in superscript;
+    that formatting does not change the rule — it is the same error.
   - A hyphenated duration, distance, or weight modifier in narration: "a
     25-minute wait" -> "a twenty-five-minute wait", "a 30-minute ride", "a
     5-mile radius", "a 5-pound bag". These are prose, not measurements — the
@@ -24,6 +30,12 @@ detection_prompt: |
     "the 1990s" — keeps its numerals; see below.)
   - Centuries written with an ordinal numeral: "20th century",
     "21st-century medicine".
+  - A cancer stage in Arabic digits or spelled out: "stage 4 cancer" ->
+    "stage IV cancer", "stage four liver cancer" -> "stage IV liver cancer".
+    House sets cancer stages in Roman numerals — the ONE context where this
+    type's direction runs toward numerals. Only cancer staging: other medical
+    and technical labels ("type 2 diabetes", "grade 3") keep Arabic digits
+    and are not flagged.
   - Simple fractions as digits in prose: "2/3 of the class".
   - A four-digit-or-larger quantity missing its thousands comma: "1000 people",
     "12500 miles". (Years are exempt — see below.)
@@ -31,17 +43,19 @@ detection_prompt: |
   Do NOT flag — these are legitimate numeral contexts and the house guide
   leaves them alone:
   - Dates and years: "July 14, 1989", "in 1997", "the 1990s".
-  - Times, including a BARE clock hour: "8:30 a.m.", "at 5:00", "around 4",
-    "the meeting starts at 8". A bare hour is a time-format question (should
-    it be "4:00"?), not a spell-out — the whole-book consistency scan owns
-    it, and spelling it out fights the book's own clock style.
+  - Times, including a BARE clock hour: "8:30 AM", "at 5:00", "around 4",
+    "the meeting starts at 8". The house time form is digits with minutes and
+    a capital meridiem ("11:00 AM") — a deterministic sweep normalizes the
+    meridiem and the whole-book consistency scan owns bare hours, so never
+    spell a clock time out and never restyle one yourself.
   - Money, which the currency_style type owns entirely.
   - Percentages: "40 percent".
   - Addresses, house and room numbers: "12 Oak Street", "room 4".
   - Chapter, page, verse, section, and figure numbers.
-  - Medical and technical stage/type/grade labels: "stage 4 cancer",
-    "type 2 diabetes", "grade 3". The numeral IS the label; spelling it out
-    is a wrong edit the head proofreader reverses.
+  - Medical and technical type/grade labels: "type 2 diabetes", "grade 3".
+    The numeral IS the label; spelling it out is a wrong edit the head
+    proofreader reverses. (Cancer STAGES are the exception — they convert to
+    Roman numerals; see FLAG above.)
   - Measurements and data with ABBREVIATED or technical units: "10 kg",
     "30°C", "a 9mm round". A spelled-out everyday unit in narration
     ("20 minutes", "a 5-mile radius") is prose and IS flagged — see above.
@@ -57,24 +71,31 @@ detection_prompt: |
     numerals — not for 101-and-up, not for round quantities ("ten thousand
     rounds" stays as written; Chicago spells round large numbers), and never
     inside dialogue or a spoken transcript, where spelled-out numbers are
-    always correct. This type's only direction is numerals → words.
+    always correct. The single exception is a cancer stage, which converts to
+    Roman numerals wherever it sits — see FLAG above. Everything else runs
+    numerals → words only.
   - A character reciting digits aloud — a phone number, a combination, a
     countdown — where the numerals are the point.
 
 fix_guidance: |
   corrected_text must repeat the entire sentence with the number spelled out
   and nothing else changed. Hyphenate compound numbers from twenty-one through
-  ninety-nine. Hyphenate an age used attributively before a noun ("a
-  fifty-year-old woman") and leave it open in the predicate ("over fifty years
-  old"). Spell centuries as ordinals in words ("twentieth century"). Hyphenate
-  a fraction used adjectivally ("a two-thirds majority"). For a missing
+  ninety-nine. Spell ordinals as words ("the fourth floor", "his third
+  attempt"), hyphenating compounds ("the forty-second day"). Hyphenate an age
+  used attributively before a noun ("a fifty-year-old woman") and leave it
+  open in the predicate ("over fifty years old"). Spell centuries as ordinals
+  in words ("twentieth century"). Set a cancer stage in capital Roman
+  numerals ("stage IV"), changing nothing but the stage number. Hyphenate a
+  fraction used adjectivally ("a two-thirds majority"). For a missing
   thousands comma, insert only the comma.
 
 confidence_guidance: |
-  high   — a bare integer 1–100 in plain narration with no numeral context in
-           sight, or an ordinal-numeral century.
+  high   — a bare integer 1–100 or an ordinal numeral in plain narration with
+           no numeral context in sight, an ordinal-numeral century, or a
+           cancer stage with the disease named nearby.
   medium — the context could be a legitimate-numeral one (a measurement, a
-           tally, a form) depending on how the surrounding scene reads.
+           tally, a form, an address or proper name for an ordinal) depending
+           on how the surrounding scene reads.
   low    — the numerals appear in dialogue, a quoted document, or a passage
            where the digit form looks deliberate.
 
@@ -87,6 +108,12 @@ examples:
       confidence: high
   - text: "The letter was postmarked July 14, 1989."
     finding: null
+  - text: "Back to the 4th floor."
+    finding:
+      original_text: "Back to the 4th floor."
+      corrected_text: "Back to the fourth floor."
+      explanation: "House style spells out ordinals in prose."
+      confidence: high
   - text: "He collected 20th century pulp magazines."
     finding:
       original_text: "He collected 20th century pulp magazines."
@@ -113,7 +140,13 @@ examples:
       corrected_text: "Day one is here, and I'm pumped."
       explanation: "A day counter in narration is spelled out."
       confidence: high
-  - text: "He has stage 4 liver cancer."
+  - text: "He has stage four liver cancer that has metastasized to his lungs."
+    finding:
+      original_text: "He has stage four liver cancer that has metastasized to his lungs."
+      corrected_text: "He has stage IV liver cancer that has metastasized to his lungs."
+      explanation: "House style sets cancer stages in Roman numerals."
+      confidence: high
+  - text: "She manages her type 2 diabetes with diet alone."
     finding: null
   - text: "We will start getting ready around 4."
     finding: null

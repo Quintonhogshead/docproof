@@ -888,28 +888,48 @@ def unclosed_quote_findings(paragraphs: Sequence[ParagraphRef],
 
 # --- time of day --------------------------------------------------------------
 
-# A clock time with an AM/PM meridiem attached to a digit: "3:40AM", "2:00 AM",
+# A clock time with an AM/PM meridiem attached to a digit: "3:40AM", "2:00 a.m.",
 # "4:15PM", "at 2 PM". The digit requirement is what keeps the sweep off the
 # stray capital pair — "I AM here", an "AM" radio band — that is not a time at
-# all. Already-correct "3:40 a.m." matches too, but the replacement equals the
-# text, so no hit is emitted and the sweep stays idempotent.
+# all. Already-correct "3:40 AM" matches too, but the replacement equals the
+# text, so no hit is emitted and the sweep stays idempotent. The meridiem's
+# trailing dot is captured separately: on a dotted form ("3 p.m.") that dot may
+# be the abbreviation's own or the sentence's period, and the two need
+# different replacements.
 _TIME_MERIDIEM = re.compile(
-    r"(?<![.\d])(\d{1,2}(?::\d{2})?)[  ]*([AaPp])[  ]*\.?[  ]*([Mm])\.?")
+    r"(?<![.\d])(\d{1,2})(:\d{2})?[  ]*([AaPp])[  ]*\.?[  ]*([Mm])(\.?)")
 
 
 def _sweep_time_of_day(text: str, variant=None) -> list[Hit]:
-    """House/Chicago style sets a meridiem lowercase with periods and a space:
-    "3:40 a.m.", not "3:40AM". Only the meridiem is touched — whether the hour
-    itself should be spelled out or take ":00" is a number-style judgment the
-    number rules own, so a bare "2 p.m." keeps its digit here."""
+    """House style sets a clock time as digits with minutes and a capital
+    meridiem, no periods: "11:00 AM", not "11:00 a.m." or "11AM". A bare hour
+    with a meridiem gains its ":00" here ("2 PM" -> "2:00 PM") — the meridiem
+    is what makes it unambiguously a time; a meridiem-less "around 4" stays
+    the whole-book consistency scan's question. A dotted form whose final
+    period is followed by a capitalized word is skipped, not guessed: that dot
+    may close the sentence ("at 3 p.m. He left") or belong to the abbreviation
+    ("3 p.m. Eastern"), and a sweep must never decide that blind."""
     hits: list[Hit] = []
     for m in _TIME_MERIDIEM.finditer(text):
-        canonical = f"{m.group(1)} {m.group(2).lower()}.{m.group(3).lower()}."
+        canonical = f"{m.group(1)}{m.group(2) or ':00'} {m.group(3).upper()}M"
+        if m.group(5):                      # the matched form ended with "."
+            tail = text[m.end():]
+            stripped = tail.lstrip(" \t ")
+            if not tail or tail[0] in "”’\"'":
+                canonical += "."            # paragraph- or quote-final: the
+                                            # dot is the sentence's period
+            elif tail[0] in ")]" or (stripped and (
+                    stripped[0].isupper() or stripped[0].isdigit()
+                    or stripped[0] in "“‘\"")):
+                continue                    # sentence break or "p.m. Eastern"?
+                                            # ambiguous — leave it to a reader
+            # otherwise (comma, lowercase word, dash…): the dot was the
+            # abbreviation's own, and the replacement drops it.
         if m.group(0) == canonical:
             continue
         hits.append(Hit(m.start(), m.end(), canonical,
-                        "House style sets a time's meridiem lowercase with "
-                        "periods: “a.m.”/“p.m.”"))
+                        "House style sets clock times as digits with minutes "
+                        "and a capital meridiem: “11:00 AM”."))
     return hits
 
 
@@ -1184,7 +1204,7 @@ SWEEPS: tuple[Sweep, ...] = (
           _sweep_quote_punctuation),
     Sweep("sweep_nested_quote", "Nested quotations set in singles",
           _sweep_nested_quote),
-    Sweep("sweep_time_of_day", "Times of day (a.m./p.m.)", _sweep_time_of_day),
+    Sweep("sweep_time_of_day", "Times of day (11:00 AM)", _sweep_time_of_day),
     Sweep("sweep_deity_capital", "Deity capitalized in set expressions",
           _sweep_deity_capital),
     Sweep("sweep_dialogue_splice", "Comma splices around a dialogue tag",
