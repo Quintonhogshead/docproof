@@ -184,14 +184,24 @@ body{
   font-size:var(--fs-body);
   line-height:1.62;
   min-height:100vh;
-  /* Warm wash + handmade paper: a broad fibrous mottle (the pulp clouds of a
-     deckled sheet) under a fine pressed grain. Both are procedural turbulence,
-     greyscale so every skin tint reads through them unchanged. */
+  /* The warm accent wash scrolls with the page; the paper grain lives on the
+     fixed ::before layer below. */
   background-image:
-    radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%),
+    radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%);
+  transition:background-color .55s ease;
+}
+/* Handmade paper: a broad fibrous mottle (the pulp clouds of a deckled sheet)
+   under a fine pressed grain. Both are procedural turbulence, greyscale so
+   every skin tint reads through them unchanged. They sit on a fixed,
+   viewport-sized layer of their own: tiling SVG-filter backgrounds directly on
+   a tall scrolling body re-rasterize on scroll in Safari and read as a laggy
+   page — one composited screenful of noise costs nothing, and uniform noise
+   looks identical whether it scrolls or not. */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"),
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='640'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.017' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23m)' opacity='0.07'/%3E%3C/svg%3E");
-  transition:background-color .55s ease;
 }
 .wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--s3) var(--s7)}
 
