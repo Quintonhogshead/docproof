@@ -9,9 +9,13 @@ never change; only the costume does.
 from .model import DEFAULT_SKIN, CharacterSkin, SkinSpec
 from .skin import (LUNA_MODEL, SkinResult, generate_skin, price_band,
                    read_sample_source)
+from .sweep import (LANES, SWEEP_WORDS, LaneCatch, LaneCatches, LaneResult,
+                    iter_sweep, run_lane, sweep, sweep_sample)
 
 __all__ = [
     "CharacterSkin", "SkinSpec", "DEFAULT_SKIN",
     "SkinResult", "generate_skin", "price_band", "read_sample_source",
     "LUNA_MODEL",
+    "LANES", "SWEEP_WORDS", "LaneCatch", "LaneCatches", "LaneResult",
+    "iter_sweep", "run_lane", "sweep", "sweep_sample",
 ]

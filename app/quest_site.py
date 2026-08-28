@@ -135,7 +135,8 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def guard_skins(request: Request, call_next):
-        if request.url.path == "/api/quest/skin" and request.method == "POST":
+        if (request.url.path in ("/api/quest/skin", "/api/quest/sweep")
+                and request.method == "POST"):
             if not limiter.allow(client_ip(request)):
                 return JSONResponse({"detail": (
                     "The party has costumed a lot of books lately and is "
