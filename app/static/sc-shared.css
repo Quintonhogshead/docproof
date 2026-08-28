@@ -223,9 +223,11 @@ header.top::after{content:"";position:absolute;left:-40px;right:-40px;bottom:0;h
 .nav a{font-family:var(--ui);font-size:var(--fs-ui);color:var(--faded);text-decoration:none;letter-spacing:.02em}
 .nav a:hover{color:var(--ink)}
 .nav a.now{color:var(--accent)}
-.nav .go{background:var(--accent);color:var(--accent-ink);clip-path:var(--edge-tab);
-  padding:9px 18px;font-weight:600;filter:var(--drop-sm)}
-.nav .go:hover{background:var(--accent-hot);color:var(--accent-ink)}
+.nav .go{background:var(--accent);color:var(--accent-ink);clip-path:var(--edge-scrap);
+  padding:9px 18px;font-weight:600;filter:var(--drop-sm);
+  transition:transform .16s ease, background .18s ease}
+.nav .go:hover,.nav .go:focus-visible{background:var(--accent-hot);color:var(--accent-ink);
+  transform:translate(1px,-1px) rotate(-1.2deg)}
 .nav .go.now{color:var(--accent-ink)}
 @media (max-width:520px){
   header.top{gap:var(--s2)}
@@ -279,16 +281,20 @@ a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   text-decoration-color:var(--accent-wash);text-underline-offset:3px}
 a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 
-/* Buttons are paper tabs: a cut label with a hard offset shadow. */
+/* Buttons are torn paper scraps: an irregular cut label with a hard offset
+   shadow. Hovering — or tabbing onto one — nudges the scrap out of square,
+   like a finger just moved it. (clip-path swallows outlines, so the focus
+   indicator on scraps is the shift + colour change, not a ring.) */
 .btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:none;
-  clip-path:var(--edge-tab);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
+  clip-path:var(--edge-scrap);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
   cursor:pointer;text-decoration:none;filter:var(--drop-sm);
   transition:transform .16s ease, background .18s ease, filter .16s ease}
-.btn:hover{background:var(--accent-hot);color:var(--accent-ink);transform:translateY(-2px);
+.btn:hover,.btn:focus-visible{background:var(--accent-hot);color:var(--accent-ink);
+  transform:translate(1px,-2px) rotate(-1.2deg);
   filter:drop-shadow(2px 4px 0 var(--paper-shadow))}
-.btn:active{transform:translateY(0)}
+.btn:active{transform:translateY(0) rotate(.6deg)}
 .btn.ghost{background:var(--card);color:var(--accent)}
-.btn.ghost:hover{background:var(--accent-wash);color:var(--accent-hot)}
+.btn.ghost:hover,.btn.ghost:focus-visible{background:var(--accent-wash);color:var(--accent-hot)}
 .btn:disabled{background:var(--kraft-2);color:var(--card);cursor:not-allowed;transform:none;filter:var(--drop-sm)}
 .btn:focus-visible,.nav a:focus-visible,a:focus-visible,.tier:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
 
@@ -397,8 +403,10 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 /* The three escape hatches beneath Galley's opening line. */
 .hatches{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);align-items:center}
 .hatch-link{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);text-decoration:none;
-  background:var(--card);padding:7px 14px;clip-path:var(--edge-tab);filter:var(--drop-sm)}
-.hatch-link:hover{color:var(--accent-hot);background:var(--card-2)}
+  background:var(--card);padding:7px 14px;clip-path:var(--edge-scrap);filter:var(--drop-sm);
+  display:inline-block;transition:transform .16s ease, background .18s ease}
+.hatch-link:hover,.hatch-link:focus-visible{color:var(--accent-hot);background:var(--card-2);
+  transform:translate(1px,-1px) rotate(1deg)}
 /* The campfire scene as the stage floor — cropped to the lit lower strip so
    the empty cream sky above doesn't balloon the hero. */
 .scene-band{position:relative;height:clamp(180px,24vw,300px);overflow:hidden}

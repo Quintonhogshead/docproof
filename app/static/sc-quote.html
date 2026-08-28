@@ -58,10 +58,11 @@
   @keyframes wpulse{40%{opacity:1}}
   .wline{font-size:1rem;color:var(--faded)}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{border:none;background:var(--card);color:var(--accent);clip-path:var(--edge-tab);
-    padding:7px 16px;font:1rem var(--ui);cursor:pointer;filter:var(--drop-sm)}
-  .chip:hover{background:var(--accent-wash)}
-  .chip:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+  .chip{border:none;background:var(--card);color:var(--accent);clip-path:var(--edge-scrap);
+    padding:7px 16px;font:1rem var(--ui);cursor:pointer;filter:var(--drop-sm);
+    transition:transform .16s ease, background .18s ease}
+  .chip:hover,.chip:focus-visible{background:var(--accent-wash);
+    transform:translate(1px,-1px) rotate(-1deg)}
 
   .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);
     padding:12px 18px;box-shadow:var(--lift)}

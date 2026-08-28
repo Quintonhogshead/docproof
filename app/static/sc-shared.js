@@ -296,14 +296,13 @@
      correction scrap + the honest lane. Used on the homepage party act and on
      the quote page's "who rides" list. */
   function memberCard(m, skinAdv) {
+    // Names are permanent: the skin tailors the job line, never the name.
     var s = skinAdv && skinAdv[m.id];
-    var alias = s ? s.alias : m.name;
     var job = s ? s.job : m.plain;
-    var tag = m.role + (alias !== m.name ? ' · always ' + m.name : '');
     return '<div class="member rich">' +
       '<div class="top"><div class="sigil"' + (s && s.look ? ' title="' + esc(s.look) + '"' : '') + '>' +
         artFigure(m.id) + '</div>' +
-      '<div><div class="mname">' + esc(alias) + '<small>' + esc(tag) + '</small></div>' +
+      '<div><div class="mname">' + esc(m.name) + '<small>' + esc(m.role) + '</small></div>' +
       '<div class="mjob">' + esc(job) + '</div></div></div>' +
       correctionScrap(m) +
       '<div class="mlane">lane: ' + m.lane + '</div></div>';
