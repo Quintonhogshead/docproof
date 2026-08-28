@@ -43,6 +43,23 @@ patch:
     enabled: true
   fix_check:
     enabled: true
+  # Storysheet: one Luna read that fixes the narrator/person/tense/pronoun facts
+  # AND detects the manuscript's spelling convention (US/UK/CA/AU), which is fed
+  # back as `variant` so the spell scan and consistency scans proof against the
+  # RIGHT dictionary — a British book is read as British, not "corrected" to
+  # American. `variant: auto` (base default under this stage) does the detection;
+  # an explicit variant on the config still wins.
+  storysheet:
+    enabled: true
+    model: gpt-5.6-luna
+  variant: auto
+  # Candidate-screening in APPLY: the low-precision generators propose, the Luna
+  # judge (candidate_screening.model, already Luna) rules, and affirmed rows are
+  # applied as tracked edits. Apply is a contained capability — it stays SHADOW
+  # unless the deployment sets DOCPROOF_CANDIDATE_APPLY=1 (the Galley launch
+  # does; production keeps the floor), so this line is a no-op outside Galley.
+  candidate_screening:
+    mode: apply
 
 locks:
   - smoothing.enabled

@@ -190,3 +190,71 @@ def test_respell_sites_every_occurrence_as_its_own_ruling():
     # the adjudicator's call to make in context, not the generator's.
     assert len(respell) == 3
     assert {c.suggestion for c in respell} == {"gray", "travelers"}
+
+
+# --- variant auto-detection (Galley default: variant: auto) -------------------
+
+from docproof.variants import detect_variant
+
+
+def _brit():
+    return [
+        "The colour of the theatre was grey that evening.",
+        "She travelled to the centre, realising her favourite neighbour had left.",
+        "The organisation apologised for its behaviour towards the labourers.",
+    ]
+
+
+def _amer():
+    return [
+        "The color of the theater was gray that evening.",
+        "She traveled to the center, realizing her favorite neighbor had left.",
+        "The organization apologized for its behavior toward the laborers.",
+    ]
+
+
+def test_detect_variant_reads_british_spelling_as_uk():
+    assert detect_variant(_brit()) == "uk"
+
+
+def test_detect_variant_reads_american_spelling_as_us():
+    assert detect_variant(_amer()) == "us"
+
+
+def test_detect_variant_is_none_on_thin_or_mixed_evidence():
+    # Too few markers → no guess (the run falls back to US, logged).
+    assert detect_variant(["A quiet ordinary sentence.", "Nothing to see."]) is None
+    # A dead heat between the two conventions is not a call either.
+    mixed = ["He liked the colour gray and the theater's centre."]
+    assert detect_variant(mixed, min_markers=2) is None
+
+
+def test_load_variant_auto_falls_back_to_us_without_text():
+    # A standalone path that never detected still resolves, never crashes.
+    assert load_variant("auto").key == "us"
+
+
+def test_config_accepts_auto_variant():
+    cfg = load_config("config/default.yaml")
+    cfg.variant = "auto"           # the mechanical-wave stage sets this
+    assert cfg.variant == "auto"
+
+
+def test_prepare_auto_detects_uk_end_to_end(tmp_path):
+    """variant: auto flows through prepare(): a British-spelled manuscript is
+    resolved to U.K. English (and the config is pinned to the concrete key)."""
+    import docx
+    from docproof.pipeline import prepare
+
+    d = docx.Document()
+    for line in _brit() * 3:            # enough markers to clear the threshold
+        d.add_paragraph(line)
+    src = tmp_path / "brit.docx"
+    d.save(src)
+
+    cfg = load_config("config/default.yaml")
+    cfg.variant = "auto"
+    cfg.output_dir = str(tmp_path)
+    prepared = prepare(cfg, src, ERROR_DIR)
+    assert prepared.variant.key == "uk"
+    assert cfg.variant == "uk"          # pinned for downstream consumers

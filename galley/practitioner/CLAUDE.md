@@ -254,10 +254,29 @@ context ~150 times. Keep your window lean:
    command with `--approval approval.json`, so a run that drifts from the
    approved manuscript/config/routes refuses itself rather than spending. Do
    not spend a paid dollar past wave 1 defaults without the gate's approval.
-5. **Execute.** Mechanical lane first (the ladder). Copy-edit flights run on
-   the ALREADY-PROOFREAD text — two-stage order is the clobbering fix, not an
-   optimization. Checkpoint discipline: confirm `findings.checkpoint.json`
-   exists before `finish()`-stage risk.
+5. **Execute.** Mechanical lane first (the ladder). Wave 1 now runs these lanes
+   by default, on top of the ensemble/sweeps/typed passes:
+   - **Whole-book continuity + chapter continuity** — as **$0 Opus session
+     subagents** (an Opus whole-book read for timeline/age/date/attribute drift
+     plus the deterministic calendar check; an Opus per-chapter read for physical
+     continuity), query-only, findings imported. Do NOT enable them in the paid
+     review config — that bills; the subagent path is the $0 one, same as the
+     typed passes.
+   - **rewrite / "type-and-compare"** — a **$0 Sonnet→Opus subagent** that
+     retypes each paragraph minimally and diffs it, catching the
+     missing-word/homophone/agreement misses detection glides past. A real-word
+     swap it proposes rides as a query (the P0-1 guard), never a blind edit.
+   - **storysheet** (Luna) sets the voice profile, and **`variant: auto`**
+     detects the book's English from its spelling so it is proofed as British /
+     American / etc., not silently Americanized.
+   - **Candidate screening in apply** (Luna judge) proposes and applies from the
+     low-precision generators; the Galley launch releases apply for this
+     deployment only (`DOCPROOF_CANDIDATE_APPLY=1`), production keeps the floor.
+
+   Copy-edit flights still run as a SEPARATE second wave on the ALREADY-PROOFREAD
+   text — two-stage order is the clobbering fix, not an optimization. Checkpoint
+   discipline: confirm `findings.checkpoint.json` exists before `finish()`-stage
+   risk.
 6. **Audit** (`skills/audit`) after each wave. Hypotheses → targeted re-reads
    while marginal cost per finding stays sane. A quiet audit converges the loop.
 7. **Adjudicate** (`skills/adjudicate`) with the screening rulebook, then
