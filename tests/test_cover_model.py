@@ -295,7 +295,7 @@ def test_layerref_rejects_unknown_kind():
         LayerRef(kind="bogus", ref="title")
 
 
-# -- RenderReport: every field required, no silent defaults -----------------
+# -- RenderReport: the four original fields required, no silent defaults ----
 
 def test_render_report_requires_every_field():
     with pytest.raises(ValidationError):
@@ -307,6 +307,32 @@ def test_render_report_accepts_full_data():
                           fitted_sizes={"title": 0.09}, warnings=[])
     assert report.contrast["title"] == 5.2
     assert report.scrim_final[0] == 0.4
+
+
+# -- RenderReport: v2.1 BODY-fix wave additions — defaulted (occlusion={},
+# dead_band_frac=0.0) so every pre-existing caller that built a RenderReport
+# by hand (before either field existed) keeps working unchanged. ------------
+
+def test_render_report_occlusion_and_dead_band_frac_default_when_omitted():
+    report = RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[])
+    assert report.occlusion == {}
+    assert report.dead_band_frac == 0.0
+
+
+def test_render_report_occlusion_and_dead_band_frac_round_trip():
+    report = RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                          occlusion={"title<-focal": 0.18}, dead_band_frac=0.42)
+    assert report.occlusion["title<-focal"] == 0.18
+    assert report.dead_band_frac == 0.42
+
+
+def test_render_report_dead_band_frac_rejects_outside_the_unit_range():
+    with pytest.raises(ValidationError):
+        RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                    dead_band_frac=1.5)
+    with pytest.raises(ValidationError):
+        RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                    dead_band_frac=-0.1)
 
 
 # -- Direction / Directions: schema-enforced closed font list ---------------
@@ -452,9 +478,15 @@ def test_build_spec_big_type_title_matches_the_launch_spec():
     spec = build_spec(direction, _brief(), archetype)
     title = next(t for t in spec.text if t.id == "title")
     assert title.align == "left"
-    assert title.size_max == pytest.approx(0.16)
+    # v2.1 BODY-fix wave: 0.16 -> 0.20 — a short, punchy title was never
+    # width-constrained enough to reach the old ceiling's full block height.
+    assert title.size_max == pytest.approx(0.20)
     assert title.max_lines == 4
-    assert {a.id for a in spec.art} == {"background"}   # texture declined
+    # texture declined — but rule_frame (v2.1 BODY-fix wave) is unconditional,
+    # the same way background always is; only the literal "texture" id is
+    # ever skipped for a declined direction (see build_spec's own `ref ==
+    # "texture"` check).
+    assert {a.id for a in spec.art} == {"background", "rule_frame"}
 
 
 def test_build_spec_degrades_gracefully_for_a_series_slot_brief_has_no_field_for():

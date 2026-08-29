@@ -133,6 +133,23 @@ def _fake_save_renders(image, job_dir, version, concept):
     return [rel]
 
 
+def _fake_save_renders_with_thumb(image, job_dir, version, concept):
+    """Like _fake_save_renders, but also writes the 100px shelf/search
+    thumbnail companion file (BRAIN v2.1 -- compose.save_renders's own
+    `_thumb100.png` naming) -- for the handful of tests below that verify
+    _run_critique_safely's thumb-path plumbing specifically. Every other
+    test in this file keeps using the thumb-less _fake_save_renders, which
+    doubles as this suite's implicit coverage of the "missing thumbnail"
+    degrade path (see pipeline._thumb_path/_run_critique_safely)."""
+    out = job_dir / "renders"
+    out.mkdir(parents=True, exist_ok=True)
+    rel = f"renders/v{version}_c{concept}.png"
+    thumb_rel = f"renders/v{version}_c{concept}_thumb100.png"
+    (job_dir / rel).write_bytes(b"fake-png-bytes")
+    (job_dir / thumb_rel).write_bytes(b"fake-thumb-bytes")
+    return [rel]
+
+
 def _ready_job_with_concept(tmp_path, *, archetype: str = "full_bleed_art",
                             asset: str = "assets/c0_background.png") -> pipeline.JobState:
     """A job with exactly one 'ready' concept, its background art already
@@ -843,7 +860,7 @@ def test_run_job_critique_passes_ships_without_a_revision_round(tmp_path, monkey
     monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
 
     critique_calls = []
-    def fake_run_critique(png_bytes, spec, brief, client, **kw):
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
         critique_calls.append((spec.version, client, brief.title))
         return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
     monkeypatch.setattr(pipeline, "run_critique", fake_run_critique)
@@ -885,7 +902,7 @@ def test_run_job_critique_fails_then_passes_iterates_exactly_two_rounds(
         CritiqueResult(passes=True, tells=[], notes="", cost=0.0007),
     ]
     critique_calls = []
-    def fake_run_critique(png_bytes, spec, brief, client, **kw):
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
         critique_calls.append(spec.version)
         assert client is CRITIQUE_CLIENT
         return verdicts.pop(0)
@@ -1140,7 +1157,7 @@ def test_run_job_critique_per_concept_isolation(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "compose", _fake_compose)
     monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
 
-    def fake_run_critique(png_bytes, spec, brief, client, **kw):
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
         if spec.concept_name == "Bad":
             raise pipeline.CritiqueError("boom")
         return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
@@ -1274,3 +1291,227 @@ def test_run_job_second_critique_passing_with_tells_still_records_them(
     # A pass-with-notes second verdict records its tells exactly like the
     # first critique would — the card's warning line is for it.
     assert "accent contrast a touch low" in concept.report.warnings
+
+
+# -- critique pass: the 100px thumbnail (BRAIN v2.1) ---------------------------
+
+def test_run_job_critique_reads_the_thumbnail_off_disk_when_present(
+        tmp_path, monkeypatch):
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders_with_thumb)
+
+    received = {}
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
+        received["png"] = png_bytes
+        received["thumb"] = thumb_bytes
+        return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
+    monkeypatch.setattr(pipeline, "run_critique", fake_run_critique)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert received["png"] == b"fake-png-bytes"
+    assert received["thumb"] == b"fake-thumb-bytes"
+
+
+def test_run_job_critique_missing_thumbnail_degrades_to_none_not_a_failure(
+        tmp_path, monkeypatch):
+    # _fake_save_renders (unlike the _with_thumb variant above) never writes
+    # a _thumb100.png -- exactly the "old job" / "caller never rendered one"
+    # case run_critique's own docstring calls out. Must still reach a real
+    # verdict, never get folded into the "critique call failed" path.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    received = {}
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
+        received["thumb"] = thumb_bytes
+        return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
+    monkeypatch.setattr(pipeline, "run_critique", fake_run_critique)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.concepts[0].status == "ready"          # never fails over a missing thumb
+    assert received["thumb"] is None
+    critique_row = next(r for r in result.ledger if r["kind"] == "critique")
+    assert critique_row["usd"] > 0                        # a REAL verdict, not a failure note
+    assert "passed" in critique_row["detail"]
+
+
+# -- critique pass: the art-repaint escape hatch (BRAIN v2.1) ------------------
+
+def test_run_job_critique_art_defect_triggers_a_repaint(tmp_path, monkeypatch):
+    # A design-only revision can never fix a defective GENERATED image -- a
+    # failing verdict naming art_defects clears those (real, generatable)
+    # slots' assets and repaints them for real via generate(), on top of
+    # whatever design-only edit the same round's notes also asked for. A
+    # hallucinated slot id is dropped rather than blowing up the round.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+
+    generate_calls = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        generate_calls.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["a surreal blob in the forest"],
+                       notes="Tighten the tracking.", cost=0.0007,
+                       art_defects=["nonexistent_slot", "background", "focal"]),
+        CritiqueResult(passes=True, tells=[], notes="", cost=0.0007),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique", lambda *a, **k: verdicts.pop(0))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        new_text = [t.model_copy(update={"size_max": t.size_max + 0.01})
+                   if t.id == "title" else t for t in spec.text]
+        revised = spec.model_copy(update={"version": spec.version + 1,
+                                         "notes_log": [*spec.notes_log, notes],
+                                         "text": new_text})
+        return RevisionResult(spec=revised, cost=0.01)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    concept = result.concepts[0]
+    assert concept.status == "ready"
+    background = next(s for s in concept.spec.art if s.id == "background")
+    focal = next(s for s in concept.spec.art if s.id == "focal")
+    assert background.asset and focal.asset            # repainted, not left blank
+    # 2 initial paints (background + focal, both generatable) + 2 repaints
+    # (the 2 REAL flagged slots -- nonexistent_slot is silently dropped).
+    assert len(generate_calls) == 4
+
+    repaint_rows = [r for r in result.ledger if r["kind"] == "image"
+                    and "repainted on judge's flag" in r["detail"]]
+    assert len(repaint_rows) == 2
+    assert all(r["usd"] == 0.0 for r in repaint_rows)
+    assert any("slot background repainted on judge's flag" in r["detail"]
+              for r in repaint_rows)
+    assert any("slot focal repainted on judge's flag" in r["detail"]
+              for r in repaint_rows)
+    # the real costed image-generation rows ride along too -- nothing lost
+    # (2 initial paints + the 2 repaints just asserted above).
+    costed_image_rows = [r for r in result.ledger
+                         if r["kind"] == "image" and r["usd"] > 0]
+    assert len(costed_image_rows) == 4
+
+
+def test_run_job_critique_repaint_happens_at_most_once_per_concept(
+        tmp_path, monkeypatch):
+    # Hard bound (§6.3, BRAIN v2.1): at most ONE repaint round per concept
+    # per job, even when a LATER round's verdict also names art_defects.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("full_bleed_art")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    generate_calls = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        generate_calls.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["a surreal blob"],
+                       notes="Tighten the tracking.", cost=0.0007,
+                       art_defects=["background"]),
+        CritiqueResult(passes=False, tells=["still a surreal blob"],
+                       notes="Loosen the tracking.", cost=0.0007,
+                       art_defects=["background"]),
+        CritiqueResult(passes=True, tells=[], notes="", cost=0.0007),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique", lambda *a, **k: verdicts.pop(0))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        new_text = [t.model_copy(update={"size_max": t.size_max + 0.01})
+                   if t.id == "title" else t for t in spec.text]
+        revised = spec.model_copy(update={"version": spec.version + 1,
+                                         "notes_log": [*spec.notes_log, notes],
+                                         "text": new_text})
+        return RevisionResult(spec=revised, cost=0.01)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    concept = result.concepts[0]
+    assert concept.status == "ready"
+    assert concept.spec.version == 3                     # both revision rounds still applied
+    # 1 initial paint (background is full_bleed_art's only generatable slot)
+    # + 1 repaint in round 1; round 2's art_defects flag is a no-op -- the
+    # concept already spent its one repaint.
+    assert len(generate_calls) == 2
+    repaint_rows = [r for r in result.ledger if r["kind"] == "image"
+                    and "repainted on judge's flag" in r["detail"]]
+    assert len(repaint_rows) == 1
+    assert "round 1" in next(r for r in result.ledger
+                             if r["kind"] == "revision"
+                             and "auto-critique revision" in r["detail"])["detail"]
+
+
+def test_run_job_critique_repaint_bypasses_the_identical_spec_early_stop(
+        tmp_path, monkeypatch):
+    # A repaint changes real pixels on disk without changing the spec's
+    # `asset` STRING at all (_generate_art_slot writes to a fixed,
+    # deterministic per-slot path) -- the identical-spec early stop must
+    # NOT fire just because the revision itself was otherwise a no-op, when
+    # a repaint happened this same round.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("full_bleed_art")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["a surreal blob"], notes="",
+                       cost=0.0007, art_defects=["background"]),
+        CritiqueResult(passes=True, tells=[], notes="", cost=0.0007),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique", lambda *a, **k: verdicts.pop(0))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        # The model echoes the design back UNCHANGED -- only the mechanical
+        # version bump + notes_log append revise_spec always does.
+        revised = spec.model_copy(update={"version": spec.version + 1,
+                                         "notes_log": [*spec.notes_log, notes]})
+        return RevisionResult(spec=revised, cost=0.01)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    compose_calls = []
+    def counting_compose(spec, job_dir):
+        compose_calls.append(spec.version)
+        return _fake_compose(spec, job_dir)
+    monkeypatch.setattr(pipeline, "compose", counting_compose)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    concept = result.concepts[0]
+    assert concept.status == "ready"
+    assert compose_calls == [1, 2]              # recomposed despite the "identical" spec
+    assert verdicts == []                        # both rounds' verdicts consumed
+    assert not any("identical spec" in r["detail"] for r in result.ledger
+                  if r["kind"] == "revision")
+    assert any("repainted on judge's flag" in r["detail"] for r in result.ledger
+              if r["kind"] == "image")

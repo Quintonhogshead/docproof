@@ -96,6 +96,22 @@ def _with_asset(spec: CoverSpec, slot_id: str, asset: str) -> CoverSpec:
     return spec.model_copy(update={"art": new_art})
 
 
+def _index_of(slots, slot_id: str) -> int:
+    """The position of the slot with this id in an art/text list. A
+    SpecEdit.path addresses a slot by its POSITION, never its `id` (§6.2) —
+    exactly like the model must, this looks the index up rather than
+    hardcoding it, so these tests stay honest about the archetype's real
+    slot order instead of assuming it."""
+    return next(i for i, s in enumerate(slots) if s.id == slot_id)
+
+
+def _edits_payload(*edits: dict) -> dict:
+    """The raw JSON dict a SpecEdits structured reply carries — the shape
+    FakeProvider's `parsed` field expects, mirroring _direction_payload's
+    role for the direction-call tests above."""
+    return {"edits": list(edits)}
+
+
 class _ExplodingProvider:
     """Stands in for "the call itself failed" — a dropped connection, an SDK
     exception — as opposed to FakeProvider's "the call answered with
@@ -118,6 +134,7 @@ def test_direction_result_is_frozen():
 def test_revision_result_is_frozen():
     spec = _base_spec()
     result = RevisionResult(spec=spec, cost=None)
+    assert result.skipped == ()             # default: nothing was skipped
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.cost = 1.0
 
@@ -168,6 +185,21 @@ def test_run_directions_system_prompt_states_the_art_prompt_rules_verbatim():
            "artist; describe a scene, not a cover.") in system
 
 
+def test_run_directions_system_prompt_states_the_symbolic_object_doctrine():
+    # BRAIN v2.1 (owner's live-batch review, 2026-08-29): a literary cover
+    # shipped a surreal blob object -- design-only revisions can't fix a
+    # generation-time art defect, so the fix is to steer the PROMPT away
+    # from surreal/composite objects in the first place.
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "symbolic-object slot" in system
+    assert "ONE clean, instantly recognizable object" in system
+    assert "a brass key, a single feather" in system
+    assert "never a surreal composite, never anatomy on inanimate things" in system
+
+
 def test_run_directions_system_prompt_prefers_illustrated_media_over_photoreal():
     # §6.3's one-line addition to the §6.1 prompt: stylized media hide
     # generation artifacts, so it should steer away from photorealism unless
@@ -195,6 +227,20 @@ def test_run_directions_system_prompt_states_the_de_muting_palette_doctrine():
     assert "Tone-on-tone monochrome" in system
     assert "a signature move" in system
     assert "Muddy gray-on-gray" in system
+
+
+def test_run_directions_system_prompt_states_the_dark_minimal_doctrine():
+    # BRAIN v2.1 (owner's live-batch review, 2026-08-29): the judge passed a
+    # thriller with a near-invisible dark-on-dark silhouette -- the fix
+    # steers art direction away from an all-whisper palette in the first
+    # place, verbatim per the owner's own pinned phrasing.
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert ("a dark, quiet cover must still carry one high-voltage element"
+           in system.lower())
+    assert "all-values-within-a-whisper is a failure" in system
 
 
 def test_run_directions_system_prompt_states_the_image_simplicity_hierarchy():
@@ -451,59 +497,95 @@ def test_run_directions_raises_when_the_provider_call_itself_fails():
         run_directions(_brief(), _ExplodingProvider(), n=4)
 
 
-# -- revise_spec: happy path (spec §6.2) --------------------------------------
+# -- revise_spec: happy path (spec §6.2 -- patch edits, not a full echo) -----
 
-def test_revise_spec_bumps_version_and_appends_notes_and_ignores_the_models_asset_echo():
+def test_revise_spec_happy_path_applies_edits_bumps_version_and_appends_notes():
     original = _with_asset(_base_spec(), "background", "assets/c0_background.png")
-    revised_dict = original.model_dump(mode="json")
-    # A compliant model would echo the same asset, but the code must not
-    # trust that echo either way -- corrupt it here to prove the point.
-    for art in revised_dict["art"]:
-        if art["id"] == "background":
-            art["asset"] = "the-model-should-not-control-this.png"
-    provider = FakeProvider(
-        results=[ProviderResult(parsed=revised_dict, usage=USAGE)])
+    title_i = _index_of(original.text, "title")
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": "palette.primary", "value": "\"#a83250\""},
+        {"path": f"text[{title_i}].zone.y", "value": "0.57"},
+        {"path": f"text[{title_i}].size_max", "value": "0.13"},
+    ), usage=USAGE)])
 
-    result = revise_spec(original, "make the title bigger", provider)
+    result = revise_spec(original, "brighten it and make the title bigger",
+                         provider)
 
     assert isinstance(result, RevisionResult)
     assert result.spec.version == 2
-    assert result.spec.notes_log == ["make the title bigger"]
+    assert result.spec.notes_log == ["brighten it and make the title bigger"]
+    assert result.spec.palette.primary == "#a83250"
+    assert result.spec.text[title_i].zone.y == 0.57
+    assert result.spec.text[title_i].size_max == 0.13
+    assert result.skipped == ()
     assert result.cost is not None
+    # an untouched slot's asset rides straight through
     background = next(a for a in result.spec.art if a.id == "background")
-    assert background.asset == "assets/c0_background.png"   # unchanged prompt/transparent
+    assert background.asset == "assets/c0_background.png"
     # the input spec itself is never mutated
     assert original.version == 1
     assert original.notes_log == []
 
     call = provider.calls[0]
     assert call["schema_name"] == "cover_revision"
-    assert "make the title bigger" in call["user"]
+    assert "brighten it and make the title bigger" in call["user"]
+
+
+def test_revise_spec_can_append_to_a_list():
+    original = _base_spec()   # full_bleed_art: 2 scrims
+    n = len(original.scrims)
+    provider = FakeProvider(results=[ProviderResult(
+        parsed=_edits_payload({"path": f"scrims[{n}]", "value": "{}"}),
+        usage=USAGE)])
+
+    result = revise_spec(original, "add a third scrim", provider)
+
+    assert len(result.spec.scrims) == n + 1
+    assert result.skipped == ()
 
 
 def test_revise_spec_defaults_to_the_workhorse_model_but_accepts_an_override():
     original = _base_spec()
-    provider = FakeProvider(results=[ProviderResult(
-        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
     result = revise_spec(original, "notes", provider)
     assert provider.calls[0]["model"] == REVISION_MODEL == "claude-sonnet-5"
     assert result.spec.version == 2
 
-    overridden = FakeProvider(results=[ProviderResult(
-        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    overridden = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
     result = revise_spec(original, "notes", overridden, model="claude-opus-5")
     assert overridden.calls[0]["model"] == "claude-opus-5"
     assert result.spec.version == 2
 
 
-def test_revise_spec_system_prompt_states_the_may_not_rules():
+# -- revise_spec: system prompt content (spec §6.2's verbatim requirements) --
+
+def test_revise_spec_system_prompt_documents_the_path_syntax_and_worked_examples():
     original = _base_spec()
-    provider = FakeProvider(results=[ProviderResult(
-        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
     revise_spec(original, "notes", provider)
     system = provider.calls[0]["system"]
-    assert "touch any `asset` path" in system
+    assert "PATCH EDITS" in system
+    assert "`palette.primary`" in system
+    assert "`text[1].zone.y`" in system
+    assert "`art[0].prompt`" in system
+    assert "Move the title zone up" in system
+    assert "Recolor the palette" in system
+    assert "Resize the title's type" in system
+
+
+def test_revise_spec_system_prompt_states_the_may_not_rules():
+    original = _base_spec()
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
+    revise_spec(original, "notes", provider)
+    system = provider.calls[0]["system"]
+    assert "write to `version` or `notes_log`" in system
+    assert "touch an art slot's `asset` field" in system
     assert "invent a new art, scrim, or text slot" in system
+    assert "out of scope for a revision" in system
 
 
 def test_revise_spec_system_prompt_allows_mask_from_and_container_adjustments():
@@ -512,24 +594,103 @@ def test_revise_spec_system_prompt_allows_mask_from_and_container_adjustments():
     # allowed to touch them, the same way it's allowed to touch any other
     # design field.
     original = _base_spec()
-    provider = FakeProvider(results=[ProviderResult(
-        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
     revise_spec(original, "notes", provider)
     system = provider.calls[0]["system"]
     assert "mask_from" in system
     assert "container art slot" in system
 
 
+# -- revise_spec: invalid edits are skipped, not fatal ------------------------
+
+def test_revise_spec_skips_guarded_paths_and_records_them():
+    original = _with_asset(_base_spec(), "background", "assets/c0_background.png")
+    bg_i = _index_of(original.art, "background")
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": "version", "value": "99"},
+        {"path": "notes_log", "value": "[\"hacked\"]"},
+        {"path": f"art[{bg_i}].asset", "value": "\"sneaky.png\""},
+    ), usage=USAGE)])
+
+    result = revise_spec(original, "try to sneak past the guard", provider)
+
+    assert result.spec.version == 2                                  # normal bump, not 99
+    assert result.spec.notes_log == ["try to sneak past the guard"]   # not "hacked"
+    background = next(a for a in result.spec.art if a.id == "background")
+    assert background.asset == "assets/c0_background.png"    # the sneaky value never landed
+    assert len(result.skipped) == 3
+    assert all("guarded" in reason for reason in result.skipped)
+
+
+def test_revise_spec_skips_an_unresolvable_path():
+    original = _base_spec()
+    provider = FakeProvider(results=[ProviderResult(
+        parsed=_edits_payload({"path": "text[99].zone.y", "value": "0.1"}),
+        usage=USAGE)])
+
+    result = revise_spec(original, "notes", provider)
+
+    assert len(result.skipped) == 1
+    assert "text[99].zone.y" in result.skipped[0]
+    assert result.spec.model_dump(exclude={"version", "notes_log"}) == \
+        original.model_dump(exclude={"version", "notes_log"})
+
+
+def test_revise_spec_all_edits_invalid_is_a_no_op():
+    original = _base_spec()
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": "version", "value": "5"},
+        {"path": "not a valid path!!", "value": "1"},
+        {"path": "palette.nonexistent", "value": "1"},
+    ), usage=USAGE)])
+
+    result = revise_spec(original, "notes that land nowhere", provider)
+
+    assert len(result.skipped) == 3
+    assert result.spec.version == 2       # the bookkeeping still runs
+    assert result.spec.model_dump(exclude={"version", "notes_log"}) == \
+        original.model_dump(exclude={"version", "notes_log"})
+
+
+def test_revise_spec_zero_edits_is_a_no_op():
+    original = _base_spec()
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
+
+    result = revise_spec(original, "nothing to change", provider)
+
+    assert result.spec.version == 2
+    assert result.spec.notes_log == ["nothing to change"]
+    assert result.skipped == ()
+    assert result.spec.model_dump(exclude={"version", "notes_log"}) == \
+        original.model_dump(exclude={"version", "notes_log"})
+
+
+def test_revise_spec_bad_value_type_raises_and_leaves_the_prior_spec_untouched():
+    # "42" parses as valid JSON (an int), so the edit APPLIES -- it only
+    # fails once the patched dict is validated as a whole CoverSpec, since
+    # palette.primary must be a #rrggbb hex string.
+    original = _base_spec()
+    provider = FakeProvider(results=[ProviderResult(
+        parsed=_edits_payload({"path": "palette.primary", "value": "42"}),
+        usage=USAGE)])
+
+    with pytest.raises(RevisionError, match="schema"):
+        revise_spec(original, "notes", provider)
+    assert original.version == 1
+    assert original.palette.primary != "42"
+
+
 # -- revise_spec: art-asset diffing (the regen signal) ------------------------
 
-def test_revise_spec_clears_asset_when_the_prompt_changes():
+def test_revise_spec_prompt_change_edit_still_clears_the_asset():
     original = _with_asset(_base_spec(), "background", "assets/c0_background.png")
-    revised_dict = original.model_dump(mode="json")
-    for art in revised_dict["art"]:
-        if art["id"] == "background":
-            art["prompt"] = "A lighthouse at night under a full moon, oil painting."
-    provider = FakeProvider(
-        results=[ProviderResult(parsed=revised_dict, usage=USAGE)])
+    bg_i = _index_of(original.art, "background")
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": f"art[{bg_i}].prompt",
+         "value": "\"A lighthouse at night under a full moon, oil painting.\""},
+    ), usage=USAGE)])
 
     result = revise_spec(original, "different imagery -- a lighthouse at night",
                          provider)
@@ -544,12 +705,11 @@ def test_revise_spec_leaves_other_art_slots_asset_untouched():
     original = _base_spec()   # full_bleed_art: background + texture
     original = _with_asset(original, "background", "assets/c0_background.png")
     original = _with_asset(original, "texture", "assets/c0_texture.png")
-    revised_dict = original.model_dump(mode="json")
-    for art in revised_dict["art"]:
-        if art["id"] == "background":
-            art["prompt"] = "Something completely different, gouache."
-    provider = FakeProvider(
-        results=[ProviderResult(parsed=revised_dict, usage=USAGE)])
+    bg_i = _index_of(original.art, "background")
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": f"art[{bg_i}].prompt",
+         "value": "\"Something completely different, gouache.\""},
+    ), usage=USAGE)])
 
     result = revise_spec(original, "new background art", provider)
 
@@ -563,14 +723,11 @@ def test_revise_spec_clears_asset_when_only_transparent_changes():
     original = _with_asset(original, "focal", "assets/c0_focal.png")
     focal = next(a for a in original.art if a.id == "focal")
     assert focal.transparent is True    # cutout_sandwich's archetype default
+    focal_i = _index_of(original.art, "focal")
 
-    revised_dict = original.model_dump(mode="json")
-    for art in revised_dict["art"]:
-        if art["id"] == "focal":
-            art["transparent"] = False   # prompt text is untouched
-
-    provider = FakeProvider(
-        results=[ProviderResult(parsed=revised_dict, usage=USAGE)])
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": f"art[{focal_i}].transparent", "value": "false"},
+    ), usage=USAGE)])
     result = revise_spec(
         original, "make the focal figure opaque, not a cutout", provider)
 
@@ -580,21 +737,19 @@ def test_revise_spec_clears_asset_when_only_transparent_changes():
 
 
 def test_revise_spec_clears_asset_for_a_slot_the_input_never_had():
-    # Defensive: the model is told never to invent a new slot, but the
-    # asset-diffing code should not choke (or, worse, leak a stray asset
-    # path) if it happens anyway -- there's no prior value to compare
-    # against, so it reads as changed.
+    # Defensive: the model is told never to invent a new slot, but appending
+    # one is still mechanically legal (append is a generic, uniform list
+    # operation -- see _apply_edit) -- the asset-diffing code should not
+    # choke (or, worse, leak a stray asset path) if it happens anyway --
+    # there's no prior value to compare against, so it reads as changed.
     original = _base_spec(archetype_name="full_bleed_art")
     assert {a.id for a in original.art} == {"background", "texture"}
-    revised_dict = original.model_dump(mode="json")
-    revised_dict["art"].append({
-        "id": "focal", "prompt": "should not exist", "transparent": False,
-        "fit": "contain", "anchor": [0.5, 0.5], "scale": 1.0,
-        "offset": [0.0, 0.0], "opacity": 1.0, "blend": "normal",
-        "asset": "sneaky-preexisting-path.png",
-    })
-    provider = FakeProvider(
-        results=[ProviderResult(parsed=revised_dict, usage=USAGE)])
+    n = len(original.art)
+    provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
+        {"path": f"art[{n}]",
+         "value": ('{"id": "focal", "prompt": "should not exist", '
+                   '"asset": "sneaky-preexisting-path.png"}')},
+    ), usage=USAGE)])
 
     result = revise_spec(original, "notes that never asked for this", provider)
 

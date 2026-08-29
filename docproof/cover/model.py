@@ -438,6 +438,17 @@ class RenderReport(BaseModel):
     scrim_final: dict[int, float]                # scrim index -> strength after escalation
     fitted_sizes: dict[str, float]                # slot id -> chosen size (fraction)
     warnings: list[str]                          # "title at size_min and still 2 lines over"
+    # v2.1 BODY-fix wave: "<text id><-<art id>" -> fraction of that text
+    # slot's own ink alpha covered by that art slot's alpha (the title
+    # occlusion guard, fix 2) — only populated for a "sandwich" pair (a
+    # contain-fit art slot immediately after a text layer); defaulted so
+    # every pre-existing caller that builds a RenderReport by hand keeps
+    # working unchanged.
+    occlusion: dict[str, float] = Field(default_factory=dict)
+    # The tallest contiguous vertical stretch of the finished cover with no
+    # text/art/ornament ink crossing it, as a fraction of canvas height (the
+    # dead-band metric, fix 4) — see docproof.cover.compose._dead_band_frac.
+    dead_band_frac: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 # -- the art-direction call's answer -----------------------------------------

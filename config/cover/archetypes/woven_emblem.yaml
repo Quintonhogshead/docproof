@@ -65,10 +65,14 @@ art:
     generatable: true
     fit: contain
     transparent: true            # a vine/ribbon/branch, not a scene
-    anchor: [0.5, 0.722]         # into the title zone's own bottom edge
-                                  # (0.38 + 0.36) — reliable because valign:
-                                  # bottom above pins the last line there
-                                  # regardless of title length
+    # v2.1 BODY-fix wave: nudged down ~3% of canvas (0.722 -> 0.75) so the
+    # vine crosses the title's OWN descender/line-height margin below the
+    # last line's baseline, not straight through the glyphs' main body — a
+    # live render's vine cut across the middle of the letterforms instead
+    # of threading beneath them. Still well inside the title zone's own
+    # bottom edge (0.38 + 0.36 = 0.74) — reliable because valign: bottom
+    # above pins the last line there regardless of title length.
+    anchor: [0.5, 0.75]
     scale: 0.40
     treatment: silhouette
 scrims:
@@ -111,7 +115,12 @@ text:
     size_min: 0.014
     size_max: 0.020
   - id: author
-    zone: {x: 0.10, y: 0.905, w: 0.80, h: 0.055}
+    # v2.1 BODY-fix wave: nudged up (0.905 -> 0.885) clear of the corner
+    # vines' own inset — fix 1 (corners:true's new 2%-canvas margin) keeps
+    # more of a mirrored vine fully on-canvas than the old flush placement
+    # did, so the vines now reliably reach a little further into the frame
+    # than before.
+    zone: {x: 0.10, y: 0.885, w: 0.80, h: 0.055}
     case: upper
     tracking: 130
     size_min: 0.020

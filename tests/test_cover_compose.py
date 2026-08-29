@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageColor
+from PIL import Image, ImageColor, ImageDraw
 
 from docproof.cover.archetypes import ARCHETYPES, zone_px
 from docproof.cover.model import (ArtSlot, Brief, CoverSpec, Direction,
@@ -367,7 +367,15 @@ def test_focal_asset_with_real_transparency_does_not_swap_or_warn(tmp_path):
 
     _, report = compose(spec, tmp_path, canvas=CANVAS)
 
-    assert report.warnings == []
+    # Not a blanket "no warnings at all": this minimal hand-built spec (a
+    # flat background, no subtitle content) has real empty canvas above the
+    # title zone that the v2.1 BODY-fix wave's dead-band metric is entitled
+    # to flag — this test is specifically about the opaque-focal swap-and-
+    # warn mechanism (see test_opaque_focal_asset_swaps_behind_its_title_
+    # and_warns, its positive counterpart), so assert THAT warning's
+    # absence rather than the absence of every warning any mechanism could
+    # ever raise.
+    assert not any("focal" in w and "title" in w for w in report.warnings)
 
 
 # -- ComposeError ---------------------------------------------------------------
@@ -676,3 +684,217 @@ def test_an_art_layer_drawn_after_text_paints_over_its_ink(tmp_path):
     # fully occlude every pixel of ink the title would otherwise have put
     # down — the title's own ink color appears NOWHERE in the final image.
     assert set(image.getdata()) == {overlay_rgb}
+
+
+# ===========================================================================
+# v2.1 BODY-fix wave: title occlusion guard (fix 2) — a contain-fit art
+# layer drawn after a text layer (the cutout_sandwich shape) may overlap
+# that text's zone, but not bury its ink.
+# ===========================================================================
+
+def _dark_blob_png(path: Path, size: tuple[int, int],
+                   fill: tuple[int, int, int, int] = (10, 10, 10, 255)) -> None:
+    """An opaque circle on a transparent field, real alpha at the margins
+    (so _degrade_opaque_focal's own opaque-asset check passes it through
+    rather than intercepting it first) — the title occlusion guard is what
+    this section means to exercise, not the separate opaque-focal swap."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse((0, 0, size[0] - 1, size[1] - 1), fill=fill)
+    img.save(path)
+
+
+def _sandwich_spec(tmp_path: Path, scale: float) -> CoverSpec:
+    """A left-aligned title over a centered, dark, opaque-circle `focal`
+    drawn immediately after it (fit="contain") — `scale` controls how much
+    horizontal room the occlusion guard's anchor search has to work with."""
+    _dark_blob_png(tmp_path / "focal.png", (200, 200))
+    title = TextSlot(id="title", content="ASH", zone=Zone(x=0.05, y=0.35, w=0.9, h=0.2),
+                     font_family="Spectral", size_min=0.15, size_max=0.15,
+                     max_lines=1, align="left")
+    focal = ArtSlot(id="focal", asset="focal.png", fit="contain", transparent=True,
+                    anchor=[0.5, 0.5], scale=scale)
+    return CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[focal], scrims=[], text=[title],
+                     layers=[LayerRef(kind="text", ref="title"),
+                            LayerRef(kind="art", ref="focal")])
+
+
+def test_occlusion_guard_shifts_the_anchor_when_the_default_position_buries_the_title(tmp_path):
+    # At its declared anchor (0.5, 0.5) this focal covers ~44% of the
+    # title's own ink — over the 30% limit. +0.10 (~31%) and -0.10 (~56%)
+    # both still fail; +0.20 is the first candidate that clears it (~16%),
+    # so this also exercises the search actually trying more than one
+    # offset before succeeding, not just getting lucky on the first try.
+    spec = _sandwich_spec(tmp_path, scale=0.35)
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.occlusion["title<-focal"] <= 0.30
+    assert not any("focal" in w and "title" in w for w in report.warnings)
+    # The title's own ink is genuinely on the page — a solid-coverage pixel
+    # from the "A" glyph's stroke (see typeset.text_mask for this slot)
+    # shows the text color, not the blob's dark fill.
+    assert image.getpixel((54, 253)) == ImageColor.getrgb("#f5f1e8")
+
+
+def test_occlusion_guard_degrades_to_drawing_text_on_top_when_no_offset_clears_it(tmp_path):
+    # This focal is wide enough (scale=0.6) that no anchor offset in
+    # _OCCLUSION_ANCHOR_OFFSETS gets it under the 30% limit (the best any
+    # of the six manages is ~53%) — every offset failing is exactly the
+    # §5.2.3 degrade trigger: draw the text back on top instead.
+    spec = _sandwich_spec(tmp_path, scale=0.6)
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    # Post-degrade, the composited cover carries none of this pair's
+    # occlusion any more — text draws on top of the (now-earlier) art.
+    assert report.occlusion["title<-focal"] == 0.0
+    assert any("focal" in w and "title" in w and "instead of underneath" in w
+              for w in report.warnings)
+    assert image.getpixel((54, 253)) == ImageColor.getrgb("#f5f1e8")
+
+
+# ===========================================================================
+# v2.1 BODY-fix wave: art-vs-ground contrast floor (fix 3) — silhouette and
+# duotone commit an art slot's whole shape to one ink color; that color must
+# actually differ from whatever ground it sits on.
+# ===========================================================================
+
+def test_dark_silhouette_on_a_dark_ground_forces_the_accent_switch(tmp_path):
+    _flat_png(tmp_path / "background.png", CANVAS, (10, 10, 12))   # near-black ground
+    # _silhouette only reads the source's ALPHA (never its RGB — see that
+    # function's own docstring), so the fill color here is irrelevant; a
+    # fully opaque circle is all that matters for shape.
+    _dark_blob_png(tmp_path / "focal.png", (200, 200), fill=(255, 255, 255, 255))
+
+    # primary is near-black too — silhouette-on-primary would be
+    # essentially invisible against the near-black background.
+    palette = _palette(background="#0a0a0c", primary="#0d0d10", accent="#f2c744")
+    background = ArtSlot(id="background", asset="background.png", fit="cover")
+    focal = ArtSlot(id="focal", asset="focal.png", fit="contain", transparent=True,
+                    anchor=[0.5, 0.5], scale=0.4, treatment="silhouette")
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=palette, art=[background, focal], scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="background"),
+                            LayerRef(kind="art", ref="focal")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert any("focal" in w and "silhouette" in w for w in report.warnings)
+    # The silhouette's own opaque color is no longer primary (near-black) —
+    # it cleared the floor by switching toward accent/white, so its actual
+    # fill color now differs meaningfully from the near-black ground.
+    colors = {c for c in image.getdata() if c != (10, 10, 12)}
+    assert colors   # the shape is still there
+    for c in colors:
+        # every non-background pixel is far enough from the ground to be
+        # visibly a different color, not a near-black-on-near-black smear
+        assert sum(abs(a - b) for a, b in zip(c, (10, 10, 12))) > 60
+
+
+# ===========================================================================
+# v2.1 BODY-fix wave: dead-band metric (fix 4) — the tallest empty vertical
+# stretch of the finished cover, as a fraction of canvas height.
+# ===========================================================================
+
+def test_dead_band_warns_on_a_deliberately_gappy_spec(tmp_path):
+    _flat_png(tmp_path / "background.png", CANVAS, (20, 20, 24))
+    background = ArtSlot(id="background", asset="background.png", fit="cover")
+    # A single small author line pinned to the very bottom — everything
+    # above it (the whole top ~85% of the canvas) is flat, unbroken
+    # background with nothing crossing it.
+    author = TextSlot(id="author", content="J. R. VANCE",
+                      zone=Zone(x=0.1, y=0.92, w=0.8, h=0.06),
+                      font_family="Spectral", size_min=0.03, size_max=0.03,
+                      max_lines=1)
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[background], scrims=[], text=[author],
+                     layers=[LayerRef(kind="art", ref="background"),
+                            LayerRef(kind="text", ref="author")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.dead_band_frac >= 0.28
+    assert any("empty band" in w for w in report.warnings)
+
+
+def test_dead_band_is_silent_when_ink_regularly_breaks_up_the_canvas(tmp_path):
+    _flat_png(tmp_path / "background.png", CANVAS, (20, 20, 24))
+    background = ArtSlot(id="background", asset="background.png", fit="cover")
+    # Five short lines spread evenly down the whole canvas — nowhere is
+    # there a band anywhere near 28% of the height with nothing crossing it.
+    text = [
+        TextSlot(id="title", content="ONE TWO THREE",
+                 zone=Zone(x=0.1, y=0.06, w=0.8, h=0.10),
+                 font_family="Spectral", size_min=0.05, size_max=0.05, max_lines=1),
+        TextSlot(id="subtitle", content="FOUR FIVE SIX",
+                 zone=Zone(x=0.1, y=0.30, w=0.8, h=0.10), optional=True,
+                 font_family="Spectral", size_min=0.05, size_max=0.05, max_lines=1),
+        TextSlot(id="author", content="SEVEN EIGHT NINE",
+                 zone=Zone(x=0.1, y=0.54, w=0.8, h=0.10),
+                 font_family="Spectral", size_min=0.05, size_max=0.05, max_lines=1),
+        TextSlot(id="series", content="TEN ELEVEN TWELVE",
+                 zone=Zone(x=0.1, y=0.78, w=0.8, h=0.10), optional=True,
+                 font_family="Spectral", size_min=0.05, size_max=0.05, max_lines=1),
+    ]
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[background], scrims=[], text=text,
+                     layers=[LayerRef(kind="art", ref="background"),
+                            *(LayerRef(kind="text", ref=t.id) for t in text)])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.dead_band_frac < 0.28
+    assert not any("empty band" in w for w in report.warnings)
+
+
+# -- frame-containment clamp (v2.1, owner-reported frame bleed) ---------------
+
+def _framed_spec(title_zone, title_content="AN EXTREMELY WIDE TITLE LINE"):
+    # Minimal hand-built spec: procedural ground + rule frame + one title.
+    from docproof.cover.model import (ArtSlot, CoverSpec, LayerRef, TextSlot,
+                                      Zone)
+    return CoverSpec(
+        archetype="big_type", concept_name="Frame Probe",
+        rationale="frame clamp regression", palette=_TEST_PALETTE,
+        art=[ArtSlot(id="background"),
+             ArtSlot(id="frame", procedural="rule_frame")],
+        scrims=[],
+        text=[TextSlot(id="title", content=title_content,
+                       zone=Zone(**title_zone), font_family="Spectral",
+                       size_min=0.02, size_max=0.06, max_lines=2)],
+        layers=[LayerRef(kind="art", ref="background"),
+                LayerRef(kind="art", ref="frame"),
+                LayerRef(kind="text", ref="title")])
+
+
+def test_frame_clamp_keeps_title_ink_inside_the_rule_frame(tmp_path):
+    # An over-wide declared zone (nearly full-bleed) must not produce ink
+    # across the frame: render with and without the title and require the
+    # difference to live entirely inside the frame's inner rect.
+    from docproof.cover.compose import _frame_inner_rect
+    from PIL import ImageChops
+    zone = dict(x=0.02, y=0.30, w=0.96, h=0.25)
+    with_title, _ = compose(_framed_spec(zone), tmp_path, canvas=CANVAS)
+    without_title, _ = compose(_framed_spec(zone, title_content=""),
+                               tmp_path, canvas=CANVAS)
+    diff = ImageChops.difference(with_title.convert("RGB"),
+                                 without_title.convert("RGB"))
+    fx, fy, fw, fh = _frame_inner_rect(CANVAS)
+    left = round(fx * CANVAS[0]); top = round(fy * CANVAS[1])
+    right = round((fx + fw) * CANVAS[0]); bottom = round((fy + fh) * CANVAS[1])
+    px = diff.load()
+    outside = [(x, y) for y in range(CANVAS[1]) for x in range(CANVAS[0])
+               if (x < left or x >= right or y < top or y >= bottom)
+               and px[x, y] != (0, 0, 0)]
+    assert outside == []
+    # And the title genuinely rendered somewhere inside.
+    assert diff.getbbox() is not None
+
+
+def test_frame_clamp_refuses_to_crush_a_zone_and_warns(tmp_path):
+    # A zone almost entirely outside the frame would clamp below 40% of its
+    # width — the clamp must refuse, keep the declared zone, and warn.
+    zone = dict(x=0.0, y=0.30, w=0.14, h=0.25)
+    _, report = compose(_framed_spec(zone), tmp_path, canvas=CANVAS)
+    assert any("rule frame" in w and "crush" in w for w in report.warnings)

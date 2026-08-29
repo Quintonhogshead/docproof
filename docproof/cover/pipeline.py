@@ -148,31 +148,51 @@ IMAGE_CONCURRENCY = 2
 # default); a module constant so it is one place to change.
 IMAGE_RESOLUTION = "2K"
 
-# One compose() at a time, PROCESS-WIDE, not per job: Pillow buffers
-# (1600x2560x4 ~= 16MB per layer, ~5 layers per compose) are the 512MB box's
-# real constraint, and that budget is shared by every job on the machine, not
-# owned by one (§7.4).
-_COMPOSE_LOCK = asyncio.Lock()
+# Every asyncio primitive below is created lazily and keyed by the RUNNING
+# event loop (plus job_id where relevant): an asyncio.Lock binds to the loop
+# it is first awaited on, and a module-level Lock created at import time dies
+# with "bound to a different event loop" the moment a second loop appears —
+# which never happens under uvicorn (one loop for the process's lifetime,
+# so production behavior is identical), but happens immediately in any CLI
+# script or test that calls asyncio.run() per job. The registries grow by one
+# entry per loop (and per job for the keyed ones) — the same modest tradeoff
+# the job_id-keyed registries already accepted.
+
+# One compose() at a time, PROCESS-WIDE (per loop), not per job: Pillow
+# buffers (1600x2560x4 ~= 16MB per layer, ~5 layers per compose) are the
+# 512MB box's real constraint, and that budget is shared by every job on the
+# machine, not owned by one (§7.4).
+_COMPOSE_LOCKS: dict[int, asyncio.Lock] = {}
 
 # Serializes job.json read-modify-write across the concurrent tasks that can
 # touch one job at once: a job's own concept tasks (painting in parallel) and
-# any revision running on a different concept of the same job. Keyed by
-# job_id and created lazily; asyncio is cooperative-single-threaded, so a
-# plain dict get-or-create here is not itself racy. See _commit_concept.
-_STATE_LOCKS: dict[str, asyncio.Lock] = {}
+# any revision running on a different concept of the same job. asyncio is
+# cooperative-single-threaded, so a plain dict get-or-create is not racy.
+_STATE_LOCKS: dict[tuple[int, str], asyncio.Lock] = {}
 
 # One image-generation semaphore PER JOB, shared by run_job and every
 # concurrent run_revision on that job — a local Semaphore per call would
 # bound each call to IMAGE_CONCURRENCY while letting the job's true
 # in-flight total exceed it (two ready-concept revisions + a still-painting
-# job = 6 calls at once on a 512MB box). Same keyed-registry pattern, and
-# the same modest unbounded-growth tradeoff, as _STATE_LOCKS above.
-_IMAGE_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+# job = 6 calls at once on a 512MB box).
+_IMAGE_SEMAPHORES: dict[tuple[int, str], asyncio.Semaphore] = {}
+
+
+def _loop_id() -> int:
+    return id(asyncio.get_running_loop())
+
+
+def _compose_lock() -> asyncio.Lock:
+    return _COMPOSE_LOCKS.setdefault(_loop_id(), asyncio.Lock())
+
+
+def _state_lock(job_id: str) -> asyncio.Lock:
+    return _STATE_LOCKS.setdefault((_loop_id(), job_id), asyncio.Lock())
 
 
 def _image_semaphore(job_id: str) -> asyncio.Semaphore:
-    return _IMAGE_SEMAPHORES.setdefault(job_id,
-                                        asyncio.Semaphore(IMAGE_CONCURRENCY))
+    return _IMAGE_SEMAPHORES.setdefault(
+        (_loop_id(), job_id), asyncio.Semaphore(IMAGE_CONCURRENCY))
 
 # job_id -> the background tasks currently working it (the one run_job task,
 # and/or any run_revision tasks). Used only for stale-job detection
@@ -298,8 +318,7 @@ async def _commit_concept(root: str | Path, job_id: str, index: int,
     trusting an in-memory JobState, because sibling concept tasks (or a
     concurrent revision on another concept) may have written in the
     meantime — see the module docstring."""
-    lock = _STATE_LOCKS.setdefault(job_id, asyncio.Lock())
-    async with lock:
+    async with _state_lock(job_id):
         job = load_job(root, job_id)
         if job is None or index >= len(job.concepts):
             return
@@ -429,7 +448,7 @@ async def _render(spec: CoverSpec, d: Path, index: int
     compose(): save_renders holds a comparable buffer (the composed image,
     re-encoded to PNG/JPG plus two thumbnails) on the same 512MB box (§7.4),
     so "only one compose-shaped operation at a time" covers both."""
-    async with _COMPOSE_LOCK:
+    async with _compose_lock():
         image, report = await asyncio.to_thread(compose, spec, d)
         renders = await asyncio.to_thread(save_renders, image, d, spec.version, index)
     # save_renders writes four files (png, jpg, thumb300, thumb100) but the
@@ -577,6 +596,16 @@ def _dump_equal_ignoring_bookkeeping(old: CoverSpec, new: CoverSpec) -> bool:
 
 # -- critique pass (§6.3, iterated — BRAIN wave) -------------------------------
 
+def _thumb_path(png_path: Path) -> Path:
+    """The 100px shelf/search thumbnail save_renders wrote right next to
+    this render (BRAIN v2.1 — compose.save_renders's own `_thumb100.png`
+    naming: `renders/v{version}_c{concept}.png` ->
+    `renders/v{version}_c{concept}_thumb100.png`), computed rather than
+    threaded through as a second return value, since it is a pure function
+    of the path save_renders already gave back."""
+    return png_path.with_name(f"{png_path.stem}_thumb100{png_path.suffix}")
+
+
 def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
                          png_path: Path, critique_client: Any,
                          ledger_rows: list[dict], warnings: Sequence[str],
@@ -589,11 +618,18 @@ def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
     pass" — the two must not be conflated into ready for the same reason.
 
     `warnings` (the composer's own RenderReport.warnings for THIS render) is
-    threaded straight through to run_critique, which labels them into the
-    call's summary — see that module's own docstring. `round_n` (1-based)
-    is folded into every ledger row's `detail` so a job that iterated
-    several rounds reads as a sequence, not a blur — see
+    threaded straight through to run_critique as `composer_warnings`, which
+    labels them into the call's summary — see that module's own docstring.
+    `round_n` (1-based) is folded into every ledger row's `detail` so a job
+    that iterated several rounds reads as a sequence, not a blur — see
     _critique_and_revise, the only caller.
+
+    The 100px thumbnail (BRAIN v2.1) is read separately from the render, and
+    its own OSError is swallowed to None rather than joining the render's —
+    a missing thumbnail (an old job, a save_renders fake in a test that only
+    writes the primary PNG) must degrade run_critique to one image, never
+    turn into a "the critique call failed" ledger note the way a genuinely
+    unreadable RENDER does.
 
     Called directly, not via asyncio.to_thread: run_directions and
     revise_spec (both synchronous network calls, same as this one) are
@@ -603,8 +639,12 @@ def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
     model calls."""
     try:
         png_bytes = png_path.read_bytes()
-        verdict = run_critique(png_bytes, spec, brief, critique_client,
-                               warnings=warnings)
+        try:
+            thumb_bytes: bytes | None = _thumb_path(png_path).read_bytes()
+        except OSError:
+            thumb_bytes = None
+        verdict = run_critique(png_bytes, thumb_bytes, spec, brief,
+                               critique_client, composer_warnings=warnings)
     except (CritiqueError, OSError) as e:
         log.warning("Cover job %s concept %d round %d: critique call "
                    "failed, shipping as composed: %s", job_id, index,
@@ -626,7 +666,8 @@ def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
 
 async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
                                brief: Brief, d: Path, providers: Providers,
-                               critique_client: Any, report: RenderReport,
+                               critique_client: Any, image_client: Any,
+                               sem: asyncio.Semaphore, report: RenderReport,
                                renders: list[str]
                                ) -> tuple[CoverSpec, RenderReport, list[str], list[dict]]:
     """§6.3, ITERATED (BRAIN wave, 2026-08-29): the owner's beta verdict was
@@ -645,7 +686,11 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
     from v1), a genuine pass, or a revision that comes back IDENTICAL to
     the spec it started from (_dump_equal_ignoring_bookkeeping — the model
     had nothing left to give, and looping further would only spend money to
-    relearn that; noted in the ledger, not recomposed). A RevisionError is
+    relearn that; noted in the ledger, not recomposed) AND did not also
+    trigger an art repaint this round (see below — a repaint changes real
+    pixels on disk without changing the spec's `asset` string at all, so
+    the identical-spec check is blind to it on purpose and must not be the
+    thing that stops the loop when one just happened). A RevisionError is
     equally non-fatal: logged, ledgered, and the concept ships with
     whatever it already has.
 
@@ -661,15 +706,23 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
 
     allow_new_art is always False for every auto round — the code-level
     backstop below holds regardless of what the model wrote, the same
-    restore-the-prior-asset behavior v1 had.
+    restore-the-prior-asset behavior v1 had. The ONE exception (BRAIN
+    v2.1): a slot the JUDGE names in CritiqueResult.art_defects — a
+    generation defect a design-only revision can never fix — may repaint,
+    at most 2 slots and at most once per concept for the whole job
+    (`repaint_used` below), through the same _generate_art_slot path a
+    fresh concept's own art uses; `image_client`/`sem` exist on this
+    function's signature for exactly that one path.
 
     Returns (spec, report, renders, ledger_rows) — all three of the first
     unchanged from what was passed in unless at least one round actually
     revised and recomposed. Human-triggered run_revision never calls this
     (§6.3: "the human is the critic there") — it gains the same
-    diff_spec_fields note on its own path instead."""
+    diff_spec_fields note on its own path instead, and never repaints on
+    its own initiative."""
     ledger_rows: list[dict] = []
     verdict: CritiqueResult | None = None
+    repaint_used = False
 
     for round_n in range(1, MAX_CRITIQUE_ROUNDS + 1):
         verdict = _run_critique_safely(
@@ -722,7 +775,51 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
                           f"the existing art (auto rounds never repaint)"),
                 "usd": 0.0})
 
-        if _dump_equal_ignoring_bookkeeping(spec, revised):
+        # BRAIN v2.1's one-repaint escape hatch: a design-only revision can
+        # never fix a defective GENERATED image (a surreal blob, an eye
+        # baked into a lighthouse lantern). When the verdict named
+        # art_defects and this concept hasn't spent its one repaint yet,
+        # clear up to 2 of those flagged slots' assets and repaint them for
+        # real, through the same _generate_art_slot path a fresh concept's
+        # own art uses — the same prompt, or the one the revision above
+        # just rewrote if it touched that slot (regeneration re-rolls the
+        # image either way). A hallucinated or non-generatable slot id is
+        # dropped rather than raised, same tolerance direction._validate_
+        # direction gives a stray art_prompts entry. This deliberately runs
+        # AFTER the restore-backstop above and re-clears regardless of what
+        # it just restored — simpler than teaching that loop about
+        # art_defects, and the net effect (a fresh paint) is the same.
+        repainted = False
+        if verdict.art_defects and not repaint_used:
+            slot_map = {s.id: s for s in revised.art}
+            eligible = [sid for sid in verdict.art_defects
+                       if (s := slot_map.get(sid)) is not None and s.prompt]
+            flagged = eligible[:2]
+            if flagged:
+                archetype = ARCHETYPES[revised.archetype]
+                for sid in flagged:
+                    slot_map[sid].asset = ""
+                for slot_rows in await asyncio.gather(*(
+                        _generate_art_slot(image_client, sem, d, index,
+                                           slot_map[sid], archetype)
+                        for sid in flagged)):
+                    ledger_rows.extend(slot_rows)
+                for sid in flagged:
+                    ledger_rows.append({
+                        "kind": "image", "concept": index,
+                        "detail": (f"concept {index} slot {sid} repainted "
+                                  f"on judge's flag"),
+                        "usd": 0.0})
+                repaint_used = True
+                repainted = True
+
+        # A repaint changes real pixels on disk without changing the spec's
+        # `asset` STRING at all (_generate_art_slot writes to a fixed,
+        # deterministic path per slot — see its own docstring), so the
+        # identical-spec check below is blind to it by construction; a
+        # repaint this round must never let that check be the thing that
+        # stops the loop, or the fresh paint would ship uncritiqued.
+        if not repainted and _dump_equal_ignoring_bookkeeping(spec, revised):
             ledger_rows.append({
                 "kind": "revision", "concept": index,
                 "detail": (f"concept {index} round {round_n}: the revision "
@@ -794,8 +891,8 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
 
         report, renders = await _render(spec, d, index)
         spec, report, renders, critique_rows = await _critique_and_revise(
-            job_id, index, spec, brief, d, providers, critique_client, report,
-            renders)
+            job_id, index, spec, brief, d, providers, critique_client,
+            image_client, sem, report, renders)
 
         concept.spec = spec
         concept.status = "ready"
@@ -891,6 +988,23 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
     job.ledger.append({"kind": "direction",
                        "detail": f"{len(result.directions)} concepts via {result.model}",
                        "usd": result.cost or 0.0})
+    # A generatable slot with no prompt ships as a blank layer — legal (a
+    # direction may lean procedural on purpose) but worth saying out loud:
+    # the first live v2 batch shipped EVERY cover artless because the
+    # direction's prompts named slots that don't exist and were dropped.
+    for i, concept in enumerate(job.concepts):
+        archetype = ARCHETYPES[concept.spec.archetype]
+        generatable = {a.id for a in archetype.art if a.generatable}
+        promptless = sorted(
+            s.id for s in concept.spec.art
+            if s.id in generatable and not s.prompt and not s.procedural)
+        if promptless:
+            job.ledger.append({
+                "kind": "direction", "concept": i,
+                "detail": (f"concept {i}: no art prompt reached "
+                          f"{', '.join(promptless)} — those layers render "
+                          f"empty"),
+                "usd": 0.0})
     _write_state(root, job)
 
     sem = _image_semaphore(job_id)

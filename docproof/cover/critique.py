@@ -27,6 +27,26 @@ in production — the one thing it does not (and cannot) prove is that an
 since none of docproof's existing Anthropic calls send one. Confirm a real
 call against CRITIQUE_MODEL works before this ships.
 
+BRAIN v2.1 (this fix wave, 2026-08-29's live-batch review): the owner
+watched the judge PASS a thriller with a giant dead middle and a near-
+invisible dark-on-dark silhouette — one ≤600px render hid exactly the tells
+that only show up at actual shelf size. run_critique now takes a second,
+optional image (`thumb_bytes`) — the job's own 100px search/shelf
+thumbnail, already on disk right next to the render (see
+docproof.cover.compose.save_renders's `_thumb100.png` naming) — and sends
+both, each labeled, so shelf-size legibility is directly visible to the
+judge rather than inferred from the large render alone. A missing
+thumbnail (an old job, a test fake that only writes the primary PNG)
+degrades to sending the one image; it never fails the call over that.
+CritiqueResult also gains `art_defects`: the ids of art slots whose
+GENERATED IMAGE ITSELF is the problem (a generation artifact, anatomical
+nonsense, an illegible subject) as opposed to a slot whose art is clean but
+mis-designed. A design-only revision (§6.2's machinery) can fix contrast
+and placement; it can never fix a bad pixel — so
+docproof.cover.pipeline._critique_and_revise reads this field to trigger
+an actual, code-bounded repaint instead of just another design pass (see
+that function's own comment on the one-repaint-per-concept escape hatch).
+
 Failure posture: run_critique itself raises CritiqueError on any trouble,
 the same "never guess, always raise" contract run_directions/revise_spec/
 imaging.generate all share. §6.3 is explicit that a critique failure must
@@ -41,12 +61,12 @@ from __future__ import annotations
 import base64
 import io
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 import anthropic
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..providers import NormalizedUsage, cost_of_usage, lookup, strict_json_schema
 from .model import Brief, CoverSpec
@@ -96,10 +116,20 @@ class CritiqueError(RuntimeError):
 
 @dataclass(frozen=True)
 class CritiqueResult:
+    """One critique round's whole verdict. `art_defects` (BRAIN v2.1) names
+    every art slot (by id, from spec.art) whose GENERATED IMAGE ITSELF is
+    the problem — as opposed to `tells`/`notes`, which cover everything a
+    design-only revision could actually fix. Defaulted rather than
+    required so every pre-v2.1 keyword-constructed caller (pipeline.py's
+    frozen-dataclass consumers, this module's own older tests) keeps
+    working unchanged — the same reasoning
+    docproof.cover.direction.RevisionResult.skipped already documents for
+    itself."""
     passes: bool
     tells: list[str]
     notes: str
     cost: float | None
+    art_defects: list[str] = field(default_factory=list)
 
 
 class _CritiquePayload(BaseModel):
@@ -116,6 +146,11 @@ class _CritiquePayload(BaseModel):
     passes: bool
     tells: list[str]
     notes: str
+    # BRAIN v2.1: a Python default is still a required wire key
+    # (strict_json_schema's own docstring) -- the model always answers with
+    # SOME list, empty when no slot's art is itself defective, the same
+    # convention `tells` already follows.
+    art_defects: list[str] = Field(default_factory=list)
 
 
 # -- image prep -----------------------------------------------------------------
@@ -143,9 +178,13 @@ def _downscale_to_base64(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> str
 def _system_prompt() -> str:
     return """You are the art director at a traditional press, doing a final \
 proof review before a cover ships. You will be shown the finished cover render \
-plus a short summary of the book. Judge it exactly the way you would judge a \
-proof crossing your desk: would this pass as a real cover on a \
-traditionally-published shelf in this genre, sitting next to its competitors?
+-- usually followed by a second image of that SAME cover at its actual \
+shelf/search-thumbnail size (100px wide) -- plus a short summary of the book. \
+Judge it exactly the way you would judge a proof crossing your desk: would \
+this pass as a real cover on a traditionally-published shelf in this genre, \
+sitting next to its competitors? Weigh both images when you have both: a \
+cover can look fine large and still fail at the size a reader actually \
+meets it first.
 
 Some choices read as deliberate, well-executed design moves rather than \
 flaws — judge them on execution, not on whether they are bold. In \
@@ -170,6 +209,9 @@ container's edges
 - more rendered detail than the concept needs — a simple shape or \
 silhouette would have hidden generation artifacts better than the detail \
 actually shown
+- a large empty band with nothing designed in it
+- an element so low-contrast against its ground it disappears
+- at thumbnail size the cover reads as a blank field with words
 
 passes: true only if you would ship this exactly as-is — a real, \
 essentially flaw-free proof, not merely "acceptable." false if there is at \
@@ -178,24 +220,54 @@ least one concrete tell above.
 tells: every concrete problem you found, each one sentence. Empty if passes \
 is true.
 
+art_defects: the id of every art slot -- named for you, with its prompt, in \
+the summary below -- whose GENERATED IMAGE ITSELF is the problem: visible \
+AI-generation artifacts, anatomical or structural nonsense on an inanimate \
+object, an illegible or badly warped subject. This is NOT for a slot whose \
+art is clean but simply mis-designed (badly placed, badly scaled, wrong \
+contrast, fighting the type) -- that belongs in tells/notes instead, since a \
+design-only fix can actually address it. Only name a slot here when the \
+PAINTED IMAGE ITSELF needs to be repainted from scratch, using the exact \
+slot id given in the summary. Empty if every slot's art is clean.
+
 notes: if passes is false, ONE actionable revision instruction — the kind \
 of note you would hand a designer for a quick second pass: adjust an \
 EXISTING design choice (palette, scale, position, contrast, tracking, a \
 scrim, which existing art layer sits where, and the like). You may NOT ask \
 for new art, a different archetype, or new imagery of any kind — this note \
-can only request a design-only fix, never a repaint. If passes is true, \
-notes is an empty string."""
+can only request a design-only fix, never a repaint (name a slot in \
+art_defects for that instead). If passes is true, notes is an empty \
+string."""
 
 
-def _summary(spec: CoverSpec, brief: Brief, warnings: Sequence[str] = ()) -> str:
+def _art_slots_line(spec: CoverSpec) -> str:
+    """BRAIN v2.1: names every GENERATED art slot (one with a real prompt --
+    a procedural/no-prompt slot like a gradient or texture has no "generated
+    image" to be defective) by its exact id, alongside the prompt that made
+    it, so the judge's art_defects answer can name a real slot instead of
+    guessing at one. Empty string when this concept generated no art at all
+    (a big_type concept, say) -- omitted from the summary entirely then, the
+    same convention the composer-warnings clause below already follows."""
+    prompted = [a for a in spec.art if a.prompt]
+    if not prompted:
+        return ""
+    listed = "; ".join(f'{a.id} ("{a.prompt}")' for a in prompted)
+    return (" This concept's generated art slots, by id (name one here in "
+           f"art_defects only if ITS OWN generated image is the problem): "
+           f"{listed}.")
+
+
+def _summary(spec: CoverSpec, brief: Brief,
+            composer_warnings: Sequence[str] = ()) -> str:
     """One paragraph: brief + genre (§6.3) — not the fully labeled brief
     run_directions sends; the critique call is judging a finished image, not
-    drafting one, so it needs just enough context to judge genre fit. When
-    the composer itself flagged anything (RenderReport.warnings — a
-    contrast escalation that still fell short, a coverage note on a
-    mask_from container, and the like), it rides along here, clearly
-    labeled, so the judge reasons with the composer's own measurements
-    rather than re-deriving them by eye."""
+    drafting one, so it needs just enough context to judge genre fit. Also
+    names every generated art slot (BRAIN v2.1 — see _art_slots_line) so
+    art_defects can address one by id. When the composer itself flagged
+    anything (RenderReport.warnings — a contrast escalation that still fell
+    short, a coverage note on a mask_from container, and the like), it
+    rides along here too, clearly labeled, so the judge reasons with the
+    composer's own measurements rather than re-deriving them by eye."""
     bits = [f'"{brief.title}"']
     if brief.subtitle:
         bits.append(f"({brief.subtitle})")
@@ -205,9 +277,10 @@ def _summary(spec: CoverSpec, brief: Brief, warnings: Sequence[str] = ()) -> str
         sentence += f" Mood: {brief.mood}."
     sentence += (f" This concept, \"{spec.concept_name}\", uses the "
                 f"{spec.archetype} cover layout.")
-    if warnings:
+    sentence += _art_slots_line(spec)
+    if composer_warnings:
         sentence += (" The composer's own measurements flagged: "
-                     + "; ".join(warnings) + ".")
+                     + "; ".join(composer_warnings) + ".")
     return sentence
 
 
@@ -216,11 +289,21 @@ def _summary(spec: CoverSpec, brief: Brief, warnings: Sequence[str] = ()) -> str
 # Mirrors docproof/providers/anthropic_provider.py's own _params/
 # complete_structured almost exactly (see the module docstring for the full
 # reasoning): the same output_config.format.json_schema dialect, the same
-# effort gating, one addition only — an `image` content block ahead of the
-# text block in the one user message. Anthropic's own vision guidance is to
-# put a single image before the text that refers to it, hence that order.
+# effort gating, one addition only — one or two `image` content blocks ahead
+# of the text block in the one user message. Anthropic's own vision guidance
+# is to put a single image before the text that refers to it, hence that
+# order for the single-image (no thumbnail) case; with two images (BRAIN
+# v2.1) each is preceded by its own short label so the model can address
+# "the thumbnail" unambiguously in its answer, the standard multi-image
+# prompting shape.
 
-def _request_params(*, model: str, image_b64: str, summary: str) -> dict[str, Any]:
+def _image_block(b64: str) -> dict[str, Any]:
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": b64}}
+
+
+def _request_params(*, model: str, image_b64: str, thumb_b64: str | None,
+                    summary: str) -> dict[str, Any]:
     output_config: dict[str, Any] = {
         "format": {"type": "json_schema",
                    "schema": strict_json_schema(_CritiquePayload)}}
@@ -229,15 +312,29 @@ def _request_params(*, model: str, image_b64: str, summary: str) -> dict[str, An
     # a model that predates it, so it is catalog-gated rather than always-on.
     if info is None or info.supports_effort:
         output_config["effort"] = "low"
+
+    # No thumbnail: exactly v1's shape (bare image, then text) -- a single
+    # image was never ambiguous, so no label is added over it. A thumbnail
+    # (the common case once a job has actually rendered one) labels BOTH
+    # images instead, so the model can name which one it means.
+    content: list[dict[str, Any]] = []
+    if thumb_b64 is not None:
+        content.append({"type": "text",
+                        "text": "Image 1 — the full-size composed cover render:"})
+    content.append(_image_block(image_b64))
+    if thumb_b64 is not None:
+        content.append({"type": "text", "text": (
+            "Image 2 — the SAME cover at its actual shelf/search-thumbnail "
+            "size (100px wide) — legibility and contrast tells often only "
+            "show up here:")})
+        content.append(_image_block(thumb_b64))
+    content.append({"type": "text", "text": summary})
+
     return {
         "model": model,
         "max_tokens": MAX_OUTPUT_TOKENS,
         "system": _system_prompt(),
-        "messages": [{"role": "user", "content": [
-            {"type": "image", "source": {
-                "type": "base64", "media_type": "image/png", "data": image_b64}},
-            {"type": "text", "text": summary},
-        ]}],
+        "messages": [{"role": "user", "content": content}],
         "output_config": output_config,
     }
 
@@ -289,12 +386,18 @@ def _call_with_retry(client: Any, params: dict[str, Any]) -> Any:
                 f"The critique call failed after a retry: {e2}") from e2
 
 
-def run_critique(png_bytes: bytes, spec: CoverSpec, brief: Brief, client: Any,
-                 *, model: str = CRITIQUE_MODEL,
-                 warnings: Sequence[str] = ()) -> CritiqueResult:
+def run_critique(png_bytes: bytes, thumb_bytes: bytes | None, spec: CoverSpec,
+                 brief: Brief, client: Any, *, model: str = CRITIQUE_MODEL,
+                 composer_warnings: Sequence[str] = ()) -> CritiqueResult:
     """Review one composed cover the way an art director reviews a proof
-    (§6.3). `png_bytes` is the full-size composed render; this function does
-    its own downscale before sending anything. `warnings` is the composer's
+    (§6.3). `png_bytes` is the full-size composed render; `thumb_bytes` is
+    the job's own 100px shelf/search thumbnail (BRAIN v2.1 —
+    docproof.cover.compose.save_renders's `_thumb100.png` companion file,
+    read straight off disk by the caller) or None when there isn't one (an
+    old job, a caller that never rendered one) — this function does its own
+    downscale on whichever of the two it was given, and degrades to sending
+    just `png_bytes` when `thumb_bytes` is None; a missing thumbnail is
+    never a reason to fail this call. `composer_warnings` is the composer's
     OWN RenderReport.warnings for this exact render (a contrast escalation
     that still fell short, a container-coverage note, and the like) — passed
     through so the judge reasons with the composer's measurements instead of
@@ -308,8 +411,10 @@ def run_critique(png_bytes: bytes, spec: CoverSpec, brief: Brief, client: Any,
     app/routes/cover.py's client construction) — this module never builds
     one itself, the same division imaging.py draws with make_client()."""
     image_b64 = _downscale_to_base64(png_bytes)
-    summary = _summary(spec, brief, warnings)
-    params = _request_params(model=model, image_b64=image_b64, summary=summary)
+    thumb_b64 = _downscale_to_base64(thumb_bytes) if thumb_bytes is not None else None
+    summary = _summary(spec, brief, composer_warnings)
+    params = _request_params(model=model, image_b64=image_b64,
+                             thumb_b64=thumb_b64, summary=summary)
 
     try:
         message = _call_with_retry(client, params)
@@ -328,7 +433,8 @@ def run_critique(png_bytes: bytes, spec: CoverSpec, brief: Brief, client: Any,
 
     return CritiqueResult(
         passes=payload.passes, tells=list(payload.tells), notes=payload.notes,
-        cost=cost_of_usage(usage, fallback_model=model))
+        cost=cost_of_usage(usage, fallback_model=model),
+        art_defects=list(payload.art_defects))
 
 
 __all__ = ["CRITIQUE_MODEL", "MAX_WIDTH", "CritiqueError", "CritiqueResult",

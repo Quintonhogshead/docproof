@@ -473,8 +473,17 @@ def describe_archetypes(genre: str | None = None) -> str:
         archetypes = [a for a in ARCHETYPES.values() if _fits_genre(a, genre)]
     else:
         archetypes = list(ARCHETYPES.values())
-    return "\n".join(f"- {a.name} — {' '.join(a.describe.split())}"
-                     for a in archetypes)
+    lines = []
+    for a in archetypes:
+        gen = [s.id for s in a.art if s.generatable]
+        # The slot ids are load-bearing prompt content: v2's free-form slugs
+        # mean the art director can no longer guess them, and a prompt for a
+        # misspelled slot is silently dropped downstream — the first live v2
+        # batch shipped every cover artless for exactly this reason.
+        slots = (f" (art slots to prompt, by exact id: {', '.join(gen)})"
+                 if gen else " (no generated art — fully procedural)")
+        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{slots}")
+    return "\n".join(lines)
 
 
 __all__ = ["ARCHETYPES", "ARCHETYPES_DIR", "SUBJECT_KEYS", "Archetype",

@@ -64,9 +64,15 @@ def test_shipped_archetype_is_a_valid_archetype_with_matching_name(name):
 
 def test_big_type_has_no_focal_slot_and_a_procedural_background():
     big_type = ARCHETYPES["big_type"]
-    assert {a.id for a in big_type.art} == {"background", "texture"}
+    # v2.1 BODY-fix wave added `rule_frame` (an always-procedural, never-
+    # generatable double-rule) alongside the original background/texture —
+    # still no focal slot at all, the point this test's own name makes.
+    assert {a.id for a in big_type.art} == {"background", "texture", "rule_frame"}
     background = next(a for a in big_type.art if a.id == "background")
     assert background.generatable is False   # the $0-fallback guarantee
+    rule_frame = next(a for a in big_type.art if a.id == "rule_frame")
+    assert rule_frame.generatable is False
+    assert rule_frame.procedural == "rule_frame"
 
 
 def test_cutout_sandwich_focal_is_generatable_transparent_and_contained():

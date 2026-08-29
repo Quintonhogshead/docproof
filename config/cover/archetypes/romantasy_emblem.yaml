@@ -17,8 +17,14 @@ composition_note: >-
   anywhere.
 art:
   - id: background
-    generatable: true            # a plain dark jewel-tone ground; a fully
-    fit: cover                   # procedural gradient reads fine too ($0)
+    # v2.1 BODY-fix wave: was generatable — a live render's "ghost-wash"
+    # background generation shipped as a smudge (a wash of near-nothing,
+    # since the medallion is the real subject and the prompt had nothing
+    # else to describe); the archetype's own original comment already
+    # admitted "a fully procedural gradient reads fine too ($0)", so this
+    # now always IS one — one fewer generation per concept, too.
+    generatable: false
+    fit: cover
   - id: focal2
     generatable: true
     fit: contain                 # placement is moot once `corners` is set —

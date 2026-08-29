@@ -23,8 +23,9 @@ from pydantic import ValidationError
 
 from docproof.cover.archetypes import (ARCHETYPES, Archetype, ArchetypeArt,
                                        ArchetypeText, ArchetypeZone)
-from docproof.cover.compose import (_ART_FILL_OUTLINE_FRACTION, _dilate_mask,
-                                    _padded_rect, compose)
+from docproof.cover.compose import (_ART_FILL_OUTLINE_FRACTION,
+                                    _CORNER_MARGIN_FRACTION, _dilate_mask,
+                                    _padded_rect, _place_corners, compose)
 from docproof.cover.model import (ArtPrompt, ArtSlot, Brief, CoverSpec,
                                   Direction, Directions, LayerRef, Palette,
                                   ScrimSpec, TextSlot, Zone, build_spec)
@@ -466,7 +467,15 @@ def test_duotone_output_only_uses_colors_on_the_background_primary_ramp(tmp_path
     # which (for a source narrower than the canvas) only exposes a middle
     # slice of the gradient's range rather than its full 0..255 span.
     _gray_gradient_png(tmp_path / "art.png", CANVAS)
-    bg_hex, fg_hex = "#102040", "#f0c020"
+    # High enough contrast between the two ramp ends that the art-vs-ground
+    # contrast floor (v2.1 BODY-fix wave — the ramp's own MEAN luminance,
+    # against a blank/black ground here since `focal` is this spec's only
+    # layer) clears _ART_CONTRAST_FLOOR without tripping an accent swap;
+    # gamma decoding skews a linear-in-sRGB ramp's mean well toward its
+    # darker end, so "the two hex endpoints look high-contrast" is not by
+    # itself enough headroom (#102040/#f0c020 measures ~0.119, just under
+    # the 0.12 floor).
+    bg_hex, fg_hex = "#102040", "#fdf6e3"
     palette = _palette(background=bg_hex, primary=fg_hex)
     spec = _spec(art=[_art(id="focal", asset="art.png", fit="cover", treatment="duotone")],
                 layers=[LayerRef(kind="art", ref="focal")], palette=palette)
@@ -599,16 +608,49 @@ def test_corners_mirrors_the_ornament_into_all_four_corners_exactly(tmp_path):
 
     cw, ch = CANVAS
     k = round(0.25 * ch)   # a 100x100 (square) source -> target_w == target_h == k
-    top_left = image.crop((0, 0, k, k))
-    top_right = image.crop((cw - k, 0, cw, k))
-    bottom_left = image.crop((0, ch - k, k, ch))
-    bottom_right = image.crop((cw - k, ch - k, cw, ch))
+    # v2.1 BODY-fix wave: each copy is inset _CORNER_MARGIN_FRACTION from
+    # its own corner (fix 1), not flush to it — crop windows follow suit.
+    mx, my = round(_CORNER_MARGIN_FRACTION * cw), round(_CORNER_MARGIN_FRACTION * ch)
+    top_left = image.crop((mx, my, mx + k, my + k))
+    top_right = image.crop((cw - mx - k, my, cw - mx, my + k))
+    bottom_left = image.crop((mx, ch - my - k, mx + k, ch - my))
+    bottom_right = image.crop((cw - mx - k, ch - my - k, cw - mx, ch - my))
 
     assert top_left.tobytes() != top_right.tobytes()   # genuinely asymmetric source
     assert top_right.tobytes() == ImageOps.mirror(top_left).tobytes()
     assert bottom_left.tobytes() == ImageOps.flip(top_left).tobytes()
     assert bottom_right.tobytes() == ImageOps.flip(ImageOps.mirror(top_left)).tobytes()
-    assert report.warnings == []
+    # Not a blanket "no warnings at all": this minimal hand-built spec is a
+    # small corner ornament on an otherwise blank canvas (no background
+    # layer at all), so the v2.1 BODY-fix wave's dead-band metric is
+    # entitled to flag the wide-open middle — this test is specifically
+    # about corners' own mirroring/no-op-warning behavior.
+    assert not any("corners" in w for w in report.warnings)
+
+    # And the margin itself: nothing from the ornament reaches the canvas
+    # edge. compose() flattens to RGB, and this spec has no background
+    # layer at all, so a never-painted edge pixel stays exactly (0, 0, 0) —
+    # the regression probe fix 1 asks for ("zero ornament alpha within 1px
+    # of any canvas edge").
+    for edge in (image.crop((0, 0, cw, 1)), image.crop((0, ch - 1, cw, ch)),
+                image.crop((0, 0, 1, ch)), image.crop((cw - 1, 0, cw, ch))):
+        assert set(edge.getdata()) == {(0, 0, 0)}
+
+
+def test_place_corners_keeps_a_margin_so_nothing_touches_the_canvas_edge():
+    # A probe ornament fully opaque right up to its OWN edges — exactly the
+    # shape that would show alpha bleeding to the canvas edge under the
+    # OLD flush (or a hypothetical centered-on-the-corner-point) placement.
+    probe = Image.new("RGBA", (40, 40), (200, 30, 30, 255))
+    result = _place_corners(probe, CANVAS, scale=0.1)
+
+    cw, ch = CANVAS
+    alpha = result.getchannel("A")
+    edge_bands = (
+        alpha.crop((0, 0, cw, 2)), alpha.crop((0, ch - 2, cw, ch)),      # top/bottom, 2px
+        alpha.crop((0, 0, 2, ch)), alpha.crop((cw - 2, 0, cw, ch)))      # left/right, 2px
+    for band in edge_bands:
+        assert band.getextrema()[1] == 0   # max alpha in the band is 0
 
 
 def test_corners_on_an_opaque_slot_is_a_no_op_with_a_warning(tmp_path):

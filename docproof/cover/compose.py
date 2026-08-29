@@ -38,7 +38,7 @@ from . import typeset
 from .archetypes import zone_px
 from .imaging import has_real_alpha
 from .model import (ArtSlot, CoverSpec, LayerRef, Palette, RenderReport,
-                    ScrimSpec, Shadow, TextSlot)
+                    ScrimSpec, Shadow, TextSlot, Zone)
 
 log = logging.getLogger("docproof.cover.compose")
 
@@ -82,6 +82,57 @@ _SCATTER_MAX_ATTEMPTS = 200           # per copy, before skipping it rather than
                                       # intersecting any text zone's padded rect" is
                                       # non-negotiable; placing fewer copies is the
                                       # fallback, not placing one wrong)
+_CORNER_MARGIN_FRACTION = 0.02        # of canvas, on both axes — corners:true's
+                                      # ornament sits fully inside the trim, never
+                                      # flush to the edge (v2.1 BODY-fix wave)
+
+# -- v2.1 BODY-fix wave tuning -------------------------------------------------
+#
+# Four live-observed defects, each fixed by a small deterministic measurement
+# added to compose()'s existing passes rather than a new pass of its own —
+# see this module's docstring for the general shape ("measure the CURRENT
+# canvas, then decide") that all four extend.
+
+# Title occlusion guard (fix 2): a contain-fit art slot drawn immediately
+# after a text layer (the cutout_sandwich shape — _degrade_opaque_focal
+# already detects this exact z-order pattern for a different reason, reused
+# here) is deliberately allowed to overlap that text's zone; it is not
+# allowed to bury the text's own ink. _OCCLUSION_THRESHOLD is the fraction of
+# the text's ink alpha the art's positioned alpha may cover before this
+# module intervenes.
+_OCCLUSION_THRESHOLD = 0.30
+# Tried in this fixed order — smallest nudge first, alternating sides — so
+# two composes of the same spec always land on the same winning offset
+# (determinism, same as every other search in this module).
+_OCCLUSION_ANCHOR_OFFSETS: tuple[float, ...] = (0.10, -0.10, 0.20, -0.20, 0.25, -0.25)
+
+# Art-vs-ground contrast floor (fix 3): silhouette/duotone both commit an art
+# slot's entire visible shape to one ink color (palette.primary) with no
+# check against whatever the slot actually sits on — a real render shipped a
+# near-black silhouette on a near-black ground, correct by the treatment's
+# own rules and invisible on the page. |ΔL| mirrors the legibility
+# autopilot's own WCAG-relative-luminance measurement (§7.3), applied to art
+# ink against its ground instead of text ink against a zone.
+_ART_CONTRAST_FLOOR = 0.12
+_ART_CONTRAST_LIGHTEN_STEP = 0.10     # HLS lightness step per bounded-loop try
+_ART_CONTRAST_MAX_STEPS = 10          # hard cap — guarantees the loop ends
+
+# Dead-band metric (fix 4): three live covers shipped with a full third of
+# the canvas doing nothing at all. _DEAD_BAND_ROW_STDDEV_THRESHOLD separates
+# "quiet by design" (a gradient step, a low-alpha procedural texture — both
+# near-flat within any one row) from "actually empty" versus real ink (text
+# glyphs, art edges, ornament) — tuned against this wave's own retuned
+# templates' preview renders, per docs/cover_designer_spec.md's acceptance
+# pass for this wave.
+_DEAD_BAND_SAMPLE_HEIGHT = 640        # downsample rows before scanning — a
+                                      # "band" spans real fractions of the
+                                      # cover, so sub-pixel-row precision buys
+                                      # nothing; keeps the scan O(640) rather
+                                      # than O(canvas height), matching this
+                                      # module's existing downsample-for-cost
+                                      # discipline (_grain_layer et al.)
+_DEAD_BAND_ROW_STDDEV_THRESHOLD = 0.020   # of 0..1 relative luminance
+_DEAD_BAND_WARN_FRACTION = 0.28
 
 
 class ComposeError(Exception):
@@ -99,6 +150,27 @@ class _ResolvedText:
     fit: typeset.FitResult
     color: str
     shadow: Shadow | None
+
+
+@dataclass(frozen=True)
+class _ArtPositions:
+    """Everything one _position_all_art() pass produces (v2.1 BODY-fix
+    wave): every art slot's final canvas-space pixels (`positioned`); the
+    same pixels from just before treatment was applied, for any slot whose
+    treatment is not "none" (`pre_treatment` — only the art-vs-ground
+    contrast floor reads this, and only for silhouette/duotone slots, so it
+    can re-treat from a clean source instead of compounding a second
+    treatment on top of the first); the z-order (`layers` — identical to
+    what was passed in unless the title occlusion guard degraded a sandwich
+    pair, the same list-mutation _degrade_opaque_focal already does for a
+    different reason); the warnings raised while positioning; and the
+    occlusion measured for every sandwich (a contain-fit art layer
+    immediately after a text layer) pair, keyed "<text id><-<art id>"."""
+    positioned: dict[str, Image.Image]
+    pre_treatment: dict[str, Image.Image]
+    layers: list[LayerRef]
+    warnings: list[str]
+    occlusion: dict[str, float]
 
 
 def compose(spec: CoverSpec, job_dir: Path,
@@ -124,6 +196,13 @@ def compose(spec: CoverSpec, job_dir: Path,
     contrast: dict[str, float] = {}
     fitted_sizes: dict[str, float] = {}
     warnings: list[str] = []
+    # A cover that declares a rule frame promises nothing crosses it — but
+    # zones are validated against the canvas, so a generous title zone can
+    # legally run right over the gold lines (a live woven_emblem cover
+    # shipped exactly that). Clamp every text zone to the frame's inner
+    # content rect BEFORE fitting; scrims derive their zones from these same
+    # slots below, so they follow automatically.
+    text_by_id = _frame_clamp_text(text_by_id, spec, canvas, warnings)
     layers = _degrade_opaque_focal(spec.layers, art_by_id, job_dir, warnings)
 
     # Every art layer's final, canvas-space, positioned pixels — computed
@@ -135,10 +214,24 @@ def compose(spec: CoverSpec, job_dir: Path,
     # scatter request that silently no-ops on opaque art), duplicated
     # warnings at worst — see _position_all_art's own docstring.
     text_avoid_rects = _text_zone_rects(spec.text, canvas)
-    positioned_art, art_warnings = _position_all_art(
+    art_positions = _position_all_art(
         spec.art, layers, job_dir, canvas, spec.palette, spec.version,
-        text_avoid_rects)
-    warnings.extend(art_warnings)
+        text_avoid_rects, text_by_id)
+    positioned_art = art_positions.positioned
+    layers = art_positions.layers   # possibly degraded by the title
+                                    # occlusion guard (fix 2) — every reader
+                                    # below this point (render_upto's own
+                                    # closure, the safety net's ground loop)
+                                    # sees the same, single, final z-order.
+    warnings.extend(art_positions.warnings)
+
+    # Art-vs-ground contrast floor (fix 3): mutates `positioned_art` in
+    # place for any silhouette/duotone slot whose ink barely differed from
+    # its own ground — run once, here, after every slot has its real
+    # (possibly occlusion-adjusted) position, and before render_upto ever
+    # composites anything for real.
+    _apply_art_contrast_floor(positioned_art, art_positions.pre_treatment,
+                              layers, art_by_id, spec.palette, canvas, warnings)
 
     def render_upto(stop: int) -> Image.Image:
         """Everything in `layers[:stop]`, freshly composited: art at its
@@ -288,11 +381,25 @@ def compose(spec: CoverSpec, job_dir: Path,
                 f"the finished cover is {final_ratio:.2f} (threshold "
                 f"{threshold}, was {contrast[ref]:.2f} at draw time).")
 
+    # Dead-band metric (fix 4): one full-canvas read of the FINISHED
+    # composite — text, art, and scrims all baked in — for the tallest
+    # stretch of vertical real estate doing nothing at all.
+    dead_band_frac, band_top_px, band_bottom_px = _dead_band_frac(final_image)
+    if dead_band_frac >= _DEAD_BAND_WARN_FRACTION:
+        ch = canvas[1]
+        warnings.append(
+            f"empty band from {band_top_px / ch:.0%} to "
+            f"{band_bottom_px / ch:.0%} of the cover's height "
+            f"({dead_band_frac:.0%} of the canvas) has no text, art, or "
+            f"ornament ink crossing it.")
+
     report = RenderReport(
         contrast=contrast,
         scrim_final={idx: strengths[idx] for idx in range(len(spec.scrims))},
         fitted_sizes=fitted_sizes,
-        warnings=warnings)
+        warnings=warnings,
+        occlusion=art_positions.occlusion,
+        dead_band_frac=dead_band_frac)
     return final_image.convert("RGB"), report
 
 
@@ -591,13 +698,22 @@ def _place_corners(source: Image.Image, canvas: tuple[int, int],
     `scale` of the canvas height (there is no cover/contain baseline to zoom
     from here, unlike _fit_cover/_fit_contain's own reading of `scale` — so
     `scale` is read directly against the canvas, the same convention
-    SCATTER_SIZE_FRACTION's fixed 14% uses below), placed flush in the
-    top-left corner, then mirrored
+    SCATTER_SIZE_FRACTION's fixed 14% uses below), placed inset
+    _CORNER_MARGIN_FRACTION from the top-left corner, then mirrored
     horizontally, vertically, and both, into the other three. Every copy is
     an exact Pillow ImageOps.mirror/flip of the same resized source, so the
     four corners are byte-for-byte symmetric — the "exact symmetry is the
     tell generators can't produce" effect the spec calls for, not an
-    approximation of one."""
+    approximation of one.
+
+    v2.1 BODY-fix wave: a real render shipped ornament halves bleeding off
+    all four edges — the ORIGINAL version of this function placed every copy
+    flush to the trim edge (0% margin), and a generated ornament whose own
+    artwork already reaches its own image bounds then reads as "chopped off"
+    rather than "inset like a designer would place it." The margin is
+    clamped to at most half of whatever slack (canvas minus ornament) exists
+    on each axis, so an oversized ornament degrades to symmetric centered
+    overlap instead of a negative destination or a left/right swap."""
     cw, ch = canvas
     iw, ih = source.size
     target_h = max(1, round(scale * ch))
@@ -606,11 +722,18 @@ def _place_corners(source: Image.Image, canvas: tuple[int, int],
     mirrored_h = ImageOps.mirror(resized)
     flipped_v = ImageOps.flip(resized)
     both = ImageOps.flip(mirrored_h)
+
+    slack_x, slack_y = max(0, cw - target_w), max(0, ch - target_h)
+    inset_x = min(round(_CORNER_MARGIN_FRACTION * cw), slack_x // 2)
+    inset_y = min(round(_CORNER_MARGIN_FRACTION * ch), slack_y // 2)
+    left_x, top_y = inset_x, inset_y
+    right_x, bottom_y = slack_x - inset_x, slack_y - inset_y
+
     out = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    out.alpha_composite(resized, dest=(0, 0))
-    out.alpha_composite(mirrored_h, dest=(max(0, cw - target_w), 0))
-    out.alpha_composite(flipped_v, dest=(0, max(0, ch - target_h)))
-    out.alpha_composite(both, dest=(max(0, cw - target_w), max(0, ch - target_h)))
+    out.alpha_composite(resized, dest=(left_x, top_y))
+    out.alpha_composite(mirrored_h, dest=(right_x, top_y))
+    out.alpha_composite(flipped_v, dest=(left_x, bottom_y))
+    out.alpha_composite(both, dest=(right_x, bottom_y))
     return out
 
 
@@ -669,10 +792,74 @@ def _apply_mask_from(img: Image.Image, ref_img: Image.Image | None) -> Image.Ima
     return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, ref_stencil)))
 
 
+def _occlusion_fraction(ink_mask: Image.Image, art_alpha: Image.Image) -> float:
+    """What fraction of `ink_mask`'s (a text slot's glyph-coverage 'L' mask,
+    from typeset.text_mask) total weighted ink is also covered by
+    `art_alpha` (an art slot's own positioned+treated alpha channel) — the
+    same multiply-then-ratio idiom _clip_text_to_container already uses for
+    the opposite question ("how much of the ink SURVIVES a clip"), reused
+    here to ask "how much gets BURIED." 0.0 when the text slot has no ink at
+    all (never happens here — the caller already skips empty optional slots
+    — but degenerate-safe regardless, matching _clip_text_to_container's own
+    zero-ink guard)."""
+    ink_total = ImageStat.Stat(ink_mask).sum[0]
+    if ink_total <= 0:
+        return 0.0
+    covered = ImageChops.multiply(ink_mask, art_alpha)
+    return ImageStat.Stat(covered).sum[0] / ink_total
+
+
+def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
+                                 slot: ArtSlot, palette: Palette, has_alpha: bool,
+                                 text_slot: TextSlot
+                                 ) -> tuple[Image.Image, float, bool]:
+    """The title occlusion guard's search (fix 2, v2.1 BODY-fix wave):
+    `slot`'s normal contain-fit placement at its own declared anchor, if
+    that already covers at most _OCCLUSION_THRESHOLD of `text_slot`'s
+    fitted ink; otherwise, nudge the anchor's x by each of
+    _OCCLUSION_ANCHOR_OFFSETS in turn (clamped to [0, 1] — an anchor is a
+    fraction of the canvas, same convention as everywhere else
+    _fit_contain reads one) and take the first that clears the threshold.
+
+    Returns (the UNTREATED placed image at the winning anchor, its
+    occlusion fraction, whether every offset still failed — the caller's
+    cue to degrade to drawing this art BELOW the text instead, per §5.2.3).
+    Measurement itself happens against each candidate's TREATED alpha (a
+    throwaway copy) because silhouette's hard threshold and sticker's
+    dilation both reshape alpha — scoring the untreated candidate could
+    pick an anchor that only looks clear before its own treatment repaints
+    back over the text. The function still returns the untreated image at
+    the winning anchor so the caller's own single, uniform
+    _apply_treatment call (the one that also populates `pre_treatment` for
+    the art-vs-ground contrast floor) is the only place treatment is
+    actually applied for real — never twice."""
+    fit = typeset.fit_text(text_slot, canvas)
+    ink_mask = typeset.text_mask(text_slot, fit, canvas)
+
+    def measure(anchor: tuple[float, float]) -> tuple[Image.Image, float]:
+        placed = _fit_contain(source, canvas, anchor, slot.scale, slot.offset)
+        treated, _warning = _apply_treatment(placed, slot.treatment, palette,
+                                             slot.id, has_alpha)
+        return placed, _occlusion_fraction(ink_mask, treated.getchannel("A"))
+
+    ax, ay = slot.anchor
+    best_img, best_ratio = measure((ax, ay))
+    if best_ratio <= _OCCLUSION_THRESHOLD:
+        return best_img, best_ratio, False
+
+    for dx in _OCCLUSION_ANCHOR_OFFSETS:
+        trial_img, trial_ratio = measure((min(1.0, max(0.0, ax + dx)), ay))
+        if trial_ratio <= _OCCLUSION_THRESHOLD:
+            return trial_img, trial_ratio, False
+        if trial_ratio < best_ratio:
+            best_img, best_ratio = trial_img, trial_ratio
+    return best_img, best_ratio, True
+
+
 def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                       job_dir: Path, canvas: tuple[int, int], palette: Palette,
-                      version: int, text_avoid_rects: list[tuple[int, int, int, int]]
-                      ) -> tuple[dict[str, Image.Image], list[str]]:
+                      version: int, text_avoid_rects: list[tuple[int, int, int, int]],
+                      text_by_id: dict[str, TextSlot]) -> _ArtPositions:
     """Every art slot's final, canvas-space RGBA image, positioned and
     effects-rack-treated exactly once, keyed by slot id. Computed as a
     single pass over `layers` (not `art_slots` directly) so a `mask_from`
@@ -686,11 +873,26 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
     what keeps this function's own warnings (a sticker/corners/scatter
     request that no-ops because the art has no real transparency, or a
     scatter that couldn't place every copy) from being duplicated once per
-    replay — see compose()'s own docstring note on the same trade-off."""
+    replay — see compose()'s own docstring note on the same trade-off.
+
+    v2.1 BODY-fix wave: also runs the title occlusion guard (fix 2). A
+    contain-fit art slot immediately following a text layer in `layers`
+    (the cutout_sandwich shape) is checked against that text's own fitted
+    ink via _place_contain_clear_of_text — typeset.fit_text has no
+    dependency on anything this function computes, so measuring it here,
+    ahead of compose()'s own per-text loop, costs nothing beyond one
+    redundant (pure, deterministic, cheap) fit search. The returned
+    _ArtPositions.layers reflects any occlusion-driven degrade (a text/art
+    swap — the same list-mutation move _degrade_opaque_focal makes for a
+    different reason); every caller must read z-order from THAT list from
+    this point on, not the one passed in."""
     art_by_id = {a.id: a for a in art_slots}
     positioned: dict[str, Image.Image] = {}
+    pre_treatment: dict[str, Image.Image] = {}
+    occlusion: dict[str, float] = {}
     warnings: list[str] = []
-    for layer in layers:
+    layers_out = list(layers)
+    for i, layer in enumerate(layers_out):
         if layer.kind != "art" or layer.ref in positioned:
             continue
         slot = art_by_id[layer.ref]
@@ -700,6 +902,13 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
             continue
 
         has_alpha = _has_transparency(source)
+        sandwich_text = None
+        if slot.fit == "contain" and i > 0 and layers_out[i - 1].kind == "text":
+            candidate = text_by_id.get(layers_out[i - 1].ref)
+            if candidate is not None and not (candidate.optional
+                                              and not candidate.content.strip()):
+                sandwich_text = candidate
+
         if slot.corners and has_alpha:
             img = _place_corners(source, canvas, slot.scale)
         elif slot.scatter and has_alpha:
@@ -709,6 +918,23 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                 warnings.append(
                     f"{slot.id}: only placed {placed} of {slot.scatter} "
                     f"scatter copies without overlapping a text zone.")
+        elif slot.fit == "contain" and sandwich_text is not None:
+            img, ratio, degrade = _place_contain_clear_of_text(
+                source, canvas, slot, palette, has_alpha, sandwich_text)
+            key = f"{sandwich_text.id}<-{slot.id}"
+            if degrade:
+                layers_out[i - 1], layers_out[i] = layers_out[i], layers_out[i - 1]
+                warnings.append(
+                    f"{slot.id}: even after searching anchor offsets, it "
+                    f"still covered {ratio:.0%} of '{sandwich_text.id}''s "
+                    f"ink (over the {_OCCLUSION_THRESHOLD:.0%} limit); drew "
+                    f"'{sandwich_text.id}' on top of it instead of "
+                    f"underneath.")
+                occlusion[key] = 0.0   # text now draws on top — the
+                                      # composited cover carries none of
+                                      # this pair's occlusion any more
+            else:
+                occlusion[key] = ratio
         else:
             if slot.corners and not has_alpha:
                 warnings.append(
@@ -722,6 +948,8 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                   if slot.fit == "cover" else
                   _fit_contain(source, canvas, slot.anchor, slot.scale, slot.offset))
 
+        if slot.treatment != "none":
+            pre_treatment[slot.id] = img
         img, treatment_warning = _apply_treatment(img, slot.treatment, palette,
                                                   slot.id, has_alpha)
         if treatment_warning:
@@ -731,7 +959,8 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
             img = _apply_mask_from(img, positioned.get(slot.mask_from))
 
         positioned[slot.id] = img
-    return positioned, warnings
+    return _ArtPositions(positioned=positioned, pre_treatment=pre_treatment,
+                         layers=layers_out, warnings=warnings, occlusion=occlusion)
 
 
 def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
@@ -957,6 +1186,15 @@ def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot_id: str,
     return out
 
 
+# The frame-containment clamp's breathing room between the inner rule and
+# any text ink, as a fraction of canvas height (matching every other
+# rule-frame constant's units).
+_FRAME_TEXT_PAD_FRACTION = 0.015
+# A clamp that would crush a zone below this share of its declared width is
+# refused: microscopic type is worse than a crossed rule, and the warning
+# hands the collision to the judge instead.
+_FRAME_CLAMP_MIN_WIDTH = 0.40
+
 _RULE_FRAME_INSET_FRACTION = 0.05      # of canvas height, from each edge
 _RULE_FRAME_GAP_FRACTION = 0.007       # of canvas height, between the two rules
 _RULE_FRAME_WIDTH_FRACTION = 0.0022    # of canvas height, each rule's stroke
@@ -993,6 +1231,56 @@ def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot_id: str,
 # One entry per docproof.cover.model.PROCEDURAL_KINDS name — kept in that
 # exact same set (tests assert it) so a name that validates at the spec
 # layer always resolves to a real synthesizer here, and vice versa.
+def _frame_inner_rect(canvas: tuple[int, int]) -> tuple[float, float, float, float]:
+    """The rule frame's inner content boundary as zone fractions (x, y, w,
+    h), derived from the SAME constants _synth_rule_frame draws with — inset
+    + both rule strokes + the gap between them + breathing room — so the
+    clamp and the drawn frame can never disagree. All the frame constants
+    are fractions of canvas HEIGHT (matching the synthesizer's px math), so
+    the x fraction re-scales by the aspect ratio."""
+    cw, ch = canvas
+    boundary_px = ch * (_RULE_FRAME_INSET_FRACTION
+                        + 2 * _RULE_FRAME_WIDTH_FRACTION
+                        + _RULE_FRAME_GAP_FRACTION
+                        + _FRAME_TEXT_PAD_FRACTION)
+    fx = boundary_px / cw
+    fy = boundary_px / ch
+    return fx, fy, 1.0 - 2 * fx, 1.0 - 2 * fy
+
+
+def _frame_clamp_text(text_by_id: dict[str, TextSlot], spec: CoverSpec,
+                      canvas: tuple[int, int],
+                      warnings: list[str]) -> dict[str, TextSlot]:
+    """Intersect every text zone with the rule frame's inner rect (when the
+    spec declares one) so type can never cross a frame the cover promised.
+    A clamp that would crush a zone below _FRAME_CLAMP_MIN_WIDTH of its
+    declared width refuses instead — the warning hands that collision to
+    the judge, because microscopic type is the worse failure."""
+    if not any(a.procedural == "rule_frame" for a in spec.art):
+        return text_by_id
+    fx, fy, fw, fh = _frame_inner_rect(canvas)
+    out: dict[str, TextSlot] = {}
+    for slot_id, slot in text_by_id.items():
+        z = slot.zone
+        nx, ny = max(z.x, fx), max(z.y, fy)
+        nx2, ny2 = min(z.x + z.w, fx + fw), min(z.y + z.h, fy + fh)
+        nw, nh = nx2 - nx, ny2 - ny
+        if nw <= 0 or nh <= 0 or (nx, ny, nw, nh) == (z.x, z.y, z.w, z.h):
+            out[slot_id] = slot
+            continue
+        if nw < z.w * _FRAME_CLAMP_MIN_WIDTH:
+            warnings.append(
+                f"{slot_id}: its zone barely fits inside the rule frame — "
+                f"clamping would crush it below "
+                f"{_FRAME_CLAMP_MIN_WIDTH:.0%} of its width, so it was "
+                f"left as declared and may cross the frame.")
+            out[slot_id] = slot
+            continue
+        out[slot_id] = slot.model_copy(
+            update={"zone": Zone(x=nx, y=ny, w=nw, h=nh)})
+    return out
+
+
 PROCEDURAL_SYNTHESIZERS = {
     "gradient": _synth_gradient,
     "grain": _synth_grain,
@@ -1024,18 +1312,23 @@ def _dilate_mask(mask: Image.Image, px: float) -> Image.Image:
     return mask.filter(ImageFilter.MaxFilter(size))
 
 
-def _duotone(img: Image.Image, palette: Palette) -> Image.Image:
+def _duotone(img: Image.Image, palette: Palette,
+            ink: tuple[int, int, int] | None = None) -> Image.Image:
     """Map every pixel's WCAG luminance onto a straight-line ramp between
-    palette.background (darkest) and palette.primary (lightest), reusing
-    the same _luminance_band the legibility autopilot already computes —
-    the same measurement, put to a different use. Alpha passes through
-    untouched, so a transparent cutout stays exactly as transparent after
-    its RGB is remapped. Every OPAQUE output pixel's color lies exactly on
-    that 256-step line (never off it), which is the "duotone output
-    contains only ramp colors" guarantee §7.4a's test list asks for."""
+    palette.background (darkest) and `ink` (lightest — defaults to
+    palette.primary, the normal §7.4a rule), reusing the same
+    _luminance_band the legibility autopilot already computes — the same
+    measurement, put to a different use. Alpha passes through untouched, so
+    a transparent cutout stays exactly as transparent after its RGB is
+    remapped. Every OPAQUE output pixel's color lies exactly on that
+    256-step line (never off it), which is the "duotone output contains
+    only ramp colors" guarantee §7.4a's test list asks for — `ink` only
+    changes WHICH ramp, never that guarantee. (`ink` is the art-vs-ground
+    contrast floor's escalation, v2.1 BODY-fix wave — see
+    _apply_art_contrast_floor.)"""
     lum = _luminance_band(img)
     bg = ImageColor.getrgb(palette.background)
-    fg = ImageColor.getrgb(palette.primary)
+    fg = ink if ink is not None else ImageColor.getrgb(palette.primary)
     bands = []
     for c in range(3):
         lut = [round(bg[c] + (fg[c] - bg[c]) * (i / 255)) for i in range(256)]
@@ -1043,18 +1336,22 @@ def _duotone(img: Image.Image, palette: Palette) -> Image.Image:
     return Image.merge("RGBA", (*bands, img.getchannel("A")))
 
 
-def _silhouette(img: Image.Image, palette: Palette) -> Image.Image:
+def _silhouette(img: Image.Image, palette: Palette,
+                ink: tuple[int, int, int] | None = None) -> Image.Image:
     """Threshold `img`'s OWN alpha (not its luminance — a transparent
     cutout's shape is already exactly its alpha channel) at
     _SILHOUETTE_ALPHA_THRESHOLD into a hard 0/255 stencil, then fill that
-    stencil flat with palette.primary. The result is binary by
-    construction: every pixel is either fully transparent or exactly
-    palette.primary at full opacity — no in-between shade survives, which
-    is what "thresholds to a flat primary shape" means literally."""
-    primary = ImageColor.getrgb(palette.primary)
+    stencil flat with `ink` (defaults to palette.primary, the normal §7.4a
+    rule). The result is binary by construction: every pixel is either
+    fully transparent or exactly `ink` at full opacity — no in-between
+    shade survives, which is what "thresholds to a flat shape" means
+    literally, regardless of which color fills it. (`ink` is the
+    art-vs-ground contrast floor's escalation, v2.1 BODY-fix wave — see
+    _apply_art_contrast_floor.)"""
+    fill = ink if ink is not None else ImageColor.getrgb(palette.primary)
     stencil = img.getchannel("A").point(
         lambda v: 255 if v > _SILHOUETTE_ALPHA_THRESHOLD else 0)
-    flat = Image.new("RGBA", img.size, (*primary, 255))
+    flat = Image.new("RGBA", img.size, (*fill, 255))
     flat.putalpha(stencil)
     return flat
 
@@ -1132,6 +1429,116 @@ def _apply_treatment(img: Image.Image, treatment: str, palette: Palette,
                 f"the art has no real transparency, so it was left untreated.")
         return _sticker(img, palette, img.size), None
     return img, None   # unreachable given the Literal; never crash on the unknown
+
+
+# -- art-vs-ground contrast floor (fix 3, v2.1 BODY-fix wave) ----------------
+#
+# silhouette/duotone both commit an art slot's entire visible shape to ONE
+# ink color (palette.primary) by fixed rule (§7.4a: "no per-slot color
+# params"), with nothing ever checking that color against whatever the slot
+# actually sits on. A live thriller render shipped a near-black silhouette
+# on a near-black ground — correct by the treatment's own rule, invisible on
+# the page. This mirrors the legibility autopilot's own escalate-then-
+# reach-for-a-different-color shape (§7.3), reusing its exact WCAG relative-
+# luminance measurement, for art ink against its ground instead of text ink
+# against a zone.
+
+def _farther_extreme(luminance: float) -> float:
+    """Which luminance extreme (0.0 black, 1.0 white) sits farther from
+    `luminance` — the contrast floor's escalation pushes an ink color
+    toward whichever extreme maximizes its distance from the ground it
+    sits on, per the fix's own "lighten/darken toward the farther extreme.\""""
+    return 1.0 if luminance <= 0.5 else 0.0
+
+
+def _step_toward_extreme(rgb: tuple[int, int, int], target_l: float,
+                         step: float) -> tuple[int, int, int]:
+    """Nudge `rgb`'s HLS lightness by `step` toward `target_l` (0.0 or 1.0
+    — see _farther_extreme), clamped so it never overshoots past it. HLS
+    lightness is not the same scale as the WCAG relative luminance the
+    contrast floor actually measures against, but it is monotonic with it
+    — the bounded loop that calls this (_apply_art_contrast_floor)
+    re-measures the ACTUAL relative luminance after every step, so this is
+    never trusted as more than "which direction to nudge.\""""
+    h, l, s = colorsys.rgb_to_hls(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+    l = min(target_l, l + step) if target_l >= l else max(target_l, l - step)
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return (round(r * 255), round(g * 255), round(b * 255))
+
+
+def _retreat_with_ink(img: Image.Image, treatment: str, palette: Palette,
+                      ink: tuple[int, int, int]) -> Image.Image:
+    """_silhouette/_duotone, re-run with `ink` standing in for
+    palette.primary — the contrast floor's escalation, sharing the exact
+    same treatment functions (and so the exact same "binary stencil" /
+    "ramp" guarantees §7.4a's own tests already hold the normal
+    palette.primary path to) rather than a parallel implementation. `img`
+    is expected to be the PRE-treatment positioned image
+    (_ArtPositions.pre_treatment) — re-treating from a clean source rather
+    than compounding a second treatment on top of the first."""
+    if treatment == "silhouette":
+        return _silhouette(img, palette, ink=ink)
+    return _duotone(img, palette, ink=ink)
+
+
+def _apply_art_contrast_floor(positioned: dict[str, Image.Image],
+                              pre_treatment: dict[str, Image.Image],
+                              layers: list[LayerRef], art_by_id: dict[str, ArtSlot],
+                              palette: Palette, canvas: tuple[int, int],
+                              warnings: list[str]) -> None:
+    """After every art slot is positioned and treated (_position_all_art),
+    walk `layers` in z-order a second time, maintaining a running "ground"
+    composite of the art painted so far, and for every silhouette/duotone
+    slot compare its own opaque pixels' mean WCAG relative luminance
+    against the ground beneath its bbox. Scrims are deliberately left out
+    of `ground`: every shipped archetype's scrims start at strength 0.0 (a
+    no-op — see _apply_scrim's own early exit) and only ever escalate
+    later, in compose()'s text-driven autopilot loop, which has not run yet
+    at this point — so the ground this function sees already matches the
+    ground a silhouette/duotone slot is actually painted onto in practice.
+
+    Mutates `positioned` (and, for a slot that needed re-treating,
+    implicitly nothing else — compose() still owns compositing the result
+    for real) in place; returns nothing."""
+    ground = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    for layer in layers:
+        if layer.kind != "art":
+            continue
+        slot = art_by_id[layer.ref]
+        img = positioned[slot.id]
+        if slot.treatment in ("silhouette", "duotone"):
+            bbox = img.getbbox()
+            if bbox is not None:
+                art_l, _ = _zone_stats(img, bbox, mask=img.getchannel("A"))
+                ground_l, _ = _zone_stats(ground, bbox)
+                delta = art_l - ground_l
+                if abs(delta) < _ART_CONTRAST_FLOOR:
+                    before = delta
+                    source = pre_treatment.get(slot.id, img)
+                    target_l = _farther_extreme(ground_l)
+                    ink = ImageColor.getrgb(palette.accent)
+                    retreated = _retreat_with_ink(source, slot.treatment, palette, ink)
+                    art_l, _ = _zone_stats(retreated, bbox,
+                                          mask=retreated.getchannel("A"))
+                    delta = art_l - ground_l
+                    steps = 0
+                    while abs(delta) < _ART_CONTRAST_FLOOR and steps < _ART_CONTRAST_MAX_STEPS:
+                        ink = _step_toward_extreme(ink, target_l, _ART_CONTRAST_LIGHTEN_STEP)
+                        retreated = _retreat_with_ink(source, slot.treatment, palette, ink)
+                        art_l, _ = _zone_stats(retreated, bbox,
+                                              mask=retreated.getchannel("A"))
+                        delta = art_l - ground_l
+                        steps += 1
+                    positioned[slot.id] = img = retreated
+                    outcome = ("now clears" if abs(delta) >= _ART_CONTRAST_FLOOR
+                              else "still falls short of")
+                    warnings.append(
+                        f"{slot.id}: {slot.treatment} ink was only "
+                        f"|ΔL|={abs(before):.3f} from its own ground "
+                        f"(floor {_ART_CONTRAST_FLOOR}); switched its ink "
+                        f"toward {'white' if target_l == 1.0 else 'black'}, "
+                        f"which {outcome} the floor (|ΔL|={abs(delta):.3f}).")
+        ground = _composite_layer(ground, img, slot.opacity, slot.blend)
 
 
 def _fit_cover(img: Image.Image, canvas: tuple[int, int],
@@ -1441,6 +1848,55 @@ def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int],
             return stat.mean[0] / 255.0, stat.stddev[0] / 255.0
     stat = ImageStat.Stat(band)
     return stat.mean[0] / 255.0, stat.stddev[0] / 255.0
+
+
+# -- dead-band metric (fix 4, v2.1 BODY-fix wave) -----------------------------
+#
+# Three live covers shipped with a full third of the canvas doing nothing at
+# all. _dead_band_frac measures the tallest such stretch so a template's
+# emptiness can be judged by a number, not eyeballed off a thumbnail.
+
+def _dead_band_frac(image: Image.Image) -> tuple[float, int, int]:
+    """The tallest contiguous run of near-flat rows (per-row relative-
+    luminance stddev under _DEAD_BAND_ROW_STDDEV_THRESHOLD), as a fraction
+    of canvas height, plus its own (top, bottom) row bounds in the ORIGINAL
+    image's px — the composer's one full-canvas, post-composite read of
+    "how much of this cover is doing nothing." `image` is the FINAL
+    flattened composite (text, art, scrims all baked in), so nothing this
+    function measures can tell "texture on a gradient" apart from "an
+    actually blank stretch" except the threshold itself — which is the
+    point: a deliberately quiet band (reference DNA item 7's paper grain, a
+    gradient step) should still measure quiet, and a title, a silhouette,
+    or an ornament crossing a row should not.
+
+    Downsamples to _DEAD_BAND_SAMPLE_HEIGHT rows first (see that constant's
+    own comment) — the returned fraction is scale-invariant either way, and
+    the px bounds are scaled back up to `image`'s own size before returning."""
+    cw, ch = image.size
+    sample_h = min(ch, _DEAD_BAND_SAMPLE_HEIGHT)
+    sample_w = max(1, round(cw * sample_h / ch)) if ch else cw
+    band = _luminance_band(image)
+    if (sample_w, sample_h) != (cw, ch):
+        band = band.resize((sample_w, sample_h), Image.Resampling.BILINEAR)
+
+    best_len, best_top = 0, 0
+    run_len, run_top = 0, 0
+    for y in range(sample_h):
+        row = band.crop((0, y, sample_w, y + 1))
+        row_stddev = ImageStat.Stat(row).stddev[0] / 255.0
+        if row_stddev < _DEAD_BAND_ROW_STDDEV_THRESHOLD:
+            if run_len == 0:
+                run_top = y
+            run_len += 1
+            if run_len > best_len:
+                best_len, best_top = run_len, run_top
+        else:
+            run_len = 0
+
+    frac = best_len / sample_h if sample_h else 0.0
+    top_px = round(best_top / sample_h * ch) if sample_h else 0
+    bottom_px = round((best_top + best_len) / sample_h * ch) if sample_h else 0
+    return frac, top_px, bottom_px
 
 
 def _relative_luminance(rgb: tuple[int, int, int]) -> float:
