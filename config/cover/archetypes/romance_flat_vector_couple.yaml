@@ -1,0 +1,47 @@
+# Research: named anchor examples "The Hating Game", "The Wedding Date",
+# "The Kiss Quotient" (The Spokesman-Review, May 2025); Publishers Weekly and
+# DAMONZA both describe this as the dominant romance look since ~2023,
+# continuing through 2025-2026. Confidence: high (docs/cover_template_research.md
+# #6) — the single most-cited, most stable convention in the whole pass.
+name: romance_flat_vector_couple
+genres: [romance]
+describe: >-
+  Two flat-vector figures at a chaste distance on one solid bright color
+  field; title in a clean band up top, author just below it, the figures
+  filling the lower two-thirds.
+composition_note: >-
+  Two figures in simplified flat-vector illustration — shape over texture,
+  no gradients, no scene detail — standing at a friendly distance on a
+  single solid unbroken color field, full-bodied, anchored toward the
+  bottom of the frame. No text anywhere.
+art:
+  - id: background
+    generatable: true            # one or two bright solid colors; the
+    fit: cover                   # procedural gradient is a close $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # flat-vector cutout, not a painted scene
+    anchor: [0.5, 1.0]           # flush to the bottom edge, full-bodied
+    scale: 0.65                  # large but under the 0.7 cap — the figures
+                                  # are the point, without burying the title
+text:
+  - id: title
+    zone: {x: 0.10, y: 0.08, w: 0.80, h: 0.16}
+    case: upper
+    tracking: 40
+    size_min: 0.045
+    size_max: 0.10
+    max_lines: 2
+  - id: author
+    zone: {x: 0.15, y: 0.25, w: 0.70, h: 0.045}
+    case: upper
+    tracking: 110
+    size_min: 0.018
+    size_max: 0.026
+  - id: subtitle
+    zone: {x: 0.14, y: 0.305, w: 0.72, h: 0.03}
+    optional: true
+    size_min: 0.015
+    size_max: 0.022
+layers: [background, focal, title, author, subtitle]

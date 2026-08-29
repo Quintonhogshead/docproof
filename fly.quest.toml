@@ -14,6 +14,7 @@ primary_region = "iad"
 [env]
   PORT = "8000"
   WAITLIST_PATH = "/data/waitlist.jsonl"
+  COVER_DATA_PATH = "/data/cover"
 
 # Waitlist signups live here and must survive restarts and scale-to-zero.
 [[mounts]]

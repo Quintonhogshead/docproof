@@ -1,0 +1,47 @@
+name: cutout_sandwich
+describe: >-
+  A generated scene behind the title, and a transparent cutout figure sitting
+  in front of it, overlapping the title's lower edge — the "a designer did
+  this" effect a prompt-only generator can't produce on its own.
+composition_note: >-
+  Leave the middle of the frame relatively clear and simply lit — no small
+  detail or business where large title text will sit. No text anywhere.
+art:
+  - id: background
+    generatable: true
+    fit: cover
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # a subject cut out on its own, not a scene
+    # Bottom-center, ~62% of canvas height: tall enough to overlap the
+    # title's lower edge (the sandwich effect), never tall enough to bury
+    # the whole title zone the way a full-canvas cutout would.
+    anchor: [0.5, 1.0]
+    scale: 0.62
+text:
+  - id: subtitle
+    zone: {x: 0.10, y: 0.20, w: 0.80, h: 0.05}
+    optional: true
+    size_min: 0.016
+    size_max: 0.024
+  - id: title
+    zone: {x: 0.08, y: 0.40, w: 0.84, h: 0.22}
+    case: upper
+    tracking: 60
+    size_min: 0.035
+    size_max: 0.11
+    max_lines: 3
+    shadow: {alpha: 0.5}
+  - id: author
+    zone: {x: 0.10, y: 0.91, w: 0.80, h: 0.05}
+    case: upper
+    tracking: 140
+    size_min: 0.018
+    size_max: 0.030
+# background -> title -> focal -> author (§5.2.3): the focal cutout sits IN
+# FRONT of the title, overlapping its lower edge, which is the point of this
+# archetype. If the focal generation comes back non-transparent, the composer
+# degrades to drawing title above focal instead and records a warning — see
+# docs/cover_designer_spec.md §5.2.3.
+layers: [background, subtitle, title, focal, author]
