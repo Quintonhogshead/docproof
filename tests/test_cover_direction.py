@@ -13,10 +13,10 @@ import dataclasses
 import pytest
 
 from docproof.cover.archetypes import ARCHETYPES
-from docproof.cover.direction import (LUNA_MODEL, DirectionError,
-                                      DirectionResult, RevisionError,
-                                      RevisionResult, revise_spec,
-                                      run_directions)
+from docproof.cover.direction import (DIRECTION_MODEL, REVISION_MODEL,
+                                      DirectionError, DirectionResult,
+                                      RevisionError, RevisionResult,
+                                      revise_spec, run_directions)
 from docproof.cover.model import Brief, CoverSpec, Direction, build_spec
 from docproof.providers import ProviderResult
 
@@ -110,7 +110,7 @@ class _ExplodingProvider:
 # -- DirectionResult / RevisionResult: frozen dataclasses --------------------
 
 def test_direction_result_is_frozen():
-    result = DirectionResult(directions=[], model=LUNA_MODEL, cost=None)
+    result = DirectionResult(directions=[], model=DIRECTION_MODEL, cost=None)
     with pytest.raises(dataclasses.FrozenInstanceError):
         result.model = "other"
 
@@ -134,21 +134,26 @@ def test_run_directions_happy_path():
     assert all(isinstance(d, Direction) for d in result.directions)
     assert [d.concept_name for d in result.directions] == \
         ["Concept 0", "Concept 1", "Concept 2", "Concept 3"]
-    assert result.model == LUNA_MODEL
+    assert result.model == DIRECTION_MODEL
     assert result.cost is not None and result.cost > 0
 
     call = provider.calls[0]
     assert call["schema_name"] == "cover_directions"
     assert call["max_tokens"] == 8000
-    assert call["model"] == LUNA_MODEL
+    assert call["model"] == DIRECTION_MODEL
 
 
-def test_run_directions_defaults_to_luna_but_accepts_an_override():
+def test_run_directions_defaults_to_the_frontier_model_but_accepts_an_override():
     provider = FakeProvider(
         results=[ProviderResult(parsed=_directions_payload(1), usage=USAGE)])
-    result = run_directions(_brief(), provider, n=1, model="gpt-5.6-terra")
-    assert result.model == "gpt-5.6-terra"
-    assert provider.calls[0]["model"] == "gpt-5.6-terra"
+    result = run_directions(_brief(), provider, n=1)
+    assert result.model == DIRECTION_MODEL == "claude-fable-5"
+
+    overridden = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(1), usage=USAGE)])
+    result = run_directions(_brief(), overridden, n=1, model="claude-opus-5")
+    assert result.model == "claude-opus-5"
+    assert overridden.calls[0]["model"] == "claude-opus-5"
 
 
 # -- system/user prompt content (spec §6.1's verbatim requirements) ---------
@@ -173,6 +178,57 @@ def test_run_directions_system_prompt_prefers_illustrated_media_over_photoreal()
     system = provider.calls[0]["system"]
     assert "Prefer illustrated, painterly, or graphic media" in system
     assert "only when the brief explicitly calls for photography" in system
+
+
+# -- de-muting doctrine, image-simplicity hierarchy, container device -------
+# (§6.1, folded in against the owner's beta verdict that concepts were too
+# timid and imagery too complex/detailed for AI-generation to hide its own
+# artifacts — 2026-08-29)
+
+def test_run_directions_system_prompt_states_the_de_muting_palette_doctrine():
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "FLAT and CONFIDENT" in system
+    assert "2–4 colors per cover" in system
+    assert "Tone-on-tone monochrome" in system
+    assert "a signature move" in system
+    assert "Muddy gray-on-gray" in system
+
+
+def test_run_directions_system_prompt_states_the_image_simplicity_hierarchy():
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "Flat SILHOUETTE" in system
+    assert "DUOTONE single subject" in system
+    assert "ORNAMENT/PATTERN" in system
+    assert "Stylized single-subject illustration" in system
+    assert "A full illustrated scene" in system
+    assert "never a sweeping or complex vista" in system
+    assert "reaches past level 3" in system
+    assert "SHAPE and GESTURE" in system
+
+
+def test_run_directions_system_prompt_states_type_is_the_hero():
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "Type is the hero of the cover" in system
+
+
+def test_run_directions_system_prompt_states_the_container_device_doctrine():
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "The container device" in system
+    assert "lighthouse's beam" in system
+    assert "a transparent cutout whose shape will clip the title" in system
+    assert "Never describe or bake the payload" in system
 
 
 def test_run_directions_system_prompt_names_the_effects_rack(): # §7.4a
@@ -285,6 +341,24 @@ def test_run_directions_manuscript_sample_section_present_only_when_passed():
     assert "the manuscript's actual text" in call["system"]
     assert "typed fields" in call["system"] or "typed brief fields" in \
         call["system"] or "ALWAYS win over the sample" in call["system"]
+
+
+def test_run_directions_sample_rule_frames_the_sample_as_usually_a_reality_sheet():
+    # docproof.cover.pipeline.run_job now distills the manuscript sample into
+    # a reality sheet before this call ever runs (docproof.cover.reality);
+    # the rule text has to name that, while still covering the rare
+    # raw-sample fallback.
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(1), usage=USAGE)])
+    run_directions(_brief(), provider, n=1,
+                   manuscript_sample="Setting: a windswept lighthouse.")
+    system = provider.calls[0]["system"]
+    assert "REALITY SHEET" in system
+    assert "palette cues" in system
+    assert "motifs" in system
+    # the pre-existing has_sample assertions still hold verbatim
+    assert "the manuscript's actual text" in system
+    assert "ALWAYS win over the sample" in system
 
 
 def test_run_directions_user_prompt_labels_brief_fields_and_skips_empty_ones():
@@ -407,12 +481,18 @@ def test_revise_spec_bumps_version_and_appends_notes_and_ignores_the_models_asse
     assert "make the title bigger" in call["user"]
 
 
-def test_revise_spec_defaults_to_luna_but_accepts_an_override():
+def test_revise_spec_defaults_to_the_workhorse_model_but_accepts_an_override():
     original = _base_spec()
     provider = FakeProvider(results=[ProviderResult(
         parsed=original.model_dump(mode="json"), usage=USAGE)])
-    result = revise_spec(original, "notes", provider, model="gpt-5.6-terra")
-    assert provider.calls[0]["model"] == "gpt-5.6-terra"
+    result = revise_spec(original, "notes", provider)
+    assert provider.calls[0]["model"] == REVISION_MODEL == "claude-sonnet-5"
+    assert result.spec.version == 2
+
+    overridden = FakeProvider(results=[ProviderResult(
+        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    result = revise_spec(original, "notes", overridden, model="claude-opus-5")
+    assert overridden.calls[0]["model"] == "claude-opus-5"
     assert result.spec.version == 2
 
 
@@ -424,6 +504,20 @@ def test_revise_spec_system_prompt_states_the_may_not_rules():
     system = provider.calls[0]["system"]
     assert "touch any `asset` path" in system
     assert "invent a new art, scrim, or text slot" in system
+
+
+def test_revise_spec_system_prompt_allows_mask_from_and_container_adjustments():
+    # The container device (§6.1) is realized via TextSlot.mask_from /
+    # ArtSlot placement-and-scale, so a revision has to be explicitly
+    # allowed to touch them, the same way it's allowed to touch any other
+    # design field.
+    original = _base_spec()
+    provider = FakeProvider(results=[ProviderResult(
+        parsed=original.model_dump(mode="json"), usage=USAGE)])
+    revise_spec(original, "notes", provider)
+    system = provider.calls[0]["system"]
+    assert "mask_from" in system
+    assert "container art slot" in system
 
 
 # -- revise_spec: art-asset diffing (the regen signal) ------------------------

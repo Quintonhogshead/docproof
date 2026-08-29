@@ -49,6 +49,20 @@ art:
     generatable: false           # procedural film grain (§7.3) doubles as
     opacity: 0.08                # the "engraved metal" texture the research
     blend: overlay                # calls for
+# v2 BODY wave retune: this archetype shipped with NO protecting scrim at
+# all — on a busy/bright generated medallion, the title's only fallback was
+# the autopilot's ink-color flip, never a graceful local dim first. The
+# redesigned `panel` default (a feathered, rounded, canvas-edge-safe local
+# patch — never a wash) is a strict improvement with no "muted" downside, so
+# both bands now get one, starting at strength 0 (autopilot-reactive only —
+# still de-muted by default, nothing dims unless contrast actually fails).
+scrims:
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
 text:
   - id: series
     zone: {x: 0.15, y: 0.045, w: 0.70, h: 0.03}
@@ -58,12 +72,12 @@ text:
     size_min: 0.012
     size_max: 0.018
   - id: title
-    zone: {x: 0.10, y: 0.09, w: 0.80, h: 0.19}
+    zone: {x: 0.10, y: 0.085, w: 0.80, h: 0.195}
     case: upper
     tracking: 50
     size_min: 0.05
-    size_max: 0.13
-    max_lines: 3
+    size_max: 0.15                 # v2 BODY wave: bigger type (was 0.13) —
+    max_lines: 3                   # type is the hero (reference DNA #2)
   - id: subtitle
     zone: {x: 0.15, y: 0.285, w: 0.70, h: 0.03}
     optional: true
@@ -75,4 +89,5 @@ text:
     tracking: 130
     size_min: 0.018
     size_max: 0.028
-layers: [background, texture, focal2, focal, series, title, subtitle, author]
+layers: [background, texture, focal2, focal, "scrim:0", series, title,
+        subtitle, "scrim:1", author]

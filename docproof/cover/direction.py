@@ -10,11 +10,19 @@ difference: skin.py degrades to DEFAULT_SKIN on a bad reply because the page
 must always render; there is no such fallback here. A junk direction goes on
 to spend real image-generation dollars, and a junk revision would silently
 corrupt a spec a human is iterating on, so both calls raise instead — an
-unreadable-sentence error, never a guess dressed up as a result. LUNA_MODEL is
-mirrored rather than imported from docproof.quest.skin on purpose: the two
-features share a convention, not a dependency (the same reasoning
-docproof.cover.archetypes gives for mirroring Zone/Shadow/Stroke instead of
-importing docproof.cover.model).
+unreadable-sentence error, never a guess dressed up as a result.
+
+DIRECTION_MODEL / REVISION_MODEL are mirrored rather than imported from
+docproof.quest.skin.LUNA_MODEL on purpose: the two features share a
+convention, not a dependency (the same reasoning docproof.cover.archetypes
+gives for mirroring Zone/Shadow/Stroke instead of importing
+docproof.cover.model). They also deliberately split (the BRAIN wave, 2026-08-
+29): art direction is the one call worth the frontier model's price — "covers
+need to be good," per the owner, and a timid or generic set of concepts
+poisons every concept built from it — while a revision (human-triggered or
+the auto-critique loop in docproof.cover.pipeline) is a narrower, cheaper
+edit-this-document task that a mid-tier model handles well. See each
+constant's own comment.
 
 The art-direction call also narrows which archetypes it enumerates to the
 brief's own genre (§5.3): `_normalize_genre` turns `brief.genre` into an
@@ -48,7 +56,19 @@ from .model import ArtSlot, Brief, CoverSpec, Direction, Directions
 
 log = logging.getLogger("docproof.cover.direction")
 
-LUNA_MODEL = "gpt-5.6-luna"
+# The frontier model: art direction is the one call in Cover Studio where
+# quality is worth paying for (owner decision, 2026-08-29 — "covers need to
+# be good"; roughly $1-2 per 6-concept job at typical prompt sizes, which the
+# owner accepted). A real docproof.providers.catalog id — see that module for
+# current pricing.
+DIRECTION_MODEL = "claude-fable-5"
+
+# The workhorse model: a revision (§6.2) edits a document it is already
+# handed in full, human-triggered or from the auto-critique loop
+# (docproof.cover.pipeline._critique_and_revise) — a narrower task than
+# drafting concepts from nothing, and not worth the frontier price repeated
+# up to MAX_CRITIQUE_ROUNDS times per concept.
+REVISION_MODEL = "claude-sonnet-5"
 
 # Structured replies on a reasoning model share max_tokens with thinking, and
 # a truncated structured reply parses as nothing — so leave far more room
@@ -120,12 +140,25 @@ def _big_type_rule(n: int) -> str:
 
 
 def _sample_rule(has_sample: bool) -> str:
+    """docproof.cover.pipeline.run_job distills a manuscript sample into a
+    compact REALITY SHEET (docproof.cover.reality) before this call ever
+    runs, and hands the SHEET's rendered text in as `manuscript_sample` —
+    same parameter, so the prompt shape below barely changes. The one
+    exception is a distillation failure, which falls back to the raw sample
+    (reality.py's caller logs and ledgers it, never blocks the job on it) —
+    this rule has to read sensibly for either shape landing in the
+    MANUSCRIPT SAMPLE section below, so it names both without committing to
+    which one arrived."""
     if not has_sample:
         return ""
     return (
-        "\n\nA MANUSCRIPT SAMPLE follows the brief below. Ground imagery, "
-        "mood, and palette in the manuscript's actual text — its era, "
-        "setting, and the concrete details it shows — not just the genre "
+        "\n\nA MANUSCRIPT SAMPLE follows the brief below — usually a "
+        "distilled REALITY SHEET pulled from the book (its setting, era, "
+        "palette cues, concrete objects, motifs, atmosphere, and anything "
+        "the cover must never show), occasionally the manuscript's own raw "
+        "opening text on the rare run where a sheet could not be produced. "
+        "Either way, ground imagery, mood, and palette in the manuscript's "
+        "actual text — its concrete objects and motifs, not just the genre "
         "label. The brief's own typed fields (title, author, genre, and "
         "every other labeled field above) ALWAYS win over the sample on any "
         "conflict. Never spoil an ending on the cover.")
@@ -160,11 +193,17 @@ list; nothing outside it is valid:
 {describe_fonts()}
 
 Palette: five hexes by role (background, primary, accent, text, scrim). \
-Choose real contrast intent, not just a pretty scheme — `text` must be \
-readable over `background` combined with `scrim` at typical strength. (The \
-composer enforces this mechanically later and will escalate the scrim or \
-flip the text color if you get it wrong, but a good answer gets there on \
-its own.)
+Grounds must be FLAT and CONFIDENT, never muddy: commit to a single color \
+(cream, or one saturated hue) or a lightly textured field, and use 2–4 \
+colors per cover, never more. Tone-on-tone monochrome — dark red art on a \
+red ground, say — is a signature move to reach for on purpose, not a \
+compromise. Muddy gray-on-gray and low-saturation-everything palettes read \
+as timid and are a failure, unless the brief itself specifically demands \
+that muted a mood. Within that discipline, choose real contrast intent, \
+not just a pretty scheme — `text` must be readable over `background` \
+combined with `scrim` at typical strength. (The composer enforces this \
+mechanically later and will escalate the scrim or flip the text color if \
+you get it wrong, but a good answer gets there on its own.)
 
 art_prompts: a list with one {{slot, prompt, treatment}} entry for every \
 generatable art slot the archetype you picked declares. Each prompt is 1–3 \
@@ -180,6 +219,34 @@ brief explicitly calls for photography — stylized media hide generation \
 artifacts, and photoreal is the single biggest "AI-generated" tell. The \
 composition note that keeps room for the type is appended by code \
 afterward — do not write it yourself.
+
+Image simplicity is not a vague preference — simple shapes and silhouettes \
+hide AI-generation artifacts far better than rendered detail does. For \
+every generatable art prompt, reach for the SIMPLEST form on this list that \
+still serves the concept, in order:
+1. Flat SILHOUETTE — one flat color, a pure shape, no interior detail at \
+all (pair it with treatment: "silhouette").
+2. DUOTONE single subject — one subject rendered tone-on-tone against the \
+flat ground (pair it with treatment: "duotone").
+3. ORNAMENT/PATTERN — a repeating border, botanical flourish, emblem, or \
+motif AS THE ART ITSELF (not a frame drawn around a finished cover — that \
+rule above still stands).
+4. Stylized single-subject illustration — one subject, still simplified, \
+with some interior rendering.
+5. A full illustrated scene — ONLY when the brief explicitly demands one, \
+and never a sweeping or complex vista.
+If a concept reaches past level 3, its `rationale` must say why, in one \
+clause.
+
+Write every silhouette or cutout art prompt around SHAPE and GESTURE, not \
+surface detail — "a wing swept upward," "a beam widening from the tower \
+base," never the texture of feathers or brickwork. Rendered detail is \
+exactly where a generator's fingerprints show; a clean, simple gesture \
+hides them.
+
+Type is the hero of the cover: choose the archetype and palette so the \
+title can run huge and confident. When a concept's font, palette, and \
+archetype could support a bolder, larger title, take the bolder choice.
 
 The effects rack: `treatment` on an art_prompts entry is a deterministic, \
 $0 post-processing pass the composer applies to that slot after it is \
@@ -197,6 +264,19 @@ exposure masking, and knockout/art_fill title treatments (used only when \
 the archetype's type IS the hero of the cover) are archetype and revision \
 territory — never invent or request them yourself; pick the archetype whose \
 own convention already wants one, and trust it to carry that.
+
+The container device: the single strongest intentionality move available \
+on a cover is content living inside a shape that belongs to the scene — a \
+lighthouse's beam, a train's smoke plume, a ribbon, a banner, a doorway, a \
+keyhole, a mirror, a wave. Some archetypes declare a container slot for \
+exactly this: a transparent cutout whose shape will clip the title (or \
+another image) once composed. When the archetype you picked declares one, \
+write that slot's art prompt as ONE clean, bold shape with a soft, simple \
+interior — the payload has to read clearly once it sits inside — for \
+example "a lighthouse's light beam as a wide, soft-edged cone of pale \
+light, transparent background." Never describe or bake the payload (the \
+title, the second image) into the container image itself; the container is \
+a shape only, and the composer fills it.
 
 If the brief's `pitch` is present, ground the imagery in it. Never spoil an \
 ending on the cover, regardless of how much the pitch reveals.{_sample_rule(has_sample)}"""
@@ -243,7 +323,7 @@ def _validate_direction(direction: Direction) -> Direction:
 
 def run_directions(brief: Brief, provider: Provider, *, n: int,
                    manuscript_sample: str = "",
-                   model: str = LUNA_MODEL) -> DirectionResult:
+                   model: str = DIRECTION_MODEL) -> DirectionResult:
     """One structured call for all n design concepts at once (spec §6.1).
 
     Raises DirectionError on any failure: a call error, a schema mismatch, a
@@ -298,8 +378,10 @@ rephrase, reformat, or "improve" anything the notes did not ask about.
 You may: move or resize zones; change palette hexes; swap fonts (from the \
 same closed list already used in the spec — nothing outside it is valid); \
 change text case, tracking, or align; adjust scrim strengths and art \
-transforms (scale, offset, anchor); rewrite an art_prompt; toggle the \
-texture layer on or off.
+transforms (scale, offset, anchor); adjust a text slot's mask_from (which \
+art slot's shape it is clipped into) or a container art slot's own \
+placement and scale; rewrite an art_prompt; toggle the texture layer on or \
+off.
 
 You may NOT: change `archetype` unless the notes explicitly ask for a \
 different archetype; invent a new art, scrim, or text slot that was not in \
@@ -319,7 +401,7 @@ def _revision_user_prompt(spec: CoverSpec, notes: str) -> str:
 
 
 def revise_spec(spec: CoverSpec, notes: str, provider: Provider, *,
-                model: str = LUNA_MODEL) -> RevisionResult:
+                model: str = REVISION_MODEL) -> RevisionResult:
     """One structured call that edits a spec in place (spec §6.2).
 
     Raises RevisionError on any failure; this function never mutates `spec`
@@ -373,5 +455,6 @@ def revise_spec(spec: CoverSpec, notes: str, provider: Provider, *,
                           cost=cost_of_usage(usage, fallback_model=model))
 
 
-__all__ = ["LUNA_MODEL", "DirectionError", "DirectionResult", "RevisionError",
-          "RevisionResult", "revise_spec", "run_directions"]
+__all__ = ["DIRECTION_MODEL", "REVISION_MODEL", "DirectionError",
+          "DirectionResult", "RevisionError", "RevisionResult", "revise_spec",
+          "run_directions"]

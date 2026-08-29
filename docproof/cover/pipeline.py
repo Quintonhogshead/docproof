@@ -29,7 +29,21 @@ directly on this module (`monkeypatch.setattr(pipeline, "run_directions",
 fake)`); a lazy import inside a function body would re-import the real thing
 on every call and silently ignore the patch. Before those modules land, the
 callable placeholders are `None` and calling one raises a clear TypeError
-rather than doing the wrong thing quietly.
+rather than doing the wrong thing quietly. docproof.cover.reality is the one
+sibling NOT guarded this way — it was built in the same pass as this file,
+by the same hand, so there is no window where it doesn't exist yet; it is
+imported plainly, which still leaves it monkeypatchable on this module for
+the same reason (`monkeypatch.setattr(pipeline, "distill_reality", fake)`).
+
+Providers (below) bundles one Provider per model role — direction, revision,
+reality — because the BRAIN wave (2026-08-29) pins each to its own model
+(docproof.cover.direction.DIRECTION_MODEL/REVISION_MODEL,
+docproof.cover.reality.REALITY_MODEL). It is built once per request in
+app/routes/cover.py and threaded through run_job/run_revision unchanged;
+docproof.cover.critique's vision call is deliberately NOT a fourth field
+here — it goes through the raw `anthropic` SDK, not the Provider protocol
+(see critique.py's own module docstring), so its client is threaded
+separately as `critique_client`.
 """
 from __future__ import annotations
 
@@ -37,9 +51,10 @@ import asyncio
 import logging
 import os
 import secrets
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import ValidationError
 
@@ -50,7 +65,8 @@ from docproof.utils.files import write_atomic
 
 from .archetypes import ARCHETYPES, Archetype
 from .model import (ArtSlot, Brief, ConceptState, CoverSpec, JobState,
-                    RenderReport, build_spec)
+                    RenderReport, Zone, build_spec)
+from .reality import RealitySheetError, RealityResult, distill_reality
 
 log = logging.getLogger("docproof.cover.pipeline")
 
@@ -97,8 +113,32 @@ except ImportError:                                        # pragma: no cover
 
 JOB_MANIFEST = "job.json"
 MANUSCRIPT_SAMPLE_NAME = "manuscript_sample.txt"
+REALITY_SHEET_NAME = "reality.json"
 ASSETS_DIR = "assets"
 RENDERS_DIR = "renders"
+
+# The iterating judge loop's round cap (§6.3, iterated — BRAIN wave): a
+# "round" is one critique CALL, so this bounds judge spend, not revision
+# spend — see _critique_and_revise's own docstring for exactly where the
+# cap gates a revision versus just a critique.
+MAX_CRITIQUE_ROUNDS = 4
+
+
+@dataclass(frozen=True)
+class Providers:
+    """One Provider per model role: the frontier model for art direction,
+    the workhorse model for revision (both human-triggered and the
+    auto-critique loop), and the workhorse model for manuscript
+    distillation. Three separate instances, not one shared Provider, because
+    each role is pinned to its OWN model id
+    (docproof.cover.direction.DIRECTION_MODEL/REVISION_MODEL,
+    docproof.cover.reality.REALITY_MODEL) — see this module's own docstring
+    for why critique isn't a fourth field here. Built once per request in
+    app/routes/cover.py and threaded through run_job/run_revision
+    unchanged."""
+    direction: Provider
+    revision: Provider
+    reality: Provider
 
 # One job's image generations run bounded by this — network-bound SDK calls,
 # not memory-bound, so 2 in flight is about latency, not the 512MB box (§7.4).
@@ -398,17 +438,162 @@ async def _render(spec: CoverSpec, d: Path, index: int
     return report, renders[:1]
 
 
-# -- critique pass (§6.3) -------------------------------------------------------
+# -- spec diffing: "revising did nothing" made visibly impossible -------------
+#
+# Two small, pure functions (no I/O — trivial to unit-test directly), shared
+# by the auto-critique loop below and by run_revision's own human-revision
+# path: diff_spec_fields turns two CoverSpec VERSIONS into a compact,
+# human-readable field-level diff, computed from the validated pydantic
+# models themselves — never trusted from the model's own prose — so a
+# revision that silently no-ops cannot be dressed up as a confident-sounding
+# note. _dump_equal_ignoring_bookkeeping answers a narrower question (did
+# ANYTHING outside version/notes_log change at all), used to stop the
+# auto-critique loop the moment a revision has nothing left to give.
+
+_PALETTE_ROLES: tuple[str, ...] = ("background", "primary", "accent", "text", "scrim")
+
+# ArtSlot/TextSlot fields worth naming in a diff clause. `asset` is
+# deliberately excluded from both — a regenerated art path is a PIPELINE
+# signal (revise_spec's own asset-diffing already reports it separately: see
+# the "kept the existing art" ledger row), not a design change in its own
+# right, and `prompt` is reported as "rewritten" rather than dumped in full
+# (a prompt runs to whole sentences; nobody wants that in a ledger line).
+_ART_DIFF_FIELDS: tuple[str, ...] = ("transparent", "fit", "anchor", "scale",
+                                    "offset", "opacity", "blend", "treatment",
+                                    "mask_from", "corners", "scatter")
+_TEXT_DIFF_FIELDS: tuple[str, ...] = ("font_family", "case", "tracking", "align",
+                                     "valign", "max_lines", "size_min",
+                                     "size_max", "color_role", "optional", "mode")
+
+
+def _fmt(value: Any) -> str:
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def _zone_clauses(label: str, old: Zone, new: Zone) -> list[str]:
+    """Zone moves are reported as a direction and a magnitude (a designer's
+    own shorthand — "title zone up 8%"), not four raw fractions; x/y=0 is
+    the canvas's top-left corner, matching docproof.cover.model.Zone."""
+    clauses = []
+    if abs(old.y - new.y) > 1e-9:
+        clauses.append(f"{label} zone {'up' if new.y < old.y else 'down'} "
+                       f"{round(abs(old.y - new.y) * 100)}%")
+    if abs(old.x - new.x) > 1e-9:
+        clauses.append(f"{label} zone {'left' if new.x < old.x else 'right'} "
+                       f"{round(abs(old.x - new.x) * 100)}%")
+    if abs(old.w - new.w) > 1e-9:
+        clauses.append(f"{label} zone {'wider' if new.w > old.w else 'narrower'} "
+                       f"{round(abs(old.w - new.w) * 100)}%")
+    if abs(old.h - new.h) > 1e-9:
+        clauses.append(f"{label} zone {'taller' if new.h > old.h else 'shorter'} "
+                       f"{round(abs(old.h - new.h) * 100)}%")
+    return clauses
+
+
+def diff_spec_fields(old: CoverSpec, new: CoverSpec) -> str:
+    """A compact, semicolon-joined, human-readable list of what changed
+    between two CoverSpec versions, e.g. "title zone up 8%;
+    palette.primary #6b2d3e→#a83250; title size_max 0.1→0.13". Pure
+    function — no I/O, no randomness, safe to call on any two specs
+    regardless of whether `new` is actually a revision of `old`. Empty
+    string when nothing this function looks at differs (version and
+    notes_log are never compared — see _dump_equal_ignoring_bookkeeping for
+    the stricter, exhaustive version of that same question)."""
+    clauses: list[str] = []
+
+    if old.archetype != new.archetype:
+        clauses.append(f"archetype {old.archetype}→{new.archetype}")
+    if old.concept_name != new.concept_name:
+        clauses.append(f'concept_name "{old.concept_name}"→"{new.concept_name}"')
+    if old.rationale != new.rationale:
+        clauses.append("rationale changed")
+
+    for role in _PALETTE_ROLES:
+        ov, nv = getattr(old.palette, role), getattr(new.palette, role)
+        if ov != nv:
+            clauses.append(f"palette.{role} {ov}→{nv}")
+
+    old_art = {a.id: a for a in old.art}
+    for slot in new.art:
+        prior = old_art.get(slot.id)
+        if prior is None:
+            clauses.append(f"{slot.id} art slot added")
+            continue
+        if prior.prompt != slot.prompt:
+            clauses.append(f"{slot.id}.prompt rewritten")
+        for field in _ART_DIFF_FIELDS:
+            ov, nv = getattr(prior, field), getattr(slot, field)
+            if ov != nv:
+                clauses.append(f"{slot.id}.{field} {_fmt(ov)}→{_fmt(nv)}")
+
+    for i, scrim in enumerate(new.scrims):
+        if i >= len(old.scrims):
+            clauses.append(f"scrim[{i}] added")
+            continue
+        prior = old.scrims[i]
+        if prior.strength != scrim.strength:
+            clauses.append(f"scrim[{i}].strength "
+                           f"{_fmt(prior.strength)}→{_fmt(scrim.strength)}")
+        if prior.kind != scrim.kind:
+            clauses.append(f"scrim[{i}].kind {prior.kind}→{scrim.kind}")
+        if prior.protects != scrim.protects:
+            clauses.append(f"scrim[{i}].protects {prior.protects}→{scrim.protects}")
+
+    old_text = {t.id: t for t in old.text}
+    for slot in new.text:
+        prior = old_text.get(slot.id)
+        if prior is None:
+            clauses.append(f"{slot.id} text slot added")
+            continue
+        clauses.extend(_zone_clauses(slot.id, prior.zone, slot.zone))
+        for field in _TEXT_DIFF_FIELDS:
+            ov, nv = getattr(prior, field), getattr(slot, field)
+            if ov != nv:
+                clauses.append(f"{slot.id} {field} {_fmt(ov)}→{_fmt(nv)}")
+        if prior.shadow != slot.shadow:
+            clauses.append(f"{slot.id} shadow changed")
+        if prior.stroke != slot.stroke:
+            clauses.append(f"{slot.id} stroke changed")
+
+    if [(r.kind, r.ref) for r in old.layers] != [(r.kind, r.ref) for r in new.layers]:
+        clauses.append("layer order changed")
+
+    return "; ".join(clauses)
+
+
+def _dump_equal_ignoring_bookkeeping(old: CoverSpec, new: CoverSpec) -> bool:
+    """Whether two spec VERSIONS are the same DESIGN — every field except the
+    two that mechanically always change on any revise_spec call (`version`
+    +1, `notes_log` grows by one entry) regardless of whether the model
+    changed anything else. Plain model_dump() equality would be vacuously
+    False on every call for exactly that reason. Used by the auto-critique
+    loop to detect "the model had nothing more to give" (dump-equality, per
+    docs/cover_designer_spec.md's iterating-judge-loop decision) — a
+    stricter, exhaustive check than diff_spec_fields, which only names the
+    fields it knows how to describe."""
+    return (old.model_dump(exclude={"version", "notes_log"})
+           == new.model_dump(exclude={"version", "notes_log"}))
+
+
+# -- critique pass (§6.3, iterated — BRAIN wave) -------------------------------
 
 def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
-                         png_path: Path, image_client: Any,
-                         ledger_rows: list[dict]) -> CritiqueResult | None:
+                         png_path: Path, critique_client: Any,
+                         ledger_rows: list[dict], warnings: Sequence[str],
+                         round_n: int) -> CritiqueResult | None:
     """run_critique, with §6.3's "a critique failure must never block a
     cover" contract enforced in exactly one place: a CritiqueError here is
     logged and turned into a $0 ledger note, never raised further. Returns
     None on failure (as opposed to a CritiqueResult with passes=True) so the
     caller can tell "no verdict was reached" apart from "the verdict was a
     pass" — the two must not be conflated into ready for the same reason.
+
+    `warnings` (the composer's own RenderReport.warnings for THIS render) is
+    threaded straight through to run_critique, which labels them into the
+    call's summary — see that module's own docstring. `round_n` (1-based)
+    is folded into every ledger row's `detail` so a job that iterated
+    several rounds reads as a sequence, not a blur — see
+    _critique_and_revise, the only caller.
 
     Called directly, not via asyncio.to_thread: run_directions and
     revise_spec (both synchronous network calls, same as this one) are
@@ -418,120 +603,161 @@ def _run_critique_safely(job_id: str, index: int, spec: CoverSpec, brief: Brief,
     model calls."""
     try:
         png_bytes = png_path.read_bytes()
-        verdict = run_critique(png_bytes, spec, brief, image_client)
+        verdict = run_critique(png_bytes, spec, brief, critique_client,
+                               warnings=warnings)
     except (CritiqueError, OSError) as e:
-        log.warning("Cover job %s concept %d: critique call failed, "
-                   "shipping as composed: %s", job_id, index, e)
+        log.warning("Cover job %s concept %d round %d: critique call "
+                   "failed, shipping as composed: %s", job_id, index,
+                   round_n, e)
         ledger_rows.append({
             "kind": "critique", "concept": index,
-            "detail": (f"concept {index}: critique call failed ({e}); "
-                      f"shipped as composed"),
+            "detail": (f"concept {index} round {round_n}: critique call "
+                      f"failed ({e}); shipped as composed"),
             "usd": 0.0})
         return None
     ledger_rows.append({
         "kind": "critique", "concept": index,
-        "detail": (f"concept {index}: passed" if verdict.passes else
-                  f"concept {index}: flagged {len(verdict.tells)} tell(s)"),
+        "detail": (f"concept {index} round {round_n}: passed" if verdict.passes
+                  else f"concept {index} round {round_n}: flagged "
+                       f"{len(verdict.tells)} tell(s)"),
         "usd": verdict.cost or 0.0})
     return verdict
 
 
 async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
-                               brief: Brief, d: Path, provider: Provider,
-                               image_client: Any, report: RenderReport,
+                               brief: Brief, d: Path, providers: Providers,
+                               critique_client: Any, report: RenderReport,
                                renders: list[str]
                                ) -> tuple[CoverSpec, RenderReport, list[str], list[dict]]:
-    """§6.3: critique the just-composed render; if it doesn't pass, run
-    exactly one auto-revision round with the critique's own note
-    (allow_new_art always False — the critique's own system prompt already
-    tells it not to ask for new art, but this is the code-level backstop
-    that holds regardless of what the model wrote), recompose, and critique
-    THAT too — but ship ready regardless of what the second verdict says;
-    v1 runs exactly one round, never a third attempt. A CritiqueError from
-    either critique call, or a RevisionError from the auto-revision, is
-    never fatal here: logged, ledgered, and the concept ships with whatever
-    it already has (§6.3's "must never block a cover", extended the same
-    way to the auto-revision step, which is equally optional polish).
+    """§6.3, ITERATED (BRAIN wave, 2026-08-29): the owner's beta verdict was
+    that a single critique-then-revise round left the judge merely
+    reporting problems instead of actually fixing them — invisible-to-the-
+    user iteration was the fix. Loop up to MAX_CRITIQUE_ROUNDS rounds; a
+    "round" is one CRITIQUE CALL, so the cap bounds judge spend, not
+    revision spend: a critique that still fails on the very last permitted
+    round ships with its tells as leftover warnings rather than buying one
+    more revision nothing will ever re-check (the `round_n ==
+    MAX_CRITIQUE_ROUNDS` guard below is exactly that gate) — a 4-round cap
+    therefore means at most 4 critique calls and at most 3 revisions.
+
+    Three things stop the loop before the cap: the critique call itself
+    failing (verdict is None — §6.3's "must never block a cover", unchanged
+    from v1), a genuine pass, or a revision that comes back IDENTICAL to
+    the spec it started from (_dump_equal_ignoring_bookkeeping — the model
+    had nothing left to give, and looping further would only spend money to
+    relearn that; noted in the ledger, not recomposed). A RevisionError is
+    equally non-fatal: logged, ledgered, and the concept ships with
+    whatever it already has.
+
+    Every round's critique call, and every revision it triggers, gets its
+    own ledger row (round-numbered — see _run_critique_safely). Every
+    revision that actually recomposes also gets a compact, CODE-COMPUTED
+    notes_log entry naming what changed (diff_spec_fields, a pure function
+    diffing the validated spec models themselves — never the model's own
+    prose) as a SEPARATE "[auto-critique r{n} changed] ..." entry right
+    after the "[auto-critique r{n}] <the note that was applied>" entry —
+    "revising did nothing" is visibly impossible this way, since the log
+    itself measures the effect rather than repeating the request.
+
+    allow_new_art is always False for every auto round — the code-level
+    backstop below holds regardless of what the model wrote, the same
+    restore-the-prior-asset behavior v1 had.
 
     Returns (spec, report, renders, ledger_rows) — all three of the first
-    unchanged from what was passed in unless an auto-revision actually ran
-    and recomposed. Human-triggered run_revision never calls this (§6.3:
-    "the human is the critic there")."""
+    unchanged from what was passed in unless at least one round actually
+    revised and recomposed. Human-triggered run_revision never calls this
+    (§6.3: "the human is the critic there") — it gains the same
+    diff_spec_fields note on its own path instead."""
     ledger_rows: list[dict] = []
+    verdict: CritiqueResult | None = None
 
-    verdict = _run_critique_safely(job_id, index, spec, brief,
-                                   d / renders[0], image_client, ledger_rows)
-    if verdict is None or verdict.passes:
-        if verdict is not None and verdict.tells:
-            report = report.model_copy(
-                update={"warnings": [*report.warnings, *verdict.tells]})
-        return spec, report, renders, ledger_rows
+    for round_n in range(1, MAX_CRITIQUE_ROUNDS + 1):
+        verdict = _run_critique_safely(
+            job_id, index, spec, brief, d / renders[-1], critique_client,
+            ledger_rows, report.warnings, round_n)
+        if verdict is None or verdict.passes:
+            break
+        if round_n == MAX_CRITIQUE_ROUNDS:
+            break         # no budget left to judge one more revision
 
-    try:
-        result = revise_spec(spec, verdict.notes, provider)
-    except RevisionError as e:
-        log.warning("Cover job %s concept %d: auto-critique revision "
-                   "failed, shipping the pre-critique composition: %s",
-                   job_id, index, e)
+        try:
+            result = revise_spec(spec, verdict.notes, providers.revision)
+        except RevisionError as e:
+            log.warning("Cover job %s concept %d: auto-critique revision "
+                       "failed on round %d, shipping the last composition: "
+                       "%s", job_id, index, round_n, e)
+            ledger_rows.append({
+                "kind": "revision", "concept": index,
+                "detail": (f"concept {index} round {round_n}: auto-critique "
+                          f"revision failed ({e}); shipped the last "
+                          f"composition"),
+                "usd": 0.0})
+            break
+
+        # revise_spec appends `notes` verbatim as the last notes_log entry
+        # (see its own docstring); swap that one entry for the prefixed,
+        # round-numbered form rather than appending a second copy of it.
+        revised = result.spec.model_copy(update={
+            "notes_log": [*result.spec.notes_log[:-1],
+                         f"[auto-critique r{round_n}] {verdict.notes}"]})
+
+        # The code-level allow_new_art=False backstop the docstring
+        # promises: whatever the revision model wrote, an auto round may
+        # never leave a generated slot assetless — revise_spec clears
+        # `asset` when a prompt changes (the regenerate signal), and
+        # recomposing without restoring it would render that layer blank.
+        # Auto rounds never repaint; put the prior art straight back, like
+        # run_revision's own allow_new_art=False branch does.
+        prior_assets = {slot.id: slot.asset for slot in spec.art}
+        restored = False
+        for slot in revised.art:
+            if slot.prompt and not slot.asset and prior_assets.get(slot.id, ""):
+                slot.asset = prior_assets[slot.id]
+                restored = True
+        if restored:
+            ledger_rows.append({
+                "kind": "revision", "concept": index,
+                "detail": (f"concept {index} round {round_n}: the "
+                          f"auto-critique revision asked for new art; kept "
+                          f"the existing art (auto rounds never repaint)"),
+                "usd": 0.0})
+
+        if _dump_equal_ignoring_bookkeeping(spec, revised):
+            ledger_rows.append({
+                "kind": "revision", "concept": index,
+                "detail": (f"concept {index} round {round_n}: the revision "
+                          f"produced an identical spec; stopped (the model "
+                          f"has nothing more to give)"),
+                "usd": result.cost or 0.0})
+            break
+
+        diff_note = diff_spec_fields(spec, revised) or "(no field-level change detected)"
+        revised = revised.model_copy(update={
+            "notes_log": [*revised.notes_log,
+                         f"[auto-critique r{round_n} changed] {diff_note}"]})
+
         ledger_rows.append({
             "kind": "revision", "concept": index,
-            "detail": (f"concept {index}: auto-critique revision failed "
-                      f"({e}); shipped the original composition"),
-            "usd": 0.0})
+            "detail": f"concept {index} round {round_n}: auto-critique revision",
+            "usd": result.cost or 0.0})
+
+        new_report, new_renders = await _render(revised, d, index)
+        renders = [*renders, *new_renders]
+        spec, report = revised, new_report
+        # loop continues: round_n + 1 critiques THIS round's recomposed render
+
+    if verdict is not None and verdict.tells:
         report = report.model_copy(
             update={"warnings": [*report.warnings, *verdict.tells]})
-        return spec, report, renders, ledger_rows
 
-    # revise_spec appends `notes` verbatim as the last notes_log entry (see
-    # its own docstring); swap that one entry for the prefixed form rather
-    # than appending a second one.
-    revised = result.spec.model_copy(update={
-        "notes_log": [*result.spec.notes_log[:-1],
-                     f"[auto-critique] {verdict.notes}"]})
-
-    # The code-level allow_new_art=False backstop the docstring promises:
-    # whatever the revision model wrote, an auto round may never leave a
-    # generated slot assetless — revise_spec clears `asset` when a prompt
-    # changes (the regenerate signal), and recomposing without restoring it
-    # would render that layer blank. Auto rounds never repaint; put the
-    # prior art straight back, like run_revision's own allow_new_art=False
-    # branch does.
-    prior_assets = {slot.id: slot.asset for slot in spec.art}
-    restored = False
-    for slot in revised.art:
-        if slot.prompt and not slot.asset and prior_assets.get(slot.id, ""):
-            slot.asset = prior_assets[slot.id]
-            restored = True
-    if restored:
-        ledger_rows.append({
-            "kind": "revision", "concept": index,
-            "detail": (f"concept {index}: the auto-critique revision asked "
-                      f"for new art; kept the existing art (auto rounds "
-                      f"never repaint)"),
-            "usd": 0.0})
-    ledger_rows.append({"kind": "revision", "concept": index,
-                        "detail": f"concept {index}: auto-critique revision",
-                        "usd": result.cost or 0.0})
-
-    new_report, new_renders = await _render(revised, d, index)
-    all_renders = [*renders, *new_renders]
-
-    second = _run_critique_safely(job_id, index, revised, brief,
-                                  d / new_renders[0], image_client, ledger_rows)
-    # Tells are recorded whether or not the verdict passes — the first
-    # critique records pass-with-notes the same way, and a note the model
-    # bothered to write is exactly what the card's warning line is for.
-    if second is not None and second.tells:
-        new_report = new_report.model_copy(
-            update={"warnings": [*new_report.warnings, *second.tells]})
-
-    return revised, new_report, all_renders, ledger_rows
+    return spec, report, renders, ledger_rows
 
 
 # -- run_job: directing, then per-concept painting/composing (§8) -------------
 
 async def _paint_and_compose(root: str | Path, job_id: str, index: int,
-                             provider: Provider, image_client: Any,
+                             providers: Providers, image_client: Any,
+                             critique_client: Any,
                              sem: asyncio.Semaphore) -> None:
     """One concept's whole life after directing: painting -> composing ->
     critique (§6.3) -> ready, or error. A failure here (an ImagingError, or
@@ -568,7 +794,7 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
 
         report, renders = await _render(spec, d, index)
         spec, report, renders, critique_rows = await _critique_and_revise(
-            job_id, index, spec, brief, d, provider, image_client, report,
+            job_id, index, spec, brief, d, providers, critique_client, report,
             renders)
 
         concept.spec = spec
@@ -583,9 +809,10 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         log.warning("Cover job %s concept %d failed: %s", job_id, index, e)
 
 
-async def run_job(root: str | Path, job_id: str, provider: Provider,
-                  image_client: Any) -> None:
-    """The whole job flow (§8): one direction call, a CoverSpec built per
+async def run_job(root: str | Path, job_id: str, providers: Providers,
+                  image_client: Any, critique_client: Any) -> None:
+    """The whole job flow (§8): distill a reality sheet from the manuscript
+    sample when there is one, one direction call, a CoverSpec built per
     concept, then every concept painted and composed independently and in
     parallel. Meant to run as a detached background task — register it with
     register_task right after creating it, so an interrupted run is
@@ -595,10 +822,44 @@ async def run_job(root: str | Path, job_id: str, provider: Provider,
         log.warning("run_job: cover job %s vanished before it could start", job_id)
         return
 
+    # Reality-sheet distillation (docproof.cover.reality, BRAIN wave): ONCE
+    # per job, before directing, so every concept's direction call reads the
+    # SAME curated sheet rather than each re-reading raw prose. Runs only
+    # when there is a sample to distill; `sample` is reassigned to the
+    # rendered sheet on success so run_directions below receives it as its
+    # ordinary manuscript_sample argument — same parameter, no signature
+    # change there (see direction.py's _sample_rule docstring). A
+    # distillation failure is deliberately non-fatal: falls back to the raw
+    # sample, exactly what every job did before this module existed, logged
+    # and ledgered rather than ever blocking the job on it.
+    sample = _read_sample(root, job_id)
+    if sample:
+        try:
+            reality_result: RealityResult = distill_reality(
+                sample, providers.reality)
+        except RealitySheetError as e:
+            log.warning("Cover job %s: reality-sheet distillation failed; "
+                       "falling back to the raw manuscript sample: %s",
+                       job_id, e)
+            job.ledger.append({
+                "kind": "reality",
+                "detail": (f"reality-sheet distillation failed ({e}); used "
+                          f"the raw manuscript sample instead"),
+                "usd": 0.0})
+        else:
+            sample = reality_result.rendered
+            (job_dir(root, job_id) / REALITY_SHEET_NAME).write_text(
+                reality_result.sheet.model_dump_json(indent=2),
+                encoding="utf-8")
+            job.ledger.append({
+                "kind": "reality",
+                "detail": f"distilled a reality sheet via {reality_result.model}",
+                "usd": reality_result.cost or 0.0})
+
     try:
-        sample = _read_sample(root, job_id)
         result: DirectionResult = run_directions(
-            job.brief, provider, n=job.brief.concepts, manuscript_sample=sample)
+            job.brief, providers.direction, n=job.brief.concepts,
+            manuscript_sample=sample)
     except DirectionError as e:
         job.status, job.error = "error", str(e)
         _write_state(root, job)
@@ -634,7 +895,8 @@ async def run_job(root: str | Path, job_id: str, provider: Provider,
 
     sem = _image_semaphore(job_id)
     await asyncio.gather(*(
-        _paint_and_compose(root, job_id, i, provider, image_client, sem)
+        _paint_and_compose(root, job_id, i, providers, image_client,
+                           critique_client, sem)
         for i in range(len(job.concepts))))
 
     job = load_job(root, job_id)
@@ -646,7 +908,7 @@ async def run_job(root: str | Path, job_id: str, provider: Provider,
 # -- run_revision (§6.2, §8) ---------------------------------------------------
 
 async def run_revision(root: str | Path, job_id: str, concept_index: int,
-                       notes: str, allow_new_art: bool, provider: Provider,
+                       notes: str, allow_new_art: bool, providers: Providers,
                        image_client: Any) -> None:
     """revise_spec -> (maybe) regenerate the art it cleared -> recompose ->
     ready. Meant to run as a detached background task, exactly like run_job;
@@ -656,7 +918,13 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
     `allow_new_art=False` keeps every existing asset even when the notes
     changed a prompt: revise_spec clears `asset` on any art slot whose prompt
     or transparency changed (that clearing is the regenerate signal), so this
-    puts the prior path straight back and logs why nothing was repainted."""
+    puts the prior path straight back and logs why nothing was repainted.
+
+    Gains the same code-computed diff note the auto-critique loop writes
+    (diff_spec_fields — see _critique_and_revise's own docstring): a human
+    revision's notes_log entry is the human's own words, which say what was
+    ASKED for, not necessarily what actually changed, so a "[changed] ..."
+    entry naming the real field-level diff rides along right after it."""
     job = load_job(root, job_id)
     if job is None or concept_index >= len(job.concepts):
         return
@@ -664,7 +932,7 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
     prior_assets = {slot.id: slot.asset for slot in concept.spec.art}
 
     try:
-        result: RevisionResult = revise_spec(concept.spec, notes, provider)
+        result: RevisionResult = revise_spec(concept.spec, notes, providers.revision)
         spec = result.spec
         # Validate BEFORE anything is committed: a revision may legitimately
         # switch archetypes (the notes can ask for it), but an unknown key
@@ -696,6 +964,15 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
                           f"art regen is off; kept the existing art"),
                 "usd": 0.0})
             cleared = []
+
+        # The code-computed diff note (see this function's own docstring):
+        # a SEPARATE notes_log entry naming what actually changed, computed
+        # by diffing the validated spec models — never the human's own
+        # words, which say what was asked for, not what happened.
+        diff_note = diff_spec_fields(concept.spec, spec)
+        if diff_note:
+            spec = spec.model_copy(update={
+                "notes_log": [*spec.notes_log, f"[changed] {diff_note}"]})
 
         concept.spec = spec
         concept.status = "painting" if cleared else "composing"
@@ -737,8 +1014,9 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
 
 __all__ = [
     "ASSETS_DIR", "IMAGE_CONCURRENCY", "IMAGE_RESOLUTION", "JOB_MANIFEST",
-    "MANUSCRIPT_SAMPLE_NAME", "RENDERS_DIR",
-    "check_interrupted", "create_job", "default_root", "is_job_alive",
-    "job_dir", "list_jobs", "load_job", "new_job_id", "register_task",
-    "run_job", "run_revision", "total_usd",
+    "MANUSCRIPT_SAMPLE_NAME", "MAX_CRITIQUE_ROUNDS", "REALITY_SHEET_NAME",
+    "RENDERS_DIR", "Providers",
+    "check_interrupted", "create_job", "default_root", "diff_spec_fields",
+    "is_job_alive", "job_dir", "list_jobs", "load_job", "new_job_id",
+    "register_task", "run_job", "run_revision", "total_usd",
 ]

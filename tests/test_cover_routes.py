@@ -6,7 +6,7 @@ Every model call and render step is monkeypatched at the pipeline seam
 (docproof.cover.pipeline's own module attributes -- the same module object
 app/routes/cover.py imports), exactly the way tests/test_cover_pipeline.py
 does, so these are tests of HTTP behaviour, not of direction.py/imaging.py/
-compose.py. _provider/_image_client are monkeypatched directly on
+compose.py. _providers/_image_client/_critique_client are monkeypatched directly on
 app.routes.cover so a route test never needs a real config file, a real API
 key, or the network -- mirrors tests/test_quest.py's own
 `monkeypatch.setattr("app.routes.quest.build_provider", ...)` pattern.
@@ -72,12 +72,19 @@ def _app(monkeypatch, tmp_path, *, cover_key: str | None = COVER_KEY):
 
 
 def _bypass_provider_and_image_client(monkeypatch) -> None:
-    """Stand in for _provider()/_image_client() so a route test never needs a
-    real config file, a real API key, or the network -- whatever they return
-    only ever gets threaded through to the pipeline-level fakes below, which
-    ignore it."""
-    monkeypatch.setattr("app.routes.cover._provider", lambda: object())
+    """Stand in for _providers()/_image_client()/_critique_client() so a
+    route test never needs a real config file, a real API key, or the
+    network -- whatever they return only ever gets threaded through to the
+    pipeline-level fakes below, which ignore it. One Providers instance
+    (BRAIN wave, 2026-08-29) rather than a bare object(), since
+    cover_pipeline.run_job/run_revision now expect the real dataclass shape
+    (.direction/.revision/.reality), not any old sentinel."""
+    monkeypatch.setattr(
+        "app.routes.cover._providers",
+        lambda: cover_pipeline.Providers(
+            direction=object(), revision=object(), reality=object()))
     monkeypatch.setattr("app.routes.cover._image_client", lambda: object())
+    monkeypatch.setattr("app.routes.cover._critique_client", lambda: object())
 
 
 def _fake_direction_call(monkeypatch, directions: list[Direction]) -> None:

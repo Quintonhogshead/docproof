@@ -801,3 +801,121 @@ def test_degrade_opaque_focal_also_covers_the_new_slot_ids(tmp_path, slot_id):
     _, report = compose(spec, tmp_path, canvas=CANVAS)
 
     assert any(slot_id in w and "title" in w for w in report.warnings)
+
+
+# ===========================================================================
+# compose(): "thing inside of thing" — TextSlot.mask_from (v2 BODY wave)
+# ===========================================================================
+
+def test_text_mask_from_clips_ink_to_the_containers_shape(tmp_path):
+    # A hard-edged circle "container" well inside a much bigger text zone,
+    # over a real opaque background — ink must survive deep in the
+    # circle's interior and vanish well outside its margin.
+    ground_rgb = (40, 60, 90)
+    _flat_opaque_png(tmp_path / "ground.png", CANVAS, ground_rgb)
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    title = _text(id="title", content="ASH AND EMBER AND SALT AND STONE",
+                 zone=Zone(x=0.0, y=0.0, w=1.0, h=1.0), size_min=0.03,
+                 size_max=0.10, max_lines=6, mask_from="beam")
+    spec = _spec(art=[_art(id="ground", asset="ground.png", fit="cover"),
+                     _art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="ground"),
+                                      LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    # Far outside the circle's margin (a corner): the untouched ground
+    # color — the container's own yellow AND any ink are both absent.
+    assert image.getpixel((2, 2)) == ground_rgb
+    # Something OTHER than plain ground shows up too (the container's own
+    # fill and/or ink survived inside the circle) — clipping isn't just
+    # erasing everything.
+    assert set(image.getdata()) - {ground_rgb}
+    assert "title" in report.contrast
+
+
+def test_text_mask_from_low_coverage_warns_with_slot_and_container_named(tmp_path):
+    # A tiny container relative to a title zone sized to need much more
+    # room: most of the ink cannot possibly land inside it.
+    _blob_png(tmp_path / "beam.png", (60, 60), fg=(255, 255, 0, 255))
+    beam = _art(id="beam", asset="beam.png", fit="contain", transparent=True,
+               anchor=[0.5, 0.5], scale=0.15)
+    title = _text(id="title", content="A LONG TITLE ACROSS THE WHOLE FRAME",
+                 zone=Zone(x=0.0, y=0.0, w=1.0, h=1.0), size_min=0.03,
+                 size_max=0.09, max_lines=6, mask_from="beam")
+    spec = _spec(art=[beam], text=[title],
+                layers=[LayerRef(kind="art", ref="beam"),
+                       LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert any("title" in w and "beam" in w and "only" in w for w in report.warnings)
+
+
+def test_text_mask_from_full_coverage_does_not_warn(tmp_path):
+    # A container that fully covers the (small, centered) text zone:
+    # coverage should be complete, no warning.
+    _flat_opaque_png(tmp_path / "beam.png", CANVAS, (255, 255, 0))
+    title = _text(id="title", content="ASH", zone=Zone(x=0.3, y=0.4, w=0.4, h=0.2),
+                 size_min=0.05, size_max=0.05, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert not any("only" in w and "title" in w for w in report.warnings)
+
+
+def test_text_mask_from_feathering_is_deterministic(tmp_path):
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    title = _text(id="title", content="ASH", zone=Zone(x=0.2, y=0.3, w=0.6, h=0.3),
+                 size_min=0.06, size_max=0.06, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    image1, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image2, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image1.tobytes() == image2.tobytes()
+
+
+def test_text_mask_from_skips_empty_optional_slots_like_fill_does(tmp_path):
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    subtitle = _text(id="subtitle", content="", optional=True, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[subtitle], layers=[LayerRef(kind="art", ref="beam"),
+                                         LayerRef(kind="text", ref="subtitle")])
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert "subtitle" not in report.contrast
+
+
+def test_text_mask_from_contrast_samples_only_inside_the_container(tmp_path):
+    # The title zone straddles two very different regions: an all-WHITE
+    # "ground" everywhere, and a BLACK "beam" container covering only the
+    # zone's bottom half. Light ink reads terribly on white (mean-of-both
+    # would land around mid-gray and still fail) and excellently on black.
+    # If the sampler correctly restricts to the beam's own interior, it
+    # sees pure black and passes cleanly; if it ever fell back to the
+    # zone's raw (unmasked) rect, the white half would drag it below 4.5.
+    cw, ch = CANVAS
+    _flat_opaque_png(tmp_path / "ground.png", CANVAS, (255, 255, 255))
+    beam = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+    ImageDraw.Draw(beam).rectangle((0, ch // 2, cw, ch), fill=(0, 0, 0, 255))
+    beam.save(tmp_path / "beam.png")
+
+    palette = _palette(text="#f5f1e8")   # light ink
+    title = _text(id="title", content="ASH", zone=Zone(x=0.1, y=0.35, w=0.8, h=0.30),
+                 size_min=0.05, size_max=0.05, mask_from="beam")
+    spec = _spec(art=[_art(id="ground", asset="ground.png", fit="cover"),
+                     _art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], palette=palette,
+                layers=[LayerRef(kind="art", ref="ground"),
+                       LayerRef(kind="art", ref="beam"),
+                       LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.contrast["title"] >= 4.5
+    assert not any("title" in w and "contrast" in w for w in report.warnings)

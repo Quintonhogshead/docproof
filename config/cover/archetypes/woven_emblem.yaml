@@ -1,0 +1,125 @@
+# v2 "BODY" wave flagship: built directly from the owner's 18-cover
+# reference-DNA analysis (docs/cover_designer_spec.md's companion beta
+# review, 2026-08-29), not one named bestseller — it encodes ALL eight
+# doctrine points at once rather than one convention:
+#  1. flat confident ground (procedural, no murky gradient-to-nowhere)
+#  2. type IS the hero (huge stacked serif caps, size_max 0.17)
+#  3. interweaving — the `weave` slot is drawn AFTER `title` in `layers`,
+#     so its ornament visibly crosses the title's own lower edge
+#  4. ornament replaces scene (rule frame + mirrored corner vine, no scene)
+#  5. silhouette/duotone illustration (every generated slot: `treatment:
+#     silhouette` — tone-on-tone, one flat ink color, never a raw
+#     full-color render)
+#  6. 2-4 palette colors, high commitment — ground/paper/rule/emblem/vine/
+#     weave all resolve to exactly `background`/`text`/`accent`/`primary`
+#  7. quiet paper grain unifying everything (`paper` slot)
+#  8. thin inset rule frame + a restrained series/"a novel" tag
+# genres: romantasy's fantasy/romance seam, plus literary and historical —
+# untagged would flood every genre's enumeration (§5.3).
+name: woven_emblem
+genres: [fantasy, romance, literary, historical]
+describe: >-
+  A flat confident ground, thin engraved rule frame, and mirrored corner
+  vines; one silhouette emblem above a huge stacked-caps title, with a
+  second ornament woven across the title's own lower edge.
+composition_note: >-
+  A single flat, boldly stylized ornamental motif ONLY — a mythic creature,
+  a heraldic emblem, a climbing botanical vine, a ribbon or branch — one
+  graphic subject rendered as a bold simple silhouette shape with clean
+  edges, no shading, no gradients, no scenery, no landscape, no background
+  of any kind behind it, transparent everywhere else. No text anywhere.
+art:
+  - id: background
+    generatable: false           # flat, confident ground — procedural
+    fit: cover                   # gradient (direction may still pick a
+    procedural: gradient         # saturated color OR cream via palette.background)
+  - id: paper
+    generatable: false           # quiet unifying paper grain (§7 of the DNA
+    fit: cover                   # doctrine) — laid-paper fibers, not screen noise
+    procedural: paper
+    opacity: 0.55
+    blend: overlay
+  - id: rule_frame
+    generatable: false           # thin engraved double-rule, inset ~5%
+    fit: cover                   # (§8 of the doctrine) — reads as craft
+    procedural: rule_frame
+  - id: corner_vine
+    generatable: true
+    fit: contain                 # placement is moot once `corners` is set,
+    transparent: true            # kept `contain` so a revision that clears
+    scale: 0.30                  # `corners` still degrades to one sane layer
+    treatment: silhouette        # (§7.4a's own documented fallback)
+    corners: true                # mirrored into all four corners — ornament
+                                  # REPLACES scene (§4), the exact-symmetry
+                                  # tell a prompt-only generator can't produce
+  - id: emblem
+    generatable: true
+    fit: contain
+    transparent: true            # the central creature/emblem is a cutout
+    anchor: [0.5, 0.24]          # upper area, clear above the title zone
+    scale: 0.30                  # confident but leaves the title dominant
+    treatment: silhouette        # tone-on-tone doctrine (§5): one flat ink
+                                  # shape on the flat ground, never a raw
+                                  # full-color illustration
+  - id: weave
+    generatable: true
+    fit: contain
+    transparent: true            # a vine/ribbon/branch, not a scene
+    anchor: [0.5, 0.722]         # into the title zone's own bottom edge
+                                  # (0.38 + 0.36) — reliable because valign:
+                                  # bottom above pins the last line there
+                                  # regardless of title length
+    scale: 0.40
+    treatment: silhouette
+scrims:
+  # De-muted by design (v2 BODY wave): strength starts at 0, so nothing
+  # dims anything unless the legibility autopilot actually measures a
+  # problem — and when it does, escalation raises a FEATHERED LOCAL panel
+  # (the redesigned `panel` default), never a wash to the canvas edge.
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: series
+    zone: {x: 0.20, y: 0.048, w: 0.60, h: 0.028}
+    case: upper
+    tracking: 160
+    optional: true
+    size_min: 0.011
+    size_max: 0.016
+  - id: title
+    # HUGE stacked serif caps — type IS the hero (§2 of the doctrine):
+    # size_max 0.17 comfortably clears the 0.13 floor, max_lines 4.
+    # valign bottom (not the usual middle) is deliberate: it pins the LAST
+    # line's own baseline to the same y regardless of how many lines a
+    # given title needs, so `weave`'s fixed anchor below reliably crosses
+    # that last line for a two-word title and a six-word one alike.
+    zone: {x: 0.06, y: 0.38, w: 0.88, h: 0.36}
+    case: upper
+    valign: bottom
+    tracking: 30
+    align: center
+    size_min: 0.05
+    size_max: 0.17
+    max_lines: 4
+  - id: subtitle
+    zone: {x: 0.15, y: 0.745, w: 0.70, h: 0.032}
+    optional: true
+    size_min: 0.014
+    size_max: 0.020
+  - id: author
+    zone: {x: 0.10, y: 0.905, w: 0.80, h: 0.055}
+    case: upper
+    tracking: 130
+    size_min: 0.020
+    size_max: 0.032
+# background -> paper -> rule_frame -> corner_vine -> emblem -> (scrims) ->
+# series -> title -> WEAVE -> subtitle -> author. `weave` drawn AFTER
+# `title` is the point of this archetype (§3 of the doctrine): it paints
+# back over the title's own lower rows, so the ornament visibly threads
+# across the letterforms instead of sitting politely beside them.
+layers: [background, paper, rule_frame, corner_vine, emblem, "scrim:0",
+        "scrim:1", series, title, weave, subtitle, author]

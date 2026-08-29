@@ -23,6 +23,7 @@ import re
 import tempfile
 from pathlib import Path
 
+import anthropic
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -36,18 +37,24 @@ from docproof.providers.base import ProviderError
 
 from ..settings import CONFIG_PATH, get_api_key
 
-# Mirrored rather than imported from docproof.quest, on purpose — the same
-# call docproof.cover.direction's own LUNA_MODEL makes about docproof.quest.
-# skin.LUNA_MODEL: Cover Studio shares a convention with Quest (the cheap
-# model's id), not a dependency on Quest's module. Guarded because direction.
-# py is a sibling module built alongside this one and may not exist yet at
-# import time (see docproof.cover.pipeline's module docstring for the same
-# concern) — a test that never calls _provider() must still be able to import
-# this module.
+# Guarded because direction.py/reality.py are sibling modules built alongside
+# this one (see docproof.cover.pipeline's module docstring for the same
+# concern) — a test that never calls _providers() must still be able to
+# import this module. DIRECTION_MODEL/REVISION_MODEL/REALITY_MODEL are NOT
+# mirrored here the way LUNA_MODEL once was: routes.py needs the REAL model
+# ids (to look up each one's vendor via docproof.providers.lookup — see
+# _build_role_provider), not a locally-agreed convention, so importing them
+# is the only correct choice, not a stylistic one.
 try:
-    from docproof.cover.direction import LUNA_MODEL
+    from docproof.cover.direction import DIRECTION_MODEL, REVISION_MODEL
 except ImportError:                                        # pragma: no cover
-    LUNA_MODEL = "gpt-5.6-luna"
+    DIRECTION_MODEL = "claude-fable-5"
+    REVISION_MODEL = "claude-sonnet-5"
+
+try:
+    from docproof.cover.reality import REALITY_MODEL
+except ImportError:                                        # pragma: no cover
+    REALITY_MODEL = "claude-sonnet-5"
 
 try:
     from docproof.cover.imaging import make_client
@@ -114,17 +121,51 @@ def _data_root(request: Request) -> Path:
     return request.app.state.cover_data_root
 
 
-def _provider():
-    """The cheap direction/revision model, built fresh per call — mirrors
-    quest.py's own _provider() exactly (Luna, effort low)."""
+def _build_role_provider(model: str, *, role: str):
+    """One model role's Provider, built fresh per call — mirrors the site's
+    old single-model _provider() (Quest's own quest.py:_provider() still
+    works this way for its one cheap model), but resolves the vendor from
+    the MODEL itself (build_provider's own `model=` override; see that
+    function's docstring) rather than mutating cfg.api.model, so all three
+    Cover Studio roles can share one loaded config without stepping on each
+    other. `role` is a human word ("direction", "revision", "reality") used
+    only in the 503 sentence below."""
     cfg = load_config(CONFIG_PATH)
-    cfg.api.model = LUNA_MODEL
     cfg.api.effort = "low"
     try:
-        return build_provider(cfg, api_key=get_api_key(lookup(LUNA_MODEL).provider))
+        return build_provider(
+            cfg, api_key=get_api_key(lookup(model).provider), model=model)
     except ProviderError as e:
         raise HTTPException(503, detail=(
-            f"The direction model is not available: {e}")) from e
+            f"The {role} model is not available: {e}")) from e
+
+
+def _providers() -> cover_pipeline.Providers:
+    """One Provider per model role (BRAIN wave, 2026-08-29): the frontier
+    model for art direction, the workhorse model for revision, the
+    workhorse model for manuscript distillation — see
+    docproof.cover.pipeline.Providers' own docstring for why three, not
+    one. Built fresh per request, same as the single provider it replaces."""
+    return cover_pipeline.Providers(
+        direction=_build_role_provider(DIRECTION_MODEL, role="direction"),
+        revision=_build_role_provider(REVISION_MODEL, role="revision"),
+        reality=_build_role_provider(REALITY_MODEL, role="reality"))
+
+
+def _critique_client() -> anthropic.Anthropic:
+    """The raw anthropic client for the vision critique call (§6.3) —
+    critique.py talks to the anthropic SDK directly rather than through the
+    Provider protocol (see that module's own docstring for why), so it needs
+    its own client rather than reusing one of the three Providers above.
+    Keyed the same way the image client is (§7.2's precedent):
+    app.settings.get_api_key, a missing key surfaced as the same
+    human-sentence 503 pattern."""
+    key = get_api_key("anthropic")
+    if not key:
+        raise HTTPException(503, detail=(
+            "Cover critique is not configured on this deployment (no "
+            "Anthropic key)."))
+    return anthropic.Anthropic(api_key=key)
 
 
 def _image_client():
@@ -168,8 +209,9 @@ def register(app: FastAPI) -> None:
         # Built before anything touches disk: a missing model/key is a 503
         # regardless of whether this particular job would ever need images,
         # the same all-or-nothing stance quest.py's _provider() takes.
-        provider = _provider()
+        providers = _providers()
         image_client = _image_client()
+        critique_client = _critique_client()
         root = _data_root(request)
 
         manuscript_name = ""
@@ -187,7 +229,8 @@ def register(app: FastAPI) -> None:
                 raise HTTPException(400, detail=str(e)) from e
 
         task = asyncio.create_task(
-            cover_pipeline.run_job(root, job.job_id, provider, image_client))
+            cover_pipeline.run_job(root, job.job_id, providers, image_client,
+                                   critique_client))
         cover_pipeline.register_task(job.job_id, task)
         return {"job_id": job.job_id}
 
@@ -227,11 +270,11 @@ def register(app: FastAPI) -> None:
                 "This concept is still being worked on — wait for it to "
                 "finish before revising it."))
 
-        provider = _provider()
+        providers = _providers()
         image_client = _image_client()
         task = asyncio.create_task(cover_pipeline.run_revision(
             root, job_id, body.concept, body.notes, body.allow_new_art,
-            provider, image_client))
+            providers, image_client))
         cover_pipeline.register_task(job_id, task)
         return {"job_id": job_id, "concept": body.concept}
 

@@ -160,7 +160,7 @@ def compose(spec: CoverSpec, job_dir: Path,
             else:  # "text"
                 resolved = finalized.get(layer.ref)
                 if resolved is not None:
-                    img = _draw_resolved_text(img, resolved, canvas)
+                    img = _draw_resolved_text(img, resolved, canvas, positioned_art)
         return img
 
     for i, layer in enumerate(layers):
@@ -186,20 +186,42 @@ def compose(spec: CoverSpec, job_dir: Path,
         color_hex = (spec.palette.primary if slot.mode != "fill"
                     else spec.palette.get(slot.color_role))
 
+        # "Thing inside of thing" (mask_from): a title living inside a
+        # lighthouse beam reads its contrast against the BEAM's own
+        # interior, not the dark sky around it — _zone_stats restricts its
+        # sample to wherever this container's positioned alpha is actually
+        # opaque, still cropped to the slot's own rect first.
+        container_mask = (positioned_art[slot.mask_from].getchannel("A")
+                          if slot.mask_from and slot.mask_from in positioned_art
+                          else None)
+
+        # v2 BODY wave: the fit search runs BEFORE the legibility
+        # measurement now (it used to run after) — worst-REGION scoring,
+        # below, needs to know where the fitted glyphs actually land so it
+        # can skip grid cells with no ink in them; fit_text has no
+        # dependency on the render itself, so this reorder costs nothing.
+        fit = typeset.fit_text(slot, canvas)
+        if fit.warning:
+            warnings.append(fit.warning)
+        ink_bbox = typeset.text_mask(slot, fit, canvas).getbbox()
+
         below = render_upto(i)
-        mean_lum, stddev = _zone_stats(below, rect)
-        ratio = _contrast_against_luminance(ImageColor.getrgb(color_hex), mean_lum)
+        ratio = _worst_region_contrast(below, rect, ImageColor.getrgb(color_hex),
+                                       ink_bbox, container_mask)
+        _, stddev = _zone_stats(below, rect, container_mask)
 
         while ratio < threshold and any(strengths[idx] < _SCRIM_CAP for idx in protecting):
             for idx in protecting:
                 strengths[idx] = min(_SCRIM_CAP, round(strengths[idx] + _SCRIM_STEP, 10))
             below = render_upto(i)
-            mean_lum, stddev = _zone_stats(below, rect)
-            ratio = _contrast_against_luminance(ImageColor.getrgb(color_hex), mean_lum)
+            ratio = _worst_region_contrast(below, rect, ImageColor.getrgb(color_hex),
+                                           ink_bbox, container_mask)
+            _, stddev = _zone_stats(below, rect, container_mask)
 
         if ratio < threshold:
             pre_flip_ratio = ratio
-            options = [(c, _contrast_against_luminance(ImageColor.getrgb(c), mean_lum))
+            options = [(c, _worst_region_contrast(below, rect, ImageColor.getrgb(c),
+                                                  ink_bbox, container_mask))
                       for c in _TEXT_COLOR_FALLBACKS]
             color_hex, ratio = max(options, key=lambda pair: pair[1])
             outcome = "now passes" if ratio >= threshold else "still falls short"
@@ -213,13 +235,23 @@ def compose(spec: CoverSpec, job_dir: Path,
         if stddev > _STDDEV_SHADOW_THRESHOLD and shadow is None:
             shadow = Shadow()
 
-        fit = typeset.fit_text(slot, canvas)
-        if fit.warning:
-            warnings.append(fit.warning)
-
         finalized[layer.ref] = _ResolvedText(slot=slot, fit=fit, color=color_hex, shadow=shadow)
         contrast[layer.ref] = round(ratio, 4)
         fitted_sizes[layer.ref] = fit.size_frac
+
+        if slot.mask_from:
+            # Measured once, here, at finalization — not inside render_upto,
+            # which redraws every finalized slot on every later replay (see
+            # the module docstring's note on that trade-off); a warning
+            # appended once per replay would duplicate it N times over.
+            text_layer = _render_text_only(slot, fit, color_hex, shadow, canvas)
+            _, coverage = _clip_text_to_container(
+                text_layer, positioned_art.get(slot.mask_from), canvas)
+            if coverage < _TEXT_MASK_MIN_COVERAGE:
+                warnings.append(
+                    f"{slot.id}: only {coverage:.0%} of its ink landed "
+                    f"inside '{slot.mask_from}' — move the container or "
+                    f"shrink the {slot.id}.")
 
     final_image = render_upto(len(layers))
 
@@ -241,9 +273,14 @@ def compose(spec: CoverSpec, job_dir: Path,
                                   text_by_id, spec.palette, canvas)
     for ref, resolved in finalized.items():
         zl, zt, zw, zh = zone_px(resolved.slot.zone, canvas)
-        final_lum, _ = _zone_stats(ground, (zl, zt, zl + zw, zt + zh))
-        final_ratio = _contrast_against_luminance(
-            ImageColor.getrgb(resolved.color), final_lum)
+        container_mask = (positioned_art[resolved.slot.mask_from].getchannel("A")
+                          if resolved.slot.mask_from
+                          and resolved.slot.mask_from in positioned_art
+                          else None)
+        ink_bbox = typeset.text_mask(resolved.slot, resolved.fit, canvas).getbbox()
+        final_ratio = _worst_region_contrast(
+            ground, (zl, zt, zl + zw, zt + zh), ImageColor.getrgb(resolved.color),
+            ink_bbox, container_mask)
         threshold = _CONTRAST_THRESHOLDS[resolved.slot.id]
         if final_ratio < threshold and final_ratio < contrast[ref] - 0.5:
             warnings.append(
@@ -262,19 +299,89 @@ def compose(spec: CoverSpec, job_dir: Path,
 # -- knockout / art_fill text modes (§7.4a) -----------------------------------
 
 def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
-                        canvas: tuple[int, int]) -> Image.Image:
+                        canvas: tuple[int, int],
+                        positioned_art: dict[str, Image.Image]) -> Image.Image:
     """Dispatch one already-resolved text slot to whichever renderer its
     `mode` needs: typeset.draw_text for the normal ink-colored `fill`, or
     _draw_knockout_or_art_fill for the two panel/window modes. Both branches
     were handed the SAME `resolved.color` by the autopilot loop above (the
     escalate-then-flip machinery has no idea which mode it is tuning a color
     for), so this is the one place that color's meaning finally forks: ink,
-    or panel/outline."""
-    if resolved.slot.mode == "fill":
-        return typeset.draw_text(base, resolved.slot, resolved.fit,
-                                 resolved.color, resolved.shadow, canvas)
-    return _draw_knockout_or_art_fill(base, resolved.slot, resolved.fit,
-                                      resolved.color, canvas)
+    or panel/outline.
+
+    When `resolved.slot.mask_from` names a container ("thing inside of
+    thing" — a title inside a lighthouse beam), the fully rendered text
+    layer (whichever mode built it) is clipped to that container's already-
+    positioned alpha before it ever reaches `base` — see
+    _render_text_only/_clip_text_to_container."""
+    slot = resolved.slot
+    if not slot.mask_from:
+        if slot.mode == "fill":
+            return typeset.draw_text(base, slot, resolved.fit, resolved.color,
+                                     resolved.shadow, canvas)
+        return _draw_knockout_or_art_fill(base, slot, resolved.fit,
+                                          resolved.color, canvas)
+
+    text_layer = _render_text_only(slot, resolved.fit, resolved.color,
+                                   resolved.shadow, canvas)
+    clipped, _coverage = _clip_text_to_container(
+        text_layer, positioned_art.get(slot.mask_from), canvas)
+    out = base.copy()
+    out.alpha_composite(clipped)
+    return out
+
+
+def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
+                      shadow: Shadow | None, canvas: tuple[int, int]) -> Image.Image:
+    """`slot`'s fully rendered pixels — ink/stroke/shadow for `fill`, the
+    panel/window pixels for knockout/art_fill — as a STANDALONE canvas-sized
+    RGBA layer, transparent everywhere else. Both typeset.draw_text and
+    _draw_knockout_or_art_fill already build exactly this internally before
+    compositing it onto whatever `base` they're given (neither reads a
+    single pixel FROM `base` — it is only ever the accumulator they
+    composite onto), so calling either against a blank transparent canvas
+    returns the layer itself, unchanged. mask_from's clip and its coverage
+    measurement both need the text's own pixels in isolation from the art
+    beneath them, before that clip ever happens."""
+    blank = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    if slot.mode == "fill":
+        return typeset.draw_text(blank, slot, fit, color, shadow, canvas)
+    return _draw_knockout_or_art_fill(blank, slot, fit, color, canvas)
+
+
+# v2 BODY wave: "thing inside of thing" — a title living inside a lighthouse
+# beam, an image inside a train's smoke plume. Art-inside-art already worked
+# via ArtSlot.mask_from/_apply_mask_from (a hard-thresholded stencil, by
+# that mechanism's own design); text-inside-art wants a SOFTER edge (the
+# glyphs' own antialiasing should survive, not get re-thresholded to a hard
+# stencil), so this is deliberately a separate, smaller mechanism rather
+# than a shared helper.
+_TEXT_MASK_FEATHER_PX = 2.0     # gaussian-soften the container's own edge,
+                                # so a clipped title never looks razor-cut
+_TEXT_MASK_MIN_COVERAGE = 0.85  # below this fraction of surviving ink, warn
+
+
+def _clip_text_to_container(text_layer: Image.Image, container: Image.Image | None,
+                            canvas: tuple[int, int]) -> tuple[Image.Image, float]:
+    """`text_layer` (from _render_text_only) with its alpha multiplied by
+    `container`'s own positioned alpha — lightly feathered so the container
+    art's own edge (however hard-edged the source cutout is) never reads as
+    a razor-cut clip — plus how much of the text's own ink alpha survived:
+    1.0 when there is no container (a dangling mask_from can't happen for a
+    spec that passed CoverSpec validation — defensive, mirrors
+    _apply_mask_from's own None guard) or when the layer had no ink at all
+    (an empty optional slot trivially "fully covers")."""
+    if container is None:
+        return text_layer, 1.0
+    container_alpha = container.getchannel("A")
+    if _TEXT_MASK_FEATHER_PX > 0:
+        container_alpha = container_alpha.filter(
+            ImageFilter.GaussianBlur(_TEXT_MASK_FEATHER_PX))
+    r, g, b, a = text_layer.split()
+    ink_total = ImageStat.Stat(a).sum[0]
+    clipped_a = ImageChops.multiply(a, container_alpha)
+    coverage = (ImageStat.Stat(clipped_a).sum[0] / ink_total) if ink_total > 0 else 1.0
+    return Image.merge("RGBA", (r, g, b, clipped_a)), coverage
 
 
 def _padded_rect(zone, canvas: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -409,15 +516,17 @@ def _degrade_opaque_focal(layers: list[LayerRef], art_by_id: dict[str, ArtSlot],
 # -- art layers ---------------------------------------------------------------
 
 def _load_or_synthesize(slot: ArtSlot, job_dir: Path, canvas: tuple[int, int],
-                        palette: Palette) -> Image.Image | None:
+                        palette: Palette, version: int) -> Image.Image | None:
     """Load a generated asset, or synthesize one procedurally when the slot
     has none — §7.3's "reads generated art when set, synthesizes otherwise"
     rule, checked on `asset` alone (not `prompt`): by the time a real job
     reaches compose(), pipeline.py has already generated everything with a
     prompt, so an empty `asset` here always means "procedural on purpose"
-    (the $0 big_type background, the grain texture) or "no art for this
-    slot" (an ungenerated `focal`, which draws nothing rather than invent a
-    fallback the spec never described — signaled by returning None).
+    (the $0 big_type background, the grain texture, or any slot naming a
+    `procedural` synthesizer) or "no art for this slot" (an ungenerated
+    `focal` with no `procedural` either, which draws nothing rather than
+    invent a fallback the spec never described — signaled by returning
+    None).
 
     Returns the RAW loaded/synthesized image, before any fit/placement or
     effects-rack treatment — _position_all_art is what turns this into
@@ -432,7 +541,7 @@ def _load_or_synthesize(slot: ArtSlot, job_dir: Path, canvas: tuple[int, int],
             raise ComposeError(
                 f"Could not read the generated art for the '{slot.id}' slot "
                 f"at {path}: {e}") from e
-    return _procedural_art(slot, canvas, palette)
+    return _procedural_art(slot, canvas, palette, version)
 
 
 def _has_transparency(img: Image.Image) -> bool:
@@ -585,7 +694,7 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
         if layer.kind != "art" or layer.ref in positioned:
             continue
         slot = art_by_id[layer.ref]
-        source = _load_or_synthesize(slot, job_dir, canvas, palette)
+        source = _load_or_synthesize(slot, job_dir, canvas, palette, version)
         if source is None:
             positioned[slot.id] = Image.new("RGBA", canvas, (0, 0, 0, 0))
             continue
@@ -625,13 +734,27 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
     return positioned, warnings
 
 
-def _procedural_art(slot: ArtSlot, canvas: tuple[int, int],
-                    palette: Palette) -> Image.Image | None:
-    if slot.id == "texture":
-        return _grain_layer(canvas)
-    if slot.id == "background":
-        return _gradient_layer(canvas, palette.background)
-    return None   # e.g. an ungenerated "focal" cutout: nothing to draw
+def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
+                    version: int) -> Image.Image | None:
+    """slot.procedural, if set, names a PROCEDURAL_SYNTHESIZERS entry
+    directly — any slot, any id, generatable or not (a generatable slot
+    whose asset never arrived degrades to its named synthesizer instead of a
+    blank layer). An UNSET (empty) `procedural` falls back to the ORIGINAL
+    hardcoded-by-id behavior — "texture" -> grain, "background" -> gradient,
+    anything else -> nothing — so every archetype/spec written before this
+    field existed renders byte-identical pixels (v2 BODY wave)."""
+    name = slot.procedural
+    if not name:
+        if slot.id == "texture":
+            name = "grain"
+        elif slot.id == "background":
+            name = "gradient"
+        else:
+            return None   # e.g. an ungenerated "focal" cutout: nothing to draw
+    synth = PROCEDURAL_SYNTHESIZERS.get(name)
+    if synth is None:
+        return None   # unreachable given the Literal; never crash on the unknown
+    return synth(canvas, palette, slot.id, version)
 
 
 def _gradient_layer(canvas: tuple[int, int], base_hex: str) -> Image.Image:
@@ -666,6 +789,219 @@ def _grain_layer(canvas: tuple[int, int]) -> Image.Image:
     small = Image.frombytes("L", (sw, sh), raw)
     grain = small.resize(canvas, Image.Resampling.BILINEAR)
     return Image.merge("RGBA", (grain, grain, grain, Image.new("L", canvas, 255)))
+
+
+# -- procedural texture shelf (v2 BODY wave) -----------------------------------
+#
+# Reference DNA item 7: "quiet paper grain unifying everything" — and item 8's
+# "thin rule frames... read as craft." Every synthesizer here is a pure
+# function of (canvas, palette, slot id, spec version) -> a canvas-sized RGBA
+# image, drawn in ONE palette color at a baked-in low alpha (so it looks
+# right blended `normal` at slot.opacity=1.0; an archetype may still dial it
+# further via opacity/blend) — never a hardcoded hex, so a direction that
+# "makes the palette warmer" re-tints every texture along with everything
+# else. Each is built from vector draw calls or a downsampled-then-upsampled
+# noise field (never a full-canvas Python pixel loop — the same performance
+# discipline _grain_layer/_gradient_layer/_paint_vignette_scrim already
+# apply), and each is either periodic-by-construction (a fixed pitch grid:
+# halftone, canvas weave, rule_frame — trivially tileable) or seeded purely
+# from (version, slot_id, name) via _synth_seed (paper, speckle) — never
+# Python's process-randomized built-in hash() — so two composes of the same
+# spec, on any machine, synthesize byte-identical pixels. `grain`/`gradient`
+# below are thin registry wrappers around the two ORIGINAL, unchanged
+# synthesizers above, so the "texture"/"background" legacy-id fallback in
+# _procedural_art reaches the exact same bytes it always has.
+
+def _synth_seed(version: int, slot_id: str, name: str) -> int:
+    """Mirrors _scatter_seed's reasoning exactly (fixed integer arithmetic
+    over `version` plus every character's ordinal, never hash()) with the
+    synthesizer's own `name` folded in too, so two different slots asking
+    for the SAME synthesizer — or one slot's `procedural` changing across a
+    revision — never stamp identical noise."""
+    return (version * 1_000_003 + sum(ord(c) for c in slot_id) * 97
+           + sum(ord(c) for c in name) * 7)
+
+
+def _synth_gradient(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                    version: int) -> Image.Image:
+    return _gradient_layer(canvas, palette.background)
+
+
+def _synth_grain(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                 version: int) -> Image.Image:
+    return _grain_layer(canvas)
+
+
+_PAPER_LINE_SPACING_FRACTION = 0.0065   # of canvas height, between laid lines
+_PAPER_FIBER_BLUR_FRACTION = 0.003      # of canvas height
+_PAPER_ALPHA = 90                       # of 255 - subtle fiber+laid-line tint
+
+
+def _synth_paper(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                 version: int) -> Image.Image:
+    """Laid paper: soft mottled fiber noise plus regularly spaced horizontal
+    "laid lines" — the faint ribbing real laid paper shows held to light —
+    the two textures together read as "paper," not "screen." Fiber noise is
+    a downsampled-then-blurred random field (like _grain_layer's, but
+    blurred further so it clumps into fibers instead of reading as sharp
+    per-pixel noise); the laid lines are exact, fixed-period horizontal
+    rules, so the whole field tiles cleanly at that period."""
+    cw, ch = canvas
+    seed = _synth_seed(version, slot_id, "paper")
+    sw = max(1, round(cw * _GRAIN_SCALE))
+    sh = max(1, round(ch * _GRAIN_SCALE))
+    raw = random.Random(seed).randbytes(sw * sh)
+    fiber = (Image.frombytes("L", (sw, sh), raw)
+            .resize(canvas, Image.Resampling.BILINEAR)
+            .filter(ImageFilter.GaussianBlur(max(1.0, ch * _PAPER_FIBER_BLUR_FRACTION))))
+    spacing = max(2, round(ch * _PAPER_LINE_SPACING_FRACTION))
+    lines = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(lines)
+    for y in range(0, ch, spacing):
+        draw.line([(0, y), (cw, y)], fill=60)
+    pattern = ImageChops.add(fiber.point(lambda v: v // 4), lines)
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(pattern.point(lambda v: round(min(255, v) * _PAPER_ALPHA / 255)))
+    return out
+
+
+_HALFTONE_PERIOD_FRACTION = 0.018     # of canvas height, dot-grid pitch
+_HALFTONE_MAX_ALPHA = 130
+_HALFTONE_MIN_RADIUS_FACTOR = 0.25    # of the biggest dot, toward the edges
+_HALFTONE_MAX_RADIUS_FACTOR = 0.42    # of the pitch, at the slot's center
+
+
+def _synth_halftone(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                    version: int) -> Image.Image:
+    """A classic print dot screen: a square grid of solid circles, radially
+    graded so full-size dots cluster toward the slot's own center and taper
+    toward the edges — a deterministic vignette built from pure geometry, no
+    randomness needed (a halftone's whole visual identity IS its regular
+    grid; irregular placement would just read as noise with extra steps).
+    Tileable by construction: dot centers fall on an exact period-`pitch`
+    grid covering the whole canvas."""
+    cw, ch = canvas
+    pitch = max(4, round(ch * _HALFTONE_PERIOD_FRACTION))
+    max_r = pitch * _HALFTONE_MAX_RADIUS_FACTOR
+    cx, cy = cw / 2, ch / 2
+    max_dist = math.hypot(cx, cy) or 1.0
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for gy in range(0, ch + pitch, pitch):
+        for gx in range(0, cw + pitch, pitch):
+            d = 1.0 - min(1.0, math.hypot(gx - cx, gy - cy) / max_dist)
+            r = max_r * (_HALFTONE_MIN_RADIUS_FACTOR
+                        + (1 - _HALFTONE_MIN_RADIUS_FACTOR) * d)
+            if r < 0.5:
+                continue
+            draw.ellipse((gx - r, gy - r, gx + r, gy + r), fill=255)
+    rgb = ImageColor.getrgb(palette.primary)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _HALFTONE_MAX_ALPHA / 255)))
+    return out
+
+
+_WEAVE_PERIOD_FRACTION = 0.010   # of canvas height, thread pitch
+_WEAVE_ALPHA = 34
+_WEAVE_LINE_VALUE = 110
+
+
+def _synth_canvas(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                  version: int) -> Image.Image:
+    """A plain-weave canvas/linen texture: two perpendicular sets of evenly
+    spaced fine rules — a cheap, fully deterministic crosshatch read at low
+    alpha. Pure geometry (a fixed-pitch grid of `ImageDraw.line` calls, each
+    O(canvas dimension) at the C level), so it costs nothing like a real
+    per-pixel weave simulation would."""
+    cw, ch = canvas
+    pitch = max(3, round(ch * _WEAVE_PERIOD_FRACTION))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for y in range(0, ch, pitch):
+        draw.line([(0, y), (cw, y)], fill=_WEAVE_LINE_VALUE)
+    for x in range(0, cw, pitch):
+        draw.line([(x, 0), (x, ch)], fill=_WEAVE_LINE_VALUE)
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(min(255, v) * _WEAVE_ALPHA / 255)))
+    return out
+
+
+_SPECKLE_DENSITY_PER_MEGAPIXEL = 900    # dot count scales with canvas area
+_SPECKLE_MIN_RADIUS_FRACTION = 0.0015   # of canvas height
+_SPECKLE_MAX_RADIUS_FRACTION = 0.0045
+_SPECKLE_ALPHA = 210
+
+
+def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                   version: int) -> Image.Image:
+    """Sparse scattered dots at varied sizes — the "Atomic Habits" cover
+    signature: a field of small solid circles at random positions and radii,
+    seeded purely from (version, slot_id) so the same slot always speckles
+    identically."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot_id, "speckle"))
+    count = max(1, round((cw * ch) / 1_000_000 * _SPECKLE_DENSITY_PER_MEGAPIXEL))
+    min_r = _SPECKLE_MIN_RADIUS_FRACTION * ch
+    max_r = _SPECKLE_MAX_RADIUS_FRACTION * ch
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw), rng.uniform(0, ch)
+        r = rng.uniform(min_r, max_r)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=255)
+    rgb = ImageColor.getrgb(palette.primary)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _SPECKLE_ALPHA / 255)))
+    return out
+
+
+_RULE_FRAME_INSET_FRACTION = 0.05      # of canvas height, from each edge
+_RULE_FRAME_GAP_FRACTION = 0.007       # of canvas height, between the two rules
+_RULE_FRAME_WIDTH_FRACTION = 0.0022    # of canvas height, each rule's stroke
+_RULE_FRAME_ALPHA = 235
+
+
+def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot_id: str,
+                      version: int) -> Image.Image:
+    """A thin, engraved double-rule frame inset from the edge — reference
+    DNA item 8's "thin rule frames inset from the edge... read as craft,"
+    and the same "engraved double-rule" motif the Spell & Check site's own
+    chrome already uses (app/static/sc-shared.css). Pure geometry (two
+    concentric inset rectangles), no randomness needed; palette.accent, so
+    it reads as a considered metallic/ink accent rather than blending into
+    the ground it sits on."""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    gap = max(1, round(_RULE_FRAME_GAP_FRACTION * ch))
+    width = max(1, round(_RULE_FRAME_WIDTH_FRACTION * ch))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    outer = (inset, inset, cw - 1 - inset, ch - 1 - inset)
+    inner = (inset + gap, inset + gap, cw - 1 - inset - gap, ch - 1 - inset - gap)
+    if outer[2] > outer[0] and outer[3] > outer[1]:
+        draw.rectangle(outer, outline=255, width=width)
+    if inner[2] > inner[0] and inner[3] > inner[1]:
+        draw.rectangle(inner, outline=255, width=width)
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
+# One entry per docproof.cover.model.PROCEDURAL_KINDS name — kept in that
+# exact same set (tests assert it) so a name that validates at the spec
+# layer always resolves to a real synthesizer here, and vice versa.
+PROCEDURAL_SYNTHESIZERS = {
+    "gradient": _synth_gradient,
+    "grain": _synth_grain,
+    "paper": _synth_paper,
+    "halftone": _synth_halftone,
+    "canvas": _synth_canvas,
+    "speckle": _synth_speckle,
+    "rule_frame": _synth_rule_frame,
+}
 
 
 # -- slot treatments (§7.4a) ---------------------------------------------------
@@ -919,9 +1255,8 @@ def _apply_scrim(base: Image.Image, scrim: ScrimSpec, strength: float,
     rgb = ImageColor.getrgb(palette.get(scrim.color_role))
     overlay = Image.new("RGBA", canvas, (0, 0, 0, 0))
     if scrim.kind == "panel":
-        block = Image.new("RGBA", (right - left, bottom - top),
-                          (*rgb, round(255 * strength)))
-        overlay.alpha_composite(block, dest=(left, top))
+        _paint_local_panel_scrim(overlay, rgb, strength, left, top, right,
+                                 bottom, canvas)
     elif scrim.kind in ("gradient_down", "gradient_up"):
         _paint_gradient_scrim(overlay, scrim.kind, rgb, strength,
                               left, top, right, bottom, canvas)
@@ -930,6 +1265,65 @@ def _apply_scrim(base: Image.Image, scrim: ScrimSpec, strength: float,
     out = base.copy()
     out.alpha_composite(overlay)
     return out
+
+
+# -- local panel scrim (v2 BODY wave: "de-mute the composer") ----------------
+#
+# The DEFAULT `panel` scrim kind, redesigned: reference-DNA beta feedback
+# named scrims washing covers out ("reads as AI image + blank space, muted,
+# timid") — traced to `gradient_down`/`gradient_up`'s "extend a solid fill to
+# the nearest canvas edge" behavior (§7.3), which a protecting scrim used
+# unconditionally even for a small text zone. Those two kinds keep that
+# exact behavior UNCHANGED below — full-bleed archetypes that deliberately
+# want a dramatic sky/ground wash still get it — but `panel` (every
+# ArchetypeScrim/ScrimSpec's own default `kind`, so this is what a newly
+# authored or default-kind scrim gets) is now a soft-edged, rounded, Gaussian
+# -feathered local patch, hard-clipped so it PROVABLY never dims a single
+# pixel outside its own (already 4%-padded) rect — no wash to the canvas
+# edge, ever. The legibility autopilot's escalate-then-flip contract doesn't
+# change at all (compose()'s own loop above only ever raises `strength`); a
+# scrim using `panel` just means escalation raises THIS local panel's
+# opacity instead of a hard box's.
+
+_PANEL_FEATHER_FRACTION = 0.028       # of canvas height, gaussian blur sigma cap
+_PANEL_FEATHER_RECT_FRACTION = 0.22   # cap as a fraction of the rect's shorter side
+_PANEL_CORNER_FRACTION = 0.30         # corner radius, as a fraction of the
+                                      # rect's shorter side / 2
+
+
+def _paint_local_panel_scrim(overlay: Image.Image, rgb: tuple[int, int, int],
+                             strength: float, left: int, top: int, right: int,
+                             bottom: int, canvas: tuple[int, int]) -> None:
+    """A rounded rectangle exactly filling (left, top, right, bottom),
+    Gaussian-blurred for a soft edge, then hard-clipped back to that same
+    rect — so the panel's CENTER reads solid (any zone comfortably bigger
+    than the feather radius stays at full `strength` across the text itself,
+    the padding margin is what tapers) while its boundary is provably never
+    crossed: multiplying by a hard binary mask of the rect zeroes anything
+    the blur spread past it, by construction, not by tuning. The feather
+    radius is capped as a fraction of the rect's own shorter side so a very
+    small zone (a `series` eyebrow, say) still gets a visible, proportionally
+    -softened panel instead of being blurred down to nothing."""
+    w, h = right - left, bottom - top
+    if w <= 0 or h <= 0:
+        return
+    ch = canvas[1]
+    feather_px = max(1.0, min(_PANEL_FEATHER_FRACTION * ch,
+                              _PANEL_FEATHER_RECT_FRACTION * min(w, h)))
+    radius = max(1, min(round(_PANEL_CORNER_FRACTION * min(w, h) / 2),
+                        min(w, h) // 2))
+    mask = Image.new("L", canvas, 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (left, top, right - 1, bottom - 1), radius=radius, fill=255)
+    feathered = mask.filter(ImageFilter.GaussianBlur(feather_px))
+    clip = Image.new("L", canvas, 0)
+    ImageDraw.Draw(clip).rectangle((left, top, right - 1, bottom - 1), fill=255)
+    alpha = ImageChops.multiply(feathered, clip)
+    if strength < 1.0:
+        alpha = alpha.point(lambda v: round(v * strength))
+    block = Image.new("RGBA", canvas, (*rgb, 0))
+    block.putalpha(alpha)
+    overlay.alpha_composite(block)
 
 
 def _paint_gradient_scrim(overlay: Image.Image, kind: str, rgb: tuple[int, int, int],
@@ -1016,10 +1410,22 @@ def _luminance_band(rgb_img: Image.Image) -> Image.Image:
     return Image.blend(mixed, b_lin, 0.0722)
 
 
-def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int]) -> tuple[float, float]:
+def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int],
+                mask: Image.Image | None = None) -> tuple[float, float]:
     """Mean and stddev of relative luminance (both 0..1) under `rect` of the
     CURRENT composite — the "how legible would text be here, and how busy is
-    the backdrop" readout the autopilot bases every decision on."""
+    the backdrop" readout the autopilot bases every decision on.
+
+    `mask` (an 'L' image the same size as `img`) restricts the sample
+    further, to wherever the mask is opaque within `rect` — the "thing
+    inside of thing" device (TextSlot.mask_from): a title living inside a
+    lighthouse beam reads its contrast against the beam's own interior, not
+    the dark sky around it. Binarized at the same threshold
+    _apply_mask_from's own stencil uses, since ImageStat's mask semantics
+    are a boolean selector, not a weight. Falls back to the unmasked
+    reading if the mask happens to be entirely empty inside `rect` (a
+    degenerate archetype where the container never actually reaches the
+    text's own zone) rather than dividing by zero."""
     left, top, right, bottom = rect
     left, top = max(0, left), max(0, top)
     right, bottom = min(img.width, right), min(img.height, bottom)
@@ -1027,6 +1433,12 @@ def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int]) -> tuple[floa
         return 0.5, 0.0   # a degenerate/out-of-canvas zone: neutral, no data
     crop = img.convert("RGB").crop((left, top, right, bottom))
     band = _luminance_band(crop)
+    if mask is not None:
+        mask_crop = mask.crop((left, top, right, bottom)).point(
+            lambda v: 255 if v > _SILHOUETTE_ALPHA_THRESHOLD else 0)
+        stat = ImageStat.Stat(band, mask=mask_crop)
+        if stat.count[0] > 0:
+            return stat.mean[0] / 255.0, stat.stddev[0] / 255.0
     stat = ImageStat.Stat(band)
     return stat.mean[0] / 255.0, stat.stddev[0] / 255.0
 
@@ -1048,5 +1460,65 @@ def _contrast_against_luminance(rgb: tuple[int, int, int], mean_luminance: float
     return (lighter + 0.05) / (darker + 0.05)
 
 
-__all__ = ["EBOOK_H", "EBOOK_W", "THUMB_LARGE", "THUMB_SMALL", "ComposeError",
-          "compose", "save_renders"]
+# -- legibility autopilot: worst-region scoring (v2 BODY wave) ---------------
+#
+# A mean-luminance-over-the-whole-zone score can pass a slot whose backdrop
+# is HALF perfectly legible and half illegible — a real cover shipped a dark
+# title straddling a busy dark border and a cream clearing that scored fine
+# on average while its outer letters were unreadable. `_worst_region_contrast`
+# grids the zone into _CONTRAST_GRID x _CONTRAST_GRID cells and scores the
+# slot by its WORST cell instead: "readable everywhere the text actually
+# sits," not "readable on average." The escalate-then-flip contract above is
+# unchanged — only what `ratio` MEANS changed; every call site still just
+# compares it to `threshold`.
+
+_CONTRAST_GRID = 3   # cells per side
+
+
+def _grid_cells(rect: tuple[int, int, int, int], n: int
+               ) -> list[tuple[int, int, int, int]]:
+    """`rect` partitioned into an n x n grid of sub-rectangles, covering it
+    exactly (fractional rounding lands on whichever cell boundary it lands
+    on — cells are not required to be pixel-identical in size)."""
+    left, top, right, bottom = rect
+    w, h = right - left, bottom - top
+    cells = []
+    for row in range(n):
+        y0 = top + round(h * row / n)
+        y1 = top + round(h * (row + 1) / n)
+        for col in range(n):
+            x0 = left + round(w * col / n)
+            x1 = left + round(w * (col + 1) / n)
+            cells.append((x0, y0, x1, y1))
+    return cells
+
+
+def _rects_intersect(a: tuple[int, int, int, int],
+                     b: tuple[int, int, int, int]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _worst_region_contrast(img: Image.Image, rect: tuple[int, int, int, int],
+                           color_rgb: tuple[int, int, int],
+                           ink_bbox: tuple[int, int, int, int] | None,
+                           mask: Image.Image | None = None) -> float:
+    """The MINIMUM WCAG contrast ratio across `rect`'s _CONTRAST_GRID x
+    _CONTRAST_GRID cells, each measured the same way _zone_stats measures
+    the whole zone (mean luminance, optionally further restricted to
+    `mask`). `ink_bbox` (typeset.text_mask(...).getbbox(), computed once by
+    the caller from the already-fitted text) skips any cell the fitted
+    glyphs never reach — a large zone holding a short line of text should
+    not be scored on its own empty margin — falling back to every cell when
+    `ink_bbox` is None (no ink at all: an empty fit, or called before one
+    exists) or when, degenerately, nothing intersects it."""
+    ratios = [
+        _contrast_against_luminance(color_rgb, _zone_stats(img, cell, mask)[0])
+        for cell in _grid_cells(rect, _CONTRAST_GRID)
+        if ink_bbox is None or _rects_intersect(cell, ink_bbox)]
+    if not ratios:
+        return _contrast_against_luminance(color_rgb, _zone_stats(img, rect, mask)[0])
+    return min(ratios)
+
+
+__all__ = ["EBOOK_H", "EBOOK_W", "PROCEDURAL_SYNTHESIZERS", "THUMB_LARGE",
+          "THUMB_SMALL", "ComposeError", "compose", "save_renders"]
