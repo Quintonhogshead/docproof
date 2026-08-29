@@ -16,8 +16,15 @@ art:
     transparent: true            # a subject cut out on its own, not a scene
     # Bottom-center, ~62% of canvas height: tall enough to overlap the
     # title's lower edge (the sandwich effect), never tall enough to bury
-    # the whole title zone the way a full-canvas cutout would.
-    anchor: [0.5, 1.0]
+    # the whole title zone the way a full-canvas cutout would. v2.1
+    # BODY-fix wave: x nudged off-center (0.5 -> 0.66) so the default
+    # overlap lands on the title's own EDGE rather than dead center — a
+    # live render shipped a title's whole middle word buried behind a
+    # centered figure's head; the composer's own title occlusion guard
+    # (compose._place_contain_clear_of_text) still searches from here if a
+    # given figure's silhouette needs it, but starting off-center means the
+    # common case never needs the search at all.
+    anchor: [0.66, 1.0]
     scale: 0.62
 text:
   - id: subtitle

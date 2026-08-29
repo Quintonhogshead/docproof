@@ -34,6 +34,7 @@ NEW_ARCHETYPES = (
     "literary_minimal_symbolic_object", "memoir_restrained_object_portrait",
     "nonfiction_bold_colorblock_typographic",
     "young_readers_character_illustration",
+    "woven_emblem",
 )
 
 # Kept under its old name too — every existing test below that parametrizes
@@ -63,9 +64,15 @@ def test_shipped_archetype_is_a_valid_archetype_with_matching_name(name):
 
 def test_big_type_has_no_focal_slot_and_a_procedural_background():
     big_type = ARCHETYPES["big_type"]
-    assert {a.id for a in big_type.art} == {"background", "texture"}
+    # v2.1 BODY-fix wave added `rule_frame` (an always-procedural, never-
+    # generatable double-rule) alongside the original background/texture —
+    # still no focal slot at all, the point this test's own name makes.
+    assert {a.id for a in big_type.art} == {"background", "texture", "rule_frame"}
     background = next(a for a in big_type.art if a.id == "background")
     assert background.generatable is False   # the $0-fallback guarantee
+    rule_frame = next(a for a in big_type.art if a.id == "rule_frame")
+    assert rule_frame.generatable is False
+    assert rule_frame.procedural == "rule_frame"
 
 
 def test_cutout_sandwich_focal_is_generatable_transparent_and_contained():
@@ -152,6 +159,7 @@ _EXPECTED_GENRES = {
     "memoir_restrained_object_portrait": ["memoir_biography"],
     "nonfiction_bold_colorblock_typographic": ["nonfiction"],
     "young_readers_character_illustration": ["young_readers"],
+    "woven_emblem": ["fantasy", "romance", "literary", "historical"],
 }
 
 
@@ -466,3 +474,145 @@ def test_archetype_art_rejects_a_malformed_anchor_pair():
         ArchetypeArt(id="focal", generatable=True, anchor=[0.5])
     with pytest.raises(ValidationError, match="anchor/offset"):
         ArchetypeArt(id="focal", generatable=True, offset=[0.0, 9.0])
+
+
+# ===========================================================================
+# v2 BODY wave: free-form art slot ids, procedural synthesizers, and
+# TextSlot-inside-art (mask_from) at the archetype layer
+# ===========================================================================
+
+@pytest.mark.parametrize("slot_id", [
+    "background", "focal", "focal2", "foreground", "texture",   # legacy five
+    "vine_left", "emblem", "border_motif", "weave", "corner_vine",
+])
+def test_archetype_art_id_accepts_any_valid_slug(slot_id):
+    assert ArchetypeArt(id=slot_id, generatable=False).id == slot_id
+
+
+@pytest.mark.parametrize("slot_id", [
+    "", "Emblem", "vine-left", "vine left", "1corner", "z" * 25,
+])
+def test_archetype_art_id_rejects_invalid_slugs(slot_id):
+    with pytest.raises(ValidationError, match="valid art slot id"):
+        ArchetypeArt(id=slot_id, generatable=False)
+
+
+def test_archetype_art_procedural_defaults_to_off():
+    assert ArchetypeArt(id="paper", generatable=False).procedural == ""
+
+
+@pytest.mark.parametrize("name", ["gradient", "grain", "paper", "halftone",
+                                  "canvas", "speckle", "rule_frame"])
+def test_archetype_art_procedural_accepts_every_documented_synthesizer(name):
+    art = ArchetypeArt(id="paper", generatable=False, procedural=name)
+    assert art.procedural == name
+
+
+def test_archetype_art_procedural_rejects_an_undocumented_name():
+    with pytest.raises(ValidationError):
+        ArchetypeArt(id="paper", generatable=False, procedural="sparkles")
+
+
+def test_archetype_text_mask_from_defaults_to_off():
+    text = ArchetypeText(id="title", zone=ArchetypeZone(x=0.1, y=0.1, w=0.8, h=0.2),
+                         size_min=0.05, size_max=0.1)
+    assert text.mask_from == ""
+
+
+def test_archetype_text_mask_from_exists_dangling_reference_fails_loudly():
+    with pytest.raises(ValidationError, match="mask_from"):
+        Archetype(name="x", describe="x", composition_note="x",
+                 art=[ArchetypeArt(id="beam", generatable=True)],
+                 text=[ArchetypeText(id="title",
+                                     zone=ArchetypeZone(x=0.1, y=0.1, w=0.8, h=0.2),
+                                     size_min=0.05, size_max=0.1,
+                                     mask_from="nonexistent")],
+                 layers=["beam", "title"])
+
+
+def test_archetype_text_mask_from_valid_reference_loads_fine():
+    archetype = Archetype(
+        name="x", describe="x", composition_note="x",
+        art=[ArchetypeArt(id="beam", generatable=True)],
+        text=[ArchetypeText(id="title",
+                            zone=ArchetypeZone(x=0.1, y=0.1, w=0.8, h=0.2),
+                            size_min=0.05, size_max=0.1, mask_from="beam")],
+        layers=["beam", "title"])
+    assert archetype.text[0].mask_from == "beam"
+
+
+def test_archetype_text_mask_from_does_not_need_to_precede_in_layers():
+    # Mirrors CoverSpec's own no-ordering-required rule (model.py's
+    # _text_mask_from_resolves) — the container may be declared to draw
+    # AFTER the text it clips.
+    archetype = Archetype(
+        name="x", describe="x", composition_note="x",
+        art=[ArchetypeArt(id="beam", generatable=True)],
+        text=[ArchetypeText(id="title",
+                            zone=ArchetypeZone(x=0.1, y=0.1, w=0.8, h=0.2),
+                            size_min=0.05, size_max=0.1, mask_from="beam")],
+        layers=["title", "beam"])
+    assert archetype.text[0].mask_from == "beam"
+
+
+# -- woven_emblem: the v2 BODY wave flagship ---------------------------------
+
+def test_woven_emblem_declares_the_designed_slot_vocabulary():
+    archetype = ARCHETYPES["woven_emblem"]
+    assert {a.id for a in archetype.art} == {
+        "background", "paper", "rule_frame", "corner_vine", "emblem", "weave"}
+    assert {t.id for t in archetype.text} == {
+        "series", "title", "subtitle", "author"}
+
+
+def test_woven_emblem_procedural_slots_use_the_documented_synthesizers():
+    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+    assert art_by_id["background"].procedural == "gradient"
+    assert art_by_id["paper"].procedural == "paper"
+    assert art_by_id["rule_frame"].procedural == "rule_frame"
+    for slot_id in ("background", "paper", "rule_frame"):
+        assert art_by_id[slot_id].generatable is False
+
+
+def test_woven_emblem_ornament_slots_are_tone_on_tone_silhouette():
+    # Reference DNA #5: silhouette/duotone illustration, never a raw
+    # full-color render, on every generated ornament.
+    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+    for slot_id in ("corner_vine", "emblem", "weave"):
+        assert art_by_id[slot_id].treatment == "silhouette"
+        assert art_by_id[slot_id].generatable is True
+        assert art_by_id[slot_id].transparent is True
+
+
+def test_woven_emblem_corner_vine_mirrors_without_touching_the_emblem():
+    art_by_id = {a.id: a for a in ARCHETYPES["woven_emblem"].art}
+    assert art_by_id["corner_vine"].corners is True
+    assert art_by_id["emblem"].corners is False
+
+
+def test_woven_emblem_title_is_huge_and_bottom_anchored():
+    # Reference DNA #2: type is the hero (size_max clears the 0.13 floor);
+    # valign bottom is what makes `weave`'s fixed position reliably cross
+    # the title's last line regardless of how many lines it needs.
+    title = next(t for t in ARCHETYPES["woven_emblem"].text if t.id == "title")
+    assert title.size_max >= 0.13
+    assert title.max_lines == 4
+    assert title.valign == "bottom"
+
+
+def test_woven_emblem_weave_is_drawn_after_title_in_layer_order():
+    # Reference DNA #3: the interweave signature — an ornament crossing
+    # back OVER the title's own lower edge only works if it is drawn later.
+    layers = ARCHETYPES["woven_emblem"].layers
+    assert layers.index("title") < layers.index("weave")
+
+
+def test_woven_emblem_scrims_default_to_the_local_panel_kind_at_zero_strength():
+    # De-muted by design: strength 0 means nothing dims unless the
+    # legibility autopilot actually measures a problem.
+    archetype = ARCHETYPES["woven_emblem"]
+    assert len(archetype.scrims) == 2
+    for scrim in archetype.scrims:
+        assert scrim.kind == "panel"
+        assert scrim.strength == 0.0
+    assert {s.protects for s in archetype.scrims} == {"title", "author"}

@@ -12,11 +12,11 @@ import pytest
 from pydantic import ValidationError
 
 from docproof.cover.archetypes import ARCHETYPES
-from docproof.cover.model import (ArtSlot, Brief, ConceptState, CoverSpec,
-                                  Direction, Directions, JobState, LayerRef,
-                                  Palette, PaletteRole, RenderReport,
-                                  ScrimSpec, Shadow, Stroke, TextSlot, Zone,
-                                  build_spec)
+from docproof.cover.model import (PROCEDURAL_KINDS, ArtPrompt, ArtSlot, Brief,
+                                  ConceptState, CoverSpec, Direction,
+                                  Directions, JobState, LayerRef, Palette,
+                                  PaletteRole, RenderReport, ScrimSpec, Shadow,
+                                  Stroke, TextSlot, Zone, build_spec)
 
 # -- fixtures -----------------------------------------------------------------
 
@@ -222,6 +222,64 @@ def test_artslot_defaults():
     assert slot.opacity == 1.0
     assert slot.blend == "normal"
     assert slot.asset == ""
+    assert slot.procedural == ""
+
+
+# -- v2 BODY wave: free-form art slot ids ------------------------------------
+
+@pytest.mark.parametrize("slot_id", [
+    "background", "focal", "focal2", "foreground", "texture",   # legacy five
+    "vine_left", "emblem", "border_motif", "a", "z" * 24,        # new slugs
+    "weave", "rule_frame2", "corner_1",
+])
+def test_artslot_id_accepts_any_valid_slug(slot_id):
+    assert ArtSlot(id=slot_id).id == slot_id
+
+
+@pytest.mark.parametrize("slot_id", [
+    "", "Background", "VineLeft", "vine-left", "vine left", "2corners",
+    "_leading_underscore", "z" * 25, "emblem!", "émigré",
+])
+def test_artslot_id_rejects_invalid_slugs(slot_id):
+    with pytest.raises(ValidationError, match="valid art slot id"):
+        ArtSlot(id=slot_id)
+
+
+def test_artprompt_slot_accepts_a_freeform_slug():
+    assert ArtPrompt(slot="vine_left", prompt="x").slot == "vine_left"
+
+
+def test_artprompt_slot_rejects_invalid_slug():
+    with pytest.raises(ValidationError, match="valid art slot id"):
+        ArtPrompt(slot="Not-A-Slug", prompt="x")
+
+
+# -- v2 BODY wave: procedural synthesizer selection --------------------------
+
+def test_procedural_kinds_is_the_documented_seven():
+    assert set(PROCEDURAL_KINDS) == {
+        "gradient", "grain", "paper", "halftone", "canvas", "speckle",
+        "rule_frame"}
+
+
+@pytest.mark.parametrize("name", PROCEDURAL_KINDS)
+def test_artslot_procedural_accepts_every_documented_synthesizer(name):
+    assert ArtSlot(id="vine_left", procedural=name).procedural == name
+
+
+def test_artslot_procedural_rejects_an_undocumented_name():
+    with pytest.raises(ValidationError):
+        ArtSlot(id="vine_left", procedural="glitter")
+
+
+# -- v2 BODY wave: "thing inside of thing" (TextSlot.mask_from) -------------
+
+def test_textslot_mask_from_defaults_to_off():
+    assert _text_slot().mask_from == ""
+
+
+def test_textslot_mask_from_round_trips():
+    assert _text_slot(mask_from="beam").mask_from == "beam"
 
 
 def test_scrimspec_strength_bounds():
@@ -237,7 +295,7 @@ def test_layerref_rejects_unknown_kind():
         LayerRef(kind="bogus", ref="title")
 
 
-# -- RenderReport: every field required, no silent defaults -----------------
+# -- RenderReport: the four original fields required, no silent defaults ----
 
 def test_render_report_requires_every_field():
     with pytest.raises(ValidationError):
@@ -249,6 +307,32 @@ def test_render_report_accepts_full_data():
                           fitted_sizes={"title": 0.09}, warnings=[])
     assert report.contrast["title"] == 5.2
     assert report.scrim_final[0] == 0.4
+
+
+# -- RenderReport: v2.1 BODY-fix wave additions — defaulted (occlusion={},
+# dead_band_frac=0.0) so every pre-existing caller that built a RenderReport
+# by hand (before either field existed) keeps working unchanged. ------------
+
+def test_render_report_occlusion_and_dead_band_frac_default_when_omitted():
+    report = RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[])
+    assert report.occlusion == {}
+    assert report.dead_band_frac == 0.0
+
+
+def test_render_report_occlusion_and_dead_band_frac_round_trip():
+    report = RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                          occlusion={"title<-focal": 0.18}, dead_band_frac=0.42)
+    assert report.occlusion["title<-focal"] == 0.18
+    assert report.dead_band_frac == 0.42
+
+
+def test_render_report_dead_band_frac_rejects_outside_the_unit_range():
+    with pytest.raises(ValidationError):
+        RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                    dead_band_frac=1.5)
+    with pytest.raises(ValidationError):
+        RenderReport(contrast={}, scrim_final={}, fitted_sizes={}, warnings=[],
+                    dead_band_frac=-0.1)
 
 
 # -- Direction / Directions: schema-enforced closed font list ---------------
@@ -394,9 +478,15 @@ def test_build_spec_big_type_title_matches_the_launch_spec():
     spec = build_spec(direction, _brief(), archetype)
     title = next(t for t in spec.text if t.id == "title")
     assert title.align == "left"
-    assert title.size_max == pytest.approx(0.16)
+    # v2.1 BODY-fix wave: 0.16 -> 0.20 — a short, punchy title was never
+    # width-constrained enough to reach the old ceiling's full block height.
+    assert title.size_max == pytest.approx(0.20)
     assert title.max_lines == 4
-    assert {a.id for a in spec.art} == {"background"}   # texture declined
+    # texture declined — but rule_frame (v2.1 BODY-fix wave) is unconditional,
+    # the same way background always is; only the literal "texture" id is
+    # ever skipped for a declined direction (see build_spec's own `ref ==
+    # "texture"` check).
+    assert {a.id for a in spec.art} == {"background", "rule_frame"}
 
 
 def test_build_spec_degrades_gracefully_for_a_series_slot_brief_has_no_field_for():
@@ -444,3 +534,80 @@ def test_coverspec_rejects_a_layers_reference_to_a_missing_scrim():
     broken["scrims"] = broken["scrims"][:1]     # layers still names scrim:1
     with pytest.raises(ValidationError, match="scrim"):
         CoverSpec.model_validate(broken)
+
+
+# -- build_spec threads the v2 BODY wave's new archetype-only fields --------
+
+def test_build_spec_woven_emblem_carries_procedural_from_the_archetype():
+    archetype = ARCHETYPES["woven_emblem"]
+    direction = _direction(
+        archetype="woven_emblem",
+        art_prompts={"corner_vine": "a vine", "emblem": "a phoenix",
+                    "weave": "a ribbon"})
+    spec = build_spec(direction, _brief(), archetype)
+    art_by_id = {a.id: a for a in spec.art}
+    assert art_by_id["background"].procedural == "gradient"
+    assert art_by_id["paper"].procedural == "paper"
+    assert art_by_id["rule_frame"].procedural == "rule_frame"
+    # a GENERATABLE slot with no archetype-side procedural default stays ""
+    assert art_by_id["emblem"].procedural == ""
+
+
+def test_build_spec_carries_text_mask_from_from_the_archetype():
+    from docproof.cover.archetypes import (Archetype, ArchetypeArt,
+                                           ArchetypeText, ArchetypeZone)
+    synthetic = Archetype(
+        name="synthetic_beam", describe="test", composition_note="test",
+        art=[ArchetypeArt(id="beam", generatable=True, transparent=True)],
+        text=[ArchetypeText(id="title",
+                            zone=ArchetypeZone(x=0.1, y=0.1, w=0.8, h=0.3),
+                            size_min=0.02, size_max=0.1, mask_from="beam")],
+        layers=["beam", "title"])
+    direction = _direction(archetype="synthetic_beam",
+                           art_prompts={"beam": "a cone of light"})
+    spec = build_spec(direction, _brief(), synthetic)
+    title = next(t for t in spec.text if t.id == "title")
+    assert title.mask_from == "beam"
+
+
+# -- CoverSpec._text_mask_from_resolves: existence, no ordering required ----
+
+def test_coverspec_text_mask_from_unknown_slot_fails_validation():
+    art = [ArtSlot(id="beam", transparent=True)]
+    text = [_text_slot(id="title", mask_from="nonexistent")]
+    with pytest.raises(ValidationError, match="mask_from"):
+        CoverSpec(archetype="x", concept_name="x", rationale="x",
+                 palette=_palette(), art=art, scrims=[], text=text,
+                 layers=[LayerRef(kind="art", ref="beam"),
+                        LayerRef(kind="text", ref="title")])
+
+
+def test_coverspec_text_mask_from_valid_reference_passes():
+    art = [ArtSlot(id="beam", transparent=True)]
+    text = [_text_slot(id="title", mask_from="beam")]
+    spec = CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=art, scrims=[], text=text,
+                     layers=[LayerRef(kind="art", ref="beam"),
+                            LayerRef(kind="text", ref="title")])
+    assert spec.text[0].mask_from == "beam"
+
+
+def test_coverspec_text_mask_from_does_not_need_to_precede_in_layers():
+    # Unlike ArtSlot.mask_from (_mask_from_precedes), a text slot's
+    # container may be drawn AFTER it — compose() clips against the
+    # container's already-positioned pixels regardless of z-order.
+    art = [ArtSlot(id="beam", transparent=True)]
+    text = [_text_slot(id="title", mask_from="beam")]
+    spec = CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=art, scrims=[], text=text,
+                     layers=[LayerRef(kind="text", ref="title"),
+                            LayerRef(kind="art", ref="beam")])
+    assert spec.text[0].mask_from == "beam"
+
+
+def test_coverspec_text_mask_from_off_by_default_needs_no_validation():
+    text = [_text_slot(id="title")]
+    spec = CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=[], scrims=[], text=text,
+                     layers=[LayerRef(kind="text", ref="title")])
+    assert spec.text[0].mask_from == ""

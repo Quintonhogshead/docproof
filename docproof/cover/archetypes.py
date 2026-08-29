@@ -40,6 +40,22 @@ ARCHETYPES_DIR = Path(__file__).resolve().parents[2] / "config" / "cover" / "arc
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+# Mirrors docproof.cover.model._SLOT_ID_RE/_validate_slot_id exactly (same
+# widening, same reasoning: any lowercase slug, 1-24 chars, starting with a
+# letter) — duplicated rather than imported for the same reason this whole
+# module mirrors Zone/Shadow/Stroke instead of importing them (see the module
+# docstring).
+_SLOT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+
+
+def _validate_slot_id(value: str) -> str:
+    if not _SLOT_ID_RE.match(value):
+        raise ValueError(
+            f"{value!r} is not a valid art slot id — must match "
+            f"{_SLOT_ID_RE.pattern!r} (lowercase letters/digits/underscore, "
+            f"starting with a letter, at most 24 characters)")
+    return value
+
 # The ten subject keys a brief's genre (or an archetype's `genres:` tag) may
 # name — the same closed list config/prep/book_design.yaml's `subjects:`
 # section and app/static/sc-cover.html's genre <select> use, mirrored here
@@ -145,7 +161,7 @@ class ArchetypeArt(BaseModel):
     can)."""
     model_config = ConfigDict(extra="forbid")
 
-    id: Literal["background", "focal", "focal2", "foreground", "texture"]
+    id: str                                     # any slug matching _SLOT_ID_RE
     generatable: bool
     fit: Literal["cover", "contain"] = "cover"
     transparent: bool = False
@@ -168,6 +184,16 @@ class ArchetypeArt(BaseModel):
     mask_from: str = ""
     corners: bool = False
     scatter: int = Field(default=0)
+    # Mirrors docproof.cover.model.ArtSlot.procedural exactly (same seven
+    # names, same "" = no-opinion default that falls back to the ORIGINAL
+    # hardcoded-by-id background/texture behavior — v2 BODY wave).
+    procedural: Literal["", "gradient", "grain", "paper", "halftone",
+                        "canvas", "speckle", "rule_frame"] = ""
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        return _validate_slot_id(value)
 
     @field_validator("scatter")
     @classmethod
@@ -223,6 +249,11 @@ class ArchetypeText(BaseModel):
     # archetype/revision territory — no Direction field sets this, so the
     # only way a concept ever gets one is an archetype that presets it.
     mode: Literal["fill", "knockout", "art_fill"] = "fill"
+    # "thing inside of thing" (v2 BODY wave): mirrors
+    # docproof.cover.model.TextSlot.mask_from exactly — an art slot id this
+    # text is clipped to, or "" = off. Checked for existence (never
+    # ordering — see Archetype._text_mask_from_exists below) at load time.
+    mask_from: str = ""
 
     @model_validator(mode="after")
     def _size_range(self) -> ArchetypeText:
@@ -333,6 +364,21 @@ class Archetype(BaseModel):
                     f"than {slot.id!r} itself")
         return self
 
+    @model_validator(mode="after")
+    def _text_mask_from_exists(self) -> Archetype:
+        """Mirrors docproof.cover.model.CoverSpec's own
+        _text_mask_from_resolves — existence only, deliberately no
+        "precedes" requirement (see that method's docstring for why draw
+        order doesn't matter for a text-clipped-to-art container)."""
+        art_ids = {a.id for a in self.art}
+        for slot in self.text:
+            if slot.mask_from and slot.mask_from not in art_ids:
+                raise ValueError(
+                    f"{self.name}: text slot {slot.id!r} has mask_from="
+                    f"{slot.mask_from!r}, which is not one of this "
+                    f"archetype's art slots ({', '.join(sorted(art_ids))})")
+        return self
+
 
 class _Fractional(Protocol):
     """Anything shaped like a fractional zone — ArchetypeZone here, or
@@ -427,8 +473,17 @@ def describe_archetypes(genre: str | None = None) -> str:
         archetypes = [a for a in ARCHETYPES.values() if _fits_genre(a, genre)]
     else:
         archetypes = list(ARCHETYPES.values())
-    return "\n".join(f"- {a.name} — {' '.join(a.describe.split())}"
-                     for a in archetypes)
+    lines = []
+    for a in archetypes:
+        gen = [s.id for s in a.art if s.generatable]
+        # The slot ids are load-bearing prompt content: v2's free-form slugs
+        # mean the art director can no longer guess them, and a prompt for a
+        # misspelled slot is silently dropped downstream — the first live v2
+        # batch shipped every cover artless for exactly this reason.
+        slots = (f" (art slots to prompt, by exact id: {', '.join(gen)})"
+                 if gen else " (no generated art — fully procedural)")
+        lines.append(f"- {a.name} — {' '.join(a.describe.split())}{slots}")
+    return "\n".join(lines)
 
 
 __all__ = ["ARCHETYPES", "ARCHETYPES_DIR", "SUBJECT_KEYS", "Archetype",

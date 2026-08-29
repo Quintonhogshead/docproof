@@ -23,8 +23,9 @@ from pydantic import ValidationError
 
 from docproof.cover.archetypes import (ARCHETYPES, Archetype, ArchetypeArt,
                                        ArchetypeText, ArchetypeZone)
-from docproof.cover.compose import (_ART_FILL_OUTLINE_FRACTION, _dilate_mask,
-                                    _padded_rect, compose)
+from docproof.cover.compose import (_ART_FILL_OUTLINE_FRACTION,
+                                    _CORNER_MARGIN_FRACTION, _dilate_mask,
+                                    _padded_rect, _place_corners, compose)
 from docproof.cover.model import (ArtPrompt, ArtSlot, Brief, CoverSpec,
                                   Direction, Directions, LayerRef, Palette,
                                   ScrimSpec, TextSlot, Zone, build_spec)
@@ -466,7 +467,15 @@ def test_duotone_output_only_uses_colors_on_the_background_primary_ramp(tmp_path
     # which (for a source narrower than the canvas) only exposes a middle
     # slice of the gradient's range rather than its full 0..255 span.
     _gray_gradient_png(tmp_path / "art.png", CANVAS)
-    bg_hex, fg_hex = "#102040", "#f0c020"
+    # High enough contrast between the two ramp ends that the art-vs-ground
+    # contrast floor (v2.1 BODY-fix wave — the ramp's own MEAN luminance,
+    # against a blank/black ground here since `focal` is this spec's only
+    # layer) clears _ART_CONTRAST_FLOOR without tripping an accent swap;
+    # gamma decoding skews a linear-in-sRGB ramp's mean well toward its
+    # darker end, so "the two hex endpoints look high-contrast" is not by
+    # itself enough headroom (#102040/#f0c020 measures ~0.119, just under
+    # the 0.12 floor).
+    bg_hex, fg_hex = "#102040", "#fdf6e3"
     palette = _palette(background=bg_hex, primary=fg_hex)
     spec = _spec(art=[_art(id="focal", asset="art.png", fit="cover", treatment="duotone")],
                 layers=[LayerRef(kind="art", ref="focal")], palette=palette)
@@ -599,16 +608,49 @@ def test_corners_mirrors_the_ornament_into_all_four_corners_exactly(tmp_path):
 
     cw, ch = CANVAS
     k = round(0.25 * ch)   # a 100x100 (square) source -> target_w == target_h == k
-    top_left = image.crop((0, 0, k, k))
-    top_right = image.crop((cw - k, 0, cw, k))
-    bottom_left = image.crop((0, ch - k, k, ch))
-    bottom_right = image.crop((cw - k, ch - k, cw, ch))
+    # v2.1 BODY-fix wave: each copy is inset _CORNER_MARGIN_FRACTION from
+    # its own corner (fix 1), not flush to it — crop windows follow suit.
+    mx, my = round(_CORNER_MARGIN_FRACTION * cw), round(_CORNER_MARGIN_FRACTION * ch)
+    top_left = image.crop((mx, my, mx + k, my + k))
+    top_right = image.crop((cw - mx - k, my, cw - mx, my + k))
+    bottom_left = image.crop((mx, ch - my - k, mx + k, ch - my))
+    bottom_right = image.crop((cw - mx - k, ch - my - k, cw - mx, ch - my))
 
     assert top_left.tobytes() != top_right.tobytes()   # genuinely asymmetric source
     assert top_right.tobytes() == ImageOps.mirror(top_left).tobytes()
     assert bottom_left.tobytes() == ImageOps.flip(top_left).tobytes()
     assert bottom_right.tobytes() == ImageOps.flip(ImageOps.mirror(top_left)).tobytes()
-    assert report.warnings == []
+    # Not a blanket "no warnings at all": this minimal hand-built spec is a
+    # small corner ornament on an otherwise blank canvas (no background
+    # layer at all), so the v2.1 BODY-fix wave's dead-band metric is
+    # entitled to flag the wide-open middle — this test is specifically
+    # about corners' own mirroring/no-op-warning behavior.
+    assert not any("corners" in w for w in report.warnings)
+
+    # And the margin itself: nothing from the ornament reaches the canvas
+    # edge. compose() flattens to RGB, and this spec has no background
+    # layer at all, so a never-painted edge pixel stays exactly (0, 0, 0) —
+    # the regression probe fix 1 asks for ("zero ornament alpha within 1px
+    # of any canvas edge").
+    for edge in (image.crop((0, 0, cw, 1)), image.crop((0, ch - 1, cw, ch)),
+                image.crop((0, 0, 1, ch)), image.crop((cw - 1, 0, cw, ch))):
+        assert set(edge.getdata()) == {(0, 0, 0)}
+
+
+def test_place_corners_keeps_a_margin_so_nothing_touches_the_canvas_edge():
+    # A probe ornament fully opaque right up to its OWN edges — exactly the
+    # shape that would show alpha bleeding to the canvas edge under the
+    # OLD flush (or a hypothetical centered-on-the-corner-point) placement.
+    probe = Image.new("RGBA", (40, 40), (200, 30, 30, 255))
+    result = _place_corners(probe, CANVAS, scale=0.1)
+
+    cw, ch = CANVAS
+    alpha = result.getchannel("A")
+    edge_bands = (
+        alpha.crop((0, 0, cw, 2)), alpha.crop((0, ch - 2, cw, ch)),      # top/bottom, 2px
+        alpha.crop((0, 0, 2, ch)), alpha.crop((cw - 2, 0, cw, ch)))      # left/right, 2px
+    for band in edge_bands:
+        assert band.getextrema()[1] == 0   # max alpha in the band is 0
 
 
 def test_corners_on_an_opaque_slot_is_a_no_op_with_a_warning(tmp_path):
@@ -801,3 +843,121 @@ def test_degrade_opaque_focal_also_covers_the_new_slot_ids(tmp_path, slot_id):
     _, report = compose(spec, tmp_path, canvas=CANVAS)
 
     assert any(slot_id in w and "title" in w for w in report.warnings)
+
+
+# ===========================================================================
+# compose(): "thing inside of thing" — TextSlot.mask_from (v2 BODY wave)
+# ===========================================================================
+
+def test_text_mask_from_clips_ink_to_the_containers_shape(tmp_path):
+    # A hard-edged circle "container" well inside a much bigger text zone,
+    # over a real opaque background — ink must survive deep in the
+    # circle's interior and vanish well outside its margin.
+    ground_rgb = (40, 60, 90)
+    _flat_opaque_png(tmp_path / "ground.png", CANVAS, ground_rgb)
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    title = _text(id="title", content="ASH AND EMBER AND SALT AND STONE",
+                 zone=Zone(x=0.0, y=0.0, w=1.0, h=1.0), size_min=0.03,
+                 size_max=0.10, max_lines=6, mask_from="beam")
+    spec = _spec(art=[_art(id="ground", asset="ground.png", fit="cover"),
+                     _art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="ground"),
+                                      LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    # Far outside the circle's margin (a corner): the untouched ground
+    # color — the container's own yellow AND any ink are both absent.
+    assert image.getpixel((2, 2)) == ground_rgb
+    # Something OTHER than plain ground shows up too (the container's own
+    # fill and/or ink survived inside the circle) — clipping isn't just
+    # erasing everything.
+    assert set(image.getdata()) - {ground_rgb}
+    assert "title" in report.contrast
+
+
+def test_text_mask_from_low_coverage_warns_with_slot_and_container_named(tmp_path):
+    # A tiny container relative to a title zone sized to need much more
+    # room: most of the ink cannot possibly land inside it.
+    _blob_png(tmp_path / "beam.png", (60, 60), fg=(255, 255, 0, 255))
+    beam = _art(id="beam", asset="beam.png", fit="contain", transparent=True,
+               anchor=[0.5, 0.5], scale=0.15)
+    title = _text(id="title", content="A LONG TITLE ACROSS THE WHOLE FRAME",
+                 zone=Zone(x=0.0, y=0.0, w=1.0, h=1.0), size_min=0.03,
+                 size_max=0.09, max_lines=6, mask_from="beam")
+    spec = _spec(art=[beam], text=[title],
+                layers=[LayerRef(kind="art", ref="beam"),
+                       LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert any("title" in w and "beam" in w and "only" in w for w in report.warnings)
+
+
+def test_text_mask_from_full_coverage_does_not_warn(tmp_path):
+    # A container that fully covers the (small, centered) text zone:
+    # coverage should be complete, no warning.
+    _flat_opaque_png(tmp_path / "beam.png", CANVAS, (255, 255, 0))
+    title = _text(id="title", content="ASH", zone=Zone(x=0.3, y=0.4, w=0.4, h=0.2),
+                 size_min=0.05, size_max=0.05, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert not any("only" in w and "title" in w for w in report.warnings)
+
+
+def test_text_mask_from_feathering_is_deterministic(tmp_path):
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    title = _text(id="title", content="ASH", zone=Zone(x=0.2, y=0.3, w=0.6, h=0.3),
+                 size_min=0.06, size_max=0.06, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], layers=[LayerRef(kind="art", ref="beam"),
+                                      LayerRef(kind="text", ref="title")])
+
+    image1, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image2, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image1.tobytes() == image2.tobytes()
+
+
+def test_text_mask_from_skips_empty_optional_slots_like_fill_does(tmp_path):
+    _blob_png(tmp_path / "beam.png", CANVAS, fg=(255, 255, 0, 255))
+    subtitle = _text(id="subtitle", content="", optional=True, mask_from="beam")
+    spec = _spec(art=[_art(id="beam", asset="beam.png", fit="cover")],
+                text=[subtitle], layers=[LayerRef(kind="art", ref="beam"),
+                                         LayerRef(kind="text", ref="subtitle")])
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert "subtitle" not in report.contrast
+
+
+def test_text_mask_from_contrast_samples_only_inside_the_container(tmp_path):
+    # The title zone straddles two very different regions: an all-WHITE
+    # "ground" everywhere, and a BLACK "beam" container covering only the
+    # zone's bottom half. Light ink reads terribly on white (mean-of-both
+    # would land around mid-gray and still fail) and excellently on black.
+    # If the sampler correctly restricts to the beam's own interior, it
+    # sees pure black and passes cleanly; if it ever fell back to the
+    # zone's raw (unmasked) rect, the white half would drag it below 4.5.
+    cw, ch = CANVAS
+    _flat_opaque_png(tmp_path / "ground.png", CANVAS, (255, 255, 255))
+    beam = Image.new("RGBA", CANVAS, (0, 0, 0, 0))
+    ImageDraw.Draw(beam).rectangle((0, ch // 2, cw, ch), fill=(0, 0, 0, 255))
+    beam.save(tmp_path / "beam.png")
+
+    palette = _palette(text="#f5f1e8")   # light ink
+    title = _text(id="title", content="ASH", zone=Zone(x=0.1, y=0.35, w=0.8, h=0.30),
+                 size_min=0.05, size_max=0.05, mask_from="beam")
+    spec = _spec(art=[_art(id="ground", asset="ground.png", fit="cover"),
+                     _art(id="beam", asset="beam.png", fit="cover")],
+                text=[title], palette=palette,
+                layers=[LayerRef(kind="art", ref="ground"),
+                       LayerRef(kind="art", ref="beam"),
+                       LayerRef(kind="text", ref="title")])
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.contrast["title"] >= 4.5
+    assert not any("title" in w and "contrast" in w for w in report.warnings)

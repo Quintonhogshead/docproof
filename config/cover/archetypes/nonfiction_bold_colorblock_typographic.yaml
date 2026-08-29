@@ -25,8 +25,12 @@ art:
     fit: contain
     transparent: true            # one small icon, not a scene
     anchor: [0.5, 0.5]
-    scale: 0.18                  # "at most one small icon" — the smallest
-    offset: [0.0, 0.24]          # focal element in the whole library
+    # v2.1 BODY-fix wave: scale up (0.18 -> 0.30, "at most one small icon"
+    # still holds — the rest of the field stays one flat color) and offset
+    # trimmed to match (0.24 -> 0.16) so the now-bigger mark still clears
+    # the author line beneath it instead of crowding it.
+    scale: 0.30
+    offset: [0.0, 0.16]
     # Effects rack (§7.4a): the composition_note already asks for "an icon
     # OR silhouette" — this makes that half of the ask deterministic instead
     # of a coin flip left to the image model, matching Atomic Habits'
@@ -34,7 +38,10 @@ art:
     treatment: silhouette
 text:
   - id: title
-    zone: {x: 0.08, y: 0.10, w: 0.84, h: 0.46}
+    # v2.1 BODY-fix wave: height 0.46 -> 0.34 — a short title no longer
+    # reserves nearly half the cover it will not fill; the freed space goes
+    # to the now-larger icon in the lower-middle instead of sitting empty.
+    zone: {x: 0.08, y: 0.10, w: 0.84, h: 0.34}
     case: upper
     valign: top
     tracking: 10                 # tight vertical stacking, per research
@@ -42,15 +49,20 @@ text:
     size_max: 0.16                # "up to 70-80% of the cover"
     max_lines: 4
   - id: subtitle
-    zone: {x: 0.10, y: 0.58, w: 0.80, h: 0.04}
+    # v2.1 BODY-fix wave: directly beneath the title zone now (was 0.58, a
+    # canyon past title's own bottom edge at 0.44) — no gap between them.
+    zone: {x: 0.10, y: 0.46, w: 0.80, h: 0.04}
     optional: true
     size_min: 0.020
     size_max: 0.032
   - id: author
     # "often a personal-brand/platform name" — sized closer to a subtitle
-    # than a typical fiction author credit.
+    # than a typical fiction author credit. v2.1 BODY-fix wave: base-
+    # anchored (valign: bottom) so it sits flush at the foot of its own
+    # zone, clear of the icon now centered in the lower-middle above it.
     zone: {x: 0.10, y: 0.88, w: 0.80, h: 0.06}
     case: upper
+    valign: bottom
     tracking: 80
     size_min: 0.022
     size_max: 0.036

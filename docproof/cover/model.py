@@ -29,6 +29,24 @@ from .fonts import FAMILIES
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+# v2 BODY wave: an ArtSlot/ArtPrompt/ArchetypeArt id is any lowercase slug
+# matching this pattern — widened from the launch/effects-rack closed Literal
+# five (see ART_SLOT_IDS below) so an archetype can name a slot for what it
+# IS ("vine_left", "emblem", "border_motif") instead of contorting every
+# decorative layer into "focal2"/"foreground". 1-24 chars, lowercase letters/
+# digits/underscore, must start with a letter (so a slug can never be
+# confused with a scrim's "scrim:N" layer-ref shorthand or a bare digit).
+_SLOT_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
+
+
+def _validate_slot_id(value: str) -> str:
+    if not _SLOT_ID_RE.match(value):
+        raise ValueError(
+            f"{value!r} is not a valid art slot id — must match "
+            f"{_SLOT_ID_RE.pattern!r} (lowercase letters/digits/underscore, "
+            f"starting with a letter, at most 24 characters)")
+    return value
+
 
 def _validate_hex(value: str) -> str:
     """Every color in a spec is a literal #rrggbb string — no named colors,
@@ -40,12 +58,14 @@ def _validate_hex(value: str) -> str:
     return value
 
 
-# Every ArtSlot the model layer knows about — widened from the launch three
-# (background/focal/texture) by the effects rack (§7.4a) so a depth-collage
-# archetype can declare a second focal subject or a dedicated foreground
-# layer. Shared by ArtSlot.id and ArtPrompt.slot (archetypes.ArchetypeArt.id
-# mirrors this same list independently — see that module's docstring for why
-# it never imports this one).
+# The five names every launch/effects-rack archetype already used, back when
+# ArtSlot.id/ArtPrompt.slot were a closed Literal over exactly this tuple.
+# The v2 BODY wave widened both to _SLOT_ID_RE (any lowercase slug) — these
+# five still validate unchanged (they're just slugs now, like any other), and
+# this tuple survives purely as a documented "the legacy names, for
+# reference" constant. archetypes.ArchetypeArt.id mirrors the same widening
+# independently — see that module's docstring for why it never imports this
+# one.
 ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", "texture")
 
 # The slot treatments every ArtSlot/ArtPrompt may request (§7.4a): pure,
@@ -54,6 +74,19 @@ ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", 
 # archetype this session did not explicitly retrofit — the rack is opt-in,
 # never a surprise on an existing cover.
 ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize", "sticker")
+
+# The named procedural synthesizers (v2 BODY wave) an ArchetypeArt/ArtSlot
+# may request via `procedural: <name>` instead of (or as the no-asset
+# fallback alongside) an AI-generated `prompt` — compose.py's
+# PROCEDURAL_SYNTHESIZERS dict is the other half of this contract, one pure
+# function per name, keyed on exactly these strings. This tuple is the
+# single source of truth for which names are legal (mirroring how
+# ART_TREATMENTS is the source of truth for `treatment`, even though the
+# pixel logic for both lives downstream in compose.py) — a typo'd name fails
+# loudly at spec-validation/archetype-load time, not silently as a blank
+# layer three steps later in compose().
+PROCEDURAL_KINDS: tuple[str, ...] = (
+    "gradient", "grain", "paper", "halftone", "canvas", "speckle", "rule_frame")
 
 
 def _validate_scatter(value: int) -> int:
@@ -193,6 +226,14 @@ class TextSlot(BaseModel):
     # concept always starts "fill", and only a hand-authored archetype or a
     # human revision's notes ever choose otherwise.
     mode: Literal["fill", "knockout", "art_fill"] = "fill"
+    # "thing inside of thing" (v2 BODY wave): the id of an ArtSlot whose
+    # POSITIONED alpha this text is clipped to — a title living inside a
+    # lighthouse beam, an image inside a train's smoke plume. "" = off (draw
+    # normally). Archetype/revision territory, same bucket as mode: no
+    # Direction field ever sets it. Unlike ArtSlot.mask_from, the referenced
+    # slot need NOT precede this text slot in `layers` — see CoverSpec's own
+    # _text_mask_from_resolves for why draw order doesn't matter here.
+    mask_from: str = ""
 
     @field_validator("font_family")
     @classmethod
@@ -215,7 +256,7 @@ class TextSlot(BaseModel):
 class ArtSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: Literal["background", "focal", "focal2", "foreground", "texture"]
+    id: str                                     # any slug matching _SLOT_ID_RE
     prompt: str = ""                           # what to ask gpt-image-2 for; "" = procedural
     transparent: bool = False                  # request transparent background (cutouts)
     fit: Literal["cover", "contain"] = "cover"
@@ -239,6 +280,17 @@ class ArtSlot(BaseModel):
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     blend: Literal["normal", "multiply", "overlay", "soft_light"] = "normal"
     asset: str = ""                            # relative path under the job dir once generated
+    # Names a compose.PROCEDURAL_SYNTHESIZERS entry to draw when this slot
+    # has no `asset` on disk (v2 BODY wave). "" = no opinion — a slot with
+    # id "background"/"texture" then falls back to the ORIGINAL hardcoded-by-
+    # id behavior (gradient / grain respectively) so every pre-existing
+    # YAML/spec keeps rendering byte-identical pixels; any other id with ""
+    # draws nothing, exactly like before this field existed. A non-"" name
+    # applies regardless of id — including a GENERATABLE slot whose asset
+    # never arrived, which is a graceful, designed fallback rather than a
+    # blank layer.
+    procedural: Literal["", "gradient", "grain", "paper", "halftone",
+                        "canvas", "speckle", "rule_frame"] = ""
 
     # -- effects rack (§7.4a) — archetype/revision territory; a fresh
     # art-direction call only ever sets `treatment` (via ArtPrompt, folded in
@@ -248,6 +300,11 @@ class ArtSlot(BaseModel):
     mask_from: str = ""                        # another art slot's id, or "" = off
     corners: bool = False                      # mirror into all four corners (transparent slots)
     scatter: int = Field(default=0)            # stamp N copies, 0 = off (transparent slots)
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        return _validate_slot_id(value)
 
     @field_validator("scatter")
     @classmethod
@@ -350,6 +407,26 @@ class CoverSpec(BaseModel):
                     f"time {slot.id!r} is drawn")
         return self
 
+    @model_validator(mode="after")
+    def _text_mask_from_resolves(self) -> CoverSpec:
+        """"Thing inside of thing" (v2 BODY wave): a TextSlot.mask_from must
+        name a real art slot in THIS spec — but, unlike ArtSlot's own
+        mask_from (_mask_from_precedes, above), draw ORDER never matters
+        here. compose() positions every art slot's final pixels once, up
+        front, before any text is measured or drawn (see
+        compose._position_all_art) — a container art slot is available for
+        clipping whether it is drawn under the text, or later, over it, for
+        a weave. So this checks existence only, deliberately with no
+        "precedes" requirement to mirror."""
+        art_ids = {a.id for a in self.art}
+        for slot in self.text:
+            if slot.mask_from and slot.mask_from not in art_ids:
+                raise ValueError(
+                    f"text slot {slot.id!r} has mask_from="
+                    f"{slot.mask_from!r}, which is not an art slot in this "
+                    f"spec (art slots: {', '.join(sorted(art_ids)) or 'empty'})")
+        return self
+
 
 class RenderReport(BaseModel):
     """What one compose() call found, for the "did this actually come out
@@ -361,6 +438,17 @@ class RenderReport(BaseModel):
     scrim_final: dict[int, float]                # scrim index -> strength after escalation
     fitted_sizes: dict[str, float]                # slot id -> chosen size (fraction)
     warnings: list[str]                          # "title at size_min and still 2 lines over"
+    # v2.1 BODY-fix wave: "<text id><-<art id>" -> fraction of that text
+    # slot's own ink alpha covered by that art slot's alpha (the title
+    # occlusion guard, fix 2) — only populated for a "sandwich" pair (a
+    # contain-fit art slot immediately after a text layer); defaulted so
+    # every pre-existing caller that builds a RenderReport by hand keeps
+    # working unchanged.
+    occlusion: dict[str, float] = Field(default_factory=dict)
+    # The tallest contiguous vertical stretch of the finished cover with no
+    # text/art/ornament ink crossing it, as a fraction of canvas height (the
+    # dead-band metric, fix 4) — see docproof.cover.compose._dead_band_frac.
+    dead_band_frac: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 # -- the art-direction call's answer -----------------------------------------
@@ -381,7 +469,7 @@ class ArtPrompt(BaseModel):
     more natural may still pass one — Direction converts it on validation."""
     model_config = ConfigDict(extra="forbid")
 
-    slot: Literal["background", "focal", "focal2", "foreground", "texture"]
+    slot: str                                   # any slug matching _SLOT_ID_RE
     prompt: str
     # The ONLY effects-rack field the art-direction call may set (§7.4a) —
     # build_spec folds this onto the matching ArtSlot.treatment for a
@@ -389,6 +477,11 @@ class ArtPrompt(BaseModel):
     # archetype/revision territory (direction.py's system prompt says so).
     treatment: Literal["none", "duotone", "silhouette", "posterize",
                        "sticker"] = "none"
+
+    @field_validator("slot")
+    @classmethod
+    def _valid_slot(cls, value: str) -> str:
+        return _validate_slot_id(value)
 
 
 def _coerce_art_prompts(value: object) -> object:
@@ -514,7 +607,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             treatment=prompt_treatments.get(slot.id, slot.treatment),
             mask_from=slot.mask_from,
             corners=slot.corners,
-            scatter=slot.scatter))
+            scatter=slot.scatter,
+            procedural=slot.procedural))
 
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
              for s in archetype.scrims]
@@ -537,7 +631,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             shadow=Shadow(**slot.shadow.model_dump()) if slot.shadow else None,
             stroke=Stroke(**slot.stroke.model_dump()) if slot.stroke else None,
             optional=slot.optional,
-            mode=slot.mode))
+            mode=slot.mode,
+            mask_from=slot.mask_from))
 
     art_ids = {a.id for a in archetype.art}
     layers: list[LayerRef] = []
@@ -560,6 +655,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
 
 __all__ = [
+    "ART_SLOT_IDS", "ART_TREATMENTS", "PROCEDURAL_KINDS",
     "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke",
     "TextSlot", "ArtSlot", "ScrimSpec", "LayerRef", "CoverSpec",
     "RenderReport", "Direction", "Directions", "ConceptState", "JobState",

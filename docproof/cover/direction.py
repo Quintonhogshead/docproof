@@ -10,11 +10,19 @@ difference: skin.py degrades to DEFAULT_SKIN on a bad reply because the page
 must always render; there is no such fallback here. A junk direction goes on
 to spend real image-generation dollars, and a junk revision would silently
 corrupt a spec a human is iterating on, so both calls raise instead — an
-unreadable-sentence error, never a guess dressed up as a result. LUNA_MODEL is
-mirrored rather than imported from docproof.quest.skin on purpose: the two
-features share a convention, not a dependency (the same reasoning
-docproof.cover.archetypes gives for mirroring Zone/Shadow/Stroke instead of
-importing docproof.cover.model).
+unreadable-sentence error, never a guess dressed up as a result.
+
+DIRECTION_MODEL / REVISION_MODEL are mirrored rather than imported from
+docproof.quest.skin.LUNA_MODEL on purpose: the two features share a
+convention, not a dependency (the same reasoning docproof.cover.archetypes
+gives for mirroring Zone/Shadow/Stroke instead of importing
+docproof.cover.model). They also deliberately split (the BRAIN wave, 2026-08-
+29): art direction is the one call worth the frontier model's price — "covers
+need to be good," per the owner, and a timid or generic set of concepts
+poisons every concept built from it — while a revision (human-triggered or
+the auto-critique loop in docproof.cover.pipeline) is a narrower, cheaper
+edit-this-document task that a mid-tier model handles well. See each
+constant's own comment.
 
 The art-direction call also narrows which archetypes it enumerates to the
 brief's own genre (§5.3): `_normalize_genre` turns `brief.genre` into an
@@ -28,10 +36,13 @@ was narrowed.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
 from dataclasses import dataclass
+from typing import Any
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..models import Usage
 from ..providers import Provider, cost_of_usage, strict_json_schema
@@ -48,12 +59,25 @@ from .model import ArtSlot, Brief, CoverSpec, Direction, Directions
 
 log = logging.getLogger("docproof.cover.direction")
 
-LUNA_MODEL = "gpt-5.6-luna"
+# The frontier model: art direction is the one call in Cover Studio where
+# quality is worth paying for (owner decision, 2026-08-29 — "covers need to
+# be good"; roughly $1-2 per 6-concept job at typical prompt sizes, which the
+# owner accepted). A real docproof.providers.catalog id — see that module for
+# current pricing.
+DIRECTION_MODEL = "claude-fable-5"
+
+# The workhorse model: a revision (§6.2) is shown a document it is already
+# handed in full and answers with a short list of patch edits against it,
+# human-triggered or from the auto-critique loop
+# (docproof.cover.pipeline._critique_and_revise) — a narrower task than
+# drafting concepts from nothing, and not worth the frontier price repeated
+# up to MAX_CRITIQUE_ROUNDS times per concept.
+REVISION_MODEL = "claude-sonnet-5"
 
 # Structured replies on a reasoning model share max_tokens with thinking, and
 # a truncated structured reply parses as nothing — so leave far more room
-# than either call needs (a Directions answer or a whole CoverSpec both fit
-# comfortably under this).
+# than either call needs (a Directions answer or a SpecEdits patch list both
+# fit comfortably under this).
 MAX_OUTPUT_TOKENS = 8000
 
 
@@ -87,9 +111,18 @@ class DirectionResult:
 class RevisionResult:
     """One revision call's edited spec, plus what it cost. `spec` already
     carries the bumped version, the appended notes_log entry, and cleared
-    assets on any changed art slot — see revise_spec's docstring."""
+    assets on any changed art slot — see revise_spec's docstring. `skipped`
+    names every edit the model asked for that was refused before it ever
+    reached CoverSpec validation: a guarded path (`version`, `notes_log`, an
+    art slot's `asset`), a path that doesn't parse, or one that doesn't
+    resolve against the spec it was shown — see _apply_edit. Empty on a
+    call where every edit (if any) applied cleanly. Added after
+    RevisionResult already shipped, so it carries a default and every
+    existing keyword-constructed caller (pipeline.py's frozen-dataclass
+    consumers, this module's own tests) keeps working unchanged."""
     spec: CoverSpec
     cost: float | None
+    skipped: tuple[str, ...] = ()
 
 
 # -- art direction: brief -> N distinct concepts (spec §6.1) -----------------
@@ -120,12 +153,25 @@ def _big_type_rule(n: int) -> str:
 
 
 def _sample_rule(has_sample: bool) -> str:
+    """docproof.cover.pipeline.run_job distills a manuscript sample into a
+    compact REALITY SHEET (docproof.cover.reality) before this call ever
+    runs, and hands the SHEET's rendered text in as `manuscript_sample` —
+    same parameter, so the prompt shape below barely changes. The one
+    exception is a distillation failure, which falls back to the raw sample
+    (reality.py's caller logs and ledgers it, never blocks the job on it) —
+    this rule has to read sensibly for either shape landing in the
+    MANUSCRIPT SAMPLE section below, so it names both without committing to
+    which one arrived."""
     if not has_sample:
         return ""
     return (
-        "\n\nA MANUSCRIPT SAMPLE follows the brief below. Ground imagery, "
-        "mood, and palette in the manuscript's actual text — its era, "
-        "setting, and the concrete details it shows — not just the genre "
+        "\n\nA MANUSCRIPT SAMPLE follows the brief below — usually a "
+        "distilled REALITY SHEET pulled from the book (its setting, era, "
+        "palette cues, concrete objects, motifs, atmosphere, and anything "
+        "the cover must never show), occasionally the manuscript's own raw "
+        "opening text on the rare run where a sheet could not be produced. "
+        "Either way, ground imagery, mood, and palette in the manuscript's "
+        "actual text — its concrete objects and motifs, not just the genre "
         "label. The brief's own typed fields (title, author, genre, and "
         "every other labeled field above) ALWAYS win over the sample on any "
         "conflict. Never spoil an ending on the cover.")
@@ -160,26 +206,70 @@ list; nothing outside it is valid:
 {describe_fonts()}
 
 Palette: five hexes by role (background, primary, accent, text, scrim). \
-Choose real contrast intent, not just a pretty scheme — `text` must be \
-readable over `background` combined with `scrim` at typical strength. (The \
-composer enforces this mechanically later and will escalate the scrim or \
-flip the text color if you get it wrong, but a good answer gets there on \
-its own.)
+Grounds must be FLAT and CONFIDENT, never muddy: commit to a single color \
+(cream, or one saturated hue) or a lightly textured field, and use 2–4 \
+colors per cover, never more. Tone-on-tone monochrome — dark red art on a \
+red ground, say — is a signature move to reach for on purpose, not a \
+compromise. Muddy gray-on-gray and low-saturation-everything palettes read \
+as timid and are a failure, unless the brief itself specifically demands \
+that muted a mood. Within that discipline, choose real contrast intent, \
+not just a pretty scheme — `text` must be readable over `background` \
+combined with `scrim` at typical strength. (The composer enforces this \
+mechanically later and will escalate the scrim or flip the text color if \
+you get it wrong, but a good answer gets there on its own.) A dark, quiet \
+cover must still carry one high-voltage element — an accent hue doing \
+real work on the silhouette, a type line, or a single motif; \
+all-values-within-a-whisper is a failure.
 
 art_prompts: a list with one {{slot, prompt, treatment}} entry for every \
-generatable art slot the archetype you picked declares. Each prompt is 1–3 \
+generatable art slot the archetype you picked declares. The archetype list \
+above names each archetype's art slots BY EXACT ID — use those ids, spelled \
+exactly, and no others: a prompt for a slot the archetype does not declare \
+is silently discarded, and a declared slot you skip ships with no art at \
+all. Each prompt is 1–3 \
 sentences describing subject, style, \
 lighting, era, and medium ("flat vector", "oil painting", "photographic", \
 "paper-cutout collage", and so on). Rules for every art prompt, no \
 exceptions: never ask for text, letters, numbers, typography, book covers, \
 mockups, borders, or frames; never name a living artist; describe a scene, \
-not a cover. Prefer illustrated, painterly, or graphic media (oil painting, \
+not a cover. For a symbolic-object slot, direct ONE clean, instantly \
+recognizable object, described plainly (a brass key, a single feather); \
+never a surreal composite, never anatomy on inanimate things. Prefer \
+illustrated, painterly, or graphic media (oil painting, \
 gouache, flat vector, linocut, paper-cutout collage, and the like) over \
 photorealism; ask for a photographic or photoreal render only when the \
 brief explicitly calls for photography — stylized media hide generation \
 artifacts, and photoreal is the single biggest "AI-generated" tell. The \
 composition note that keeps room for the type is appended by code \
 afterward — do not write it yourself.
+
+Image simplicity is not a vague preference — simple shapes and silhouettes \
+hide AI-generation artifacts far better than rendered detail does. For \
+every generatable art prompt, reach for the SIMPLEST form on this list that \
+still serves the concept, in order:
+1. Flat SILHOUETTE — one flat color, a pure shape, no interior detail at \
+all (pair it with treatment: "silhouette").
+2. DUOTONE single subject — one subject rendered tone-on-tone against the \
+flat ground (pair it with treatment: "duotone").
+3. ORNAMENT/PATTERN — a repeating border, botanical flourish, emblem, or \
+motif AS THE ART ITSELF (not a frame drawn around a finished cover — that \
+rule above still stands).
+4. Stylized single-subject illustration — one subject, still simplified, \
+with some interior rendering.
+5. A full illustrated scene — ONLY when the brief explicitly demands one, \
+and never a sweeping or complex vista.
+If a concept reaches past level 3, its `rationale` must say why, in one \
+clause.
+
+Write every silhouette or cutout art prompt around SHAPE and GESTURE, not \
+surface detail — "a wing swept upward," "a beam widening from the tower \
+base," never the texture of feathers or brickwork. Rendered detail is \
+exactly where a generator's fingerprints show; a clean, simple gesture \
+hides them.
+
+Type is the hero of the cover: choose the archetype and palette so the \
+title can run huge and confident. When a concept's font, palette, and \
+archetype could support a bolder, larger title, take the bolder choice.
 
 The effects rack: `treatment` on an art_prompts entry is a deterministic, \
 $0 post-processing pass the composer applies to that slot after it is \
@@ -197,6 +287,19 @@ exposure masking, and knockout/art_fill title treatments (used only when \
 the archetype's type IS the hero of the cover) are archetype and revision \
 territory — never invent or request them yourself; pick the archetype whose \
 own convention already wants one, and trust it to carry that.
+
+The container device: the single strongest intentionality move available \
+on a cover is content living inside a shape that belongs to the scene — a \
+lighthouse's beam, a train's smoke plume, a ribbon, a banner, a doorway, a \
+keyhole, a mirror, a wave. Some archetypes declare a container slot for \
+exactly this: a transparent cutout whose shape will clip the title (or \
+another image) once composed. When the archetype you picked declares one, \
+write that slot's art prompt as ONE clean, bold shape with a soft, simple \
+interior — the payload has to read clearly once it sits inside — for \
+example "a lighthouse's light beam as a wide, soft-edged cone of pale \
+light, transparent background." Never describe or bake the payload (the \
+title, the second image) into the container image itself; the container is \
+a shape only, and the composer fills it.
 
 If the brief's `pitch` is present, ground the imagery in it. Never spoil an \
 ending on the cover, regardless of how much the pitch reveals.{_sample_rule(has_sample)}"""
@@ -243,7 +346,7 @@ def _validate_direction(direction: Direction) -> Direction:
 
 def run_directions(brief: Brief, provider: Provider, *, n: int,
                    manuscript_sample: str = "",
-                   model: str = LUNA_MODEL) -> DirectionResult:
+                   model: str = DIRECTION_MODEL) -> DirectionResult:
     """One structured call for all n design concepts at once (spec §6.1).
 
     Raises DirectionError on any failure: a call error, a schema mismatch, a
@@ -286,77 +389,275 @@ def run_directions(brief: Brief, provider: Provider, *, n: int,
                            cost=cost_of_usage(usage, fallback_model=model))
 
 
-# -- revision: spec + notes -> edited spec (spec §6.2) ------------------------
+# -- revision: spec + notes -> a small patch, applied in code (spec §6.2) ----
+#
+# The revision call used to hand back a whole edited CoverSpec — a full-
+# document echo, wire-schema-identical to the input. Anthropic's structured-
+# output grammar compiler rejected that schema outright ("The compiled
+# grammar is too large"), even after every enum in it was collapsed to a
+# plain typed field (this module's old `_relaxed` helper — deleted, its job
+# gone with the schema it was relaxing). The fix is architectural, not a
+# bigger relaxation: the model never sees or emits the whole document again.
+# It answers with SpecEdits — a short list of {path, value} patches against
+# the spec it was shown — and this code applies each one to a plain dict,
+# then validates the RESULT as a real CoverSpec exactly as before. The wire
+# schema for SpecEdits is two string fields repeated at most 40 times: tiny,
+# by construction, regardless of how large CoverSpec itself ever grows.
+
+# A path segment is a field name (lowercase letters/underscore) with an
+# optional trailing `[n]` list index — `text[1]` tokenizes to `"text"` then
+# `1`; a bare `layers` tokenizes to just `"layers"`. Matches _parse_path's
+# own docstring and spec §6.2's "tokens ^[a-z_]+$ plus [int]".
+_PATH_SEGMENT_RE = re.compile(r"^([a-z_]+)(\[(\d+)\])?$")
+
+
+class SpecEdit(BaseModel):
+    """One patch edit against the spec the model was shown. `path` locates
+    a field — dotted keys, optional `[n]` list indices, see
+    _revision_system_prompt's worked examples. `value` is the new value
+    there, JSON-encoded as a plain string ('"#a83250"', '0.13',
+    '[0.5, 1.0]', '{"x":0.1,...}') so the wire shape stays a flat pair of
+    strings no matter what kind of field is being patched — see
+    _apply_edit for how it's decoded and placed."""
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    value: str
+
+
+class SpecEdits(BaseModel):
+    """One revision call's whole answer: a small list of patch edits
+    against the spec it was shown, never the document itself. This is the
+    entire wire schema for the revision call now — see this section's own
+    header comment for why."""
+    model_config = ConfigDict(extra="forbid")
+
+    edits: list[SpecEdit] = Field(default_factory=list, min_length=0,
+                                  max_length=40)
+
+
+def _parse_path(path: str) -> list[str | int] | None:
+    """Tokenize a SpecEdit.path into a list of dict keys and list indices:
+    `text[1].zone.y` -> `["text", 1, "zone", "y"]`; `layers` -> `["layers"]`.
+    None when the path doesn't match the syntax at all — as opposed to
+    matching but not resolving against the current spec, which
+    _resolve_container decides once the spec's actual shape is in hand."""
+    tokens: list[str | int] = []
+    for segment in path.split("."):
+        m = _PATH_SEGMENT_RE.match(segment)
+        if not m:
+            return None
+        tokens.append(m.group(1))
+        if m.group(3) is not None:
+            tokens.append(int(m.group(3)))
+    return tokens
+
+
+def _is_guarded(tokens: list[str | int]) -> bool:
+    """`version`, `notes_log`, and any art slot's `asset` are code's alone
+    to write (§6.2) — the calling code bumps version and appends notes_log
+    unconditionally, and revise_spec recomputes every art slot's `asset`
+    from its prompt/transparent diff regardless of what a revision wrote,
+    so an edit here would be silently overwritten even if let through. It
+    is refused here instead, loudly, so a model that tries shows up in
+    RevisionResult.skipped rather than looking like it succeeded."""
+    head = tokens[0]
+    if head in ("version", "notes_log"):
+        return True
+    return head == "art" and "asset" in tokens[1:]
+
+
+def _resolve_container(root: dict, tokens: list[str | int]
+                       ) -> tuple[Any, str | int] | None:
+    """Walk every token but the last, returning (the container it lands in,
+    the final token) — or None the moment an intermediate step doesn't
+    exist. The last token's own validity — an existing dict key, or a list
+    index in [0, length] — is _apply_edit's job, since only it knows
+    whether the edit is a replace or an append."""
+    node: Any = root
+    for token in tokens[:-1]:
+        if isinstance(token, str):
+            if not isinstance(node, dict) or token not in node:
+                return None
+            node = node[token]
+        else:
+            if not isinstance(node, list) or not (0 <= token < len(node)):
+                return None
+            node = node[token]
+    return node, tokens[-1]
+
+
+def _apply_edit(root: dict, edit: SpecEdit) -> str | None:
+    """Apply one SpecEdit to `root` (a plain spec dict, mutated in place).
+
+    Returns None on success, or a human-readable reason it was skipped: a
+    path that doesn't parse, a guarded path, a value that isn't valid JSON,
+    or a location that doesn't resolve (§6.2: "anything else unresolvable =
+    invalid edit"). Every check here is STRUCTURAL — whether the value
+    actually belongs at that location (a number where a hex string is
+    required, say) is CoverSpec.model_validate's job, once every edit in
+    the batch has been applied; that failure is a RevisionError, not a
+    skip, because it means the edits as a whole don't add up to a valid
+    spec rather than that one of several independent edits misfired."""
+    tokens = _parse_path(edit.path)
+    if tokens is None:
+        return f"{edit.path!r}: not a valid path"
+    if _is_guarded(tokens):
+        return (f"{edit.path!r}: guarded — version, notes_log, and art "
+                f"asset paths are code's alone to write")
+    try:
+        value = json.loads(edit.value)
+    except json.JSONDecodeError:
+        return f"{edit.path!r}: value {edit.value!r} is not valid JSON"
+
+    resolved = _resolve_container(root, tokens)
+    if resolved is None:
+        return f"{edit.path!r}: does not resolve against the current spec"
+    container, last = resolved
+    if isinstance(last, str):
+        if not isinstance(container, dict) or last not in container:
+            return f"{edit.path!r}: no such field"
+        container[last] = value
+    else:
+        if not isinstance(container, list) or not (0 <= last <= len(container)):
+            return f"{edit.path!r}: list index out of range"
+        if last == len(container):
+            container.append(value)
+        else:
+            container[last] = value
+    return None
+
 
 def _revision_system_prompt() -> str:
-    return """You are editing a book cover design document (a CoverSpec), \
-not writing prose. You will be given the current spec as JSON and a human's \
-notes about what to change. Change ONLY what the notes require; copy every \
-other field through completely unchanged, exactly as given — do not \
-rephrase, reformat, or "improve" anything the notes did not ask about.
+    return """You are editing a book cover design document (a CoverSpec) by \
+writing a small list of PATCH EDITS against it, not by rewriting the whole \
+document. You will be given the current spec as JSON and a human's notes \
+about what to change. Return only the edits the notes require — at most \
+40 — and leave every field you don't mention exactly as it already is; \
+there is nothing to copy through.
 
-You may: move or resize zones; change palette hexes; swap fonts (from the \
-same closed list already used in the spec — nothing outside it is valid); \
-change text case, tracking, or align; adjust scrim strengths and art \
-transforms (scale, offset, anchor); rewrite an art_prompt; toggle the \
-texture layer on or off.
+Each edit is a {path, value} pair. `path` is a dotted chain of field \
+names with an optional `[n]` list index on any segment: `palette.primary` \
+(a top-level field), `text[1].zone.y` (the second text slot's zone's y), \
+`art[0].prompt` (the first art slot's prompt), `scrims[0].strength`. A \
+bare list field name with no index — `layers` on its own — replaces the \
+WHOLE list. A list index addresses a slot by its POSITION in the spec \
+JSON you were given, never by its `id` — find which index holds the `id` \
+you mean before writing its path.
 
-You may NOT: change `archetype` unless the notes explicitly ask for a \
-different archetype; invent a new art, scrim, or text slot that was not in \
-the input spec; change a text slot's `content` unless the notes dictate new \
-wording; touch any `asset` path (leave every `asset` field exactly as \
-given — code decides separately which assets need to be regenerated).
+`value` is the new value, JSON-encoded AS A STRING: quote a string value \
+("#a83250"), leave a number bare (0.13), use JSON array syntax for a pair \
+([0.5, 1.0]), use JSON object syntax for a whole nested object \
+({"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.15}).
 
-Echo `version` back unchanged — the calling code bumps it, not you. Do not \
-add anything to `notes_log` — the calling code appends the notes itself; \
-copy the existing `notes_log` array through verbatim."""
+Three worked examples:
+1. Move the title zone up: the spec JSON shows a text slot with "id": \
+"title" at index 0, whose zone.y is currently 0.62. Edit: path \
+`text[0].zone.y`, value `0.57`.
+2. Recolor the palette: path `palette.primary`, value `"#a83250"`.
+3. Resize the title's type: path `text[0].size_max`, value `0.13`.
+
+A path may replace any existing location. A list index equal to that \
+list's CURRENT length appends a new element there; anything else — an \
+out-of-range index, or a field name not already in the spec you were \
+shown — is an invalid edit, skipped rather than guessed at.
+
+You may: move or resize zones; change palette hexes; swap fonts (from \
+the same closed list already used in the spec — nothing outside it is \
+valid); change text case, tracking, or align; adjust scrim strengths and \
+art transforms (scale, offset, anchor); adjust a text slot's mask_from \
+(which art slot's shape it is clipped into) or a container art slot's \
+own placement and scale; rewrite an art_prompt; toggle the texture layer \
+on or off.
+
+You may NOT, ever: write to `version` or `notes_log` — the calling code \
+owns both, and any edit touching them is refused before it reaches the \
+design. You may NOT touch an art slot's `asset` field — code alone \
+decides which assets need to be regenerated, from whether you changed \
+that slot's prompt or transparent, never from what you write here. You \
+may NOT invent a new art, scrim, or text slot that was not in the input \
+spec — wanting new art is out of scope for a revision; express it \
+instead as a rewritten prompt or a new treatment on an EXISTING slot.
+
+You additionally may not, unless the notes explicitly say so: change \
+`archetype`; change a text slot's `content`.
+
+Change only what the notes require, and nothing else."""
 
 
 def _revision_user_prompt(spec: CoverSpec, notes: str) -> str:
-    return (f"Current cover spec (JSON):\n{spec.model_dump_json()}\n\n"
+    return (f"Current cover spec (JSON) — your edits' [n] indices address "
+            f"positions in these same arrays:\n{spec.model_dump_json()}\n\n"
             f"Notes from a human editor — apply exactly these changes and "
             f"nothing else:\n{notes}")
 
 
 def revise_spec(spec: CoverSpec, notes: str, provider: Provider, *,
-                model: str = LUNA_MODEL) -> RevisionResult:
-    """One structured call that edits a spec in place (spec §6.2).
+                model: str = REVISION_MODEL) -> RevisionResult:
+    """One structured call that edits a spec via a small list of patch
+    edits, applied and validated in code (spec §6.2).
 
-    Raises RevisionError on any failure; this function never mutates `spec`
-    itself, so the caller keeps the prior version on that path. On success,
-    the returned spec's `version` is bumped and `notes` is appended to
-    `notes_log` in code — the model's own echo of either field is discarded,
-    never trusted — and any art slot whose `prompt` or `transparent` changed
-    has its `asset` cleared, which is the signal
-    docproof.cover.pipeline.run_revision uses to regenerate exactly that one
-    image and no other."""
+    The model answers with SpecEdits, never the document itself (see this
+    section's header comment for why); each edit is applied to a COPY of
+    `spec`'s own dict (`_apply_edit`), and the patched dict is then
+    validated as a whole real CoverSpec — the same validation a fresh
+    build_spec or the old full-echo reply went through. An edit that
+    doesn't parse, resolves nowhere, or touches a guarded path (`version`,
+    `notes_log`, an art slot's `asset`) is skipped rather than applied;
+    every skip is named in the returned RevisionResult.skipped, which the
+    caller is free to ignore.
+
+    Raises RevisionError on any failure: a call error, a schema mismatch on
+    the edits themselves, or edits that — once applied — produce a spec
+    that CoverSpec itself rejects. This function never mutates `spec`, so the
+    caller keeps the prior version on every failure path. On success, the
+    returned spec's `version` is bumped and `notes` is appended to
+    `notes_log` in code — never trusted from the model, which cannot even
+    address either field (see `_is_guarded`) — and any art slot whose
+    `prompt` or `transparent` changed has its `asset` cleared, which is the
+    signal docproof.cover.pipeline.run_revision uses to regenerate exactly
+    that one image and no other. Zero edits applied — an empty `edits` list,
+    or every edit in it skipped — still runs this same bookkeeping and
+    returns a spec identical in every OTHER field to the input; the
+    pipeline's own _dump_equal_ignoring_bookkeeping is what turns that into
+    a visible no-op rather than a wasted recompose."""
     usage = Usage()
     try:
         result = provider.complete_structured(
             model=model, system=_revision_system_prompt(),
             user=_revision_user_prompt(spec, notes),
-            schema=strict_json_schema(CoverSpec),
+            schema=strict_json_schema(SpecEdits),
             schema_name="cover_revision",
             max_tokens=MAX_OUTPUT_TOKENS)
         usage.add(result.usage, model=model)
         if result.stop_reason != "ok" or result.parsed is None:
             raise RevisionError(
-                f"The model did not return a revised cover spec: "
+                f"The model did not return any revision edits: "
                 f"{result.error or result.stop_reason}.")
-        revised = CoverSpec.model_validate(result.parsed)
+        edits = SpecEdits.model_validate(result.parsed)
     except ValidationError as e:
         raise RevisionError(
-            f"The revised spec did not match the schema: {e}") from e
+            f"The model's revision edits did not match the schema: "
+            f"{e}") from e
     except RevisionError:
         raise
     except Exception as e:  # noqa: BLE001 - SDK/network variants
         raise RevisionError(f"The revision call failed: {e}") from e
 
+    working = spec.model_dump(mode="json")
+    skipped = tuple(reason for edit in edits.edits
+                    if (reason := _apply_edit(working, edit)) is not None)
+    try:
+        revised = CoverSpec.model_validate(working)
+    except ValidationError as e:
+        raise RevisionError(
+            f"The revised spec did not match the schema: {e}") from e
+
     old_art = {a.id: a for a in spec.art}
     new_art: list[ArtSlot] = []
     for slot in revised.art:
         old = old_art.get(slot.id)
-        # A brand-new slot id (the model breaking the "no new slots" rule)
+        # A brand-new slot id (an edit breaking the "no new slots" rule)
         # has no prior asset to restore, so it reads as changed too — there
         # is nothing valid to keep, only something to (re)generate.
         regen = (old is None or old.prompt != slot.prompt
@@ -370,8 +671,10 @@ def revise_spec(spec: CoverSpec, notes: str, provider: Provider, *,
         "art": new_art,
     })
     return RevisionResult(spec=final,
-                          cost=cost_of_usage(usage, fallback_model=model))
+                          cost=cost_of_usage(usage, fallback_model=model),
+                          skipped=skipped)
 
 
-__all__ = ["LUNA_MODEL", "DirectionError", "DirectionResult", "RevisionError",
-          "RevisionResult", "revise_spec", "run_directions"]
+__all__ = ["DIRECTION_MODEL", "REVISION_MODEL", "DirectionError",
+          "DirectionResult", "RevisionError", "RevisionResult", "SpecEdit",
+          "SpecEdits", "revise_spec", "run_directions"]

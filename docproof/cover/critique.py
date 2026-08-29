@@ -1,15 +1,51 @@
 """The critique pass: after a concept first composes, a vision model reviews
 the finished cover the way an art director reviews a proof, before the
-concept is marked ready (docs/cover_designer_spec.md §6.3).
+concept is marked ready (docs/cover_designer_spec.md §6.3). This call runs
+once per round of docproof.cover.pipeline._critique_and_revise's iterating
+judge loop (BRAIN wave, 2026-08-29) — the loop, its round cap, and its
+identical-spec stop condition all live in pipeline.py; this module only ever
+answers ONE round's question, "does this pass, and if not, what's the one
+thing to fix."
 
 The `Provider` protocol is text-only (see docproof.cover.direction's own
-note on this exact point), so this call goes straight through the `openai`
-SDK — the same precedent docproof.cover.imaging's gpt-image-2 wrapper sets,
-the same key. Unlike imaging.py's engine, though, this is a JUDGMENT call
-with a structured, schema-shaped answer, so its request shape has more in
-common with docproof.providers.openai_provider (docproof's own OpenAI text
-provider) than with imaging.generate() — see run_critique's docstring for
-exactly which shape and why.
+note on this exact point), so this call goes straight through the
+`anthropic` SDK rather than through a Provider — the same "vendor SDK lives
+in its own module" precedent docproof.cover.imaging sets for gpt-image-2,
+just a different vendor. Unlike imaging.py's engine call, though, the actual
+request shape here mirrors docproof/providers/anthropic_provider.py's own
+`complete_structured` almost exactly: the same `output_config` structured-
+output dialect (`{"format": {"type": "json_schema", "schema": ...}}`, an
+`effort` dial gated by docproof.providers.catalog's per-model
+`supports_effort`), and the same streamed call
+(`client.messages.stream(**params).get_final_message()`, never a plain
+`create()` — the SDK refuses a non-streaming request whose max_tokens could
+run past its 10-minute ceiling; see that provider's own comment on the
+identical point). anthropic_provider.py is proof this shape reaches a real
+endpoint successfully today, for every OTHER Anthropic call docproof makes
+in production — the one thing it does not (and cannot) prove is that an
+`image` content block rides along in the same message without incident,
+since none of docproof's existing Anthropic calls send one. Confirm a real
+call against CRITIQUE_MODEL works before this ships.
+
+BRAIN v2.1 (this fix wave, 2026-08-29's live-batch review): the owner
+watched the judge PASS a thriller with a giant dead middle and a near-
+invisible dark-on-dark silhouette — one ≤600px render hid exactly the tells
+that only show up at actual shelf size. run_critique now takes a second,
+optional image (`thumb_bytes`) — the job's own 100px search/shelf
+thumbnail, already on disk right next to the render (see
+docproof.cover.compose.save_renders's `_thumb100.png` naming) — and sends
+both, each labeled, so shelf-size legibility is directly visible to the
+judge rather than inferred from the large render alone. A missing
+thumbnail (an old job, a test fake that only writes the primary PNG)
+degrades to sending the one image; it never fails the call over that.
+CritiqueResult also gains `art_defects`: the ids of art slots whose
+GENERATED IMAGE ITSELF is the problem (a generation artifact, anatomical
+nonsense, an illegible subject) as opposed to a slot whose art is clean but
+mis-designed. A design-only revision (§6.2's machinery) can fix contrast
+and placement; it can never fix a bad pixel — so
+docproof.cover.pipeline._critique_and_revise reads this field to trigger
+an actual, code-bounded repaint instead of just another design pass (see
+that function's own comment on the one-repaint-per-concept escape hatch).
 
 Failure posture: run_critique itself raises CritiqueError on any trouble,
 the same "never guess, always raise" contract run_directions/revise_spec/
@@ -25,55 +61,75 @@ from __future__ import annotations
 import base64
 import io
 import logging
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Sequence
 
-import openai
+import anthropic
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ..providers import NormalizedUsage, cost_of_usage, strict_json_schema
+from ..providers import NormalizedUsage, cost_of_usage, lookup, strict_json_schema
 from .model import Brief, CoverSpec
 
 log = logging.getLogger("docproof.cover.critique")
 
-# Vision-capable per spec §6.3. Mirrored as its own constant rather than
-# imported from docproof.cover.direction.LUNA_MODEL — same convention, not a
-# dependency, the same call direction.py itself makes about docproof.quest.
-# skin.LUNA_MODEL. Module constant, overridable per call.
-CRITIQUE_MODEL = "gpt-5.6-luna"
+# The workhorse model: a critique verdict is a judgment call over one already-
+# composed image, the same tier of task docproof.cover.direction.
+# REVISION_MODEL is priced for — mirrored as its own constant rather than
+# imported, same convention direction.py itself documents about
+# docproof.quest.skin.LUNA_MODEL. Module constant, overridable per call.
+CRITIQUE_MODEL = "claude-sonnet-5"
 
 # Token cost, and the tells that matter (type crowding, weak hierarchy, a
 # palette that reads wrong) are visible at 600px — finer artifacts are not
 # what this pass is for (§6.3).
 MAX_WIDTH = 600
 
-# A transient failure (rate limit, a 5xx, a dropped connection) is worth one
-# retry; a TypeError or BadRequestError is a request-SHAPE problem that will
-# fail the same way again unchanged — see run_critique's shape fallback
-# instead. Same table as docproof.cover.imaging's _TRANSIENT_ERRORS.
-_TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
-    openai.RateLimitError, openai.InternalServerError, openai.APIConnectionError,
-)
+# A CritiqueResult's whole answer is a bool, a short list of one-sentence
+# tells, and one sentence of notes -- tiny. Generous anyway, on the same
+# house lesson every other structured call in this codebase already leans
+# on: max_tokens is a ceiling shared with the model's own thinking, not a
+# target, and a truncated structured reply parses as nothing.
+MAX_OUTPUT_TOKENS = 8000
 
-_SCHEMA_NAME = "cover_critique"
+# A transient failure (rate limit, a 5xx, a dropped connection) is worth one
+# retry; anything else (a bad request, an auth failure) will fail the same
+# way again unchanged, so retrying it would just waste the round trip. Same
+# table shape as docproof.cover.imaging's _TRANSIENT_ERRORS, adapted to the
+# anthropic SDK's own exception hierarchy (every one of these subclasses
+# anthropic.APIStatusError).
+_TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
+    anthropic.RateLimitError, anthropic.InternalServerError,
+    anthropic.APIConnectionError,
+)
 
 
 class CritiqueError(RuntimeError):
-    """The critique call failed outright, or came back unusable — every
-    retry and request shape exhausted. Always carries a sentence a person
-    could read, the same convention as docproof.cover.imaging.ImagingError.
-    docproof.cover.pipeline is what decides this is non-fatal (§6.3: a
-    critique failure must never block a cover) — that policy lives at the
-    call site, not here; see the module docstring."""
+    """The critique call failed outright, or came back unusable — a bad
+    reply, a refusal, or a transient failure surviving its retry. Always
+    carries a sentence a person could read, the same convention as
+    docproof.cover.imaging.ImagingError. docproof.cover.pipeline is what
+    decides this is non-fatal (§6.3: a critique failure must never block a
+    cover) — that policy lives at the call site, not here; see the module
+    docstring."""
 
 
 @dataclass(frozen=True)
 class CritiqueResult:
+    """One critique round's whole verdict. `art_defects` (BRAIN v2.1) names
+    every art slot (by id, from spec.art) whose GENERATED IMAGE ITSELF is
+    the problem — as opposed to `tells`/`notes`, which cover everything a
+    design-only revision could actually fix. Defaulted rather than
+    required so every pre-v2.1 keyword-constructed caller (pipeline.py's
+    frozen-dataclass consumers, this module's own older tests) keeps
+    working unchanged — the same reasoning
+    docproof.cover.direction.RevisionResult.skipped already documents for
+    itself."""
     passes: bool
     tells: list[str]
     notes: str
     cost: float | None
+    art_defects: list[str] = field(default_factory=list)
 
 
 class _CritiquePayload(BaseModel):
@@ -90,17 +146,23 @@ class _CritiquePayload(BaseModel):
     passes: bool
     tells: list[str]
     notes: str
+    # BRAIN v2.1: a Python default is still a required wire key
+    # (strict_json_schema's own docstring) -- the model always answers with
+    # SOME list, empty when no slot's art is itself defective, the same
+    # convention `tells` already follows.
+    art_defects: list[str] = Field(default_factory=list)
 
 
 # -- image prep -----------------------------------------------------------------
 
-def _downscale_to_data_uri(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> str:
+def _downscale_to_base64(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> str:
     """The composed render, downscaled to at most `max_width` px wide and
-    re-encoded as a base64 PNG data URI — the shape both the Responses API's
-    `input_image` and chat.completions' `image_url` content parts accept
-    (either a real URL or a base64 data URL; see each param's own
-    docstring in the installed openai package). Already-narrow input is
-    re-encoded but not upscaled."""
+    re-encoded as a BARE base64 PNG string (no `data:image/...;base64,`
+    prefix) — the shape
+    anthropic.types.base64_image_source_param.Base64ImageSourceParam wants:
+    `data` and `media_type` are separate fields on the wire, unlike OpenAI's
+    single data-URI string. Already-narrow input is re-encoded but not
+    upscaled."""
     with Image.open(io.BytesIO(png_bytes)) as img:
         img = img.convert("RGB")
         if img.width > max_width:
@@ -108,8 +170,7 @@ def _downscale_to_data_uri(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> s
             img = img.resize((max_width, height), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+        return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 # -- prompts ----------------------------------------------------------------------
@@ -117,9 +178,20 @@ def _downscale_to_data_uri(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> s
 def _system_prompt() -> str:
     return """You are the art director at a traditional press, doing a final \
 proof review before a cover ships. You will be shown the finished cover render \
-plus a short summary of the book. Judge it exactly the way you would judge a \
-proof crossing your desk: would this pass as a real cover on a \
-traditionally-published shelf in this genre, sitting next to its competitors?
+-- usually followed by a second image of that SAME cover at its actual \
+shelf/search-thumbnail size (100px wide) -- plus a short summary of the book. \
+Judge it exactly the way you would judge a proof crossing your desk: would \
+this pass as a real cover on a traditionally-published shelf in this genre, \
+sitting next to its competitors? Weigh both images when you have both: a \
+cover can look fine large and still fail at the size a reader actually \
+meets it first.
+
+Some choices read as deliberate, well-executed design moves rather than \
+flaws — judge them on execution, not on whether they are bold. In \
+particular: content living inside a container shape (a light beam, a smoke \
+plume, a ribbon, a doorway) that is executed cleanly, with its payload \
+reading clearly inside the shape, is a strength. Do not flag a well-\
+executed container device as a tell.
 
 Look for concrete, nameable problems — the kind of note an art director \
 actually writes on a proof, not vague taste:
@@ -131,6 +203,15 @@ right order at a glance)
 - visible AI-generation artifacts (extra fingers, warped objects, nonsense \
 background detail, an uncanny face)
 - a genre miscue (imagery that promises the wrong kind of book)
+- the container device attempted but botched: a container shape too busy \
+or cluttered for its payload, or the payload spilling outside its \
+container's edges
+- more rendered detail than the concept needs — a simple shape or \
+silhouette would have hidden generation artifacts better than the detail \
+actually shown
+- a large empty band with nothing designed in it
+- an element so low-contrast against its ground it disappears
+- at thumbnail size the cover reads as a blank field with words
 
 passes: true only if you would ship this exactly as-is — a real, \
 essentially flaw-free proof, not merely "acceptable." false if there is at \
@@ -139,19 +220,54 @@ least one concrete tell above.
 tells: every concrete problem you found, each one sentence. Empty if passes \
 is true.
 
+art_defects: the id of every art slot -- named for you, with its prompt, in \
+the summary below -- whose GENERATED IMAGE ITSELF is the problem: visible \
+AI-generation artifacts, anatomical or structural nonsense on an inanimate \
+object, an illegible or badly warped subject. This is NOT for a slot whose \
+art is clean but simply mis-designed (badly placed, badly scaled, wrong \
+contrast, fighting the type) -- that belongs in tells/notes instead, since a \
+design-only fix can actually address it. Only name a slot here when the \
+PAINTED IMAGE ITSELF needs to be repainted from scratch, using the exact \
+slot id given in the summary. Empty if every slot's art is clean.
+
 notes: if passes is false, ONE actionable revision instruction — the kind \
 of note you would hand a designer for a quick second pass: adjust an \
 EXISTING design choice (palette, scale, position, contrast, tracking, a \
 scrim, which existing art layer sits where, and the like). You may NOT ask \
 for new art, a different archetype, or new imagery of any kind — this note \
-can only request a design-only fix, never a repaint. If passes is true, \
-notes is an empty string."""
+can only request a design-only fix, never a repaint (name a slot in \
+art_defects for that instead). If passes is true, notes is an empty \
+string."""
 
 
-def _summary(spec: CoverSpec, brief: Brief) -> str:
+def _art_slots_line(spec: CoverSpec) -> str:
+    """BRAIN v2.1: names every GENERATED art slot (one with a real prompt --
+    a procedural/no-prompt slot like a gradient or texture has no "generated
+    image" to be defective) by its exact id, alongside the prompt that made
+    it, so the judge's art_defects answer can name a real slot instead of
+    guessing at one. Empty string when this concept generated no art at all
+    (a big_type concept, say) -- omitted from the summary entirely then, the
+    same convention the composer-warnings clause below already follows."""
+    prompted = [a for a in spec.art if a.prompt]
+    if not prompted:
+        return ""
+    listed = "; ".join(f'{a.id} ("{a.prompt}")' for a in prompted)
+    return (" This concept's generated art slots, by id (name one here in "
+           f"art_defects only if ITS OWN generated image is the problem): "
+           f"{listed}.")
+
+
+def _summary(spec: CoverSpec, brief: Brief,
+            composer_warnings: Sequence[str] = ()) -> str:
     """One paragraph: brief + genre (§6.3) — not the fully labeled brief
     run_directions sends; the critique call is judging a finished image, not
-    drafting one, so it needs just enough context to judge genre fit."""
+    drafting one, so it needs just enough context to judge genre fit. Also
+    names every generated art slot (BRAIN v2.1 — see _art_slots_line) so
+    art_defects can address one by id. When the composer itself flagged
+    anything (RenderReport.warnings — a contrast escalation that still fell
+    short, a coverage note on a mask_from container, and the like), it
+    rides along here too, clearly labeled, so the judge reasons with the
+    composer's own measurements rather than re-deriving them by eye."""
     bits = [f'"{brief.title}"']
     if brief.subtitle:
         bits.append(f"({brief.subtitle})")
@@ -159,193 +275,150 @@ def _summary(spec: CoverSpec, brief: Brief) -> str:
     sentence = " ".join(bits)
     if brief.mood:
         sentence += f" Mood: {brief.mood}."
-    return (f"{sentence} This concept, \"{spec.concept_name}\", uses the "
-           f"{spec.archetype} cover layout.")
+    sentence += (f" This concept, \"{spec.concept_name}\", uses the "
+                f"{spec.archetype} cover layout.")
+    sentence += _art_slots_line(spec)
+    if composer_warnings:
+        sentence += (" The composer's own measurements flagged: "
+                     + "; ".join(composer_warnings) + ".")
+    return sentence
 
 
-# -- request shapes -----------------------------------------------------------------
+# -- request shape ------------------------------------------------------------
 #
-# INTEGRATOR, READ THIS: two request shapes follow. The PRIMARY one (Responses
-# API) is verified two ways, both without live network access:
-#   1. Against the installed openai==2.53.0 package's own type stubs —
-#      openai.types.responses.response_input_image_param.ResponseInputImageParam
-#      (type="input_image", image_url=<url or base64 data URL>) and
-#      openai.types.responses.response_text_config_param.ResponseTextConfigParam
-#      (format={"type": "json_schema", "name", "schema", "strict"}).
-#   2. Against THIS repo's own docproof/providers/openai_provider.py, which
-#      already calls client.responses.create(instructions=..., input=...,
-#      text={"format": {"type": "json_schema", ...}}) for EVERY OpenAI text
-#      call docproof makes in production — the identical text.format.json_schema
-#      shape, just without an image part. That file is proof this shape reaches
-#      a real endpoint successfully today, not merely that the SDK's type
-#      stubs allow constructing it.
-# What neither of those two things can verify: whether "gpt-5.6-luna"
-# SPECIFICALLY accepts an input_image content part. Vision support is a
-# runtime, per-model capability — nothing in the SDK's static types encodes
-# it, and this repo's model catalog (docproof/providers/catalog.py) carries
-# no vision flag either. CONFIRM A REAL CALL AGAINST THIS MODEL WORKS before
-# this ships; if it 400s specifically on the image part, the fix is the
-# `detail` value or the image content-part shape below, not the overall
-# Responses-API-first design (openai_provider.py's precedent for THAT stands).
-#
-# The FALLBACK (chat.completions with response_format json_schema + an
-# image_url content part) is verified only against the installed package's
-# type stubs (openai.types.chat.chat_completion_content_part_image_param,
-# completion_create_params.ResponseFormat) — not against a real call, and not
-# against any existing in-repo precedent (nothing else in docproof calls
-# chat.completions). It exists purely as a safety net for an SDK/gateway that
-# rejects the Responses API shape outright; if IT is what ends up firing in
-# production, something about the primary shape needs fixing, not this one.
+# Mirrors docproof/providers/anthropic_provider.py's own _params/
+# complete_structured almost exactly (see the module docstring for the full
+# reasoning): the same output_config.format.json_schema dialect, the same
+# effort gating, one addition only — one or two `image` content blocks ahead
+# of the text block in the one user message. Anthropic's own vision guidance
+# is to put a single image before the text that refers to it, hence that
+# order for the single-image (no thumbnail) case; with two images (BRAIN
+# v2.1) each is preceded by its own short label so the model can address
+# "the thumbnail" unambiguously in its answer, the standard multi-image
+# prompting shape.
 
-def _responses_request(*, model: str, image_data_uri: str, summary: str) -> dict[str, Any]:
+def _image_block(b64: str) -> dict[str, Any]:
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": "image/png", "data": b64}}
+
+
+def _request_params(*, model: str, image_b64: str, thumb_b64: str | None,
+                    summary: str) -> dict[str, Any]:
+    output_config: dict[str, Any] = {
+        "format": {"type": "json_schema",
+                   "schema": strict_json_schema(_CritiquePayload)}}
+    info = lookup(model)
+    # Same gate as AnthropicProvider._params: effort is rejected outright on
+    # a model that predates it, so it is catalog-gated rather than always-on.
+    if info is None or info.supports_effort:
+        output_config["effort"] = "low"
+
+    # No thumbnail: exactly v1's shape (bare image, then text) -- a single
+    # image was never ambiguous, so no label is added over it. A thumbnail
+    # (the common case once a job has actually rendered one) labels BOTH
+    # images instead, so the model can name which one it means.
+    content: list[dict[str, Any]] = []
+    if thumb_b64 is not None:
+        content.append({"type": "text",
+                        "text": "Image 1 — the full-size composed cover render:"})
+    content.append(_image_block(image_b64))
+    if thumb_b64 is not None:
+        content.append({"type": "text", "text": (
+            "Image 2 — the SAME cover at its actual shelf/search-thumbnail "
+            "size (100px wide) — legibility and contrast tells often only "
+            "show up here:")})
+        content.append(_image_block(thumb_b64))
+    content.append({"type": "text", "text": summary})
+
     return {
         "model": model,
-        "instructions": _system_prompt(),
-        "input": [{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": summary},
-                # "low" detail deliberately: the image is already downscaled
-                # to <=600px wide for token cost (§6.3); asking for "auto" or
-                # "high" would let the server re-tile/upscale its own
-                # analysis and spend the tokens we just avoided.
-                {"type": "input_image", "image_url": image_data_uri, "detail": "low"},
-            ],
-        }],
-        "text": {"format": {"type": "json_schema", "name": _SCHEMA_NAME,
-                            "schema": strict_json_schema(_CritiquePayload),
-                            "strict": True}},
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "system": _system_prompt(),
+        "messages": [{"role": "user", "content": content}],
+        "output_config": output_config,
     }
 
 
-def _chat_completions_request(*, model: str, image_data_uri: str, summary: str
-                              ) -> dict[str, Any]:
-    return {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _system_prompt()},
-            {"role": "user", "content": [
-                {"type": "text", "text": summary},
-                {"type": "image_url",
-                 "image_url": {"url": image_data_uri, "detail": "low"}},
-            ]},
-        ],
-        "response_format": {"type": "json_schema", "json_schema": {
-            "name": _SCHEMA_NAME, "schema": strict_json_schema(_CritiquePayload),
-            "strict": True}},
-    }
+def _usage(u: Any) -> NormalizedUsage:
+    return NormalizedUsage(
+        input_tokens=getattr(u, "input_tokens", 0) or 0,
+        output_tokens=getattr(u, "output_tokens", 0) or 0,
+        cache_creation_input_tokens=getattr(
+            u, "cache_creation_input_tokens", 0) or 0,
+        cache_read_input_tokens=getattr(u, "cache_read_input_tokens", 0) or 0)
 
 
-def _usage_from_token_counts(*, input_tokens: int, output_tokens: int,
-                             cached_tokens: int) -> NormalizedUsage:
-    # Both OpenAI usage shapes count cached tokens inside the input total;
-    # docproof reports the two separately (same subtraction
-    # docproof.providers.openai_provider._usage makes for the identical
-    # reason).
-    return NormalizedUsage(input_tokens=max(input_tokens - cached_tokens, 0),
-                           output_tokens=output_tokens,
-                           cache_read_input_tokens=cached_tokens)
-
-
-def _read_responses_reply(resp: Any) -> tuple[str, NormalizedUsage]:
-    """(json_text, usage) from a Responses API answer — the same walk
-    docproof.providers.openai_provider.result_from_response/_usage use for
-    the identical response shape, since this call goes through the exact
-    endpoint docproof's own OpenAI provider already uses in production."""
-    body = resp.model_dump()
-    for item in body.get("output") or []:
-        for part in item.get("content") or []:
-            if part.get("type") == "refusal":
-                raise CritiqueError(
-                    f"The critique model declined to review this cover: "
-                    f"{part.get('refusal') or 'no reason given'}.")
-    text = "".join(
-        part.get("text", "")
-        for item in body.get("output") or []
-        if item.get("type") == "message"
-        for part in item.get("content") or []
-        if part.get("type") == "output_text")
-    if not text:
-        raise CritiqueError("The critique model returned no usable text.")
-    u = body.get("usage") or {}
-    cached = (u.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
-    usage = _usage_from_token_counts(
-        input_tokens=u.get("input_tokens", 0) or 0,
-        output_tokens=u.get("output_tokens", 0) or 0, cached_tokens=cached)
-    return text, usage
-
-
-def _read_chat_completion_reply(resp: Any) -> tuple[str, NormalizedUsage]:
-    choice = resp.choices[0]
-    refusal = getattr(choice.message, "refusal", None)
-    if refusal:
+def _read_message(message: Any) -> tuple[str, NormalizedUsage]:
+    """(json_text, usage) from an Anthropic Message — the same walk
+    docproof.providers.anthropic_provider._to_result/_usage make for the
+    identical response shape, since this call goes through the exact SDK
+    method (messages.stream(...).get_final_message()) that provider already
+    uses in production."""
+    usage = _usage(message.usage)
+    if message.stop_reason == "refusal":
+        raise CritiqueError("The critique model declined to review this cover.")
+    if message.stop_reason == "max_tokens":
         raise CritiqueError(
-            f"The critique model declined to review this cover: {refusal}.")
-    text = choice.message.content or ""
+            "The critique model's answer was cut off before it finished.")
+    text = next((b.text for b in message.content if b.type == "text"), "")
     if not text:
         raise CritiqueError("The critique model returned no usable text.")
-    u = resp.usage.model_dump() if getattr(resp, "usage", None) is not None else {}
-    cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
-    usage = _usage_from_token_counts(
-        input_tokens=u.get("prompt_tokens", 0) or 0,
-        output_tokens=u.get("completion_tokens", 0) or 0, cached_tokens=cached)
     return text, usage
 
 
-def _call_with_retry(fn, *args, **kwargs):
-    """One retry for a transient failure only — same policy as
-    docproof.cover.imaging._call_with_retry. A TypeError/BadRequestError
-    propagates immediately, unretried, so run_critique can try the other
-    request shape instead of burning a retry on one that will never
-    succeed unchanged."""
+def _call_with_retry(client: Any, params: dict[str, Any]) -> Any:
+    """One real attempt, with a single retry for a transient failure only —
+    see _TRANSIENT_ERRORS. Streamed, not a plain create(): see the module
+    docstring's note on why (the SDK's own 10-minute non-streaming guard);
+    get_final_message() returns the same Message object a create() would
+    have, so _read_message reads it unchanged either way."""
     try:
-        return fn(*args, **kwargs)
+        with client.messages.stream(**params) as stream:
+            return stream.get_final_message()
     except _TRANSIENT_ERRORS as e:
         log.warning("critique.run_critique: transient failure (%s); "
                    "retrying once.", e)
         try:
-            return fn(*args, **kwargs)
+            with client.messages.stream(**params) as stream:
+                return stream.get_final_message()
         except _TRANSIENT_ERRORS as e2:
             raise CritiqueError(
                 f"The critique call failed after a retry: {e2}") from e2
 
 
-def run_critique(png_bytes: bytes, spec: CoverSpec, brief: Brief, client: Any,
-                 *, model: str = CRITIQUE_MODEL) -> CritiqueResult:
+def run_critique(png_bytes: bytes, thumb_bytes: bytes | None, spec: CoverSpec,
+                 brief: Brief, client: Any, *, model: str = CRITIQUE_MODEL,
+                 composer_warnings: Sequence[str] = ()) -> CritiqueResult:
     """Review one composed cover the way an art director reviews a proof
-    (§6.3). `png_bytes` is the full-size composed render; this function does
-    its own downscale before sending anything.
+    (§6.3). `png_bytes` is the full-size composed render; `thumb_bytes` is
+    the job's own 100px shelf/search thumbnail (BRAIN v2.1 —
+    docproof.cover.compose.save_renders's `_thumb100.png` companion file,
+    read straight off disk by the caller) or None when there isn't one (an
+    old job, a caller that never rendered one) — this function does its own
+    downscale on whichever of the two it was given, and degrades to sending
+    just `png_bytes` when `thumb_bytes` is None; a missing thumbnail is
+    never a reason to fail this call. `composer_warnings` is the composer's
+    OWN RenderReport.warnings for this exact render (a contrast escalation
+    that still fell short, a container-coverage note, and the like) — passed
+    through so the judge reasons with the composer's measurements instead of
+    re-deriving them by eye; empty when the caller has none to offer, which
+    is the same as never having passed the argument.
 
-    Raises CritiqueError on any failure — a bad reply, a refusal, both
-    request shapes rejected, or a transient failure surviving its retry.
-    Never returns a fabricated verdict; see the module docstring for why
-    that's a hard line."""
-    image_data_uri = _downscale_to_data_uri(png_bytes)
-    summary = _summary(spec, brief)
+    Raises CritiqueError on any failure — a bad reply, a refusal, a
+    truncated answer, or a transient failure surviving its retry. Never
+    returns a fabricated verdict; see the module docstring for why that's a
+    hard line. `client` is an `anthropic.Anthropic` instance (see
+    app/routes/cover.py's client construction) — this module never builds
+    one itself, the same division imaging.py draws with make_client()."""
+    image_b64 = _downscale_to_base64(png_bytes)
+    thumb_b64 = _downscale_to_base64(thumb_bytes) if thumb_bytes is not None else None
+    summary = _summary(spec, brief, composer_warnings)
+    params = _request_params(model=model, image_b64=image_b64,
+                             thumb_b64=thumb_b64, summary=summary)
 
     try:
-        resp = _call_with_retry(
-            client.responses.create,
-            **_responses_request(model=model, image_data_uri=image_data_uri,
-                                 summary=summary))
-        text, usage = _read_responses_reply(resp)
-    except (TypeError, openai.BadRequestError) as e:
-        log.warning(
-            "critique.run_critique: the Responses API shape (input_image + "
-            "text.format json_schema) was rejected (%s); falling back to "
-            "chat.completions.", e)
-        try:
-            resp = _call_with_retry(
-                client.chat.completions.create,
-                **_chat_completions_request(model=model,
-                                            image_data_uri=image_data_uri,
-                                            summary=summary))
-            text, usage = _read_chat_completion_reply(resp)
-        except (TypeError, openai.BadRequestError) as e2:
-            raise CritiqueError(
-                f"The critique call failed: both the Responses API shape "
-                f"and the chat.completions fallback were rejected "
-                f"({e2}).") from e2
+        message = _call_with_retry(client, params)
+        text, usage = _read_message(message)
     except CritiqueError:
         raise
     except Exception as e:  # noqa: BLE001 - SDK/network variants
@@ -360,7 +433,8 @@ def run_critique(png_bytes: bytes, spec: CoverSpec, brief: Brief, client: Any,
 
     return CritiqueResult(
         passes=payload.passes, tells=list(payload.tells), notes=payload.notes,
-        cost=cost_of_usage(usage, fallback_model=model))
+        cost=cost_of_usage(usage, fallback_model=model),
+        art_defects=list(payload.art_defects))
 
 
 __all__ = ["CRITIQUE_MODEL", "MAX_WIDTH", "CritiqueError", "CritiqueResult",

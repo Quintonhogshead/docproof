@@ -22,17 +22,22 @@ art:
     generatable: true
     fit: contain
     transparent: true            # a hard-edged silhouette cutout
-    anchor: [0.5, 1.0]           # flush bottom, confined below the title
-    scale: 0.40
+    # v2.1 BODY-fix wave: rises INTO the lower third instead of hugging the
+    # base flush (anchor.y 1.0 -> 0.85) — a live render's silhouette sat so
+    # low it read as a footnote instead of a presence; scale up (0.40 ->
+    # 0.50) so it actually fills the lower third it now rises into.
+    anchor: [0.5, 0.85]
+    scale: 0.50
     # Effects rack (§7.4a): "silhouette" is this archetype's own name and
     # its single most locked-in research finding — thresholding to one flat
     # primary shape makes the hard edge structural instead of hoping the
     # generated cutout already reads that way.
     treatment: silhouette
   - id: texture
-    generatable: false           # procedural film grain (§7.3) for a
-    opacity: 0.07                # slightly gritty, printed-thriller feel
-    blend: overlay
+    generatable: false           # v2.1 BODY-fix wave: was plain film grain —
+    opacity: 0.08                # halftone's print-dot screen reads more
+    blend: overlay                # like a pulp-thriller jacket, still at a
+    procedural: halftone         # low, barely-there opacity
 text:
   - id: author
     zone: {x: 0.06, y: 0.05, w: 0.88, h: 0.085}
@@ -47,7 +52,13 @@ text:
     size_min: 0.015
     size_max: 0.020
   - id: title
-    zone: {x: 0.05, y: 0.175, w: 0.90, h: 0.40}
+    # v2.1 BODY-fix wave: widened down (h 0.40 -> 0.48) so the title's own
+    # block reaches further toward the now-larger, now-higher-rising
+    # silhouette instead of stopping well short of it — center-valigned
+    # (not bottom) so a SHORT title still fills the middle of its own zone
+    # rather than clustering at the very bottom and opening a fresh gap
+    # above itself.
+    zone: {x: 0.05, y: 0.175, w: 0.90, h: 0.48}
     case: upper
     tracking: 20                 # tight-tracked, up to "70-80% of cover
     size_min: 0.07               # height" between title+author together

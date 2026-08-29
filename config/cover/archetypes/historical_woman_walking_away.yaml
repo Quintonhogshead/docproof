@@ -26,16 +26,25 @@ art:
 scrims:
   # "An in-world scrim, not a flat overlay box" per the research — these are
   # a code-level backstop for when the generated sky/margin isn't quite
-  # quiet enough, not the primary legibility strategy.
-  - kind: gradient_up            # darkens toward the canvas TOP (the sky the
-    protects: title               # title sits in) — gradient_up extends its
-    strength: 0.22                 # solid fill up to the canvas top edge (§7.3)
-  - kind: gradient_down          # darkens toward the canvas BOTTOM (the
-    protects: author               # foreground margin the author line sits in)
+  # quiet enough, not the primary legibility strategy. v2 BODY wave retune:
+  # gradient_up/gradient_down's canvas-edge extension was washing out most
+  # of the sky and foreground — the exact "AI image + blank space, muted"
+  # complaint the whole BODY wave answers — for protection that only ever
+  # needs to cover the title/author band itself. The redesigned `panel`
+  # default (feathered, rounded, provably never dims past its own zone) is
+  # the closer match to "not a flat overlay box" than a literal box ever
+  # was, so these three switch to it; strengths drop a little too, since a
+  # local panel needs less strength than a thin gradient ramp to reach the
+  # same measured contrast.
+  - kind: panel
+    protects: title
     strength: 0.16
-  - kind: gradient_up            # the optional subtitle sits just below the
-    protects: subtitle             # title, still in the same sky band — give
-    strength: 0.18                 # it its own (lighter) protection too
+  - kind: panel
+    protects: author
+    strength: 0.12
+  - kind: panel
+    protects: subtitle
+    strength: 0.14
 text:
   - id: title
     zone: {x: 0.10, y: 0.08, w: 0.80, h: 0.16}
