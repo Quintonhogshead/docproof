@@ -1,0 +1,51 @@
+# Research: BookCoverZone ("What Makes A Thriller Cover Sell In 2026"),
+# CreativIndieCovers, and Rocking Book Covers all converge on the same
+# rules, including a cited "silhouettes crush faces 3:1 in conversion rate"
+# claim. Confidence: high (docs/cover_template_research.md #8) — arguably
+# the single most locked-in convention in the whole research pass.
+name: thriller_bigtype_silhouette
+genres: [mystery_thriller]
+describe: >-
+  Author name banner huge across the top, an even huger tight-tracked title
+  filling the middle, one confined silhouette low in the frame — flat dark
+  ground plus a single screaming accent color, no scrim, no scene.
+composition_note: >-
+  One hard-edged silhouette — a running or standing figure, a profile, or
+  a single ominous object like a key or a door — confined to the lower
+  quarter of the frame, on a single flat, dark, almost featureless ground.
+  Never a detailed scene. No text anywhere.
+art:
+  - id: background
+    generatable: true            # one dominant dark flat ground; procedural
+    fit: cover                   # gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # a hard-edged silhouette cutout
+    anchor: [0.5, 1.0]           # flush bottom, confined below the title
+    scale: 0.40
+  - id: texture
+    generatable: false           # procedural film grain (§7.3) for a
+    opacity: 0.07                # slightly gritty, printed-thriller feel
+    blend: overlay
+text:
+  - id: author
+    zone: {x: 0.06, y: 0.05, w: 0.88, h: 0.085}
+    case: upper
+    tracking: 40                 # "nearly as large" as the title (research)
+    size_min: 0.05
+    size_max: 0.11
+    max_lines: 2
+  - id: subtitle
+    zone: {x: 0.10, y: 0.14, w: 0.80, h: 0.028}
+    optional: true
+    size_min: 0.015
+    size_max: 0.020
+  - id: title
+    zone: {x: 0.05, y: 0.175, w: 0.90, h: 0.40}
+    case: upper
+    tracking: 20                 # tight-tracked, up to "70-80% of cover
+    size_min: 0.07               # height" between title+author together
+    size_max: 0.17
+    max_lines: 2
+layers: [background, texture, focal, author, subtitle, title]

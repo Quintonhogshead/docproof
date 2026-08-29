@@ -1,0 +1,52 @@
+# Research: the "Atomic Habits" pattern named explicitly as the model —
+# massive sans-serif type + one high-contrast abstract icon; "Wall Street's
+# Blind Spots" and "The Happiness Handbook" (Reedsy, 20 Best Book Covers of
+# 2025) as concrete 2025 examples; Mel Robbins's "The Let Them Theory" as
+# 2025's #1 bestselling nonfiction title. Confidence: high (docs/
+# cover_template_research.md #16).
+name: nonfiction_bold_colorblock_typographic
+genres: [nonfiction]
+describe: >-
+  Huge stacked title claims most of the cover on one saturated flat color
+  block; one small high-contrast icon beneath it, a platform-sized author
+  line at the bottom. No scrim — it's a flat color block by design.
+composition_note: >-
+  At most one small, high-contrast abstract icon or silhouette — a
+  sunburst, an arrow, an object relevant to the book's thesis — small and
+  centered low in the frame, on one saturated, completely flat, unbroken
+  color field covering the rest of the cover. No scene, no illustration.
+  No text anywhere.
+art:
+  - id: background
+    generatable: true            # one saturated flat color; procedural
+    fit: cover                   # gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # one small icon, not a scene
+    anchor: [0.5, 0.5]
+    scale: 0.18                  # "at most one small icon" — the smallest
+    offset: [0.0, 0.24]          # focal element in the whole library
+text:
+  - id: title
+    zone: {x: 0.08, y: 0.10, w: 0.84, h: 0.46}
+    case: upper
+    valign: top
+    tracking: 10                 # tight vertical stacking, per research
+    size_min: 0.07
+    size_max: 0.16                # "up to 70-80% of the cover"
+    max_lines: 4
+  - id: subtitle
+    zone: {x: 0.10, y: 0.58, w: 0.80, h: 0.04}
+    optional: true
+    size_min: 0.020
+    size_max: 0.032
+  - id: author
+    # "often a personal-brand/platform name" — sized closer to a subtitle
+    # than a typical fiction author credit.
+    zone: {x: 0.10, y: 0.88, w: 0.80, h: 0.06}
+    case: upper
+    tracking: 80
+    size_min: 0.022
+    size_max: 0.036
+layers: [background, focal, title, subtitle, author]

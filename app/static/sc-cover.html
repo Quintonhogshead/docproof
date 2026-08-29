@@ -1,0 +1,1051 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cover Studio — Spell &amp; Check</title>
+<meta name="description" content="Internal AI-assisted ebook cover designer: a brief in, several finished concepts out.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/assets/art/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/assets/art/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/assets/art/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Alegreya:ital,wght@0,400;0,500;0,700;1,400;1,500&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono&display=swap">
+<link rel="stylesheet" href="/assets/sc-shared.css">
+<style>
+  /* ---- Cover Studio: page-scoped styles. Every custom class is "cs-"
+     prefixed so nothing collides with the shared chrome (house gotcha). ---- */
+  .cs-head{padding:var(--s4) 0 var(--s2)}
+  .cs-view{padding:var(--s2) 0 var(--s6)}
+
+  /* form fields — the site's papery inputs, matching .emailrow's look */
+  .field{display:block;margin-bottom:var(--s3);max-width:640px}
+  .field .flabel{display:block;font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.1em;
+    text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .field .fhint-inline{text-transform:none;letter-spacing:0;font-size:.82em;color:var(--faded)}
+  .field.required .flabel::after{content:" *";color:var(--accent)}
+  .field input[type=text],.field input[type=password],.field select,.field textarea{
+    width:100%;background:var(--paper);border:1px solid var(--line-strong);color:var(--ink);
+    font:var(--fs-ui) var(--ui);padding:11px 13px;min-width:0}
+  .field select{appearance:auto}
+  .field textarea{resize:vertical;min-height:5.2em;line-height:1.5;font-family:var(--body)}
+  .field input:focus-visible,.field select:focus-visible,.field textarea:focus-visible{
+    outline:2px solid var(--accent-hot);outline-offset:2px}
+  .genre-other{margin-top:10px;max-width:320px}
+
+  /* concepts radio — pill buttons, native radios underneath for free a11y */
+  .countpick{display:flex;gap:10px;flex-wrap:wrap}
+  .countpick label{position:relative;display:inline-block}
+  .countpick input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer}
+  .countpick span{display:inline-block;background:var(--card);color:var(--faded);
+    clip-path:var(--edge-tab);padding:9px 22px;font:600 .95rem var(--ui);filter:var(--drop-sm);
+    transition:background .15s ease,color .15s ease}
+  .countpick input:checked + span{background:var(--accent);color:var(--accent-ink)}
+  .countpick input:focus-visible + span{outline:2px solid var(--accent-hot);outline-offset:2px}
+
+  /* manuscript drop zone — adapted from /quote's affordance */
+  .cs-drop{display:flex;align-items:center;gap:16px;border:2px dashed var(--line-strong);
+    background:var(--card);padding:20px 22px;cursor:pointer;box-shadow:var(--lift);
+    max-width:640px;transition:border-color .2s}
+  .cs-drop:hover,.cs-drop.over{border-color:var(--accent)}
+  .cs-drop:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
+  .cs-drop .dicon{flex:0 0 auto;width:42px;height:42px;clip-path:var(--edge-tab);
+    display:grid;place-items:center;color:var(--accent);background:var(--accent-wash)}
+  .cs-drop .dicon svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.6;
+    stroke-linecap:round;stroke-linejoin:round}
+  .cs-drop .dtitle{font-family:var(--disp);font-size:1.1rem}
+  .cs-drop .dsub{font-family:var(--ui);font-size:.82rem;color:var(--faded);margin-top:2px}
+  .ms-chip{display:none;align-items:center;gap:12px;background:var(--card);padding:10px 16px;
+    box-shadow:var(--lift);max-width:640px}
+  .ms-chip.show{display:flex}
+  .ms-chip b{font-family:var(--disp);font-weight:400;font-size:1.02rem;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .ms-chip .x{margin-left:auto;flex:0 0 auto;background:none;border:none;color:var(--dim);
+    cursor:pointer;font-size:1.1rem;line-height:1;padding:4px}
+  .ms-chip .x:hover{color:var(--accent)}
+  .ms-chip .x:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+
+  .ferror{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);margin-top:8px;min-height:1.2em}
+
+  /* unlock */
+  .cs-unlock{max-width:420px}
+  @media (prefers-reduced-motion:no-preference){
+    .shake{animation:cs-shake .4s ease}
+  }
+  @keyframes cs-shake{
+    10%,90%{transform:translateX(-1px)} 20%,80%{transform:translateX(2px)}
+    30%,50%,70%{transform:translateX(-4px)} 40%,60%{transform:translateX(4px)}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .shake{outline:2px solid var(--accent);outline-offset:3px}
+  }
+
+  /* recent jobs */
+  .recent{margin-top:var(--s5);max-width:760px}
+  .recent-row{display:flex;gap:12px;align-items:center;padding:11px 6px;border:none;
+    border-bottom:1px solid var(--line);background:none;width:100%;text-align:left;
+    cursor:pointer;font-family:var(--ui);color:var(--ink)}
+  .recent-row:hover{color:var(--accent)}
+  .recent-row:focus-visible{outline:2px solid var(--accent-hot);outline-offset:-2px}
+  .recent-row .rtitle{font-family:var(--disp);font-size:1.05rem;flex:1 1 auto;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .recent-row .rstatus{font:.72rem var(--mono);color:var(--dim);text-transform:uppercase;
+    letter-spacing:.05em;flex:0 0 auto}
+  .recent-row .rdate{font-size:.8rem;color:var(--faded);flex:0 0 auto}
+  .recent-row .rcost{font:.85rem var(--mono);color:var(--faded);min-width:4.2em;text-align:right;flex:0 0 auto}
+
+  /* progress */
+  .progress-head{margin-bottom:var(--s3)}
+  .progress-words{font-family:var(--ui);font-size:.9rem;color:var(--faded);margin-top:4px}
+  .progress-list{display:grid;gap:10px;max-width:640px}
+  .progress-row{display:flex;align-items:center;gap:12px;background:var(--card);
+    padding:12px 16px;box-shadow:var(--lift-sm)}
+  .progress-row .pname{font-family:var(--disp);font-size:1.05rem;flex:0 0 auto;min-width:9em}
+  .progress-row .pline{font-family:var(--ui);font-size:.9rem;color:var(--faded);flex:1 1 auto}
+  .progress-row.is-error .pline{color:var(--accent)}
+  .progress-row.is-ready .pdot{background:var(--good)}
+  .pdot{width:8px;height:8px;border-radius:50%;background:var(--gold-soft);flex:0 0 auto}
+  .progress-row.is-busy .pdot{background:var(--accent)}
+  @media (prefers-reduced-motion:no-preference){
+    .progress-row.is-busy .pdot{animation:pdot-pulse 1.4s ease-in-out infinite}
+  }
+  @keyframes pdot-pulse{40%{opacity:.3}}
+
+  /* contact sheet */
+  .sheet-head{display:flex;justify-content:space-between;gap:var(--s3);flex-wrap:wrap;
+    align-items:flex-end;margin-bottom:var(--s3)}
+  .sheet-words{font-family:var(--ui);font-size:.88rem;color:var(--faded);margin-top:4px}
+  .sheet-cost{font-family:var(--ui);font-size:.95rem;color:var(--faded);text-align:right}
+  .cs-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(0,260px));gap:var(--s3)}
+  .cs-card{position:relative;background:var(--card);padding:var(--s2);box-shadow:var(--lift);
+    cursor:pointer;display:flex;flex-direction:column;gap:8px;text-align:left;color:inherit;
+    transition:transform .15s ease,box-shadow .15s ease}
+  .cs-card:hover{transform:translateY(-2px);box-shadow:3px 5px 0 var(--paper-shadow)}
+  .cs-card:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
+  .cs-card.is-error{box-shadow:var(--lift),0 0 0 1px var(--accent-wash)}
+  .cs-thumbs{display:flex;gap:8px;align-items:flex-end}
+  .cs-thumb300{flex:1 1 auto;min-width:0;aspect-ratio:1600/2560;background:var(--stage);overflow:hidden}
+  .cs-thumb300 img{display:block;width:100%;height:100%;object-fit:cover}
+  .cs-thumb100-wrap{flex:0 0 auto;text-align:center}
+  .cs-thumb100{width:100px;height:160px;background:var(--stage);overflow:hidden}
+  .cs-thumb100 img{display:block;width:100px;height:160px;object-fit:cover}
+  .cs-thumb100-wrap .tcap{font-family:var(--mono);font-size:.6rem;color:var(--dim);
+    margin-top:4px;display:block;max-width:100px;line-height:1.3}
+  .cs-name{font-family:var(--disp);font-size:1.18rem;line-height:1.15}
+  .cs-rationale{font-family:var(--ui);font-size:.85rem;color:var(--faded);line-height:1.42}
+  .cs-fonts{font:.7rem var(--mono);color:var(--dim)}
+  .cs-swatches{display:flex;gap:4px}
+  .cs-swatch{width:18px;height:18px;border:1px solid var(--line-strong);flex:0 0 auto}
+  .cs-meta{display:flex;align-items:center;gap:8px}
+  .cs-status{font:.66rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--dim)}
+  .cs-card.is-error .cs-status{color:var(--accent)}
+  .cs-cost{margin-left:auto;font:.8rem var(--mono);color:var(--faded)}
+  .cs-warn{font-family:var(--ui);font-size:.74rem;color:var(--accent);line-height:1.4}
+  .cs-retry{align-self:flex-start;padding:8px 16px;font-size:.86rem}
+
+  /* detail */
+  .detail-top{display:flex;justify-content:space-between;gap:var(--s2);flex-wrap:wrap;
+    align-items:baseline;margin-bottom:var(--s2)}
+  .detail-grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:var(--s4);align-items:start}
+  @media (max-width:860px){.detail-grid{grid-template-columns:1fr}}
+  .detail-image-wrap{background:var(--stage);box-shadow:var(--lift);display:flex;
+    align-items:center;justify-content:center;padding:var(--s2);min-height:200px}
+  .detail-image-wrap img{display:block;max-width:100%;max-height:80vh;height:auto;width:auto}
+  .version-strip{display:flex;gap:8px;margin-top:10px;overflow-x:auto;padding-bottom:4px}
+  .version-strip button{flex:0 0 auto;font:.78rem var(--mono);background:var(--card);border:none;
+    padding:6px 12px;clip-path:var(--edge-tab);cursor:pointer;color:var(--faded);filter:var(--drop-sm)}
+  .version-strip button.is-current{background:var(--accent);color:var(--accent-ink)}
+  .version-strip button:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+  .detail-side{display:flex;flex-direction:column;gap:var(--s3);min-width:0}
+  .dl-row{display:flex;gap:8px;flex-wrap:wrap}
+  .allow-art{display:flex;gap:10px;align-items:flex-start;font-family:var(--ui);
+    font-size:.88rem;color:var(--faded);cursor:pointer}
+  .allow-art input{margin-top:3px;width:16px;height:16px;accent-color:var(--accent);flex:0 0 auto}
+  .detail-busy-note{font-family:var(--ui);font-size:.82rem;color:var(--dim)}
+
+  @media (max-width:520px){
+    .cs-drop{flex-wrap:wrap}
+    .sheet-head{flex-direction:column;align-items:flex-start}
+    .sheet-cost{text-align:left}
+    .recent-row{flex-wrap:wrap}
+  }
+</style>
+</head>
+<body data-page="cover">
+<div class="wrap">
+
+  <div class="cs-head">
+    <div class="eyebrow">Internal tool</div>
+    <h1>Cover Studio</h1>
+    <p class="lede lede-sm">A brief goes in; several finished ebook covers come out —
+    AI art direction, deterministic typesetting, and notes you can iterate on for free.</p>
+  </div>
+
+  <!-- ============================================================ 1. UNLOCK -->
+  <section id="view-unlock" class="cs-view hidden">
+    <div class="card cs-unlock" id="unlock-card">
+      <h2 style="margin-top:0">Unlock Cover Studio</h2>
+      <p class="note">Staff-only. Enter the shared key to continue.</p>
+      <form id="unlock-form">
+        <div class="field required">
+          <label class="flabel" for="unlock-key">Cover key</label>
+          <input type="password" id="unlock-key" autocomplete="off" required>
+        </div>
+        <button class="btn" type="submit" id="unlock-submit">Unlock</button>
+        <div class="ferror" id="unlock-error" role="alert"></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ============================================================ 2. BRIEF -->
+  <section id="view-brief" class="cs-view hidden">
+    <form id="brief-form">
+      <div class="field required">
+        <label class="flabel" for="f-title">Title</label>
+        <input type="text" id="f-title" maxlength="200" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="flabel" for="f-subtitle">Subtitle</label>
+        <input type="text" id="f-subtitle" maxlength="200" autocomplete="off">
+      </div>
+      <div class="field required">
+        <label class="flabel" for="f-author">Author</label>
+        <input type="text" id="f-author" maxlength="200" required autocomplete="off">
+      </div>
+      <div class="field required">
+        <label class="flabel" for="f-genre">Genre</label>
+        <select id="f-genre" required>
+          <option value="">Choose a genre…</option>
+          <option value="fantasy">Fantasy</option>
+          <option value="science_fiction">Science Fiction</option>
+          <option value="romance">Romance</option>
+          <option value="mystery_thriller">Mystery / Thriller</option>
+          <option value="horror">Horror</option>
+          <option value="historical">Historical Fiction</option>
+          <option value="literary">Literary Fiction</option>
+          <option value="memoir_biography">Memoir / Biography</option>
+          <option value="nonfiction">Nonfiction</option>
+          <option value="young_readers">Young Readers</option>
+          <option value="other">Other…</option>
+        </select>
+        <div class="genre-other hidden" id="genre-other-wrap">
+          <input type="text" id="f-genre-other" maxlength="80" placeholder="Name the genre" autocomplete="off">
+        </div>
+      </div>
+      <div class="field">
+        <label class="flabel" for="f-pitch">Pitch</label>
+        <textarea id="f-pitch" maxlength="4000" rows="4"
+          placeholder="A synopsis, back-cover copy, or logline"></textarea>
+      </div>
+      <div class="field">
+        <label class="flabel" for="f-mood">Mood</label>
+        <input type="text" id="f-mood" maxlength="300" placeholder="elegiac, wintry, hopeful" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="flabel" for="f-must">Must include</label>
+        <input type="text" id="f-must" maxlength="300" placeholder="a lighthouse, the color red" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="flabel" for="f-avoid">Avoid</label>
+        <input type="text" id="f-avoid" maxlength="300" placeholder="no faces, no dragons" autocomplete="off">
+      </div>
+      <div class="field">
+        <span class="flabel" id="concepts-label">Concepts</span>
+        <div class="countpick" role="radiogroup" aria-labelledby="concepts-label">
+          <label><input type="radio" name="concepts" value="2"><span>2</span></label>
+          <label><input type="radio" name="concepts" value="4" checked><span>4</span></label>
+          <label><input type="radio" name="concepts" value="6"><span>6</span></label>
+        </div>
+      </div>
+      <div class="field">
+        <span class="flabel">Manuscript
+          <span class="fhint-inline">— optional, grounds the art in your actual text</span></span>
+        <div class="cs-drop" id="ms-drop" role="button" tabindex="0"
+             aria-label="Upload a manuscript. Accepts .docx, .txt, or .md, up to 40MB.">
+          <div class="dicon"><svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 6c-2-1.4-5-1.4-7-.4v11c2-1 5-1 7 .4 2-1.4 5-1.4 7-.4v-11c-2-1-5-1-7 .4z"/>
+            <path d="M12 6v11.6"/><path d="M6 20.5l6 1 6-1"/></svg></div>
+          <div>
+            <div class="dtitle">Drop a manuscript here, or click to choose</div>
+            <div class="dsub">.docx, .txt, or .md · up to 40MB</div>
+          </div>
+          <input type="file" id="ms-file" accept=".docx,.txt,.md" hidden>
+        </div>
+        <div class="ms-chip" id="ms-chip">
+          <b id="ms-chip-name"></b>
+          <button type="button" class="x" id="ms-remove" aria-label="Remove manuscript">✕</button>
+        </div>
+        <div class="ferror" id="ms-error" role="alert"></div>
+      </div>
+      <div class="stack-m">
+        <button class="btn" type="submit" id="brief-submit">Send the brief</button>
+        <div class="ferror" id="brief-error" role="alert"></div>
+      </div>
+    </form>
+
+    <div class="recent">
+      <h2>Recent covers</h2>
+      <div id="recent-list"></div>
+      <p class="note hidden" id="recent-empty"></p>
+    </div>
+  </section>
+
+  <!-- ============================================================ 3. PROGRESS -->
+  <section id="view-progress" class="cs-view hidden" aria-live="polite">
+    <div class="progress-head">
+      <h2 id="progress-title" style="margin-top:0">Working…</h2>
+      <div class="progress-words hidden" id="progress-words"></div>
+    </div>
+    <div class="progress-list" id="progress-list"></div>
+    <div class="ferror" id="progress-poll-error" role="status"></div>
+  </section>
+
+  <!-- ============================================================ 4. CONTACT SHEET -->
+  <section id="view-sheet" class="cs-view hidden">
+    <div class="sheet-head">
+      <div>
+        <h2 id="sheet-title" style="margin-top:0">—</h2>
+        <div class="note" id="sheet-byline"></div>
+        <div class="sheet-words hidden" id="sheet-words"></div>
+      </div>
+      <div>
+        <div class="sheet-cost" id="sheet-total">—</div>
+        <p class="stack-s"><button class="btn ghost" type="button" id="sheet-newcover">Start a new cover</button></p>
+      </div>
+    </div>
+    <div class="ferror" id="sheet-error" role="alert"></div>
+    <div class="cs-grid" id="cs-grid"></div>
+  </section>
+
+  <!-- ============================================================ 5. DETAIL -->
+  <section id="view-detail" class="cs-view hidden">
+    <div class="detail-top">
+      <div>
+        <h2 id="detail-name" style="margin-top:0">—</h2>
+        <p class="note" id="detail-rationale"></p>
+      </div>
+      <button class="btn ghost" type="button" id="detail-back">Back to contact sheet</button>
+    </div>
+    <div class="ferror hidden" id="detail-status-error" role="alert"></div>
+    <div class="detail-grid">
+      <div>
+        <div class="detail-image-wrap" id="detail-image-wrap"></div>
+        <div class="version-strip hidden" id="version-strip"></div>
+      </div>
+      <div class="detail-side">
+        <div class="dl-row hidden" id="detail-downloads">
+          <button class="btn ghost" type="button" id="dl-jpg">Download JPG</button>
+          <button class="btn ghost" type="button" id="dl-png">Download PNG</button>
+          <button class="btn ghost" type="button" id="dl-spec">Download spec JSON</button>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label class="flabel" for="detail-notes">Notes for a revision</label>
+          <textarea id="detail-notes" rows="4"
+            placeholder="Make the title bigger and the palette warmer, keep the art…"></textarea>
+        </div>
+        <label class="allow-art">
+          <input type="checkbox" id="detail-allow-art">
+          <span>Allow new art (regenerates the images this concept needs — costs a little more;
+          leave unchecked to only re-typeset)</span>
+        </label>
+        <div>
+          <button class="btn" type="button" id="detail-revise">Revise</button>
+          <button class="btn ghost hidden" type="button" id="detail-retry">Retry</button>
+          <div class="detail-busy-note hidden" id="detail-busy-note">Still finishing up — try again in a moment.</div>
+          <div class="ferror" id="detail-error" role="alert"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script src="/assets/sc-shared.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var KEY_STORAGE = 'sc-cover-key';
+  var JOB_STORAGE = 'sc-cover-job';
+  var VIEWS = ['unlock', 'brief', 'progress', 'sheet', 'detail'];
+  var BUSY_STATUSES = { queued: 1, painting: 1, composing: 1 };
+  var STATUS_LINES = {
+    queued: 'mixing pigments…', painting: 'painting…', composing: 'setting type…',
+    ready: 'ready', error: 'hit a snag'
+  };
+
+  var state = {
+    view: null, jobId: null, job: null, detailIndex: null,
+    pollTimer: null, manuscriptFile: null
+  };
+  var blobCache = {};   // "jobId/name" -> Promise<objectURL>
+
+  /* ---------------------------------------------------------- storage ---- */
+  function getKey() { try { return sessionStorage.getItem(KEY_STORAGE) || ''; } catch (e) { return ''; } }
+  function setKey(k) { try { sessionStorage.setItem(KEY_STORAGE, k); } catch (e) {} }
+  function clearKey() { try { sessionStorage.removeItem(KEY_STORAGE); } catch (e) {} }
+  function getStoredJob() { try { return sessionStorage.getItem(JOB_STORAGE) || ''; } catch (e) { return ''; } }
+  function setStoredJob(id) { try { sessionStorage.setItem(JOB_STORAGE, id); } catch (e) {} }
+  function clearStoredJob() { try { sessionStorage.removeItem(JOB_STORAGE); } catch (e) {} }
+
+  /* ------------------------------------------------------------ fetch ---- */
+  function apiError(status, message) { var e = new Error(message); e.status = status; return e; }
+
+  function rawFetch(path, opts) {
+    opts = opts || {};
+    var headers = {};
+    if (opts.headers) { for (var k in opts.headers) headers[k] = opts.headers[k]; }
+    var key = getKey();
+    if (key) headers['X-Cover-Key'] = key;
+    return fetch(path, { method: opts.method, body: opts.body, headers: headers, cache: 'no-store' })
+      .then(function (resp) {
+        if (resp.status === 401) {
+          clearKey();
+          return resp.json().catch(function () { return {}; }).then(function (b) {
+            throw apiError(401, b.detail || 'That key isn’t right.');
+          });
+        }
+        if (resp.status === 503) {
+          return resp.json().catch(function () { return {}; }).then(function (b) {
+            throw apiError(503, b.detail || 'Cover Studio is not enabled on this deployment.');
+          });
+        }
+        if (!resp.ok) {
+          return resp.json().catch(function () { return {}; }).then(function (b) {
+            throw apiError(resp.status, b.detail || ('Something went wrong (' + resp.status + ').'));
+          });
+        }
+        return resp;
+      });
+  }
+  function apiFetch(path, opts) {
+    return rawFetch(path, opts).then(function (r) {
+      return r.text().then(function (t) {
+        if (!t) return {};
+        try { return JSON.parse(t); } catch (e) { return {}; }
+      });
+    });
+  }
+  function apiFetchBlob(path, opts) {
+    return rawFetch(path, opts).then(function (r) { return r.blob(); });
+  }
+  function fetchFileBlobURL(jobId, name) {
+    var key = jobId + '/' + name;
+    if (blobCache[key]) return blobCache[key];
+    var p = apiFetchBlob('/api/cover/jobs/' + encodeURIComponent(jobId) + '/file/' + encodeURIComponent(name))
+      .then(function (blob) { return URL.createObjectURL(blob); })
+      .catch(function (err) { delete blobCache[key]; throw err; });
+    blobCache[key] = p;
+    return p;
+  }
+  function triggerDownload(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }
+  function downloadFile(jobId, name, filename) {
+    return apiFetchBlob('/api/cover/jobs/' + encodeURIComponent(jobId) + '/file/' + encodeURIComponent(name))
+      .then(function (blob) { triggerDownload(blob, filename); });
+  }
+  function downloadSpec(jobId, conceptIdx, filename) {
+    return apiFetchBlob('/api/cover/jobs/' + encodeURIComponent(jobId) + '/file/spec?concept=' + conceptIdx)
+      .then(function (blob) { triggerDownload(blob, filename); });
+  }
+
+  /* -------------------------------------------------------------- misc --- */
+  function renderBase(path) { return String(path || '').split('/').pop().replace(/\.png$/i, ''); }
+  function formatDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+  function uniqueFonts(text) {
+    var seen = {}, out = [];
+    (text || []).forEach(function (t) {
+      var f = t && t.font_family;
+      if (f && !seen[f]) { seen[f] = 1; out.push(f); }
+    });
+    return out;
+  }
+  function conceptCost(job, idx) {
+    var sum = 0, has = false;
+    (job.ledger || []).forEach(function (e) {
+      if (e && typeof e.concept === 'number' && e.concept === idx) { sum += (e.usd || 0); has = true; }
+    });
+    return has ? sum : null;
+  }
+  function safeName(name, idx) {
+    var s = String(name || ('concept-' + idx)).toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
+    return s || ('concept-' + idx);
+  }
+  function normalizeJobsList(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (payload && Array.isArray(payload.jobs)) return payload.jobs;
+    return [];
+  }
+
+  /* -------------------------------------------------------------- views -- */
+  function showView(name) {
+    state.view = name;
+    VIEWS.forEach(function (v) {
+      var el = document.getElementById('view-' + v);
+      if (el) el.classList.toggle('hidden', v !== name);
+    });
+  }
+  function shakeUnlock() {
+    var card = document.getElementById('unlock-card');
+    if (!card) return;
+    card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+  }
+
+  /* -------------------------------------------------------- job polling -- */
+  function anyBusy(job) {
+    if (!job) return true;
+    if (job.status === 'directing' || job.status === 'working') return true;
+    return (job.concepts || []).some(function (c) { return BUSY_STATUSES[c.status]; });
+  }
+  function clearPollErrors() {
+    ['progress-poll-error', 'sheet-error', 'detail-error'].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.textContent = '';
+    });
+  }
+  function renderActiveView() {
+    if (state.view === 'progress') renderProgress(state.job);
+    else if (state.view === 'sheet') renderContactSheet(state.job);
+    else if (state.view === 'detail') renderDetail(state.job, state.detailIndex);
+  }
+  function onJobSettled(job) {
+    if (state.view === 'progress') {
+      if (job.status === 'error' && (!job.concepts || !job.concepts.length)) {
+        renderJobLevelError(job);
+      } else {
+        showView('sheet');
+        renderContactSheet(job);
+      }
+    }
+  }
+  function showPollError(msg) {
+    var id = state.view === 'progress' ? 'progress-poll-error'
+      : state.view === 'sheet' ? 'sheet-error'
+      : state.view === 'detail' ? 'detail-error' : null;
+    if (id) { var el = document.getElementById(id); if (el) el.textContent = msg; }
+  }
+  function pollTick() {
+    if (!state.jobId) return;
+    var jobId = state.jobId;
+    apiFetch('/api/cover/jobs/' + encodeURIComponent(jobId)).then(function (job) {
+      if (state.jobId !== jobId) return;
+      clearPollErrors();
+      state.job = job;
+      renderActiveView();
+      if (anyBusy(job)) {
+        state.pollTimer = setTimeout(pollTick, 2500);
+      } else {
+        state.pollTimer = null;
+        onJobSettled(job);
+      }
+    }).catch(function (err) {
+      if (state.jobId !== jobId) return;
+      state.pollTimer = null;
+      if (err.status === 401 || err.status === 503) return;   // apiFetch already bounced to unlock
+      showPollError(err.message);
+      state.pollTimer = setTimeout(pollTick, 5000);
+    });
+  }
+  function startPolling(jobId) {
+    state.jobId = jobId;
+    setStoredJob(jobId);
+    if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+    pollTick();
+  }
+  function openJob(jobId) {
+    showView('progress');
+    state.job = null; state.detailIndex = null;
+    renderProgress(null);
+    startPolling(jobId);
+  }
+  function goToBrief() {
+    clearStoredJob();
+    state.jobId = null; state.job = null;
+    if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+    showView('brief');
+    resetBriefForm();
+    refreshRecentJobs();
+  }
+
+  /* ------------------------------------------------------------- unlock -- */
+  function wireUnlockForm() {
+    var form = document.getElementById('unlock-form');
+    var input = document.getElementById('unlock-key');
+    var err = document.getElementById('unlock-error');
+    var btn = document.getElementById('unlock-submit');
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var val = input.value.trim();
+      if (!val) { input.focus(); return; }
+      err.textContent = '';
+      setKey(val);
+      btn.disabled = true;
+      apiFetch('/api/cover/jobs').then(function (payload) {
+        btn.disabled = false;
+        input.value = '';
+        var jobId = getStoredJob();
+        if (jobId) { openJob(jobId); }
+        else { showView('brief'); renderRecentJobs(payload); }
+      }).catch(function (e2) {
+        btn.disabled = false;
+        if (e2.status === 401) shakeUnlock();
+        err.textContent = e2.message;
+      });
+    });
+  }
+
+  /* -------------------------------------------------------------- brief -- */
+  function resetBriefForm() {
+    var form = document.getElementById('brief-form');
+    form.reset();
+    document.getElementById('genre-other-wrap').classList.add('hidden');
+    document.getElementById('f-genre-other').required = false;
+    document.getElementById('brief-error').textContent = '';
+    resetDropZone();
+  }
+  function collectBrief() {
+    var genreSel = document.getElementById('f-genre');
+    var genre = genreSel.value === 'other'
+      ? document.getElementById('f-genre-other').value.trim()
+      : genreSel.value;
+    var countEl = document.querySelector('input[name=concepts]:checked');
+    return {
+      title: document.getElementById('f-title').value.trim(),
+      subtitle: document.getElementById('f-subtitle').value.trim(),
+      author: document.getElementById('f-author').value.trim(),
+      genre: genre,
+      pitch: document.getElementById('f-pitch').value.trim(),
+      mood: document.getElementById('f-mood').value.trim(),
+      must_include: document.getElementById('f-must').value.trim(),
+      avoid: document.getElementById('f-avoid').value.trim(),
+      concepts: parseInt((countEl && countEl.value) || '4', 10)
+    };
+  }
+  function wireBriefForm() {
+    var form = document.getElementById('brief-form');
+    var genreSel = document.getElementById('f-genre');
+    var otherWrap = document.getElementById('genre-other-wrap');
+    var otherInput = document.getElementById('f-genre-other');
+    genreSel.addEventListener('change', function () {
+      var isOther = genreSel.value === 'other';
+      otherWrap.classList.toggle('hidden', !isOther);
+      otherInput.required = isOther;
+      if (!isOther) otherInput.value = '';
+    });
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var errEl = document.getElementById('brief-error');
+      errEl.textContent = '';
+      var brief = collectBrief();
+      var fd = new FormData();
+      fd.append('brief', JSON.stringify(brief));
+      if (state.manuscriptFile) fd.append('manuscript', state.manuscriptFile, state.manuscriptFile.name);
+      var btn = document.getElementById('brief-submit');
+      btn.disabled = true;
+      apiFetch('/api/cover/jobs', { method: 'POST', body: fd }).then(function (r) {
+        btn.disabled = false;
+        if (!r || !r.job_id) {
+          errEl.textContent = 'The job was created, but no job id came back — look for it under Recent covers.';
+          refreshRecentJobs();
+          return;
+        }
+        openJob(r.job_id);
+      }).catch(function (err) {
+        btn.disabled = false;
+        errEl.textContent = err.message;
+      });
+    });
+  }
+
+  /* --------------------------------------------------------- drop zone --- */
+  function resetDropZone() {
+    state.manuscriptFile = null;
+    document.getElementById('ms-file').value = '';
+    document.getElementById('ms-chip').classList.remove('show');
+    document.getElementById('ms-drop').classList.remove('hidden');
+    document.getElementById('ms-error').textContent = '';
+  }
+  function wireDropZone() {
+    var drop = document.getElementById('ms-drop');
+    var fileInput = document.getElementById('ms-file');
+    var chip = document.getElementById('ms-chip');
+    var chipName = document.getElementById('ms-chip-name');
+    var err = document.getElementById('ms-error');
+
+    function accept(file) {
+      err.textContent = '';
+      if (!file) return;
+      if (!/\.(docx|txt|md)$/i.test(file.name || '')) {
+        err.textContent = 'Cover Studio reads .docx, .txt, or .md — ' + file.name + ' isn’t one.';
+        return;
+      }
+      if (file.size > 40 * 1024 * 1024) {
+        err.textContent = file.name + ' is over the 40MB cap.';
+        return;
+      }
+      state.manuscriptFile = file;
+      chipName.textContent = 'Grounded in “' + file.name + '”';
+      chip.classList.add('show');
+      drop.classList.add('hidden');
+    }
+    drop.addEventListener('click', function () { fileInput.click(); });
+    drop.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+    });
+    fileInput.addEventListener('change', function () { accept(fileInput.files[0]); });
+    ['dragover', 'dragenter'].forEach(function (ev) {
+      drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+    });
+    drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
+    drop.addEventListener('drop', function (e) {
+      e.preventDefault(); drop.classList.remove('over');
+      accept(e.dataTransfer.files && e.dataTransfer.files[0]);
+    });
+    document.getElementById('ms-remove').addEventListener('click', resetDropZone);
+  }
+
+  /* --------------------------------------------------------- recent list -- */
+  function renderRecentJobs(payload) {
+    var jobs = normalizeJobsList(payload);
+    var host = document.getElementById('recent-list');
+    var empty = document.getElementById('recent-empty');
+    if (!jobs.length) {
+      host.innerHTML = '';
+      empty.textContent = 'No covers yet — your finished and in-progress jobs will line up here.';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    host.innerHTML = jobs.map(function (j) {
+      var title = j.title || 'Untitled';
+      var cost = '$' + Number(j.total_usd || 0).toFixed(2);
+      return '<button type="button" class="recent-row" data-job="' + SC.esc(j.job_id) + '">' +
+        '<span class="rtitle">' + SC.esc(title) + '</span>' +
+        '<span class="rstatus">' + SC.esc(j.status || '') + '</span>' +
+        '<span class="rdate">' + SC.esc(formatDate(j.created)) + '</span>' +
+        '<span class="rcost">' + cost + '</span></button>';
+    }).join('');
+  }
+  function refreshRecentJobs() {
+    apiFetch('/api/cover/jobs').then(renderRecentJobs).catch(function (err) {
+      if (err.status === 401 || err.status === 503) return;
+      var empty = document.getElementById('recent-empty');
+      document.getElementById('recent-list').innerHTML = '';
+      empty.textContent = err.message;
+      empty.classList.remove('hidden');
+    });
+  }
+  function wireRecentList() {
+    document.getElementById('recent-list').addEventListener('click', function (e) {
+      var row = e.target.closest('.recent-row'); if (!row) return;
+      openJob(row.dataset.job);
+    });
+  }
+
+  /* ------------------------------------------------------------ progress -- */
+  function renderProgress(job) {
+    var wc = document.getElementById('progress-words');
+    if (!job) {
+      document.getElementById('progress-title').textContent = 'Working…';
+      document.getElementById('progress-list').innerHTML =
+        '<div class="progress-row is-busy"><span class="pdot"></span>' +
+        '<span class="pname">Job</span><span class="pline">loading…</span></div>';
+      wc.classList.add('hidden');
+      return;
+    }
+    var t = (job.brief && job.brief.title) || 'Untitled';
+    var a = (job.brief && job.brief.author) || '';
+    document.getElementById('progress-title').textContent = t + (a ? ' — ' + a : '');
+    if (job.manuscript_name) {
+      wc.textContent = 'Grounded in “' + job.manuscript_name + '” · ' +
+        Number(job.word_count || 0).toLocaleString() + ' words';
+      wc.classList.remove('hidden');
+    } else { wc.classList.add('hidden'); }
+
+    var list = document.getElementById('progress-list');
+    if (job.status === 'directing') {
+      list.innerHTML = '<div class="progress-row is-busy"><span class="pdot"></span>' +
+        '<span class="pname">Art direction</span><span class="pline">reading the brief…</span></div>';
+      return;
+    }
+    var concepts = job.concepts || [];
+    if (!concepts.length) {
+      list.innerHTML = '<div class="progress-row is-busy"><span class="pdot"></span>' +
+        '<span class="pname">Art direction</span><span class="pline">reading the brief…</span></div>';
+      return;
+    }
+    list.innerHTML = concepts.map(function (c, i) {
+      var name = (c.spec && c.spec.concept_name) || ('Concept ' + (i + 1));
+      var isError = c.status === 'error', isReady = c.status === 'ready', isBusy = BUSY_STATUSES[c.status];
+      var cls = 'progress-row' + (isReady ? ' is-ready' : '') + (isError ? ' is-error' : '') + (isBusy ? ' is-busy' : '');
+      var line = isError ? (c.error || STATUS_LINES.error) : (STATUS_LINES[c.status] || c.status);
+      return '<div class="' + cls + '"><span class="pdot"></span>' +
+        '<span class="pname">' + SC.esc(name) + '</span>' +
+        '<span class="pline">' + SC.esc(line) + '</span></div>';
+    }).join('');
+  }
+  function renderJobLevelError(job) {
+    var list = document.getElementById('progress-list');
+    list.innerHTML = '<div class="progress-row is-error"><span class="pdot"></span>' +
+      '<span class="pname">Art direction</span>' +
+      '<span class="pline">' + SC.esc(job.error || 'Something went wrong.') + '</span></div>' +
+      '<div class="stack-s"><button class="btn ghost" type="button" id="progress-restart">Back to brief</button></div>';
+    var btn = document.getElementById('progress-restart');
+    if (btn) btn.addEventListener('click', goToBrief);
+  }
+
+  /* -------------------------------------------------------- contact sheet -- */
+  function paintThumb(el, jobId, base, suffix) {
+    if (!el || el.dataset.painted === base) return;
+    el.dataset.painted = base;
+    fetchFileBlobURL(jobId, base + suffix).then(function (url) {
+      if (el.dataset.painted !== base) return;
+      el.innerHTML = '<img src="' + url + '" alt="">';
+    }).catch(function () {});
+  }
+  function paintCardThumbs(jobId, c, idx) {
+    var renders = c.renders || [];
+    if (!renders.length) return;
+    var base = renderBase(renders[renders.length - 1]);
+    paintThumb(document.querySelector('[data-thumb300="' + idx + '"]'), jobId, base, '_thumb300.png');
+    paintThumb(document.querySelector('[data-thumb100="' + idx + '"]'), jobId, base, '_thumb100.png');
+  }
+  function conceptCardHTML(job, c, idx) {
+    var spec = c.spec || {};
+    var pal = spec.palette || {};
+    var swatches = ['background', 'primary', 'accent', 'text', 'scrim'].map(function (r) {
+      var hex = pal[r] || '#cccccc';
+      return '<span class="cs-swatch" style="background:' + hex + '" title="' + r + ' ' + hex + '"></span>';
+    }).join('');
+    var fonts = uniqueFonts(spec.text).join(' · ');
+    var cost = conceptCost(job, idx);
+    var warnings = (c.report && c.report.warnings) || [];
+    var isError = c.status === 'error';
+    var isBusy = BUSY_STATUSES[c.status];
+    var statusText = isError ? 'error' : (isBusy ? (STATUS_LINES[c.status] || c.status) : 'ready');
+    var name = spec.concept_name || ('Concept ' + (idx + 1));
+    return '<div class="cs-card' + (isError ? ' is-error' : '') + '" role="button" tabindex="0" data-idx="' + idx + '" ' +
+      'aria-label="Open concept ' + SC.esc(name) + '">' +
+      '<div class="cs-thumbs">' +
+        '<div class="cs-thumb300" data-thumb300="' + idx + '"></div>' +
+        '<div class="cs-thumb100-wrap"><div class="cs-thumb100" data-thumb100="' + idx + '"></div>' +
+        '<span class="tcap">search-result size</span></div>' +
+      '</div>' +
+      '<div class="cs-name">' + SC.esc(name) + '</div>' +
+      (spec.rationale ? '<div class="cs-rationale">' + SC.esc(spec.rationale) + '</div>' : '') +
+      (fonts ? '<div class="cs-fonts">' + SC.esc(fonts) + '</div>' : '') +
+      '<div class="cs-swatches">' + swatches + '</div>' +
+      '<div class="cs-meta"><span class="cs-status">' + SC.esc(statusText) + '</span>' +
+      (cost !== null ? '<span class="cs-cost">$' + cost.toFixed(2) + '</span>' : '') + '</div>' +
+      (warnings.length ? '<div class="cs-warn">' + warnings.map(SC.esc).join(' · ') + '</div>' : '') +
+      (isError ? ('<div class="cs-warn">' + SC.esc(c.error || 'This concept hit a snag.') + '</div>' +
+        '<button type="button" class="btn ghost cs-retry" data-retry="' + idx + '">Retry</button>') : '') +
+      '</div>';
+  }
+  function renderContactSheet(job) {
+    if (!job) return;
+    var t = (job.brief && job.brief.title) || 'Untitled';
+    var a = (job.brief && job.brief.author) || '';
+    document.getElementById('sheet-title').textContent = t;
+    document.getElementById('sheet-byline').textContent = a ? 'by ' + a : '';
+    document.getElementById('sheet-total').textContent = '$' + Number(job.total_usd || 0).toFixed(2) + ' so far';
+    var wc = document.getElementById('sheet-words');
+    if (job.manuscript_name) {
+      wc.textContent = 'Grounded in “' + job.manuscript_name + '” · ' +
+        Number(job.word_count || 0).toLocaleString() + ' words';
+      wc.classList.remove('hidden');
+    } else { wc.classList.add('hidden'); }
+
+    var grid = document.getElementById('cs-grid');
+    var concepts = job.concepts || [];
+    grid.innerHTML = concepts.map(function (c, i) { return conceptCardHTML(job, c, i); }).join('');
+    concepts.forEach(function (c, i) { paintCardThumbs(job.job_id, c, i); });
+  }
+  function wireSheet() {
+    var grid = document.getElementById('cs-grid');
+    grid.addEventListener('click', function (e) {
+      var retry = e.target.closest('.cs-retry');
+      if (retry) {
+        e.stopPropagation();
+        doRevise(parseInt(retry.dataset.retry, 10), '', true).catch(function (err) {
+          document.getElementById('sheet-error').textContent = err.message;
+        });
+        return;
+      }
+      var card = e.target.closest('.cs-card');
+      if (card) openDetail(parseInt(card.dataset.idx, 10));
+    });
+    grid.addEventListener('keydown', function (e) {
+      if (e.target.closest('.cs-retry')) return;
+      var card = e.target.closest('.cs-card'); if (!card) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(parseInt(card.dataset.idx, 10)); }
+    });
+    document.getElementById('sheet-newcover').addEventListener('click', goToBrief);
+  }
+
+  /* ------------------------------------------------------------- revise --- */
+  function doRevise(idx, notes, allowNewArt) {
+    if (!state.jobId) return Promise.reject(apiError(0, 'No job is open.'));
+    return apiFetch('/api/cover/jobs/' + encodeURIComponent(state.jobId) + '/revise', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ concept: idx, notes: notes, allow_new_art: !!allowNewArt })
+    }).then(function (r) {
+      startPolling(state.jobId);
+      return r;
+    });
+  }
+
+  /* -------------------------------------------------------------- detail -- */
+  function openDetail(idx) {
+    state.detailIndex = idx;
+    showView('detail');
+    renderDetail(state.job, idx);
+  }
+  function showDetailVersion(jobId, renderPath) {
+    var base = renderBase(renderPath);
+    var imgWrap = document.getElementById('detail-image-wrap');
+    imgWrap.dataset.current = base;
+    imgWrap.innerHTML = '<p class="note">loading…</p>';
+    fetchFileBlobURL(jobId, base + '.png').then(function (url) {
+      if (imgWrap.dataset.current !== base) return;
+      imgWrap.innerHTML = '<img src="' + url + '" alt="">';
+    }).catch(function (err) {
+      if (imgWrap.dataset.current !== base) return;
+      imgWrap.innerHTML = '<p class="note">' + SC.esc(err.message || 'Could not load that render.') + '</p>';
+    });
+  }
+  function renderVersionStrip(renders, currentPath) {
+    var strip = document.getElementById('version-strip');
+    if (!renders.length || renders.length <= 1) { strip.innerHTML = ''; strip.classList.add('hidden'); return; }
+    strip.classList.remove('hidden');
+    strip.innerHTML = renders.map(function (r) {
+      var m = /^v(\d+)_/.exec(renderBase(r));
+      var vNum = m ? m[1] : '?';
+      return '<button type="button" class="' + (r === currentPath ? 'is-current' : '') +
+        '" data-render="' + SC.esc(r) + '">v' + vNum + '</button>';
+    }).join('');
+  }
+  function renderDetail(job, idx) {
+    if (!job || idx == null) return;
+    var c = (job.concepts || [])[idx];
+    if (!c) return;
+    var spec = c.spec || {};
+    document.getElementById('detail-name').textContent = spec.concept_name || ('Concept ' + (idx + 1));
+    document.getElementById('detail-rationale').textContent = spec.rationale || '';
+    var isBusy = !!BUSY_STATUSES[c.status];
+    var isError = c.status === 'error';
+    var renders = c.renders || [];
+
+    var imgWrap = document.getElementById('detail-image-wrap');
+    if (!renders.length) {
+      imgWrap.dataset.current = '';
+      imgWrap.innerHTML = '<p class="note">' + SC.esc(isError
+        ? (c.error || 'This concept hit a snag before any art was made.')
+        : 'Still working — ' + (STATUS_LINES[c.status] || c.status)) + '</p>';
+    } else {
+      var latest = renders[renders.length - 1];
+      if (imgWrap.dataset.current !== renderBase(latest)) showDetailVersion(job.job_id, latest);
+    }
+    renderVersionStrip(renders, renders.length ? renders[renders.length - 1] : null);
+
+    var errBox = document.getElementById('detail-status-error');
+    errBox.classList.toggle('hidden', !isError);
+    if (isError) errBox.textContent = c.error || 'This concept hit a snag.';
+
+    document.getElementById('detail-retry').classList.toggle('hidden', !isError);
+    document.getElementById('detail-revise').disabled = isBusy;
+    document.getElementById('detail-busy-note').classList.toggle('hidden', !isBusy);
+    document.getElementById('detail-downloads').classList.toggle('hidden', !renders.length);
+  }
+  function wireDetail() {
+    document.getElementById('detail-back').addEventListener('click', function () {
+      state.detailIndex = null;
+      showView('sheet');
+      renderContactSheet(state.job);
+    });
+    document.getElementById('version-strip').addEventListener('click', function (e) {
+      var btn = e.target.closest('button'); if (!btn) return;
+      showDetailVersion(state.jobId, btn.dataset.render);
+      document.querySelectorAll('#version-strip button').forEach(function (b) {
+        b.classList.toggle('is-current', b === btn);
+      });
+    });
+    function currentConcept() {
+      return state.job && state.job.concepts && state.detailIndex != null
+        ? state.job.concepts[state.detailIndex] : null;
+    }
+    document.getElementById('dl-jpg').addEventListener('click', function () {
+      var c = currentConcept(); if (!c || !c.renders.length) return;
+      var base = renderBase(c.renders[c.renders.length - 1]);
+      downloadFile(state.jobId, base + '.jpg', safeName(c.spec.concept_name, state.detailIndex) + '.jpg')
+        .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
+    });
+    document.getElementById('dl-png').addEventListener('click', function () {
+      var c = currentConcept(); if (!c || !c.renders.length) return;
+      var base = renderBase(c.renders[c.renders.length - 1]);
+      downloadFile(state.jobId, base + '.png', safeName(c.spec.concept_name, state.detailIndex) + '.png')
+        .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
+    });
+    document.getElementById('dl-spec').addEventListener('click', function () {
+      var c = currentConcept(); if (!c) return;
+      downloadSpec(state.jobId, state.detailIndex, safeName(c.spec.concept_name, state.detailIndex) + '-spec.json')
+        .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
+    });
+    document.getElementById('detail-revise').addEventListener('click', function () {
+      var idx = state.detailIndex;
+      var notes = document.getElementById('detail-notes').value.trim();
+      var allowArt = document.getElementById('detail-allow-art').checked;
+      var btn = document.getElementById('detail-revise');
+      var errEl = document.getElementById('detail-error');
+      errEl.textContent = '';
+      btn.disabled = true;
+      doRevise(idx, notes, allowArt).then(function () {
+        document.getElementById('detail-notes').value = '';
+        document.getElementById('detail-allow-art').checked = false;
+        renderDetail(state.job, idx);
+      }).catch(function (err) {
+        btn.disabled = false;
+        errEl.textContent = err.message;
+      });
+    });
+    document.getElementById('detail-retry').addEventListener('click', function () {
+      var idx = state.detailIndex;
+      var errEl = document.getElementById('detail-error');
+      errEl.textContent = '';
+      doRevise(idx, '', true).then(function () {
+        renderDetail(state.job, idx);
+      }).catch(function (err) { errEl.textContent = err.message; });
+    });
+  }
+
+  /* --------------------------------------------------------------- boot -- */
+  function boot() {
+    wireUnlockForm();
+    wireBriefForm();
+    wireDropZone();
+    wireRecentList();
+    wireSheet();
+    wireDetail();
+
+    if (!getKey()) { showView('unlock'); return; }
+    var jobId = getStoredJob();
+    if (jobId) { openJob(jobId); }
+    else { showView('brief'); refreshRecentJobs(); }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>

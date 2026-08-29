@@ -1,0 +1,54 @@
+# Research: Richard Osman's Thursday Murder Club series (latest: "The
+# Impossible Fortune", 2025) — trade coverage explicitly calls the look
+# "stark contrast, minimal illustration, slanted letters" and notes it has
+# spawned imitators ("many book covers are now being created in Osman
+# style"). Confidence: high (docs/cover_template_research.md #9).
+name: cozy_mystery_graphic_stamp
+genres: [mystery_thriller]
+describe: >-
+  Osman-style: a bold title banner across the upper third on a flat
+  cheerful color block, one small flat graphic icon beneath it, upright
+  author line and a series tag at the very bottom for contrast.
+composition_note: >-
+  One small, flat graphic icon — a teacup, a magnifying glass, a
+  footprint — in one or two flat colors with a bold outline, centered low
+  in the frame, on an otherwise completely flat, cheerful, unbroken color
+  field. Not gritty, not moody. No scene, no clutter. No text anywhere.
+art:
+  - id: background
+    generatable: true            # bright cheerful flat color; procedural
+    fit: cover                   # gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # one small icon, not a scene
+    anchor: [0.5, 0.5]
+    scale: 0.28                  # deliberately small — "never a full scene"
+    offset: [0.0, 0.12]
+text:
+  - id: title
+    zone: {x: 0.06, y: 0.08, w: 0.88, h: 0.22}
+    case: title                  # mixed-case, friendly — not a shout. The
+    tracking: 20                 # engine has no synthetic-slant option, so
+    size_min: 0.05               # the "slanted letters" signature is
+    size_max: 0.13               # approximated with scale + placement only
+    max_lines: 2
+  - id: subtitle
+    zone: {x: 0.12, y: 0.31, w: 0.76, h: 0.03}
+    optional: true
+    size_min: 0.015
+    size_max: 0.021
+  - id: author
+    zone: {x: 0.15, y: 0.80, w: 0.70, h: 0.05}
+    case: upper                  # upright and uppercase, for contrast
+    tracking: 100                # against the title's mixed-case treatment
+    size_min: 0.020
+    size_max: 0.030
+  - id: series
+    zone: {x: 0.20, y: 0.93, w: 0.60, h: 0.028}
+    case: upper
+    tracking: 140
+    optional: true
+    size_min: 0.012
+    size_max: 0.017
+layers: [background, focal, title, subtitle, author, series]
