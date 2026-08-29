@@ -8,6 +8,11 @@
 app = "spell-and-check"
 primary_region = "iad"
 
+# Headroom for Cover Studio's rare worst-case spikes (concurrent image
+# downloads + a compose), on top of the 1GB below. Swap is slow but a slow
+# render beats an OOM reboot that orphans every in-flight job.
+swap_size_mb = 512
+
 [build]
   dockerfile = "Dockerfile.quest"
 
@@ -31,4 +36,8 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 512mb served the skin generator fine but OOM-killed the box the first
+  # time Cover Studio composited real covers (kernel log: anon-rss ~406MB at
+  # the kill) — every kill reboots the machine and strands in-flight jobs as
+  # "interrupted". Still scale-to-zero, so the upgrade costs pennies.
+  memory = "1024mb"
