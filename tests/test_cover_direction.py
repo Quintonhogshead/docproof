@@ -175,6 +175,28 @@ def test_run_directions_system_prompt_prefers_illustrated_media_over_photoreal()
     assert "only when the brief explicitly calls for photography" in system
 
 
+def test_run_directions_system_prompt_names_the_effects_rack(): # §7.4a
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    for effect in ("duotone", "silhouette", "posterize", "sticker", "corners",
+                  "scatter", "knockout", "art_fill"):
+        assert effect in system
+
+
+def test_run_directions_system_prompt_effects_rack_says_treatment_is_the_only_field():
+    # §7.4a: "the model sets ArtPrompt.treatment only — corners/scatter/
+    # mask_from/mode stay archetype/revision territory (say so in the
+    # prompt)."
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert "`treatment` is the ONLY effects-rack field you ever set" in system
+    assert "never invent or request them yourself" in system
+
+
 def test_run_directions_system_prompt_enumerates_archetypes_and_fonts():
     # A genre that isn't one of the ten subject keys normalizes to "no
     # filter" (§5.3) — every archetype is enumerated, exactly the unfiltered
@@ -296,17 +318,21 @@ def test_run_directions_rejects_a_bad_archetype_key():
         run_directions(_brief(), provider, n=1)
 
 
-def test_run_directions_rejects_an_art_prompt_for_a_non_generatable_slot():
+def test_run_directions_drops_an_art_prompt_for_a_non_generatable_slot():
     # full_bleed_art's texture slot exists but is procedural (generatable is
-    # false) -- writing an art_prompt for it is exactly the mistake this
-    # check exists to catch (as opposed to a slot id that doesn't exist at
-    # all in the archetype).
+    # false). A surplus prompt for it used to be fatal; a live run showed
+    # that killing a whole multi-concept job over one stray extra prompt is
+    # the wrong trade (the entry is never read by build_spec anyway), so it
+    # is now dropped -- the concept survives with only its generatable
+    # prompts, and only a fabricated ARCHETYPE stays fatal.
     payload = {"concepts": [_direction_payload(
         archetype="full_bleed_art",
-        art_prompts={"texture": "a grainy film overlay"})]}
+        art_prompts={"background": "a moody coastal scene, oil painting",
+                     "texture": "a grainy film overlay"})]}
     provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
-    with pytest.raises(DirectionError, match="texture"):
-        run_directions(_brief(), provider, n=1)
+    result = run_directions(_brief(), provider, n=1)
+    slots = {p.slot for p in result.directions[0].art_prompts}
+    assert slots == {"background"}
 
 
 def test_run_directions_accepts_a_well_formed_cutout_sandwich_concept():
@@ -316,6 +342,18 @@ def test_run_directions_accepts_a_well_formed_cutout_sandwich_concept():
     provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
     result = run_directions(_brief(), provider, n=1)
     assert result.directions[0].archetype == "cutout_sandwich"
+
+
+def test_run_directions_accepts_an_art_prompts_treatment_from_the_model(): # §7.4a
+    # art_prompts also accepts the LIST-of-objects wire shape directly (not
+    # just the {slot: prompt} dict convenience form _direction_payload uses
+    # elsewhere) — this is the only shape that can carry `treatment` at all.
+    payload = {"concepts": [_direction_payload(
+        art_prompts=[{"slot": "background", "prompt": "A lonely lighthouse.",
+                     "treatment": "duotone"}])]}
+    provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
+    result = run_directions(_brief(), provider, n=1)
+    assert result.directions[0].art_prompts[0].treatment == "duotone"
 
 
 # -- failure paths: no fallback, always DirectionError ------------------------

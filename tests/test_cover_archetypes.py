@@ -456,3 +456,13 @@ def test_describe_fonts_mentions_every_family_and_its_vibe():
     for name, font in FAMILIES.items():
         assert name in text
         assert font.vibe in text
+
+
+def test_archetype_art_rejects_a_malformed_anchor_pair():
+    # The module promises malformed archetype data fails LOUDLY at load —
+    # that must include the placement pairs, or a bad YAML only explodes
+    # later inside build_spec, in a detached job task.
+    with pytest.raises(ValidationError, match="anchor/offset"):
+        ArchetypeArt(id="focal", generatable=True, anchor=[0.5])
+    with pytest.raises(ValidationError, match="anchor/offset"):
+        ArchetypeArt(id="focal", generatable=True, offset=[0.0, 9.0])

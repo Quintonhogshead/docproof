@@ -498,3 +498,20 @@ def test_cover_page_route_is_registered(monkeypatch, tmp_path):
     app = _app(monkeypatch, tmp_path)
     paths = {getattr(r, "path", None) for r in app.routes}
     assert "/cover" in paths
+
+
+def test_job_id_with_a_traversal_shape_is_a_plain_404(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    with TestClient(app) as client:
+        # Dot-dot shapes are normalized away by routing before our code ever
+        # sees them (also a 404); the format check is the backstop for any
+        # malformed id that DOES reach the endpoint.
+        for bad in ("..", "%2e%2e", "20260829-XYZZY!", "a" * 40):
+            resp = client.get("/api/cover/jobs/" + bad,
+                              headers={"X-Cover-Key": COVER_KEY})
+            assert resp.status_code == 404, bad
+        for reaches_route in ("20260829-XYZZY!", "a" * 40, "..%5Cjob"):
+            resp = client.get("/api/cover/jobs/" + reaches_route,
+                              headers={"X-Cover-Key": COVER_KEY})
+            assert resp.status_code == 404, reaches_route
+            assert "No cover job" in resp.json()["detail"]

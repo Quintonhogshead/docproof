@@ -121,6 +121,19 @@ _COMPOSE_LOCK = asyncio.Lock()
 # plain dict get-or-create here is not itself racy. See _commit_concept.
 _STATE_LOCKS: dict[str, asyncio.Lock] = {}
 
+# One image-generation semaphore PER JOB, shared by run_job and every
+# concurrent run_revision on that job — a local Semaphore per call would
+# bound each call to IMAGE_CONCURRENCY while letting the job's true
+# in-flight total exceed it (two ready-concept revisions + a still-painting
+# job = 6 calls at once on a 512MB box). Same keyed-registry pattern, and
+# the same modest unbounded-growth tradeoff, as _STATE_LOCKS above.
+_IMAGE_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+
+
+def _image_semaphore(job_id: str) -> asyncio.Semaphore:
+    return _IMAGE_SEMAPHORES.setdefault(job_id,
+                                        asyncio.Semaphore(IMAGE_CONCURRENCY))
+
 # job_id -> the background tasks currently working it (the one run_job task,
 # and/or any run_revision tasks). Used only for stale-job detection
 # (check_interrupted) — a job stuck in a non-terminal state with nothing in
@@ -475,6 +488,27 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
     revised = result.spec.model_copy(update={
         "notes_log": [*result.spec.notes_log[:-1],
                      f"[auto-critique] {verdict.notes}"]})
+
+    # The code-level allow_new_art=False backstop the docstring promises:
+    # whatever the revision model wrote, an auto round may never leave a
+    # generated slot assetless — revise_spec clears `asset` when a prompt
+    # changes (the regenerate signal), and recomposing without restoring it
+    # would render that layer blank. Auto rounds never repaint; put the
+    # prior art straight back, like run_revision's own allow_new_art=False
+    # branch does.
+    prior_assets = {slot.id: slot.asset for slot in spec.art}
+    restored = False
+    for slot in revised.art:
+        if slot.prompt and not slot.asset and prior_assets.get(slot.id, ""):
+            slot.asset = prior_assets[slot.id]
+            restored = True
+    if restored:
+        ledger_rows.append({
+            "kind": "revision", "concept": index,
+            "detail": (f"concept {index}: the auto-critique revision asked "
+                      f"for new art; kept the existing art (auto rounds "
+                      f"never repaint)"),
+            "usd": 0.0})
     ledger_rows.append({"kind": "revision", "concept": index,
                         "detail": f"concept {index}: auto-critique revision",
                         "usd": result.cost or 0.0})
@@ -484,7 +518,10 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
 
     second = _run_critique_safely(job_id, index, revised, brief,
                                   d / new_renders[0], image_client, ledger_rows)
-    if second is not None and not second.passes and second.tells:
+    # Tells are recorded whether or not the verdict passes — the first
+    # critique records pass-with-notes the same way, and a note the model
+    # bothered to write is exactly what the card's warning line is for.
+    if second is not None and second.tells:
         new_report = new_report.model_copy(
             update={"warnings": [*new_report.warnings, *second.tells]})
 
@@ -516,11 +553,15 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         (d / ASSETS_DIR).mkdir(parents=True, exist_ok=True)
 
         ledger_rows: list[dict] = []
-        for art_slot in spec.art:
-            if not art_slot.prompt or art_slot.asset:
-                continue        # procedural slot, or already generated
-            ledger_rows.extend(await _generate_art_slot(
-                image_client, sem, d, index, art_slot, archetype))
+        # All of one concept's generations in flight together — the per-job
+        # semaphore (not this gather) is what bounds actual concurrency, so
+        # awaiting them one by one would just serialize what the semaphore
+        # already meters (11 of 15 archetypes declare 2+ generatable slots).
+        gen_slots = [s for s in spec.art if s.prompt and not s.asset]
+        for rows in await asyncio.gather(*(
+                _generate_art_slot(image_client, sem, d, index, s, archetype)
+                for s in gen_slots)):
+            ledger_rows.extend(rows)
 
         concept.status = "composing"
         await _commit_concept(root, job_id, index, concept, ledger_rows)
@@ -569,17 +610,29 @@ async def run_job(root: str | Path, job_id: str, provider: Provider,
         _write_state(root, job)
         return
 
-    job.concepts = [
-        ConceptState(spec=build_spec(d, job.brief, ARCHETYPES[d.archetype]),
-                    status="queued")
-        for d in result.directions]
+    try:
+        job.concepts = [
+            ConceptState(spec=build_spec(d, job.brief, ARCHETYPES[d.archetype]),
+                        status="queued")
+            for d in result.directions]
+    except Exception as e:  # noqa: BLE001 - a bad archetype must fail visibly
+        # Without this guard a build_spec validation error dies inside a
+        # detached task, the job never leaves "directing", and the next poll
+        # mislabels it "interrupted" — hiding the real cause (most likely a
+        # malformed archetype file) behind a retry that fails identically.
+        log.exception("Cover job %s: building concept specs failed", job_id)
+        job.status = "error"
+        job.error = (f"A design concept could not be assembled from its "
+                     f"archetype: {e}")
+        _write_state(root, job)
+        return
     job.status = "working"
     job.ledger.append({"kind": "direction",
                        "detail": f"{len(result.directions)} concepts via {result.model}",
                        "usd": result.cost or 0.0})
     _write_state(root, job)
 
-    sem = asyncio.Semaphore(IMAGE_CONCURRENCY)
+    sem = _image_semaphore(job_id)
     await asyncio.gather(*(
         _paint_and_compose(root, job_id, i, provider, image_client, sem)
         for i in range(len(job.concepts))))
@@ -613,6 +666,16 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
     try:
         result: RevisionResult = revise_spec(concept.spec, notes, provider)
         spec = result.spec
+        # Validate BEFORE anything is committed: a revision may legitimately
+        # switch archetypes (the notes can ask for it), but an unknown key
+        # stored on the concept would make every retry fail identically —
+        # the prior version must survive a typo'd note untouched.
+        if spec.archetype not in ARCHETYPES:
+            raise RevisionError(
+                f"The revision switched to archetype {spec.archetype!r}, "
+                f"which is not one of the shipped archetypes; the previous "
+                f"version is unchanged. (Real keys: "
+                f"{', '.join(sorted(ARCHETYPES))}.)")
         ledger_rows = [{"kind": "revision", "concept": concept_index,
                         "detail": f"concept {concept_index}: {notes or '(retry)'}",
                         "usd": result.cost or 0.0}]
@@ -643,11 +706,13 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
             d = job_dir(root, job_id)
             (d / ASSETS_DIR).mkdir(parents=True, exist_ok=True)
             archetype = ARCHETYPES[spec.archetype]
-            sem = asyncio.Semaphore(IMAGE_CONCURRENCY)
+            sem = _image_semaphore(job_id)
             image_rows: list[dict] = []
-            for art_slot in cleared:
-                image_rows.extend(await _generate_art_slot(
-                    image_client, sem, d, concept_index, art_slot, archetype))
+            for rows in await asyncio.gather(*(
+                    _generate_art_slot(image_client, sem, d, concept_index,
+                                       s, archetype)
+                    for s in cleared)):
+                image_rows.extend(rows)
             concept.status = "composing"
             await _commit_concept(root, job_id, concept_index, concept, image_rows)
 

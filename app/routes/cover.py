@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -91,6 +92,19 @@ def _gate(request: Request) -> None:
     if not hmac.compare_digest(supplied, cover_key):
         raise HTTPException(401, detail=(
             "That key doesn't match — check X-Cover-Key and try again."))
+
+
+# Exactly what new_job_id() mints — anything else 404s before it can reach
+# the filesystem. The sibling `name` parameter gets the same treatment in
+# cover_get_file; a job_id of ".." would otherwise resolve job_dir() to the
+# store's parent.
+_JOB_ID_RE = re.compile(r"^[0-9]{8}-[0-9a-f]{6}$")
+
+
+def _checked_job_id(job_id: str) -> str:
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(404, detail=f"No cover job {job_id!r} here.")
+    return job_id
 
 
 def _data_root(request: Request) -> Path:
@@ -183,6 +197,7 @@ def register(app: FastAPI) -> None:
         job orphaned by a restart before answering, so a stuck poll turns
         into a plain, actionable error instead of hanging forever."""
         _gate(request)
+        job_id = _checked_job_id(job_id)
         root = _data_root(request)
         job = cover_pipeline.load_job(root, job_id)
         if job is None:
@@ -199,6 +214,7 @@ def register(app: FastAPI) -> None:
         unless that concept is ready/error — a concept mid-paint has nothing
         stable to revise yet (§9)."""
         _gate(request)
+        job_id = _checked_job_id(job_id)
         root = _data_root(request)
         job = cover_pipeline.load_job(root, job_id)
         if job is None:
@@ -226,6 +242,7 @@ def register(app: FastAPI) -> None:
         concept's spec as a JSON download. Refuses any name that could climb
         out of the job directory (§9)."""
         _gate(request)
+        job_id = _checked_job_id(job_id)
         root = _data_root(request)
         job = cover_pipeline.load_job(root, job_id)
         if job is None:

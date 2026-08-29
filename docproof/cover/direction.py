@@ -28,6 +28,7 @@ was narrowed.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import ValidationError
@@ -44,6 +45,8 @@ from .model import ArtSlot, Brief, CoverSpec, Direction, Directions
 # caller (docproof.cover.pipeline) is what decides whether/how to log it
 # against a job, the same way docproof.cover.archetypes' ArchetypeError and
 # docproof.promo.ingest's IngestError raise without logging here either.
+
+log = logging.getLogger("docproof.cover.direction")
 
 LUNA_MODEL = "gpt-5.6-luna"
 
@@ -163,9 +166,9 @@ composer enforces this mechanically later and will escalate the scrim or \
 flip the text color if you get it wrong, but a good answer gets there on \
 its own.)
 
-art_prompts: a list with one {{slot, prompt}} entry for every generatable \
-art slot the archetype you picked declares. Each prompt is 1–3 sentences \
-describing subject, style, \
+art_prompts: a list with one {{slot, prompt, treatment}} entry for every \
+generatable art slot the archetype you picked declares. Each prompt is 1–3 \
+sentences describing subject, style, \
 lighting, era, and medium ("flat vector", "oil painting", "photographic", \
 "paper-cutout collage", and so on). Rules for every art prompt, no \
 exceptions: never ask for text, letters, numbers, typography, book covers, \
@@ -177,6 +180,23 @@ brief explicitly calls for photography — stylized media hide generation \
 artifacts, and photoreal is the single biggest "AI-generated" tell. The \
 composition note that keeps room for the type is appended by code \
 afterward — do not write it yourself.
+
+The effects rack: `treatment` on an art_prompts entry is a deterministic, \
+$0 post-processing pass the composer applies to that slot after it is \
+generated — "none" (the default — leave it alone) unless the archetype's \
+own convention or the brief's mood specifically earns one of: "duotone" \
+(maps the art onto a two-color background/primary ramp — flat graphic and \
+color-block conventions want this), "silhouette" (thresholds the art to one \
+flat primary shape — thriller and historical-figure conventions want this), \
+"posterize" (snaps the art to four flat palette colors — a bold poster-\
+graphic look), or "sticker" (outlines a transparent cutout with a text-\
+colored edge — collage looks want this). `treatment` is the ONLY \
+effects-rack field you ever set. Mirrored corners (ornamental-frame \
+conventions), motif scatter (repeating-pattern conventions), double-\
+exposure masking, and knockout/art_fill title treatments (used only when \
+the archetype's type IS the hero of the cover) are archetype and revision \
+territory — never invent or request them yourself; pick the archetype whose \
+own convention already wants one, and trust it to carry that.
 
 If the brief's `pitch` is present, ground the imagery in it. Never spoil an \
 ending on the cover, regardless of how much the pitch reveals.{_sample_rule(has_sample)}"""
@@ -195,12 +215,15 @@ def _direction_user_prompt(brief: Brief, manuscript_sample: str) -> str:
     return body
 
 
-def _validate_direction(direction: Direction) -> None:
-    """archetype must be real, and every art_prompts key must name a slot
-    that archetype actually declares generatable — the two checks
-    build_spec's own caller (docproof.cover.pipeline) would otherwise
-    discover the hard way, mid-render, several dollars of image spend
-    later."""
+def _validate_direction(direction: Direction) -> Direction:
+    """archetype must be real — a fabricated one is fatal, because nothing
+    downstream can render it. An art prompt for a slot the archetype does
+    not generate is NOT fatal: build_spec simply never reads it, so the
+    honest handling is to drop the extra entry and say so, not to kill a
+    whole multi-concept job over surplus enthusiasm (a live run died exactly
+    this way — one stray `foreground` prompt took down three paid-for
+    concepts that were otherwise fine). Dropping costs nothing; the
+    keep-only-generatable copy is returned."""
     archetype = ARCHETYPES.get(direction.archetype)
     if archetype is None:
         raise DirectionError(
@@ -208,14 +231,14 @@ def _validate_direction(direction: Direction) -> None:
             f"{direction.archetype!r}, which is not one of the shipped "
             f"archetypes ({', '.join(sorted(ARCHETYPES))}).")
     generatable = {a.id for a in archetype.art if a.generatable}
-    bad_keys = sorted({p.slot for p in direction.art_prompts} - generatable)
-    if bad_keys:
-        raise DirectionError(
-            f"{direction.concept_name!r} wrote art prompts for "
-            f"{', '.join(bad_keys)}, but the {archetype.name} archetype "
-            f"does not generate "
-            f"{'that slot' if len(bad_keys) == 1 else 'those slots'} "
-            f"(only {', '.join(sorted(generatable)) or 'nothing'} is).")
+    extra = sorted({p.slot for p in direction.art_prompts} - generatable)
+    if not extra:
+        return direction
+    log.info("Direction %r wrote art prompts for %s, which the %s archetype "
+             "does not generate; dropped.", direction.concept_name,
+             ", ".join(extra), archetype.name)
+    kept = [p for p in direction.art_prompts if p.slot in generatable]
+    return direction.model_copy(update={"art_prompts": kept})
 
 
 def run_directions(brief: Brief, provider: Provider, *, n: int,
@@ -257,10 +280,9 @@ def run_directions(brief: Brief, provider: Provider, *, n: int,
         raise DirectionError(
             f"Asked the model for {n} cover concepts but got "
             f"{len(directions.concepts)}.")
-    for direction in directions.concepts:
-        _validate_direction(direction)
+    validated = [_validate_direction(d) for d in directions.concepts]
 
-    return DirectionResult(directions=list(directions.concepts), model=model,
+    return DirectionResult(directions=validated, model=model,
                            cost=cost_of_usage(usage, fallback_model=model))
 
 

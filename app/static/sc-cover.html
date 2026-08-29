@@ -537,6 +537,12 @@
   }
   function pollTick() {
     if (!state.jobId) return;
+    if (document.hidden) {
+      // A backgrounded tab keeps its place but stops billing the server
+      // a full job re-read every 2.5s; the next visible tick catches up.
+      state.pollTimer = setTimeout(pollTick, 2500);
+      return;
+    }
     var jobId = state.jobId;
     apiFetch('/api/cover/jobs/' + encodeURIComponent(jobId)).then(function (job) {
       if (state.jobId !== jobId) return;
@@ -986,15 +992,21 @@
       return state.job && state.job.concepts && state.detailIndex != null
         ? state.job.concepts[state.detailIndex] : null;
     }
+    function shownBase(c) {
+      // The version strip may be showing an older render; download what the
+      // person is looking at, not silently the newest.
+      var iw = document.getElementById('detail-image-wrap');
+      return (iw && iw.dataset.current) || renderBase(c.renders[c.renders.length - 1]);
+    }
     document.getElementById('dl-jpg').addEventListener('click', function () {
       var c = currentConcept(); if (!c || !c.renders.length) return;
-      var base = renderBase(c.renders[c.renders.length - 1]);
+      var base = shownBase(c);
       downloadFile(state.jobId, base + '.jpg', safeName(c.spec.concept_name, state.detailIndex) + '.jpg')
         .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
     });
     document.getElementById('dl-png').addEventListener('click', function () {
       var c = currentConcept(); if (!c || !c.renders.length) return;
-      var base = renderBase(c.renders[c.renders.length - 1]);
+      var base = shownBase(c);
       downloadFile(state.jobId, base + '.png', safeName(c.spec.concept_name, state.detailIndex) + '.png')
         .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
     });

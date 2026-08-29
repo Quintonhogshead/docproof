@@ -40,6 +40,35 @@ def _validate_hex(value: str) -> str:
     return value
 
 
+# Every ArtSlot the model layer knows about — widened from the launch three
+# (background/focal/texture) by the effects rack (§7.4a) so a depth-collage
+# archetype can declare a second focal subject or a dedicated foreground
+# layer. Shared by ArtSlot.id and ArtPrompt.slot (archetypes.ArchetypeArt.id
+# mirrors this same list independently — see that module's docstring for why
+# it never imports this one).
+ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", "texture")
+
+# The slot treatments every ArtSlot/ArtPrompt may request (§7.4a): pure,
+# deterministic Pillow ops compose.py applies after fit/placement and before
+# compositing. "none" is the default on every launch archetype and every
+# archetype this session did not explicitly retrofit — the rack is opt-in,
+# never a surprise on an existing cover.
+ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize", "sticker")
+
+
+def _validate_scatter(value: int) -> int:
+    """`scatter` is either off (0) or a real stamped count — 1 copy would
+    just be a worse-positioned normal placement, so the closed range starts
+    at 2 (§7.4a: "ArtSlot.scatter: int = 0 (transparent slots, 2-12)"),
+    matching the same "a lone value is not a range" reasoning ScrimSpec's
+    strength bounds and Brief.concepts already apply elsewhere in this
+    module."""
+    if value != 0 and not (2 <= value <= 12):
+        raise ValueError(
+            f"scatter must be 0 (off) or between 2 and 12, got {value}")
+    return value
+
+
 class Brief(BaseModel):
     """The human input, fixed for the life of a job. Every downstream
     document (Direction, CoverSpec) is built from this plus a model's
@@ -158,6 +187,12 @@ class TextSlot(BaseModel):
     shadow: Shadow | None = None
     stroke: Stroke | None = None
     optional: bool = False                     # subtitle/series render only if content
+    # "fill" (default) is typeset.draw_text's normal ink-colored glyphs.
+    # "knockout"/"art_fill" (§7.4a) are archetype/revision territory, never
+    # the art-direction call's (direction.py says so explicitly) — a fresh
+    # concept always starts "fill", and only a hand-authored archetype or a
+    # human revision's notes ever choose otherwise.
+    mode: Literal["fill", "knockout", "art_fill"] = "fill"
 
     @field_validator("font_family")
     @classmethod
@@ -180,7 +215,7 @@ class TextSlot(BaseModel):
 class ArtSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: Literal["background", "focal", "texture"]
+    id: Literal["background", "focal", "focal2", "foreground", "texture"]
     prompt: str = ""                           # what to ask gpt-image-2 for; "" = procedural
     transparent: bool = False                  # request transparent background (cutouts)
     fit: Literal["cover", "contain"] = "cover"
@@ -204,6 +239,20 @@ class ArtSlot(BaseModel):
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     blend: Literal["normal", "multiply", "overlay", "soft_light"] = "normal"
     asset: str = ""                            # relative path under the job dir once generated
+
+    # -- effects rack (§7.4a) — archetype/revision territory; a fresh
+    # art-direction call only ever sets `treatment` (via ArtPrompt, folded in
+    # by build_spec), never these four directly. ------------------------------
+    treatment: Literal["none", "duotone", "silhouette", "posterize",
+                       "sticker"] = "none"
+    mask_from: str = ""                        # another art slot's id, or "" = off
+    corners: bool = False                      # mirror into all four corners (transparent slots)
+    scatter: int = Field(default=0)            # stamp N copies, 0 = off (transparent slots)
+
+    @field_validator("scatter")
+    @classmethod
+    def _scatter_range(cls, value: int) -> int:
+        return _validate_scatter(value)
 
 
 class ScrimSpec(BaseModel):
@@ -240,6 +289,67 @@ class CoverSpec(BaseModel):
     layers: list[LayerRef]                      # explicit z-order, bottom first
     notes_log: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="after")
+    def _layers_resolve(self) -> CoverSpec:
+        """Every layers entry must resolve to a real art slot, text slot, or
+        scrim index — the same guarantee archetypes.Archetype enforces on its
+        own layer list, re-enforced here because a revision (§6.2) hands the
+        WHOLE spec to a model for rewriting: dropping a slot while leaving
+        its layer reference behind must fail as a readable validation error,
+        not as compose()'s bare KeyError three steps later."""
+        art_ids = {a.id for a in self.art}
+        text_ids = {t.id for t in self.text}
+        for ref in self.layers:
+            if ref.kind == "art" and ref.ref not in art_ids:
+                raise ValueError(
+                    f"layers references art slot {ref.ref!r}, which is not "
+                    f"in this spec's art list "
+                    f"({', '.join(sorted(art_ids)) or 'empty'})")
+            if ref.kind == "text" and ref.ref not in text_ids:
+                raise ValueError(
+                    f"layers references text slot {ref.ref!r}, which is not "
+                    f"in this spec's text list "
+                    f"({', '.join(sorted(text_ids)) or 'empty'})")
+            if ref.kind == "scrim":
+                if not ref.ref.isdigit() or int(ref.ref) >= len(self.scrims):
+                    raise ValueError(
+                        f"layers references scrim {ref.ref!r}, but this "
+                        f"spec has {len(self.scrims)} scrim(s)")
+        return self
+
+    @model_validator(mode="after")
+    def _mask_from_precedes(self) -> CoverSpec:
+        """§7.4a: "the referenced slot must exist and precede it in `layers`;
+        a dangling reference fails spec validation." Checked here — at the
+        whole-spec level, not on ArtSlot alone — because "precedes" only
+        means anything relative to `layers`, which ArtSlot itself can't see.
+        A revision (§6.2) hands the model the WHOLE spec and validates the
+        result with this same model, so a revision that breaks this
+        invariant is caught exactly the same way a fresh build_spec would
+        be."""
+        art_ids = {a.id for a in self.art}
+        first_art_position: dict[str, int] = {}
+        for i, ref in enumerate(self.layers):
+            if ref.kind == "art" and ref.ref not in first_art_position:
+                first_art_position[ref.ref] = i
+        for slot in self.art:
+            if not slot.mask_from:
+                continue
+            if slot.mask_from not in art_ids:
+                raise ValueError(
+                    f"art slot {slot.id!r} has mask_from={slot.mask_from!r}, "
+                    f"which is not an art slot in this spec (art slots: "
+                    f"{', '.join(sorted(art_ids))})")
+            this_pos = first_art_position.get(slot.id)
+            ref_pos = first_art_position.get(slot.mask_from)
+            if this_pos is None or ref_pos is None or ref_pos >= this_pos:
+                raise ValueError(
+                    f"art slot {slot.id!r}'s mask_from={slot.mask_from!r} "
+                    f"must appear earlier in `layers` than {slot.id!r} "
+                    f"itself, so its pixels are already positioned by the "
+                    f"time {slot.id!r} is drawn")
+        return self
+
 
 class RenderReport(BaseModel):
     """What one compose() call found, for the "did this actually come out
@@ -271,8 +381,14 @@ class ArtPrompt(BaseModel):
     more natural may still pass one — Direction converts it on validation."""
     model_config = ConfigDict(extra="forbid")
 
-    slot: Literal["background", "focal", "texture"]
+    slot: Literal["background", "focal", "focal2", "foreground", "texture"]
     prompt: str
+    # The ONLY effects-rack field the art-direction call may set (§7.4a) —
+    # build_spec folds this onto the matching ArtSlot.treatment for a
+    # generatable slot; mask_from/corners/scatter/TextSlot.mode stay
+    # archetype/revision territory (direction.py's system prompt says so).
+    treatment: Literal["none", "duotone", "silhouette", "posterize",
+                       "sticker"] = "none"
 
 
 def _coerce_art_prompts(value: object) -> object:
@@ -371,6 +487,14 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
     include_texture = bool(direction.texture)
     prompts = {p.slot: p.prompt for p in direction.art_prompts}
+    # "none" from the model reads as "no opinion", not "force no effect": an
+    # archetype that presets a treatment (the cozy_mystery_graphic_stamp icon
+    # -> silhouette retrofit, say) keeps that convention by default, and only
+    # a direction that actually NAMES an effect overrides it. Direction never
+    # sees mask_from/corners/scatter/TextSlot.mode at all (§7.4a: "archetype/
+    # revision territory") — those always come straight from the archetype.
+    prompt_treatments = {p.slot: p.treatment for p in direction.art_prompts
+                        if p.treatment != "none"}
 
     art: list[ArtSlot] = []
     for slot in archetype.art:
@@ -386,7 +510,11 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             blend=slot.blend,
             anchor=slot.anchor,
             scale=slot.scale,
-            offset=slot.offset))
+            offset=slot.offset,
+            treatment=prompt_treatments.get(slot.id, slot.treatment),
+            mask_from=slot.mask_from,
+            corners=slot.corners,
+            scatter=slot.scatter))
 
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
              for s in archetype.scrims]
@@ -408,7 +536,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             size_max=slot.size_max,
             shadow=Shadow(**slot.shadow.model_dump()) if slot.shadow else None,
             stroke=Stroke(**slot.stroke.model_dump()) if slot.stroke else None,
-            optional=slot.optional))
+            optional=slot.optional,
+            mode=slot.mode))
 
     art_ids = {a.id for a in archetype.art}
     layers: list[LayerRef] = []

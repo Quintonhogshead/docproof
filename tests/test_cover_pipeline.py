@@ -771,3 +771,117 @@ def test_run_revision_human_triggered_does_not_call_run_critique(tmp_path, monke
     assert result.concepts[0].status == "ready"
     assert result.concepts[0].spec.version == 2
     assert not any(row["kind"] == "critique" for row in result.ledger)
+
+
+def test_run_job_auto_critique_revision_that_clears_art_keeps_the_existing_art(
+        tmp_path, monkeypatch):
+    # The code-level allow_new_art=False backstop: even when the auto-
+    # critique revision changes an art prompt (which clears the asset — the
+    # regenerate signal), the auto round restores the prior art instead of
+    # recomposing a blank layer, and never calls generate a second time.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("full_bleed_art")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+
+    generate_calls = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        generate_calls.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["muddy art"],
+                       notes="Different imagery entirely.", cost=0.0007),
+        CritiqueResult(passes=True, tells=[], notes="", cost=0.0007),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique",
+                        lambda *a, **k: verdicts.pop(0))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        # Mimic the real revise_spec: the model rewrote the background's
+        # prompt, so the diffing cleared its asset.
+        art = [s.model_copy(update={"prompt": "something else", "asset": ""})
+               if s.id == "background" else s for s in spec.art]
+        revised = spec.model_copy(update={
+            "version": spec.version + 1, "art": art,
+            "notes_log": [*spec.notes_log, notes]})
+        return RevisionResult(spec=revised, cost=0.01)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDER, IMAGE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    concept = result.concepts[0]
+    assert concept.status == "ready"
+    assert concept.spec.version == 2
+    background = next(s for s in concept.spec.art if s.id == "background")
+    assert background.asset                  # restored, not left blank
+    assert len(generate_calls) == 1          # painted once, never repainted
+    kept = [r for r in result.ledger
+            if r["kind"] == "revision" and "kept the existing art" in r["detail"]]
+    assert len(kept) == 1
+
+
+def test_run_job_second_critique_passing_with_tells_still_records_them(
+        tmp_path, monkeypatch):
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["weak hierarchy"],
+                       notes="Enlarge the title.", cost=0.0007),
+        CritiqueResult(passes=True, tells=["accent contrast a touch low"],
+                       notes="", cost=0.0007),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique",
+                        lambda *a, **k: verdicts.pop(0))
+    monkeypatch.setattr(pipeline, "revise_spec",
+                        lambda spec, notes, provider, **kw: RevisionResult(
+                            spec=spec.model_copy(update={
+                                "version": spec.version + 1,
+                                "notes_log": [*spec.notes_log, notes]}),
+                            cost=0.01))
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDER, IMAGE_CLIENT))
+
+    concept = pipeline.load_job(tmp_path, job.job_id).concepts[0]
+    assert concept.status == "ready"
+    # A pass-with-notes second verdict records its tells exactly like the
+    # first critique would — the card's warning line is for it.
+    assert "accent contrast a touch low" in concept.report.warnings
+
+
+def test_run_revision_rejects_an_unknown_archetype_and_keeps_the_prior_version(
+        tmp_path, monkeypatch):
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+    monkeypatch.setattr(pipeline, "run_critique", lambda *a, **k: CritiqueResult(
+        passes=True, tells=[], notes="", cost=0.0))
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDER, IMAGE_CLIENT))
+
+    monkeypatch.setattr(pipeline, "revise_spec",
+                        lambda spec, notes, provider, **kw: RevisionResult(
+                            spec=spec.model_copy(update={
+                                "archetype": "horror_emblem",
+                                "version": spec.version + 1,
+                                "notes_log": [*spec.notes_log, notes]}),
+                            cost=0.01))
+    asyncio.run(pipeline.run_revision(tmp_path, job.job_id, 0,
+                                      "switch to horror_emblem", False,
+                                      PROVIDER, IMAGE_CLIENT))
+
+    concept = pipeline.load_job(tmp_path, job.job_id).concepts[0]
+    assert concept.status == "error"
+    assert "not one of the shipped archetypes" in concept.error
+    # The prior version survives untouched — a retry is not doomed.
+    assert concept.spec.archetype == "big_type"
+    assert concept.spec.version == 1

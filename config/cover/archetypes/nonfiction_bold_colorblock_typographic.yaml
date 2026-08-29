@@ -27,6 +27,11 @@ art:
     anchor: [0.5, 0.5]
     scale: 0.18                  # "at most one small icon" — the smallest
     offset: [0.0, 0.24]          # focal element in the whole library
+    # Effects rack (§7.4a): the composition_note already asks for "an icon
+    # OR silhouette" — this makes that half of the ask deterministic instead
+    # of a coin flip left to the image model, matching Atomic Habits'
+    # actual one-flat-shape mark.
+    treatment: silhouette
 text:
   - id: title
     zone: {x: 0.08, y: 0.10, w: 0.84, h: 0.46}

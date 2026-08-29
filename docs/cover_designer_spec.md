@@ -270,7 +270,7 @@ One call returns all N concepts (a `Directions` wrapper model with `concepts: li
 
 User prompt: the brief fields, labeled — followed by a `MANUSCRIPT SAMPLE` section when the job has one (§8.1). **Manuscript upload is in scope (DECIDED 2026-08-28):** reuse `read_sample_source` and `sample_text` from [docproof/quest/skin.py](../docproof/quest/skin.py) (they already read .docx/.txt/.md and take an opening + middle slice so front matter doesn't get the only vote). When a sample is present, the system prompt additionally instructs: ground imagery, mood, and palette in the manuscript's actual text and era/setting; typed brief fields always win over the sample on any conflict (title, author, genre); never spoil an ending. Signature: `run_directions(brief, provider, *, n, manuscript_sample: str = "")`.
 
-Failure: no `DEFAULT_DIRECTION` fallback — unlike skins, a junk direction wastes image dollars. Raise `DirectionError` with a human sentence; the route surfaces it and the job ends in state `error`.
+Failure: no `DEFAULT_DIRECTION` fallback — unlike skins, a junk direction wastes image dollars. Raise `DirectionError` with a human sentence; the route surfaces it and the job ends in state `error`. One deliberate exception: an art prompt for a slot the chosen archetype doesn't generate is dropped with a log line rather than raising — `build_spec` never reads it, dropping costs nothing, and a live run proved that failing a whole multi-concept job over one surplus prompt is the wrong trade. Only a fabricated archetype (or wrong concept count, schema mismatch, call failure) stays fatal.
 
 ### 6.2 Revision: `revise_spec(spec, notes, provider) -> CoverSpec`
 

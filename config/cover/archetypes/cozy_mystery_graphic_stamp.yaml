@@ -25,6 +25,11 @@ art:
     anchor: [0.5, 0.5]
     scale: 0.28                  # deliberately small — "never a full scene"
     offset: [0.0, 0.12]
+    # Effects rack (§7.4a): the research calls this "one or two flat colors
+    # with a bold outline" — silhouette GUARANTEES that reading (one flat
+    # primary shape) regardless of how much shading gpt-image-2 actually
+    # renders into the icon, rather than hoping the prompt alone gets there.
+    treatment: silhouette
 text:
   - id: title
     zone: {x: 0.06, y: 0.08, w: 0.88, h: 0.22}

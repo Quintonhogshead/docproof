@@ -19,6 +19,26 @@ art:
   - id: background
     generatable: true            # a plain dark jewel-tone ground; a fully
     fit: cover                   # procedural gradient reads fine too ($0)
+  - id: focal2
+    generatable: true
+    fit: contain                 # placement is moot once `corners` is set —
+    transparent: true            # kept `contain` so an ungenerated slot, or
+                                  # a revision that clears `corners`, still
+                                  # degrades to something sane (§7.4a: the
+                                  # composer falls back to a single normal
+                                  # layer whenever the art has no real alpha)
+    scale: 0.09                  # small — a corner flourish, not a second
+                                  # medallion; clear of the title (y<=0.28)
+                                  # and author (y 0.72-0.78) bands at any
+                                  # plausible generated aspect ratio
+    # Effects rack (§7.4a): the research's own "tarot-card style ornamental
+    # frame" is currently just implied by the composition_note's prose —
+    # `corners` makes the frame LITERAL and exactly symmetric (the "a
+    # designer did this" tell a prompt-only generator can't produce), while
+    # leaving the central medallion (`focal`, below) completely untouched —
+    # corners on `focal` ITSELF would have replaced the medallion with four
+    # small corner copies of it, which is not what this archetype wants.
+    corners: true
   - id: focal
     generatable: true
     fit: contain
@@ -55,4 +75,4 @@ text:
     tracking: 130
     size_min: 0.018
     size_max: 0.028
-layers: [background, texture, focal, series, title, subtitle, author]
+layers: [background, texture, focal2, focal, series, title, subtitle, author]

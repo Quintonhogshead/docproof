@@ -396,5 +396,52 @@ def draw_text(base: Image.Image, slot: TextSlot, fit: FitResult, color: str,
     return out
 
 
+def text_mask(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]) -> Image.Image:
+    """The fitted text's glyph coverage alone, as a canvas-sized 'L' mask —
+    white where ink would land, black everywhere else. Shares draw_text's
+    exact block-positioning and per-line math (same valign branch, same
+    `_render_line` calls) so a mask always lines up pixel-for-pixel with
+    where a normal `fill` render would have put its ink.
+
+    This is the effects rack's (§7.4a) seam into typeset: knockout/art_fill
+    text modes are not "draw colored glyphs", they are "punch glyphs out of
+    a panel" / "window glyphs onto the ground beneath" — both of which need
+    the glyph SHAPE as a mask, never an ink color, which is why this returns
+    an 'L' image rather than taking a color and drawing RGBA like draw_text
+    does. docproof.cover.compose owns what to DO with the mask (that is
+    still a legibility-autopilot decision, same as draw_text's color/shadow
+    are), never this module."""
+    canvas_w, canvas_h = canvas_size
+    if not fit.lines:
+        return Image.new("L", canvas_size, 0)
+    zone_left, zone_top, zone_w_px, zone_h_px = zone_px(slot.zone, canvas_size)
+    font = ImageFont.truetype(font_path(slot.font_family), max(1.0, fit.size_px))
+    line_h = fit.size_px * LINE_HEIGHT
+    block_h = line_h * len(fit.lines)
+    if slot.valign == "top":
+        block_top = float(zone_top)
+    elif slot.valign == "bottom":
+        block_top = zone_top + zone_h_px - block_h
+    else:
+        block_top = zone_top + (zone_h_px - block_h) / 2.0
+
+    stroke_w_px = 0
+    if slot.stroke is not None and slot.stroke.width > 0:
+        stroke_w_px = max(1, round(slot.stroke.width * canvas_h))
+
+    out = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    white = (255, 255, 255)
+    for i, line in enumerate(fit.lines):
+        if not line:
+            continue
+        row_center_y = block_top + line_h * (i + 0.5)
+        layer = _render_line(line, font, fit.tracking_px, white, zone_left,
+                             zone_w_px, row_center_y, slot.align, stroke_w_px,
+                             white if stroke_w_px else None, canvas_size)
+        out.alpha_composite(layer)
+    return out.getchannel("A")
+
+
 __all__ = ["FIT_ITERATIONS", "LINE_HEIGHT", "MAX_BRUTE_WORDS",
-          "RAQM_AVAILABLE", "FitResult", "draw_text", "fit_text", "measure"]
+          "RAQM_AVAILABLE", "FitResult", "draw_text", "fit_text", "measure",
+          "text_mask"]

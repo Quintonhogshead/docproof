@@ -421,3 +421,26 @@ def test_build_spec_degrades_gracefully_for_a_series_slot_brief_has_no_field_for
     series = next(t for t in spec.text if t.id == "series")
     assert series.content == ""
     assert series.font_family == direction.author_font
+
+
+def test_coverspec_rejects_a_layers_reference_to_a_dropped_slot():
+    # A revision may drop a slot while leaving its layers entry behind — the
+    # spec must fail validation readably, not crash compose with a KeyError.
+    direction = _direction(archetype="full_bleed_art",
+                           art_prompts={"background": "a moody coast, oil"},
+                           texture=True)
+    spec = build_spec(direction, _brief(), ARCHETYPES["full_bleed_art"])
+    broken = spec.model_dump()
+    broken["art"] = [a for a in broken["art"] if a["id"] != "texture"]
+    with pytest.raises(ValidationError, match="texture"):
+        CoverSpec.model_validate(broken)
+
+
+def test_coverspec_rejects_a_layers_reference_to_a_missing_scrim():
+    direction = _direction(archetype="full_bleed_art",
+                           art_prompts={"background": "a moody coast, oil"})
+    spec = build_spec(direction, _brief(), ARCHETYPES["full_bleed_art"])
+    broken = spec.model_dump()
+    broken["scrims"] = broken["scrims"][:1]     # layers still names scrim:1
+    with pytest.raises(ValidationError, match="scrim"):
+        CoverSpec.model_validate(broken)

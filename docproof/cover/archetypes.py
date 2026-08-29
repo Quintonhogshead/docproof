@@ -28,7 +28,8 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
+                      field_validator, model_validator)
 
 # docproof/cover/archetypes.py -> docproof/cover -> docproof -> package root,
 # the same depth docproof/eval/candidate_eval.py's CANDIDATE_CASES walks, and
@@ -56,6 +57,18 @@ SUBJECT_KEYS: frozenset[str] = frozenset({
 def _hex(value: str) -> str:
     if not _HEX_RE.match(value):
         raise ValueError(f"{value!r} is not a #rrggbb hex color")
+    return value
+
+
+def _scatter_range(value: int) -> int:
+    """Mirrors docproof.cover.model._validate_scatter exactly (same
+    reasoning: 0 is off, 1 is not a real "scatter", so the closed range
+    starts at 2) — duplicated rather than imported for the same reason this
+    whole module mirrors Zone/Shadow/Stroke instead of importing them (see
+    the module docstring)."""
+    if value != 0 and not (2 <= value <= 12):
+        raise ValueError(
+            f"scatter must be 0 (off) or between 2 and 12, got {value}")
     return value
 
 
@@ -132,7 +145,7 @@ class ArchetypeArt(BaseModel):
     can)."""
     model_config = ConfigDict(extra="forbid")
 
-    id: Literal["background", "focal", "texture"]
+    id: Literal["background", "focal", "focal2", "foreground", "texture"]
     generatable: bool
     fit: Literal["cover", "contain"] = "cover"
     transparent: bool = False
@@ -145,6 +158,34 @@ class ArchetypeArt(BaseModel):
     anchor: list[float] = Field(default_factory=lambda: [0.5, 0.5])
     scale: float = Field(default=1.0, gt=0.0)
     offset: list[float] = Field(default_factory=lambda: [0.0, 0.0])
+    # Effects rack (§7.4a): a convention an archetype bakes in by default —
+    # the direction call may still override `treatment` per concept (a
+    # non-"none" ArtPrompt.treatment wins; see model.build_spec), but
+    # mask_from/corners/scatter are never the model's to set, only the
+    # archetype's (or a later revision's).
+    treatment: Literal["none", "duotone", "silhouette", "posterize",
+                       "sticker"] = "none"
+    mask_from: str = ""
+    corners: bool = False
+    scatter: int = Field(default=0)
+
+    @field_validator("scatter")
+    @classmethod
+    def _scatter_bounds(cls, value: int) -> int:
+        return _scatter_range(value)
+
+    @field_validator("anchor", "offset")
+    @classmethod
+    def _pair(cls, value: list[float]) -> list[float]:
+        """Mirrors ArtSlot._pair in model.py exactly. Without this, a
+        malformed YAML pair loads fine here and only explodes later inside
+        build_spec — in a detached job task, where the module's own "fails
+        LOUDLY at import" promise is worth nothing."""
+        if len(value) != 2:
+            raise ValueError("anchor/offset must be exactly [x, y]")
+        if not all(-2.0 <= v <= 2.0 for v in value):
+            raise ValueError("anchor/offset values must stay within [-2, 2]")
+        return value
 
 
 class ArchetypeScrim(BaseModel):
@@ -178,6 +219,10 @@ class ArchetypeText(BaseModel):
     optional: bool = False
     shadow: ArchetypeShadow | None = None
     stroke: ArchetypeStroke | None = None
+    # "fill" is the launch default everywhere; knockout/art_fill (§7.4a) are
+    # archetype/revision territory — no Direction field sets this, so the
+    # only way a concept ever gets one is an archetype that presets it.
+    mode: Literal["fill", "knockout", "art_fill"] = "fill"
 
     @model_validator(mode="after")
     def _size_range(self) -> ArchetypeText:
@@ -256,6 +301,36 @@ class Archetype(BaseModel):
                 raise ValueError(
                     f"{self.name}: layers entry {ref!r} matches no art slot, "
                     f"text slot, or scrim index")
+        return self
+
+    @model_validator(mode="after")
+    def _mask_from_precedes(self) -> Archetype:
+        """Mirrors docproof.cover.model.CoverSpec's own _mask_from_precedes
+        exactly (same rule: a mask_from target must exist and come earlier
+        in `layers`), checked again here so a malformed SHIPPED archetype
+        fails at import — this module's whole "fails LOUDLY" philosophy
+        (see the module docstring) — rather than only surfacing the first
+        time a real brief happens to build a spec from it."""
+        art_ids = {a.id for a in self.art}
+        first_position: dict[str, int] = {}
+        for i, ref in enumerate(self.layers):
+            if ref in art_ids and ref not in first_position:
+                first_position[ref] = i
+        for slot in self.art:
+            if not slot.mask_from:
+                continue
+            if slot.mask_from not in art_ids:
+                raise ValueError(
+                    f"{self.name}: art slot {slot.id!r} has mask_from="
+                    f"{slot.mask_from!r}, which is not one of this "
+                    f"archetype's art slots ({', '.join(sorted(art_ids))})")
+            this_pos = first_position.get(slot.id)
+            ref_pos = first_position.get(slot.mask_from)
+            if this_pos is None or ref_pos is None or ref_pos >= this_pos:
+                raise ValueError(
+                    f"{self.name}: art slot {slot.id!r}'s mask_from="
+                    f"{slot.mask_from!r} must appear earlier in `layers` "
+                    f"than {slot.id!r} itself")
         return self
 
 
