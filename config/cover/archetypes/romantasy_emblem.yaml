@@ -1,0 +1,78 @@
+# Research: Fourth Wing / Onyx Storm (Rebecca Yarros; design by Bree Archer &
+# Elizabeth Turner Stokes) plus Reedsy's "Romantasy Book Covers" resource,
+# which names the pattern outright: a central emblem inside a tarot-card-
+# style ornamental frame. Confidence: high (docs/cover_template_research.md #1).
+name: romantasy_emblem
+genres: [fantasy, romance]     # "romantasy" itself isn't a subject key — the
+                                # convention sits at the fantasy/romance seam
+describe: >-
+  A central mythical emblem inside a circular ornamental frame, tarot-card
+  style; small series eyebrow, huge engraved-caps title above the frame,
+  tight-tracked author just below it.
+composition_note: >-
+  Center the emblem inside its own circular or pointed-arch frame with
+  nested decorative bands, leaving clear unbroken dark ground above and
+  below the ring — an open band across the top third for a title and a
+  narrower open band just beneath the frame for an author line. No text
+  anywhere.
+art:
+  - id: background
+    generatable: true            # a plain dark jewel-tone ground; a fully
+    fit: cover                   # procedural gradient reads fine too ($0)
+  - id: focal2
+    generatable: true
+    fit: contain                 # placement is moot once `corners` is set —
+    transparent: true            # kept `contain` so an ungenerated slot, or
+                                  # a revision that clears `corners`, still
+                                  # degrades to something sane (§7.4a: the
+                                  # composer falls back to a single normal
+                                  # layer whenever the art has no real alpha)
+    scale: 0.09                  # small — a corner flourish, not a second
+                                  # medallion; clear of the title (y<=0.28)
+                                  # and author (y 0.72-0.78) bands at any
+                                  # plausible generated aspect ratio
+    # Effects rack (§7.4a): the research's own "tarot-card style ornamental
+    # frame" is currently just implied by the composition_note's prose —
+    # `corners` makes the frame LITERAL and exactly symmetric (the "a
+    # designer did this" tell a prompt-only generator can't produce), while
+    # leaving the central medallion (`focal`, below) completely untouched —
+    # corners on `focal` ITSELF would have replaced the medallion with four
+    # small corner copies of it, which is not what this archetype wants.
+    corners: true
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # the medallion is a cutout, not a scene
+    anchor: [0.5, 0.5]
+    scale: 0.55                  # centered mid-canvas, well under the 0.7 cap
+  - id: texture
+    generatable: false           # procedural film grain (§7.3) doubles as
+    opacity: 0.08                # the "engraved metal" texture the research
+    blend: overlay                # calls for
+text:
+  - id: series
+    zone: {x: 0.15, y: 0.045, w: 0.70, h: 0.03}
+    case: upper
+    tracking: 160
+    optional: true
+    size_min: 0.012
+    size_max: 0.018
+  - id: title
+    zone: {x: 0.10, y: 0.09, w: 0.80, h: 0.19}
+    case: upper
+    tracking: 50
+    size_min: 0.05
+    size_max: 0.13
+    max_lines: 3
+  - id: subtitle
+    zone: {x: 0.15, y: 0.285, w: 0.70, h: 0.03}
+    optional: true
+    size_min: 0.014
+    size_max: 0.02
+  - id: author
+    zone: {x: 0.15, y: 0.72, w: 0.70, h: 0.06}
+    case: upper
+    tracking: 130
+    size_min: 0.018
+    size_max: 0.028
+layers: [background, texture, focal2, focal, series, title, subtitle, author]

@@ -1,0 +1,58 @@
+# Research: Book Riot ("Book Cover Trend Watch: WW2-Era Women Looking
+# Away"), BookBrowse ("Faces Lost to Time"), and a curated Allegheny County
+# Libraries list all independently name and describe this identical
+# pattern. Confidence: high (docs/cover_template_research.md #12) — one of
+# the most explicitly documented conventions in the whole research pass.
+name: historical_woman_walking_away
+genres: [historical]
+describe: >-
+  A single figure shown from behind or at a distance in a painterly period
+  landscape; title-case (not shouting caps) title in the sky above her,
+  author in the margin below, muted desaturated tones throughout.
+composition_note: >-
+  A single figure shown from behind, in silhouette, or at a distance —
+  face hidden or unreadable — against a painterly period landscape,
+  street, or architectural backdrop, visible brushwork, muted tones. Leave
+  the sky or open landscape simple and uncluttered across the top third,
+  and a plain foreground margin along the bottom edge. No text anywhere.
+art:
+  - id: background
+    generatable: true
+    fit: cover
+  - id: texture
+    generatable: false           # procedural film grain (§7.3), pushed a
+    opacity: 0.09                # touch stronger for an old-photograph patina
+    blend: overlay
+scrims:
+  # "An in-world scrim, not a flat overlay box" per the research — these are
+  # a code-level backstop for when the generated sky/margin isn't quite
+  # quiet enough, not the primary legibility strategy.
+  - kind: gradient_up            # darkens toward the canvas TOP (the sky the
+    protects: title               # title sits in) — gradient_up extends its
+    strength: 0.22                 # solid fill up to the canvas top edge (§7.3)
+  - kind: gradient_down          # darkens toward the canvas BOTTOM (the
+    protects: author               # foreground margin the author line sits in)
+    strength: 0.16
+  - kind: gradient_up            # the optional subtitle sits just below the
+    protects: subtitle             # title, still in the same sky band — give
+    strength: 0.18                 # it its own (lighter) protection too
+text:
+  - id: title
+    zone: {x: 0.10, y: 0.08, w: 0.80, h: 0.16}
+    case: title                  # title case, not all-caps — "signals
+    tracking: 10                 # literary/upmarket rather than commercial-
+    size_min: 0.04               # genre loudness" (research)
+    size_max: 0.09
+    max_lines: 3
+  - id: subtitle
+    zone: {x: 0.12, y: 0.25, w: 0.76, h: 0.035}
+    optional: true
+    size_min: 0.016
+    size_max: 0.024
+  - id: author
+    zone: {x: 0.10, y: 0.90, w: 0.80, h: 0.05}
+    case: title
+    tracking: 60
+    size_min: 0.020
+    size_max: 0.030
+layers: [background, texture, "scrim:0", "scrim:1", "scrim:2", title, subtitle, author]

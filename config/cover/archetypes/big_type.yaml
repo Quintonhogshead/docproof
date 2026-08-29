@@ -1,0 +1,46 @@
+name: big_type
+describe: >-
+  No focal art — a huge stacked title over a procedural gradient field is the
+  whole cover. The $0 fallback, and the print-safest design of the three.
+composition_note: >-
+  An abstract texture only, with no recognizable subject and no text — just
+  color, grain, and light, since the type itself carries the entire cover.
+art:
+  - id: background
+    generatable: false           # procedural: two-stop vertical gradient (§7.3)
+    fit: cover
+  - id: texture
+    generatable: true            # optional: a small generated abstract texture;
+    opacity: 0.10                # falls back to procedural film grain (§7.3)
+    blend: overlay               # if no asset is ever generated for it
+scrims:
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: title
+    zone: {x: 0.08, y: 0.07, w: 0.84, h: 0.53}
+    case: upper
+    align: left
+    valign: top
+    tracking: 20
+    size_min: 0.06
+    size_max: 0.16
+    max_lines: 4
+  - id: subtitle
+    zone: {x: 0.08, y: 0.63, w: 0.84, h: 0.06}
+    align: left
+    optional: true
+    size_min: 0.018
+    size_max: 0.028
+  - id: author
+    zone: {x: 0.08, y: 0.90, w: 0.60, h: 0.06}
+    case: upper
+    align: left
+    tracking: 120
+    size_min: 0.020
+    size_max: 0.032
+layers: [background, texture, "scrim:0", "scrim:1", title, subtitle, author]

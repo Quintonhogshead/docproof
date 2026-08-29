@@ -1,0 +1,47 @@
+# Research: SPINE Magazine's named 2025 list (Fools for Love, Blob, On the
+# Clock, and others) plus Sally Rooney's "Intermezzo" US edition (design by
+# June Park) — a small object on a flat, near-monochrome ground under an
+# oversized "old-school Big Book" title. Confidence: high (docs/
+# cover_template_research.md #13).
+name: literary_minimal_symbolic_object
+genres: [literary]
+describe: >-
+  One small, slightly surreal object floats off to one side; an oversized
+  editorial title claims the top third, author the bottom — highly
+  asymmetric, 80%+ unbroken flat color.
+composition_note: >-
+  One small, often slightly distorted or surreal object — a warped
+  everyday item, a single creature, a fragment — off-center on a flat,
+  single-color, near-monochrome background. Not a scene: just the object
+  and color. Leave the rest of the frame completely empty and unbroken.
+  No text anywhere.
+art:
+  - id: background
+    generatable: true            # one near-monochrome flat hue; procedural
+    fit: cover                   # gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # one small object, not a scene
+    anchor: [0.35, 0.7]          # off-center, in the "opposite two-thirds"
+    scale: 0.26                  # from the title — small and asymmetric
+text:
+  - id: title
+    zone: {x: 0.08, y: 0.08, w: 0.84, h: 0.22}
+    align: left                  # asymmetric, editorial — not centered
+    size_min: 0.05
+    size_max: 0.14                # "sometimes deliberately oversized"
+    max_lines: 3
+  - id: subtitle
+    zone: {x: 0.08, y: 0.31, w: 0.80, h: 0.035}
+    align: left
+    optional: true
+    size_min: 0.016
+    size_max: 0.022
+  - id: author
+    zone: {x: 0.08, y: 0.90, w: 0.60, h: 0.05}
+    align: left
+    tracking: 20
+    size_min: 0.020
+    size_max: 0.030
+layers: [background, focal, title, subtitle, author]

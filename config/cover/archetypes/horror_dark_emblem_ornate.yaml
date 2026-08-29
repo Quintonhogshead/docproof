@@ -1,0 +1,52 @@
+# Research: "Cardinal" (Reedsy, 20 Best Book Covers of 2025) — a burgundy
+# bird with a blood-red eye, a sword, and spiderwebs, explicitly bridging
+# horror and dark romance. Corroborated by Troubador, MIBLART, and The
+# Rainbow Stories on gothic/dark-academia ornate covers. Confidence: high
+# (docs/cover_template_research.md #11).
+name: horror_dark_emblem_ornate
+genres: [horror, romance]      # the research names an explicit dark-romance
+                                 # crossover alongside straight horror
+describe: >-
+  One dark symbolic emblem — bird, blade, mask — with fine hidden
+  linework, centered above a huge caps title on unbroken dark ground; a
+  single blood accent color, no ornament competing with the type.
+composition_note: >-
+  One dark, detailed symbolic emblem — a bird, an insect, a blade, a
+  mask, a partially obscured figure — with fine linework and hidden
+  micro-detail, centered in the frame with a wide margin of unbroken dark
+  ground around it, above and below. No text anywhere.
+art:
+  - id: background
+    generatable: true            # near-black or deep-plum ground; procedural
+    fit: cover                   # gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # the emblem is a cutout, not a scene
+    anchor: [0.5, 0.55]
+    scale: 0.45                  # confined, sparer than romantasy_emblem —
+                                  # "sparer and darker" per the research
+  - id: texture
+    generatable: false           # procedural film grain (§7.3) — the
+    opacity: 0.07                # micro-detail the emblem itself can't fake
+    blend: overlay
+text:
+  - id: title
+    zone: {x: 0.10, y: 0.08, w: 0.80, h: 0.18}
+    case: upper
+    tracking: 40
+    size_min: 0.05
+    size_max: 0.12
+    max_lines: 2
+  - id: subtitle
+    zone: {x: 0.15, y: 0.27, w: 0.70, h: 0.03}
+    optional: true
+    size_min: 0.014
+    size_max: 0.019
+  - id: author
+    zone: {x: 0.15, y: 0.80, w: 0.70, h: 0.05}
+    case: upper
+    tracking: 120
+    size_min: 0.018
+    size_max: 0.028
+layers: [background, texture, focal, title, subtitle, author]

@@ -10,10 +10,10 @@ WORKDIR /app
 # doesn't reinstall the world on every deploy.
 COPY pyproject.toml ./
 COPY docproof/__init__.py ./docproof/__init__.py
-RUN pip install --no-cache-dir ".[app]" || true
+RUN pip install --no-cache-dir ".[app,cover]" || true
 
 COPY . .
-RUN pip install --no-cache-dir ".[app]"
+RUN pip install --no-cache-dir ".[app,cover]"
 
 ENV PORT=8000
 EXPOSE 8000

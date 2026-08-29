@@ -1,0 +1,42 @@
+name: full_bleed_art
+describe: >-
+  Full-bleed illustrated scene; title banded across the lower third on a scrim.
+composition_note: >-
+  Keep the lower third of the image simple, dark, and uncluttered — open sky,
+  ground, or shadow — so large text can sit there. No text anywhere.
+art:
+  - id: background
+    generatable: true
+    fit: cover
+  - id: texture
+    generatable: false            # procedural: film grain (§7.3)
+    opacity: 0.06
+    blend: overlay
+scrims:
+  - kind: gradient_down
+    protects: title
+    strength: 0.25
+  - kind: gradient_down
+    protects: author
+    strength: 0.15
+text:
+  - id: title
+    zone: {x: 0.08, y: 0.62, w: 0.84, h: 0.22}
+    case: upper
+    tracking: 60
+    size_min: 0.035
+    size_max: 0.10
+    max_lines: 3
+    shadow: {alpha: 0.45}
+  - id: subtitle
+    zone: {x: 0.10, y: 0.845, w: 0.80, h: 0.05}
+    optional: true
+    size_min: 0.016
+    size_max: 0.026
+  - id: author
+    zone: {x: 0.10, y: 0.91, w: 0.80, h: 0.05}
+    case: upper
+    tracking: 140
+    size_min: 0.018
+    size_max: 0.030
+layers: [background, texture, "scrim:0", "scrim:1", title, subtitle, author]

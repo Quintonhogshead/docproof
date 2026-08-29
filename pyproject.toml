@@ -50,6 +50,12 @@ app = [
     # it is one small pure-Python package and both builds install this extra.
     "itsdangerous>=2.0",
 ]
+cover = [
+    # Cover Studio's composer (docproof/cover/compose.py, typeset.py): the
+    # only new dependency the feature needs — art direction and imaging reuse
+    # the Provider protocol and the openai SDK, both already installed.
+    "pillow>=10.4",
+]
 desktop = [
     "docproof[app]",
     "pywebview>=5.0",
@@ -106,3 +112,6 @@ config = ["*.yaml"]
 "config.prep.fonts.licenses" = ["*.txt"]
 "config.promo" = ["*.yaml"]
 "config.variants" = ["*.yaml"]
+# Cover Studio's archetype templates (docproof/cover/archetypes.py).
+"config.cover" = ["*.yaml"]
+"config.cover.archetypes" = ["*.yaml"]
