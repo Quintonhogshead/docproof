@@ -77,9 +77,8 @@ class SkinResult:
     cost: float | None            # dollars for this one call, None off-catalog
     fallback: bool                # True when skin is DEFAULT_SKIN
     error: str | None             # why, when fallback is True
-    # Aliases that literally appear in the sample — the model may have dressed
-    # the party as the book's own characters, which reads as confusing rather
-    # than clever. Surfaced for a regenerate/QA decision, not fatal.
+    # Historical field: invented aliases are gone (names are permanent), so
+    # this is always empty. Kept so the /api/quest/skin payload stays stable.
     alias_collisions: tuple[str, ...] = ()
 
 
@@ -133,20 +132,9 @@ The permanent party members (never add, drop, or reorder them):
 {roles}
 
 Rules:
-- alias: an invented in-register name for each member (e.g. noir: Pip becomes \
-"Slim"; regency romance: Bram becomes "Lord Bramwell"; fae court: Maple might \
-become "Madame Maplewood of the Records"). ALWAYS invent aliases — riff on the \
-true name where you can, so the member stays recognizable. The one exception: \
-plain sword-and-campfire epic fantasy, where the true names are already at \
-home and may stay. Names must sound like people from the book's world: real \
-surnames of that place and era ("Maple Dawson", "Bramwell Carter"), a title or \
-honorific doing the work ("Deacon Bramwell", "Auntie Maple", "Sgt. Bram"), or \
-a bare nickname ("Slim"). Do NOT build trait-compound surnames ("Quickpen", \
-"Rulewright", "Longmemory", "Bluebook") unless the manuscript itself names its \
-people that way. NEVER use the name of an actual character, place, or person \
-appearing in the manuscript — including surnames: if the book has an Ida \
-Pomeroy, no party member may be a Pomeroy. Invent names that BELONG in that \
-world without already being in it.
+- alias: always exactly the member's true first name — "Pip", "Bram", \
+"Maple", "Cinder", "Sage", "Lark". The names never change, in any genre; all \
+costuming lives in job and look. Never rename, extend, or title a member.
 - job: ONE sentence in the book's register describing that member's real \
 function (given above). Charming, but never misleading about what it does.
 - look: ONE sentence describing that member's appearance in this book's world, \
@@ -154,6 +142,8 @@ written for an illustrator — age impression, build, attire, one memorable \
 detail. Keep each member's permanent silhouette: Pip small and quick; Bram \
 broad and steady; Maple precise and bespectacled; Cinder strong-armed with \
 tools; Sage old and unhurried; Lark bright-eyed with an instrument or notebook. \
+Never dress a member as, or name them after, an actual character in the \
+manuscript. \
 When cultural grounding (below) applies, say plainly and respectfully that the \
 member belongs to that community — an illustrator cannot draw an implication.
 - Cultural grounding: when the manuscript is rooted in a specific culture, \
@@ -201,24 +191,14 @@ def _user_prompt(ms: Manuscript) -> str:
             f"{sample_text(ms.text)}")
 
 
-def _collisions(skin: SkinSpec, sample: str) -> tuple[str, ...]:
-    """Alias name-parts that appear in the sample — likely borrowed from the
-    book's own people ("Maple Pomeroy" when the book has an Ida Pomeroy).
-    Checked token by token, because the model's favorite dodge is a fresh
-    first name stapled to a stolen surname. True names (Pip, Bram, …) and
-    short words (honorifics, "of", "the") are exempt."""
-    true_names = {name for _, name, _, _ in ROLES}
-    hits = []
-    for key, _, _, _ in ROLES:
-        alias = getattr(skin, key).alias.strip()
-        if not alias:
-            continue
-        for part in alias.replace(".", " ").split():
-            if (len(part) > 3 and part[0].isupper()
-                    and part not in true_names and part in sample):
-                hits.append(alias)
-                break
-    return tuple(hits)
+def _true_names(skin: SkinSpec) -> SkinSpec:
+    """The party's names never change (product decision 2026-08-28): whatever
+    the model wrote in `alias`, the page shows Pip, Bram, Maple, Cinder, Sage,
+    and Lark. Enforced here rather than trusted to the prompt, so a creative
+    reply can never rename anyone."""
+    return skin.model_copy(update={
+        key: getattr(skin, key).model_copy(update={"alias": name})
+        for key, name, _, _ in ROLES})
 
 
 def generate_skin(path: str | Path, provider: Provider, *,
@@ -262,13 +242,8 @@ def generate_skin(path: str | Path, provider: Provider, *,
         error = f"The skin call failed: {e}"
     if error:
         log.warning("Skin fallback for %s: %s", ms.title, error)
-    collisions = () if error else _collisions(skin, ms.text)
-    if collisions:
-        log.info("Skin aliases collide with the text of %s: %s", ms.title,
-                 ", ".join(collisions))
     return SkinResult(
-        skin=skin, title=ms.title, word_count=ms.word_count,
+        skin=_true_names(skin), title=ms.title, word_count=ms.word_count,
         band=price_band(ms.word_count), model=model,
         cost=cost_of_usage(usage, fallback_model=model),
-        fallback=error is not None, error=error,
-        alias_collisions=collisions)
+        fallback=error is not None, error=error)

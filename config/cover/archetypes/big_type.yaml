@@ -1,0 +1,85 @@
+name: big_type
+describe: >-
+  No focal art — a huge stacked title over a procedural gradient field is the
+  whole cover. The $0 fallback, and the print-safest design of the three.
+# Deep-stack wave (§15.6): the tasteful default for a flat, type-led cover —
+# a barely-there print finish (touch less color, faint warmth, gentle corner
+# shade, whisper grain) that keeps a bare gradient field from reading as a
+# raw screen fill. A direction's own non-empty recipe pick still wins.
+recipe: quiet_literary
+composition_note: >-
+  An abstract texture only, with no recognizable subject and no text — just
+  color, grain, and light, since the type itself carries the entire cover.
+art:
+  - id: background
+    generatable: false           # procedural: two-stop vertical gradient (§7.3)
+    fit: cover
+  - id: texture
+    generatable: true            # optional: a small generated abstract texture;
+    opacity: 0.14                # v2.1 BODY-fix wave: was a bare gradient with
+    blend: overlay               # only film grain to fall back on — now a
+    procedural: speckle          # named synthesizer either way (generated OR
+                                  # ungenerated): the "Atomic Habits" scattered-
+                                  # dot signature the reference DNA names outright.
+  - id: rule_frame
+    generatable: false           # v2.1 BODY-fix wave: a thin engraved double-
+    fit: cover                   # rule inset from the edge — the "How to Be
+    procedural: rule_frame       # Good at Life" hairline-grid reference; reads
+                                  # as craft rather than a bare color field, and
+                                  # its own bottom rule doubles as the "small
+                                  # accent rule above" the author line below.
+scrims:
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: title
+    # v2.1 BODY-fix wave: fills the upper-to-middle mass (unchanged height,
+    # 0.53 — the fit search sizes the block against `size_max`/width first,
+    # so a taller zone alone does not make a short title fill more of it).
+    # valign middle (was top): a short title's block centers WITHIN the
+    # zone instead of clinging to its top edge, splitting whatever room the
+    # content does not fill into two smaller gaps (above and below the
+    # block) rather than dumping it all as one long run beneath — the
+    # actual fix for "canyon below a short title," across title lengths,
+    # not just the one test brief that happened to nearly fill the zone.
+    zone: {x: 0.08, y: 0.07, w: 0.84, h: 0.53}
+    case: upper
+    align: left
+    valign: middle
+    tracking: 20
+    size_min: 0.06
+    # v2.1 BODY-fix wave: 0.16 -> 0.20 — a short, punchy (one- or two-word)
+    # title is common for this archetype and was never width-constrained
+    # enough to reach the old ceiling's full block height; the higher
+    # ceiling only ever engages when a title is already short enough to be
+    # otherwise under-filling its space, since a longer one is capped by
+    # the zone's own height/width first, same as always.
+    size_max: 0.20
+    max_lines: 4
+  - id: subtitle
+    # v2.1 BODY-fix wave: directly beneath the title zone now (was 0.69, a
+    # canyon past title's own bottom edge at 0.60) — no gap between them,
+    # regardless of how many lines a given title actually renders at.
+    zone: {x: 0.08, y: 0.60, w: 0.84, h: 0.06}
+    align: left
+    optional: true
+    size_min: 0.018
+    size_max: 0.028
+  - id: author
+    # v2.1 BODY-fix wave: nudged up (0.91 -> 0.80) so the gap after title
+    # (subtitle is optional — a brief with none can't be relied on to break
+    # it up) stays well clear of the dead-band floor even for a short,
+    # one-line title — still anchored toward the lower portion of the
+    # cover, still inside rule_frame's own inset border.
+    zone: {x: 0.08, y: 0.80, w: 0.60, h: 0.06}
+    case: upper
+    align: left
+    tracking: 120
+    size_min: 0.020
+    size_max: 0.032
+layers: [background, texture, rule_frame, "scrim:0", "scrim:1", title,
+        subtitle, author]

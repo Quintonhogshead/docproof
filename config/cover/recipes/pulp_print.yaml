@@ -1,0 +1,15 @@
+# §15.6's roster line: "halftone plate, hard gradient_map, speckle —
+# retro/cozy." Grounded in docs/cover_template_research.md #9 (cozy
+# mystery's stamped, screen-printed graphic look) and #8's pulp-jacket
+# lineage: a two-ink press run — luminance forced onto the
+# background-to-accent axis harder than cinematic_duotone ever pushes, a
+# visible dot screen, stray press speckle, and warmth for aged stock.
+name: pulp_print
+describe: >-
+  Two-ink press run: a hard background-to-accent map, a visible halftone
+  dot screen, stray press speckle, warm aged stock. Retro, cozy, stamped.
+finish:
+  - adjust: {id: fx_map,   op: gradient_map, stops: [background, accent], opacity: 0.80}
+  - art:    {id: fx_dots,  procedural: halftone, opacity: 0.30, blend: multiply}
+  - art:    {id: fx_speck, procedural: speckle, opacity: 0.18, blend: overlay}
+  - adjust: {id: fx_stock, op: grade, temperature: 0.20, contrast: 0.06}

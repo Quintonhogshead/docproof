@@ -1,0 +1,60 @@
+# Research: The Casual Optimist's "Notable YA Covers of 2025" (40+ named
+# 2025 titles, almost all illustrated) and "Tulip: The Brave Little Beaver"
+# (Reedsy, 20 Best Book Covers of 2025) for the younger/MG end. Confidence:
+# high (docs/cover_template_research.md #17) — an unusually large, specific,
+# current named data set.
+name: young_readers_character_illustration
+genres: [young_readers]
+describe: >-
+  A warm, expressive hand-crafted character fills the lower two-thirds; a
+  bold title with a soft drop shadow up top, a small series tag and a
+  tiny author line completing the set.
+composition_note: >-
+  One expressive character — human, animal, or creature — in a dynamic
+  pose on a simple, flat or soft-gradient background with minimal setting
+  detail, warm hand-crafted texture (visible brush or pencil marks), full
+  body, anchored toward the bottom of the frame. Keep the upper third
+  simple and empty so large title text can sit there without crossing the
+  character's face. No text anywhere.
+art:
+  - id: background
+    generatable: true
+    fit: cover
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # the character is a cutout, not a scene
+    anchor: [0.5, 1.0]           # flush bottom, full-bodied and dominant
+    scale: 0.66                  # large but under the 0.7 cap
+text:
+  - id: title
+    zone: {x: 0.08, y: 0.06, w: 0.84, h: 0.20}
+    case: upper
+    tracking: 20
+    size_min: 0.06
+    size_max: 0.14
+    max_lines: 3
+    # A light "pop" shadow is the designed choice here (hand-crafted, kid-
+    # friendly), not merely the autopilot's busy-backdrop fallback.
+    shadow: {alpha: 0.35}
+  - id: subtitle
+    zone: {x: 0.10, y: 0.265, w: 0.80, h: 0.028}
+    optional: true
+    size_min: 0.015
+    size_max: 0.020
+  - id: series
+    zone: {x: 0.15, y: 0.30, w: 0.70, h: 0.026}
+    case: upper
+    tracking: 100
+    optional: true
+    size_min: 0.013
+    size_max: 0.018
+  - id: author
+    # Sits over the character's lower edge near the very bottom, the same
+    # "credit line on top of the cutout" convention cutout_sandwich already
+    # uses for its own author slot (§5.2.3) — layer order (below) draws it
+    # last, so it stays legible.
+    zone: {x: 0.10, y: 0.93, w: 0.80, h: 0.025}
+    size_min: 0.018
+    size_max: 0.026
+layers: [background, focal, title, subtitle, series, author]

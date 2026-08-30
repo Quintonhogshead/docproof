@@ -26,8 +26,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from docproof import __version__
+from docproof.cover import pipeline as cover_pipeline
 
-from .routes import quest
+from .routes import cover, quest
 from .settings import resource_root
 
 log = logging.getLogger("app.quest_site")
@@ -39,6 +40,30 @@ PER_IP_LIMIT = 12          # skins per IP per window
 PER_IP_WINDOW = 3600.0     # seconds
 GLOBAL_LIMIT = 600         # skins site-wide per day
 GLOBAL_WINDOW = 86400.0
+
+# Cover Studio spends real money per job (a direction call plus, typically,
+# one or more gpt-image-2 generations) rather than the skin's fraction of a
+# cent, so its ceilings are tighter and daily rather than hourly. Between
+# them they cap worst-case sitewide spend at roughly $25/day (§9): 40 jobs/
+# day at up to ~4 concepts and ~2K-resolution images apiece is a few dollars,
+# and revisions are cheap unless allow_new_art regenerates an image. Revision
+# site-wide is deliberately generous rather than tightly budgeted — the real
+# backstop for this whole feature is COVER_KEY, not the limiter; on an
+# unlocked deployment only staff holding that key can reach either endpoint
+# at all, so the per-IP number is the one doing real work.
+COVER_JOB_IP_LIMIT = 10
+COVER_JOB_IP_WINDOW = 86400.0
+COVER_JOB_GLOBAL_LIMIT = 40
+COVER_JOB_GLOBAL_WINDOW = 86400.0
+COVER_REVISE_IP_LIMIT = 60
+COVER_REVISE_IP_WINDOW = 86400.0
+COVER_REVISE_GLOBAL_LIMIT = COVER_REVISE_IP_LIMIT * 4
+COVER_REVISE_GLOBAL_WINDOW = 86400.0
+
+# A revision's URL carries the job id as a path segment
+# (/api/cover/jobs/{job_id}/revise); matched with a regex rather than a plain
+# tuple membership check the way guard_skins matches its two fixed paths.
+_COVER_REVISE_PATH = re.compile(r"^/api/cover/jobs/[^/]+/revise$")
 
 # Waitlist signups spend nothing, so the ceilings only blunt junk floods.
 WAITLIST_IP_LIMIT = 20
@@ -129,8 +154,19 @@ def create_app() -> FastAPI:
     signups = RateLimiter(WAITLIST_IP_LIMIT, WAITLIST_IP_WINDOW,
                           WAITLIST_GLOBAL_LIMIT, WAITLIST_GLOBAL_WINDOW)
     waitlist = Waitlist(WAITLIST_PATH)
+    cover_jobs = RateLimiter(COVER_JOB_IP_LIMIT, COVER_JOB_IP_WINDOW,
+                             COVER_JOB_GLOBAL_LIMIT, COVER_JOB_GLOBAL_WINDOW)
+    cover_revisions = RateLimiter(COVER_REVISE_IP_LIMIT, COVER_REVISE_IP_WINDOW,
+                                  COVER_REVISE_GLOBAL_LIMIT,
+                                  COVER_REVISE_GLOBAL_WINDOW)
     app.state.limiter = limiter
     app.state.waitlist = waitlist
+    # Cover Studio's job store root — read once here (COVER_DATA_PATH; Fly:
+    # /data/cover, local default cover_jobs/ under cwd) and stashed on
+    # app.state, the same place the skin's own rate limiter and waitlist
+    # live — app/routes/cover.py reads it back per request rather than
+    # re-reading the environment itself.
+    app.state.cover_data_root = cover_pipeline.default_root()
     static = resource_root() / "app" / "static"
 
     @app.middleware("http")
@@ -144,7 +180,31 @@ def create_app() -> FastAPI:
                     status_code=429)
         return await call_next(request)
 
+    @app.middleware("http")
+    async def guard_cover(request: Request, call_next):
+        """Cover Studio's own daily ceilings (§9) — same shape as
+        guard_skins, a separate limiter because an image generation costs
+        real money where a skin call costs a fraction of a cent. The key
+        gate itself (COVER_KEY / X-Cover-Key) lives in app/routes/cover.py,
+        checked per endpoint; this middleware only ever answers 429, never
+        503/401, so it runs before that gate without pre-empting it."""
+        if request.method == "POST":
+            if (request.url.path == "/api/cover/jobs"
+                    and not cover_jobs.allow(client_ip(request))):
+                return JSONResponse({"detail": (
+                    "Cover Studio has painted a lot of covers today and is "
+                    "resting the brushes. Please try again tomorrow.")},
+                    status_code=429)
+            if (_COVER_REVISE_PATH.match(request.url.path)
+                    and not cover_revisions.allow(client_ip(request))):
+                return JSONResponse({"detail": (
+                    "Cover Studio has taken a lot of notes today and is "
+                    "resting the brushes. Please try again tomorrow.")},
+                    status_code=429)
+        return await call_next(request)
+
     quest.register(app)
+    cover.register(app)
 
     @app.post("/api/quest/waitlist")
     async def join_waitlist(request: Request,
@@ -178,6 +238,12 @@ def create_app() -> FastAPI:
     def healthz() -> dict:
         return {"ok": True, "version": __version__}
 
+    # Browsers ask for /favicon.ico regardless of what the pages declare;
+    # answer with the raster favicon instead of a 404 on every visit.
+    @app.get("/favicon.ico")
+    def favicon() -> FileResponse:
+        return FileResponse(static / "art" / "favicon-32.png")
+
     # The papery pages. /customize is the original candlelit party builder,
     # kept dark on purpose — the workshop, by candlelight.
     def _page(name: str) -> FileResponse:
@@ -203,6 +269,10 @@ def create_app() -> FastAPI:
     @app.get("/customize")
     def customize() -> FileResponse:
         return _page("quest.html")
+
+    @app.get("/cover")
+    def cover_page() -> FileResponse:
+        return _page("sc-cover.html")
 
     # The old front door keeps working for anyone holding the earlier link.
     @app.get("/quest.html")

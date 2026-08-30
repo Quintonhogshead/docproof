@@ -2,14 +2,12 @@
    ---------------------------------------------------------------------------
    A cut-paper collage system: flat torn- and scissor-cut construction-paper
    sheets, a pressed paper grain, and elevation by a hard offset shadow — NEVER
-   blur. Real printed-book typefaces sit against the handmade paper. The site is
-   warm cream by default; a generated skin tints the accent + paper variables
-   per uploaded book (see applyTint in sc-shared.js), re-costuming the whole
-   theater. The candlelit workshop look lives on /customize alone.
+   blur. Real printed-book typefaces sit against the handmade paper. ONE warm
+   cream palette for every book and every genre — per-book tints were retired
+   (Quinton, 2026-08-28). The candlelit workshop look lives on /customize alone.
 
    Structure:
      1. Design tokens (paper palette, type, space)
-     2. Skin tints (11 palettes — accent + paper only)
      3. Paper system: sheets, torn/cut edges, strata, offset shadow
      4. Base + paper grain
      5. Typography scale
@@ -118,21 +116,7 @@
     0% 8%, 3% 0%, 97% 0%, 100% 8%, 100% 92%, 97% 100%, 3% 100%, 0% 92%);
 }
 
-/* ------------------------------------------------------------------- tints */
-/* Each skin takes the paper's hue subtly and carries the rest in the accent.
-   Only accent + paper vars move; ink, rules, ochre, and teal stay put so
-   contrast and the collage read the same on every book. */
-body.tint-rose     {--accent:#a83259;--accent-hot:#c85a81;--accent-wash:rgba(168,50,89,.10);--paper:#f0dfdc;--paper-2:#e5cdc9;--card:#fcf1ef;--card-2:#f6e6e2}
-body.tint-rain     {--accent:#4a5a66;--accent-hot:#6f818d;--accent-wash:rgba(74,90,102,.10);--paper:#e3e7e8;--paper-2:#d3dadb;--card:#f6f8f8;--card-2:#eaeeee}
-body.tint-honey    {--accent:#996b0c;--accent-hot:#c08d28;--accent-wash:rgba(153,107,12,.12);--paper:#f1e4c3;--paper-2:#ead4a8;--card:#fdf6df;--card-2:#f7ecc6}
-body.tint-void     {--accent:#544ab0;--accent-hot:#7a70d0;--accent-wash:rgba(84,74,176,.10);--paper:#e5e1f0;--paper-2:#d7d2e8;--card:#f6f4fd;--card-2:#ece9f6}
-body.tint-neon     {--accent:#973383;--accent-hot:#bd5ca8;--accent-wash:rgba(151,51,131,.10);--paper:#eddeea;--paper-2:#e2cddc;--card:#fcf1fa;--card-2:#f4e4f0}
-body.tint-verdigris{--accent:#26725d;--accent-hot:#4f9884;--accent-wash:rgba(38,114,93,.10);--paper:#dfeae2;--paper-2:#cee0d4;--card:#f3faf5;--card-2:#e7f2ea}
-body.tint-bone     {--accent:#8f322c;--accent-hot:#b3554e;--accent-wash:rgba(143,50,44,.10);--paper:#ebe0dc;--paper-2:#e0d0cb;--card:#fbf2ef;--card-2:#f2e6e1}
-body.tint-gold     {--accent:#856209;--accent-hot:#ab8628;--accent-wash:rgba(133,98,9,.13);--paper:#efe4c1;--paper-2:#e6d4a5;--card:#fcf5db;--card-2:#f5ebc4}
-body.tint-slate    {--accent:#436486;--accent-hot:#6a8bad;--accent-wash:rgba(67,100,134,.10);--paper:#e2e8ee;--paper-2:#d2dce4;--card:#f5f9fc;--card-2:#e9f0f5}
-body.tint-rust     {--accent:#9c4419;--accent-hot:#bd6739;--accent-wash:rgba(156,68,25,.10);--paper:#efe2d3;--paper-2:#e6d2bd;--card:#fcf4e9;--card-2:#f5e9d8}
-body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,111,143,.10);--paper:#dfe9ef;--paper-2:#cfe0e8;--card:#f3fafd;--card-2:#e7f2f7}
+/* One palette for every book — per-genre tints retired (Quinton, 2026-08-28). */
 
 /* --------------------------------------------------------- paper system */
 /* A sheet of construction paper: flat fill, an optional torn/cut silhouette,
@@ -169,7 +153,9 @@ body.tint-frost    {--accent:#356f8f;--accent-hot:#5c95b3;--accent-wash:rgba(53,
 
 /* --------------------------------------------------------------- base/grain */
 *{box-sizing:border-box}
-html{font-size:100%}
+/* The torn chrome strips (header/footer) bleed 40px past the wrap on purpose;
+   clip that bleed at the viewport so no page ever scrolls sideways. */
+html{font-size:100%;overflow-x:clip}
 
 .skip{position:absolute;left:-9999px;top:0;z-index:100;background:var(--accent);color:var(--accent-ink);
   font-family:var(--ui);font-size:var(--fs-ui);padding:10px 16px;text-decoration:none}
@@ -182,11 +168,24 @@ body{
   font-size:var(--fs-body);
   line-height:1.62;
   min-height:100vh;
-  /* Warm wash + a pressed paper grain (fractal turbulence, very faint). */
+  /* The warm accent wash scrolls with the page; the paper grain lives on the
+     fixed ::before layer below. */
   background-image:
-    radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    radial-gradient(1100px 520px at 82% -10%, var(--accent-wash), transparent 62%);
   transition:background-color .55s ease;
+}
+/* Handmade paper: a broad fibrous mottle (the pulp clouds of a deckled sheet)
+   under a fine pressed grain. Both are procedural turbulence, greyscale so
+   every skin tint reads through them unchanged. They sit on a fixed,
+   viewport-sized layer of their own: tiling SVG-filter backgrounds directly on
+   a tall scrolling body re-rasterize on scroll in Safari and read as a laggy
+   page — one composited screenful of noise costs nothing, and uniform noise
+   looks identical whether it scrolls or not. */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='640'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.017' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23m)' opacity='0.07'/%3E%3C/svg%3E");
 }
 .wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--s3) var(--s7)}
 
@@ -207,9 +206,9 @@ small{font-size:var(--fs-small)}
 
 /* ------------------------------------------------------------------ chrome */
 /* Header + footer are injected from sc-shared.js so the pages stop drifting. */
-.top{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
+header.top{display:flex;align-items:center;gap:var(--s3);flex-wrap:wrap;
   padding:var(--s3) 0 var(--s2);position:relative;margin-bottom:var(--s1)}
-.top::after{content:"";position:absolute;left:-40px;right:-40px;bottom:0;height:8px;
+header.top::after{content:"";position:absolute;left:-40px;right:-40px;bottom:0;height:8px;
   background:var(--kraft);clip-path:var(--edge-torn);opacity:.5}
 .wordmark{font-family:var(--disp);font-size:1.7rem;line-height:1;color:var(--ink);
   text-decoration:none;white-space:nowrap;letter-spacing:.01em}
@@ -218,12 +217,14 @@ small{font-size:var(--fs-small)}
 .nav a{font-family:var(--ui);font-size:var(--fs-ui);color:var(--faded);text-decoration:none;letter-spacing:.02em}
 .nav a:hover{color:var(--ink)}
 .nav a.now{color:var(--accent)}
-.nav .go{background:var(--accent);color:var(--accent-ink);clip-path:var(--edge-tab);
-  padding:9px 18px;font-weight:600;filter:var(--drop-sm)}
-.nav .go:hover{background:var(--accent-hot);color:var(--accent-ink)}
+.nav .go{background:var(--accent);color:var(--accent-ink);clip-path:var(--edge-scrap);
+  padding:9px 18px;font-weight:600;filter:var(--drop-sm);
+  transition:transform .16s ease, background .18s ease}
+.nav .go:hover,.nav .go:focus-visible{background:var(--accent-hot);color:var(--accent-ink);
+  transform:translate(1px,-1px) rotate(-1.2deg)}
 .nav .go.now{color:var(--accent-ink)}
 @media (max-width:520px){
-  .top{gap:var(--s2)}
+  header.top{gap:var(--s2)}
   .wordmark{font-size:1.5rem}
   .nav{width:100%;margin-left:0;justify-content:flex-start;gap:var(--s2) var(--s3)}
 }
@@ -274,16 +275,20 @@ a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   text-decoration-color:var(--accent-wash);text-underline-offset:3px}
 a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 
-/* Buttons are paper tabs: a cut label with a hard offset shadow. */
+/* Buttons are torn paper scraps: an irregular cut label with a hard offset
+   shadow. Hovering — or tabbing onto one — nudges the scrap out of square,
+   like a finger just moved it. (clip-path swallows outlines, so the focus
+   indicator on scraps is the shift + colour change, not a ring.) */
 .btn{display:inline-block;background:var(--accent);color:var(--accent-ink);border:none;
-  clip-path:var(--edge-tab);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
+  clip-path:var(--edge-scrap);padding:14px 28px;font:600 1rem var(--ui);letter-spacing:.03em;
   cursor:pointer;text-decoration:none;filter:var(--drop-sm);
   transition:transform .16s ease, background .18s ease, filter .16s ease}
-.btn:hover{background:var(--accent-hot);color:var(--accent-ink);transform:translateY(-2px);
+.btn:hover,.btn:focus-visible{background:var(--accent-hot);color:var(--accent-ink);
+  transform:translate(1px,-2px) rotate(-1.2deg);
   filter:drop-shadow(2px 4px 0 var(--paper-shadow))}
-.btn:active{transform:translateY(0)}
+.btn:active{transform:translateY(0) rotate(.6deg)}
 .btn.ghost{background:var(--card);color:var(--accent)}
-.btn.ghost:hover{background:var(--accent-wash);color:var(--accent-hot)}
+.btn.ghost:hover,.btn.ghost:focus-visible{background:var(--accent-wash);color:var(--accent-hot)}
 .btn:disabled{background:var(--kraft-2);color:var(--card);cursor:not-allowed;transform:none;filter:var(--drop-sm)}
 .btn:focus-visible,.nav a:focus-visible,a:focus-visible,.tier:focus-visible{outline:2px solid var(--accent-hot);outline-offset:3px}
 
@@ -307,7 +312,7 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .artwork .frame{fill:none;stroke:currentColor;stroke-width:2.4}
 .artwork .frame-in{fill:none;stroke:currentColor;stroke-width:1;opacity:.55}
 .art-figure{display:block;color:var(--ink)}
-/* Commissioned art is opaque cream; show it whole and let its ground blend. */
+/* Commissioned cutouts carry alpha — they sit straight on the paper. */
 .art-figure img{display:block;width:100%;height:auto;object-fit:contain}
 /* Square portrait frames crop-fill instead. */
 .member .sigil .art-figure img,
@@ -322,13 +327,13 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
   background:var(--card);padding:var(--s2) var(--s3);box-shadow:var(--lift)}
 .members > .member:nth-child(3n+1){transform:rotate(-.5deg)}
 .members > .member:nth-child(3n+2){transform:rotate(.4deg)}
-.member .sigil{width:58px;height:58px;color:var(--accent);background:var(--stage);
+.member .sigil{width:58px;height:58px;color:var(--accent);background:var(--card-2);
   display:grid;place-items:center;overflow:hidden;clip-path:var(--edge-tab)}
 .member .sigil svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-.member .sigil:has(.art-figure){background:var(--stage);color:var(--ink)}
+.member .sigil:has(.art-figure){background:var(--card-2);color:var(--ink)}
 .member .sigil .art-figure{width:100%;height:100%}
 .member .mname{font-family:var(--disp);font-size:1.22rem;line-height:1.1}
-.member .mname small{font-family:var(--ui);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-left:8px;white-space:nowrap}
+.member .mname small{font-family:var(--ui);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-left:8px}
 .member .mjob{font-size:.95rem;color:var(--faded);margin-top:6px;line-height:1.45}
 .member .mlane{font:.68rem var(--mono);color:var(--dim);margin-top:8px;letter-spacing:0}
 
@@ -350,7 +355,7 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
   clip-path:var(--edge-tab);font-family:var(--ui);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;padding:4px 12px;filter:var(--drop-sm)}
 /* The row of tiny member busts riding on a tier plate. */
 .tier .triders{display:flex;gap:4px;margin-top:2px;min-height:26px;align-items:center}
-.tier .triders .bust{width:26px;height:26px;clip-path:var(--edge-tab);background:var(--stage);
+.tier .triders .bust{width:26px;height:26px;clip-path:var(--edge-tab);background:var(--card-2);
   overflow:hidden;color:var(--ink)}
 .tier .triders .bust .art-figure{width:100%;height:100%}
 .tier .triders .alone{font-family:var(--ui);font-size:.72rem;color:var(--dim);font-style:italic}
@@ -392,13 +397,18 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 /* The three escape hatches beneath Galley's opening line. */
 .hatches{display:flex;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s3);align-items:center}
 .hatch-link{font-family:var(--ui);font-size:var(--fs-ui);color:var(--accent);text-decoration:none;
-  background:var(--card);padding:7px 14px;clip-path:var(--edge-tab);filter:var(--drop-sm)}
-.hatch-link:hover{color:var(--accent-hot);background:var(--card-2)}
+  background:var(--card);padding:7px 14px;clip-path:var(--edge-scrap);filter:var(--drop-sm);
+  display:inline-block;transition:transform .16s ease, background .18s ease}
+.hatch-link:hover,.hatch-link:focus-visible{color:var(--accent-hot);background:var(--card-2);
+  transform:translate(1px,-1px) rotate(1deg)}
 /* The campfire scene as the stage floor — cropped to the lit lower strip so
    the empty cream sky above doesn't balloon the hero. */
 .scene-band{position:relative;height:clamp(180px,24vw,300px);overflow:hidden}
 .scene-band .art-figure{display:block;width:100%;height:100%}
 .scene-band .art-figure img{width:100%;height:100%;object-fit:cover;object-position:50% 92%}
+/* The whole-party group shot on /party — taller band, faces centred. */
+.scene-band.party-band{height:clamp(250px,36vw,440px);margin-top:var(--s3);box-shadow:var(--lift)}
+.scene-band.party-band .art-figure img{object-position:50% 52%}
 @media (max-width:760px){
   .curtain .cast{grid-template-columns:1fr;gap:var(--s2)}
   .curtain-galley{max-width:220px;order:-1;justify-self:start}
@@ -412,11 +422,24 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 /* Act II — party sheets that rotate-and-settle in. */
 .act-party .members{margin-top:var(--s3)}
 .correction{margin-top:10px;display:inline-flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;
-  background:var(--card-2);padding:8px 12px;clip-path:var(--edge-scrap);font-size:.86rem}
+  max-width:100%;background:var(--card-2);padding:8px 12px;clip-path:var(--edge-scrap);font-size:.86rem}
 .correction .from{font-family:var(--mono);font-size:.78rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px}
 .correction .to{font-family:var(--mono);font-size:.78rem;color:var(--good)}
 .correction .arrow{color:var(--dim)}
 .correction .why{font-family:var(--ui);color:var(--dim);font-size:.78rem}
+.correction .live-tag{font-family:var(--ui);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--accent);background:var(--accent-wash);padding:2px 8px;clip-path:var(--edge-tab)}
+
+/* Tracked-change scraps: the exact wrong words carry one clean strike; the
+   replacement is marked in. Reads like a tracked change in Word. */
+.df{font-family:var(--mono);font-size:.78rem;color:var(--ink-soft);line-height:1.9;
+  overflow-wrap:anywhere;min-width:0}
+.df .df-keep{color:var(--ink-soft)}
+.df .df-del{color:var(--accent);text-decoration-line:line-through;text-decoration-thickness:2px;
+  text-decoration-color:var(--accent);background:var(--accent-wash);padding:1px 3px;font-style:normal}
+.df .df-add{color:var(--good);background:rgba(53,107,86,.10);padding:1px 3px;
+  text-decoration:none;font-weight:600;font-style:normal}
+
 .member.rich{grid-template-columns:1fr;gap:0}
 .member.rich .top{display:grid;grid-template-columns:58px 1fr;gap:var(--s2);align-items:start}
 
@@ -424,8 +447,11 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .strip{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s3);margin-top:var(--s3)}
 .strip .scene-card{position:relative;background:var(--card);padding:0 0 var(--s3);box-shadow:var(--lift);text-align:center}
 .strip .scene-card:nth-child(2){transform:rotate(-.6deg)}
-.strip .scene-art{display:block;width:100%;aspect-ratio:2/1;background:var(--card-2);overflow:hidden;color:var(--ink)}
+/* The commissioned step spots are 3:2 — match the frame so nothing is
+   lopped off, and cover-crop anything that isn't exactly 3:2. */
+.strip .scene-art{display:block;width:100%;aspect-ratio:3/2;background:var(--card-2);overflow:hidden;color:var(--ink)}
 .strip .scene-art .art-figure{width:100%;height:100%}
+.strip .scene-art .art-figure img{width:100%;height:100%;object-fit:cover}
 .strip .sno{font-family:var(--mono);font-size:var(--fs-small);color:var(--accent);letter-spacing:.1em;margin-top:var(--s2)}
 .strip .sh{font-family:var(--disp);font-size:1.2rem;margin:4px 0 6px}
 .strip .sp{font-family:var(--ui);font-size:.9rem;color:var(--faded);line-height:1.45;margin:0;padding:0 var(--s2)}
@@ -448,7 +474,7 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
   background:var(--card);padding:var(--s3);box-shadow:var(--lift)}
 .gallery > .chapter:nth-child(odd){transform:rotate(-.4deg)}
 .gallery > .chapter:nth-child(even){transform:rotate(.4deg)}
-.chapter .portrait{color:var(--ink);background:var(--stage);overflow:hidden;aspect-ratio:1;clip-path:var(--edge-tab)}
+.chapter .portrait{color:var(--ink);background:var(--card-2);overflow:hidden;aspect-ratio:1;clip-path:var(--edge-tab)}
 .chapter .portrait .art-figure{display:block;width:100%;height:100%}
 .chapter-body{padding-top:var(--s1)}
 .chapter-no{font-family:var(--disp);font-size:1rem;color:var(--accent);letter-spacing:.1em;font-style:italic}
@@ -486,32 +512,57 @@ a:hover{color:var(--accent-hot);text-decoration-color:var(--accent-hot)}
 .pose-rail .speech .say em{color:var(--accent);font-style:italic}
 @media (max-width:560px){.pose-rail{gap:var(--s2)}.pose-rail .pose{width:84px}}
 
-/* The party bench — the centerpiece. A paper stage; puppets walk on from the
-   wing, settle with a bounce, and drop a greeting scrap. */
-.bench{position:relative;background:var(--stage);padding:var(--s3) var(--s2) 0;
-  box-shadow:var(--lift);overflow:hidden;margin-top:var(--s2)}
-.bench::after{content:"";position:absolute;left:0;right:0;bottom:0;height:14px;background:var(--kraft);
-  clip-path:var(--edge-torn)}
-.bench .bench-label{font-family:var(--ui);font-size:var(--fs-label);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-bottom:var(--s1)}
-.troupe{display:flex;align-items:flex-end;gap:clamp(4px,1.4vw,14px);min-height:190px;padding-bottom:18px;flex-wrap:nowrap;overflow-x:auto}
-.puppet{flex:0 0 auto;width:clamp(84px,13vw,120px);position:relative;text-align:center}
+/* The cover — the centerpiece. The front of an adventure novel: the paper-hill
+   scene, the book's title lettered across the sky, and the party pasted into
+   the landscape. Choosing a tier pastes members on or peels them away. */
+.cover{position:relative;margin-top:var(--s2);aspect-ratio:1500/1000;
+  overflow:hidden;clip-path:var(--edge-torn);filter:var(--drop);background:var(--stage)}
+.cover .cover-scene{position:absolute;inset:0;z-index:0}
+.cover .cover-scene .art-figure{display:block;width:100%;height:100%}
+.cover .cover-scene .art-figure img{width:100%;height:100%;object-fit:cover;object-position:50% 100%}
+/* A whisper of cinema: darkened corners, light on the party. */
+.cover .cover-grade{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(115% 90% at 50% 62%, transparent 58%, rgba(36,29,18,.14) 100%)}
+.cover .cover-title{position:absolute;left:8%;right:8%;top:7%;z-index:2;text-align:center;pointer-events:none}
+.cover .ct-over{font-family:var(--ui);font-size:clamp(.56rem,1.3vw,.78rem);letter-spacing:.3em;
+  text-transform:uppercase;color:var(--ink-soft);opacity:.7;margin-bottom:4px}
+.cover .ct-book{font-family:var(--disp);font-size:clamp(1.4rem,4.2vw,2.6rem);line-height:1.08;
+  color:var(--ink);text-wrap:balance;
+  text-shadow:0 1px 0 rgba(251,244,226,.8), 0 0 18px rgba(251,244,226,.55)}
+.cover-cast{position:absolute;inset:0;z-index:3}
+/* Each member owns a spot in the composition; nearer figures stand lower and
+   larger, farther ones higher on the hills and smaller. */
+.puppet{position:absolute;text-align:center;transform-origin:50% 100%}
 .puppet .fig{display:block;width:100%;color:var(--ink)}
 .puppet .fig .art-figure{width:100%;filter:var(--drop-sm)}
-.puppet.galley-anchor .fig .art-figure{filter:var(--drop)}
+.puppet.cast-galley{left:43%;bottom:3%;width:17%;z-index:30}
+.puppet.cast-galley .fig .art-figure{filter:var(--drop)}
+.puppet[data-member="pip"]{left:28%;bottom:2%;width:13%;z-index:32}
+.puppet[data-member="bram"]{left:61%;bottom:4%;width:15%;z-index:28}
+.puppet[data-member="maple"]{left:13%;bottom:7%;width:13.5%;z-index:26}
+.puppet[data-member="cinder"]{left:76%;bottom:8%;width:13.5%;z-index:24}
+.puppet[data-member="sage"]{left:2%;bottom:14%;width:12%;z-index:22}
+.puppet[data-member="lark"]{left:88%;bottom:13%;width:11.5%;z-index:20}
 .puppet .greet{position:absolute;left:50%;top:-6px;transform:translate(-50%,-100%);
   background:var(--card);padding:6px 11px;clip-path:var(--edge-scrap);filter:var(--drop-sm);
   font-family:var(--ui);font-size:.74rem;color:var(--ink);white-space:nowrap;z-index:3;
   opacity:0;pointer-events:none}
 .puppet .greet.show{opacity:1}
 .puppet .greet b{color:var(--accent);font-weight:600}
+/* Keep the outermost greetings inside the torn frame. */
+.puppet[data-member="sage"] .greet{left:0;transform:translate(0,-100%)}
+.puppet[data-member="lark"] .greet{left:auto;right:0;transform:translate(0,-100%)}
 @media (prefers-reduced-motion:no-preference){
   .puppet .greet.show{animation:greet-pop .35s ease both}
   @keyframes greet-pop{from{opacity:0;transform:translate(-50%,-84%)}to{opacity:1;transform:translate(-50%,-100%)}}
-  /* walk-on from the right wing, settle with a small bounce */
-  .puppet.joining{animation:walk-on .5s cubic-bezier(.2,.8,.3,1.2) both}
-  @keyframes walk-on{0%{opacity:0;transform:translateX(60px)}60%{opacity:1;transform:translateX(-6px)}100%{transform:translateX(0)}}
-  .puppet.leaving{animation:walk-off .38s ease-in both}
-  @keyframes walk-off{to{opacity:0;transform:translateX(-56px)}}
+  .puppet[data-member="sage"] .greet.show,.puppet[data-member="lark"] .greet.show{animation:greet-pop-flat .35s ease both}
+  @keyframes greet-pop-flat{from{opacity:0;transform:translateY(-84%)}to{opacity:1;transform:translateY(-100%)}}
+  /* pasted into the cover: set down from above, settle flat */
+  .puppet.joining{animation:paste-on .5s cubic-bezier(.2,.8,.3,1.2) both}
+  @keyframes paste-on{0%{opacity:0;transform:scale(1.35) rotate(-5deg) translateY(-14px)}
+    62%{opacity:1;transform:scale(.97) rotate(1deg) translateY(2px)}100%{transform:none}}
+  .puppet.leaving{animation:peel-off .38s ease-in both}
+  @keyframes peel-off{to{opacity:0;transform:scale(.82) rotate(4deg) translateY(-10px)}}
 }
 @media (prefers-reduced-motion:reduce){
   .puppet.joining{animation:none;outline:2px solid var(--accent);outline-offset:3px}
