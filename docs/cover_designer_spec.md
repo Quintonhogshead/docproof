@@ -953,3 +953,70 @@ light → disturbance (spray, bounce pool) → verify seat as numbers (contact_g
 6. *Style lock + economics*: default stylized; ~5 elements × $0.05 × 5 concepts + planner/critique
    ≈ under $3 per book for 4-6 covers, generated in-product (authors never see a prompt), every
    cover an archived spec that re-renders byte-identically and revises for $0.
+
+### 15.20 Arrangement doctrine — scene agreement (the Desaturated addendum)
+
+Provenance: the second real cover (Desaturated, 2026-08-30) — 23 versions across three
+generations of the same scene (white-ground flood-cut elements → native-alpha elements →
+same elements REARRANGED), converging only when a hand-arranged reference built from the
+IDENTICAL assets outperformed every engine composite. The lesson that closed the gap:
+**every "wonky" render was a violated relationship, not a wrong coordinate.** §15.19
+seats one element; this section makes the elements agree with each other. The compressed
+form: *a cover scene is a claim about one world — one viewpoint, one light, one ground —
+and every element must be provably inside that claim before any element is polished.*
+
+**Scene-agreement rules (owner-bound, each learned as a failure)**
+
+1. *Ground-level agreement.* A scene agrees on ground level in exactly one of two modes:
+   SHOW a floor and seat every element on it with matched perspective (§15.18/§15.19
+   machinery), or HIDE the floor and conceal EVERY ground contact — no foot, leg-end, or
+   base visible against sky, cloud, or canopy. Never mix modes. A waist-deep-field cover
+   is mode two: the reference showed not one termination anywhere, and each of ours that
+   showed (post tip in a cloud gap, boots on the leaf canopy) read as a float regardless
+   of shadows.
+2. *Arrangement before assets.* Design the depth-band stack first (sky → deep row →
+   structure → mid figures → front band), commit to one viewpoint scale ("the viewer
+   stands in the rows"), and plan universal overlap — no element keeps its complete
+   outline. Unbroken silhouettes are THE composited-cutout tell. Then derive asset briefs
+   from the arrangement, requesting structures already at their immersion depth (a
+   billboard waist-deep in corn), not engineered into it afterward.
+3. *The third-variable rule.* When two placement constraints cannot be reconciled by
+   moving the element (legs must bury vs. sky must not empty), the answer is a variable
+   neither constraint names — here field density (add a deep row behind the structure) —
+   never procedural limb surgery. Tiled/sheared texture extensions read as a checkered
+   ladder; the vetoed fix cost five versions.
+4. *One plate per depth band; tiling within a band is legal.* Foreground occluder and
+   background field are separate generations (never re-slice one plate across bands), but
+   a band wider than its plate may repeat the plate flipped/shifted, and clusters may be
+   cropped from a band's own plate and re-aimed at specific burial points.
+5. *Coherence is arrangement, not generation unity.* Native palette and restraint beat
+   grading: the failed composites carried synthetic light events (pools, halos, dusk
+   overlays) and per-layer grades; the working scene deleted all of them and let the sky
+   plate's own ember through the stalk gaps. Add light only where the scene claims a
+   source.
+6. *Diegetic text takes its environment's material properties.* Text living inside the
+   scene (painted on the sign) is baked as an art layer: glyph color MODULATED by the
+   underlying surface luminance (paint follows the planks) + alpha ERODED by a wear map
+   (real flake holes, not a multiply overlay) + scene occlusion. Occluders clip STROKES,
+   never letterforms, and never a word's first letter (readers reconstruct middles, not
+   heads). Baked text forfeits the composer's contrast gate — check it manually.
+   Non-diegetic text (author line, eyebrow) stays composer-gated, and deliberate
+   text-behind-corn depth must be baked too: the occlusion autopilot reorders any
+   TextSlot whose ink an art layer touches past its limit.
+
+**Gates this adds** (beyond §15.19's): zero visible ground contacts in mode-two scenes
+(extend contact_gaps: a termination against sky/cloud/canopy = FAIL); ink-outside-surface
+== 0 for every painted-on decal (mask by surface minus off-plane hardware, correct by
+construction); the 100px thumbnail read on every delivered version, not the last one.
+
+**Pixel traps (new this cover)**
+
+- Corner-median background sampling fails when two corners are ink — take the brightest
+  corner as ground truth.
+- Recoloring bright pockets must touch only fully-opaque pixels (alpha > 230); touching
+  anti-aliased edges paints halos around every stalk.
+- "Transparent" gen output may carry garbage RGB in its alpha-0 regions — it composites
+  fine but previews as smoke; judge assets over a neutral ground, never by raw preview.
+- Enclosed white pockets never reach a border flood; under native-alpha assets the whole
+  flood-fill pipeline is legacy — request `background: transparent` and floor the sub-40
+  haze band instead.
