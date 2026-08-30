@@ -1809,10 +1809,14 @@ class Config(BaseModel):
     # Which English this manuscript is written in. A handful of conventions
     # flip on it — which mark opens dialogue, decade apostrophes, percent
     # versus per cent, the that/which rule — and it selects the spell-scan
-    # dictionary. Stated, never inferred: guessing the variant and then
-    # applying its rules silently is how a U.K. manuscript comes back
-    # Americanized. See docproof/variants.py.
-    variant: Literal["us", "uk", "ca", "au"] = "us"
+    # dictionary. Usually stated, never GUESSED-then-applied-silently — that is
+    # how a U.K. manuscript comes back Americanized. "auto" is the deliberate,
+    # logged exception: the run detects the variant from the manuscript's own
+    # spelling (British vs American markers) and proofs against THAT, so a
+    # British book is read as British; it resolves to "us" when the evidence is
+    # thin, and ca/au (hybrids) still want an explicit choice. See
+    # docproof/variants.py:detect_variant.
+    variant: Literal["auto", "us", "uk", "ca", "au"] = "us"
     min_confidence: Literal["low", "medium", "high"] = "medium"
     # Each entry is one error-type category: a bare key runs alone, a list of
     # keys runs as a single combined pass, and a mapping {group, passes?,

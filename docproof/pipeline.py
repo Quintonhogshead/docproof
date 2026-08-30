@@ -31,7 +31,7 @@ from .reporting import write_findings_json, write_summary_md
 from .spellscan import SpellScan, scan as spell_scan
 from .sweeps import SweepReport, run_sweeps
 from .validator import validate_findings
-from .variants import Variant, load_variant
+from .variants import Variant, detect_variant, load_variant
 
 log = logging.getLogger("docproof.pipeline")
 
@@ -380,6 +380,33 @@ def _unprotect_near_miss(spell: SpellScan, candidates) -> SpellScan:
         lexicon_counts=tuple(counts[w] for w in kept) if counts else ())
 
 
+def _resolve_variant(cfg: Config, fmt, pkg) -> Variant:
+    """The English variant to proof against. An explicit `cfg.variant` is loaded
+    verbatim; `"auto"` detects it from the manuscript's spelling.
+
+    Detection reads the pre-normalization paragraph text (spelling markers are
+    unaffected by quote/space normalization) and only needs a format that can
+    snapshot its text — the .docx path. It resolves to "us" when the evidence is
+    thin, and the choice is logged, never silent."""
+    if cfg.variant != "auto":
+        return load_variant(cfg.variant)
+    texts: list[str] = []
+    snapshot = getattr(fmt, "snapshot", None)
+    if snapshot is not None:
+        try:
+            texts = list(snapshot(pkg, "current").values())
+        except Exception as e:                       # pragma: no cover - defensive
+            log.warning("variant auto-detect: could not read text (%s)", e)
+    detected = detect_variant(texts) if texts else None
+    if detected:
+        log.info("Variant auto-detected as '%s' from the manuscript's spelling.",
+                 detected)
+    else:
+        log.info("Variant auto-detect inconclusive (thin or mixed spelling "
+                 "evidence); proofreading as US English.")
+    return load_variant(detected or "us")
+
+
 def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
             max_chunks: int | None = None,
             selection: Sequence[str] | None = None,
@@ -399,10 +426,20 @@ def prepare(cfg: Config, input_path: str | Path, error_dir: str | Path, *,
     scan's Hunspell suggestions are seconds per manuscript) is pure latency.
     The real run leaves it on."""
     fmt = get_format(input_path)
-    variant = load_variant(cfg.variant)
+    pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
+    # Resolve the English variant BEFORE normalization/sweeps/spell-scan, which
+    # all key off it. `variant: auto` detects it from the manuscript's own
+    # spelling here (see _resolve_variant), so a British book is proofed as
+    # British rather than Americanized. An explicit variant is honored verbatim.
+    variant = _resolve_variant(cfg, fmt, pkg)
+    # Pin the resolved key back onto the config so every later consumer in this
+    # run (candidate screening, the genre/context reads) sees the concrete
+    # variant, not the "auto" sentinel. The approval guard has already hashed the
+    # pre-resolution config, and certify re-loads it from file, so this in-memory
+    # pin never changes an approval hash.
+    cfg.variant = variant.key
     log.info("Proofreading as %s (%s)", variant.name,
              "; ".join(variant.authorities) or variant.dictionary)
-    pkg = fmt.preflight(str(input_path), cfg.tracked_changes_policy)
 
     # The two silent edits happen here, before anything reads the text, so no
     # later stage has to know they happened: the document model, the sweeps,

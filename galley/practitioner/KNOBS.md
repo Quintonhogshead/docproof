@@ -213,7 +213,13 @@ wrongly dropped on a bad grep.)
 | `chapter_sweep` | off | ~$18 Fable / ~$3 Sonnet, or $0 as subagents. Plan line, never default. |
 | `sapling` | off | ~$34/long novel, key is FLY-ONLY (no-ops silently local). Explicit char budget or leave off. |
 | `tracked_changes_policy` | `abort` | `accept_all_first` to review a doc that already has tracked changes. |
-| `recurrence` | on | Propagates a fix to identical surfaces — degenerate-surface flood guard is in ≥v0.116. |
+| `recurrence` | on | Propagates a fix to identical surfaces — degenerate-surface flood guard is in ≥v0.116; never seeds from a curated/imported row. |
+| `variant` | `auto` under mechanical-wave (base `us`) | `auto` DETECTS the book's English from its own spelling (British vs American markers) and proofs against THAT — a British book read as British, not Americanized; the spell scan + respell follow the detected dictionary. Resolves to `us` on thin/mixed evidence; ca/au are hybrids you still set explicitly (they carry `confirm`). Logged, never silent. |
+| `storysheet.enabled` / `.model` | ON + `gpt-5.6-luna` under mechanical-wave (base off) | One Luna read that pins narrator/person/tense/character-pronouns into every detector's prompt. Cheap, and it lifts every downstream pass; pairs with `variant: auto` as the voice+spelling profile. |
+| `continuity` (whole-book) | **default ON as a $0 Opus subagent** in the loop (base off; config model is Luna) | Timeline/age/date arithmetic, attribute + object drift across the whole book, plus the deterministic $0 calendar (weekday-vs-date) check. Query-only. Run it as an Opus session subagent, import the queries — do NOT enable it in the paid review config (that bills). |
+| `chapter_continuity` | **default ON as a $0 Opus subagent** in the loop (base off) | Intra-chapter physical continuity (sat who never stood, cigarette lit twice, dawn→evening). Query-only. Same $0 path: an Opus subagent per chapter, imported. |
+| `rewrite` ("type-and-compare") | **default ON as a $0 Sonnet→Opus subagent** in the loop (base off; the stage LOCKS the in-config lane off) | Retype each paragraph as a minimal proofread, diff against the source — catches the missing-word/homophone/agreement misses detection glides past (~25% of core-mechanical misses). Run as a subagent detector, import findings; the P0-1 guard keeps a real-word swap it proposes a query, never a blind edit. |
+| `candidate_screening.mode` | `apply` under mechanical-wave (base `off`); judge = `gpt-5.6-luna` | The low-precision generators propose, the Luna judge rules, affirmed rows apply as tracked edits. Apply is contained: it stays SHADOW unless the deployment sets `DOCPROOF_CANDIDATE_APPLY=1` — the Galley launch does, production keeps the floor. |
 
 ## The judgment subagent — a $0 Opus/Fable read for whole-book judgment
 

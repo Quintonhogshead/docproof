@@ -14,6 +14,13 @@ WORKROOT="${WORKROOT:-$HOME/galley-workspaces}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WS="$WORKROOT/$SLUG"
 
+# Release candidate-screening Apply for THIS deployment only. The subsystem's
+# global floor stays contained (CANDIDATE_APPLY_RELEASED = False), so production
+# never mutates a document from the unvalidated lane; here the practitioner has
+# opted the Galley loop in, and mechanical-wave sets candidate_screening.mode:
+# apply. Unset this to fall the lane back to shadow.
+export DOCPROOF_CANDIDATE_APPLY=1
+
 mkdir -p "$WS/source" "$WS/runs" "$WS/deliverable" "$WS/.claude"
 cp "$HERE/CLAUDE.md" "$WS/CLAUDE.md"
 rm -rf "$WS/.claude/skills"
