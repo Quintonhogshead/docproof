@@ -431,9 +431,12 @@ _EXPECTED_FAMILIES = {
 }
 
 
-def test_families_has_exactly_the_ten_registered_names():
-    assert set(FAMILIES) == _EXPECTED_FAMILIES
-    assert len(FAMILIES) == 10
+def test_families_still_carries_the_ten_launch_names():
+    # The §15.11 expansion grew the shelf past ten, but the launch names are
+    # model-visible API (archived directions refer to them) and must survive
+    # verbatim. The expansion roster itself is covered in test_cover_fonts.py.
+    assert _EXPECTED_FAMILIES <= set(FAMILIES)
+    assert len(FAMILIES) >= 10
 
 
 def test_every_family_resolves_to_a_real_ttf_on_disk():
