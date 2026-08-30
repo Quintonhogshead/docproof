@@ -1,0 +1,17 @@
+# §15.6's roster line verbatim: "gradient_map on background+primary, bloom,
+# grain — thriller/scifi." Grounded in docs/cover_template_research.md #8
+# (thriller: one dominant dark ground plus exactly one accent — the map
+# collapses the whole composite onto that two-color axis) and #4/#5 (scifi's
+# graded, light-driven fields). The map runs at partial opacity so the art's
+# own hues survive UNDER the grade — a color grade, not a poster filter —
+# and the contrast step plus bloom are what "it's lit, not flat" means.
+name: cinematic_duotone
+describe: >-
+  Two-color film grade: the whole composite mapped onto the
+  background-to-primary axis, crushed a little, bloomed where it is bright,
+  finished with grain. Thriller, scifi.
+finish:
+  - adjust: {id: fx_map,      op: gradient_map, stops: [background, primary], opacity: 0.60}
+  - adjust: {id: fx_contrast, op: grade, contrast: 0.10, saturation: -0.08}
+  - adjust: {id: fx_bloom,    op: bloom, strength: 0.35, radius: 0.030, threshold: 0.70}
+  - art:    {id: fx_grain,    procedural: grain, opacity: 0.05, blend: overlay}

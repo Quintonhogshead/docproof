@@ -31,6 +31,7 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
                       field_validator, model_validator)
 
+from .recipes import RECIPES
 from .textures import TEXTURES
 
 # docproof/cover/archetypes.py -> docproof/cover -> docproof -> package root,
@@ -76,6 +77,33 @@ def _hex(value: str) -> str:
     if not _HEX_RE.match(value):
         raise ValueError(f"{value!r} is not a #rrggbb hex color")
     return value
+
+
+# The five PaletteRole names, mirrored from docproof.cover.model rather than
+# imported for the same reason this whole module mirrors Zone/Shadow/Stroke
+# (see the module docstring) — what ArchetypeEffect's role-or-hex color
+# references validate against.
+_ROLE_NAMES: frozenset[str] = frozenset(
+    {"background", "primary", "accent", "text", "scrim"})
+
+
+def _role_or_hex(value: str) -> str:
+    """Mirrors docproof.cover.model._validate_role_or_hex exactly: a color
+    reference is either one of the five palette role names or a literal
+    #rrggbb hex, and anything else fails at load with both legal shapes
+    named."""
+    if value in _ROLE_NAMES or _HEX_RE.match(value):
+        return value
+    raise ValueError(
+        f"{value!r} is neither a palette role "
+        f"({', '.join(sorted(_ROLE_NAMES))}) nor a #rrggbb hex color")
+
+
+# Mirrors docproof.cover.model.FX_PREFIX (§15.6): reserved for
+# recipe-expanded layers, so a hand-authored archetype slot may never wear
+# it — ArchetypeArt._valid_id refuses it at load, which is what keeps a
+# recipe's expansion collision-free by construction.
+_FX_PREFIX = "fx_"
 
 
 def _scatter_range(value: int) -> int:
@@ -153,6 +181,132 @@ class ArchetypeStroke(BaseModel):
         return self
 
 
+class ArchetypeEffect(BaseModel):
+    """Mirrors docproof.cover.model.Effect's fields, defaults, and
+    validation exactly (§15.4) — one entry in a designed layer-style stack
+    an archetype bakes in (the thriller title's stacked double shadow);
+    build_spec passes each straight into a real Effect. Same forgiving-
+    fields rule: params the chosen `kind` never reads are validated but
+    inert."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["drop_shadow", "inner_shadow", "outer_glow", "inner_glow",
+                  "bevel", "gradient_overlay", "texture_overlay", "stroke"]
+    dx: float = 0.0
+    dy: float = 0.004
+    blur: float = Field(default=0.006, ge=0.0)
+    color: str = ""
+    alpha: float = Field(default=0.55, ge=0.0, le=1.0)
+    width: float = Field(default=0.004, ge=0.0)
+    stops: list[str] = Field(default_factory=list)
+    angle: float = 90.0
+    texture_file: str = ""
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("color")
+    @classmethod
+    def _valid_color(cls, value: str) -> str:
+        return _role_or_hex(value) if value else value
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        if len(value) not in (0, 2, 3):
+            raise ValueError(
+                f"stops must have 2 or 3 entries (or be empty when unused), "
+                f"got {len(value)}")
+        return [_role_or_hex(stop) for stop in value]
+
+    @field_validator("texture_file")
+    @classmethod
+    def _known_texture(cls, value: str) -> str:
+        if value and value not in TEXTURES:
+            raise ValueError(
+                f"texture_file {value!r} is not on the shelf — known "
+                f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
+        return value
+
+    @model_validator(mode="after")
+    def _kind_requirements(self) -> ArchetypeEffect:
+        if self.kind == "gradient_overlay" and not self.stops:
+            raise ValueError(
+                "a gradient_overlay effect needs 2 or 3 stops (role names "
+                "or #rrggbb hexes, dark to light)")
+        if self.kind == "texture_overlay" and not self.texture_file:
+            raise ValueError(
+                "a texture_overlay effect needs a texture_file from the "
+                f"shelf ({', '.join(sorted(TEXTURES)) or 'none stocked'})")
+        return self
+
+
+class ArchetypeGradientMask(BaseModel):
+    """Mirrors docproof.cover.model.GradientMask's fields, defaults, and
+    validation exactly (§15.2) — kept separate so this module never imports
+    model.py, the ArchetypeZone/ArchetypeShadow reasoning. build_spec passes
+    one of these (via ArchetypeMask below) straight into a real
+    GradientMask."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["linear", "radial"] = "linear"
+    angle: float = 90.0
+    center: list[float] = Field(default_factory=lambda: [0.5, 0.5])
+    start: float = Field(default=0.0, ge=0.0, le=1.0)
+    end: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("center")
+    @classmethod
+    def _pair(cls, value: list[float]) -> list[float]:
+        if len(value) != 2:
+            raise ValueError("center must be exactly [x, y]")
+        if not all(-2.0 <= v <= 2.0 for v in value):
+            raise ValueError("center values must stay within [-2, 2]")
+        return value
+
+    @model_validator(mode="after")
+    def _ramp_direction(self) -> ArchetypeGradientMask:
+        if self.start >= self.end:
+            raise ValueError(
+                f"gradient mask start ({self.start}) must be strictly less "
+                f"than end ({self.end})")
+        return self
+
+
+class ArchetypeMask(BaseModel):
+    """Mirrors docproof.cover.model.MaskSpec exactly (§15.2/§15.13): a
+    first-class mask an archetype bakes onto one of its own art slots — the
+    enabler for the mask-forward templates (§15.13 part 3: title_window's
+    art-in-the-glyphs `from_text`, split_plate's two-plates-into-one-scene
+    `gradient`), which the legacy single-stencil `mask_from` sugar cannot
+    express. Existence/ordering rules against this archetype's own slots
+    are checked at load time by Archetype._art_masks_resolve below (the
+    module's "fails LOUDLY at import" philosophy); the built spec is then
+    re-validated by CoverSpec's own deeper mask validators anyway, so the
+    two layers can never disagree for long."""
+    model_config = ConfigDict(extra="forbid")
+
+    from_layer: str = ""
+    gradient: ArchetypeGradientMask | None = None
+    luminance_of: str = ""
+    from_text: str = ""
+    invert: bool = False
+
+    @field_validator("from_layer", "luminance_of")
+    @classmethod
+    def _valid_slot_ref(cls, value: str) -> str:
+        return _validate_slot_id(value) if value else value
+
+    @model_validator(mode="after")
+    def _some_source(self) -> ArchetypeMask:
+        if not (self.from_layer or self.gradient is not None
+                or self.luminance_of or self.from_text):
+            raise ValueError(
+                "mask sets no source — set at least one of from_layer, "
+                "gradient, luminance_of, or from_text (or drop the mask)")
+        return self
+
+
 class ArchetypeArt(BaseModel):
     """One art slot an archetype declares. `generatable` says whether the
     art-direction call is asked to write an image prompt for this slot at
@@ -184,6 +338,14 @@ class ArchetypeArt(BaseModel):
     treatment: Literal["none", "duotone", "silhouette", "posterize",
                        "sticker", "photo_soft"] = "none"
     mask_from: str = ""
+    # First-class mask (§15.2, archetype-authored — the §15.13 mask-forward
+    # templates' enabler): mirrors docproof.cover.model.ArtSlot.mask exactly;
+    # build_spec passes it straight into a real MaskSpec. `mask_from` above
+    # stays as the legacy single-stencil sugar — setting BOTH is refused
+    # below (same "two masks with an undocumented winner" reasoning as
+    # ArtSlot's own fold validator), so an archetype always says the thing
+    # it means exactly once.
+    mask: ArchetypeMask | None = None
     corners: bool = False
     # Mirrors docproof.cover.model.ArtSlot.corners_flip_vertical exactly
     # (v2.2 wave, deliverable 1): False keeps all four corners-mirrored
@@ -213,12 +375,23 @@ class ArchetypeArt(BaseModel):
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
                         "canvas", "speckle", "rule_frame", "frame_hairline",
                         "frame_thickthin", "frame_corners", "frame_deco",
-                        "frame_octagon"] = ""
+                        "frame_octagon", "radial_glow", "light_leak",
+                        "fog_gradient", "rays", "bokeh", "dust", "scratches",
+                        "stars"] = ""
+    # Mirrors docproof.cover.model.ArtSlot.effects exactly (§15.4): a
+    # designed layer-style stack this archetype bakes onto the slot.
+    effects: list[ArchetypeEffect] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
     def _valid_id(cls, value: str) -> str:
-        return _validate_slot_id(value)
+        _validate_slot_id(value)
+        if value.startswith(_FX_PREFIX):
+            raise ValueError(
+                f"{value!r}: the {_FX_PREFIX!r} prefix is reserved for "
+                f"recipe-expanded finishing layers (§15.6) — a hand-authored "
+                f"archetype slot may not use it")
+        return value
 
     @field_validator("scatter")
     @classmethod
@@ -251,6 +424,21 @@ class ArchetypeArt(BaseModel):
         if not all(-2.0 <= v <= 2.0 for v in value):
             raise ValueError("anchor/offset values must stay within [-2, 2]")
         return value
+
+    @model_validator(mode="after")
+    def _one_mask_vocabulary(self) -> ArchetypeArt:
+        """`mask_from` is the legacy single-stencil sugar; `mask` is the
+        full §15.2 vocabulary. Both set at once is refused — stricter than
+        ArtSlot's own fold validator (which tolerates the exact folded
+        equivalent for round-trip reasons a YAML file never has): a
+        hand-authored template should say the thing it means exactly once,
+        in one field."""
+        if self.mask is not None and self.mask_from:
+            raise ValueError(
+                f"art slot {self.id!r} sets both mask_from and mask — use "
+                f"mask.from_layer (mask wins the vocabulary) and drop "
+                f"mask_from")
+        return self
 
 
 class ArchetypeScrim(BaseModel):
@@ -286,6 +474,13 @@ class ArchetypeText(BaseModel):
     optional: bool = False
     shadow: ArchetypeShadow | None = None
     stroke: ArchetypeStroke | None = None
+    # Mirrors docproof.cover.model.TextSlot.effects exactly (§15.4): a
+    # designed layer-style stack for this slot (the thriller retrofit's
+    # stacked double title shadow). The runtime fold — legacy shadow to the
+    # stack's front, stroke to its back when this list is non-empty —
+    # happens in TextSlot's own validator once build_spec converts these,
+    # never here.
+    effects: list[ArchetypeEffect] = Field(default_factory=list)
     # "fill" is the launch default everywhere; knockout/art_fill (§7.4a) are
     # archetype/revision territory — no Direction field sets this, so the
     # only way a concept ever gets one is an archetype that presets it.
@@ -329,6 +524,38 @@ class Archetype(BaseModel):
     text: list[ArchetypeText] = Field(min_length=1)
     layers: list[str] = Field(min_length=1)
     genres: list[str] = Field(default_factory=list)
+    # Mirrors docproof.cover.model.CoverSpec.axis/axis_x exactly (§15.10;
+    # build_spec copies both verbatim): which vertical axis this template
+    # composes around, so the balance engine's snap pass knows what a
+    # near-miss is a near-miss OF. None — the default, and every shipped
+    # archetype's current state until a later wave retrofits declarations
+    # — means pre-wave behavior: no snap pass, byte-identical renders
+    # (§15.0 constraint 2). axis_x (fraction of canvas width) positions a
+    # left/right rail; None takes §15.10's conventional 0.08/0.92, and a
+    # center axis never reads it at all.
+    axis: Literal["center", "left", "right"] | None = None
+    axis_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    # The finishing recipe this template wears BY DEFAULT (§15.6) — applied
+    # by build_spec whenever the direction stays silent (recipe=""); a
+    # direction's own non-"" pick always wins. "" (the default, and every
+    # un-retrofitted archetype's permanent state) means no default
+    # finishing at all: the no-recipe path renders byte-identical to
+    # pre-wave pixels, which is §15.0 constraint 2 for this field.
+    recipe: str = ""
+
+    @field_validator("recipe")
+    @classmethod
+    def _known_recipe(cls, value: str) -> str:
+        """The archetype-side twin of Direction.recipe's closed Literal —
+        checked against the same recipes.RECIPES shelf at load time, so a
+        typo'd default fails the build loudly (this module's whole "core
+        inventory" philosophy) instead of expanding to nothing the first
+        time a brief picks the template."""
+        if value and value not in RECIPES:
+            raise ValueError(
+                f"recipe {value!r} is not on the shelf — known recipes: "
+                f"{', '.join(sorted(RECIPES)) or 'none'}")
+        return value
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Archetype:
@@ -403,6 +630,61 @@ class Archetype(BaseModel):
                     f"{self.name}: art slot {slot.id!r}'s mask_from="
                     f"{slot.mask_from!r} must appear earlier in `layers` "
                     f"than {slot.id!r} itself")
+        return self
+
+    @model_validator(mode="after")
+    def _art_masks_resolve(self) -> Archetype:
+        """The archetype-side twin of CoverSpec._masks_resolve, for the new
+        first-class `mask` field (§15.13's mask-forward templates), checked
+        at load so a malformed SHIPPED template fails at import: `from_layer`
+        must name a real art slot that appears earlier in `layers` (the
+        exact _mask_from_precedes rule); `luminance_of` and `from_text` need
+        existence only (order-free sources, per CoverSpec's own reasoning);
+        and `from_text` refuses the one true cycle — clipping into a text
+        slot that is itself mask_from-clipped to this same art slot."""
+        art_ids = {a.id for a in self.art}
+        text_by_id = {t.id: t for t in self.text}
+        first_position: dict[str, int] = {}
+        for i, ref in enumerate(self.layers):
+            if ref in art_ids and ref not in first_position:
+                first_position[ref] = i
+        for slot in self.art:
+            mask = slot.mask
+            if mask is None:
+                continue
+            if mask.from_layer:
+                if mask.from_layer not in art_ids:
+                    raise ValueError(
+                        f"{self.name}: art slot {slot.id!r} has "
+                        f"mask.from_layer={mask.from_layer!r}, which is not "
+                        f"one of this archetype's art slots "
+                        f"({', '.join(sorted(art_ids))})")
+                this_pos = first_position.get(slot.id)
+                ref_pos = first_position.get(mask.from_layer)
+                if this_pos is None or ref_pos is None or ref_pos >= this_pos:
+                    raise ValueError(
+                        f"{self.name}: art slot {slot.id!r}'s mask."
+                        f"from_layer={mask.from_layer!r} must appear earlier "
+                        f"in `layers` than {slot.id!r} itself")
+            if mask.luminance_of and mask.luminance_of not in art_ids:
+                raise ValueError(
+                    f"{self.name}: art slot {slot.id!r} has "
+                    f"mask.luminance_of={mask.luminance_of!r}, which is not "
+                    f"one of this archetype's art slots "
+                    f"({', '.join(sorted(art_ids))})")
+            if mask.from_text:
+                target = text_by_id.get(mask.from_text)
+                if target is None:
+                    raise ValueError(
+                        f"{self.name}: art slot {slot.id!r} has "
+                        f"mask.from_text={mask.from_text!r}, which is not "
+                        f"one of this archetype's text slots "
+                        f"({', '.join(sorted(text_by_id))})")
+                if target.mask_from == slot.id:
+                    raise ValueError(
+                        f"{self.name}: art slot {slot.id!r} clips into text "
+                        f"slot {mask.from_text!r}'s glyphs while that text "
+                        f"slot is itself clipped to {slot.id!r} — a cycle")
         return self
 
     @model_validator(mode="after")
@@ -552,7 +834,8 @@ def describe_archetypes(genre: str | None = None) -> str:
 
 
 __all__ = ["ARCHETYPES", "ARCHETYPES_DIR", "SUBJECT_KEYS", "Archetype",
-          "ArchetypeArt", "ArchetypeError", "ArchetypeScrim",
-          "ArchetypeShadow", "ArchetypeStroke", "ArchetypeText",
-          "ArchetypeZone", "describe_archetypes", "load_archetypes",
-          "zone_px"]
+          "ArchetypeArt", "ArchetypeEffect", "ArchetypeError",
+          "ArchetypeGradientMask", "ArchetypeMask",
+          "ArchetypeScrim", "ArchetypeShadow", "ArchetypeStroke",
+          "ArchetypeText", "ArchetypeZone", "describe_archetypes",
+          "load_archetypes", "zone_px"]

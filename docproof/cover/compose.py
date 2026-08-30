@@ -28,17 +28,29 @@ import colorsys
 import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageEnhance,
                  ImageFilter, ImageOps, ImageStat)
 
-from . import typeset
+from . import balance, typeset
 from .archetypes import zone_px
+# The deep-stack wave (§15.9) moved every shared pixel formula out to
+# effects.py — the blend table, the WCAG luminance band, mask resolution,
+# and the adjust ops — so art layers, adjust layers, and (later) clipped
+# overlays share one implementation. The underscore aliases keep this
+# module's long-standing internal names (and their many call sites)
+# unchanged; the math behind them moved verbatim, which is what the
+# golden-bytes back-compat test verifies.
+from .effects import (apply_adjust, apply_effect_stack, apply_mask,
+                      resolve_mask,
+                      composite_layer as _composite_layer,
+                      luminance_band as _luminance_band,
+                      srgb_to_linear as _srgb_to_linear)
 from .imaging import has_real_alpha
 from .model import (ArtSlot, CoverSpec, LayerRef, Palette, RenderReport,
-                    ScrimSpec, Shadow, TextSlot, Zone)
+                    ScrimSpec, Shadow, TextSlot, Zone, effect_from_shadow)
 from .textures import TEXTURES
 
 log = logging.getLogger("docproof.cover.compose")
@@ -186,6 +198,25 @@ _TEXT_ART_CONTACT_NUDGES: tuple[float, ...] = (0.06, -0.06, 0.12, -0.12)
 # hug the target closely, not give it a whole scrim's worth of clearance.
 _NOTCH_PAD_FRACTION = 0.015
 
+# -- deep-stack wave tuning (§15.7) -------------------------------------------
+#
+# The finishing-attenuation ladder: after the full stack renders, any text
+# slot whose contrast the finishing group (adjust layers / fx_-prefixed art
+# above it) pulled below threshold gets remedied in a fixed order — one
+# more scrim-escalation pass, the two-ink flip, then halving fx_ layers'
+# opacity top-down until the slot passes or every finishing layer sits at
+# or under the floor.
+
+# The reserved prefix finishing-recipe layers will carry (§15.6 — recipes
+# land in a later PR, but the ladder keys on the prefix NOW so hand-
+# authored fx_ layers already participate, and so the prefix's meaning is
+# fixed before anything ships that relies on it).
+_FX_PREFIX = "fx_"
+# "…until the slot passes or all at ≤0.05" (§15.7, verbatim). Halving from
+# 1.0 reaches this floor in five steps (…0.0625 → 0.03125), so per-layer
+# work is strictly bounded.
+_FX_ATTENUATION_FLOOR = 0.05
+
 
 class ComposeError(Exception):
     """A spec that cannot be rendered as given — currently only an art asset
@@ -242,8 +273,16 @@ def compose(spec: CoverSpec, job_dir: Path,
     job_dir = Path(job_dir)
     text_by_id = {t.id: t for t in spec.text}
     art_by_id = {a.id: a for a in spec.art}
+    adjust_by_id = {a.id: a for a in spec.adjust}
     strengths = {i: s.strength for i, s in enumerate(spec.scrims)}
     finalized: dict[str, _ResolvedText] = {}
+    # §15.7's finishing-attenuation ladder halves fx_-prefixed layers'
+    # opacity WITHOUT ever mutating the spec it was handed (compose is a
+    # pure function of spec + job_dir; the caller may reuse the spec):
+    # every compositing read below goes through this override map instead.
+    # Empty on every render that never triggers the ladder — the default
+    # path reads each layer's own opacity exactly as before.
+    fx_opacity: dict[str, float] = {}
 
     contrast: dict[str, float] = {}
     fitted_sizes: dict[str, float] = {}
@@ -266,9 +305,10 @@ def compose(spec: CoverSpec, job_dir: Path,
     # scatter request that silently no-ops on opaque art), duplicated
     # warnings at worst — see _position_all_art's own docstring.
     text_avoid_rects = _text_zone_rects(spec.text, canvas)
+    text_ink_for_masks = _text_ink_for_masks(spec, text_by_id, canvas)
     art_positions = _position_all_art(
         spec.art, layers, job_dir, canvas, spec.palette, spec.version,
-        text_avoid_rects, text_by_id)
+        text_avoid_rects, text_by_id, text_ink_for_masks)
     positioned_art = art_positions.positioned
     layers = art_positions.layers   # possibly degraded by the title
                                     # occlusion guard (fix 2) — every reader
@@ -285,27 +325,61 @@ def compose(spec: CoverSpec, job_dir: Path,
     _apply_art_contrast_floor(positioned_art, art_positions.pre_treatment,
                               layers, art_by_id, spec.palette, canvas, warnings)
 
+    # Balance snap pass (§15.10): the LAST word on horizontal position —
+    # after every positioning guard above (occlusion, notches, contact,
+    # contrast floor), before anything below ever measures or paints, so
+    # scrims and the legibility autopilot both see the final, snapped
+    # positions. Gated on the spec actually DECLARING an axis: None (every
+    # pre-wave spec and every un-retrofitted archetype) means no snap pass
+    # at all — §15.0 constraint 2, byte-identical default path — while the
+    # balance MEASUREMENTS further down still run for every spec (report-
+    # only, no pixels). Mutates `positioned_art`/`text_by_id` in place;
+    # every reader below (render_upto's closure included) sees only the
+    # snapped state.
+    adjustments: list[str] = []
+    if spec.axis is not None:
+        _snap_positions(spec, canvas, positioned_art, layers, art_by_id,
+                        text_by_id, adjustments)
+
+    # Adjust-layer masks resolve exactly once, here: every ingredient
+    # (positioned art, fitted text ink, the synthesized gradients) is fixed
+    # before the first replay, so recomputing them inside render_upto would
+    # be identical work N times over — the same reasoning that hoisted
+    # _position_all_art itself out of the replay loop.
+    adjust_masks = {
+        a.id: resolve_mask(a.mask, canvas, positioned_art, text_ink_for_masks)
+        for a in spec.adjust if a.mask is not None}
+
     def render_upto(stop: int) -> Image.Image:
         """Everything in `layers[:stop]`, freshly composited: art at its
         always-deterministic pixels (looked up from `positioned_art`, not
         recomputed), scrims at their CURRENT (possibly escalated) strength,
-        and any text slot already resolved drawn exactly as it was the
-        first time. Never includes the text slot AT `stop` — the caller
-        measures this result to decide how to draw it."""
+        adjust layers computed over the composite as it stands (§15.3), and
+        any text slot already resolved drawn exactly as it was the first
+        time. Never includes the text slot AT `stop` — the caller measures
+        this result to decide how to draw it. Art and adjust opacities read
+        through `fx_opacity` so a §15.7 attenuation replays consistently."""
         img = Image.new("RGBA", canvas, (0, 0, 0, 0))
         for layer in layers[:stop]:
             if layer.kind == "art":
                 slot = art_by_id[layer.ref]
                 img = _composite_layer(img, positioned_art[layer.ref],
-                                       slot.opacity, slot.blend)
+                                       fx_opacity.get(layer.ref, slot.opacity),
+                                       slot.blend)
             elif layer.kind == "scrim":
                 idx = int(layer.ref)
                 img = _apply_scrim(img, spec.scrims[idx], strengths[idx],
                                    text_by_id, spec.palette, canvas)
+            elif layer.kind == "adjust":
+                adj = adjust_by_id[layer.ref]
+                img = apply_adjust(
+                    img, adj, spec.palette, canvas, adjust_masks.get(layer.ref),
+                    opacity=fx_opacity.get(layer.ref, adj.opacity))
             else:  # "text"
                 resolved = finalized.get(layer.ref)
                 if resolved is not None:
-                    img = _draw_resolved_text(img, resolved, canvas, positioned_art)
+                    img = _draw_resolved_text(img, resolved, canvas,
+                                              positioned_art, spec.palette)
         return img
 
     for i, layer in enumerate(layers):
@@ -389,7 +463,8 @@ def compose(spec: CoverSpec, job_dir: Path,
             # which redraws every finalized slot on every later replay (see
             # the module docstring's note on that trade-off); a warning
             # appended once per replay would duplicate it N times over.
-            text_layer = _render_text_only(slot, fit, color_hex, shadow, canvas)
+            text_layer = _render_text_only(slot, fit, color_hex, shadow, canvas,
+                                           emphasis_color=spec.palette.accent)
             _, coverage = _clip_text_to_container(
                 text_layer, positioned_art.get(slot.mask_from), canvas)
             if coverage < _TEXT_MASK_MIN_COVERAGE:
@@ -400,38 +475,164 @@ def compose(spec: CoverSpec, job_dir: Path,
 
     final_image = render_upto(len(layers))
 
-    # Safety net: the autopilot measured each slot against what was BENEATH
-    # it at draw time; a later non-text layer (a focal cutout, say) can
-    # still bury text it never saw. Re-measure against the finished stack of
-    # art + scrims WITHOUT the text layers — measuring the text's own pixels
-    # would bias the zone toward the ink color and cry wolf on every clean
-    # cover — and say so out loud when a slot lost meaningful contrast.
-    ground = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    for layer in layers:
-        if layer.kind == "art":
-            slot = art_by_id[layer.ref]
-            ground = _composite_layer(ground, positioned_art[layer.ref],
-                                      slot.opacity, slot.blend)
-        elif layer.kind == "scrim":
-            idx = int(layer.ref)
-            ground = _apply_scrim(ground, spec.scrims[idx], strengths[idx],
-                                  text_by_id, spec.palette, canvas)
+    def render_ground() -> Image.Image:
+        """The finished stack WITHOUT the text layers — art, scrims, and
+        adjust layers at their CURRENT strengths/opacities. Every final-
+        composite contrast measurement below reads this rather than
+        `final_image`, because measuring a zone that contains the text's
+        own pixels would bias it toward the ink color and cry wolf on
+        every clean cover (the long-standing safety-net reasoning). The
+        one approximation that buys: an adjust op here transforms a
+        text-free composite, while the shipped render's op also saw the
+        glyphs — for judging INK-vs-GROUND legibility, the text-free
+        reading is the honest one."""
+        img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        for layer in layers:
+            if layer.kind == "art":
+                slot = art_by_id[layer.ref]
+                img = _composite_layer(img, positioned_art[layer.ref],
+                                       fx_opacity.get(layer.ref, slot.opacity),
+                                       slot.blend)
+            elif layer.kind == "scrim":
+                idx = int(layer.ref)
+                img = _apply_scrim(img, spec.scrims[idx], strengths[idx],
+                                   text_by_id, spec.palette, canvas)
+            elif layer.kind == "adjust":
+                adj = adjust_by_id[layer.ref]
+                img = apply_adjust(
+                    img, adj, spec.palette, canvas, adjust_masks.get(layer.ref),
+                    opacity=fx_opacity.get(layer.ref, adj.opacity))
+        return img
+
+    # Final-composite legibility re-check (§15.7). The autopilot approved
+    # each slot against what was beneath it AT DRAW TIME; a finishing stack
+    # above the text (adjust layers, fx_-prefixed art) can afterwards
+    # change the contrast it approved. Re-measure every slot against the
+    # finished ground; a slot that now fails — and has finishing machinery
+    # above it to blame — climbs a fixed, bounded remedy ladder: (a) one
+    # more scrim-escalation replay pass, (b) the existing two-ink flip,
+    # (c) finishing attenuation, halving fx_ layers' opacity top-down. A
+    # slot with NOTHING new above it keeps the launch-era behavior to the
+    # byte: warn when a later layer buried it, change nothing — §15.0's
+    # byte-identical-default-path constraint is non-negotiable, and
+    # remedying pre-wave specs would change pre-wave pixels.
+    ground = render_ground()
+    ladder_changed = False
+    text_positions: dict[str, int] = {}
+    for i, layer in enumerate(layers):
+        if layer.kind == "text" and layer.ref not in text_positions:
+            text_positions[layer.ref] = i
     for ref, resolved in finalized.items():
         zl, zt, zw, zh = zone_px(resolved.slot.zone, canvas)
+        rect = (zl, zt, zl + zw, zt + zh)
         container_mask = (positioned_art[resolved.slot.mask_from].getchannel("A")
                           if resolved.slot.mask_from
                           and resolved.slot.mask_from in positioned_art
                           else None)
         ink_bbox = typeset.text_mask(resolved.slot, resolved.fit, canvas).getbbox()
-        final_ratio = _worst_region_contrast(
-            ground, (zl, zt, zl + zw, zt + zh), ImageColor.getrgb(resolved.color),
-            ink_bbox, container_mask)
+
+        def remeasure(img: Image.Image, color: str) -> float:
+            return _worst_region_contrast(img, rect, ImageColor.getrgb(color),
+                                          ink_bbox, container_mask)
+
+        final_ratio = remeasure(ground, resolved.color)
         threshold = _CONTRAST_THRESHOLDS[resolved.slot.id]
-        if final_ratio < threshold and final_ratio < contrast[ref] - 0.5:
+        finishing_above = list(dict.fromkeys(
+            layer.ref for layer in layers[text_positions.get(ref, len(layers)) + 1:]
+            if layer.kind == "adjust"
+            or (layer.kind == "art" and layer.ref.startswith(_FX_PREFIX))))
+        if not finishing_above:
+            if final_ratio < threshold and final_ratio < contrast[ref] - 0.5:
+                warnings.append(
+                    f"{ref}: a layer drawn later covers this text — contrast on "
+                    f"the finished cover is {final_ratio:.2f} (threshold "
+                    f"{threshold}, was {contrast[ref]:.2f} at draw time).")
+            continue
+        if final_ratio >= threshold:
+            continue
+
+        # (a) One more scrim-escalation replay pass: the exact
+        # escalate-until-pass-or-cap loop the draw-time autopilot ran,
+        # judged against the FINAL ground this time. Whatever headroom the
+        # slot's protecting scrims still have is the cheapest remedy — it
+        # brightens/darkens under the finishing rather than dismantling it.
+        protecting = [idx for idx, s in enumerate(spec.scrims) if s.protects == ref]
+        while (final_ratio < threshold
+               and any(strengths[idx] < _SCRIM_CAP for idx in protecting)):
+            for idx in protecting:
+                strengths[idx] = min(_SCRIM_CAP, round(strengths[idx] + _SCRIM_STEP, 10))
+            ground = render_ground()
+            final_ratio = remeasure(ground, resolved.color)
+            ladder_changed = True
+
+        # (b) The existing two-ink flip, judged on the final ground — with
+        # the CURRENT color kept in the running (unlike the draw-time flip,
+        # which had already exhausted its scrims and had nothing to lose):
+        # flipping to a fallback that measures WORSE than what the slot
+        # already wears would be a regression, not a remedy.
+        if final_ratio < threshold:
+            options = [(resolved.color, final_ratio)] + [
+                (c, remeasure(ground, c)) for c in _TEXT_COLOR_FALLBACKS]
+            best_color, best_ratio = max(options, key=lambda pair: pair[1])
+            if best_color != resolved.color:
+                pre_flip = final_ratio
+                resolved = replace(resolved, color=best_color)
+                finalized[ref] = resolved
+                ladder_changed = True
+                outcome = ("now passes" if best_ratio >= threshold
+                           else "still falls short")
+                warnings.append(
+                    f"{ref}: the finishing stack pulled contrast down to "
+                    f"{pre_flip:.2f} against threshold {threshold}; flipped "
+                    f"text color to {best_color}, which {outcome} "
+                    f"({best_ratio:.2f}).")
+            final_ratio = best_ratio
+
+        # (c) Finishing attenuation: halve the opacity of fx_-prefixed
+        # layers above this slot, topmost first, re-rendering and
+        # re-measuring after every halving, until the slot passes or every
+        # finishing layer sits at or under the floor. Geometric halving
+        # from 1.0 reaches the floor in five steps, so the whole sweep is
+        # strictly bounded. Every halving is announced with the exact layer
+        # id and its new opacity — the judge reads these (§6.3's
+        # composer_warnings channel), so they are measurements, not prose.
+        if final_ratio < threshold:
+            fx_above = [r for r in finishing_above if r.startswith(_FX_PREFIX)]
+
+            def current_opacity(layer_ref: str) -> float:
+                if layer_ref in fx_opacity:
+                    return fx_opacity[layer_ref]
+                owner = art_by_id.get(layer_ref) or adjust_by_id.get(layer_ref)
+                return owner.opacity if owner is not None else 0.0
+
+            while (final_ratio < threshold
+                   and any(current_opacity(r) > _FX_ATTENUATION_FLOOR
+                           for r in fx_above)):
+                for layer_ref in reversed(fx_above):   # top-down
+                    cur = current_opacity(layer_ref)
+                    if cur <= _FX_ATTENUATION_FLOOR:
+                        continue
+                    fx_opacity[layer_ref] = round(cur / 2.0, 6)
+                    ladder_changed = True
+                    warnings.append(
+                        f"{layer_ref} halved to {fx_opacity[layer_ref]:g} "
+                        f"to keep {ref} legible.")
+                    ground = render_ground()
+                    final_ratio = remeasure(ground, resolved.color)
+                    if final_ratio >= threshold:
+                        break
+
+        if final_ratio < threshold:
             warnings.append(
-                f"{ref}: a layer drawn later covers this text — contrast on "
-                f"the finished cover is {final_ratio:.2f} (threshold "
-                f"{threshold}, was {contrast[ref]:.2f} at draw time).")
+                f"{ref}: still {final_ratio:.2f} against threshold "
+                f"{threshold} on the finished cover after scrim escalation, "
+                f"an ink flip, and finishing attenuation.")
+        # The draw-time number is stale once the ladder has run — the
+        # report carries what the finished cover actually measures.
+        contrast[ref] = round(final_ratio, 4)
+
+    if ladder_changed:
+        final_image = render_upto(len(layers))
 
     # Dead-band metric (fix 4): one full-canvas read of the FINISHED
     # composite — text, art, and scrims all baked in — for the tallest
@@ -445,21 +646,35 @@ def compose(spec: CoverSpec, job_dir: Path,
             f"({dead_band_frac:.0%} of the canvas) has no text, art, or "
             f"ornament ink crossing it.")
 
+    # Balance measurements (§15.10): mirror symmetry, center of mass,
+    # margins, gap rhythm — measured on the FINISHED composite (finishing
+    # included; these judge what ships) and reported into the same
+    # warnings channel the judge already reads as composer_warnings.
+    # Report-only by design (taste calls the judge arbitrates), so they
+    # run for EVERY spec, axis declared or not — a pre-wave spec's pixels
+    # are untouchable, its numbers are not.
+    final_rgb = final_image.convert("RGB")
+    warnings.extend(_balance_measurements(spec, canvas, final_rgb,
+                                          positioned_art, layers, art_by_id,
+                                          finalized))
+
     report = RenderReport(
         contrast=contrast,
         scrim_final={idx: strengths[idx] for idx in range(len(spec.scrims))},
         fitted_sizes=fitted_sizes,
         warnings=warnings,
         occlusion=art_positions.occlusion,
-        dead_band_frac=dead_band_frac)
-    return final_image.convert("RGB"), report
+        dead_band_frac=dead_band_frac,
+        adjustments=adjustments)
+    return final_rgb, report
 
 
 # -- knockout / art_fill text modes (§7.4a) -----------------------------------
 
 def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
                         canvas: tuple[int, int],
-                        positioned_art: dict[str, Image.Image]) -> Image.Image:
+                        positioned_art: dict[str, Image.Image],
+                        palette: Palette) -> Image.Image:
     """Dispatch one already-resolved text slot to whichever renderer its
     `mode` needs: typeset.draw_text for the normal ink-colored `fill`, or
     _draw_knockout_or_art_fill for the two panel/window modes. Both branches
@@ -468,21 +683,38 @@ def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
     for), so this is the one place that color's meaning finally forks: ink,
     or panel/outline.
 
+    A slot carrying an effect stack (§15.4 — non-empty `effects`, into
+    which the model validator already folded any legacy shadow/stroke)
+    takes the ONE engine path instead: _text_layer_with_effects builds the
+    styled layer standalone, and the legacy branches below never see it.
+    An EMPTY stack is the pre-wave spec shape, and everything below this
+    guard is that byte-identical legacy path, untouched.
+
     When `resolved.slot.mask_from` names a container ("thing inside of
     thing" — a title inside a lighthouse beam), the fully rendered text
-    layer (whichever mode built it) is clipped to that container's already-
+    layer (whichever path built it) is clipped to that container's already-
     positioned alpha before it ever reaches `base` — see
     _render_text_only/_clip_text_to_container."""
     slot = resolved.slot
+    if slot.effects:
+        text_layer = _text_layer_with_effects(resolved, canvas, palette)
+        if slot.mask_from:
+            text_layer, _coverage = _clip_text_to_container(
+                text_layer, positioned_art.get(slot.mask_from), canvas)
+        out = base.copy()
+        out.alpha_composite(text_layer)
+        return out
     if not slot.mask_from:
         if slot.mode == "fill":
             return typeset.draw_text(base, slot, resolved.fit, resolved.color,
-                                     resolved.shadow, canvas)
+                                     resolved.shadow, canvas,
+                                     emphasis_color=palette.accent)
         return _draw_knockout_or_art_fill(base, slot, resolved.fit,
                                           resolved.color, canvas)
 
     text_layer = _render_text_only(slot, resolved.fit, resolved.color,
-                                   resolved.shadow, canvas)
+                                   resolved.shadow, canvas,
+                                   emphasis_color=palette.accent)
     clipped, _coverage = _clip_text_to_container(
         text_layer, positioned_art.get(slot.mask_from), canvas)
     out = base.copy()
@@ -490,8 +722,36 @@ def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
     return out
 
 
+def _text_layer_with_effects(resolved: _ResolvedText, canvas: tuple[int, int],
+                             palette: Palette) -> Image.Image:
+    """One text slot's pixels through the effects engine (§15.4's single
+    code path): the bare fill — glyphs at the autopilot's color, WITHOUT
+    the legacy shadow or stroke, both of which now live in the stack via
+    the model's fold — run through apply_effect_stack.
+
+    The one draw-time composition left to do here is the autopilot's own
+    auto-Shadow: it keeps writing to `resolved.shadow` (never `effects` —
+    §15.4 says so outright), so when it invented one (`slot.shadow` is
+    None but the resolved shadow is not), that shadow joins the FRONT of
+    the stack exactly as the fold would have put it. A shadow the slot
+    declared itself is already folded in — prepending it again would
+    double it."""
+    slot = resolved.slot
+    # model_copy, not re-validation: stripping stroke/shadow off a copy for
+    # the bare-fill render must not re-trigger the fold (which would see
+    # effects non-empty and try to help).
+    bare = slot.model_copy(update={"shadow": None, "stroke": None})
+    fill = _render_text_only(bare, resolved.fit, resolved.color, None, canvas,
+                             emphasis_color=palette.accent)
+    stack = list(slot.effects)
+    if resolved.shadow is not None and slot.shadow is None:
+        stack.insert(0, effect_from_shadow(resolved.shadow))
+    return apply_effect_stack(fill, stack, palette, canvas)
+
+
 def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
-                      shadow: Shadow | None, canvas: tuple[int, int]) -> Image.Image:
+                      shadow: Shadow | None, canvas: tuple[int, int],
+                      emphasis_color: str | None = None) -> Image.Image:
     """`slot`'s fully rendered pixels — ink/stroke/shadow for `fill`, the
     panel/window pixels for knockout/art_fill — as a STANDALONE canvas-sized
     RGBA layer, transparent everywhere else. Both typeset.draw_text and
@@ -504,7 +764,8 @@ def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
     beneath them, before that clip ever happens."""
     blank = Image.new("RGBA", canvas, (0, 0, 0, 0))
     if slot.mode == "fill":
-        return typeset.draw_text(blank, slot, fit, color, shadow, canvas)
+        return typeset.draw_text(blank, slot, fit, color, shadow, canvas,
+                                 emphasis_color=emphasis_color)
     return _draw_knockout_or_art_fill(blank, slot, fit, color, canvas)
 
 
@@ -892,24 +1153,12 @@ def _place_scatter(source: Image.Image, canvas: tuple[int, int], count: int,
     return out, placed
 
 
-def _apply_mask_from(img: Image.Image, ref_img: Image.Image | None) -> Image.Image:
-    """§7.4a's double exposure: keep `img`'s own pixels only where `ref_img`
-    (another art slot's already-positioned, canvas-space image) is opaque —
-    art poured inside another slot's silhouette. A hard 50% threshold turns
-    the reference's alpha into a binary stencil first (a soft/graduated
-    reference edge should not leave `img` partially see-through in a way
-    neither slot's own alpha describes); ImageChops.multiply against that
-    0/255 stencil then either passes `img`'s own alpha through unchanged
-    (stencil=255) or zeroes it (stencil=0), so `img`'s own soft edges (its
-    OWN anti-aliasing, its OWN treatment) still survive wherever the
-    reference allows it through. `ref_img=None` (a dangling reference) can't
-    happen for a spec that passed CoverSpec validation — defensive, not a
-    real path."""
-    if ref_img is None:
-        return img
-    r, g, b, a = img.split()
-    ref_stencil = ref_img.split()[3].point(lambda v: 255 if v > 127 else 0)
-    return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, ref_stencil)))
+# §7.4a's double exposure (the old _apply_mask_from) is now one source of
+# effects.resolve_mask (§15.2): ArtSlot.mask_from folds into
+# mask.from_layer at validation, and resolve_mask keeps the exact
+# hard-50%-threshold stencil semantics that fold's byte-compat rides on.
+# _apply_masks below is where every art-layer mask — legacy or first-class
+# — is actually applied.
 
 
 def _occlusion_fraction(ink_mask: Image.Image, art_alpha: Image.Image) -> float:
@@ -1074,10 +1323,78 @@ def _snap_to_line_gap(source: Image.Image, canvas: tuple[int, int],
     return best_img, best_ratio, warning
 
 
+def _text_ink_for_masks(spec: CoverSpec, text_by_id: dict[str, TextSlot],
+                        canvas: tuple[int, int]) -> dict[str, Image.Image]:
+    """Fitted glyph coverage ('L', canvas-sized, via typeset.text_mask) for
+    every text slot some MaskSpec in this spec clips to (mask.from_text,
+    §15.13) — computed once, up front, because text ink depends on nothing
+    the art walk produces (fit_text is a pure function of slot + canvas;
+    the occlusion guard already leans on exactly that ordering). The fit
+    runs again inside compose()'s own text loop later — deterministic, so
+    the glyph alpha a mask clips to is pixel-identical to the glyphs
+    eventually drawn — and any fit *warning* is deliberately left to that
+    later loop, so it lands in the report exactly once. `text_by_id` must
+    be the frame-clamped dict compose built, for the same identical-fit
+    reason."""
+    needed: set[str] = set()
+    for slot in spec.art:
+        if slot.mask is not None and slot.mask.from_text:
+            needed.add(slot.mask.from_text)
+    for layer in spec.adjust:
+        if layer.mask is not None and layer.mask.from_text:
+            needed.add(layer.mask.from_text)
+    ink: dict[str, Image.Image] = {}
+    for text_id in sorted(needed):
+        slot = text_by_id.get(text_id)
+        if slot is None:   # dangling ref can't survive validation — defensive
+            continue
+        fit = typeset.fit_text(slot, canvas)
+        ink[text_id] = typeset.text_mask(slot, fit, canvas)
+    return ink
+
+
+def _apply_art_masks(positioned: dict[str, Image.Image], layers: list[LayerRef],
+                     art_by_id: dict[str, ArtSlot], canvas: tuple[int, int],
+                     text_ink: dict[str, Image.Image],
+                     warnings: list[str]) -> None:
+    """Second positioning pass (§15.2): every art slot's MaskSpec — the
+    legacy mask_from fold included — resolved against the already-
+    positioned pixels and multiplied into that slot's alpha, in place.
+
+    Runs in z-order so a chained from_layer reference (A masked by B, B
+    masked by C) always reads the referenced slot's FINAL, already-masked
+    pixels — the _masks_resolve ordering rule guarantees a from_layer
+    reference precedes its user, so walking `layers` forward preserves the
+    exact semantics the old single-pass mask_from application had. The
+    order-free sources are unaffected by z: gradient/from_text depend on no
+    art at all, and luminance_of (existence-only by design) reads whatever
+    the referenced slot's pixels are at this moment — for a LATER slot
+    that is its pre-mask placement, deterministic either way."""
+    masked: set[str] = set()
+    for layer in layers:
+        if layer.kind != "art" or layer.ref in masked or layer.ref not in positioned:
+            continue
+        masked.add(layer.ref)
+        slot = art_by_id[layer.ref]
+        if slot.mask is None:
+            continue
+        if slot.mask.from_text:
+            ink = text_ink.get(slot.mask.from_text)
+            if ink is None or ImageStat.Stat(ink).sum[0] <= 0:
+                warnings.append(
+                    f"{slot.id}: mask.from_text={slot.mask.from_text!r} "
+                    f"resolved to a text slot with no ink (empty optional "
+                    f"slot?) — the art is fully masked out.")
+        mask_img = resolve_mask(slot.mask, canvas, positioned, text_ink)
+        if mask_img is not None:
+            positioned[layer.ref] = apply_mask(positioned[layer.ref], mask_img)
+
+
 def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                       job_dir: Path, canvas: tuple[int, int], palette: Palette,
                       version: int, text_avoid_rects: list[tuple[int, int, int, int]],
-                      text_by_id: dict[str, TextSlot]) -> _ArtPositions:
+                      text_by_id: dict[str, TextSlot],
+                      text_ink: dict[str, Image.Image]) -> _ArtPositions:
     """Every art slot's final, canvas-space RGBA image, positioned and
     effects-rack-treated exactly once, keyed by slot id. Computed as a
     single pass over `layers` (not `art_slots` directly) so a `mask_from`
@@ -1195,12 +1512,29 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
         if treatment_warning:
             warnings.append(treatment_warning)
 
-        if slot.mask_from:
-            img = _apply_mask_from(img, positioned.get(slot.mask_from))
-
         positioned[slot.id] = img
 
+    # Masks apply as a second pass over the whole z-order (not inline above)
+    # because §15.2's order-free sources — luminance_of, from_text — may
+    # legally reference slots this loop has not reached yet; see
+    # _apply_art_masks' own docstring for why the from_layer chain still
+    # behaves exactly as the old inline single-pass application did.
+    _apply_art_masks(positioned, layers_out, art_by_id, canvas, text_ink,
+                     warnings)
+
     _apply_frame_notches(positioned, art_by_id, canvas, warnings)
+
+    # Effect stacks on ART slots (§15.4) run here — after fit/placement/
+    # treatment, after masks and notches (so a drop shadow or glow always
+    # wraps the slot's FINAL silhouette, not a shape a mask was about to
+    # carve away), and before compositing/the contact guard (which then
+    # nudges the finished pixels, shadow and all, as one thing — and
+    # rightly counts a soft shadow burying a title as contact).
+    for slot in art_slots:
+        if slot.effects and slot.id in positioned:
+            positioned[slot.id] = apply_effect_stack(
+                positioned[slot.id], slot.effects, palette, canvas)
+
     layers_out = _apply_text_contact_guard(
         positioned, layers_out, art_by_id, text_by_id, canvas, warnings,
         occlusion, sandwich_pairs)
@@ -1318,6 +1652,17 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
         if layer.kind != "art":
             continue
         art_id = layer.ref
+        if art_id.startswith(_FX_PREFIX):
+            # Finishing layers (§15.6) sit above the text BY DESIGN —
+            # "appended above the whole stack, text included" — so a
+            # full-canvas grain plate covering the title's ink is never
+            # the accidental collision this guard exists to undo, and
+            # nudging or reordering it would quietly dismantle the recipe.
+            # Whether the text stays LEGIBLE beneath finishing is the
+            # §15.7 final-composite re-check's job: it measures the
+            # finished ground and attenuates fx_ opacity, ladder-style,
+            # instead of touching z-order.
+            continue
         slot = art_by_id.get(art_id)
         img = positioned.get(art_id)
         if slot is None or img is None:
@@ -1370,6 +1715,181 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
     return out
 
 
+# -- balance & symmetry (§15.10) ----------------------------------------------
+
+def _snap_positions(spec: CoverSpec, canvas: tuple[int, int],
+                    positioned_art: dict[str, Image.Image],
+                    layers: list[LayerRef], art_by_id: dict[str, ArtSlot],
+                    text_by_id: dict[str, TextSlot],
+                    adjustments: list[str]) -> None:
+    """The balance engine's snap pass, wired into this module's own state:
+    measure every eligible element's positioned ink, hand the bboxes to
+    balance.plan_snaps (which owns all the geometry and every tolerance),
+    then apply the returned deltas — art by translating its positioned
+    pixels (the exact shift-the-finished-raster move the contact guard
+    established, and for the same reason: it works uniformly regardless of
+    how the pixels were placed), text by translating its ZONE (fit_text
+    depends only on the zone's width/height, so a pure horizontal
+    translation re-fits to the identical size and line breaks — only where
+    the ink lands changes, and the scrims/legibility machinery that derive
+    from the zone follow automatically). Every applied move's line lands
+    in `adjustments`.
+
+    Eligibility is decided HERE, because it is spec-level reasoning
+    balance.py deliberately can't see (it imports model/effects only):
+
+    - Text: every drawn slot participates; exempt only a slot some
+      MaskSpec.from_text clips art INTO — that art's alpha was already
+      multiplied by the glyphs' current position during the mask pass, and
+      moving the glyphs now would strand art-in-the-letterforms where the
+      letters no longer are. (A text slot's own mask_from container clip
+      is fine to move: it re-derives from the container's positioned alpha
+      at draw time, after this pass.)
+    - Art: contain-fit only, per §15.10 — cover-fit is a bleed plate, and
+      corners/scatter placements are symmetric/deliberately-random by
+      construction. Also exempt anything whose pixels are already
+      entangled with another layer's: a slot carrying its own mask (its
+      alpha was shaped against canvas-anchored or other-layer fields), a
+      slot some other mask reads (from_layer/luminance_of stencils were
+      taken at its current position), and either side of a notch_for pair
+      (the hole was cut where the target ink WAS). The snap pass runs
+      last by design — final positions — so entangled pixels must simply
+      not move.
+
+    Mutates `positioned_art` and `text_by_id` in place; runs before
+    render_upto is ever called, so every replay, scrim derivation, and
+    contrast measurement sees only the snapped state."""
+    cw = canvas[0]
+    axis_x = balance.resolve_axis_x(spec.axis, spec.axis_x)
+
+    mask_source_art: set[str] = set()
+    from_text_refs: set[str] = set()
+    for owner in (*spec.art, *spec.adjust):
+        if owner.mask is None:
+            continue
+        if owner.mask.from_layer:
+            mask_source_art.add(owner.mask.from_layer)
+        if owner.mask.luminance_of:
+            mask_source_art.add(owner.mask.luminance_of)
+        if owner.mask.from_text:
+            from_text_refs.add(owner.mask.from_text)
+    notch_bound = {a.id for a in spec.art if a.notch_for}
+    notch_bound |= {a.notch_for for a in spec.art if a.notch_for}
+
+    elements: list[balance.InkElement] = []
+    seen: set[tuple[str, str]] = set()
+    for layer in layers:
+        key = (layer.kind, layer.ref)
+        if key in seen or layer.kind not in ("text", "art"):
+            continue
+        seen.add(key)
+        if layer.kind == "text":
+            slot = text_by_id.get(layer.ref)
+            if slot is None or (slot.optional and not slot.content.strip()):
+                continue
+            # One more redundant (pure, deterministic, cheap) fit search —
+            # the same trade _position_all_art's occlusion guard already
+            # blesses — because the snap needs the fitted INK's bbox, not
+            # the zone's.
+            fit = typeset.fit_text(slot, canvas)
+            bbox = typeset.text_mask(slot, fit, canvas).getbbox()
+            if bbox is None:
+                continue
+            zone_left = round(slot.zone.x * cw)
+            # The legal horizontal travel keeps the translated zone a
+            # valid Zone (x ≥ 0, x + w ≤ 1) — plan_snaps skips any snap
+            # these bounds can't absorb whole, so a snap is always exact
+            # or absent, never partial.
+            dx_max = math.floor(cw * (1.0 - slot.zone.w) + 1e-6) - zone_left
+            elements.append(balance.InkElement(
+                id=layer.ref, kind="text", bbox=bbox, align=slot.align,
+                snappable=layer.ref not in from_text_refs,
+                dx_min=-zone_left, dx_max=dx_max))
+        else:
+            slot = art_by_id[layer.ref]
+            snappable = (slot.fit == "contain" and not slot.corners
+                         and not slot.scatter and slot.mask is None
+                         and layer.ref not in mask_source_art
+                         and layer.ref not in notch_bound)
+            if not snappable:
+                continue
+            img = positioned_art.get(layer.ref)
+            bbox = balance.ink_bbox(img) if img is not None else None
+            if bbox is None:
+                continue
+            elements.append(balance.InkElement(
+                id=layer.ref, kind="art", bbox=bbox,
+                dx_min=-bbox[0], dx_max=cw - bbox[2]))
+
+    deltas, lines = balance.plan_snaps(elements, spec.axis, axis_x, canvas)
+    for (kind, ref), dx in deltas.items():
+        if kind == "art":
+            positioned_art[ref] = balance.translate_x(
+                positioned_art[ref], dx, canvas)
+        else:
+            slot = text_by_id[ref]
+            zone_left = round(slot.zone.x * cw)
+            # (zone_left + dx) / cw re-rounds to exactly zone_left + dx at
+            # zone_px time, so the drawn ink moves by precisely the
+            # planned delta — mutating zone.x by dx/cw instead could land
+            # a pixel off on a half-integer rounding boundary.
+            z = slot.zone
+            text_by_id[ref] = slot.model_copy(update={"zone": Zone(
+                x=(zone_left + dx) / cw, y=z.y, w=z.w, h=z.h)})
+    adjustments.extend(lines)
+
+
+def _balance_measurements(spec: CoverSpec, canvas: tuple[int, int],
+                          final_rgb: Image.Image,
+                          positioned_art: dict[str, Image.Image],
+                          layers: list[LayerRef],
+                          art_by_id: dict[str, ArtSlot],
+                          finalized: dict[str, _ResolvedText]) -> list[str]:
+    """§15.10's report-only tier, gathered once over the finished render:
+    whole-canvas mirror-symmetry/center-of-mass warnings (via
+    balance.measure_composite — a spec with no declared axis measures as
+    the center composition every pre-wave archetype is), the per-element
+    margin audit, and the gap-rhythm near-miss check. Elements are
+    measured at their FINAL positions — finalized text redraws from its
+    (possibly snapped) slot, art reads its (possibly snapped) positioned
+    alpha — and cover-fit art never enters the margin audit at all: a
+    bleed layer touches the trim by design."""
+    out: list[str] = list(balance.measure_composite(
+        final_rgb, spec.axis or "center").warnings)
+
+    elements: list[balance.InkElement] = []
+    text_elements: list[balance.InkElement] = []
+    seen: set[tuple[str, str]] = set()
+    for layer in layers:
+        key = (layer.kind, layer.ref)
+        if key in seen or layer.kind not in ("text", "art"):
+            continue
+        seen.add(key)
+        if layer.kind == "text":
+            resolved = finalized.get(layer.ref)
+            if resolved is None:
+                continue
+            bbox = typeset.text_mask(resolved.slot, resolved.fit,
+                                     canvas).getbbox()
+            if bbox is None:
+                continue
+            element = balance.InkElement(id=layer.ref, kind="text", bbox=bbox)
+            elements.append(element)
+            text_elements.append(element)
+        else:
+            if art_by_id[layer.ref].fit == "cover":
+                continue                  # bleed layer — margin-exempt
+            img = positioned_art.get(layer.ref)
+            bbox = balance.ink_bbox(img) if img is not None else None
+            if bbox is None:
+                continue
+            elements.append(balance.InkElement(id=layer.ref, kind="art",
+                                               bbox=bbox))
+    out.extend(balance.margin_audit(elements, canvas))
+    out.extend(balance.gap_rhythm_warnings(text_elements, canvas))
+    return out
+
+
 def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
                     version: int) -> Image.Image | None:
     """slot.procedural, if set, names a PROCEDURAL_SYNTHESIZERS entry
@@ -1390,7 +1910,7 @@ def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
     synth = PROCEDURAL_SYNTHESIZERS.get(name)
     if synth is None:
         return None   # unreachable given the Literal; never crash on the unknown
-    return synth(canvas, palette, slot.id, version)
+    return synth(canvas, palette, slot, version)
 
 
 def _gradient_layer(canvas: tuple[int, int], base_hex: str) -> Image.Image:
@@ -1431,7 +1951,7 @@ def _grain_layer(canvas: tuple[int, int]) -> Image.Image:
 #
 # Reference DNA item 7: "quiet paper grain unifying everything" — and item 8's
 # "thin rule frames... read as craft." Every synthesizer here is a pure
-# function of (canvas, palette, slot id, spec version) -> a canvas-sized RGBA
+# function of (canvas, palette, ART SLOT, spec version) -> a canvas-sized RGBA
 # image, drawn in ONE palette color at a baked-in low alpha (so it looks
 # right blended `normal` at slot.opacity=1.0; an archetype may still dial it
 # further via opacity/blend) — never a hardcoded hex, so a direction that
@@ -1447,6 +1967,14 @@ def _grain_layer(canvas: tuple[int, int]) -> Image.Image:
 # below are thin registry wrappers around the two ORIGINAL, unchanged
 # synthesizers above, so the "texture"/"background" legacy-id fallback in
 # _procedural_art reaches the exact same bytes it always has.
+#
+# The whole ArtSlot rides in (deep-stack wave, §15.5's "extends the existing
+# _synth_* signature to receive the ArtSlot") so the light & atmosphere bank
+# further down can read anchor (= center / rays origin / fog band-y) and
+# scale (= extent) — and ONLY those existing fields: the zero-param
+# philosophy that keeps the procedural Literal a closed, judge-explainable
+# menu. Every pre-§15.5 synthesizer ignores everything but slot.id (the two
+# seeded ones) and stays byte-identical.
 
 def _synth_seed(version: int, slot_id: str, name: str) -> int:
     """Mirrors _scatter_seed's reasoning exactly (fixed integer arithmetic
@@ -1458,12 +1986,12 @@ def _synth_seed(version: int, slot_id: str, name: str) -> int:
            + sum(ord(c) for c in name) * 7)
 
 
-def _synth_gradient(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_gradient(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                     version: int) -> Image.Image:
     return _gradient_layer(canvas, palette.background)
 
 
-def _synth_grain(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_grain(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                  version: int) -> Image.Image:
     return _grain_layer(canvas)
 
@@ -1473,7 +2001,7 @@ _PAPER_FIBER_BLUR_FRACTION = 0.003      # of canvas height
 _PAPER_ALPHA = 90                       # of 255 - subtle fiber+laid-line tint
 
 
-def _synth_paper(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_paper(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                  version: int) -> Image.Image:
     """Laid paper: soft mottled fiber noise plus regularly spaced horizontal
     "laid lines" — the faint ribbing real laid paper shows held to light —
@@ -1483,7 +2011,7 @@ def _synth_paper(canvas: tuple[int, int], palette: Palette, slot_id: str,
     per-pixel noise); the laid lines are exact, fixed-period horizontal
     rules, so the whole field tiles cleanly at that period."""
     cw, ch = canvas
-    seed = _synth_seed(version, slot_id, "paper")
+    seed = _synth_seed(version, slot.id, "paper")
     sw = max(1, round(cw * _GRAIN_SCALE))
     sh = max(1, round(ch * _GRAIN_SCALE))
     raw = random.Random(seed).randbytes(sw * sh)
@@ -1508,7 +2036,7 @@ _HALFTONE_MIN_RADIUS_FACTOR = 0.25    # of the biggest dot, toward the edges
 _HALFTONE_MAX_RADIUS_FACTOR = 0.42    # of the pitch, at the slot's center
 
 
-def _synth_halftone(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_halftone(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                     version: int) -> Image.Image:
     """A classic print dot screen: a square grid of solid circles, radially
     graded so full-size dots cluster toward the slot's own center and taper
@@ -1543,7 +2071,7 @@ _WEAVE_ALPHA = 34
 _WEAVE_LINE_VALUE = 110
 
 
-def _synth_canvas(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_canvas(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                   version: int) -> Image.Image:
     """A plain-weave canvas/linen texture: two perpendicular sets of evenly
     spaced fine rules — a cheap, fully deterministic crosshatch read at low
@@ -1570,14 +2098,14 @@ _SPECKLE_MAX_RADIUS_FRACTION = 0.0045
 _SPECKLE_ALPHA = 210
 
 
-def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                    version: int) -> Image.Image:
     """Sparse scattered dots at varied sizes — the "Atomic Habits" cover
     signature: a field of small solid circles at random positions and radii,
     seeded purely from (version, slot_id) so the same slot always speckles
     identically."""
     cw, ch = canvas
-    rng = random.Random(_synth_seed(version, slot_id, "speckle"))
+    rng = random.Random(_synth_seed(version, slot.id, "speckle"))
     count = max(1, round((cw * ch) / 1_000_000 * _SPECKLE_DENSITY_PER_MEGAPIXEL))
     min_r = _SPECKLE_MIN_RADIUS_FRACTION * ch
     max_r = _SPECKLE_MAX_RADIUS_FRACTION * ch
@@ -1608,7 +2136,7 @@ _RULE_FRAME_WIDTH_FRACTION = 0.0022    # of canvas height, each rule's stroke
 _RULE_FRAME_ALPHA = 235
 
 
-def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                       version: int) -> Image.Image:
     """A thin, engraved double-rule frame inset from the edge — reference
     DNA item 8's "thin rule frames inset from the edge... read as craft,"
@@ -1667,7 +2195,7 @@ _FRAME_OCTAGON_CUT_FRACTION = 0.09        # of the inset rect's shorter
 
 
 def _synth_frame_hairline(canvas: tuple[int, int], palette: Palette,
-                          slot_id: str, version: int) -> Image.Image:
+                          slot: ArtSlot, version: int) -> Image.Image:
     """A single fine rule at rule_frame's own outer inset — the plainest
     member of the family, for a cover that wants "framed" without
     "engraved.\""""
@@ -1685,7 +2213,7 @@ def _synth_frame_hairline(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_thickthin(canvas: tuple[int, int], palette: Palette,
-                           slot_id: str, version: int) -> Image.Image:
+                           slot: ArtSlot, version: int) -> Image.Image:
     """Classic engraving: a heavy outer rule paired with a fine inner one,
     same inset/gap as rule_frame — asymmetric weight instead of
     rule_frame's own matched double rule."""
@@ -1709,7 +2237,7 @@ def _synth_frame_thickthin(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_corners(canvas: tuple[int, int], palette: Palette,
-                         slot_id: str, version: int) -> Image.Image:
+                         slot: ArtSlot, version: int) -> Image.Image:
     """Corner brackets only, open sides — an "L" at each of the inset
     rect's four corners, arms running along both edges that meet there.
     No rule ever crosses the middle of any side, which is the whole point
@@ -1737,7 +2265,7 @@ def _synth_frame_corners(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_deco(canvas: tuple[int, int], palette: Palette,
-                      slot_id: str, version: int) -> Image.Image:
+                      slot: ArtSlot, version: int) -> Image.Image:
     """"Stepped double rule with corner squares" — the Fatal Crossing
     register (docs/cover_template_research.md): rule_frame's own double
     rule, plus a small filled square centered on each of the OUTER rule's
@@ -1768,7 +2296,7 @@ def _synth_frame_deco(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_octagon(canvas: tuple[int, int], palette: Palette,
-                         slot_id: str, version: int) -> Image.Image:
+                         slot: ArtSlot, version: int) -> Image.Image:
     """Corners cut at 45 degrees — the Theo of Golden register (docs/
     cover_template_research.md): the SAME outer/inner double-rule
     rectangles rule_frame draws, each redrawn as an octagon (a rectangle
@@ -1863,6 +2391,310 @@ def _frame_clamp_text(text_by_id: dict[str, TextSlot], spec: CoverSpec,
     return out
 
 
+# -- the light & atmosphere bank (deep-stack wave, §15.5) ----------------------
+#
+# Eight more shelf entries — ordinary art slots (usually screen/overlay/
+# soft_light at low opacity), no new layer kind — that read ONLY existing
+# slot fields: `anchor` is the glow's center / the rays' origin / the fog
+# band's y / which edge a leak enters from; `scale` is extent; opacity and
+# blend composite like any other layer. Inks are palette-derived by fixed
+# rule (§15.5 verbatim): glow/leak/rays/bokeh/stars draw the accent warmed
+# toward white, fog the background lightened, dust/scratches near the text
+# color at baked-in low alpha. The smooth fields (glow, leak, fog, rays)
+# synthesize at _GRAIN_SCALE and upsample — gradient_mask's own discipline;
+# the crisp ones (bokeh's discs, dust, scratches, stars) draw full-res
+# vector calls, the speckle cost class. Seeded ones go through _synth_seed,
+# exactly like speckle.
+
+_ATMO_WHITE_BLEND = 0.60         # accent -> white, the "warmed toward white" mix
+_ATMO_WARM_SHIFT = 12            # +R/-B nudge on top of it (8-bit steps)
+_ATMO_STAR_WHITE_BLEND = 0.85    # stars sit nearly at white — hot points, not paint
+_FOG_WHITE_BLEND = 0.40          # background -> white, the "lightened" mix
+
+_RADIAL_GLOW_MAX_ALPHA = 200
+_RADIAL_GLOW_RADIUS_FRACTION = 0.55   # of canvas height, at scale=1.0
+
+_LIGHT_LEAK_MAX_ALPHA = 170
+_LIGHT_LEAK_ANGLE_DEG = 32.0     # the band's fixed tilt (y-down coordinates)
+_LIGHT_LEAK_WIDTH_FRACTION = 0.16     # of canvas height, at scale=1.0
+
+_FOG_MAX_ALPHA = 150
+_FOG_BAND_HEIGHT_FRACTION = 0.22      # gaussian half-height, of canvas height
+
+_RAYS_COUNT = 7
+_RAYS_MAX_ALPHA = 150
+_RAYS_SHARPNESS = 3                   # cos^n lobe exponent
+_RAYS_EXTENT_FRACTION = 0.95          # of canvas height, at scale=1.0
+
+_BOKEH_BASE_COUNT = 14
+_BOKEH_MIN_RADIUS_FRACTION = 0.020    # of canvas height
+_BOKEH_MAX_RADIUS_FRACTION = 0.060
+_BOKEH_MIN_ALPHA, _BOKEH_MAX_ALPHA = 30, 70
+_BOKEH_SOFTEN_FRACTION = 0.006        # of canvas height, the soft-focus blur
+
+_DUST_DENSITY_PER_MEGAPIXEL = 220
+_DUST_MAX_RADIUS_FRACTION = 0.0022    # of canvas height
+_DUST_ALPHA = 55
+
+_SCRATCH_BASE_COUNT = 26
+_SCRATCH_MIN_LEN_FRACTION = 0.05      # of canvas height
+_SCRATCH_MAX_LEN_FRACTION = 0.30
+_SCRATCH_MAX_DRIFT = 0.06             # horizontal drift per unit length
+_SCRATCH_ALPHA = 60
+
+_STAR_DENSITY_PER_MEGAPIXEL = 380
+_STAR_BRIGHT_FRACTION = 0.08          # share drawn as a 3px disc
+_STAR_FLARE_FRACTION = 0.03           # share that also gets a cross flare
+_STAR_FLARE_ARM_FRACTION = 0.004      # of canvas height, each flare arm
+
+
+def _warmed_toward_white(hex_color: str, blend: float) -> tuple[int, int, int]:
+    """`hex_color` mixed `blend` of the way to white, then nudged warm
+    (+R/−B by _ATMO_WARM_SHIFT) — §15.5's "accent warmed toward white" as
+    one documented formula, shared by every light-colored synth so the
+    bank's lights always agree about what warm means."""
+    r, g, b = ImageColor.getrgb(hex_color)
+    r = round(r + (255 - r) * blend)
+    g = round(g + (255 - g) * blend)
+    b = round(b + (255 - b) * blend)
+    return (min(255, r + _ATMO_WARM_SHIFT), g, max(0, b - _ATMO_WARM_SHIFT))
+
+
+def _anchor_px(slot: ArtSlot, size: tuple[int, int]) -> tuple[float, float]:
+    """slot.anchor as pixels at `size` — the one place the bank reads it,
+    so every synth agrees an anchor is canvas fractions (the [-2, 2]
+    latitude deliberately included: a glow centered beyond the trim is a
+    legitimate design, exactly GradientMask.center's reasoning)."""
+    return slot.anchor[0] * size[0], slot.anchor[1] * size[1]
+
+
+def _quarter_field_to_layer(small: Image.Image, canvas: tuple[int, int],
+                            rgb: tuple[int, int, int]) -> Image.Image:
+    """A quarter-scale 'L' alpha field, Lanczos-upsampled and inked as a
+    solid-color RGBA layer — the shared tail of every smooth synth here."""
+    alpha = small.resize(canvas, Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(alpha)
+    return out
+
+
+def _synth_radial_glow(canvas: tuple[int, int], palette: Palette,
+                       slot: ArtSlot, version: int) -> Image.Image:
+    """A soft light source: alpha peaks at the anchor and falls off
+    quadratically to nothing at `scale` × _RADIAL_GLOW_RADIUS_FRACTION of
+    the canvas height — pure geometry, no seed needed. Screened (the usual
+    blend) this is lamplight behind the title; through color_dodge it is
+    midnight_neon's burn."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    radius = max(1.0, _RADIAL_GLOW_RADIUS_FRACTION * slot.scale * sh)
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            t = 1.0 - min(1.0, math.hypot(x - cx, y - cy) / radius)
+            px[x, y] = round(_RADIAL_GLOW_MAX_ALPHA * t * t)
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_light_leak(canvas: tuple[int, int], palette: Palette,
+                      slot: ArtSlot, version: int) -> Image.Image:
+    """A film leak: two parallel soft bands (one bright, one fainter
+    trailing it) crossing the canvas at a fixed tilt THROUGH the anchor —
+    where the leak enters is the anchor's whole meaning here. Band width
+    scales with `scale`; the trailing band's offset is seeded, the
+    organic-accident wobble a leak needs to not read as a ruled stripe."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    rng = random.Random(_synth_seed(version, slot.id, "light_leak"))
+    width = max(1.0, _LIGHT_LEAK_WIDTH_FRACTION * slot.scale * sh)
+    trail_offset = width * rng.uniform(1.4, 2.2)
+    trail_strength = rng.uniform(0.35, 0.55)
+    # Signed distance from the line through (cx, cy) at the fixed tilt:
+    # d = (x-cx)·n_x + (y-cy)·n_y with n the unit normal.
+    nx = -math.sin(math.radians(_LIGHT_LEAK_ANGLE_DEG))
+    ny = math.cos(math.radians(_LIGHT_LEAK_ANGLE_DEG))
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            d = (x - cx) * nx + (y - cy) * ny
+            v = math.exp(-(d / width) ** 2)
+            v += trail_strength * math.exp(-((d - trail_offset) / width) ** 2)
+            px[x, y] = round(_LIGHT_LEAK_MAX_ALPHA * min(1.0, v))
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_fog_gradient(canvas: tuple[int, int], palette: Palette,
+                        slot: ArtSlot, version: int) -> Image.Image:
+    """A horizontal fog bank: a gaussian band centered on the anchor's y
+    (its x is ignored — fog has no left or right), half-height `scale` ×
+    _FOG_BAND_HEIGHT_FRACTION, inked as the background lightened toward
+    white. Alpha depends on y alone, so it builds as a one-pixel column and
+    stretches — _gradient_layer's own O(height) trick — with no seed: fog
+    is fog."""
+    cw, ch = canvas
+    _, band_y = _anchor_px(slot, canvas)
+    half = max(1.0, _FOG_BAND_HEIGHT_FRACTION * slot.scale * ch)
+    col = Image.new("L", (1, max(1, ch)), 0)
+    px = col.load()
+    for y in range(ch):
+        px[0, y] = round(_FOG_MAX_ALPHA * math.exp(-((y - band_y) / half) ** 2))
+    alpha = col.resize(canvas, Image.Resampling.NEAREST)
+    # Plain lighten, no warm nudge: fog is lightened BACKGROUND, not light
+    # (§15.5's ink rule draws that exact line), so the shared warmed-
+    # toward-white helper deliberately isn't used here.
+    r, g, b = ImageColor.getrgb(palette.background)
+    rgb = (round(r + (255 - r) * _FOG_WHITE_BLEND),
+           round(g + (255 - g) * _FOG_WHITE_BLEND),
+           round(b + (255 - b) * _FOG_WHITE_BLEND))
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(alpha)
+    return out
+
+
+def _synth_rays(canvas: tuple[int, int], palette: Palette,
+                slot: ArtSlot, version: int) -> Image.Image:
+    """Light shafts: _RAYS_COUNT cos^n lobes fanning from the anchor,
+    fading with distance to `scale` × _RAYS_EXTENT_FRACTION of the canvas
+    height. The fan's rotation is seeded — which way the shafts lean is
+    the one degree of freedom that keeps two ray slots from ever
+    registering as the same stamp."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    rng = random.Random(_synth_seed(version, slot.id, "rays"))
+    phase = rng.uniform(0.0, math.tau)
+    extent = max(1.0, _RAYS_EXTENT_FRACTION * slot.scale * sh)
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            dist = math.hypot(x - cx, y - cy)
+            fall = max(0.0, 1.0 - dist / extent)
+            if fall <= 0.0:
+                continue
+            theta = math.atan2(y - cy, x - cx)
+            lobe = 0.5 + 0.5 * math.cos(_RAYS_COUNT * theta + phase)
+            px[x, y] = round(_RAYS_MAX_ALPHA * (lobe ** _RAYS_SHARPNESS) * fall)
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_bokeh(canvas: tuple[int, int], palette: Palette,
+                 slot: ArtSlot, version: int) -> Image.Image:
+    """Out-of-focus lights: seeded discs at varied radius and per-disc
+    alpha, softened by one small blur so they read as camera bokeh rather
+    than confetti. `scale` sets how many. Draw calls at full resolution
+    (the speckle cost class), blur at a fixed small radius — crisp enough
+    to keep their circular identity, soft enough to sit behind focus."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "bokeh"))
+    count = max(3, round(_BOKEH_BASE_COUNT * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw), rng.uniform(0, ch)
+        r = rng.uniform(_BOKEH_MIN_RADIUS_FRACTION,
+                        _BOKEH_MAX_RADIUS_FRACTION) * ch
+        value = rng.randint(_BOKEH_MIN_ALPHA, _BOKEH_MAX_ALPHA)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=value)
+    mask = mask.filter(ImageFilter.GaussianBlur(_BOKEH_SOFTEN_FRACTION * ch))
+    rgb = _warmed_toward_white(palette.accent, _ATMO_WHITE_BLEND)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask)
+    return out
+
+
+def _synth_dust(canvas: tuple[int, int], palette: Palette,
+                slot: ArtSlot, version: int) -> Image.Image:
+    """Drifting motes: seeded near-text-color specks at
+    _DUST_ALPHA — speckle's exact mechanism an order of magnitude smaller
+    and fainter, which is the whole difference between a design element
+    and an atmosphere. `scale` sets density."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "dust"))
+    count = max(1, round((cw * ch) / 1_000_000
+                         * _DUST_DENSITY_PER_MEGAPIXEL * slot.scale))
+    max_r = _DUST_MAX_RADIUS_FRACTION * ch
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw), rng.uniform(0, ch)
+        r = rng.uniform(max_r * 0.3, max_r)
+        draw.ellipse((x - r, y - r, x + r, y + r),
+                     fill=rng.randint(120, 255))
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _DUST_ALPHA / 255)))
+    return out
+
+
+def _synth_scratches(canvas: tuple[int, int], palette: Palette,
+                     slot: ArtSlot, version: int) -> Image.Image:
+    """Film scratches: seeded hairline near-vertical strokes with a slight
+    drift, near-text color at low alpha, drawn crisp at full resolution
+    (§15.5 names this synth full-res by design — a blurred scratch is just
+    a smudge). `scale` sets how many."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "scratches"))
+    count = max(1, round(_SCRATCH_BASE_COUNT * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x0 = rng.uniform(0, cw)
+        y0 = rng.uniform(-0.1 * ch, 0.9 * ch)
+        length = rng.uniform(_SCRATCH_MIN_LEN_FRACTION,
+                             _SCRATCH_MAX_LEN_FRACTION) * ch
+        drift = rng.uniform(-_SCRATCH_MAX_DRIFT, _SCRATCH_MAX_DRIFT) * length
+        draw.line([(x0, y0), (x0 + drift, y0 + length)],
+                  fill=rng.randint(120, 255), width=1)
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _SCRATCH_ALPHA / 255)))
+    return out
+
+
+def _synth_stars(canvas: tuple[int, int], palette: Palette,
+                 slot: ArtSlot, version: int) -> Image.Image:
+    """A night sky: seeded pinpoints at full resolution (§15.5's other
+    named crisp synth — a star is one or two pixels or it is nothing),
+    mostly single pixels at varied brightness, a bright few as small
+    discs, a rare few flared with a four-arm cross. Ink is the accent
+    blended nearly to white — hot points of light that still carry the
+    palette. `scale` sets density."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "stars"))
+    count = max(1, round((cw * ch) / 1_000_000
+                         * _STAR_DENSITY_PER_MEGAPIXEL * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    arm = max(1.0, _STAR_FLARE_ARM_FRACTION * ch)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw - 1), rng.uniform(0, ch - 1)
+        value = rng.randint(120, 255)
+        roll = rng.random()
+        if roll < _STAR_FLARE_FRACTION:
+            draw.line([(x - arm, y), (x + arm, y)], fill=value, width=1)
+            draw.line([(x, y - arm), (x, y + arm)], fill=value, width=1)
+            draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=255)
+        elif roll < _STAR_FLARE_FRACTION + _STAR_BRIGHT_FRACTION:
+            draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=value)
+        else:
+            draw.point((x, y), fill=value)
+    rgb = _warmed_toward_white(palette.accent, _ATMO_STAR_WHITE_BLEND)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask)
+    return out
+
+
 PROCEDURAL_SYNTHESIZERS = {
     "gradient": _synth_gradient,
     "grain": _synth_grain,
@@ -1876,6 +2708,14 @@ PROCEDURAL_SYNTHESIZERS = {
     "frame_corners": _synth_frame_corners,
     "frame_deco": _synth_frame_deco,
     "frame_octagon": _synth_frame_octagon,
+    "radial_glow": _synth_radial_glow,
+    "light_leak": _synth_light_leak,
+    "fog_gradient": _synth_fog_gradient,
+    "rays": _synth_rays,
+    "bokeh": _synth_bokeh,
+    "dust": _synth_dust,
+    "scratches": _synth_scratches,
+    "stars": _synth_stars,
 }
 
 
@@ -2229,33 +3069,9 @@ def _fit_contain(img: Image.Image, canvas: tuple[int, int],
     return out
 
 
-_BLEND_CHOPS = {"multiply": ImageChops.multiply, "overlay": ImageChops.overlay,
-                "soft_light": ImageChops.soft_light}
-
-
-def _composite_layer(base: Image.Image, source: Image.Image, opacity: float,
-                     blend: str) -> Image.Image:
-    """Alpha-composite `source` (RGBA, canvas-sized) onto `base`. `normal`
-    is a plain "over"; the other three blend modes run on RGB via
-    ImageChops against the CURRENT backdrop (so multiply/overlay/soft_light
-    really do react to what's beneath them), then that blended result is
-    composited back using `source`'s own alpha × `opacity` as the mix
-    factor — otherwise a 6% "overlay" texture would fully replace the pixels
-    under it instead of barely tinting them."""
-    if opacity <= 0:
-        return base
-    r, g, b, src_a = source.split()
-    if blend == "normal":
-        blended_rgb = Image.merge("RGB", (r, g, b))
-    else:
-        chop = _BLEND_CHOPS[blend]
-        blended_rgb = chop(base.convert("RGB"), Image.merge("RGB", (r, g, b)))
-    if opacity < 1.0:
-        src_a = src_a.point(lambda v: round(v * opacity))
-    layer = Image.merge("RGBA", (*blended_rgb.split(), src_a))
-    out = base.copy()
-    out.alpha_composite(layer)
-    return out
+# _composite_layer lives in effects.composite_layer now (§15.1: one blend
+# implementation for art layers, adjust layers, and clipped overlays) —
+# imported under its old name at the top of this module.
 
 
 # -- scrims -------------------------------------------------------------------
@@ -2493,29 +3309,9 @@ def _paint_vignette_scrim(overlay: Image.Image, rgb: tuple[int, int, int],
 
 # -- legibility autopilot: measurement ---------------------------------------
 
-# WCAG relative-luminance sRGB->linear lookup, precomputed once as an 8-bit
-# LUT so Pillow's Image.point() applies it band-wise in C rather than this
-# module looping over every pixel in Python.
-def _srgb_to_linear(c: float) -> float:
-    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-
-_SRGB_LUT = [round(_srgb_to_linear(i / 255) * 255) for i in range(256)]
-
-
-def _luminance_band(rgb_img: Image.Image) -> Image.Image:
-    """An 'L' image whose value at each pixel is that pixel's WCAG relative
-    luminance (0-255 scale). Built from three point()-applied LUTs and two
-    weighted Image.blend() calls — both pure-C Pillow operations — so this
-    costs the same whether the crop is 100 or 100,000 pixels."""
-    r, g, b = rgb_img.split()[:3]
-    r_lin, g_lin, b_lin = r.point(_SRGB_LUT), g.point(_SRGB_LUT), b.point(_SRGB_LUT)
-    # Image.blend(a, b, alpha) = a*(1-alpha) + b*alpha. Chaining two blends
-    # with alphas derived from the WCAG weights (0.2126/0.7152/0.0722)
-    # reaches the weighted sum without a three-way blend Pillow doesn't have
-    # — see the derivation in the PR description / commit message.
-    mixed = Image.blend(r_lin, g_lin, 0.7152 / (0.2126 + 0.7152))
-    return Image.blend(mixed, b_lin, 0.0722)
+# _srgb_to_linear and _luminance_band live in effects.py now (bloom's
+# threshold and the autopilot must measure brightness with the SAME WCAG
+# curve — §15.3), imported under their old names at the top of this module.
 
 
 def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int],

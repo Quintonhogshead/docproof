@@ -2,6 +2,11 @@ name: big_type
 describe: >-
   No focal art — a huge stacked title over a procedural gradient field is the
   whole cover. The $0 fallback, and the print-safest design of the three.
+# Deep-stack wave (§15.6): the tasteful default for a flat, type-led cover —
+# a barely-there print finish (touch less color, faint warmth, gentle corner
+# shade, whisper grain) that keeps a bare gradient field from reading as a
+# raw screen fill. A direction's own non-empty recipe pick still wins.
+recipe: quiet_literary
 composition_note: >-
   An abstract texture only, with no recognizable subject and no text — just
   color, grain, and light, since the type itself carries the entire cover.

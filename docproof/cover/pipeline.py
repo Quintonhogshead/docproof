@@ -64,8 +64,14 @@ from docproof.quest.skin import read_sample_source, sample_text
 from docproof.utils.files import write_atomic
 
 from .archetypes import ARCHETYPES, Archetype
-from .model import (ArtSlot, Brief, ConceptState, CoverSpec, JobState,
-                    RenderReport, Zone, build_spec)
+from .model import (FX_PREFIX, AdjustLayer, ArtSlot, Brief, ConceptState,
+                    CoverSpec, JobState, LayerRef, RenderReport, Zone,
+                    build_spec)
+# The ONE §15.6 recipe-expansion path — deliberately shared with build_spec
+# rather than re-implemented, so the planner's unify bind (§15.16,
+# _apply_plan_to_spec below) can never drift from how a direction's own
+# recipe pick expands.
+from .model import _expand_recipe
 from .reality import RealitySheetError, RealityResult, distill_reality
 
 log = logging.getLogger("docproof.cover.pipeline")
@@ -110,6 +116,21 @@ except ImportError:                                        # pragma: no cover
     NEGATIVE_SUFFIX = ("Absolutely no text, no letters, no words, no numbers, "
                        "no watermarks, no borders, no frames.")
     generate = has_real_alpha = make_client = None          # type: ignore[assignment]
+
+try:
+    from .planner import (MAX_STAGES, CompositionPlan, PlannerError,
+                          StageReview, plan_composition, review_stage)
+except ImportError:                                        # pragma: no cover
+    class PlannerError(Exception):
+        """Placeholder until docproof.cover.planner lands."""
+
+    # Kept identical to the pinned bound (docs/cover_designer_spec.md
+    # §15.16) so the stage math stays testable even before planner.py
+    # exists; the COVER_PLANNER gate below also requires plan_composition
+    # to be importable, so nothing here ever runs against a placeholder.
+    MAX_STAGES = 3
+    CompositionPlan = StageReview = None                     # type: ignore[assignment]
+    plan_composition = review_stage = None                   # type: ignore[assignment]
 
 JOB_MANIFEST = "job.json"
 MANUSCRIPT_SAMPLE_NAME = "manuscript_sample.txt"
@@ -594,6 +615,302 @@ def _dump_equal_ignoring_bookkeeping(old: CoverSpec, new: CoverSpec) -> bool:
            == new.model_dump(exclude={"version", "notes_log"}))
 
 
+# -- composition planner (§15.16, gated behind COVER_PLANNER) ------------------
+#
+# The frontier planner (docproof.cover.planner) runs per concept, after
+# direction and before any image dollar: one plan_composition call, then —
+# when the plan declares generation_order — SEQUENTIAL painting stages with
+# at most one review_stage vision call per stage, each review reading the
+# prior stage's ACTUAL render off disk. Everything here is fail-open by
+# §15.16's own guarantee: a planner or review failure logs, leaves a $0
+# ledger note, and falls back to the spontaneous path — a plan may improve a
+# cover, never cost one. With the gate off (the default) none of these
+# functions run and run_job's behavior is byte-for-byte the pre-planner
+# path, zero planner calls.
+
+def _planner_enabled() -> bool:
+    """The COVER_PLANNER env gate (§15.16's lane doctrine), read at call
+    time — the same plain, non-secret environment read default_root already
+    makes. Any value other than empty/0/false/no/off is on."""
+    value = os.environ.get("COVER_PLANNER", "").strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def plan_path(root: str | Path, job_id: str, index: int) -> Path:
+    """Where one concept's CompositionPlan persists — beside job.json,
+    concept-suffixed (`plan_c{n}.json`, the assets/c{n}_{slot}.png naming
+    convention) because concepts plan concurrently and each has its own
+    plan; a single plan.json would clobber under §8's parallel gather."""
+    return job_dir(root, job_id) / f"plan_c{index}.json"
+
+
+def _plan_concept(root: str | Path, job_id: str, index: int, brief: Brief,
+                  spec: CoverSpec, archetype: Archetype, critique_client: Any,
+                  ledger_rows: list[dict]) -> CompositionPlan | None:
+    """One plan_composition call for one concept, with §15.16's "never
+    block a cover" contract enforced in exactly one place (the
+    _run_critique_safely shape): any failure is logged and turned into a $0
+    ledger note, never raised, and the caller paints spontaneously. On
+    success the plan is persisted to plan_path (atomic-rewrite, the
+    job.json discipline — replayable and auditable) and its cost lands as a
+    `{kind: "plan"}` ledger row. The planner call rides the SAME
+    anthropic client critique threads through run_job (`critique_client`) —
+    both modules talk to the anthropic SDK directly, and pipeline stays
+    library-layer by never building a client itself."""
+    sample = _read_sample(root, job_id)
+    try:
+        plan = plan_composition(brief, spec, archetype, sample, critique_client)
+    except Exception as e:  # noqa: BLE001 - §15.16: a plan may never cost a cover
+        log.warning("Cover job %s concept %d: composition planning failed; "
+                    "painting spontaneously: %s", job_id, index, e)
+        ledger_rows.append({
+            "kind": "plan", "concept": index,
+            "detail": (f"concept {index}: composition planning failed ({e}); "
+                       f"painted spontaneously"),
+            "usd": 0.0})
+        return None
+    try:
+        write_atomic(plan_path(root, job_id, index),
+                     plan.model_dump_json(indent=2))
+    except OSError as e:
+        # The plan still steers this run; only the on-disk replay record is
+        # lost. Worth a log line, never worth failing the concept.
+        log.warning("Cover job %s concept %d: could not persist plan_c%d.json: %s",
+                    job_id, index, index, e)
+    ledger_rows.append({
+        "kind": "plan", "concept": index,
+        "detail": (f"concept {index}: composition planned via {plan.model} "
+                   f"({len(plan.generation_order)} staged slot(s))"),
+        "usd": plan.cost or 0.0})
+    return plan
+
+
+def _apply_plan_to_spec(spec: CoverSpec, plan: CompositionPlan, job_id: str,
+                        index: int, ledger_rows: list[dict]) -> CoverSpec:
+    """The plan's spec-touching pieces, applied to a deep copy and then
+    re-validated as a whole CoverSpec — the same all-or-nothing posture
+    revise_spec takes, so a plan can never strand a half-edited spec:
+
+    - rewritten prompts land ONLY on slots the direction already made
+      generatable (a non-empty prompt): a plan may refine image spend,
+      never conjure new spend for a slot the direction left procedural;
+    - the unify bind (recipe and/or gradient_map stops) applies ONLY when
+      the spec carries no fx_ finishing layers yet (§15.16) — a recipe the
+      direction or archetype already expanded would double-grade; logged
+      and skipped otherwise. The recipe expands through model._expand_recipe
+      (the one §15.6 path), the stops as a gradient_map at the shelf's own
+      partial-opacity convention (cinematic_duotone's 0.60 — a grade, not a
+      poster filter).
+
+    Returns the validated new spec, or `spec` untouched (logged, $0 ledger
+    note) if the applied edits fail whole-spec validation."""
+    working = spec.model_copy(deep=True)
+
+    slots = {a.id: a for a in working.art}
+    for entry in plan.prompts:
+        slot = slots.get(entry.slot)
+        if slot is None or not slot.prompt:
+            log.info("Cover job %s concept %d: the plan rewrote a prompt for "
+                     "%r, which is not a generatable slot here; ignored.",
+                     job_id, index, entry.slot)
+            continue
+        slot.prompt = entry.prompt
+
+    if plan.unify_recipe or plan.unify_stops:
+        has_fx = (any(a.id.startswith(FX_PREFIX) for a in working.art)
+                  or any(a.id.startswith(FX_PREFIX) for a in working.adjust))
+        if has_fx:
+            log.info("Cover job %s concept %d: spec already carries fx_ "
+                     "finishing layers; the plan's unify bind (recipe=%r, "
+                     "stops=%r) was not applied.", job_id, index,
+                     plan.unify_recipe, plan.unify_stops)
+        else:
+            if plan.unify_recipe:
+                try:
+                    r_art, r_adjust, r_refs = _expand_recipe(plan.unify_recipe)
+                except ValueError as e:
+                    r_art, r_adjust, r_refs = [], [], []
+                    log.warning("Cover job %s concept %d: the plan's unify "
+                                "recipe %r did not expand: %s", job_id, index,
+                                plan.unify_recipe, e)
+                if r_refs:
+                    working.art.extend(r_art)
+                    working.adjust.extend(r_adjust)
+                    working.layers.extend(r_refs)
+                else:
+                    log.info("Cover job %s concept %d: the plan named unify "
+                             "recipe %r, which is not on the shelf; ignored.",
+                             job_id, index, plan.unify_recipe)
+            if plan.unify_stops:
+                try:
+                    grade = AdjustLayer(id="fx_plan_grade", op="gradient_map",
+                                        stops=list(plan.unify_stops),
+                                        opacity=0.60)
+                except ValidationError as e:
+                    log.warning("Cover job %s concept %d: the plan's unify "
+                                "stops %r do not make a gradient_map: %s",
+                                job_id, index, plan.unify_stops, e)
+                else:
+                    working.adjust.append(grade)
+                    working.layers.append(LayerRef(kind="adjust", ref=grade.id))
+
+    try:
+        return CoverSpec.model_validate(working.model_dump())
+    except ValidationError as e:
+        log.warning("Cover job %s concept %d: applying the composition plan "
+                    "broke the spec; painting the unplanned spec instead: %s",
+                    job_id, index, e)
+        ledger_rows.append({
+            "kind": "plan", "concept": index,
+            "detail": (f"concept {index}: the plan's spec edits did not "
+                       f"validate; painted the unplanned spec"),
+            "usd": 0.0})
+        return spec
+
+
+def _plan_stages(plan: CompositionPlan,
+                 gen_slots: list[ArtSlot]) -> list[list[ArtSlot]]:
+    """§15.16's staged painting order: each generation_order id the plan
+    declared (and this spec can actually paint) becomes its own sequential
+    stage, plate first; every unlisted slot joins one final stage; stages
+    beyond MAX_STAGES fold into the last one. The planner model is TOLD the
+    bound but this is where it holds. An empty (or fully unknown)
+    generation_order means no staging at all — one stage, the existing
+    bounded gather, exactly the spontaneous shape."""
+    if not gen_slots:
+        return []
+    by_id = {s.id: s for s in gen_slots}
+    ordered = [sid for sid in dict.fromkeys(plan.generation_order)
+               if sid in by_id]
+    if not ordered:
+        return [gen_slots]
+    stages: list[list[ArtSlot]] = [[by_id[sid]] for sid in ordered]
+    rest = [s for s in gen_slots if s.id not in set(ordered)]
+    if rest:
+        stages.append(rest)
+    while len(stages) > MAX_STAGES:
+        tail = stages.pop()
+        stages[-1] = [*stages[-1], *tail]
+    return stages
+
+
+def _apply_stage_review(slot: ArtSlot, review: StageReview) -> str | None:
+    """One stage review's answer, applied to the live slot THROUGH a full
+    ArtSlot re-validation — the review's floats come from a model, and the
+    single place placement legality is defined is the model's own
+    validators (anchor/offset within [-2, 2], scale > 0), not new code
+    here. A mask_angle becomes a linear GradientMask (clearing legacy
+    mask_from — mask wins the vocabulary, model.py's own fold rule).
+    Returns an error sentence when the review doesn't validate (the slot is
+    left untouched — spontaneous for that slot), None on success."""
+    candidate = slot.model_dump()
+    candidate.update(prompt=review.prompt, anchor=list(review.anchor),
+                     scale=review.scale, offset=list(review.offset))
+    if review.mask_angle is not None:
+        candidate["mask"] = {"gradient": {"kind": "linear",
+                                          "angle": review.mask_angle}}
+        candidate["mask_from"] = ""
+    try:
+        validated = ArtSlot.model_validate(candidate)
+    except ValidationError as e:
+        return str(e)
+    for name in ("prompt", "anchor", "scale", "offset", "mask", "mask_from"):
+        setattr(slot, name, getattr(validated, name))
+    return None
+
+
+def _review_stage_slots(plan: CompositionPlan, stage_slots: list[ArtSlot],
+                        painted: dict[str, str], d: Path, index: int,
+                        critique_client: Any, ledger_rows: list[dict]) -> None:
+    """At most one review_stage call for one painting stage (§15.16's ≤1
+    review per stage — counted per CALL, since a failed review spent the
+    round trip too): the first slot in the stage whose conditioning source
+    has actually been painted gets its prompt + placement finalized against
+    that source's REAL render, read straight off disk. Every failure mode
+    — a source that never painted, an unreadable file, a failed call, an
+    answer that doesn't validate as placement — degrades that slot to the
+    spontaneous path with a log line (and a ledger note where a call was
+    actually spent), never an error. Called directly, not via
+    asyncio.to_thread — the same posture as every other synchronous model
+    call in this module (see _run_critique_safely's note)."""
+    calls = 0
+    for slot in stage_slots:
+        if calls >= 1:                    # planner.MAX_REVIEWS_PER_STAGE
+            break
+        source = plan.review_source_for(slot.id)
+        if not source:
+            continue
+        rel = painted.get(source, "")
+        if not rel:
+            log.info("Cover job concept %d: %s's conditioning source %r has "
+                     "no render yet; generating it spontaneously.",
+                     index, slot.id, source)
+            continue
+        try:
+            png_bytes = (d / rel).read_bytes()
+        except OSError as e:
+            log.warning("Cover concept %d: could not read %s's conditioning "
+                        "render %s (%s); generating it spontaneously.",
+                        index, slot.id, rel, e)
+            continue
+        calls += 1
+        try:
+            review = review_stage(plan, slot.id, [png_bytes], slot.prompt,
+                                  critique_client)
+        except Exception as e:  # noqa: BLE001 - §15.16: never fail the job
+            log.warning("Cover concept %d: stage review for %s failed; "
+                        "generating it spontaneously: %s", index, slot.id, e)
+            ledger_rows.append({
+                "kind": "plan", "concept": index,
+                "detail": (f"concept {index}: stage review for {slot.id} "
+                           f"failed ({e}); generated it spontaneously"),
+                "usd": 0.0})
+            continue
+        problem = _apply_stage_review(slot, review)
+        if problem:
+            log.warning("Cover concept %d: stage review for %s returned "
+                        "unusable placement; generating it spontaneously: %s",
+                        index, slot.id, problem)
+            ledger_rows.append({
+                "kind": "plan", "concept": index,
+                "detail": (f"concept {index}: stage review for {slot.id} "
+                           f"returned unusable placement; generated it "
+                           f"spontaneously"),
+                "usd": review.cost or 0.0})
+            continue
+        ledger_rows.append({
+            "kind": "plan", "concept": index,
+            "detail": (f"concept {index}: stage review finalized {slot.id} "
+                       f"against {source}'s render"),
+            "usd": review.cost or 0.0})
+
+
+async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
+                            image_client: Any, critique_client: Any,
+                            sem: asyncio.Semaphore, d: Path, index: int,
+                            archetype: Archetype) -> list[dict]:
+    """The painting phase under a plan (§15.16): stages run SEQUENTIALLY in
+    _plan_stages order; within one stage the existing bounded gather (and
+    the per-job semaphore underneath it) applies unchanged. From the second
+    stage on, the stage's conditioned slot (if any) is reviewed against the
+    prior stages' actual renders before it generates — prompt and placement
+    applied to the slot first, then _generate_art_slot runs exactly as it
+    would spontaneously. Returns the same ledger-row shape the spontaneous
+    gather produces, plus the review rows."""
+    rows: list[dict] = []
+    gen_slots = [s for s in spec.art if s.prompt and not s.asset]
+    for stage_n, stage_slots in enumerate(_plan_stages(plan, gen_slots)):
+        if stage_n > 0 and review_stage is not None:
+            painted = {a.id: a.asset for a in spec.art if a.asset}
+            _review_stage_slots(plan, stage_slots, painted, d, index,
+                                critique_client, rows)
+        for slot_rows in await asyncio.gather(*(
+                _generate_art_slot(image_client, sem, d, index, s, archetype)
+                for s in stage_slots)):
+            rows.extend(slot_rows)
+    return rows
+
+
 # -- critique pass (§6.3, iterated — BRAIN wave) -------------------------------
 
 def _thumb_path(png_path: Path) -> Path:
@@ -668,7 +985,8 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
                                brief: Brief, d: Path, providers: Providers,
                                critique_client: Any, image_client: Any,
                                sem: asyncio.Semaphore, report: RenderReport,
-                               renders: list[str]
+                               renders: list[str], *,
+                               plan_lines: Sequence[str] = ()
                                ) -> tuple[CoverSpec, RenderReport, list[str], list[dict]]:
     """§6.3, ITERATED (BRAIN wave, 2026-08-29): the owner's beta verdict was
     that a single critique-then-revise round left the judge merely
@@ -725,9 +1043,17 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
     repaint_used = False
 
     for round_n in range(1, MAX_CRITIQUE_ROUNDS + 1):
+        # Adjustments ride along with the warnings (§15.10): the judge's
+        # "near-miss alignment survived" tell is only checkable against
+        # what the snap pass actually moved. `plan_lines` (§15.16 —
+        # CompositionPlan.judge_lines: the plan's lighting contract and
+        # unify bind) ride the same channel, so plan-vs-render drift is a
+        # nameable tell; empty on every unplanned run, which leaves this
+        # call byte-identical to its pre-planner shape.
         verdict = _run_critique_safely(
             job_id, index, spec, brief, d / renders[-1], critique_client,
-            ledger_rows, report.warnings, round_n)
+            ledger_rows,
+            [*plan_lines, *report.warnings, *report.adjustments], round_n)
         if verdict is None or verdict.passes:
             break
         if round_n == MAX_CRITIQUE_ROUNDS:
@@ -875,16 +1201,38 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         d = job_dir(root, job_id)
         (d / ASSETS_DIR).mkdir(parents=True, exist_ok=True)
 
+        # §15.16: the composition planner, gated behind COVER_PLANNER — off
+        # (the default) means the spontaneous path below, byte-for-byte,
+        # zero planner calls. A plan (or its failure note) and the
+        # plan-edited spec are committed BEFORE painting starts, keeping
+        # job.json the truth after every step; a planning failure paints
+        # spontaneously, per §15.16's never-block-a-cover guarantee.
+        plan: CompositionPlan | None = None
+        if _planner_enabled() and plan_composition is not None:
+            plan_rows: list[dict] = []
+            plan = _plan_concept(root, job_id, index, brief, spec, archetype,
+                                 critique_client, plan_rows)
+            if plan is not None:
+                spec = _apply_plan_to_spec(spec, plan, job_id, index, plan_rows)
+                concept.spec = spec
+            await _commit_concept(root, job_id, index, concept, plan_rows)
+
         ledger_rows: list[dict] = []
-        # All of one concept's generations in flight together — the per-job
-        # semaphore (not this gather) is what bounds actual concurrency, so
-        # awaiting them one by one would just serialize what the semaphore
-        # already meters (11 of 15 archetypes declare 2+ generatable slots).
-        gen_slots = [s for s in spec.art if s.prompt and not s.asset]
-        for rows in await asyncio.gather(*(
-                _generate_art_slot(image_client, sem, d, index, s, archetype)
-                for s in gen_slots)):
-            ledger_rows.extend(rows)
+        if plan is not None:
+            ledger_rows.extend(await _generate_planned(
+                plan, spec, image_client, critique_client, sem, d, index,
+                archetype))
+        else:
+            # All of one concept's generations in flight together — the
+            # per-job semaphore (not this gather) is what bounds actual
+            # concurrency, so awaiting them one by one would just serialize
+            # what the semaphore already meters (11 of 15 archetypes declare
+            # 2+ generatable slots).
+            gen_slots = [s for s in spec.art if s.prompt and not s.asset]
+            for rows in await asyncio.gather(*(
+                    _generate_art_slot(image_client, sem, d, index, s, archetype)
+                    for s in gen_slots)):
+                ledger_rows.extend(rows)
 
         concept.status = "composing"
         await _commit_concept(root, job_id, index, concept, ledger_rows)
@@ -892,7 +1240,8 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         report, renders = await _render(spec, d, index)
         spec, report, renders, critique_rows = await _critique_and_revise(
             job_id, index, spec, brief, d, providers, critique_client,
-            image_client, sem, report, renders)
+            image_client, sem, report, renders,
+            plan_lines=plan.judge_lines() if plan is not None else ())
 
         concept.spec = spec
         concept.status = "ready"
@@ -1023,7 +1372,7 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
 
 async def run_revision(root: str | Path, job_id: str, concept_index: int,
                        notes: str, allow_new_art: bool, providers: Providers,
-                       image_client: Any) -> None:
+                       image_client: Any, critique_client: Any = None) -> None:
     """revise_spec -> (maybe) regenerate the art it cleared -> recompose ->
     ready. Meant to run as a detached background task, exactly like run_job;
     register it with register_task too, so a revision interrupted mid-flight
@@ -1033,6 +1382,15 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
     changed a prompt: revise_spec clears `asset` on any art slot whose prompt
     or transparency changed (that clearing is the regenerate signal), so this
     puts the prior path straight back and logs why nothing was repainted.
+
+    §15.16's replan rule: a revision re-buys composition planning ONLY when
+    `allow_new_art` is set AND the notes explicitly contain "replan"
+    (case-insensitive) — an ordinary revision never re-spends the planner,
+    however many times it runs. A replan also needs the COVER_PLANNER gate
+    on and an anthropic client to plan with: `critique_client` (defaulted
+    None so every existing caller is untouched) is the same client run_job
+    threads for critique — the planner rides it too. None just skips the
+    replan quietly; the revision itself is unaffected.
 
     Gains the same code-computed diff note the auto-critique loop writes
     (diff_spec_fields — see _critique_and_revise's own docstring): a human
@@ -1079,6 +1437,27 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
                 "usd": 0.0})
             cleared = []
 
+        # §15.16's replan rule (see the docstring): allow_new_art + an
+        # explicit "replan" in the notes, with the gate on and a client to
+        # plan with — otherwise planning is never re-bought. The plan's
+        # prompt/unify edits land before the diff note below, so the
+        # code-computed "[changed]" entry names them too; `cleared` is
+        # recomputed because _apply_plan_to_spec returns a re-validated
+        # copy (new slot objects).
+        plan: CompositionPlan | None = None
+        if (allow_new_art and "replan" in notes.lower() and _planner_enabled()
+                and plan_composition is not None
+                and critique_client is not None):
+            plan_rows: list[dict] = []
+            plan = _plan_concept(root, job_id, concept_index, job.brief, spec,
+                                 ARCHETYPES[spec.archetype], critique_client,
+                                 plan_rows)
+            if plan is not None:
+                spec = _apply_plan_to_spec(spec, plan, job_id, concept_index,
+                                           plan_rows)
+                cleared = [s for s in spec.art if s.prompt and not s.asset]
+            ledger_rows.extend(plan_rows)
+
         # The code-computed diff note (see this function's own docstring):
         # a SEPARATE notes_log entry naming what actually changed, computed
         # by diffing the validated spec models — never the human's own
@@ -1099,11 +1478,20 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
             archetype = ARCHETYPES[spec.archetype]
             sem = _image_semaphore(job_id)
             image_rows: list[dict] = []
-            for rows in await asyncio.gather(*(
-                    _generate_art_slot(image_client, sem, d, concept_index,
-                                       s, archetype)
-                    for s in cleared)):
-                image_rows.extend(rows)
+            if plan is not None:
+                # A replanned regeneration paints under the fresh plan's
+                # staging, exactly like run_job's planned path (§15.16);
+                # _generate_planned derives its slots from the spec, which
+                # is `cleared` by construction here.
+                image_rows.extend(await _generate_planned(
+                    plan, spec, image_client, critique_client, sem, d,
+                    concept_index, archetype))
+            else:
+                for rows in await asyncio.gather(*(
+                        _generate_art_slot(image_client, sem, d, concept_index,
+                                           s, archetype)
+                        for s in cleared)):
+                    image_rows.extend(rows)
             concept.status = "composing"
             await _commit_concept(root, job_id, concept_index, concept, image_rows)
 
@@ -1132,5 +1520,5 @@ __all__ = [
     "RENDERS_DIR", "Providers",
     "check_interrupted", "create_job", "default_root", "diff_spec_fields",
     "is_job_alive", "job_dir", "list_jobs", "load_job", "new_job_id",
-    "register_task", "run_job", "run_revision", "total_usd",
+    "plan_path", "register_task", "run_job", "run_revision", "total_usd",
 ]

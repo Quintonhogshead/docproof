@@ -49,6 +49,7 @@ from ..providers import Provider, cost_of_usage, strict_json_schema
 from .archetypes import ARCHETYPES, SUBJECT_KEYS, describe_archetypes
 from .fonts import describe_fonts
 from .model import ArtSlot, Brief, CoverSpec, Direction, Directions
+from .recipes import describe_recipes
 
 # Unlike docproof.quest.skin (which logs a fallback and keeps going, since a
 # skin failure must never stop the page from rendering), every failure path
@@ -202,7 +203,10 @@ outside it:
 {describe_archetypes(genre)}{_big_type_rule(n)}
 
 Fonts — pick title_font and author_font per concept, each from this exact \
-list; nothing outside it is valid:
+list; nothing outside it is valid. The list is grouped by ROLE, and each \
+group's own gloss names the shelf it belongs to — pick the role this \
+genre's shelf actually uses, then the family whose vibe line fits the \
+concept, honoring any "pairs with" hint for the author line:
 {describe_fonts()}
 
 Palette: five hexes by role (background, primary, accent, text, scrim). \
@@ -289,11 +293,13 @@ plus a light grain overlay — the treatment that makes a photographic or \
 photoreal prompt allowed at all; see the photorealism rule above). \
 `treatment` is the ONLY effects-rack field you ever set. Mirrored corners \
 (ornamental-frame \
-conventions), motif scatter (repeating-pattern conventions), double-\
-exposure masking, and knockout/art_fill title treatments (used only when \
+conventions), motif scatter (repeating-pattern conventions), and \
+knockout/art_fill title treatments (used only when \
 the archetype's type IS the hero of the cover) are archetype and revision \
 territory — never invent or request them yourself; pick the archetype whose \
-own convention already wants one, and trust it to carry that.
+own convention already wants one, and trust it to carry that. (Masking is \
+the one exception, and it has its own closed vocabulary — see "Masking \
+moves" below.)
 
 The container device: the single strongest intentionality move available \
 on a cover is content living inside a shape that belongs to the scene — a \
@@ -307,6 +313,64 @@ example "a lighthouse's light beam as a wide, soft-edged cone of pale \
 light, transparent background." Never describe or bake the payload (the \
 title, the second image) into the container image itself; the container is \
 a shape only, and the composer fills it.
+
+The finishing recipe: `recipe` names ONE researched, $0 finishing stack — \
+grade, grain, vignette, and texture layers the composer expands over the \
+whole composition, text included, after everything else is drawn. It is \
+how a cover gets its printed, unified, lit-as-one-scene surface without a \
+single extra image generation. Pick the recipe whose look matches this \
+genre's shelf, from this exact list, or "" for none:
+{describe_recipes()}
+Pick "" when the archetype's own look is already complete — an archetype \
+may carry a default finishing stack of its own, and "" lets that default \
+apply, while a named pick always wins over it. Restraint rule of thumb: \
+big_type usually wants quiet_literary or nothing.
+
+The type move: `type_move` may request ONE signature typography move on \
+the title — one move per concept is a hard rule, and "" (no move, the \
+default) is the most common right answer; restraint is what separates a \
+signature move from decoration. The moves: "justify_stack" (each title \
+line sized independently so every line fills the zone's width — the \
+nonfiction/thriller poster stack; earns its place when the title's words \
+break into naturally uneven lines), "arch" (a gentle upward bow along a \
+curved baseline — emblem, stamp, and vintage-label conventions), "tilt" \
+(a slight confident tilt of the whole title — playful, pulpy, or \
+off-kilter moods), and "emphasis" (ONE word of the title styled in the \
+accent color — also set `emphasis_word` to that word exactly as it \
+appears in the title; a word the title does not contain is dropped). \
+When you pick any move other than "emphasis", leave `emphasis_word` \
+empty — it rides only with "emphasis", never as a second move.
+
+Masking moves: masks are how real covers earn their "a designer composed \
+this" depth, and there are exactly four. (1) PLATE-BLEND — two full-bleed \
+plates dissolved into one scene along a soft gradient seam; it earns its \
+place when no single image can hold both of the book's worlds (a skyline \
+over a forest, a face over the sea). (2) THING-IN-TEXT — the art living \
+INSIDE the title's own letterforms; it earns its place when type is the \
+hero and the imagery works as texture and color rather than as a subject \
+to be read. (3) TEXT-IN-THING — the title clipped inside a shape that \
+belongs to the scene (the container device above); it earns its place \
+only when the archetype declares a container slot, and the archetype \
+carries it for you — never request it yourself. (4) REGION-GRADE — a \
+color grade masked to one region so one area darkens or cools without \
+touching the rest; archetype and revision territory, never yours to \
+request. At direction time you reach the reachable moves through ONE \
+field: `mask_intent` on an art_prompts entry — "" (none, the default), \
+"blend_into_background" (plate-blend: this slot dissolves into the \
+background plate behind it), "inside_title" (thing-in-text: this slot's \
+art shows only through the title's letterforms), or "inside_focal" (this \
+slot's art lives inside the focal slot's own silhouette — the classic \
+double-exposure move, only for an archetype whose focal is a cutout \
+drawn beneath this slot; anything the archetype cannot honor is simply \
+dropped). Required with any inside_* intent: write that slot's prompt as \
+a clean TRANSPARENT-BACKGROUND cutout subject — a windowed clip only \
+reads when the source's own shape is clean.
+
+Those three fields — `recipe`, `type_move`, and `mask_intent` — plus \
+per-slot `treatment` are your WHOLE design-machinery vocabulary. You \
+never set adjust-layer, mask, or effect fields directly at direction \
+time: the recipe expands into real graded layers for you, and everything \
+finer is archetype and revision territory.
 
 If the brief's `pitch` is present, ground the imagery in it. Never spoil an \
 ending on the cover, regardless of how much the pitch reveals.{_sample_rule(has_sample)}"""
@@ -557,12 +621,31 @@ you mean before writing its path.
 ([0.5, 1.0]), use JSON object syntax for a whole nested object \
 ({"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.15}).
 
-Three worked examples:
+Seven worked examples:
 1. Move the title zone up: the spec JSON shows a text slot with "id": \
 "title" at index 0, whose zone.y is currently 0.62. Edit: path \
 `text[0].zone.y`, value `0.57`.
 2. Recolor the palette: path `palette.primary`, value `"#a83250"`.
 3. Resize the title's type: path `text[0].size_max`, value `0.13`.
+4. The notes say "warmer and moodier": find the adjust layer whose op is \
+"grade" (say index 0) and the one whose op is "vignette" (say index 1) — \
+two edits: path `adjust[0].temperature`, value `0.35`; path \
+`adjust[1].strength`, value `0.4`. (No grade layer to warm? Warming the \
+palette hexes themselves is the fallback.)
+5. The notes say the type feels pasted on: move the `fx_`-prefixed \
+finishing layers ABOVE the text layers so grain and grade sit over \
+everything at once — ONE edit replacing the whole z-order: path `layers`, \
+value the entire reordered list as a JSON array of {"kind", "ref"} \
+objects copied from the spec you were shown, with the fx_ entries moved \
+after the text entries.
+6. The notes say "make the title a stacked poster title": path \
+`text[0].fit_mode`, value `"justify_stack"`.
+7. The notes say "put the forest inside the title", and the forest art \
+slot sits at index 1 with no mask yet: path `art[1].mask`, value \
+`{"from_text": "title"}`. (When a slot ALREADY carries a mask object, \
+edit the one field instead: path `art[1].mask.from_text`, value \
+`"title"` — a path can only step INTO an object that exists in the spec \
+you were shown.)
 
 A path may replace any existing location. A list index equal to that \
 list's CURRENT length appends a new element there; anything else — an \
@@ -575,7 +658,13 @@ valid); change text case, tracking, or align; adjust scrim strengths and \
 art transforms (scale, offset, anchor); adjust a text slot's mask_from \
 (which art slot's shape it is clipped into) or a container art slot's \
 own placement and scale; rewrite an art_prompt; toggle the texture layer \
-on or off.
+on or off; edit an adjust layer's grade and strength fields \
+(temperature, brightness, contrast, saturation, strength) and any \
+`fx_`-prefixed finishing layer's opacity or blend; reorder `layers` as a \
+whole-list replace; set or edit a layer's `mask` (a gradient, from_layer, \
+from_text, luminance_of, or invert); and set a text slot's expressive-\
+type fields (fit_mode, arc, rotate, emphasis, emphasis_style) where the \
+spec carries them.
 
 You may NOT, ever: write to `version` or `notes_log` — the calling code \
 owns both, and any edit touching them is refused before it reaches the \

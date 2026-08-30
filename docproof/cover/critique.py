@@ -212,6 +212,28 @@ actually shown
 - a large empty band with nothing designed in it
 - an element so low-contrast against its ground it disappears
 - at thumbnail size the cover reads as a blank field with words
+- the type reads pasted-on: flat, unshadowed, un-graded type sitting ON \
+the image instead of living IN it, sharing none of its light or texture
+- a flat, unlit composite: layers stacked with no shared light, grade, or \
+atmosphere tying them into one scene
+- filter soup: so many finishing effects stacked that the cover reads \
+processed and muddy instead of designed
+- left/right visibly unbalanced: one half of the cover carries clearly \
+more visual weight. Flag this ONLY when the composer's own measurements \
+(in the summary below) include a mirror-symmetry score or heavier-half \
+attribution, and CITE that measured number in your tell verbatim — never \
+flag imbalance from eyeballing alone when the measurements are silent.
+- a near-miss alignment that survived: an element a hair off the center \
+axis or off a shared rail. The composer's snap pass makes this impossible \
+by construction, so if you genuinely see one, say in the tell that the \
+balance pass itself appears to have missed it — this tell reports a \
+pipeline bug, not a taste call.
+- the typeface fights the genre's shelf: a script-titled thriller, poster \
+caps on a tender romance, a blackletter romcom
+- a gimmick without payoff: a type move (a stacked, arched, tilted, or \
+emphasized title) or a mask that hurts legibility or hierarchy instead \
+of earning its place — recommend removing it in your notes; removal is \
+one patch edit
 
 passes: true only if you would ship this exactly as-is — a real, \
 essentially flaw-free proof, not merely "acceptable." false if there is at \

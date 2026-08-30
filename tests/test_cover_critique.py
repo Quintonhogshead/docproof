@@ -490,3 +490,53 @@ def test_run_critique_system_prompt_describes_art_defects_vs_design_tells():
     assert "GENERATED IMAGE ITSELF" in system
     # the notes field must still say a repaint can never be requested there
     assert "never a repaint" in system
+
+
+# -- system prompt content: the §15.14 deep-stack tells (PR6) -----------------
+
+def test_run_critique_system_prompt_names_the_surface_and_finishing_tells():
+    # §15.14: type reads pasted-on; flat unlit composite; filter soup.
+    client = FakeCritiqueClient(_once(_reply(passes=True)))
+    run_critique(_png_bytes(), None, _spec(), _brief(), client)
+    system = client.calls[0]["system"]
+    assert "the type reads pasted-on" in system
+    assert "a flat, unlit composite" in system
+    assert "filter soup" in system
+
+
+def test_run_critique_system_prompt_balance_tell_must_cite_the_measured_number():
+    # §15.14: the judge receives the §15.10 symmetry score and heavier-half
+    # attribution via composer_warnings and must cite the number when it
+    # flags left/right imbalance — measurements, not eyeballing.
+    client = FakeCritiqueClient(_once(_reply(passes=True)))
+    run_critique(_png_bytes(), None, _spec(), _brief(), client)
+    system = client.calls[0]["system"]
+    assert "left/right visibly unbalanced" in system
+    assert "mirror-symmetry score" in system
+    assert "CITE that measured number" in system
+    assert "never" in system and "eyeballing" in system
+
+
+def test_run_critique_system_prompt_near_miss_alignment_means_a_balance_pass_bug():
+    # §15.14: near-miss alignment should be impossible post-snap — flagging
+    # it means a balance-pass bug, and the tell text must say exactly that.
+    client = FakeCritiqueClient(_once(_reply(passes=True)))
+    run_critique(_png_bytes(), None, _spec(), _brief(), client)
+    system = client.calls[0]["system"]
+    assert "a near-miss alignment that survived" in system
+    assert "snap pass makes this impossible" in system
+    assert "the balance pass itself appears to have missed it" in system
+    assert "a pipeline bug, not a taste call" in system
+
+
+def test_run_critique_system_prompt_names_typeface_shelf_and_gimmick_tells():
+    client = FakeCritiqueClient(_once(_reply(passes=True)))
+    run_critique(_png_bytes(), None, _spec(), _brief(), client)
+    system = client.calls[0]["system"]
+    # §15.11's judge tell, verbatim phrase
+    assert "the typeface fights the genre's shelf" in system
+    assert "a script-titled thriller" in system
+    # §15.12/§15.13's payoff tell: recommend removal — it's one patch edit
+    assert "a gimmick without payoff" in system
+    assert "recommend removing it" in system
+    assert "one patch edit" in system

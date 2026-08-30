@@ -1,0 +1,15 @@
+# §15.6's roster line: "bloom, radial_glow, +saturation — romance/romcom."
+# Grounded in docs/cover_template_research.md #6/#7 (romance/romcom: bright,
+# saturated, lit-from-within flat illustration — warmth and light ARE the
+# genre signal). A whisper of blended soft-focus (the blur op mixed back at
+# low opacity, §15.3's own equation) is what "airbrushed" adds over a plain
+# bloom: highlights halo, edges soften, nothing smears.
+name: airbrushed_glow
+describe: >-
+  Lit from within: saturation up, a warm radial glow behind the middle of
+  the cover, blooming highlights, a whisper of soft focus. Romance, romcom.
+finish:
+  - adjust: {id: fx_sat,   op: grade, saturation: 0.18, brightness: 0.04}
+  - art:    {id: fx_glow,  procedural: radial_glow, anchor: [0.5, 0.38], opacity: 0.55, blend: screen}
+  - adjust: {id: fx_bloom, op: bloom, strength: 0.45, radius: 0.030, threshold: 0.65}
+  - adjust: {id: fx_soft,  op: blur, radius: 0.004, opacity: 0.30}

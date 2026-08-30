@@ -47,6 +47,7 @@ from docproof.cover.direction import (DirectionError, DirectionResult,
                                       RevisionError, RevisionResult)
 from docproof.cover.model import (Brief, ConceptState, CoverSpec, Direction,
                                   Palette, RenderReport, build_spec)
+from docproof.cover.planner import CompositionPlan, PlannerError, StageReview
 from docproof.cover.reality import RealityResult, RealitySheet, RealitySheetError, \
     render_reality_sheet
 from docproof.ingest import IngestError
@@ -1177,6 +1178,34 @@ def test_run_job_critique_per_concept_isolation(tmp_path, monkeypatch):
     assert bad_row["usd"] == 0.0
 
 
+def test_run_job_critique_receives_adjustments_alongside_warnings(
+        tmp_path, monkeypatch):
+    # §15.10: RenderReport.adjustments (what the balance snap pass moved)
+    # ride into the judge's composer_warnings channel right behind the
+    # warnings themselves — the "near-miss alignment survived" tell is
+    # only checkable against what actually moved.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    snap_line = ("text 'title': ink center 49.00% → 50.00% of width — "
+                 "snapped onto the center axis (+4px).")
+    monkeypatch.setattr(pipeline, "compose", lambda spec, job_dir: (
+        FAKE_IMAGE, _report(warnings=["weak hierarchy"],
+                            adjustments=[snap_line])))
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    seen: dict[str, list[str]] = {}
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
+        seen["composer_warnings"] = list(kw.get("composer_warnings", ()))
+        return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
+    monkeypatch.setattr(pipeline, "run_critique", fake_run_critique)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert seen["composer_warnings"] == ["weak hierarchy", snap_line]
+
+
 def test_run_revision_human_triggered_does_not_call_run_critique(tmp_path, monkeypatch):
     job = _ready_job_with_concept(tmp_path)
 
@@ -1515,3 +1544,388 @@ def test_run_job_critique_repaint_bypasses_the_identical_spec_early_stop(
                   if r["kind"] == "revision")
     assert any("repainted on judge's flag" in r["detail"] for r in result.ledger
               if r["kind"] == "image")
+
+
+# -- composition planner (§15.16, COVER_PLANNER-gated) -------------------------
+#
+# plan_composition and review_stage are monkeypatched on the pipeline module
+# exactly like every other model call in this file -- these tests are about
+# pipeline.py's OWN §15.16 job (the gate, plan persistence, staged painting
+# order, conditioning bytes, degrade-to-spontaneous, the replan rule), not
+# about whether planner.py itself is correct, which is what
+# tests/test_cover_planner.py covers.
+
+_PLAN_SUFFIX = ("Amber dusk key light from the west, #101010 and #c9a227, "
+                "painterly gouache, timeless coastal era.")
+
+
+def _cover_plan(**overrides) -> CompositionPlan:
+    data = dict(
+        light="Key light low from the west, warm amber, dusk.",
+        palette_anchors=["background #101010", "accent #c9a227"],
+        depth=[{"slot": "background", "plane": "far",
+                "negative_space": "leave the upper third as empty sky"},
+               {"slot": "focal", "plane": "near",
+                "negative_space": "keep the left edge clear"}],
+        horizon_y=0.62,
+        generation_order=["background", "focal"],
+        conditioning=[{"slot": "focal", "review": "background"}],
+        unify_recipe="", unify_stops=[],
+        consistency_suffix=_PLAN_SUFFIX,
+        prompts=[
+            {"slot": "background",
+             "prompt": f"Planned forest plate, vast empty sky. {_PLAN_SUFFIX}"},
+            {"slot": "focal",
+             "prompt": f"Planned cloaked figure. {_PLAN_SUFFIX}"}],
+        cost=0.12, model="claude-fable-5")
+    data.update(overrides)
+    return CompositionPlan(**data)
+
+
+def _stage_review(**overrides) -> StageReview:
+    data = dict(prompt=f"Reviewed cloaked figure. {_PLAN_SUFFIX}",
+               anchor=[0.4, 0.7], scale=1.2, offset=[0.02, -0.01],
+               mask_angle=None, cost=0.03, model="claude-fable-5")
+    data.update(overrides)
+    return StageReview(**data)
+
+
+def _rig_planned_paint(monkeypatch):
+    """The paint/compose fakes every planner test shares (generate is left
+    to each test -- the prompts and bytes are usually what it asserts on)."""
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+
+def test_run_job_gate_off_makes_zero_planner_calls(tmp_path, monkeypatch):
+    monkeypatch.delenv("COVER_PLANNER", raising=False)
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+    planner_calls: list = []
+    monkeypatch.setattr(pipeline, "plan_composition",
+                        lambda *a, **k: planner_calls.append(a) or _cover_plan())
+    monkeypatch.setattr(pipeline, "review_stage",
+                        lambda *a, **k: planner_calls.append(a) or _stage_review())
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.status == "ready"
+    assert [c.status for c in result.concepts] == ["ready"]
+    assert planner_calls == []                      # the spies never fired
+    assert not pipeline.plan_path(tmp_path, job.job_id, 0).exists()
+    assert not any(row["kind"] == "plan" for row in result.ledger)
+
+
+def test_run_job_planned_stages_are_sequential_and_review_sees_real_bytes(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+
+    events: list = []
+    plan = _cover_plan()
+    plan_args: dict = {}
+
+    def fake_plan(brief, spec, archetype, sample, client, **kw):
+        plan_args.update(brief=brief, spec=spec, archetype=archetype,
+                        sample=sample, client=client)
+        events.append(("plan", spec.concept_name))
+        return plan
+    monkeypatch.setattr(pipeline, "plan_composition", fake_plan)
+
+    review_args: dict = {}
+
+    def fake_review(plan_arg, slot_id, prior_renders, draft_prompt, client, **kw):
+        review_args.update(plan=plan_arg, slot=slot_id, renders=prior_renders,
+                          draft=draft_prompt, client=client)
+        events.append(("review", slot_id))
+        return _stage_review()
+    monkeypatch.setattr(pipeline, "review_stage", fake_review)
+
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        slot = "background" if "forest" in prompt else "focal"
+        events.append(("generate", slot))
+        return f"PNG-{slot}".encode()
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    concept = result.concepts[0]
+    assert result.status == "ready" and concept.status == "ready"
+
+    # Staged and SEQUENTIAL: the plate generates first, the review runs
+    # against it, and only then does the conditioned focal generate.
+    assert events == [("plan", "Concept (cutout_sandwich)"),
+                      ("generate", "background"), ("review", "focal"),
+                      ("generate", "focal")]
+
+    # The planner rode the same anthropic client critique does, and was
+    # handed the real archetype object.
+    assert plan_args["client"] is CRITIQUE_CLIENT
+    assert plan_args["archetype"] is ARCHETYPES["cutout_sandwich"]
+
+    # The conditioning review received the prior stage's ACTUAL bytes --
+    # non-empty, and exactly what the fake engine painted for background.
+    assert review_args["slot"] == "focal"
+    assert review_args["renders"] == [b"PNG-background"]
+    assert review_args["draft"] == plan.prompt_for("focal")
+    assert review_args["client"] is CRITIQUE_CLIENT
+
+    # The review's placement fields landed on the slot before it generated.
+    focal = next(s for s in concept.spec.art if s.id == "focal")
+    assert focal.anchor == [0.4, 0.7]
+    assert focal.scale == pytest.approx(1.2)
+    assert focal.offset == [0.02, -0.01]
+    assert focal.prompt.startswith("Reviewed cloaked figure.")
+
+    # Ledger: a priced plan row and a priced review row.
+    plan_rows = [r for r in result.ledger if r["kind"] == "plan"]
+    assert any("composition planned via claude-fable-5" in r["detail"]
+              and r["usd"] == pytest.approx(0.12) for r in plan_rows)
+    assert any("stage review finalized focal against background" in r["detail"]
+              and r["usd"] == pytest.approx(0.03) for r in plan_rows)
+
+
+def test_run_job_planned_prompts_carry_the_consistency_suffix(tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+    monkeypatch.setattr(pipeline, "plan_composition",
+                        lambda *a, **k: _cover_plan(conditioning=[]))
+
+    prompts: list[str] = []
+
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        prompts.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert pipeline.load_job(tmp_path, job.job_id).status == "ready"
+    # Both staged prompts (background stage, then focal stage, in order)
+    # carry the plan's consistency suffix, with imaging's negative suffix
+    # still layered on top by _assemble_prompt.
+    assert len(prompts) == 2
+    assert "forest" in prompts[0] and "cloaked" in prompts[1]
+    for prompt in prompts:
+        assert _PLAN_SUFFIX in prompt
+        assert pipeline.NEGATIVE_SUFFIX in prompt
+        assert prompt.index(_PLAN_SUFFIX) < prompt.index(pipeline.NEGATIVE_SUFFIX)
+
+
+def test_run_job_planner_failure_degrades_to_spontaneous(tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+
+    def boom(*a, **k):
+        raise PlannerError("The planner model declined to plan this composition.")
+    monkeypatch.setattr(pipeline, "plan_composition", boom)
+    review_calls: list = []
+    monkeypatch.setattr(pipeline, "review_stage",
+                        lambda *a, **k: review_calls.append(a) or _stage_review())
+
+    prompts: list[str] = []
+
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        prompts.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    # The job is NOT lost: every slot painted spontaneously, concept ready.
+    assert result.status == "ready"
+    assert [c.status for c in result.concepts] == ["ready"]
+    assert len(prompts) == 2
+    assert any("A misty pine forest, gouache." in p for p in prompts)
+    assert review_calls == []                       # no plan, no staged reviews
+    assert not pipeline.plan_path(tmp_path, job.job_id, 0).exists()
+    # The failure left a $0 ledger note naming the degrade.
+    assert any(r["kind"] == "plan" and "planning failed" in r["detail"]
+              and "painted spontaneously" in r["detail"] and r["usd"] == 0.0
+              for r in result.ledger)
+
+
+def test_run_job_stage_review_failure_degrades_that_slot(tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+    plan = _cover_plan()
+    monkeypatch.setattr(pipeline, "plan_composition", lambda *a, **k: plan)
+
+    def review_boom(*a, **k):
+        raise PlannerError("The stage-review call failed: connection dropped.")
+    monkeypatch.setattr(pipeline, "review_stage", review_boom)
+
+    prompts: list[str] = []
+
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        prompts.append(prompt)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.status == "ready"
+    assert [c.status for c in result.concepts] == ["ready"]
+    # Both slots still generated -- the focal with the PLAN's own prompt,
+    # unreviewed (the spontaneous path for that slot).
+    assert len(prompts) == 2
+    assert any("Planned cloaked figure." in p for p in prompts)
+    assert any(r["kind"] == "plan" and "stage review for focal failed" in r["detail"]
+              and r["usd"] == 0.0 for r in result.ledger)
+
+
+def test_run_job_persists_a_replayable_plan_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+    monkeypatch.setattr(pipeline, "plan_composition", lambda *a, **k: _cover_plan())
+    monkeypatch.setattr(pipeline, "review_stage", lambda *a, **k: _stage_review())
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    path = pipeline.plan_path(tmp_path, job.job_id, 0)
+    assert path.is_file()
+    reloaded = CompositionPlan.model_validate_json(path.read_text(encoding="utf-8"))
+    assert reloaded == _cover_plan()                # replayable: reload -> same plan
+
+
+def test_run_job_plan_light_and_unify_reach_the_judge(tmp_path, monkeypatch):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("cutout_sandwich")], model="m", cost=0.0))
+    monkeypatch.setattr(pipeline, "plan_composition",
+                        lambda *a, **k: _cover_plan(unify_recipe="quiet_literary"))
+    monkeypatch.setattr(pipeline, "review_stage", lambda *a, **k: _stage_review())
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+    _rig_planned_paint(monkeypatch)
+
+    captured: dict = {}
+
+    def fake_critique(png, thumb, spec, brief, client, *, composer_warnings=(),
+                      **kw):
+        captured["warnings"] = list(composer_warnings)
+        return CritiqueResult(passes=True, tells=[], notes="", cost=0.001)
+    monkeypatch.setattr(pipeline, "run_critique", fake_critique)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert pipeline.load_job(tmp_path, job.job_id).status == "ready"
+    warnings = captured["warnings"]
+    assert any("lighting contract" in w and "warm amber" in w for w in warnings)
+    assert any("unify bind" in w and "quiet_literary" in w for w in warnings)
+
+
+@pytest.mark.parametrize("archetype, applied", [
+    ("cutout_sandwich", True),      # no fx_ layers yet -> the bind applies
+    ("full_bleed_art", False),      # archetype default recipe already expanded fx_
+])
+def test_run_job_plan_unify_applies_only_when_no_fx_layers(
+        tmp_path, monkeypatch, archetype, applied):
+    monkeypatch.setenv("COVER_PLANNER", "1")
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction(archetype)], model="m", cost=0.0))
+    monkeypatch.setattr(pipeline, "plan_composition", lambda *a, **k: _cover_plan(
+        generation_order=[], conditioning=[], prompts=[],
+        unify_recipe="quiet_literary", unify_stops=["background", "primary"]))
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+    _rig_planned_paint(monkeypatch)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.status == "ready"
+    spec = result.concepts[0].spec
+    adjust_ids = {a.id for a in spec.adjust}
+    if applied:
+        # quiet_literary's finish plus the plan's own gradient_map grade.
+        assert {"fx_hush", "fx_warm", "fx_vign", "fx_plan_grade"} <= adjust_ids
+        assert any(a.id == "fx_grain" for a in spec.art)
+        grade = next(a for a in spec.adjust if a.id == "fx_plan_grade")
+        assert grade.op == "gradient_map"
+        assert grade.stops == ["background", "primary"]
+        # Every added layer is really in the z-order.
+        layer_refs = {(r.kind, r.ref) for r in spec.layers}
+        assert ("adjust", "fx_plan_grade") in layer_refs
+    else:
+        # full_bleed_art already wears cinematic_duotone's fx_ stack -- the
+        # plan's bind is logged and skipped, nothing doubled.
+        assert "fx_plan_grade" not in adjust_ids
+        assert "fx_hush" not in adjust_ids
+        assert adjust_ids == {"fx_map", "fx_contrast", "fx_bloom"}
+
+
+def test_run_revision_replan_trigger_rules(tmp_path, monkeypatch):
+    """§15.16: a revision re-buys planning ONLY when allow_new_art is set
+    AND the notes explicitly say "replan" (case-insensitive) -- and even
+    then only with the gate on and a client to plan with."""
+    calls: list = []
+    monkeypatch.setattr(pipeline, "plan_composition", lambda *a, **k: calls.append(a)
+                        or _cover_plan(generation_order=[], conditioning=[],
+                                       prompts=[]))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        revised = spec.model_copy(update={"version": spec.version + 1,
+                                         "notes_log": [*spec.notes_log, notes]})
+        return RevisionResult(spec=revised, cost=0.01)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+    monkeypatch.setattr(pipeline, "generate",
+                        lambda client, prompt, **k: b"png-bytes")
+    _rig_planned_paint(monkeypatch)
+
+    def replan_count(notes, allow_new_art, *, client=CRITIQUE_CLIENT,
+                     gate="1"):
+        if gate is None:
+            monkeypatch.delenv("COVER_PLANNER", raising=False)
+        else:
+            monkeypatch.setenv("COVER_PLANNER", gate)
+        job = _ready_job_with_concept(tmp_path)
+        before = len(calls)
+        asyncio.run(pipeline.run_revision(tmp_path, job.job_id, 0, notes,
+                                          allow_new_art, PROVIDERS,
+                                          IMAGE_CLIENT, client))
+        concept = pipeline.load_job(tmp_path, job.job_id).concepts[0]
+        assert concept.status == "ready"            # never blocks the revision
+        return len(calls) - before
+
+    assert replan_count("moodier, and REPLAN the composition", True) == 1
+    assert replan_count("moodier, and replan the composition", False) == 0
+    assert replan_count("moodier please", True) == 0
+    assert replan_count("replan the composition", True, client=None) == 0
+    assert replan_count("replan the composition", True, gate=None) == 0

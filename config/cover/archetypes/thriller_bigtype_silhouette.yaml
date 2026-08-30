@@ -64,4 +64,14 @@ text:
     size_min: 0.07               # height" between title+author together
     size_max: 0.17
     max_lines: 2
+    # Deep-stack wave (§15.4): the stacked double shadow — a tight, dark
+    # contact shadow welding the huge caps to the ground, under a wide,
+    # soft ambient one lifting them off it. The pro poster-type move the
+    # effect stack exists for, and the research's "big bold capitalized
+    # titles dominate the page" needs the type to sit IN the cover, not on
+    # it. Stack order = paint order: the wide wash renders beneath the
+    # tight edge.
+    effects:
+      - {kind: drop_shadow, dy: 0.012, blur: 0.025, alpha: 0.45}
+      - {kind: drop_shadow, dy: 0.0025, blur: 0.002, alpha: 0.85}
 layers: [background, texture, focal, author, subtitle, title]
