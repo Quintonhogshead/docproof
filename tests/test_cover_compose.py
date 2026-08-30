@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageColor, ImageDraw
 
+from docproof.cover import typeset
 from docproof.cover.archetypes import ARCHETYPES, zone_px
 from docproof.cover.model import (ArtSlot, Brief, CoverSpec, Direction,
                                   LayerRef, Palette, Shadow, TextSlot, Zone,
@@ -526,6 +527,64 @@ def test_an_ungenerated_slot_with_no_procedural_default_draws_nothing():
     assert _procedural_art(slot, CANVAS, _TEST_PALETTE, 1) is None
 
 
+# ===========================================================================
+# v2.2 wave, deliverable 5: the stocked texture shelf (ArtSlot.texture_file)
+# ===========================================================================
+
+def test_textures_registry_loads_the_real_shelf():
+    from docproof.cover.textures import TEXTURES, TEXTURES_DIR
+    assert TEXTURES   # the shelf is not empty
+    for name, path in TEXTURES.items():
+        assert path.is_file(), f"{name} -> {path} does not exist on disk"
+        assert path.parent == TEXTURES_DIR
+
+
+def test_texture_file_slot_composes_with_cover_fit(tmp_path):
+    from docproof.cover.textures import TEXTURES
+    name = next(iter(TEXTURES))
+    slot = ArtSlot(id="background", texture_file=name, texture_fit="cover")
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_TEST_PALETTE, art=[slot], scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="background")])
+
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+    # A "cover"-fit shelf plate fills the WHOLE canvas — real tonal range
+    # somewhere, not a blank/never-painted layer.
+    assert image.size == CANVAS
+    assert image.convert("L").getextrema() != (0, 0)
+
+
+def test_texture_file_slot_tile_fit_repeats_the_plate_across_the_canvas(tmp_path):
+    from docproof.cover.compose import TEXTURES as compose_textures
+
+    # A tiny synthetic plate, much smaller than CANVAS, inserted directly
+    # into the shared registry — docproof.cover.model and
+    # docproof.cover.compose both import the SAME dict object from
+    # docproof.cover.textures (see that module's own docstring on why), so
+    # mutating it here in place is visible to ArtSlot's own field
+    # validation too, with no monkeypatching of either module needed.
+    tiny_path = tmp_path / "tiny_check.png"
+    Image.new("RGBA", (40, 40), (10, 200, 10, 255)).save(tiny_path)
+    compose_textures["tiny_check_v22"] = tiny_path
+    try:
+        slot = ArtSlot(id="background", texture_file="tiny_check_v22", texture_fit="tile")
+        spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                         palette=_TEST_PALETTE, art=[slot], scrims=[], text=[],
+                         layers=[LayerRef(kind="art", ref="background")])
+
+        image, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+        # The plate repeats every 40px in both directions — two points
+        # exactly one tile-period apart must match. A "cover" fit (the
+        # other test above) would never produce this exact periodicity at
+        # a 400x640 canvas from a 40x40 source.
+        assert image.getpixel((5, 5)) == image.getpixel((45, 5))
+        assert image.getpixel((5, 5)) == image.getpixel((5, 45))
+    finally:
+        del compose_textures["tiny_check_v22"]
+
+
 # -- rule_frame geometry ------------------------------------------------------
 
 def _runs_of_ink(values: list[int]) -> list[tuple[int, int]]:
@@ -663,11 +722,100 @@ def test_local_panel_scrim_has_no_hard_rectangle_edge():
 
 
 # ===========================================================================
-# v2 BODY wave: layer-after-text drawing over already-drawn ink (the
-# mechanism woven_emblem's `weave` ornament relies on)
+# v2.2 wave, deliverable 2: halo scrim + softer panels ("the text for
+# Lighthouse has a box around it")
 # ===========================================================================
 
-def test_an_art_layer_drawn_after_text_paints_over_its_ink(tmp_path):
+def _scan_alpha_row(out, rect, canvas) -> list[int]:
+    """255-minus-red across a full horizontal scanline through `rect`'s
+    own vertical middle — the same "how dark is this pixel" readout the
+    panel hard-edge test above already uses, generalized to the WHOLE row
+    (not just a span near one edge) so a halo's total absence of any edge,
+    anywhere, can be checked in one pass."""
+    _left, top, _right, bottom = rect
+    cy = (top + bottom) // 2
+    return [255 - out.getpixel((x, cy))[0] for x in range(canvas[0])]
+
+
+def test_halo_scrim_has_no_detectable_hard_edge():
+    from docproof.cover.compose import _apply_scrim, _scrim_rect
+    from docproof.cover.model import ScrimSpec, TextSlot, Zone
+
+    title = TextSlot(id="title", content="ASH", zone=Zone(x=0.3, y=0.4, w=0.4, h=0.15),
+                     font_family="Spectral", size_min=0.05, size_max=0.05)
+    text_by_id = {"title": title}
+    scrim = ScrimSpec(kind="halo", protects="title", strength=1.0)
+    rect = _scrim_rect(scrim, text_by_id, CANVAS)
+    base = Image.new("RGBA", CANVAS, (200, 200, 200, 255))
+    out = _apply_scrim(base, scrim, 1.0, text_by_id, _palette(scrim="#000000"), CANVAS)
+
+    alphas = _scan_alpha_row(out, rect, CANVAS)
+    diffs = [abs(b - a) for a, b in zip(alphas, alphas[1:])]
+    # A halo is built from a big-sigma Gaussian blur specifically so it has
+    # no edge anywhere a probe could find one — a handful of alpha levels'
+    # worth of step between ADJACENT pixels is noise-floor, not an edge.
+    assert max(diffs) <= 4, f"halo has a detectable edge (max step {max(diffs)})"
+    # And it genuinely darkens the middle — not a no-op.
+    left, top, right, bottom = rect
+    assert alphas[(left + right) // 2] > 40
+
+    # Unlike panel (never dims a pixel outside its own rect — see
+    # test_local_panel_scrim_never_dims_a_pixel_outside_its_own_rect), a
+    # halo is deliberately UNCLIPPED: it fades past its own nominal zone
+    # rather than snapping to zero at the boundary, so a probe well
+    # outside the padded rect still reads meaningfully dimmed.
+    assert alphas[max(0, left - 10)] > 15
+    assert alphas[min(CANVAS[0] - 1, right + 10)] > 15
+
+
+def test_panel_scrim_edge_step_is_looser_than_halos_but_still_gradual():
+    # Same probe-line methodology as the halo test above, so the "halo has
+    # no edge, panel's edge is merely SOFTER than a slab" claim is a direct,
+    # comparable measurement rather than two differently-shaped tests. The
+    # doubled feather (v2.2 wave, deliverable 2) is what keeps this looser
+    # threshold meaningfully tighter than a hard-box's 255-in-one-step
+    # would be, even though it is intentionally far looser than halo's.
+    from docproof.cover.compose import _apply_scrim, _scrim_rect
+    from docproof.cover.model import ScrimSpec, TextSlot, Zone
+
+    title = TextSlot(id="title", content="ASH", zone=Zone(x=0.3, y=0.4, w=0.4, h=0.15),
+                     font_family="Spectral", size_min=0.05, size_max=0.05)
+    text_by_id = {"title": title}
+    scrim = ScrimSpec(kind="panel", protects="title", strength=1.0)
+    rect = _scrim_rect(scrim, text_by_id, CANVAS)
+    base = Image.new("RGBA", CANVAS, (200, 200, 200, 255))
+    out = _apply_scrim(base, scrim, 1.0, text_by_id, _palette(scrim="#000000"), CANVAS)
+
+    alphas = _scan_alpha_row(out, rect, CANVAS)
+    diffs = [abs(b - a) for a, b in zip(alphas, alphas[1:])]
+    assert max(diffs) < 150   # looser than halo's <= 4 — a panel is still
+                              # hard-clipped to its rect, just no longer a
+                              # single-pixel cliff to get there
+    assert max(diffs) > 4     # and genuinely looser, not accidentally as
+                              # soft as a halo
+
+
+# ===========================================================================
+# v2 BODY wave: layer-after-text drawing over already-drawn ink (the
+# mechanism woven_emblem's `weave` ornament relies on) — v2.2 wave,
+# deliverable 4 then added a general contact guard on top: art-after-text
+# is still allowed to paint over a SMALL amount of ink (this is how a
+# weave/notch/scatter motif is meant to graze a letterform's edge — every
+# archetype-level render elsewhere in this suite that asserts
+# `report.warnings == []` with a later art layer already proves that path
+# stays silent), but no longer allowed to swallow a whole required text
+# slot's ink silently.
+# ===========================================================================
+
+def test_an_art_layer_that_would_fully_swallow_required_text_gets_guarded(tmp_path):
+    # v2.2 wave, deliverable 4 changed this scenario's outcome on purpose —
+    # the v2 BODY wave's own version of this test asserted the opposite
+    # (the title's ink appeared NOWHERE in the final image). An opaque,
+    # full-canvas "cover"-fit art layer drawn immediately after a REQUIRED
+    # text layer is not eligible for the narrower contain-fit sandwich path
+    # at all (fit != "contain") — so the general ornament-vs-text contact
+    # guard catching it here proves it really does apply to "any art layer
+    # after any text layer," not just contain-fit sandwich pairs.
     overlay_rgb = (255, 200, 0)
     _flat_png(tmp_path / "overlay.png", CANVAS, overlay_rgb)
     title = TextSlot(id="title", content="ASH", zone=Zone(x=0.1, y=0.3, w=0.8, h=0.3),
@@ -678,12 +826,15 @@ def test_an_art_layer_drawn_after_text_paints_over_its_ink(tmp_path):
                      layers=[LayerRef(kind="text", ref="title"),
                             LayerRef(kind="art", ref="weave")])
 
-    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
 
-    # The overlay is opaque and full-canvas: drawn AFTER the title, it must
-    # fully occlude every pixel of ink the title would otherwise have put
-    # down — the title's own ink color appears NOWHERE in the final image.
-    assert set(image.getdata()) == {overlay_rgb}
+    # No amount of sideways nudging can save a full-canvas opaque overlay,
+    # so the guard degrades: title now draws ON TOP of the overlay instead
+    # of being buried by it — provably more than one color on the page.
+    assert len(set(image.getdata())) > 1
+    assert report.occlusion["title<-weave"] == 0.0
+    assert any("weave" in w and "title" in w and "instead of underneath" in w
+              for w in report.warnings)
 
 
 # ===========================================================================
@@ -752,6 +903,125 @@ def test_occlusion_guard_degrades_to_drawing_text_on_top_when_no_offset_clears_i
     assert any("focal" in w and "title" in w and "instead of underneath" in w
               for w in report.warnings)
     assert image.getpixel((54, 253)) == ImageColor.getrgb("#f5f1e8")
+
+
+# ===========================================================================
+# v2.2 wave, deliverable 3: line-gap snap (ArtSlot.snap == "line_gap") — an
+# ornament drawn immediately after a text layer centers itself in the
+# LARGEST real gap between that text's own fitted lines, instead of a fixed
+# anchor point that has no idea where the glyphs actually landed.
+# ===========================================================================
+
+def _round_blob_png(path: Path, size: tuple[int, int] = (100, 100),
+                    rgb: tuple[int, int, int] = (255, 255, 0)) -> None:
+    """A solid circle on a transparent field, margin clear of the source's
+    own edges — real per-pixel alpha variation (unlike a flat opaque
+    rectangle), so _degrade_opaque_focal's opaque-asset check never
+    intercepts this before the line-gap snap ever gets a turn."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(img).ellipse((5, 5, size[0] - 5, size[1] - 5), fill=(*rgb, 255))
+    img.save(path)
+
+
+def _two_line_title() -> TextSlot:
+    """A title whose own balanced-break search reliably lands on exactly
+    two lines at this CANVAS/zone/font combination ("ASH AND" / "HONEY") —
+    verified directly against typeset.fit_text, not just assumed, so a
+    future font-metric change that broke this assumption would fail the
+    test loudly rather than silently exercising the one-line fallback path
+    instead."""
+    return TextSlot(id="title", content="ASH AND HONEY",
+                    zone=Zone(x=0.1, y=0.25, w=0.8, h=0.35),
+                    font_family="Spectral", case="upper", valign="bottom",
+                    size_min=0.05, size_max=0.15, max_lines=2)
+
+
+def test_line_gap_snap_centers_a_small_ornament_in_the_gap_with_no_glyph_contact(tmp_path):
+    _round_blob_png(tmp_path / "ornament.png")
+    title = _two_line_title()
+    fit = typeset.fit_text(title, CANVAS)
+    assert len(fit.lines) == 2, fit.lines   # confirms the two-line premise
+    ink_boxes = [b for b in typeset.line_ink_boxes(title, fit, CANVAS) if b is not None]
+    expected_gap_center = (ink_boxes[0][3] + ink_boxes[1][1]) / 2.0
+
+    weave = ArtSlot(id="weave", asset="ornament.png", fit="contain", transparent=True,
+                   anchor=[0.5, 0.5], scale=0.03, snap="line_gap")
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[weave], scrims=[], text=[title],
+                     layers=[LayerRef(kind="text", ref="title"),
+                            LayerRef(kind="art", ref="weave")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    # Clean fit on the very first try: no nudge needed, zero measured
+    # contact with the title's own ink.
+    assert report.occlusion["title<-weave"] == 0.0
+    assert not any("weave" in w for w in report.warnings)
+
+    yellow = [(x, y) for y in range(CANVAS[1]) for x in range(CANVAS[0])
+             if image.getpixel((x, y))[:3] == (255, 255, 0)]
+    assert yellow, "the ornament never rendered at all"
+    ys = [y for _x, y in yellow]
+    xs = [x for x, _y in yellow]
+    measured_center = (min(ys) + max(ys)) / 2.0
+    assert abs(measured_center - expected_gap_center) <= 1.5
+    # Horizontal center follows the slot's own anchor.x, not the gap.
+    assert abs((min(xs) + max(xs)) / 2.0 - 0.5 * CANVAS[0]) <= 1.5
+
+    # Pixel-verified no glyph contact: not one ornament pixel coincides
+    # with a title glyph pixel (the title's own ink color never touches a
+    # yellow one — sampled by re-measuring the title's own mask directly).
+    ink_mask = typeset.text_mask(title, fit, CANVAS)
+    for x, y in yellow:
+        assert ink_mask.getpixel((x, y)) == 0, f"ornament pixel ({x},{y}) sits on glyph ink"
+
+
+def test_line_gap_snap_falls_back_to_just_below_the_last_baseline_for_one_line(tmp_path):
+    _round_blob_png(tmp_path / "ornament.png")
+    # Same zone/font as the two-line case, but short enough content that
+    # the fit search settles on a single line — no internal gap to snap
+    # into at all.
+    title = TextSlot(id="title", content="ASH", zone=Zone(x=0.1, y=0.25, w=0.8, h=0.35),
+                     font_family="Spectral", case="upper", valign="bottom",
+                     size_min=0.05, size_max=0.15, max_lines=2)
+    fit = typeset.fit_text(title, CANVAS)
+    assert len(fit.lines) == 1, fit.lines
+    ink_bottom = typeset.line_ink_boxes(title, fit, CANVAS)[0][3]
+
+    weave = ArtSlot(id="weave", asset="ornament.png", fit="contain", transparent=True,
+                   anchor=[0.5, 0.5], scale=0.03, snap="line_gap")
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[weave], scrims=[], text=[title],
+                     layers=[LayerRef(kind="text", ref="title"),
+                            LayerRef(kind="art", ref="weave")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert report.occlusion["title<-weave"] == 0.0
+    assert not any("weave" in w for w in report.warnings)
+
+    ys = [y for y in range(CANVAS[1]) for x in range(CANVAS[0])
+         if image.getpixel((x, y))[:3] == (255, 255, 0)]
+    # Below the last line's own ink, never overlapping or above it.
+    assert min(ys) >= ink_bottom
+
+
+def test_line_gap_snap_warns_and_falls_back_when_not_a_valid_sandwich(tmp_path):
+    # snap="line_gap" on a slot that ISN'T a contain-fit layer immediately
+    # after a non-empty text layer has nothing to snap against — documented
+    # fallback (drawn normally) plus a warning, the same convention
+    # corners/scatter already use for their own precondition failures.
+    _round_blob_png(tmp_path / "ornament.png")
+    weave = ArtSlot(id="weave", asset="ornament.png", fit="cover", snap="line_gap")
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_palette(), art=[weave], scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="weave")])
+
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert any("weave" in w and "snap" in w and "line_gap" in w
+              for w in report.warnings)
+    assert (255, 255, 0) in set(image.getdata())   # still drew something
 
 
 # ===========================================================================
@@ -850,15 +1120,20 @@ def test_dead_band_is_silent_when_ink_regularly_breaks_up_the_canvas(tmp_path):
 
 # -- frame-containment clamp (v2.1, owner-reported frame bleed) ---------------
 
-def _framed_spec(title_zone, title_content="AN EXTREMELY WIDE TITLE LINE"):
-    # Minimal hand-built spec: procedural ground + rule frame + one title.
+def _framed_spec(title_zone, title_content="AN EXTREMELY WIDE TITLE LINE",
+                 frame_procedural="rule_frame"):
+    # Minimal hand-built spec: procedural ground + a frame-family member +
+    # one title. `frame_procedural` defaults to the original "rule_frame"
+    # so every pre-existing caller keeps testing exactly what it always
+    # did; the v2.2 wave's frame-family clamp test sweeps every sibling
+    # through the same parameter.
     from docproof.cover.model import (ArtSlot, CoverSpec, LayerRef, TextSlot,
                                       Zone)
     return CoverSpec(
         archetype="big_type", concept_name="Frame Probe",
         rationale="frame clamp regression", palette=_TEST_PALETTE,
         art=[ArtSlot(id="background"),
-             ArtSlot(id="frame", procedural="rule_frame")],
+             ArtSlot(id="frame", procedural=frame_procedural)],
         scrims=[],
         text=[TextSlot(id="title", content=title_content,
                        zone=Zone(**title_zone), font_family="Spectral",
@@ -898,3 +1173,114 @@ def test_frame_clamp_refuses_to_crush_a_zone_and_warns(tmp_path):
     zone = dict(x=0.0, y=0.30, w=0.14, h=0.25)
     _, report = compose(_framed_spec(zone), tmp_path, canvas=CANVAS)
     assert any("rule frame" in w and "crush" in w for w in report.warnings)
+
+
+# ===========================================================================
+# v2.2 wave, deliverable 7: the frame family + interactions
+# ===========================================================================
+
+_FRAME_KINDS = ["rule_frame", "frame_hairline", "frame_thickthin",
+               "frame_corners", "frame_deco", "frame_octagon"]
+
+
+@pytest.mark.parametrize("kind", _FRAME_KINDS)
+def test_frame_clamp_triggers_on_every_frame_family_kind(tmp_path, kind):
+    # _frame_clamp_text's gating (generalized from "procedural == rule_frame
+    # literally" to ANY FRAME_PROCEDURAL_KINDS member) must fire for every
+    # sibling, not just the original rule_frame — all six share the exact
+    # same inset geometry, so an over-wide title zone gets clamped
+    # identically regardless of which one a spec actually draws.
+    zone = dict(x=0.02, y=0.30, w=0.96, h=0.25)
+    with_title, _ = compose(_framed_spec(zone, frame_procedural=kind), tmp_path, canvas=CANVAS)
+    without_title, _ = compose(
+        _framed_spec(zone, title_content="", frame_procedural=kind), tmp_path, canvas=CANVAS)
+    from docproof.cover.compose import _frame_inner_rect
+    from PIL import ImageChops
+    diff = ImageChops.difference(with_title.convert("RGB"), without_title.convert("RGB"))
+    fx, fy, fw, fh = _frame_inner_rect(CANVAS)
+    left = round(fx * CANVAS[0]); top = round(fy * CANVAS[1])
+    right = round((fx + fw) * CANVAS[0]); bottom = round((fy + fh) * CANVAS[1])
+    px = diff.load()
+    outside = [(x, y) for y in range(CANVAS[1]) for x in range(CANVAS[0])
+              if (x < left or x >= right or y < top or y >= bottom)
+              and px[x, y] != (0, 0, 0)]
+    assert outside == [], f"{kind}: title ink crossed the frame's own inner rect"
+    assert diff.getbbox() is not None   # and it genuinely rendered somewhere
+
+
+def test_apply_frame_notches_erases_only_inside_the_padded_target_bbox():
+    from docproof.cover.compose import _apply_frame_notches, _NOTCH_PAD_FRACTION
+
+    canvas = CANVAS
+    frame_slot = ArtSlot(id="frame", procedural="rule_frame", notch_for="emblem")
+    target_slot = ArtSlot(id="emblem")
+    art_by_id = {"frame": frame_slot, "emblem": target_slot}
+
+    frame_rgb = (201, 162, 39)
+    frame_img = Image.new("RGBA", canvas, (*frame_rgb, 255))
+    target_img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    box = (150, 250, 250, 350)
+    ImageDraw.Draw(target_img).rectangle(box, fill=(255, 255, 255, 255))
+    positioned = {"frame": frame_img, "emblem": target_img}
+    warnings: list[str] = []
+
+    _apply_frame_notches(positioned, art_by_id, canvas, warnings)
+
+    result = positioned["frame"]
+    alpha = result.getchannel("A")
+    cw, ch = canvas
+    pad_x = round(_NOTCH_PAD_FRACTION * cw)
+    pad_y = round(_NOTCH_PAD_FRACTION * ch)
+
+    # Absent (fully erased) well inside the padded hole.
+    assert alpha.getpixel(((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)) == 0
+    # Absent right at the box's own edge too (the pad only grows the hole).
+    assert alpha.getpixel((box[0] + 2, box[1] + 2)) == 0
+    # Present just outside the padded hole on every side.
+    assert alpha.getpixel((box[0] - pad_x - 3, (box[1] + box[3]) // 2)) == 255
+    assert alpha.getpixel((box[2] + pad_x + 3, (box[1] + box[3]) // 2)) == 255
+    assert alpha.getpixel(((box[0] + box[2]) // 2, box[1] - pad_y - 3)) == 255
+    assert alpha.getpixel(((box[0] + box[2]) // 2, box[3] + pad_y + 3)) == 255
+    # Present far away from the notch entirely.
+    assert alpha.getpixel((10, 10)) == 255
+
+
+def test_frame_notch_composes_end_to_end_around_an_overlapping_emblem(tmp_path):
+    # The interaction move end to end: a frame_octagon slot notched around
+    # an emblem drawn later in z-order (so the notch mechanism has to see
+    # past the single-forward-pass ordering constraint — see
+    # _apply_frame_notches' own docstring) — frame lines vanish under the
+    # emblem's own footprint, survive everywhere else.
+    _round_blob_png(tmp_path / "emblem.png", (140, 140))
+    frame = ArtSlot(id="frame", procedural="frame_octagon", notch_for="emblem")
+    emblem = ArtSlot(id="emblem", asset="emblem.png", fit="contain", transparent=True,
+                     anchor=[0.5, 0.5], scale=0.30)
+    spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                     palette=_TEST_PALETTE, art=[frame, emblem], scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="frame"),
+                            LayerRef(kind="art", ref="emblem")])
+
+    notched, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+    plain_spec = CoverSpec(archetype="synthetic", concept_name="t", rationale="t",
+                           palette=_TEST_PALETTE,
+                           art=[ArtSlot(id="frame", procedural="frame_octagon")],
+                           scrims=[], text=[],
+                           layers=[LayerRef(kind="art", ref="frame")])
+    plain, _ = compose(plain_spec, tmp_path, canvas=CANVAS)
+
+    # Somewhere under the emblem's own footprint, the notched frame's pixel
+    # differs from the plain (un-notched) frame's — proof the notch
+    # actually erased something there, not just a no-op.
+    cw, ch = CANVAS
+    cx, cy = cw // 2, ch // 2
+    span = round(0.30 * ch) // 2
+    differs = any(
+        notched.getpixel((x, y)) != plain.getpixel((x, y))
+        for y in range(max(0, cy - span), min(ch, cy + span))
+        for x in range(max(0, cx - span), min(cw, cx + span)))
+    assert differs, "no pixel difference under the emblem — the notch did nothing"
+
+    # And far from the emblem, in a corner well outside any notch pad, the
+    # frame reads identically whether notched or not.
+    assert notched.getpixel((2, 2)) == plain.getpixel((2, 2))

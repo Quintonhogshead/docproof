@@ -335,6 +335,82 @@ def _render_line(line: str, font: ImageFont.FreeTypeFont, tracking_px: float,
     return layer
 
 
+def _block_top(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]
+              ) -> float:
+    """Where the fitted block's own top edge lands, in canvas px — the one
+    piece of geometry draw_text, text_mask, and line_boxes all need
+    identically (same valign branch, same zone/line-height math), factored
+    out once so the three can never quietly drift apart. `fit.lines` must
+    be non-empty; callers already guard the empty case themselves (an
+    empty block has no top to speak of)."""
+    _, zone_top, _, zone_h_px = zone_px(slot.zone, canvas_size)
+    line_h = fit.size_px * LINE_HEIGHT
+    block_h = line_h * len(fit.lines)
+    if slot.valign == "top":
+        return float(zone_top)
+    if slot.valign == "bottom":
+        return zone_top + zone_h_px - block_h
+    return zone_top + (zone_h_px - block_h) / 2.0
+
+
+def line_boxes(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]
+              ) -> tuple[tuple[float, float], ...]:
+    """Every fitted line's NOMINAL (top, bottom) span in canvas px — the
+    line-height grid draw_text/text_mask actually lay glyphs out on, sharing
+    their exact block-positioning math via _block_top so a caller reasoning
+    about line position always agrees with where ink was actually drawn.
+    Adjacent boxes are contiguous by construction (line i's bottom is line
+    i+1's top) — this is the STRIDE grid, not real ink extent; a caller
+    that wants the actual whitespace between two lines' own glyphs (as
+    opposed to the nominal leading between their line-height rows) wants
+    line_ink_boxes instead. Empty when `fit.lines` is empty (nothing fit —
+    e.g. an empty optional slot)."""
+    if not fit.lines:
+        return ()
+    line_h = fit.size_px * LINE_HEIGHT
+    top = _block_top(slot, fit, canvas_size)
+    return tuple((top + line_h * i, top + line_h * (i + 1))
+                for i in range(len(fit.lines)))
+
+
+def line_ink_boxes(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]
+                   ) -> tuple[tuple[int, int, int, int] | None, ...]:
+    """Every fitted line's OWN glyph ink bbox (left, top, right, bottom) in
+    canvas px — rendered exactly like text_mask's own per-line loop, but
+    kept separate rather than unioned into one mask, so a caller (the
+    line-gap snap, v2.2 wave deliverable 3) can measure the REAL
+    whitespace between two consecutive lines' actual ink — which varies
+    line to line with whether either has ascenders/descenders — rather than
+    the nominal, uniform line-height stride line_boxes describes. One entry
+    per fitted line, in order; None for any line whose own render has no
+    ink at all (a blank line, which _best_break shouldn't produce but
+    draw_text/text_mask both defensively skip too)."""
+    canvas_w, canvas_h = canvas_size
+    if not fit.lines:
+        return ()
+    zone_left, _, zone_w_px, _ = zone_px(slot.zone, canvas_size)
+    font = ImageFont.truetype(font_path(slot.font_family), max(1.0, fit.size_px))
+    line_h = fit.size_px * LINE_HEIGHT
+    top = _block_top(slot, fit, canvas_size)
+
+    stroke_w_px = 0
+    if slot.stroke is not None and slot.stroke.width > 0:
+        stroke_w_px = max(1, round(slot.stroke.width * canvas_h))
+
+    white = (255, 255, 255)
+    boxes: list[tuple[int, int, int, int] | None] = []
+    for i, line in enumerate(fit.lines):
+        if not line:
+            boxes.append(None)
+            continue
+        row_center_y = top + line_h * (i + 0.5)
+        layer = _render_line(line, font, fit.tracking_px, white, zone_left,
+                             zone_w_px, row_center_y, slot.align, stroke_w_px,
+                             white if stroke_w_px else None, canvas_size)
+        boxes.append(layer.getchannel("A").getbbox())
+    return tuple(boxes)
+
+
 def draw_text(base: Image.Image, slot: TextSlot, fit: FitResult, color: str,
              shadow: Shadow | None, canvas_size: tuple[int, int]) -> Image.Image:
     """Draw one resolved text slot onto `base`, returning a new composited
@@ -353,13 +429,7 @@ def draw_text(base: Image.Image, slot: TextSlot, fit: FitResult, color: str,
     zone_left, zone_top, zone_w_px, zone_h_px = zone_px(slot.zone, canvas_size)
     font = ImageFont.truetype(font_path(slot.font_family), max(1.0, fit.size_px))
     line_h = fit.size_px * LINE_HEIGHT
-    block_h = line_h * len(fit.lines)
-    if slot.valign == "top":
-        block_top = float(zone_top)
-    elif slot.valign == "bottom":
-        block_top = zone_top + zone_h_px - block_h
-    else:
-        block_top = zone_top + (zone_h_px - block_h) / 2.0
+    block_top = _block_top(slot, fit, canvas_size)
 
     stroke_w_px = 0
     stroke_rgb = None
@@ -417,13 +487,7 @@ def text_mask(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]) -> I
     zone_left, zone_top, zone_w_px, zone_h_px = zone_px(slot.zone, canvas_size)
     font = ImageFont.truetype(font_path(slot.font_family), max(1.0, fit.size_px))
     line_h = fit.size_px * LINE_HEIGHT
-    block_h = line_h * len(fit.lines)
-    if slot.valign == "top":
-        block_top = float(zone_top)
-    elif slot.valign == "bottom":
-        block_top = zone_top + zone_h_px - block_h
-    else:
-        block_top = zone_top + (zone_h_px - block_h) / 2.0
+    block_top = _block_top(slot, fit, canvas_size)
 
     stroke_w_px = 0
     if slot.stroke is not None and slot.stroke.width > 0:
@@ -443,5 +507,5 @@ def text_mask(slot: TextSlot, fit: FitResult, canvas_size: tuple[int, int]) -> I
 
 
 __all__ = ["FIT_ITERATIONS", "LINE_HEIGHT", "MAX_BRUTE_WORDS",
-          "RAQM_AVAILABLE", "FitResult", "draw_text", "fit_text", "measure",
-          "text_mask"]
+          "RAQM_AVAILABLE", "FitResult", "draw_text", "fit_text",
+          "line_boxes", "line_ink_boxes", "measure", "text_mask"]

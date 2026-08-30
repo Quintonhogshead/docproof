@@ -202,14 +202,30 @@ def test_run_directions_system_prompt_states_the_symbolic_object_doctrine():
 
 def test_run_directions_system_prompt_prefers_illustrated_media_over_photoreal():
     # §6.3's one-line addition to the §6.1 prompt: stylized media hide
-    # generation artifacts, so it should steer away from photorealism unless
-    # the brief itself asks for photography.
+    # generation artifacts, so it should steer away from photorealism.
+    # v2.2 wave: the flat "unless the brief asks for photography" escape
+    # hatch was replaced with a conditional-on-treatment one — a
+    # photographic prompt is permitted only when paired with the
+    # photo_soft/duotone/silhouette treatment, never bare.
     provider = FakeProvider(
         results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
     run_directions(_brief(), provider, n=2)
     system = provider.calls[0]["system"]
     assert "Prefer illustrated, painterly, or graphic media" in system
-    assert "only when the brief explicitly calls for photography" in system
+    assert 'permitted ONLY when paired with treatment: "photo_soft"' in system
+    assert 'untreated (treatment: "none") photographic prompt is never allowed' in system
+
+
+def test_run_directions_system_prompt_effects_rack_names_photo_soft():
+    # The effects-rack enumeration paragraph must also name photo_soft
+    # alongside the other four treatments, or a model reading only that
+    # paragraph would never learn it exists.
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    system = provider.calls[0]["system"]
+    assert '"photo_soft"' in system
+    assert "makes a photographic or photoreal prompt allowed at all" in system
 
 
 # -- de-muting doctrine, image-simplicity hierarchy, container device -------
