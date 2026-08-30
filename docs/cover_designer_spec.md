@@ -27,6 +27,8 @@ The unit of work is a **CoverSpec** — a JSON document describing everything ab
 - **CoverSpec** — the full renderable document for one direction (Direction + resolved zones + text slots + layer stack).
 - **Archetype** — a parametric layout template (data, not code): layer order, text zones, fitting rules.
 - **Job** — one book's cover session: brief → N directions → renders → revisions. Persisted on disk.
+- **Adjust layer** (§15) — a layer that owns no pixels of its own: it transforms the composite below it (grade, gradient map, bloom, vignette, blur, color wash), optionally through a mask.
+- **Recipe** (§15) — a named finishing stack (config data): 5–10 adjust/texture/light layers appended above everything, including the type. How a spec reaches 20–30 layers without a model authoring each one.
 
 ## 2. Repo context you must know
 
@@ -498,3 +500,305 @@ Do not build. Do keep these invariants so the later phase is additive:
 ## 14. Out of scope (v1)
 
 Inpainting/mask edits; upscaling; print wrap and PDF output; IDML export; layered-PNG bundle export; font-library expansion; Spell & Check consumer-facing skinning of this tool (an "Illuminator" party member is a later product decision); accounts, Stripe, email delivery; persistent spec-version history beyond the render strip.
+
+## 15. Deep-stack wave — the full layer engine (DRAFTED 2026-08-30, direction approved by owner; sub-decisions marked)
+
+This section specs the wave against the CODE as it stands at v2.2 (widened slot ids, effects rack, texture shelf, patch-edit revisions, iterating critique), not against §4's launch-era snapshot — earlier sections are historical record; where they disagree with shipped code, the code wins.
+
+### 15.0 Why: the census of a real cover PSD
+
+A professional cover file is 20–30 layers, and the count is not more *content* — it is that most layers are **non-content**. Census of a typical trad-shelf jacket:
+
+| Bucket | Typical count | What it is | Cover Studio v2.2 |
+|---|---|---|---|
+| Content | ~5 | background plate, figure, props, type | ✅ have (art slots, text slots) |
+| Adjustment layers | 6–10 | curves/levels, gradient maps, color balance, selective saturation — usually masked. **What unifies an assembled collage into one image.** | ❌ none |
+| Light & atmosphere | 4–6 | radial glows, rim light, fog banks between depth planes, light leaks, dodge/burn | ❌ none |
+| Layer styles (clipped) | 2–5 per type layer | stacked shadows (tight dark + wide soft), inner shadow, glows, bevel, gradient/foil fill *inside* the glyphs | ⚠️ one shadow + one stroke |
+| Masks | pervasive | gradient masks blending two plates into one scene; region-scoping a grade | ⚠️ alpha-from-another-slot only |
+| Finishing group **over the type** | 3–4 | grain + vignette + global grade on top of everything — what makes type read as printed into the artwork, not pasted on | ❌ grain sits under text |
+
+The wave closes those four gaps — plus four owner adds (2026-08-30, mid-draft): a **balance & symmetry engine** (§15.10 — "good symmetry / visually pleasing" has been the consistent live failure), **font-library expansion** (§15.11, superseding §14's deferral), **expressive typography** (§15.12 — let the model be inventive with text), and a **masking doctrine** (§15.13 — machinery alone doesn't make the model reach for masks). Design constraints, non-negotiable:
+
+1. **Extend, don't rebuild.** `layers` is already an explicit bottom-first z-list that `render_upto()` replays deterministically; every new capability is a new layer kind or a new field, never a new render architecture.
+2. **Byte-identical default path.** A spec that uses none of the new fields renders the exact bytes it rendered before the wave. Proven by a golden-bytes test (§15.10), same discipline as the per-category-passes wave.
+3. **Pure Pillow, $0, deterministic.** No numpy, no new deps. Every op below is point-LUT / ImageChops / ImageMath / GaussianBlur arithmetic. Fixed seeds only (`_GRAIN_SEED` discipline).
+4. **The schema is revision territory.** Everything lands as CoverSpec fields so §6.2 patch edits reach it for free. Wire safety: the revision wire schema is `SpecEdits` (tiny, unchanged) and the direction wire schema grows only one closed-Literal `recipe` field — no schema-size risk (the §6.2 grammar-compiler limit is about full-CoverSpec echo, which nothing here reintroduces).
+5. **No nested groups (DECIDED in draft).** PSD-style layer groups are rejected: masks + clipped effects + recipes deliver ~90% of a group's value, and a flat list keeps `SpecEdits` dotted paths, `_layers_resolve`, and the whole validator family simple. Revisit only if a real cover proves impossible flat.
+
+### 15.1 Blend modes
+
+Widen every `blend` Literal (ArtSlot, and AdjustLayer below) from `normal|multiply|overlay|soft_light` to add: `screen`, `add`, `lighten`, `darken`, `color_dodge`.
+
+- `screen`/`add`/`lighten`/`darken` are one-line `ImageChops` calls (`screen`, `add`, `lighter`, `darker`).
+- `color_dodge` (the "light pops" mode — glows, leaks, foil glints) has no ImageChops op: implement per band via `ImageMath` (`min(255, a * 256 / (256 - b))`), converting to bands and merging. Deterministic; cost is three band evals at canvas size, milliseconds.
+- `hue`/`color`/`luminosity` are **deferred** (per-pixel HSL math is where pure Pillow gets ugly; nothing in the recipe roster below needs them). Note the deferral in a comment where the Literal is defined.
+
+Blending happens where it already happens (the one composite step in the layer walk); a blend-mode function table in the new `effects.py` (§15.9) replaces the current inline if/elif so art layers, adjust layers, and clipped overlays all share one implementation.
+
+### 15.2 Masks as first-class
+
+New model, attachable to any pixel-owning or adjust layer:
+
+```python
+class GradientMask(BaseModel):
+    kind: Literal["linear", "radial"] = "linear"
+    angle: float = 90.0            # linear: degrees, 90 = top-transparent→bottom-opaque
+    center: list[float] = [0.5, 0.5]   # radial: fraction center
+    start: float = 0.0             # fraction along the ramp where alpha begins rising
+    end: float = 1.0               # fraction where alpha reaches 1.0
+
+class MaskSpec(BaseModel):
+    from_layer: str = ""           # an art slot id — that slot's POSITIONED alpha
+    gradient: GradientMask | None = None
+    luminance_of: str = ""         # an art slot id — that slot's positioned luminance as alpha
+    invert: bool = False
+```
+
+- `ArtSlot` gains `mask: MaskSpec | None = None`. The existing `ArtSlot.mask_from` **stays** and folds into `mask.from_layer` at validation when `mask` is unset (sugar; old specs untouched — same fold pattern §15.4 uses for Shadow/Stroke). Setting both `mask_from` and `mask` is a validation error.
+- `AdjustLayer` (§15.3) carries `mask: MaskSpec | None` — this is how a grade affects only the top third, how blur becomes depth-of-field.
+- Combination rule when multiple sources are set: multiply them together; `invert` applies last. Validation: `from_layer`/`luminance_of` must name a real art slot; `from_layer` inherits `_mask_from_precedes`' ordering rule, `luminance_of` needs existence only (positioned pixels are computed up front — `_text_mask_from_resolves`' reasoning).
+- Implementation: gradient masks are smooth by definition — synthesize at 25% scale and Lanczos-upsample, the `_GRAIN_SCALE` discipline. `start`/`end` remap the ramp (both 0..1, `start < end` validated).
+- **Why this field earns its place:** a gradient mask on an art slot is how two plates blend into one scene (sky plate fading into texture plate — the collage move every full-bleed PSD uses); a gradient mask on a grade is a designer's most common adjustment gesture.
+
+### 15.3 Adjust layers
+
+New model + new `LayerRef.kind` `"adjust"` + `CoverSpec.adjust: list[AdjustLayer] = []`. An adjust layer owns no pixels: when the layer walk reaches it, compute `op` over the **current composite** and blend the result back through `mask` × `opacity`:
+
+`result = composite × (1 − m·opacity) + op(composite) × (m·opacity)` — for `blend="normal"`; `color_wash` is the one op that composites a solid fill *as a layer* using the full §15.1 blend table instead.
+
+```python
+class AdjustLayer(BaseModel):
+    id: str                        # _SLOT_ID_RE slug; shares the art-slot id namespace
+                                   # (validator: no collision with any ArtSlot.id)
+    op: Literal["grade", "gradient_map", "color_wash", "vignette", "bloom", "blur"]
+    opacity: float = 1.0
+    blend: Literal[...] = "normal" # §15.1 table; read by color_wash only
+    mask: MaskSpec | None = None
+    # -- flat per-op params (strict-schema rule: no dicts on any wire) --------
+    brightness: float = 0.0        # grade: -1..1 → ImageEnhance factor 1+v
+    contrast: float = 0.0          # grade: -1..1
+    saturation: float = 0.0        # grade: -1..1 (ImageEnhance.Color)
+    temperature: float = 0.0       # grade: -1..1 warm↔cool; linear R+/B- point LUT,
+                                   # max shift ~±24/255 at |1| (exact constant
+                                   # IMPLEMENTER'S CHOICE, comment it)
+    stops: list[str] = []          # gradient_map: 2–3 entries, each a PaletteRole name
+                                   # OR a #rrggbb hex; luminance → interpolated ramp
+    color: str = ""                # color_wash/vignette ink: role name or hex; "" = scrim role
+    strength: float = 0.5          # vignette/bloom amount, 0..1
+    radius: float = 0.02           # bloom/blur: Gaussian radius as fraction of canvas height
+    threshold: float = 0.75        # bloom: relative luminance above which pixels glow
+```
+
+Fields not read by the chosen `op` are ignored (validated-but-inert — deliberately forgiving so a patch edit changing `op` can't strand the spec in an invalid state).
+
+Implementation notes, all pure Pillow:
+
+- `grade`: `ImageEnhance.Brightness/Contrast/Color` with factor `1+v`; temperature via per-band `point()` LUTs.
+- `gradient_map`: luminance ramp — convert composite to `"L"`, then `ImageOps.colorize(l, black=stop0, white=stop-1, mid=stop1-if-3)`. One line, and it is the single most cover-defining move in the whole wave (whole-composite duotones, teal-orange, sepia).
+- `color_wash`: solid fill of `color` composited with `blend`+`opacity` (+mask). Covers dodge/burn painting when masked.
+- `vignette`: full-canvas radial multiply toward `color`, `strength`-scaled — reuse the scrim vignette ramp math at canvas scope.
+- `bloom`: threshold the luminance (`point`), blur at `radius`, `screen` back at `strength`. The "it's lit, not flat" op.
+- `blur`: `GaussianBlur(radius)` selected through the mask (`Image.composite(blurred, composite, m)`) — with a gradient mask this is depth-of-field.
+
+Validators: `_layers_resolve` extends to `kind="adjust"` (ref must name an `adjust` entry); `stops` length 2–3, each a valid role or hex; `radius`/`strength`/`threshold` ranges.
+
+### 15.4 Effect stacks (layer styles)
+
+Generalize per-layer styling from "one Shadow + one Stroke, text only" to an ordered stack on **both** TextSlot and ArtSlot:
+
+```python
+class Effect(BaseModel):
+    kind: Literal["drop_shadow", "inner_shadow", "outer_glow", "inner_glow",
+                  "bevel", "gradient_overlay", "texture_overlay", "stroke"]
+    # flat params, same forgiving-fields rule as AdjustLayer:
+    dx: float = 0.0; dy: float = 0.004   # shadows: fraction of canvas height
+    blur: float = 0.006                  # shadows/glows
+    color: str = ""                      # role or hex; "" = kind-appropriate default
+                                         # (shadows #000000, glows accent role)
+    alpha: float = 0.55
+    width: float = 0.004                 # stroke/bevel depth, fraction of canvas height
+    stops: list[str] = []                # gradient_overlay: 2–3 role-or-hex stops
+    angle: float = 90.0                  # gradient_overlay ramp direction
+    texture_file: str = ""               # texture_overlay: a TEXTURES shelf name (validated)
+    blend: Literal[...] = "normal"       # overlays only
+    opacity: float = 1.0                 # overlays only
+```
+
+- `TextSlot.effects: list[Effect] = []`, `ArtSlot.effects: list[Effect] = []`. **Same kind may repeat** — stacking a tight dark drop shadow under a wide soft one is the pro type move this whole subsection exists for.
+- Back-compat fold: `TextSlot.shadow`/`stroke` stay as fields. When `effects` is empty, compose reads them exactly as today (byte-identical path). When `effects` is non-empty, a validator folds `shadow`→front / `stroke`→back of the stack so there is exactly one code path through the effects engine.
+- **Paint order semantics** (fixed, documented in the model): the engine splits the stack into *under* effects (`drop_shadow`, `outer_glow` — painted beneath the layer's own pixels, in stack order) and *over* effects (`inner_shadow`, `inner_glow`, `bevel`, `gradient_overlay`, `texture_overlay`, `stroke` — applied clipped to the layer's alpha, in stack order, after the fill).
+- Implementations (each a small function in `effects.py`, operating on a positioned RGBA layer):
+  - `inner_shadow`: invert alpha, offset, blur, intersect with alpha (`ImageChops.multiply`), paint `color` at result.
+  - `outer_glow`: blur the alpha, subtract the original alpha (glow lives *outside* the shape), colorize, composite under.
+  - `bevel`: the cheap emboss — light copy offset toward the top-left edge of the alpha, dark copy toward bottom-right, both thin (`width`) and blurred; screen/multiply respectively, clipped to alpha.
+  - `gradient_overlay`: build the ramp across the layer's alpha bbox at `angle`, `Image.composite` it over the fill through alpha, at `opacity`. **With metallic stops this is the foil title.**
+  - `texture_overlay`: shelf plate cover-fit to the alpha bbox, clipped to alpha, blended at `blend`/`opacity` — grunge-in-the-letters, foil grain, linen type.
+- The legibility autopilot's automatic busy-backdrop Shadow keeps writing to `TextSlot.shadow` (not `effects`) — the fold makes that composable with a designed stack instead of conflicting with it.
+
+### 15.5 Light & atmosphere procedural bank
+
+Widen `ArtSlot.procedural` with: `radial_glow`, `light_leak`, `fog_gradient`, `rays`, `bokeh`, `dust`, `scratches`, `stars`. These are ordinary art slots (usually `blend: screen|overlay|soft_light`, low opacity) — no new layer kind. Each synth:
+
+- Extends the existing `_synth_*` signature to receive the ArtSlot, and reads **only** existing slot fields for parameters: `anchor` = center (glow, rays origin, fog band y), `scale` = size/extent, `opacity`/`blend` = as ever. No new per-synth param fields in v1 — the zero-param philosophy that keeps the procedural Literal a closed, judge-explainable menu.
+- Is fixed-seed (`_synth_seed(version, slot_id, name)`, exactly like `speckle`), generated at ≤25% scale where smooth, full-res where crisp (`stars`, `scratches`).
+- Palette-derived inks only: glow/leak from `accent` warmed toward white, fog from `background` lightened, dust/scratches near-`text`-color at low alpha. No new color fields.
+
+`rim_light` behind a focal cutout is explicitly **not** a synth: it is `outer_glow` on the focal ArtSlot's own `effects` (§15.4) — one mechanism, not two.
+
+### 15.6 Finishing recipes (`config/cover/recipes/*.yaml` + `docproof/cover/recipes.py`)
+
+The force-multiplier: a **recipe** is a named, researched finishing stack that expands into real spec layers at `build_spec` time. This is how a spec reaches 25 layers with the model choosing one word.
+
+```yaml
+name: vintage_matte
+describe: >-
+  Sun-faded trade paperback: lifted blacks, warm wash, paper tooth, corner
+  shading, soft grain. Literary, memoir, historical.
+finish:                       # appended ABOVE the whole stack, text included, in order
+  - adjust: {id: fx_lift,  op: grade, brightness: 0.05, contrast: -0.12, saturation: -0.10}
+  - adjust: {id: fx_warm,  op: grade, temperature: 0.30}
+  - art:    {id: fx_paper, texture_file: paper_tooth, texture_fit: tile, opacity: 0.12, blend: multiply}
+  - adjust: {id: fx_vign,  op: vignette, strength: 0.28}
+  - art:    {id: fx_grain, procedural: grain, opacity: 0.05, blend: overlay}
+```
+
+- **Expansion, not indirection (DECIDED in draft):** `build_spec` instantiates each entry through the real `ArtSlot`/`AdjustLayer` models, appends them to `spec.art`/`spec.adjust`, and appends their LayerRefs at the top of `spec.layers`. The spec stays fully self-contained — the archival guarantee ("spec + assets = pixels forever") never depends on a recipe file existing later, and §6.2 patch edits reach every expanded layer individually (the judge can say "halve fx_grain" and it is an ordinary one-field edit).
+- The `fx_` id prefix is reserved for recipe-expanded layers (validator: hand-authored archetype slots may not use it), purely so humans and the judge can see at a glance which layers are finishing.
+- `recipes.py` is a foundation-layer module (the `textures.py` pattern): loads YAML into `RECIPES: dict[str, dict]` with shallow checks (name/describe/finish present), exposes `describe_recipes()`. Deep validation happens at `build_spec` when entries hit the real models — a malformed shipped recipe fails its own unit test loudly. This ordering avoids a model.py↔recipes.py import cycle: model.py imports only the name list (for the closed `recipe` Literal via the `create_model` font trick).
+- `Direction.recipe: str = ""` (closed Literal, `""` = none) — the art-direction call picks it. Archetype YAML may declare a default `recipe:` used when the direction stays silent; direction wins on conflict. Revisions may change `spec`-level layers freely; swapping the *whole* recipe post-build is expressed as ordinary layer edits (no re-expansion machinery in v1).
+- **Roster (OPEN — owner review; ship 6–8, each grounded in `docs/cover_template_research.md` conventions rather than invented):** `vintage_matte` (above), `cinematic_duotone` (gradient_map on background+primary, bloom, grain — thriller/scifi), `dark_academia` (desaturate, warm temperature, heavy vignette, dust — romantasy/gothic), `airbrushed_glow` (bloom, radial_glow, +saturation — romance/romcom), `pulp_print` (halftone plate, hard gradient_map, speckle — retro/cozy), `midnight_neon` (cool grade, color_dodge radial_glow, bloom — scifi/urban), `quiet_literary` (whisper grain, −saturation, gentle vignette — the tasteful default), plus `""`.
+
+### 15.7 Legibility autopilot × finishing (the one real interaction)
+
+The autopilot samples the composite **at text-draw time**; a finishing stack above the text can afterwards change the contrast it approved. Required remedy, deterministic and bounded:
+
+1. After the full stack renders, re-measure every text slot's contrast ratio against the **final** composite (same WCAG math, same thresholds).
+2. A slot that now fails triggers, in order: (a) one more scrim-escalation replay pass (the `render_upto` machinery already supports "something changed, replay"); (b) the existing two-ink flip; (c) **finishing attenuation** — halve the `opacity` of `fx_`-prefixed layers above that slot, top-down, re-rendering after each, until the slot passes or every finishing layer is at ≤0.05.
+3. Every attenuation lands in `RenderReport.warnings` (`"fx_grain halved to 0.03 to keep author line legible"`) — the judge then sees real measurements, per §6.3's `composer_warnings` channel.
+
+The dead-band metric and the occlusion/contact guards keep running **before** the finishing group is applied — they measure design geometry, not grade, and a vignette must never mask a dead band from the metric.
+
+### 15.8 Direction, revision, critique vocabulary
+
+Moved: the owner adds (§15.10–15.13) each carry prompt vocabulary of their own, so the model-call changes are consolidated in **§15.14** rather than split across two sections.
+
+### 15.9 File plan & engineering constraints
+
+| Path | Change |
+|---|---|
+| `docproof/cover/effects.py` | **New.** Pure pixel ops, no opinions: the blend-mode table, mask synthesis, the six adjust ops, the eight layer-style effects. Imports model.py, never compose.py (typeset.py's own rule). |
+| `docproof/cover/recipes.py` | **New.** Foundation-layer YAML loader (§15.6). |
+| `docproof/cover/model.py` | `MaskSpec`, `GradientMask`, `AdjustLayer`, `Effect`; new fields on ArtSlot/TextSlot/CoverSpec/Direction; validators (§15.2–15.6). |
+| `docproof/cover/compose.py` | Layer walk gains `kind="adjust"`; effect-stack invocation around text/art painting; final-composite legibility re-check (§15.7); blend table moves out to effects.py; calls the balance pass (§15.10). |
+| `docproof/cover/balance.py` | **New.** The balance & symmetry engine (§15.10): axis snap, rail snap, mirror/mass/margin/rhythm measurements. Imports model.py only. |
+| `docproof/cover/typeset.py` | §15.12: justify_stack fit, arc baselines, rotation, emphasis runs. |
+| `docproof/cover/fonts.py` + `config/cover/fonts/` | §15.11: registry grows role tags + style companions; new cover-owned font directory (prep's 10 stay where they are and stay registered). |
+| `docproof/cover/direction.py`, `critique.py` | §15.14 prompt additions. |
+| `config/cover/recipes/*.yaml` | The roster (§15.6). |
+| `config/cover/archetypes/*.yaml` | Retrofit 2–3 (IMPLEMENTER'S CHOICE which, e.g. thriller + romantasy + full_bleed_art) with designed effect stacks and a default recipe; every archetype gains an `axis` declaration (§15.10); 1–2 new mask-forward templates (§15.13). |
+| `pyproject.toml` | package-data: `"config.cover.recipes" = ["*.yaml"]`, `"config.cover.fonts" = ["*.ttf", "*.txt", "*.md"]`. |
+| `docproof/__init__.py` | Version bump per PR. |
+
+Memory (512MB box): the walk stays in-place — one composite buffer mutated layer by layer; an adjust op holds at most 2–3 transient full-canvas buffers (~16MB each at 1600×2560 RGBA); effect stacks render per layer and free before the next. A 30-layer spec peaks well under 100MB; the compose asyncio.Lock (§7.4) already serializes renders. Masks and smooth synths generate at 25% scale.
+
+### 15.10 Balance & symmetry engine (`docproof/cover/balance.py`)
+
+The consistent live failure: covers that are *almost* right — a title 2% off the center axis, two left-aligned blocks on slightly different rails, one half of the canvas visibly heavier. Humans read these instantly as amateur; no prompt fixes them reliably. So this is code, in the house shape: **measure the current canvas, snap what's snappable, report the rest as numbers the judge can act on.**
+
+**Axis declaration.** Every archetype YAML gains `axis: Literal["center", "left", "right"] = "center"` (fraction rail via `axis_x: float` for left/right, default 0.08/0.92). `build_spec` copies it onto the spec (`CoverSpec.axis`, `axis_x`) so revisions can change it.
+
+**Snap pass** (deterministic, runs after positioning, before finishing):
+
+- *Axis snap:* for every text slot and every contain-fit art layer, measure the ink-bbox center (center axis) or edge (left/right rail). Within **1.5% of canvas width** of the axis but not exactly on it → translate the layer onto it exactly. Off by more than that, leave it — it reads as intentional asymmetry, and §15.10's job is killing near-misses, not enforcing centering.
+- *Rail snap:* collect the leading-edge insets of all same-aligned text slots; any pair within 1.5% of each other but unequal snaps to the topmost slot's rail. Same for trailing edges of right-aligned sets.
+- *Gap rhythm:* measure vertical ink gaps between adjacent stacked text slots; two gaps within 20% of each other but unequal get a warning only (`"title→subtitle gap 3.1%, subtitle→author 3.8% — consider equalizing"`). No auto-move in v1: vertical position interacts with zones, scrims, and the occlusion guards, and a wrong vertical snap is worse than a reported near-miss.
+- Every snap is logged to `RenderReport.warnings`-adjacent info (a new `RenderReport.adjustments: list[str]`) so "why did it move" is never a mystery.
+
+**Balance measurements** (reported, never auto-fixed — these are taste calls the judge arbitrates):
+
+- *Mirror symmetry score:* mean abs luminance difference between the composite and its horizontal flip, inverted to 0..1. Reported always; for `axis="center"` specs scoring < 0.55, a warning names the heavier half by ink mass (`"right half carries 63% of visual weight"`).
+- *Visual center of mass:* luminance-weighted centroid; warn when horizontally > 6% off the axis.
+- *Margin audit:* min ink distance to each canvas edge per element; warn on any element closer than 2% to a trim edge (unless it is a bleed layer — `fit="cover"` art is exempt).
+
+All of it flows into §6.3's `composer_warnings` channel, and the judge prompt (§15.14) gains balance tells — the judge stops eyeballing symmetry and starts reading measurements, exactly the `composer_warnings` doctrine that fixed the legibility loop.
+
+**Tests:** a slot 1% off-center snaps and the adjustment is recorded; a slot 5% off-center does not; two rails 0.8% apart unify; symmetry score is 1.0 for a mirrored fixture and low for a lopsided one; heavier-half attribution correct on a constructed fixture; exempt cover-fit art doesn't trigger margin warnings.
+
+### 15.11 Font library expansion (`fonts.py` + `config/cover/fonts/`) — supersedes §14's deferral
+
+Ten families cannot cover ten genres' shelf conventions. Grow to **~30 families**, all OFL/Apache with unrestricted embedding, vendored (self-hosted TTFs, no network at render time — ~5MB total, fine for the wheel).
+
+- **New home:** `config/cover/fonts/` (cover-owned; prep's 10 under `config/prep/fonts` stay registered — the registry reads both roots). License texts ship alongside the TTFs; a `README.md` maps family → file → license, mirroring prep's.
+- **Registry model grows:**
+
+```python
+@dataclass(frozen=True)
+class CoverFont:
+    family: str; file: str; vibe: str; caps_friendly: bool
+    role: Literal["display_serif", "didone", "slab", "sans", "condensed_caps",
+                  "script", "blackletter", "mono", "decorative", "small_caps"]
+    italic_file: str = ""          # style companion when the face ships one
+    bold_file: str = ""
+    pairs_with: tuple[str, ...] = ()   # suggested author-line partners, fed to §6.1
+```
+
+- **Candidate roster** (IMPLEMENTER'S CHOICE final cut after verifying each license + embedding bits at implementation time; these are the shelf-convention anchors): *condensed caps* — Bebas Neue, Anton, Oswald, Archivo Black (thriller/nonfiction big-type); *didone/display serif* — Abril Fatface, Playfair Display SC, Rozha One, Yeseva One, Libre Caslon Display (literary/romance prestige); *slab* — Alfa Slab One, Zilla Slab (middle-grade/cozy); *script* — Great Vibes, Sacramento, Dancing Script (romance/romcom); *engraved/small-caps* — Cinzel, Marcellus, Julius Sans One (historical/fantasy); *decorative* — Monoton (neon scifi), Rye (western), UnifrakturMaguntia (gothic/horror, judge-vetoed for camp elsewhere); *workhorse sans* — Fjalla One, Archivo. The direction prompt's closed Literal grows automatically (it is built from the registry).
+- **Prompt integration:** `describe_fonts()` now groups by `role` with the vibe lines, and states pairing hints. The §6.1 rule "picks from that closed list" is unchanged — more choices, same guardrail. The §6.3 judge gains one tell: *typeface fights the genre's shelf* (a script-titled thriller, a Bebas romance).
+- **Tests:** every registered file exists and loads in Pillow; italic/bold companions load; the Literal rebuild picks up the full roster; scratch-venv package-data proof for the new directory.
+
+### 15.12 Expressive typography — inventive text, one move at a time
+
+Today every title is horizontally set, uniformly sized, straight-baselined. Real covers earn their look with a small set of type moves. Add the four that dominate trad shelves, as TextSlot fields (all revision-editable), with the **one-signature-move rule**: a fresh direction may request at most ONE move per concept (`build_spec` enforces; revisions may do as they're told). Restraint is what separates these moves from effect soup.
+
+```python
+class TextSlot(...):
+    ...
+    fit_mode: Literal["uniform", "justify_stack"] = "uniform"
+    arc: float = 0.0               # -0.35..0.35; + = arch (upward bow), − = valley
+    rotate: float = 0.0            # -15..15 degrees, whole-slot tilt
+    emphasis: list[int] = []       # word indices (post-case split) styled differently
+    emphasis_style: Literal["accent_color", "italic", "swap_face", "larger"] = "accent_color"
+    emphasis_font: str = ""        # swap_face only; validated against FAMILIES
+```
+
+- **`justify_stack`** (the poster stack — nonfiction/thriller's backbone): instead of one size for all lines, each line is sized independently so every line's tracked width fills the zone width exactly, subject to `size_min`/`size_max` and a max 2.8× ratio between smallest and largest line. Candidate line-breaks are scored by minimal wasted vertical space instead of width variance. "THE" alone on a line rendering huge is *correct* here — cap the ratio, not the drama.
+- **`arc`**: per-glyph placement along a circular baseline bowed by `arc` × zone height; glyphs rotate to the local tangent. Fit search measures the arc's chord. (Pillow per-glyph rotation — deterministic, already glyph-by-glyph when tracking is on.)
+- **`rotate`**: render the slot flat, rotate with expand, re-anchor in the zone. The legibility sample and every ink-based guard use the rotated bbox (they already measure real ink, so this is mostly free).
+- **`emphasis`**: style runs at word granularity — the "and" in italic accent, the key noun in the accent color, one word `larger` (1.25×). `swap_face`/`italic` require the face (companion file or `emphasis_font`) to exist — validator, not runtime surprise.
+- **Direction-time access:** `Direction` gains `type_move: Literal["", "justify_stack", "arch", "tilt", "emphasis"]` — one word, mapped by `build_spec` onto the title slot with safe parameters (arch → `arc=0.18`; tilt → `rotate=-6`; emphasis → model also supplies `emphasis_word: str` matched case-insensitively to a title word, dropped with a log line if absent — the §6.1 surplus-prompt precedent). Raw fields stay archetype/revision territory.
+- **Guards that already exist keep working** because they measure ink, not zones: occlusion, contact, dead-band, autopilot. New test fixtures cover each move under each guard.
+- **Tests:** justify_stack line widths within 1px of zone width; ratio cap honored; arc chord fits; rotated ink stays inside canvas; emphasis run color/face assertions; one-move rule rejects a direction requesting two; every move × 100px thumbnail legibility on a fixture brief.
+
+### 15.13 Masking doctrine — making the model actually reach for masks
+
+§15.2 builds the machinery; this section makes it *used*. Three parts:
+
+1. **One more mask source — text as clip:** `MaskSpec.from_text: str = ""` — clip an ART layer to a text slot's fitted glyph alpha (photo-in-the-letters as a first-class art move, complementing `TextSlot.mask_from` (text clipped to art) and `mode="art_fill"` (glyphs as a window)). Feasible because compose resolves text ink before positioning art (the occlusion guard already depends on that ordering). Validator: names a real text slot; the text slot must not itself be `mask_from`-clipped to the same art (cycle check).
+2. **Direction-time mask intents** (closed, safe, tiny — full MaskSpec freedom stays archetype/revision territory): `ArtPrompt.mask_intent: Literal["", "blend_into_background", "inside_title", "inside_focal"] = ""`. `build_spec` maps: `blend_into_background` → a linear gradient mask on this slot angled toward the background plate (the two-plate collage move); `inside_title` → `mask.from_text="title"`; `inside_focal` → `mask.from_layer` on the archetype's focal slot. The §6.1 prompt names all four masking moves — plate-blend, text-in-thing, thing-in-text, region-grade — each with one sentence of *when it earns its place*, and requires transparent-cutout prompts for `inside_*` sources when the target is a cutout.
+3. **Mask-forward archetypes:** ship two reference templates — `title_window` (big `art_fill` title over a color field, art visible only through the glyphs + a quiet finishing recipe) and `split_plate` (two generated plates gradient-masked into one scene, type on the seam). Templates are how conventions propagate: the judge sees them pass, revisions imitate them.
+
+**Tests:** from_text clip determinism + cycle rejection; each mask_intent expands to the documented fields; both new archetypes procedural-render green through the autopilot and balance pass.
+
+### 15.14 Direction, revision, critique vocabulary (consolidated)
+
+- **§6.1 (direction):** enumerate recipes with `describe` lines; the grouped-by-role font roster (§15.11); `type_move` with the one-move rule stated; `mask_intent` with the four moves and when each earns its place; recipe-for-the-genre guidance (big_type usually wants `quiet_literary` or nothing). The model still never sets adjust-layer/effect fields directly at direction time — recipes, `type_move`, and `mask_intent` are its whole vocabulary there (§7.4a doctrine, extended).
+- **§6.2 (revision):** the patch grammar reaches every new field. Add worked examples: *"warmer and moodier"* → `adjust[i].temperature` + vignette `strength`; *"type feels pasted on"* → `layers` whole-list replace moving `fx_` layers above the text; *"make the title a stacked poster title"* → `text[0].fit_mode`; *"put the forest inside the title"* → `art[k].mask.from_text`.
+- **§6.3 (critique):** new tells, all measurement-backed where possible: *type reads pasted-on*; *flat unlit composite*; *filter soup*; *left/right visibly unbalanced* (the judge receives the §15.10 symmetry score and heavier-half attribution via `composer_warnings` and must cite the number when it flags this); *near-miss alignment survived* (should be impossible post-snap — flagging it means a balance-pass bug, so the warning text says exactly that); *typeface fights the genre's shelf*; *gimmick without payoff* (a type move or mask that hurts legibility or hierarchy — recommend removal, it's one patch edit).
+
+### 15.15 Build order & tests
+
+Six PRs, each independently shippable and green (fonts and balance parallelize with the engine):
+
+1. **PR1 — engine.** §15.1 blends + §15.2 masks (incl. `from_text`) + §15.3 adjust layers + §15.7 re-check. Tests: golden-bytes back-compat (compose every shipped archetype procedurally before/after → identical bytes); each blend mode against hand-computed 2×2 fixtures; mask combination/invert/ordering/cycle validation; each adjust op deterministic on a fixed composite; gradient_map output contains only ramp colors; the re-check attenuation ladder end-to-end.
+2. **PR2 — balance & symmetry.** §15.10, its own tests. Independent of PR1 (operates on positioned ink, not new layer kinds).
+3. **PR3 — fonts.** §15.11. Independent.
+4. **PR4 — styles + atmosphere + recipes.** §15.4 + §15.5 + §15.6 + archetype retrofits. Tests: shadow/stroke fold equivalence (old fields alone → byte-identical); stacked double shadow; every synth deterministic + palette-coherent; every recipe expands valid and its procedural render passes autopilot + balance; `fx_` collision rejected; scratch-venv package-data.
+5. **PR5 — expressive typography.** §15.12 with its per-move × per-guard fixture matrix.
+6. **PR6 — vocabulary.** §15.14 prompts + the two mask-forward archetypes + worked examples + judge tells. Prompt-shape assertions plus the live acceptance run.
+
+Acceptance (wave): (a) same brief, `recipe=""` vs `cinematic_duotone` — visibly graded, unified, zero image-spend delta; (b) "make it feel more printed / less digital" resolves to `fx_` edits alone; (c) golden-bytes holds on every pre-wave fixture; (d) a foil title (gradient_overlay + texture_overlay) survives the 100px thumb check; (e) a deliberately 1%-off-center fixture ships exactly on axis with the adjustment logged; (f) a `justify_stack` + `title_window` concept renders legibly at 100px; (g) the judge's balance flag cites the measured score; (h) full suite green.
+
+### 15.16 Out of scope (this wave)
+
+Nested layer groups (§15.0, constraint 5); `hue`/`color`/`luminosity` blends; PSD import/export; hand-painted dodge/burn (masked grades cover it); per-synth parameter fields; recipe re-expansion on revision; curves as arbitrary control-point LUTs (grade's four scalars first — add curves only if the judge demonstrably runs out of range); vertical gap auto-equalization (warn-only in v1, §15.10); variable-font axes (static TTF weights only); per-glyph manual kerning overrides; text-on-arbitrary-path (circular arc only).
