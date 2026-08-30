@@ -31,14 +31,15 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageFilter,
-                 ImageOps, ImageStat)
+from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageEnhance,
+                 ImageFilter, ImageOps, ImageStat)
 
 from . import typeset
 from .archetypes import zone_px
 from .imaging import has_real_alpha
 from .model import (ArtSlot, CoverSpec, LayerRef, Palette, RenderReport,
                     ScrimSpec, Shadow, TextSlot, Zone)
+from .textures import TEXTURES
 
 log = logging.getLogger("docproof.cover.compose")
 
@@ -133,6 +134,57 @@ _DEAD_BAND_SAMPLE_HEIGHT = 640        # downsample rows before scanning — a
                                       # discipline (_grain_layer et al.)
 _DEAD_BAND_ROW_STDDEV_THRESHOLD = 0.020   # of 0..1 relative luminance
 _DEAD_BAND_WARN_FRACTION = 0.28
+
+
+# -- v2.2 wave tuning -----------------------------------------------------
+#
+# Deliverable 3 (line-gap snap): a contain-fit ornament drawn immediately
+# after a text layer, with `snap="line_gap"`, is centered in the largest
+# REAL (ink-to-ink) gap between two of that text's own fitted lines —
+# see _snap_to_line_gap.
+
+_LINE_GAP_FALLBACK_MARGIN_FRACTION = 0.012   # of canvas height: clearance
+                                             # below the last line's own ink
+                                             # when a title has no internal
+                                             # gap to snap into (one line)
+_LINE_GAP_CONTACT_THRESHOLD = 0.04   # fraction of the text's own ink alpha
+                                     # the snapped ornament may still cover
+                                     # before nudging — tighter than the
+                                     # general contact guard's 8% because
+                                     # this IS the archetype's own
+                                     # deliberate weave-through-title move
+                                     # and should read as threading the
+                                     # gap cleanly, not just "mostly" clear
+_LINE_GAP_NUDGE_FRACTIONS: tuple[float, ...] = (0.02, -0.02, 0.04)   # of
+                                     # canvas height, tried in this fixed
+                                     # order — smallest first, alternating
+                                     # side, the third doubled — same
+                                     # determinism reasoning as
+                                     # _OCCLUSION_ANCHOR_OFFSETS
+
+# Deliverable 4 (ornament-vs-text contact guard): the general case of the
+# same complaint — ANY art layer drawn after a text layer, not only a
+# contain-fit slot immediately following one — checked against a much
+# tighter floor than the deliberate-overlap sandwich allowance
+# (_OCCLUSION_THRESHOLD, 30%) above, because a text slot this guard catches
+# was never composed against this art on purpose; it is an accidental
+# collision (the thriller cover's nurse cap nicking the title's own tail,
+# several layers apart in z-order) and should barely touch at all.
+_TEXT_ART_CONTACT_THRESHOLD = 0.08
+# Nudges tried as a horizontal pixel shift of the ALREADY-positioned art
+# layer (not a re-derivation from source at a new anchor, which would need
+# to know which fit function and anchor semantics produced it — corners,
+# scatter, and mask_from all skip that entirely) — fractions of canvas
+# WIDTH, reusing the same "smallest first, alternating side" ordering
+# _OCCLUSION_ANCHOR_OFFSETS already established.
+_TEXT_ART_CONTACT_NUDGES: tuple[float, ...] = (0.06, -0.06, 0.12, -0.12)
+
+# Deliverable 7 (frame notch): how far past a notch_for target's own
+# positioned-alpha bbox the erased hole extends, on every side — the same
+# "pad a measured rect a little" idiom _padded_rect/_scrim_rect already use
+# for "around this thing," just a tighter margin since a notch is meant to
+# hug the target closely, not give it a whole scrim's worth of clearance.
+_NOTCH_PAD_FRACTION = 0.015
 
 
 class ComposeError(Exception):
@@ -637,7 +689,19 @@ def _load_or_synthesize(slot: ArtSlot, job_dir: Path, canvas: tuple[int, int],
 
     Returns the RAW loaded/synthesized image, before any fit/placement or
     effects-rack treatment — _position_all_art is what turns this into
-    canvas-space pixels."""
+    canvas-space pixels.
+
+    v2.2 wave, deliverable 5: `texture_file` is a third tier, checked after
+    `asset` and before `procedural` — a real generated/uploaded asset always
+    wins (unchanged priority), but a stocked shelf plate is a more
+    deliberate choice than the generic hardcoded-by-id procedural fallback,
+    so it is tried first when there is no `asset`. Falls through to
+    `procedural` (not a raised ComposeError) if the named plate somehow
+    fails to load — CoverSpec validation already refused an unknown name at
+    spec-build time, so a load failure here means the shipped file itself
+    went missing or corrupt after that check, and this module's own
+    convention (see the module docstring) is that every input renders
+    SOMETHING rather than raising, except a genuinely unreadable `asset`."""
     if slot.asset:
         path = job_dir / slot.asset
         try:
@@ -648,7 +712,48 @@ def _load_or_synthesize(slot: ArtSlot, job_dir: Path, canvas: tuple[int, int],
             raise ComposeError(
                 f"Could not read the generated art for the '{slot.id}' slot "
                 f"at {path}: {e}") from e
+    if slot.texture_file:
+        textured = _load_texture(slot, canvas)
+        if textured is not None:
+            return textured
     return _procedural_art(slot, canvas, palette, version)
+
+
+def _load_texture(slot: ArtSlot, canvas: tuple[int, int]) -> Image.Image | None:
+    """slot.texture_file's own pixels as a canvas-sized RGBA image (v2.2
+    wave, deliverable 5) — `texture_fit="cover"` scales the plate to fill
+    the canvas exactly the way _fit_cover does for a generated asset
+    (centered: a stocked plate has no book-specific focal point to anchor
+    on), `"tile"` repeats the plate at its own native size across the whole
+    canvas, wrapping at both edges.
+
+    Returns None if the name is somehow not on the (possibly test-swapped)
+    shelf, or the file fails to decode — defensive; CoverSpec validation
+    (ArtSlot._known_texture) already refuses an unknown name long before a
+    real spec ever reaches compose()."""
+    path = TEXTURES.get(slot.texture_file)
+    if path is None:
+        return None
+    try:
+        plate = Image.open(path)
+        plate.load()
+        plate = plate.convert("RGBA")
+    except Exception:  # noqa: BLE001 - a corrupt shelf file is the same story
+        return None
+    if slot.texture_fit == "cover":
+        return _fit_cover(plate, canvas, (0.5, 0.5), 1.0, (0.0, 0.0))
+    # "tile": repeat the plate's own native pixels across the canvas,
+    # wrapping at both edges — a plain nested paste loop, the same cost
+    # class as _grain_layer's own downsample-then-resize approach (at most
+    # a few dozen alpha_composite calls for a realistic plate/canvas ratio,
+    # never a per-pixel Python loop).
+    cw, ch = canvas
+    pw, ph = plate.size
+    out = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    for y in range(0, ch, max(1, ph)):
+        for x in range(0, cw, max(1, pw)):
+            out.alpha_composite(plate, dest=(x, y))
+    return out
 
 
 def _has_transparency(img: Image.Image) -> bool:
@@ -693,18 +798,29 @@ def _scatter_seed(version: int, slot_id: str) -> int:
 
 
 def _place_corners(source: Image.Image, canvas: tuple[int, int],
-                   scale: float) -> Image.Image:
+                   scale: float, flip_vertical: bool = False) -> Image.Image:
     """§7.4a's mirrored corner frame: the ornament, resized so its height is
     `scale` of the canvas height (there is no cover/contain baseline to zoom
     from here, unlike _fit_cover/_fit_contain's own reading of `scale` — so
     `scale` is read directly against the canvas, the same convention
     SCATTER_SIZE_FRACTION's fixed 14% uses below), placed inset
-    _CORNER_MARGIN_FRACTION from the top-left corner, then mirrored
-    horizontally, vertically, and both, into the other three. Every copy is
-    an exact Pillow ImageOps.mirror/flip of the same resized source, so the
-    four corners are byte-for-byte symmetric — the "exact symmetry is the
-    tell generators can't produce" effect the spec calls for, not an
-    approximation of one.
+    _CORNER_MARGIN_FRACTION from the top-left corner, then mirrored into the
+    other three. Every copy is an exact Pillow ImageOps.mirror/flip of the
+    same resized source, so the four corners are byte-for-byte symmetric —
+    the "exact symmetry is the tell generators can't produce" effect the
+    spec calls for, not an approximation of one.
+
+    v2.2 wave, deliverable 1 (gravity-safe corners): `flip_vertical=False`
+    (the new default) keeps EVERY copy upright — only the right-side copies
+    get horizontally mirrored, top-left and bottom-left stay byte-identical
+    to `source` itself, top-right and bottom-right byte-identical to each
+    other. A live render's mirrored honey-drip ornament pointed UP on both
+    bottom corners under the old unconditional ImageOps.flip: gravity has an
+    opinion most ornaments' own weight already encodes (a drip, a hanging
+    charm, anything bottom-heavy), and a v-flip inverts it. `flip_vertical=
+    True` restores the ORIGINAL full-mirror-into-all-four behavior (bottom
+    copies also vertically flipped) for a genuinely top/bottom-symmetric
+    ornament that wants the fuller kaleidoscope effect on purpose.
 
     v2.1 BODY-fix wave: a real render shipped ornament halves bleeding off
     all four edges — the ORIGINAL version of this function placed every copy
@@ -720,8 +836,12 @@ def _place_corners(source: Image.Image, canvas: tuple[int, int],
     target_w = max(1, round(iw * (target_h / ih))) if ih else 1
     resized = source.resize((target_w, target_h), Image.Resampling.LANCZOS)
     mirrored_h = ImageOps.mirror(resized)
-    flipped_v = ImageOps.flip(resized)
-    both = ImageOps.flip(mirrored_h)
+    if flip_vertical:
+        bottom_left = ImageOps.flip(resized)
+        bottom_right = ImageOps.flip(mirrored_h)
+    else:
+        bottom_left = resized
+        bottom_right = mirrored_h
 
     slack_x, slack_y = max(0, cw - target_w), max(0, ch - target_h)
     inset_x = min(round(_CORNER_MARGIN_FRACTION * cw), slack_x // 2)
@@ -732,8 +852,8 @@ def _place_corners(source: Image.Image, canvas: tuple[int, int],
     out = Image.new("RGBA", canvas, (0, 0, 0, 0))
     out.alpha_composite(resized, dest=(left_x, top_y))
     out.alpha_composite(mirrored_h, dest=(right_x, top_y))
-    out.alpha_composite(flipped_v, dest=(left_x, bottom_y))
-    out.alpha_composite(both, dest=(right_x, bottom_y))
+    out.alpha_composite(bottom_left, dest=(left_x, bottom_y))
+    out.alpha_composite(bottom_right, dest=(right_x, bottom_y))
     return out
 
 
@@ -856,6 +976,104 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
     return best_img, best_ratio, True
 
 
+def _place_contain_at_center(source: Image.Image, canvas: tuple[int, int],
+                             scale: float, offset: tuple[float, float],
+                             center: tuple[float, float]) -> Image.Image:
+    """Like _fit_contain, but placed by its own CENTER at an exact px point
+    rather than derived from an `anchor` fraction against the whole canvas
+    — the line-gap snap (v2.2 wave, deliverable 3) knows exactly where it
+    wants the ornament's middle to land (the biggest real gap between two
+    of a title's own fitted lines), and that point moves depending on how
+    many lines the title's own fit search produced — no fixed `anchor`
+    fraction could express it. `offset` still nudges by a fraction of the
+    canvas, same convention as every other fit function here."""
+    cw, ch = canvas
+    iw, ih = source.size
+    fit_scale = min(cw / iw, ch / ih) * max(scale, 1e-6)
+    new_w = max(1, round(iw * fit_scale))
+    new_h = max(1, round(ih * fit_scale))
+    resized = source.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    cx, cy = center
+    ox, oy = offset
+    dest_x = round(cx - new_w / 2 + ox * cw)
+    dest_y = round(cy - new_h / 2 + oy * ch)
+    out = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    out.alpha_composite(resized, dest=(dest_x, dest_y))
+    return out
+
+
+def _snap_to_line_gap(source: Image.Image, canvas: tuple[int, int],
+                      slot: ArtSlot, palette: Palette, has_alpha: bool,
+                      text_slot: TextSlot) -> tuple[Image.Image, float, str | None]:
+    """ArtSlot.snap == "line_gap" (v2.2 wave, deliverable 3): center a
+    contain-fit ornament in the biggest REAL whitespace between two of
+    `text_slot`'s own fitted lines, rather than at a fixed anchor point
+    that has no idea where the glyphs actually landed — the woven_emblem
+    `weave` slot's own complaint (a vine/ornament grazing letterforms it
+    was meant to thread between, on two live covers).
+
+    `text_slot` is fitted once more here (typeset.fit_text is pure and
+    cheap — the same low-cost re-run _place_contain_clear_of_text already
+    does for the same reason: _position_all_art runs strictly before
+    compose()'s own per-text loop, so nothing has fitted this slot yet).
+    typeset.line_ink_boxes gives every fitted line's own real ink bbox; the
+    largest gap between two CONSECUTIVE lines' ink (bottom of one to top of
+    the next) wins, by `max()` — a uniform-line-height title has every
+    nominal gap the same size, so ties resolve to the first (topmost) one,
+    deterministically. A one-line title has no internal gap at all: fall
+    back to just below that single line's own ink, per this deliverable's
+    own spec.
+
+    Returns (the UNTREATED placed image at the winning position, the
+    contact fraction achieved, a warning sentence or None) — mirrors
+    _place_contain_clear_of_text's own "return untreated, let the caller's
+    single uniform _apply_treatment call do it for real" contract, so
+    `pre_treatment` still gets populated correctly for the art-vs-ground
+    contrast floor (fix 3)."""
+    fit = typeset.fit_text(text_slot, canvas)
+    ink_boxes = [b for b in typeset.line_ink_boxes(text_slot, fit, canvas)
+                if b is not None]
+    cw, ch = canvas
+    cx = slot.anchor[0] * cw
+
+    if len(ink_boxes) >= 2:
+        gaps = [(t2 - b1, (b1 + t2) / 2.0)
+               for (_, _, _, b1), (_, t2, _, _) in zip(ink_boxes, ink_boxes[1:])]
+        _, cy = max(gaps, key=lambda g: g[0])
+    elif ink_boxes:
+        cy = ink_boxes[-1][3] + _LINE_GAP_FALLBACK_MARGIN_FRACTION * ch
+    else:
+        cy = float(zone_px(text_slot.zone, canvas)[1])   # no ink at all —
+                                                          # degenerate; the
+                                                          # zone's own top
+
+    ink_mask = typeset.text_mask(text_slot, fit, canvas)
+
+    def measure(center_y: float) -> tuple[Image.Image, float]:
+        placed = _place_contain_at_center(source, canvas, slot.scale,
+                                          tuple(slot.offset), (cx, center_y))
+        treated, _warning = _apply_treatment(placed, slot.treatment, palette,
+                                             slot.id, has_alpha)
+        return placed, _occlusion_fraction(ink_mask, treated.getchannel("A"))
+
+    best_img, best_ratio = measure(cy)
+    if best_ratio <= _LINE_GAP_CONTACT_THRESHOLD:
+        return best_img, best_ratio, None
+
+    for frac in _LINE_GAP_NUDGE_FRACTIONS:
+        trial_img, trial_ratio = measure(cy + frac * ch)
+        if trial_ratio < best_ratio:
+            best_img, best_ratio = trial_img, trial_ratio
+        if trial_ratio <= _LINE_GAP_CONTACT_THRESHOLD:
+            return trial_img, trial_ratio, None
+
+    warning = (
+        f"{slot.id}: still touches {best_ratio:.0%} of '{text_slot.id}''s "
+        f"ink after nudging into its line gap (limit "
+        f"{_LINE_GAP_CONTACT_THRESHOLD:.0%}).")
+    return best_img, best_ratio, warning
+
+
 def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                       job_dir: Path, canvas: tuple[int, int], palette: Palette,
                       version: int, text_avoid_rects: list[tuple[int, int, int, int]],
@@ -891,6 +1109,14 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
     pre_treatment: dict[str, Image.Image] = {}
     occlusion: dict[str, float] = {}
     warnings: list[str] = []
+    # Every (text id, art id) pair the narrow "immediate sandwich" path
+    # below (line-gap snap or the anchor-offset occlusion guard) already
+    # explicitly measured and resolved, at ITS OWN threshold — the general
+    # contact guard (deliverable 4, run once over the whole z-order after
+    # this loop) skips these on purpose, so it never re-litigates a
+    # deliberate, archetype-composed overlap allowance with its own much
+    # tighter floor.
+    sandwich_pairs: set[tuple[str, str]] = set()
     layers_out = list(layers)
     for i, layer in enumerate(layers_out):
         if layer.kind != "art" or layer.ref in positioned:
@@ -910,7 +1136,8 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                 sandwich_text = candidate
 
         if slot.corners and has_alpha:
-            img = _place_corners(source, canvas, slot.scale)
+            img = _place_corners(source, canvas, slot.scale,
+                                 slot.corners_flip_vertical)
         elif slot.scatter and has_alpha:
             img, placed = _place_scatter(source, canvas, slot.scatter, version,
                                          slot.id, text_avoid_rects)
@@ -918,10 +1145,18 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                 warnings.append(
                     f"{slot.id}: only placed {placed} of {slot.scatter} "
                     f"scatter copies without overlapping a text zone.")
+        elif slot.snap == "line_gap" and slot.fit == "contain" and sandwich_text is not None:
+            img, ratio, snap_warning = _snap_to_line_gap(
+                source, canvas, slot, palette, has_alpha, sandwich_text)
+            sandwich_pairs.add((sandwich_text.id, slot.id))
+            occlusion[f"{sandwich_text.id}<-{slot.id}"] = ratio
+            if snap_warning:
+                warnings.append(snap_warning)
         elif slot.fit == "contain" and sandwich_text is not None:
             img, ratio, degrade = _place_contain_clear_of_text(
                 source, canvas, slot, palette, has_alpha, sandwich_text)
             key = f"{sandwich_text.id}<-{slot.id}"
+            sandwich_pairs.add((sandwich_text.id, slot.id))
             if degrade:
                 layers_out[i - 1], layers_out[i] = layers_out[i], layers_out[i - 1]
                 warnings.append(
@@ -944,6 +1179,11 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                 warnings.append(
                     f"{slot.id}: scatter is set but the art has no real "
                     f"transparency; drew it as a single normal layer instead.")
+            if slot.snap == "line_gap":
+                warnings.append(
+                    f"{slot.id}: snap is 'line_gap' but this slot is not a "
+                    f"contain-fit layer immediately after a non-empty text "
+                    f"layer; drew it normally instead.")
             img = (_fit_cover(source, canvas, slot.anchor, slot.scale, slot.offset)
                   if slot.fit == "cover" else
                   _fit_contain(source, canvas, slot.anchor, slot.scale, slot.offset))
@@ -959,8 +1199,175 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
             img = _apply_mask_from(img, positioned.get(slot.mask_from))
 
         positioned[slot.id] = img
+
+    _apply_frame_notches(positioned, art_by_id, canvas, warnings)
+    layers_out = _apply_text_contact_guard(
+        positioned, layers_out, art_by_id, text_by_id, canvas, warnings,
+        occlusion, sandwich_pairs)
+
     return _ArtPositions(positioned=positioned, pre_treatment=pre_treatment,
                          layers=layers_out, warnings=warnings, occlusion=occlusion)
+
+
+def _apply_frame_notches(positioned: dict[str, Image.Image],
+                         art_by_id: dict[str, ArtSlot],
+                         canvas: tuple[int, int], warnings: list[str]) -> None:
+    """v2.2 wave, deliverable 7: for every art slot naming `notch_for`,
+    erase the frame's own painted pixels wherever the target slot's
+    positioned alpha actually reaches (padded _NOTCH_PAD_FRACTION on every
+    side) — "the frame politely breaks around an emblem that overlaps it"
+    rather than drawing straight through it. Implemented by masking the
+    frame layer's alpha with the (padded, dilated-to-a-rect) target bbox.
+
+    Runs once, here, after every slot in `positioned` already holds its
+    FINAL canvas-space pixels (see _position_all_art's own docstring on why
+    this has to be a second pass: a notch_for target frequently comes LATER
+    in z-order than the frame itself — corner_vine/emblem draw after
+    rule_frame in woven_emblem, for instance — so it is not yet in
+    `positioned` during the frame's own turn in that module's single
+    forward pass over `layers`).
+
+    Mutates `positioned[frame_id]` in place for every slot with a non-empty
+    `notch_for`. A `notch_for` naming a slot with no ink anywhere (an
+    ungenerated focal, say) leaves the frame untouched — nothing to notch
+    around, and CoverSpec validation already guarantees the name resolves
+    to a real slot, so there is nothing to warn about either."""
+    cw, ch = canvas
+    pad_x = round(_NOTCH_PAD_FRACTION * cw)
+    pad_y = round(_NOTCH_PAD_FRACTION * ch)
+    for slot in art_by_id.values():
+        if not slot.notch_for:
+            continue
+        frame_img = positioned.get(slot.id)
+        target_img = positioned.get(slot.notch_for)
+        if frame_img is None or target_img is None:
+            continue
+        bbox = target_img.getbbox()
+        if bbox is None:
+            continue
+        left, top, right, bottom = bbox
+        hole = (max(0, left - pad_x), max(0, top - pad_y),
+               min(cw, right + pad_x), min(ch, bottom + pad_y))
+        if hole[2] <= hole[0] or hole[3] <= hole[1]:
+            continue
+        mask = Image.new("L", canvas, 255)
+        ImageDraw.Draw(mask).rectangle(
+            (hole[0], hole[1], hole[2] - 1, hole[3] - 1), fill=0)
+        r, g, b, a = frame_img.split()
+        positioned[slot.id] = Image.merge(
+            "RGBA", (r, g, b, ImageChops.multiply(a, mask)))
+
+
+def _apply_text_contact_guard(positioned: dict[str, Image.Image],
+                              layers_out: list[LayerRef],
+                              art_by_id: dict[str, ArtSlot],
+                              text_by_id: dict[str, TextSlot],
+                              canvas: tuple[int, int], warnings: list[str],
+                              occlusion: dict[str, float],
+                              sandwich_pairs: set[tuple[str, str]]
+                              ) -> list[LayerRef]:
+    """v2.2 wave, deliverable 4: the general case of the title occlusion
+    guard above — ANY art layer drawn after a text layer, not only a
+    contain-fit slot immediately following one, must not bury a
+    meaningful fraction of that text's own ink. Runs once, here, as a
+    finishing pass over the current z-order (after every art slot in
+    `positioned` already holds its notch-adjusted, fully treated pixels —
+    _apply_frame_notches runs immediately before this), checking every art
+    layer against every text layer that precedes it EXCEPT a pair already
+    covered by the narrow sandwich path above — those already got their
+    own, more permissive, deliberate-overlap allowance
+    (_OCCLUSION_THRESHOLD / _LINE_GAP_CONTACT_THRESHOLD), and this general
+    _TEXT_ART_CONTACT_THRESHOLD floor must never re-litigate a
+    composed-on-purpose overlap with its own much tighter one.
+
+    For an offending pair, first tries nudging the ALREADY-positioned art
+    layer sideways by each of _TEXT_ART_CONTACT_NUDGES — a plain
+    pixel-space horizontal translate (reuse; widen the shift-search's
+    applicability per this deliverable), deliberately NOT a re-derivation
+    from source at a new anchor: that would need to know which fit
+    function and anchor semantics produced these particular pixels, and
+    corners/scatter/mask_from all sidestep that question by construction.
+    Translating the finished raster works uniformly for every art layer
+    regardless of how it was placed. If no single nudge clears every
+    currently-offending text slot AT ONCE (a shift that fixes one collision
+    could worsen another), degrades: moves the art layer to draw
+    immediately before the EARLIEST offending text layer's own position, so
+    it ends up underneath every text slot it was colliding with — the same
+    "draw text on top instead" fallback _place_contain_clear_of_text's own
+    degrade path uses (reuse), generalized to a non-adjacent reorder.
+
+    Returns the (possibly reordered) layers list; mutates `positioned`,
+    `warnings`, and `occlusion` in place for the layers it actually
+    touches."""
+    cw, ch = canvas
+    text_ink: dict[str, tuple[Image.Image, int]] = {}
+    for i, layer in enumerate(layers_out):
+        if layer.kind == "text" and layer.ref not in text_ink:
+            slot = text_by_id.get(layer.ref)
+            if slot is None or (slot.optional and not slot.content.strip()):
+                continue
+            fit = typeset.fit_text(slot, canvas)
+            text_ink[layer.ref] = (typeset.text_mask(slot, fit, canvas), i)
+
+    def measure_all(img: Image.Image, tids: list[str]) -> dict[str, float]:
+        alpha = img.getchannel("A")
+        return {tid: _occlusion_fraction(text_ink[tid][0], alpha) for tid in tids}
+
+    moves: list[tuple[str, str]] = []   # (art_id, move-before-this-text-id)
+    for i, layer in enumerate(layers_out):
+        if layer.kind != "art":
+            continue
+        art_id = layer.ref
+        slot = art_by_id.get(art_id)
+        img = positioned.get(art_id)
+        if slot is None or img is None:
+            continue
+        candidates = [tid for tid, (_mask, tidx) in text_ink.items()
+                     if tidx < i and (tid, art_id) not in sandwich_pairs]
+        if not candidates:
+            continue
+        best_img, best = img, measure_all(img, candidates)
+        if max(best.values()) > _TEXT_ART_CONTACT_THRESHOLD:
+            for frac in _TEXT_ART_CONTACT_NUDGES:
+                dx = round(frac * cw)
+                shifted = Image.new("RGBA", canvas, (0, 0, 0, 0))
+                shifted.alpha_composite(img, dest=(dx, 0))
+                trial = measure_all(shifted, candidates)
+                if max(trial.values()) < max(best.values()):
+                    best_img, best = shifted, trial
+                if max(trial.values()) <= _TEXT_ART_CONTACT_THRESHOLD:
+                    break
+
+        positioned[art_id] = best_img
+        for tid, frac in best.items():
+            occlusion[f"{tid}<-{art_id}"] = frac
+        offending = {tid: frac for tid, frac in best.items()
+                    if frac > _TEXT_ART_CONTACT_THRESHOLD}
+        if not offending:
+            continue
+
+        earliest_tid = min(offending, key=lambda tid: text_ink[tid][1])
+        moves.append((art_id, earliest_tid))
+        warnings.append(
+            f"{art_id}: touches {offending[earliest_tid]:.0%} of "
+            f"'{earliest_tid}''s ink (limit {_TEXT_ART_CONTACT_THRESHOLD:.0%}) "
+            f"even after nudging; drew '{earliest_tid}' on top of it "
+            f"instead of underneath.")
+        for tid in offending:
+            occlusion[f"{tid}<-{art_id}"] = 0.0   # about to move below —
+                                                  # the composited cover
+                                                  # carries none of this
+                                                  # pair's occlusion any
+                                                  # more
+
+    out = list(layers_out)
+    for art_id, text_id in moves:
+        art_entries = [ref for ref in out if ref.kind == "art" and ref.ref == art_id]
+        out = [ref for ref in out if not (ref.kind == "art" and ref.ref == art_id)]
+        target_idx = next(j for j, ref in enumerate(out)
+                          if ref.kind == "text" and ref.ref == text_id)
+        out[target_idx:target_idx] = art_entries
+    return out
 
 
 def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
@@ -1228,6 +1635,170 @@ def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot_id: str,
     return out
 
 
+# -- the frame family (v2.2 wave, deliverable 7) -------------------------
+#
+# rule_frame's siblings — every one of them is inset from the edge by the
+# EXACT SAME _RULE_FRAME_INSET_FRACTION rule_frame itself uses, on purpose:
+# the deliverable's own requirement is that _frame_inner_rect (and so
+# _frame_clamp_text, generalized below to trigger on ANY of these kinds,
+# not just "rule_frame" by name) yields the identical inner content rect no
+# matter which frame kind a spec actually draws. A hairline or
+# corners-only frame's own inked footprint is smaller than the double-rule
+# geometry the clamp is computed from, which only ever makes the clamp
+# MORE conservative than strictly necessary for those two — never less —
+# so text can never legally cross any frame kind's own drawn lines. All
+# five are palette.accent, matching rule_frame's own convention (§7.4a: "no
+# per-slot color params").
+
+_FRAME_HAIRLINE_WIDTH_FRACTION = 0.0012   # of canvas height — a true
+                                          # hairline, thinner than
+                                          # rule_frame's own 0.0022 rule
+_FRAME_THICKTHIN_OUTER_WIDTH_FRACTION = 0.0060   # heavy outer rule
+_FRAME_CORNERS_ARM_FRACTION = 0.09        # of the inset rect's shorter
+                                          # side, each bracket's own arm
+                                          # length
+_FRAME_CORNERS_WIDTH_FRACTION = 0.0030
+_FRAME_DECO_SQUARE_FRACTION = 0.014       # of canvas height, each corner
+                                          # square's own side length
+_FRAME_OCTAGON_CUT_FRACTION = 0.09        # of the inset rect's shorter
+                                          # side, how far each 45 degree
+                                          # corner cut travels along both
+                                          # edges it meets
+
+
+def _synth_frame_hairline(canvas: tuple[int, int], palette: Palette,
+                          slot_id: str, version: int) -> Image.Image:
+    """A single fine rule at rule_frame's own outer inset — the plainest
+    member of the family, for a cover that wants "framed" without
+    "engraved.\""""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    width = max(1, round(_FRAME_HAIRLINE_WIDTH_FRACTION * ch))
+    mask = Image.new("L", canvas, 0)
+    rect = (inset, inset, cw - 1 - inset, ch - 1 - inset)
+    if rect[2] > rect[0] and rect[3] > rect[1]:
+        ImageDraw.Draw(mask).rectangle(rect, outline=255, width=width)
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
+def _synth_frame_thickthin(canvas: tuple[int, int], palette: Palette,
+                           slot_id: str, version: int) -> Image.Image:
+    """Classic engraving: a heavy outer rule paired with a fine inner one,
+    same inset/gap as rule_frame — asymmetric weight instead of
+    rule_frame's own matched double rule."""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    gap = max(1, round(_RULE_FRAME_GAP_FRACTION * ch))
+    outer_w = max(1, round(_FRAME_THICKTHIN_OUTER_WIDTH_FRACTION * ch))
+    inner_w = max(1, round(_RULE_FRAME_WIDTH_FRACTION * ch))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    outer = (inset, inset, cw - 1 - inset, ch - 1 - inset)
+    inner = (inset + gap, inset + gap, cw - 1 - inset - gap, ch - 1 - inset - gap)
+    if outer[2] > outer[0] and outer[3] > outer[1]:
+        draw.rectangle(outer, outline=255, width=outer_w)
+    if inner[2] > inner[0] and inner[3] > inner[1]:
+        draw.rectangle(inner, outline=255, width=inner_w)
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
+def _synth_frame_corners(canvas: tuple[int, int], palette: Palette,
+                         slot_id: str, version: int) -> Image.Image:
+    """Corner brackets only, open sides — an "L" at each of the inset
+    rect's four corners, arms running along both edges that meet there.
+    No rule ever crosses the middle of any side, which is the whole point
+    of this kind: a lighter, more open frame than a fully closed rule."""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    width = max(1, round(_FRAME_CORNERS_WIDTH_FRACTION * ch))
+    left, top, right, bottom = inset, inset, cw - 1 - inset, ch - 1 - inset
+    arm = max(1, round(_FRAME_CORNERS_ARM_FRACTION * min(right - left, bottom - top)))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    if right > left and bottom > top:
+        corners = (
+            ((left, top + arm), (left, top), (left + arm, top)),          # top-left
+            ((right - arm, top), (right, top), (right, top + arm)),       # top-right
+            ((left, bottom - arm), (left, bottom), (left + arm, bottom)), # bottom-left
+            ((right - arm, bottom), (right, bottom), (right, bottom - arm)),  # bottom-right
+        )
+        for points in corners:
+            draw.line(points, fill=255, width=width, joint="curve")
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
+def _synth_frame_deco(canvas: tuple[int, int], palette: Palette,
+                      slot_id: str, version: int) -> Image.Image:
+    """"Stepped double rule with corner squares" — the Fatal Crossing
+    register (docs/cover_template_research.md): rule_frame's own double
+    rule, plus a small filled square centered on each of the OUTER rule's
+    four corners — the "stepped" deco accent the plain double rule alone
+    doesn't have."""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    gap = max(1, round(_RULE_FRAME_GAP_FRACTION * ch))
+    width = max(1, round(_RULE_FRAME_WIDTH_FRACTION * ch))
+    sq = max(2, round(_FRAME_DECO_SQUARE_FRACTION * ch))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    outer = (inset, inset, cw - 1 - inset, ch - 1 - inset)
+    inner = (inset + gap, inset + gap, cw - 1 - inset - gap, ch - 1 - inset - gap)
+    if outer[2] > outer[0] and outer[3] > outer[1]:
+        draw.rectangle(outer, outline=255, width=width)
+    if inner[2] > inner[0] and inner[3] > inner[1]:
+        draw.rectangle(inner, outline=255, width=width)
+    if outer[2] > outer[0] and outer[3] > outer[1]:
+        half = sq // 2
+        for cx, cy in ((outer[0], outer[1]), (outer[2], outer[1]),
+                      (outer[0], outer[3]), (outer[2], outer[3])):
+            draw.rectangle((cx - half, cy - half, cx + half, cy + half), fill=255)
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
+def _synth_frame_octagon(canvas: tuple[int, int], palette: Palette,
+                         slot_id: str, version: int) -> Image.Image:
+    """Corners cut at 45 degrees — the Theo of Golden register (docs/
+    cover_template_research.md): the SAME outer/inner double-rule
+    rectangles rule_frame draws, each redrawn as an octagon (a rectangle
+    with its four corners cut) via ImageDraw.polygon's own `width` stroke
+    (Pillow >= 9.2) rather than a plain rectangle outline."""
+    cw, ch = canvas
+    inset = round(_RULE_FRAME_INSET_FRACTION * ch)
+    gap = max(1, round(_RULE_FRAME_GAP_FRACTION * ch))
+    width = max(1, round(_RULE_FRAME_WIDTH_FRACTION * ch))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for rect in ((inset, inset, cw - 1 - inset, ch - 1 - inset),
+                (inset + gap, inset + gap, cw - 1 - inset - gap, ch - 1 - inset - gap)):
+        left, top, right, bottom = rect
+        if right <= left or bottom <= top:
+            continue
+        cut = max(1, round(_FRAME_OCTAGON_CUT_FRACTION * min(right - left, bottom - top)))
+        octagon = [
+            (left + cut, top), (right - cut, top),
+            (right, top + cut), (right, bottom - cut),
+            (right - cut, bottom), (left + cut, bottom),
+            (left, bottom - cut), (left, top + cut),
+        ]
+        draw.polygon(octagon, outline=255, width=width)
+    rgb = ImageColor.getrgb(palette.accent)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _RULE_FRAME_ALPHA / 255)))
+    return out
+
+
 # One entry per docproof.cover.model.PROCEDURAL_KINDS name — kept in that
 # exact same set (tests assert it) so a name that validates at the spec
 # layer always resolves to a real synthesizer here, and vice versa.
@@ -1248,15 +1819,26 @@ def _frame_inner_rect(canvas: tuple[int, int]) -> tuple[float, float, float, flo
     return fx, fy, 1.0 - 2 * fx, 1.0 - 2 * fy
 
 
+# Every frame-kind procedural name (v2.2 wave, deliverable 7) —
+# _frame_clamp_text triggers on ANY of them, not just "rule_frame" by name,
+# since every one shares the exact same inset geometry _frame_inner_rect
+# already computes (see the frame-family section's own header comment for
+# why that generalization is safe).
+FRAME_PROCEDURAL_KINDS: frozenset[str] = frozenset({
+    "rule_frame", "frame_hairline", "frame_thickthin", "frame_corners",
+    "frame_deco", "frame_octagon"})
+
+
 def _frame_clamp_text(text_by_id: dict[str, TextSlot], spec: CoverSpec,
                       canvas: tuple[int, int],
                       warnings: list[str]) -> dict[str, TextSlot]:
-    """Intersect every text zone with the rule frame's inner rect (when the
-    spec declares one) so type can never cross a frame the cover promised.
-    A clamp that would crush a zone below _FRAME_CLAMP_MIN_WIDTH of its
-    declared width refuses instead — the warning hands that collision to
-    the judge, because microscopic type is the worse failure."""
-    if not any(a.procedural == "rule_frame" for a in spec.art):
+    """Intersect every text zone with the frame's inner rect (when the spec
+    declares ANY frame-family procedural slot — see FRAME_PROCEDURAL_KINDS)
+    so type can never cross a frame the cover promised. A clamp that would
+    crush a zone below _FRAME_CLAMP_MIN_WIDTH of its declared width refuses
+    instead — the warning hands that collision to the judge, because
+    microscopic type is the worse failure."""
+    if not any(a.procedural in FRAME_PROCEDURAL_KINDS for a in spec.art):
         return text_by_id
     fx, fy, fw, fh = _frame_inner_rect(canvas)
     out: dict[str, TextSlot] = {}
@@ -1289,6 +1871,11 @@ PROCEDURAL_SYNTHESIZERS = {
     "canvas": _synth_canvas,
     "speckle": _synth_speckle,
     "rule_frame": _synth_rule_frame,
+    "frame_hairline": _synth_frame_hairline,
+    "frame_thickthin": _synth_frame_thickthin,
+    "frame_corners": _synth_frame_corners,
+    "frame_deco": _synth_frame_deco,
+    "frame_octagon": _synth_frame_octagon,
 }
 
 
@@ -1403,6 +1990,49 @@ def _sticker(img: Image.Image, palette: Palette, canvas: tuple[int, int]) -> Ima
     return layer
 
 
+# -- photo_soft (v2.2 wave, deliverable 6) -------------------------------
+#
+# The one treatment that makes a photographic/photoreal art prompt
+# shelf-safe: a photo's own fine detail and lighting are exactly where a
+# generator's fingerprints show (direction.py's own doctrine, updated
+# alongside this treatment, now permits a photographic prompt ONLY when
+# paired with photo_soft — or duotone/silhouette). Blur softens generation
+# artifacts; full desaturation kills any off-palette color cast before the
+# ramp ever sees it; a slight contrast lift keeps a blurred grayscale from
+# reading flat/muddy; a light grain, mixed into the LUMINANCE signal (not
+# composited after); then the same background->primary duotone ramp every
+# other photo-adjacent treatment already reuses (_duotone) — deliberately
+# the LAST step, so _duotone's own "every opaque output pixel's color lies
+# exactly on the ramp line" guarantee still holds verbatim for photo_soft's
+# own output: a grain pattern still shows (it perturbs which point on the
+# ramp a pixel lands at), but every resulting pixel is still a real ramp
+# color, never a gray fleck sitting off it.
+
+_PHOTO_SOFT_BLUR_FRACTION = 0.004     # of canvas height, gaussian blur radius
+_PHOTO_SOFT_CONTRAST_FACTOR = 1.15    # slight lift so a blurred, desaturated
+                                      # photo doesn't read flat/muddy
+_PHOTO_SOFT_GRAIN_STRENGTH = 0.12     # 0..1, how much the grain field
+                                      # perturbs luminance before the ramp
+
+
+def _photo_soft(img: Image.Image, palette: Palette) -> Image.Image:
+    """Canvas size is read off `img.size` itself (every art image reaching
+    a treatment is already canvas-sized by this module's own invariant —
+    the same convention `_sticker` above already relies on) rather than
+    threading a separate `canvas` parameter through _apply_treatment's
+    whole call chain."""
+    canvas = img.size
+    ch = canvas[1]
+    blur_px = max(0.0, _PHOTO_SOFT_BLUR_FRACTION * ch)
+    blurred = img.filter(ImageFilter.GaussianBlur(blur_px)) if blur_px > 0 else img
+    gray = ImageOps.grayscale(blurred)
+    lifted = ImageEnhance.Contrast(gray).enhance(_PHOTO_SOFT_CONTRAST_FACTOR)
+    grain = _grain_layer(canvas).getchannel("R")   # fixed-seed, deterministic
+    mixed = Image.blend(lifted, grain, _PHOTO_SOFT_GRAIN_STRENGTH)
+    grayscale_rgba = Image.merge("RGBA", (mixed, mixed, mixed, img.getchannel("A")))
+    return _duotone(grayscale_rgba, palette)
+
+
 def _apply_treatment(img: Image.Image, treatment: str, palette: Palette,
                      slot_id: str, has_alpha: bool
                      ) -> tuple[Image.Image, str | None]:
@@ -1410,8 +2040,8 @@ def _apply_treatment(img: Image.Image, treatment: str, palette: Palette,
     `sticker`'s one stateful exception: on an opaque slot (no real alpha to
     dilate — see _has_transparency) it is a documented no-op, not a crash,
     and returns a warning sentence instead of a treated image. The other
-    three treatments have no such precondition — duotone/silhouette/
-    posterize are well-defined on a fully opaque image too (silhouette
+    treatments have no such precondition — duotone/silhouette/posterize/
+    photo_soft are well-defined on a fully opaque image too (silhouette
     just becomes one flat rectangle; not wrong, just usually not what an
     archetype author wants on a full-bleed background)."""
     if treatment == "none":
@@ -1422,6 +2052,8 @@ def _apply_treatment(img: Image.Image, treatment: str, palette: Palette,
         return _silhouette(img, palette), None
     if treatment == "posterize":
         return _posterize(img, palette), None
+    if treatment == "photo_soft":
+        return _photo_soft(img, palette), None
     if treatment == "sticker":
         if not has_alpha:
             return img, (
@@ -1669,6 +2301,8 @@ def _apply_scrim(base: Image.Image, scrim: ScrimSpec, strength: float,
                               left, top, right, bottom, canvas)
     elif scrim.kind == "vignette":
         _paint_vignette_scrim(overlay, rgb, strength, left, top, right, bottom)
+    elif scrim.kind == "halo":
+        _paint_halo_scrim(overlay, rgb, strength, left, top, right, bottom, canvas)
     out = base.copy()
     out.alpha_composite(overlay)
     return out
@@ -1692,9 +2326,17 @@ def _apply_scrim(base: Image.Image, scrim: ScrimSpec, strength: float,
 # scrim using `panel` just means escalation raises THIS local panel's
 # opacity instead of a hard box's.
 
-_PANEL_FEATHER_FRACTION = 0.028       # of canvas height, gaussian blur sigma cap
-_PANEL_FEATHER_RECT_FRACTION = 0.22   # cap as a fraction of the rect's shorter side
-_PANEL_CORNER_FRACTION = 0.30         # corner radius, as a fraction of the
+# v2.2 wave, deliverable 2: doubled feather (0.028 -> 0.056, 0.22 -> 0.44)
+# and a more aggressive corner radius (0.30 -> 0.55) — reference-DNA
+# feedback on a live render ("the text for Lighthouse has a box around it")
+# traced to a panel escalated near its strength cap still reading as a
+# slab with a soft edge, not a shadow. The clip-to-rect guarantee below is
+# UNCHANGED (a panel still provably never dims a pixel outside its own
+# rect) — only how far the feather/rounding push in from that boundary
+# before the hard clip lands.
+_PANEL_FEATHER_FRACTION = 0.056       # of canvas height, gaussian blur sigma cap
+_PANEL_FEATHER_RECT_FRACTION = 0.44   # cap as a fraction of the rect's shorter side
+_PANEL_CORNER_FRACTION = 0.55         # corner radius, as a fraction of the
                                       # rect's shorter side / 2
 
 
@@ -1730,6 +2372,65 @@ def _paint_local_panel_scrim(overlay: Image.Image, rgb: tuple[int, int, int],
         alpha = alpha.point(lambda v: round(v * strength))
     block = Image.new("RGBA", canvas, (*rgb, 0))
     block.putalpha(alpha)
+    overlay.alpha_composite(block)
+
+
+# -- halo scrim (v2.2 wave, deliverable 2) ------------------------------------
+#
+# "The text for Lighthouse has a box around it" — even the redesigned local
+# panel scrim (above) is fundamentally a rectangle, and an escalated one can
+# still read as a slab once its strength climbs. `halo` is not a softer
+# panel; it is a different SHAPE of protection entirely — a radial darkening
+# blurred at such a large sigma relative to its own zone that no edge, soft
+# or hard, is ever discernible anywhere. Escalation still just raises
+# `strength` (the legibility autopilot's contract is unchanged); a halo
+# getting stronger only ever means "more atmosphere," never "a harder box."
+
+_HALO_SIGMA_FRACTION = 0.30   # of the zone's own diagonal — large enough
+                              # that the blurred result has no measurable
+                              # edge anywhere near the zone boundary (see
+                              # this wave's own halo edge-softness test).
+                              # Tuned down from an initial ~0.60 (the
+                              # deliverable's own rough starting figure):
+                              # on the real "Lighthouse" cover this note
+                              # was written about, 0.60 spread the
+                              # darkening thin enough that title contrast
+                              # still fell short of threshold even at max
+                              # scrim strength AND the ink-color flip —
+                              # 0.30 concentrates it enough to pass
+                              # legibility again while max adjacent-pixel
+                              # alpha step stays at ~1 either way (both
+                              # values are already so far past "no
+                              # discernible edge" that the difference is
+                              # invisible; only the CENTER strength moves)
+
+
+def _paint_halo_scrim(overlay: Image.Image, rgb: tuple[int, int, int],
+                      strength: float, left: int, top: int, right: int,
+                      bottom: int, canvas: tuple[int, int]) -> None:
+    """A radial soft darkening centered on the scrim's own rect: a filled
+    ellipse the size of the zone, Gaussian-blurred at a sigma proportional
+    to the zone's OWN diagonal (so a small `series` eyebrow and a huge
+    `title` block both get a halo that reads as atmosphere relative to
+    their own size, the same "proportional, not fixed-px" reasoning
+    _paint_local_panel_scrim's own feather cap already applies). Unlike the
+    panel scrim, this is deliberately left UNCLIPPED to its own rect after
+    blurring — hard-clipping a blurred ellipse would just reintroduce the
+    "box around the text" problem this scrim kind exists to avoid; a halo
+    is allowed (expected) to fade past its own nominal zone, the way real
+    falloff light or shadow does."""
+    w, h = right - left, bottom - top
+    if w <= 0 or h <= 0:
+        return
+    diagonal = math.hypot(w, h)
+    sigma = max(1.0, _HALO_SIGMA_FRACTION * diagonal)
+    mask = Image.new("L", canvas, 0)
+    ImageDraw.Draw(mask).ellipse((left, top, right - 1, bottom - 1), fill=255)
+    blurred = mask.filter(ImageFilter.GaussianBlur(sigma))
+    if strength < 1.0:
+        blurred = blurred.point(lambda v: round(v * strength))
+    block = Image.new("RGBA", canvas, (*rgb, 0))
+    block.putalpha(blurred)
     overlay.alpha_composite(block)
 
 

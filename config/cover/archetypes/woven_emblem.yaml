@@ -5,7 +5,9 @@
 #  1. flat confident ground (procedural, no murky gradient-to-nowhere)
 #  2. type IS the hero (huge stacked serif caps, size_max 0.17)
 #  3. interweaving — the `weave` slot is drawn AFTER `title` in `layers`,
-#     so its ornament visibly crosses the title's own lower edge
+#     snapped (v2.2 wave: snap: line_gap) into the real gap between the
+#     title's own fitted lines, so its ornament visibly interweaves
+#     without ever crossing a letterform
 #  4. ornament replaces scene (rule frame + mirrored corner vine, no scene)
 #  5. silhouette/duotone illustration (every generated slot: `treatment:
 #     silhouette` — tone-on-tone, one flat ink color, never a raw
@@ -65,16 +67,19 @@ art:
     generatable: true
     fit: contain
     transparent: true            # a vine/ribbon/branch, not a scene
-    # v2.1 BODY-fix wave: nudged down ~3% of canvas (0.722 -> 0.75) so the
-    # vine crosses the title's OWN descender/line-height margin below the
-    # last line's baseline, not straight through the glyphs' main body — a
-    # live render's vine cut across the middle of the letterforms instead
-    # of threading beneath them. Still well inside the title zone's own
-    # bottom edge (0.38 + 0.36 = 0.74) — reliable because valign: bottom
-    # above pins the last line there regardless of title length.
+    # v2.2 wave: snap: line_gap replaces the v2.1 BODY-fix wave's guessed
+    # fixed-anchor nudge (0.722 -> 0.75, aimed at "somewhere below the
+    # baseline") with EXACT positioning — the vine's own center now lands
+    # in the real largest gap between the title's actually-fitted lines,
+    # wherever that falls for a given title's line count and length,
+    # rather than a fraction tuned against one sample render. anchor.y
+    # below is now only the one-line-title fallback's rough neighborhood
+    # (see compose._snap_to_line_gap); anchor.x still centers it
+    # horizontally either way.
     anchor: [0.5, 0.75]
     scale: 0.40
     treatment: silhouette
+    snap: line_gap
 scrims:
   # De-muted by design (v2 BODY wave): strength starts at 0, so nothing
   # dims anything unless the legibility autopilot actually measures a
@@ -98,9 +103,11 @@ text:
     # HUGE stacked serif caps — type IS the hero (§2 of the doctrine):
     # size_max 0.17 comfortably clears the 0.13 floor, max_lines 4.
     # valign bottom (not the usual middle) is deliberate: it pins the LAST
-    # line's own baseline to the same y regardless of how many lines a
-    # given title needs, so `weave`'s fixed anchor below reliably crosses
-    # that last line for a two-word title and a six-word one alike.
+    # line's own baseline to a predictable neighborhood regardless of how
+    # many lines a given title needs — `weave`'s snap: line_gap (v2.2
+    # wave) still measures the ACTUAL fitted lines itself, so this is a
+    # belt-and-suspenders convenience, not a hard dependency the way a
+    # fixed anchor nudge used to be.
     zone: {x: 0.06, y: 0.38, w: 0.88, h: 0.36}
     case: upper
     valign: bottom
@@ -127,8 +134,9 @@ text:
     size_max: 0.032
 # background -> paper -> rule_frame -> corner_vine -> emblem -> (scrims) ->
 # series -> title -> WEAVE -> subtitle -> author. `weave` drawn AFTER
-# `title` is the point of this archetype (§3 of the doctrine): it paints
-# back over the title's own lower rows, so the ornament visibly threads
-# across the letterforms instead of sitting politely beside them.
+# `title` is the point of this archetype (§3 of the doctrine) — but v2.2's
+# snap: line_gap means it now threads the real WHITESPACE between two
+# fitted lines rather than painting back over their ink, so the ornament
+# visibly interweaves with the title without ever touching a letterform.
 layers: [background, paper, rule_frame, corner_vine, emblem, "scrim:0",
         "scrim:1", series, title, weave, subtitle, author]

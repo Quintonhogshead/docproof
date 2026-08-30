@@ -256,10 +256,13 @@ def test_artprompt_slot_rejects_invalid_slug():
 
 # -- v2 BODY wave: procedural synthesizer selection --------------------------
 
-def test_procedural_kinds_is_the_documented_seven():
+def test_procedural_kinds_is_the_documented_twelve():
+    # v2.2 wave, deliverable 7: the original seven plus the frame family's
+    # five new siblings.
     assert set(PROCEDURAL_KINDS) == {
         "gradient", "grain", "paper", "halftone", "canvas", "speckle",
-        "rule_frame"}
+        "rule_frame", "frame_hairline", "frame_thickthin", "frame_corners",
+        "frame_deco", "frame_octagon"}
 
 
 @pytest.mark.parametrize("name", PROCEDURAL_KINDS)
@@ -611,3 +614,45 @@ def test_coverspec_text_mask_from_off_by_default_needs_no_validation():
                      palette=_palette(), art=[], scrims=[], text=text,
                      layers=[LayerRef(kind="text", ref="title")])
     assert spec.text[0].mask_from == ""
+
+
+# -- v2.2 wave, deliverable 7: CoverSpec._notch_for_resolves -----------------
+# (existence and not-self-reference only — like text mask_from, no ordering
+# requirement: compose._apply_frame_notches runs as a finishing pass once
+# every art slot is already positioned, so a notch_for target may legally
+# come earlier OR later than the frame in `layers`.)
+
+def test_coverspec_notch_for_unknown_slot_fails_validation():
+    art = [ArtSlot(id="frame", procedural="rule_frame", notch_for="nonexistent")]
+    with pytest.raises(ValidationError, match="notch_for"):
+        CoverSpec(archetype="x", concept_name="x", rationale="x",
+                 palette=_palette(), art=art, scrims=[], text=[],
+                 layers=[LayerRef(kind="art", ref="frame")])
+
+
+def test_coverspec_notch_for_self_reference_fails_validation():
+    art = [ArtSlot(id="frame", procedural="rule_frame", notch_for="frame")]
+    with pytest.raises(ValidationError, match="notch_for"):
+        CoverSpec(archetype="x", concept_name="x", rationale="x",
+                 palette=_palette(), art=art, scrims=[], text=[],
+                 layers=[LayerRef(kind="art", ref="frame")])
+
+
+def test_coverspec_notch_for_valid_reference_passes_regardless_of_order():
+    # The target ("emblem") is drawn AFTER the frame here — legal, since
+    # the notch is applied once every art slot is already positioned.
+    art = [ArtSlot(id="frame", procedural="rule_frame", notch_for="emblem"),
+          ArtSlot(id="emblem", transparent=True)]
+    spec = CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=art, scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="frame"),
+                            LayerRef(kind="art", ref="emblem")])
+    assert spec.art[0].notch_for == "emblem"
+
+
+def test_coverspec_notch_for_off_by_default_needs_no_validation():
+    art = [ArtSlot(id="frame", procedural="rule_frame")]
+    spec = CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=art, scrims=[], text=[],
+                     layers=[LayerRef(kind="art", ref="frame")])
+    assert spec.art[0].notch_for == ""

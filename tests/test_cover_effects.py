@@ -183,12 +183,25 @@ def test_artslot_effects_rack_fields_default_off():
     assert slot.scatter == 0
 
 
+def test_artslot_v22_fields_default_off():
+    # v2.2 wave: gravity-safe corners, line-gap snap, the texture shelf,
+    # and frame notches all default to their pre-existing behavior — a
+    # spec/archetype written before this wave keeps rendering unchanged.
+    slot = ArtSlot(id="focal")
+    assert slot.corners_flip_vertical is False
+    assert slot.snap == ""
+    assert slot.texture_file == ""
+    assert slot.texture_fit == "cover"
+    assert slot.notch_for == ""
+
+
 @pytest.mark.parametrize("slot_id", ["background", "focal", "focal2", "foreground", "texture"])
 def test_artslot_id_accepts_every_widened_slot_id(slot_id):
     assert ArtSlot(id=slot_id).id == slot_id
 
 
-@pytest.mark.parametrize("treatment", ["none", "duotone", "silhouette", "posterize", "sticker"])
+@pytest.mark.parametrize("treatment", ["none", "duotone", "silhouette", "posterize",
+                                       "sticker", "photo_soft"])
 def test_artslot_accepts_every_documented_treatment(treatment):
     assert ArtSlot(id="focal", treatment=treatment).treatment == treatment
 
@@ -209,6 +222,48 @@ def test_artslot_scatter_rejects_outside_the_documented_range(value):
         ArtSlot(id="focal", scatter=value)
 
 
+@pytest.mark.parametrize("snap", ["", "line_gap"])
+def test_artslot_accepts_every_documented_snap_value(snap):
+    assert ArtSlot(id="focal", snap=snap).snap == snap
+
+
+def test_artslot_rejects_an_undocumented_snap_value():
+    with pytest.raises(ValidationError):
+        ArtSlot(id="focal", snap="magnet")
+
+
+@pytest.mark.parametrize("texture_fit", ["tile", "cover"])
+def test_artslot_accepts_every_documented_texture_fit(texture_fit):
+    assert ArtSlot(id="focal", texture_fit=texture_fit).texture_fit == texture_fit
+
+
+def test_artslot_rejects_an_undocumented_texture_fit():
+    with pytest.raises(ValidationError):
+        ArtSlot(id="focal", texture_fit="stretch")
+
+
+def test_artslot_notch_for_round_trips():
+    assert ArtSlot(id="frame", notch_for="emblem").notch_for == "emblem"
+
+
+def test_artslot_texture_file_accepts_a_real_shelf_name():
+    from docproof.cover.textures import TEXTURES
+    name = next(iter(TEXTURES))
+    assert ArtSlot(id="focal", texture_file=name).texture_file == name
+
+
+def test_artslot_texture_file_rejects_an_unknown_name():
+    # Deliverable 5's own acceptance test: an unknown texture_file fails
+    # LOUDLY at spec validation, not silently three steps later in
+    # compose() as a blank layer.
+    with pytest.raises(ValidationError, match="not on the shelf"):
+        ArtSlot(id="focal", texture_file="totally-not-a-real-plate")
+
+
+def test_scrimspec_accepts_halo_kind():
+    assert ScrimSpec(kind="halo", protects="title").kind == "halo"
+
+
 def test_artprompt_slot_accepts_every_widened_slot_id():
     for slot_id in ("background", "focal", "focal2", "foreground", "texture"):
         assert ArtPrompt(slot=slot_id, prompt="x").slot == slot_id
@@ -217,6 +272,10 @@ def test_artprompt_slot_accepts_every_widened_slot_id():
 def test_artprompt_treatment_defaults_to_none_and_is_settable():
     assert ArtPrompt(slot="focal2", prompt="x").treatment == "none"
     assert ArtPrompt(slot="focal2", prompt="x", treatment="duotone").treatment == "duotone"
+
+
+def test_artprompt_accepts_photo_soft_treatment():
+    assert ArtPrompt(slot="focal2", prompt="x", treatment="photo_soft").treatment == "photo_soft"
 
 
 def test_textslot_mode_defaults_to_fill():
@@ -564,6 +623,85 @@ def test_sticker_on_an_opaque_slot_is_a_no_op_with_a_warning(tmp_path):
 
 
 # ===========================================================================
+# v2.2 wave, deliverable 6: photo_soft treatment — the one recipe that makes
+# a photographic/photoreal art prompt shelf-safe (blur, desaturate, contrast
+# lift, grain, then the duotone ramp).
+# ===========================================================================
+
+def _sharp_split_png(path: Path, size: tuple[int, int],
+                     left_rgb: tuple[int, int, int] = (255, 0, 0),
+                     right_rgb: tuple[int, int, int] = (0, 100, 255)) -> None:
+    """A hard vertical edge, one fully saturated color on each side, no
+    anti-aliasing at all — a stand-in for "photographic detail" sharp
+    enough that ANY real blur leaves a visible transitional band at the
+    seam, which is exactly what photo_soft's own "measurably blurred"
+    acceptance test needs to detect."""
+    img = Image.new("RGB", size)
+    px = img.load()
+    half = size[0] // 2
+    for x in range(size[0]):
+        rgb = left_rgb if x < half else right_rgb
+        for y in range(size[1]):
+            px[x, y] = rgb
+    img.convert("RGBA").save(path)
+
+
+def test_photo_soft_output_only_uses_ramp_colors_and_is_measurably_blurred(tmp_path):
+    _sharp_split_png(tmp_path / "photo.png", CANVAS)
+    bg_hex, fg_hex = "#102040", "#fdf6e3"
+    palette = _palette(background=bg_hex, primary=fg_hex)
+    spec = _spec(art=[_art(id="focal", asset="photo.png", fit="cover", treatment="photo_soft")],
+                layers=[LayerRef(kind="art", ref="focal")], palette=palette)
+
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+    # Only ramp hues survive — the same background->primary duotone ramp
+    # duotone's own test above already holds to, since photo_soft's own
+    # LAST step is a real call to _duotone (see the treatment's own
+    # docstring for why grain is mixed into the luminance signal BEFORE
+    # the ramp, not composited after — specifically so this guarantee
+    # carries over verbatim rather than being merely "close").
+    bg, fg = ImageColor.getrgb(bg_hex), ImageColor.getrgb(fg_hex)
+    allowed = {tuple(round(bg[c] + (fg[c] - bg[c]) * i / 255) for c in range(3))
+              for i in range(256)}
+    colors = set(image.getdata())
+    assert colors <= allowed
+    assert len(colors) > 1   # real tonal range, not a flat wash
+
+    # Measurably blurred: the SOURCE had a razor-sharp vertical edge at the
+    # midline (one solid color, then another, no transition at all) —
+    # sampling straight across it in the output now shows a real
+    # transitional band of intermediate values, not a single-pixel jump
+    # from one ramp endpoint straight to the other.
+    cy = CANVAS[1] // 2
+    mid = CANVAS[0] // 2
+    row = [image.getpixel((x, cy))[0] for x in range(mid - 8, mid + 8)]
+    assert len(set(row)) > 2, f"edge still reads as a hard 2-value split: {row}"
+
+
+def test_photo_soft_is_deterministic_across_composes(tmp_path):
+    _sharp_split_png(tmp_path / "photo.png", (200, 100))
+    spec = _spec(art=[_art(id="focal", asset="photo.png", fit="cover", treatment="photo_soft")],
+                layers=[LayerRef(kind="art", ref="focal")])
+    image1, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image2, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image1.tobytes() == image2.tobytes()
+
+
+def test_photo_soft_needs_no_transparency_precondition(tmp_path):
+    # Unlike sticker, photo_soft has no "transparent slots only"
+    # precondition — well-defined (and expected to be used) on a fully
+    # opaque photographic background, with no warning at all.
+    _flat_opaque_png(tmp_path / "photo.png", (100, 100), (200, 60, 40))
+    spec = _spec(art=[_art(id="focal", asset="photo.png", fit="cover", treatment="photo_soft")],
+                layers=[LayerRef(kind="art", ref="focal")])
+
+    _image, report = compose(spec, tmp_path, canvas=CANVAS)
+
+    assert not any("photo_soft" in w for w in report.warnings)
+
+
+# ===========================================================================
 # compose(): mask_from double exposure
 # ===========================================================================
 
@@ -600,6 +738,13 @@ def test_mask_from_keeps_the_later_slots_pixels_only_inside_the_earlier_slots_sh
 # ===========================================================================
 
 def test_corners_mirrors_the_ornament_into_all_four_corners_exactly(tmp_path):
+    # v2.2 wave, deliverable 1 (gravity-safe corners): the DEFAULT is no
+    # longer a full kaleidoscope mirror — bottom copies stay upright (only
+    # horizontally mirrored on the right side), so top-left/bottom-left are
+    # byte-identical to each other and top-right/bottom-right are
+    # byte-identical to each other. See
+    # test_corners_flip_vertical_restores_the_old_full_mirror_behavior for
+    # the opt-in full-mirror case.
     _asymmetric_blob_png(tmp_path / "ornament.png", (100, 100))
     spec = _spec(art=[_art(id="focal2", asset="ornament.png", corners=True, scale=0.25)],
                 layers=[LayerRef(kind="art", ref="focal2")])
@@ -618,8 +763,8 @@ def test_corners_mirrors_the_ornament_into_all_four_corners_exactly(tmp_path):
 
     assert top_left.tobytes() != top_right.tobytes()   # genuinely asymmetric source
     assert top_right.tobytes() == ImageOps.mirror(top_left).tobytes()
-    assert bottom_left.tobytes() == ImageOps.flip(top_left).tobytes()
-    assert bottom_right.tobytes() == ImageOps.flip(ImageOps.mirror(top_left)).tobytes()
+    assert bottom_left.tobytes() == top_left.tobytes()       # upright, not v-flipped
+    assert bottom_right.tobytes() == top_right.tobytes()     # upright, not v-flipped
     # Not a blanket "no warnings at all": this minimal hand-built spec is a
     # small corner ornament on an otherwise blank canvas (no background
     # layer at all), so the v2.1 BODY-fix wave's dead-band metric is
@@ -635,6 +780,71 @@ def test_corners_mirrors_the_ornament_into_all_four_corners_exactly(tmp_path):
     for edge in (image.crop((0, 0, cw, 1)), image.crop((0, ch - 1, cw, ch)),
                 image.crop((0, 0, 1, ch)), image.crop((cw - 1, 0, cw, ch))):
         assert set(edge.getdata()) == {(0, 0, 0)}
+
+
+def test_corners_flip_vertical_restores_the_old_full_mirror_behavior(tmp_path):
+    # corners_flip_vertical=True is the v2.2 wave's opt-in for a genuinely
+    # top/bottom-symmetric ornament that WANTS the fuller kaleidoscope
+    # effect — byte-for-byte the original (pre-gravity-fix) behavior.
+    _asymmetric_blob_png(tmp_path / "ornament.png", (100, 100))
+    spec = _spec(art=[_art(id="focal2", asset="ornament.png", corners=True,
+                          corners_flip_vertical=True, scale=0.25)],
+                layers=[LayerRef(kind="art", ref="focal2")])
+
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+    cw, ch = CANVAS
+    k = round(0.25 * ch)
+    mx, my = round(_CORNER_MARGIN_FRACTION * cw), round(_CORNER_MARGIN_FRACTION * ch)
+    top_left = image.crop((mx, my, mx + k, my + k))
+    bottom_left = image.crop((mx, ch - my - k, mx + k, ch - my))
+    bottom_right = image.crop((cw - mx - k, ch - my - k, cw - mx, ch - my))
+
+    assert bottom_left.tobytes() == ImageOps.flip(top_left).tobytes()
+    assert bottom_right.tobytes() == ImageOps.flip(ImageOps.mirror(top_left)).tobytes()
+
+
+def _bottom_heavy_probe_png(path: Path, size: tuple[int, int] = (100, 100)) -> None:
+    """A probe ornament whose own weight is concentrated at the BOTTOM — a
+    small solid square sitting flush against the source image's own bottom
+    edge, everything else transparent. The gravity regression this wave's
+    deliverable 1 asks for: "a probe ornament with a distinctive
+    bottom-heavy pixel must keep that pixel at the BOTTOM in all four
+    corners by default" — a v-flipped copy would move this mark to the
+    TOP of its own corner tile instead."""
+    img = Image.new("RGBA", size, (0, 0, 0, 0))
+    w, h = size
+    mark = round(h * 0.15)
+    ImageDraw.Draw(img).rectangle((0, h - mark, w - 1, h - 1), fill=(230, 180, 40, 255))
+    img.save(path)
+
+
+def test_corners_default_keeps_a_bottom_heavy_mark_at_the_bottom_in_every_corner(tmp_path):
+    # The gravity regression: a mirrored ornament's own bottom-heavy weight
+    # (a honey drip, a hanging charm) must not point UP on the bottom
+    # corners under the new default.
+    _bottom_heavy_probe_png(tmp_path / "drip.png")
+    spec = _spec(art=[_art(id="focal2", asset="drip.png", corners=True, scale=0.25)],
+                layers=[LayerRef(kind="art", ref="focal2")])
+
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+
+    cw, ch = CANVAS
+    k = round(0.25 * ch)
+    mx, my = round(_CORNER_MARGIN_FRACTION * cw), round(_CORNER_MARGIN_FRACTION * ch)
+    tiles = {
+        "top_left": image.crop((mx, my, mx + k, my + k)),
+        "top_right": image.crop((cw - mx - k, my, cw - mx, my + k)),
+        "bottom_left": image.crop((mx, ch - my - k, mx + k, ch - my)),
+        "bottom_right": image.crop((cw - mx - k, ch - my - k, cw - mx, ch - my)),
+    }
+    mark_rgb = (230, 180, 40)
+    for name, tile in tiles.items():
+        tw, th = tile.size
+        top_half = set(tile.crop((0, 0, tw, th // 2)).getdata())
+        bottom_half = set(tile.crop((0, th // 2, tw, th)).getdata())
+        assert mark_rgb not in top_half, f"{name}: bottom-heavy mark floated to the top"
+        assert mark_rgb in bottom_half, f"{name}: bottom-heavy mark missing from the bottom"
 
 
 def test_place_corners_keeps_a_margin_so_nothing_touches_the_canvas_edge():

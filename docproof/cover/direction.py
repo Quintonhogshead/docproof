@@ -237,11 +237,14 @@ recognizable object, described plainly (a brass key, a single feather); \
 never a surreal composite, never anatomy on inanimate things. Prefer \
 illustrated, painterly, or graphic media (oil painting, \
 gouache, flat vector, linocut, paper-cutout collage, and the like) over \
-photorealism; ask for a photographic or photoreal render only when the \
-brief explicitly calls for photography — stylized media hide generation \
-artifacts, and photoreal is the single biggest "AI-generated" tell. The \
-composition note that keeps room for the type is appended by code \
-afterward — do not write it yourself.
+photorealism. A photographic or photoreal render is permitted ONLY when \
+paired with treatment: "photo_soft" (the dedicated blur + desaturate + \
+duotone-ramp + grain treatment that makes a photograph shelf-safe) or with \
+treatment: "duotone"/"silhouette" — an untreated (treatment: "none") \
+photographic prompt is never allowed, brief or no brief. Stylized media \
+hide generation artifacts, and a raw, untreated photoreal image is the \
+single biggest "AI-generated" tell. The composition note that keeps room \
+for the type is appended by code afterward — do not write it yourself.
 
 Image simplicity is not a vague preference — simple shapes and silhouettes \
 hide AI-generation artifacts far better than rendered detail does. For \
@@ -279,9 +282,13 @@ own convention or the brief's mood specifically earns one of: "duotone" \
 color-block conventions want this), "silhouette" (thresholds the art to one \
 flat primary shape — thriller and historical-figure conventions want this), \
 "posterize" (snaps the art to four flat palette colors — a bold poster-\
-graphic look), or "sticker" (outlines a transparent cutout with a text-\
-colored edge — collage looks want this). `treatment` is the ONLY \
-effects-rack field you ever set. Mirrored corners (ornamental-frame \
+graphic look), "sticker" (outlines a transparent cutout with a text-\
+colored edge — collage looks want this), or "photo_soft" (blurs, fully \
+desaturates, and maps a photographic image through the same duotone ramp \
+plus a light grain overlay — the treatment that makes a photographic or \
+photoreal prompt allowed at all; see the photorealism rule above). \
+`treatment` is the ONLY effects-rack field you ever set. Mirrored corners \
+(ornamental-frame \
 conventions), motif scatter (repeating-pattern conventions), double-\
 exposure masking, and knockout/art_fill title treatments (used only when \
 the archetype's type IS the hero of the cover) are archetype and revision \

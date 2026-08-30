@@ -31,6 +31,8 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
                       field_validator, model_validator)
 
+from .textures import TEXTURES
+
 # docproof/cover/archetypes.py -> docproof/cover -> docproof -> package root,
 # the same depth docproof/eval/candidate_eval.py's CANDIDATE_CASES walks, and
 # the same pattern docproof/genre.py's _genres_dir() and docproof/stages.py's
@@ -180,15 +182,38 @@ class ArchetypeArt(BaseModel):
     # mask_from/corners/scatter are never the model's to set, only the
     # archetype's (or a later revision's).
     treatment: Literal["none", "duotone", "silhouette", "posterize",
-                       "sticker"] = "none"
+                       "sticker", "photo_soft"] = "none"
     mask_from: str = ""
     corners: bool = False
+    # Mirrors docproof.cover.model.ArtSlot.corners_flip_vertical exactly
+    # (v2.2 wave, deliverable 1): False keeps all four corners-mirrored
+    # copies upright by default; True restores the original full-mirror
+    # (bottom copies also vertically flipped) for a genuinely symmetric
+    # ornament that wants it.
+    corners_flip_vertical: bool = False
     scatter: int = Field(default=0)
-    # Mirrors docproof.cover.model.ArtSlot.procedural exactly (same seven
-    # names, same "" = no-opinion default that falls back to the ORIGINAL
-    # hardcoded-by-id background/texture behavior — v2 BODY wave).
+    # Mirrors docproof.cover.model.ArtSlot.snap exactly (v2.2 wave,
+    # deliverable 3): "" = off, "line_gap" snaps a contain-fit slot drawn
+    # immediately after a text layer into that text's own largest
+    # inter-line gap instead of a fixed anchor point.
+    snap: Literal["", "line_gap"] = ""
+    # Mirrors docproof.cover.model.ArtSlot.texture_file/texture_fit exactly
+    # (v2.2 wave, deliverable 5): names a docproof.cover.textures.TEXTURES
+    # shelf plate to draw when this slot has no generated asset.
+    texture_file: str = ""
+    texture_fit: Literal["tile", "cover"] = "cover"
+    # Mirrors docproof.cover.model.ArtSlot.notch_for exactly (v2.2 wave,
+    # deliverable 7): another art slot in this SAME archetype whose
+    # positioned bbox gets erased from this slot's own painted pixels.
+    notch_for: str = ""
+    # Mirrors docproof.cover.model.ArtSlot.procedural exactly (same twelve
+    # names — the original seven plus the v2.2 wave's five frame-family
+    # entries — same "" = no-opinion default that falls back to the
+    # ORIGINAL hardcoded-by-id background/texture behavior — v2 BODY wave).
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
-                        "canvas", "speckle", "rule_frame"] = ""
+                        "canvas", "speckle", "rule_frame", "frame_hairline",
+                        "frame_thickthin", "frame_corners", "frame_deco",
+                        "frame_octagon"] = ""
 
     @field_validator("id")
     @classmethod
@@ -199,6 +224,20 @@ class ArchetypeArt(BaseModel):
     @classmethod
     def _scatter_bounds(cls, value: int) -> int:
         return _scatter_range(value)
+
+    @field_validator("texture_file")
+    @classmethod
+    def _known_texture(cls, value: str) -> str:
+        """Mirrors docproof.cover.model.ArtSlot._known_texture exactly —
+        re-validated here so a malformed SHIPPED archetype fails at import
+        (this module's own "fails LOUDLY" philosophy — see the module
+        docstring), not only the first time a real brief builds a spec
+        from it."""
+        if value and value not in TEXTURES:
+            raise ValueError(
+                f"texture_file {value!r} is not on the shelf — known "
+                f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
+        return value
 
     @field_validator("anchor", "offset")
     @classmethod
@@ -221,7 +260,9 @@ class ArchetypeScrim(BaseModel):
     is not offered rather than offered-and-unused."""
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["gradient_down", "gradient_up", "vignette", "panel"] = "panel"
+    # Mirrors docproof.cover.model.ScrimSpec.kind exactly — "halo" (v2.2
+    # wave, deliverable 2) added alongside the original four.
+    kind: Literal["gradient_down", "gradient_up", "vignette", "panel", "halo"] = "panel"
     protects: Literal["title", "subtitle", "author", "series"] | None = None
     strength: float = Field(default=0.0, ge=0.0, le=1.0)
 
@@ -376,6 +417,30 @@ class Archetype(BaseModel):
                 raise ValueError(
                     f"{self.name}: text slot {slot.id!r} has mask_from="
                     f"{slot.mask_from!r}, which is not one of this "
+                    f"archetype's art slots ({', '.join(sorted(art_ids))})")
+        return self
+
+    @model_validator(mode="after")
+    def _notch_for_exists(self) -> Archetype:
+        """Mirrors docproof.cover.model.CoverSpec's own
+        _notch_for_resolves (v2.2 wave, deliverable 7) — existence and
+        not-self-reference only, no "precedes" requirement, for the same
+        reason _text_mask_from_exists has none: the notch is applied as a
+        finishing pass once every art slot in an archetype is already
+        positioned, so draw order between a frame and its notch_for target
+        never matters."""
+        art_ids = {a.id for a in self.art}
+        for slot in self.art:
+            if not slot.notch_for:
+                continue
+            if slot.notch_for == slot.id:
+                raise ValueError(
+                    f"{self.name}: art slot {slot.id!r} cannot set "
+                    f"notch_for to itself")
+            if slot.notch_for not in art_ids:
+                raise ValueError(
+                    f"{self.name}: art slot {slot.id!r} has notch_for="
+                    f"{slot.notch_for!r}, which is not one of this "
                     f"archetype's art slots ({', '.join(sorted(art_ids))})")
         return self
 

@@ -26,6 +26,7 @@ from pydantic import (BaseModel, ConfigDict, Field, create_model,
 
 from .archetypes import Archetype
 from .fonts import FAMILIES
+from .textures import TEXTURES
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -72,8 +73,11 @@ ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", 
 # deterministic Pillow ops compose.py applies after fit/placement and before
 # compositing. "none" is the default on every launch archetype and every
 # archetype this session did not explicitly retrofit — the rack is opt-in,
-# never a surprise on an existing cover.
-ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize", "sticker")
+# never a surprise on an existing cover. "photo_soft" (v2.2 wave) is the
+# one treatment a photographic/photoreal art prompt may ever pair with —
+# see direction.py's own photorealism doctrine.
+ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize",
+                                   "sticker", "photo_soft")
 
 # The named procedural synthesizers (v2 BODY wave) an ArchetypeArt/ArtSlot
 # may request via `procedural: <name>` instead of (or as the no-asset
@@ -86,7 +90,11 @@ ART_TREATMENTS: tuple[str, ...] = ("none", "duotone", "silhouette", "posterize",
 # loudly at spec-validation/archetype-load time, not silently as a blank
 # layer three steps later in compose().
 PROCEDURAL_KINDS: tuple[str, ...] = (
-    "gradient", "grain", "paper", "halftone", "canvas", "speckle", "rule_frame")
+    "gradient", "grain", "paper", "halftone", "canvas", "speckle", "rule_frame",
+    # v2.2 wave, deliverable 7: the frame family — rule_frame's siblings, all
+    # parameterized off the same inset constants (see compose._frame_inner_rect).
+    "frame_hairline", "frame_thickthin", "frame_corners", "frame_deco",
+    "frame_octagon")
 
 
 def _validate_scatter(value: int) -> int:
@@ -290,16 +298,47 @@ class ArtSlot(BaseModel):
     # never arrived, which is a graceful, designed fallback rather than a
     # blank layer.
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
-                        "canvas", "speckle", "rule_frame"] = ""
+                        "canvas", "speckle", "rule_frame", "frame_hairline",
+                        "frame_thickthin", "frame_corners", "frame_deco",
+                        "frame_octagon"] = ""
 
     # -- effects rack (§7.4a) — archetype/revision territory; a fresh
     # art-direction call only ever sets `treatment` (via ArtPrompt, folded in
     # by build_spec), never these four directly. ------------------------------
     treatment: Literal["none", "duotone", "silhouette", "posterize",
-                       "sticker"] = "none"
+                       "sticker", "photo_soft"] = "none"
     mask_from: str = ""                        # another art slot's id, or "" = off
     corners: bool = False                      # mirror into all four corners (transparent slots)
+    # v2.2 wave, deliverable 1 (gravity-safe corners): by default, corners
+    # placement keeps all four copies upright (only h-mirrored on the right
+    # side) — a v-flipped bottom copy reads as gravity-defying for any
+    # ornament whose own weight isn't top/bottom symmetric (a honey drip
+    # pointing UP on the bottom corners, say). Set True to restore the
+    # original full-mirror-into-all-four behavior, for a genuinely
+    # symmetric ornament that wants it.
+    corners_flip_vertical: bool = False
     scatter: int = Field(default=0)            # stamp N copies, 0 = off (transparent slots)
+    # v2.2 wave, deliverable 3 (line-gap snap): "" = off (place normally via
+    # anchor/scale/offset). "line_gap" only applies to a contain-fit slot
+    # whose layer draws immediately after a text layer — it centers the
+    # ornament in the largest real gap between that text's own fitted
+    # lines instead of at a fixed anchor point that has no idea where the
+    # glyphs actually landed. See compose._snap_to_line_gap.
+    snap: Literal["", "line_gap"] = ""
+    # v2.2 wave, deliverable 5 (texture shelf): names a
+    # docproof.cover.textures.TEXTURES plate to draw when this slot has no
+    # `asset` on disk — a third tier alongside `procedural` (checked first,
+    # since a stocked plate is a more deliberate choice than a generic
+    # procedural fallback), rendered per `texture_fit` and composited with
+    # this slot's own opacity/blend like any other layer. "" = no opinion.
+    texture_file: str = ""
+    texture_fit: Literal["tile", "cover"] = "cover"
+    # v2.2 wave, deliverable 7 (frame family + interactions): names another
+    # art slot in this spec whose positioned alpha bbox (padded ~1.5%) gets
+    # erased from THIS slot's own painted pixels — a frame politely
+    # breaking around an emblem that overlaps it. "" = off. See
+    # compose._apply_frame_notches.
+    notch_for: str = ""
 
     @field_validator("id")
     @classmethod
@@ -311,11 +350,29 @@ class ArtSlot(BaseModel):
     def _scatter_range(cls, value: int) -> int:
         return _validate_scatter(value)
 
+    @field_validator("texture_file")
+    @classmethod
+    def _known_texture(cls, value: str) -> str:
+        """Mirrors TextSlot._known_family exactly (same shape: "" is always
+        fine — no opinion — and a non-empty name must already be on the
+        shelf) — "fails loudly at spec validation" for an unknown
+        texture_file, per this wave's own acceptance test, rather than
+        silently drawing nothing three steps later in compose()."""
+        if value and value not in TEXTURES:
+            raise ValueError(
+                f"texture_file {value!r} is not on the shelf — known "
+                f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
+        return value
+
 
 class ScrimSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["gradient_down", "gradient_up", "vignette", "panel"] = "panel"
+    # "halo" (v2.2 wave, deliverable 2): a radial soft darkening centered on
+    # the protected zone, blurred at a scale that never leaves a
+    # discernible edge anywhere — pure atmosphere behind text, never a
+    # panel with soft corners. See compose._paint_halo_scrim.
+    kind: Literal["gradient_down", "gradient_up", "vignette", "panel", "halo"] = "panel"
     zone: Zone | None = None                   # None = derived from the protected TextSlot
     protects: Literal["title", "subtitle", "author", "series"] | None = None
     strength: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -427,6 +484,31 @@ class CoverSpec(BaseModel):
                     f"spec (art slots: {', '.join(sorted(art_ids)) or 'empty'})")
         return self
 
+    @model_validator(mode="after")
+    def _notch_for_resolves(self) -> CoverSpec:
+        """v2.2 wave, deliverable 7: ArtSlot.notch_for must name a real,
+        DIFFERENT art slot in this spec. Unlike ArtSlot.mask_from
+        (_mask_from_precedes, above), ordering never matters here —
+        compose._apply_frame_notches runs as a finishing pass once every
+        art slot is already positioned (a notch_for target frequently comes
+        LATER in z-order than the frame itself: corner_vine/emblem draw
+        after rule_frame in woven_emblem, for instance), so this checks
+        existence and self-reference only, mirroring
+        _text_mask_from_resolves' own "no precedes requirement" reasoning."""
+        art_ids = {a.id for a in self.art}
+        for slot in self.art:
+            if not slot.notch_for:
+                continue
+            if slot.notch_for == slot.id:
+                raise ValueError(
+                    f"art slot {slot.id!r} cannot set notch_for to itself")
+            if slot.notch_for not in art_ids:
+                raise ValueError(
+                    f"art slot {slot.id!r} has notch_for={slot.notch_for!r}, "
+                    f"which is not an art slot in this spec (art slots: "
+                    f"{', '.join(sorted(art_ids))})")
+        return self
+
 
 class RenderReport(BaseModel):
     """What one compose() call found, for the "did this actually come out
@@ -475,8 +557,11 @@ class ArtPrompt(BaseModel):
     # build_spec folds this onto the matching ArtSlot.treatment for a
     # generatable slot; mask_from/corners/scatter/TextSlot.mode stay
     # archetype/revision territory (direction.py's system prompt says so).
+    # "photo_soft" (v2.2 wave) is the one treatment that makes a
+    # photographic/photoreal art prompt allowed at all — see direction.py's
+    # photorealism doctrine.
     treatment: Literal["none", "duotone", "silhouette", "posterize",
-                       "sticker"] = "none"
+                       "sticker", "photo_soft"] = "none"
 
     @field_validator("slot")
     @classmethod
@@ -607,7 +692,12 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             treatment=prompt_treatments.get(slot.id, slot.treatment),
             mask_from=slot.mask_from,
             corners=slot.corners,
+            corners_flip_vertical=slot.corners_flip_vertical,
             scatter=slot.scatter,
+            snap=slot.snap,
+            texture_file=slot.texture_file,
+            texture_fit=slot.texture_fit,
+            notch_for=slot.notch_for,
             procedural=slot.procedural))
 
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
