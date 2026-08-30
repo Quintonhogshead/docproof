@@ -1,0 +1,17 @@
+# The spec's own worked example (docs/cover_designer_spec.md §15.6),
+# verbatim but for one substitution: the spec's `paper_tooth` plate does not
+# exist on the shipped texture shelf (config/cover/textures/), so the
+# nearest real plate — laid_paper, the shelf's actual paper-tooth texture —
+# stands in. Grounded in docs/cover_template_research.md #13/#15 (literary/
+# memoir: matte, restrained, tactile-print surfaces) and #12 (historical's
+# muted, sun-faded palettes).
+name: vintage_matte
+describe: >-
+  Sun-faded trade paperback: lifted blacks, warm wash, paper tooth, corner
+  shading, soft grain. Literary, memoir, historical.
+finish:                       # appended ABOVE the whole stack, text included, in order
+  - adjust: {id: fx_lift,  op: grade, brightness: 0.05, contrast: -0.12, saturation: -0.10}
+  - adjust: {id: fx_warm,  op: grade, temperature: 0.30}
+  - art:    {id: fx_paper, texture_file: laid_paper, texture_fit: tile, opacity: 0.12, blend: multiply}
+  - adjust: {id: fx_vign,  op: vignette, strength: 0.28}
+  - art:    {id: fx_grain, procedural: grain, opacity: 0.05, blend: overlay}

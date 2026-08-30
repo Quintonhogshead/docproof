@@ -1,0 +1,82 @@
+# Mask-forward reference template #1 (deep-stack wave, §15.13 part 3):
+# the "photo-in-the-letters" convention — a flat, confident color field
+# with the generated art visible ONLY through the title's own letterforms.
+# Two §15.13 mechanisms carry the whole design:
+#  - `window_art` wears mask: {from_text: title} (§15.13 part 1's text-as-
+#    clip source): the full-bleed art is clipped INTO the title's fitted
+#    glyph coverage before it is composited, so the letters are literally
+#    a window into the picture.
+#  - the title itself runs mode: art_fill (§7.4a): nothing is painted over
+#    the glyph interiors (the clipped art beneath simply shows), and only
+#    a thin ink-colored ring at each glyph's edge keeps the letterforms
+#    reading as crisp shapes against the flat field.
+# Draw order matters the way it looks: window_art sits UNDER the title
+# layer, so the art_fill ring always lands on top of the clipped art's
+# edges. quiet_literary finishing (§15.13: "a quiet finishing recipe")
+# unifies field + windowed art with a whisper of grain and vignette.
+# Templates are how conventions propagate — the judge sees this pass,
+# revisions imitate it (§15.13's own reasoning).
+name: title_window
+genres: [literary, memoir_biography, nonfiction]
+describe: >-
+  A huge windowed title over a flat color field: the generated art is
+  visible only through the title's own letterforms, each glyph edged with
+  a thin ring — type as both the hero and the picture frame.
+composition_note: >-
+  An edge-to-edge scene or texture with strong color and interest spread
+  evenly across the whole frame — it will be seen only through large
+  letterforms, so no single small subject, no empty regions, no fine
+  detail that needs to be read. No text anywhere.
+axis: center
+recipe: quiet_literary
+art:
+  - id: background
+    generatable: false           # the flat, confident color field —
+    fit: cover                   # procedural gradient from palette.background
+    procedural: gradient
+  - id: window_art
+    generatable: true
+    fit: cover                   # full bleed, so every glyph window is full
+    mask: {from_text: title}     # §15.13 part 1: clipped INTO the title's
+                                  # fitted glyph coverage
+scrims:
+  # De-muted house default: strength 0 until the legibility autopilot
+  # actually measures a problem (the woven_emblem convention).
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: title
+    # Type IS the hero, literally: the biggest title zone in the library,
+    # because the letterforms are also the artwork's only viewport. Fat
+    # poster-weight sizes; the art_fill ring keeps edges crisp. Centered
+    # vertically enough that neither the field above nor the gap down to
+    # the author line ever reads as a dead band on its own.
+    zone: {x: 0.06, y: 0.18, w: 0.88, h: 0.50}
+    case: upper
+    tracking: 20
+    align: center
+    valign: middle
+    size_min: 0.055
+    size_max: 0.20
+    max_lines: 4
+    mode: art_fill
+  - id: subtitle
+    zone: {x: 0.15, y: 0.72, w: 0.70, h: 0.04}
+    optional: true
+    size_min: 0.014
+    size_max: 0.022
+  - id: author
+    zone: {x: 0.10, y: 0.86, w: 0.80, h: 0.05}
+    case: upper
+    tracking: 140
+    size_min: 0.018
+    size_max: 0.030
+# background (field) -> scrims -> WINDOW_ART (clipped to the title's
+# glyphs) -> title (art_fill ring over the clipped art's edges) ->
+# subtitle -> author.
+layers: [background, "scrim:0", "scrim:1", window_art, title, subtitle,
+        author]

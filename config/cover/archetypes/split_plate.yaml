@@ -1,0 +1,80 @@
+# Mask-forward reference template #2 (deep-stack wave, §15.13 part 3):
+# the two-plates-into-one-scene collage — the exact move §15.2's
+# GradientMask start/end remapping was built for. Two full-bleed generated
+# plates share the canvas: `background` owns the upper world, and
+# `plate_lower` owns the lower one, wearing a linear gradient mask that
+# holds it fully transparent above 30% of the canvas, ramps across the
+# 30-62% band, and leaves it fully solid below — so the two generations
+# dissolve into ONE scene along a soft horizontal seam, and the title
+# sits confidently ON that seam (its zone spans 0.36-0.60, inside the
+# dissolve band, where neither plate is busy). cinematic_duotone
+# finishing pulls both plates through one grade so they read as a single
+# lit composition rather than a collage of two renders. Both plates
+# carry $0 procedural fallbacks (gradient / fog_gradient), so the
+# template renders — seam, mask, and all — before a single image is
+# generated. Templates are how conventions propagate: the judge sees
+# this pass, revisions imitate it (§15.13's own reasoning).
+name: split_plate
+genres: [literary, science_fiction, mystery_thriller]
+describe: >-
+  Two generated plates dissolved into one scene along a soft horizontal
+  seam — an upper world and a lower world sharing one cover — with the
+  title sitting confidently on the seam itself.
+composition_note: >-
+  One half of a two-part scene, simply composed, with its quietest and
+  least detailed region toward the MIDDLE of the frame — large title
+  text will sit across that band where this image dissolves into its
+  counterpart. No text anywhere.
+axis: center
+recipe: cinematic_duotone
+art:
+  - id: background
+    generatable: true            # plate A — the upper world, full bleed
+    fit: cover
+    procedural: rays             # $0 fallback: light shafts from above, so
+                                  # even the artless render has a designed
+                                  # upper world (a flat gradient here reads
+                                  # as a dead band to the composer's metric)
+  - id: plate_lower
+    generatable: true            # plate B — the lower world, dissolving
+    fit: cover                   # upward into plate A across the seam band
+    procedural: fog_gradient     # $0 fallback keeps the seam visible too
+    mask:
+      gradient: {kind: linear, angle: 90, start: 0.30, end: 0.62}
+scrims:
+  # De-muted house default: strength 0 until the legibility autopilot
+  # actually measures a problem (the woven_emblem convention).
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: title
+    # ON the seam: the zone spans the mask's own 0.30-0.62 dissolve band,
+    # where both plates are at their quietest by construction (the
+    # composition note asks each plate to keep its middle simple).
+    zone: {x: 0.07, y: 0.36, w: 0.86, h: 0.24}
+    case: upper
+    tracking: 40
+    align: center
+    size_min: 0.045
+    size_max: 0.15
+    max_lines: 3
+    shadow: {alpha: 0.45}
+  - id: subtitle
+    zone: {x: 0.15, y: 0.63, w: 0.70, h: 0.035}
+    optional: true
+    size_min: 0.014
+    size_max: 0.022
+  - id: author
+    zone: {x: 0.10, y: 0.90, w: 0.80, h: 0.05}
+    case: upper
+    tracking: 140
+    size_min: 0.018
+    size_max: 0.030
+# background (plate A) -> plate_lower (plate B, gradient-masked into A)
+# -> scrims -> title (on the seam) -> subtitle -> author.
+layers: [background, plate_lower, "scrim:0", "scrim:1", title, subtitle,
+        author]

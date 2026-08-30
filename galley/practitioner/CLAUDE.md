@@ -89,6 +89,7 @@ skill; follow the skill, record what you learned.
 | `docproof tense IN --config C` | The narrative-tense profile: baseline tense + person, per-paragraph verdicts (dialogue stripped), and the contiguous runs that read AGAINST the baseline. Report-only. | $0 |
 | `docproof cites IN --config C` | Citation & cross-ref check (nonfiction): author-date citations vs the reference list both ways, chapter/figure/table refs vs the book's own headings and captions. Report-only; auto-skips what the book lacks. | $0 |
 | `docproof galley audit RESULTS IN` | The missed-error audit: density table + sampled pages → hypotheses. | 1 call |
+| `docproof galley verify RESULTS` | The finished-text SENSE gates certify cannot run: the **change verifier** re-reads every APPLIED edit in its accepted context (breaks_meaning/grammar/voice_damage/artifact/wrong_rule → `change_verify.json`), and the **finished-text walk** proofreads the ACCEPTED text for residual errors (`finished_walk.json`). `certify` then reads those artifacts (a recorded problem fails delivery; a missing artifact skips loudly). `--context BRIEF` feeds voice notes; `--changes-only`/`--walk-only` split for $0 subagents. Nonzero exit on any problem. | paid (or $0 subagents) |
 | `docproof galley letter` / `seed` / `score` | Editor's letter render; seeded-copy recall calibration. | $0 |
 | `docproof galley flights` | The copy-edit flight deck: 6 focused lenses → union → posture-judged clusters. `--propose-only` / `--judge-only` split lets session subagents fly the lenses at $0. | paid/judge |
 | `docproof galley export-judgments` / `import-judgments` | The **model-free** external-judge route: export a clusters file as a canonical judgment packet, a session agent (or human) fills each `decision`, import rebuilds the findings with **no model call** (unlike `--judge-only`, which still calls the judge model). Import refuses on bad anchoring, broken atomicity, an unknown channel, or an intent-zone edit. | $0 |
@@ -261,13 +262,23 @@ context ~150 times. Keep your window lean:
    while marginal cost per finding stays sane. A quiet audit converges the loop.
 7. **Adjudicate** (`skills/adjudicate`) with the screening rulebook, then
    rebuild the deliverable at $0 via replay/merge.
-8. **Certify, then deliver.** `docproof galley certify RESULTS --approval
-   approval.json --source BOOK --config CONFIG` must pass — hashes, approved
-   routes, checkpoint completeness, no zero-cost anomaly, budget reconciled,
-   artifact scan clean. A failing certificate blocks delivery; fix the failing
-   check, don't ship around it. Then deliver: tracked-changes docx (two authors
-   when both lanes ran), margin-comment queries within the comment budget,
-   editor's letter with the honest residual estimate, style sheet.
+8. **Verify the finished text, certify, then deliver.** Run `docproof galley
+   verify RESULTS --context BRIEF` FIRST — it re-reads every applied edit and
+   proofreads the accepted text for sense, the one thing `certify` cannot do.
+   These are standard delivery stages, not an optional extra: certify's checks
+   are integrity (hashes, routes, artifact regexes, reject-all round trip) and a
+   corrupted build passes all of them — the Purpura beta's 35 real-word LT
+   corruptions were caught ONLY by this re-read. Then `docproof galley certify
+   RESULTS --approval approval.json --source BOOK --config CONFIG` must pass —
+   hashes, approved routes, checkpoint completeness, no zero-cost anomaly, budget
+   reconciled, artifact scan clean, AND the recorded change-verify/finished-walk
+   verdict (a flagged edit or a high-severity residual fails delivery). A failing
+   certificate blocks delivery; fix the failing check, don't ship around it. Then
+   deliver: tracked-changes docx (two authors when both lanes ran), margin-comment
+   queries within the comment budget, editor's letter with the honest residual
+   estimate, style sheet. The letter/style sheet render from `casefile.json` when
+   one exists, else straight from the run's `findings.json` (`galley letter`
+   builds it either way).
 
 ## The traps ledger (all paid for in blood)
 
@@ -297,6 +308,25 @@ context ~150 times. Keep your window lean:
   Check the ledger, not the absence of errors.
 - **Skip headings structurally** (short line, no terminal punctuation, or
   `reviewable=False`) — never by style name or book-specific regex.
+- **The deterministic floor is NOT audit-exempt.** Every edit row — sweeps,
+  spellscan, LanguageTool included — rides a screen and the finished-text
+  gates like any model edit. "Deterministic" means reproducible, not correct:
+  the Purpura floor's LanguageTool lane auto-applied 35 real-word corruptions.
+  Never pass floor rows into a build unreviewed.
+- **LanguageTool word edits are query-only by default** (`languagetool.
+  edit_word_replacements` off). On voice-heavy fiction/memoir LT spells
+  coinages/slang/brands into real words; it now routes every real-word swap to
+  a margin query (still editing punctuation/spacing/casing/en-dash blind), never
+  de-accents an MW-accented word, and honors the protected-noun allowlist for
+  every rule. You may still turn LT off entirely on a voice-heavy book; leave
+  the knob off if you turn it on.
+- **Recurrence never propagates a curated/imported row.** A hand-made one-off
+  (a TOC line, a single word-choice) is not a book-wide typo — the recurrence
+  pass now seeds only from machine detector/sweep rows, so a curated
+  "massive"→"drastic" no longer queries every other "massive."
+- **Rows written against POST-sweep text** (an en-dash, a lowered am, an added
+  `:00`) — replay/import them with `--after-sweeps` and they re-anchor to the
+  pre-sweep manuscript automatically; no hand-built micro-spans.
 
 ## Your own pen — findings nobody's detector caught
 

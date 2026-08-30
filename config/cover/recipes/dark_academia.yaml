@@ -1,0 +1,16 @@
+# §15.6's roster line: "desaturate, warm temperature, heavy vignette, dust —
+# romantasy/gothic." Grounded in docs/cover_template_research.md #1
+# (romantasy's dark jewel-toned grounds), #11 (horror/gothic: ornate marks
+# on aged, shadowed fields), and #12 (historical's muted candle-lit
+# palettes): the library-at-dusk look — color pulled down, warmth pushed in,
+# edges closing like lamplight, motes in the air.
+name: dark_academia
+describe: >-
+  Candle-lit library gloom: desaturated, warmed, edges shaded hard, dust
+  motes drifting in the light. Romantasy, gothic, dark historical.
+finish:
+  - adjust: {id: fx_mute, op: grade, saturation: -0.25, brightness: -0.05}
+  - adjust: {id: fx_warm, op: grade, temperature: 0.35}
+  - adjust: {id: fx_vign, op: vignette, strength: 0.50}
+  - art:    {id: fx_dust, procedural: dust, opacity: 0.60}
+  - art:    {id: fx_tooth, texture_file: laid_paper, texture_fit: tile, opacity: 0.08, blend: multiply}

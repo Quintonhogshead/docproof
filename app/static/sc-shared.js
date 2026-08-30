@@ -452,14 +452,22 @@
     var onQuote = page === 'quote' || page === 'quote-active';
     // Once a book is on the desk, every page's CTA points at the open quote.
     var goLabel = (onQuote || loadQuote()) ? 'Your quote' : 'Bring me your book';
-    return '<header class="top">' +
+    var html = '<header class="top">' +
       '<a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>' +
       '<nav class="nav" aria-label="Primary">' +
         '<a href="/party"' + (page === 'party' ? ' class="now"' : '') + '>Meet the party</a>' +
         '<a href="/pricing"' + (page === 'pricing' ? ' class="now"' : '') + '>Pricing</a>' +
         '<a class="go' + (onQuote ? ' now' : '') + '" href="/quote"' +
-          (onQuote ? ' aria-current="page"' : '') + '>' + goLabel + '</a>' +
-      '</nav></header>';
+          (onQuote ? ' aria-current="page"' : '') + '>' + goLabel + '</a>';
+    // Cover studio is an internal, key-gated tool — the link only exists once
+    // a key is stored (sessionStorage can throw in locked-down contexts).
+    var coverKey = '';
+    try { coverKey = sessionStorage.getItem('sc-cover-key') || ''; } catch (e) {}
+    if (coverKey) {
+      html += '<a href="/cover"' + (page === 'cover' ? ' class="now"' : '') + '>Cover studio</a>';
+    }
+    html += '</nav></header>';
+    return html;
   }
 
   function footerHTML() {

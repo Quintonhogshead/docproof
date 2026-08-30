@@ -50,6 +50,13 @@ class RewriteCandidate:
     note: str | None = None  # a ready-made margin explanation, if the proposing
                              # source has a better one than the generic default
                              # (Sapling's describe() line); None uses _explanation
+    # A candidate the SOURCE has already judged unsafe to apply blind — it may be
+    # affirmed as an error, but only ever as a margin query, never a tracked
+    # edit. LanguageTool sets this on a real-word substitution (boop->book), whose
+    # confirm valve cannot be trusted to catch every voice coinage. Independent of
+    # confidence and of `mode`: a force_query candidate that confirm rules an
+    # error is asked, not applied, however sure the judge was.
+    force_query: bool = False
     # The repair channel tags every member of one sentence's repair with a shared
     # non-empty cluster_id so the members stay atomic downstream (see
     # docproof/repair.py and Finding.cluster_id). Empty for the single-edit
@@ -546,7 +553,9 @@ def _fold(rows: dict, window, text_of: dict, findings: list, reject_sink,
         else:
             quote, occurrence = para_text, 1
             corrected = para_text[:c.start] + c.replacement + para_text[c.end:]
-        will_query = suggestion or _RANK[conf] < edit_floor
+        # A candidate the source flagged unsafe to apply blind (LanguageTool on a
+        # real-word swap) can be affirmed, but only ever as a query.
+        will_query = suggestion or c.force_query or _RANK[conf] < edit_floor
         findings.append(Finding(
             finding_id=f"{id_prefix}-{next(ids):04d}",
             chunk_id=chunk_id,

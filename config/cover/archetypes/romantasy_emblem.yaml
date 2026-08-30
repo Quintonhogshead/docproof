@@ -1,0 +1,121 @@
+# Research: Fourth Wing / Onyx Storm (Rebecca Yarros; design by Bree Archer &
+# Elizabeth Turner Stokes) plus Reedsy's "Romantasy Book Covers" resource,
+# which names the pattern outright: a central emblem inside a tarot-card-
+# style ornamental frame. Confidence: high (docs/cover_template_research.md #1).
+name: romantasy_emblem
+genres: [fantasy, romance]     # "romantasy" itself isn't a subject key — the
+                                # convention sits at the fantasy/romance seam
+describe: >-
+  A central mythical emblem inside a circular ornamental frame, tarot-card
+  style; small series eyebrow, huge engraved-caps title above the frame,
+  tight-tracked author just below it.
+composition_note: >-
+  Center the emblem inside its own circular or pointed-arch frame with
+  nested decorative bands, leaving clear unbroken dark ground above and
+  below the ring — an open band across the top third for a title and a
+  narrower open band just beneath the frame for an author line. No text
+  anywhere.
+art:
+  - id: background
+    # v2.1 BODY-fix wave: was generatable — a live render's "ghost-wash"
+    # background generation shipped as a smudge (a wash of near-nothing,
+    # since the medallion is the real subject and the prompt had nothing
+    # else to describe); the archetype's own original comment already
+    # admitted "a fully procedural gradient reads fine too ($0)", so this
+    # now always IS one — one fewer generation per concept, too.
+    generatable: false
+    fit: cover
+  - id: pattern
+    # v2.2 wave (owner: "avoid the large background blank for Romantasy")
+    # — the flat procedural gradient above leaves a big, genuinely empty
+    # stretch between the title band and the medallion/frame with nothing
+    # crossing it. A shelf texture (config/cover/textures/README.md: cropped
+    # from this same "Honeycomb Court" medallion's own glow, so it already
+    # sits in this convention's warm/gilt palette family) laid over the
+    # WHOLE canvas at low opacity keeps that stretch full-FEELING rather
+    # than full — atmosphere, not a competing subject; the medallion and
+    # corner frame stay the real focal points.
+    generatable: false
+    fit: cover
+    texture_file: amber_smoke
+    texture_fit: cover
+    # Bumped from an initial 0.16 after a preview check against a dark
+    # jewel-tone palette (a plausible real romantasy choice) showed the
+    # texture nearly vanishing under `overlay` blend's own heavy shadow
+    # attenuation — 0.24 stays a quiet wash on a light/mid ground and is
+    # still genuinely visible (not competing with the medallion) on a dark
+    # one.
+    opacity: 0.24
+    blend: overlay
+  - id: focal2
+    generatable: true
+    fit: contain                 # placement is moot once `corners` is set —
+    transparent: true            # kept `contain` so an ungenerated slot, or
+                                  # a revision that clears `corners`, still
+                                  # degrades to something sane (§7.4a: the
+                                  # composer falls back to a single normal
+                                  # layer whenever the art has no real alpha)
+    scale: 0.09                  # small — a corner flourish, not a second
+                                  # medallion; clear of the title (y<=0.28)
+                                  # and author (y 0.72-0.78) bands at any
+                                  # plausible generated aspect ratio
+    # Effects rack (§7.4a): the research's own "tarot-card style ornamental
+    # frame" is currently just implied by the composition_note's prose —
+    # `corners` makes the frame LITERAL and exactly symmetric (the "a
+    # designer did this" tell a prompt-only generator can't produce), while
+    # leaving the central medallion (`focal`, below) completely untouched —
+    # corners on `focal` ITSELF would have replaced the medallion with four
+    # small corner copies of it, which is not what this archetype wants.
+    corners: true
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # the medallion is a cutout, not a scene
+    anchor: [0.5, 0.5]
+    scale: 0.55                  # centered mid-canvas, well under the 0.7 cap
+  - id: texture
+    generatable: false           # procedural film grain (§7.3) doubles as
+    opacity: 0.08                # the "engraved metal" texture the research
+    blend: overlay                # calls for
+# v2 BODY wave retune: this archetype shipped with NO protecting scrim at
+# all — on a busy/bright generated medallion, the title's only fallback was
+# the autopilot's ink-color flip, never a graceful local dim first. The
+# redesigned `panel` default (a feathered, rounded, canvas-edge-safe local
+# patch — never a wash) is a strict improvement with no "muted" downside, so
+# both bands now get one, starting at strength 0 (autopilot-reactive only —
+# still de-muted by default, nothing dims unless contrast actually fails).
+scrims:
+  - kind: panel
+    protects: title
+    strength: 0.0
+  - kind: panel
+    protects: author
+    strength: 0.0
+text:
+  - id: series
+    zone: {x: 0.15, y: 0.045, w: 0.70, h: 0.03}
+    case: upper
+    tracking: 160
+    optional: true
+    size_min: 0.012
+    size_max: 0.018
+  - id: title
+    zone: {x: 0.10, y: 0.085, w: 0.80, h: 0.195}
+    case: upper
+    tracking: 50
+    size_min: 0.05
+    size_max: 0.15                 # v2 BODY wave: bigger type (was 0.13) —
+    max_lines: 3                   # type is the hero (reference DNA #2)
+  - id: subtitle
+    zone: {x: 0.15, y: 0.285, w: 0.70, h: 0.03}
+    optional: true
+    size_min: 0.014
+    size_max: 0.02
+  - id: author
+    zone: {x: 0.15, y: 0.72, w: 0.70, h: 0.06}
+    case: upper
+    tracking: 130
+    size_min: 0.018
+    size_max: 0.028
+layers: [background, pattern, texture, focal2, focal, "scrim:0", series, title,
+        subtitle, "scrim:1", author]

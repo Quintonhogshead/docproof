@@ -1,0 +1,48 @@
+# Research: Creative Paramita/DAMONZA "thumbnail simplicity with hidden
+# detail" + AIBookArt's noted 2026 retro 70s/80s sci-fi resurgence — one
+# bold flat object, huge minimal type, 70-80% flat color field. Confidence:
+# medium-high (docs/cover_template_research.md #5) — the combination is
+# inferred from a real cross-genre trend rather than tied to one named cover.
+name: scifi_geometric_object_minimal
+genres: [science_fiction]
+describe: >-
+  A single bold retro-poster object on a flat saturated color field; huge
+  tight-tracked title dead center, tiny object just beneath it, nothing
+  else on the cover.
+composition_note: >-
+  One bold, simplified graphic object — a spacecraft silhouette, a planet
+  disc, a warped grid line — rendered as a flat shape with at most one
+  gradient, small and centered low in the frame, on an otherwise completely
+  flat, unbroken color field. No scene, no horizon, no clutter. No text
+  anywhere.
+art:
+  - id: background
+    generatable: true            # one or two flat retro-poster colors;
+    fit: cover                   # the procedural gradient is a fair $0 stand-in
+  - id: focal
+    generatable: true
+    fit: contain
+    transparent: true            # a small isolated object, not a scene
+    anchor: [0.5, 0.5]
+    scale: 0.30                  # deliberately small — "one small object",
+    offset: [0.0, 0.15]          # not a dominant emblem — nudged below title
+text:
+  - id: subtitle
+    zone: {x: 0.14, y: 0.27, w: 0.72, h: 0.035}
+    optional: true
+    size_min: 0.016
+    size_max: 0.022
+  - id: title
+    zone: {x: 0.10, y: 0.34, w: 0.80, h: 0.20}
+    case: upper
+    tracking: 90                 # tight-tracked caps — "geometric,
+    size_min: 0.06               # squared-off letterforms" per the research
+    size_max: 0.15
+    max_lines: 2
+  - id: author
+    zone: {x: 0.15, y: 0.88, w: 0.70, h: 0.05}
+    case: upper
+    tracking: 110
+    size_min: 0.018
+    size_max: 0.028
+layers: [background, focal, subtitle, title, author]

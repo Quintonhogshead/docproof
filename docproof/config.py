@@ -727,6 +727,16 @@ class LanguageToolConfig(BaseModel):
     # Extra rule ids to drop, on top of the built-in artifact/style denylist
     # (unpaired-quote, sentence-start caps, whitespace, style advice).
     disabled_rules: list[str] = Field(default_factory=list)
+    # Whether a LanguageTool suggestion that swaps one WORD for another (boop->book,
+    # sesh->mesh — as opposed to a comma, hyphen, en-dash, or capital) may become a
+    # tracked edit. Off by default: on voice-heavy fiction/memoir LanguageTool
+    # spells coinages/slang/brands into real words and the confirm valve cannot be
+    # trusted to catch every one (Purpura: 35 real-word corruptions auto-applied).
+    # Off routes every real-word swap to a margin query instead — LanguageTool
+    # still edits punctuation/spacing/casing blind, and still ASKS about a word
+    # change, but never applies one silently. Turn on only for a house that has
+    # measured LanguageTool word edits as safe on its books.
+    edit_word_replacements: bool = False
     # Threads for the scan. The pass caps this at the usable CPU count
     # regardless, so 0 (auto) is one thread per core; on a single-core VM the
     # scan is serial no matter what. Lower it only to leave cores free.
