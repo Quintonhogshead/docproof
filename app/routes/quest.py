@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 
@@ -107,6 +108,39 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _scrap_key(catch: dict) -> str:
+    """A normalized identity for one first-look scrap, so the same quoted snag
+    is never pinned up twice. Keyed on the author's own words: two members
+    catching one snag is a duplicate to the reader even when their fixes are
+    phrased differently."""
+    before = str(catch.get("before") or "").lower()
+    before = re.sub(r"\s+", " ", before).strip(" \"'‘’“”.,;:!?…—–-")
+    return before
+
+
+# Below this length, containment stops meaning "same snag" — "a" lives inside
+# every sentence — so short keys only ever match exactly.
+_CONTAINS_MIN = 6
+
+
+def _dedupe_catches(catches: list[dict], seen: set[str]) -> list[dict]:
+    """Drop catches whose snag was already shown — by this lane or an earlier
+    one. A snag counts as shown when its quote matches exactly OR when one
+    quote contains the other (Pip pins up "and and", then Bram quotes the whole
+    sentence around it). Mutates `seen` so the filter spans the whole sweep."""
+    kept = []
+    for c in catches:
+        key = _scrap_key(c)
+        if not key or key in seen:
+            continue
+        if any(min(len(key), len(s)) >= _CONTAINS_MIN
+               and (key in s or s in key) for s in seen):
+            continue
+        seen.add(key)
+        kept.append(c)
+    return kept
+
+
 def register(app: FastAPI) -> None:
 
     @app.post("/api/quest/skin")
@@ -177,9 +211,10 @@ def register(app: FastAPI) -> None:
                 skin_payload = _skin_payload(result)
                 yield _sse("skin", skin_payload)
 
-                lanes, sweep_cost = [], 0.0
+                lanes, sweep_cost, seen = [], 0.0, set()
                 for lane in iter_sweep(ms.text, provider):
-                    payload = {"key": lane.key, "catches": lane.catches,
+                    payload = {"key": lane.key,
+                               "catches": _dedupe_catches(lane.catches, seen),
                                "error": lane.error}
                     lanes.append(payload)
                     if lane.cost:

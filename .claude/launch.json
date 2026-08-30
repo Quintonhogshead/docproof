@@ -2,25 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "docproof-app",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["-m", "app.run", "--port", "8765", "--no-browser",
-                      "--home", "/tmp/docproof-preview"],
-      "port": 8765
-    },
-    {
-      "name": "docproof-web-preview",
-      "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c",
-        "DOCPROOF_SESSION_SECRET=preview-secret ANTHROPIC_API_KEY=sk-preview .venv/bin/python -m app.serve --home /tmp/docproof-web-preview --host 127.0.0.1 --port 8788 --insecure-cookies"],
-      "port": 8788
-    },
-    {
       "name": "spell-and-check",
-      "runtimeExecutable": "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/bin/python",
+      "runtimeExecutable": "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/bin/python3",
       "runtimeArgs": ["-m", "app.quest_site"],
-      "port": 8000,
-      "autoPort": true
+      "port": 8000
     }
   ]
 }

@@ -516,17 +516,16 @@
     var el = document.createElement('div');
     el.className = 'adv'; el.tabIndex = 0; el.dataset.id = a.id;
     el.setAttribute('role','button');
-    el.setAttribute('aria-label', s.alias + ', ' + a.role + ', $' + priced(a.price) + (inParty ? ', in party. Activate to dismiss.' : ', waiting. Activate to hire.'));
+    el.setAttribute('aria-label', a.name + ', ' + a.role + ', $' + priced(a.price) + (inParty ? ', in party. Activate to dismiss.' : ', waiting. Activate to hire.'));
     el.draggable = true;
     var gchips = (inParty ? (gear[a.id]||[]) : []).map(function(g){
       var it = itemById[g];
       return '<span class="gchip" role="button" tabindex="0" data-adv="'+a.id+'" data-item="'+g+'" title="'+it.effect+' ('+it.lane+')">' +
              svg(it.icon) + it.name + ' <b>+$'+it.price+'</b><span class="x">✕</span></span>';
     }).join('');
-    var tag = a.role + (s.alias !== a.name ? ' · always ' + a.name : '');
     el.innerHTML =
       '<div class="sigil"'+(s.look ? ' title="'+esc(s.look)+'"' : '')+'><span class="art-figure" data-art="'+a.id+'"></span></div>' +
-      '<div><div class="aname">'+esc(s.alias)+'<small>'+esc(tag)+'</small></div>' +
+      '<div><div class="aname">'+esc(a.name)+'<small>'+esc(a.role)+'</small></div>' +
       '<div class="ajob">'+esc(s.job)+'</div><div class="alane">lane: '+a.lane+'</div></div>' +
       '<div class="aprice">$'+priced(a.price)+'</div>' +
       '<div class="gear">'+gchips+'</div>';

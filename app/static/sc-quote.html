@@ -58,10 +58,11 @@
   @keyframes wpulse{40%{opacity:1}}
   .wline{font-size:1rem;color:var(--faded)}
   .chips{display:flex;gap:8px;flex-wrap:wrap}
-  .chip{border:none;background:var(--card);color:var(--accent);clip-path:var(--edge-tab);
-    padding:7px 16px;font:1rem var(--ui);cursor:pointer;filter:var(--drop-sm)}
-  .chip:hover{background:var(--accent-wash)}
-  .chip:focus-visible{outline:2px solid var(--accent-hot);outline-offset:2px}
+  .chip{border:none;background:var(--card);color:var(--accent);clip-path:var(--edge-scrap);
+    padding:7px 16px;font:1rem var(--ui);cursor:pointer;filter:var(--drop-sm);
+    transition:transform .16s ease, background .18s ease}
+  .chip:hover,.chip:focus-visible{background:var(--accent-wash);
+    transform:translate(1px,-1px) rotate(-1deg)}
 
   .bookchip{display:none;align-items:center;gap:14px;margin-top:24px;background:var(--card);
     padding:12px 18px;box-shadow:var(--lift)}
@@ -70,7 +71,7 @@
   .bookchip .redo{margin-left:auto;font-size:.85rem}
 
   .quotegrid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px;align-items:start;margin-top:8px}
-  @media (max-width:860px){.quotegrid{grid-template-columns:1fr}}
+  @media (max-width:860px){.quotegrid{grid-template-columns:minmax(0,1fr)}}
   .summary{position:sticky;top:16px;text-align:center}
   .summary .contract-title{font-family:var(--disp);font-size:1.25rem;line-height:1;margin-bottom:12px}
   .summary .label{margin-bottom:8px}
@@ -90,9 +91,11 @@
   .explain p{margin:0 0 12px;font-size:1rem;color:var(--faded)}
   .explain p b{color:var(--ink);font-weight:500}
   .examples{display:grid;gap:6px}
-  .ex{display:flex;gap:10px;align-items:baseline;font-size:.9rem}
-  .ex .from{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px;white-space:nowrap}
-  .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good);white-space:nowrap}
+  .ex{display:flex;gap:10px;align-items:baseline;font-size:.9rem;flex-wrap:wrap}
+  .ex .from{font-family:var(--mono);font-size:.8rem;color:var(--accent);text-decoration:line-through;text-decoration-thickness:1px}
+  .ex .to{font-family:var(--mono);font-size:.8rem;color:var(--good)}
+  /* Real scraps quote whole clauses — wrap them rather than run off the page. */
+  .ex .from,.ex .to{white-space:normal;overflow-wrap:anywhere;min-width:0}
   .ex .why{color:var(--dim);font-size:.8rem}
   .lanternmember .sigil{color:var(--accent)}
 
@@ -115,6 +118,11 @@
   .firstlook{margin:4px 0 22px}
   .firstlook .fl-title{font-family:var(--disp);font-size:1.18rem;margin-bottom:4px}
   .firstlook .fl-sub{font-family:var(--ui);font-size:.86rem;color:var(--dim);margin-bottom:12px}
+  /* Scraps follow the picked tier: a member off the ride takes their finds
+     with them. */
+  .scrap.benched{display:none}
+  .fl-note{font-family:var(--ui);font-size:.86rem;color:var(--faded);
+    background:var(--card-2);padding:10px 14px;clip-path:var(--edge-tab)}
 </style>
 </head>
 <body data-page="quote">
@@ -185,18 +193,26 @@
   <div id="step-quote" class="hidden">
     <div class="firstlook hidden" id="firstlook">
       <div class="fl-title">What we already spotted in your first pages</div>
-      <div class="fl-sub">A taste, not the full read — this is the kind of thing each of us catches.</div>
+      <div class="fl-sub">A taste, not the full read — each rider on your quest shows what they caught.</div>
+      <div class="fl-note hidden" id="flnote"></div>
     </div>
     <h2>Choose how deep we go</h2>
     <div class="quotegrid">
       <div>
         <div class="tiers" id="tiers" role="radiogroup" aria-label="Choose a tier"></div>
 
-        <!-- the party bench: puppets walk on for the chosen tier -->
-        <div class="bench" id="bench">
-          <div class="bench-label">Your party for this quest</div>
-          <div class="troupe" id="troupe" aria-live="polite">
-            <div class="puppet galley-anchor"><div class="fig"><span data-art="galleyPresenting"></span></div></div>
+        <!-- the cover: your party, pasted into the front of an adventure novel.
+             Picking a tier pastes members into the scene or peels them away. -->
+        <div class="cover" id="bench" role="img"
+             aria-label="Your party assembling on the cover of your book">
+          <div class="cover-scene" aria-hidden="true"><span data-art="sceneHills"></span></div>
+          <div class="cover-grade" aria-hidden="true"></div>
+          <div class="cover-title" aria-hidden="true">
+            <div class="ct-over">A Spell &amp; Check adventure</div>
+            <div class="ct-book" id="covertitle">Your Story</div>
+          </div>
+          <div class="cover-cast" id="troupe" aria-live="polite">
+            <div class="puppet cast-galley"><div class="fig"><span data-art="galleyHero"></span></div></div>
           </div>
         </div>
 
@@ -232,6 +248,7 @@
   var say = document.getElementById('say');
   var band = 1, skin = null, picked = 'proofread', wordLabel = '—';
   var skinPayload = null, anyScrap = false;
+  var lanesSeen = {};   // member id -> catches from this book's first pages
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var bench = SC.makeBench(document.getElementById('troupe'));
 
@@ -244,10 +261,16 @@
 
   SC.galleySay(say, 'First things first — <em>let me read a few pages.</em> Tick the two boxes so we both know what we’re agreeing to, then hand me your book.');
 
-  /* ---------- plain-English tier explainers, with example catches ---------- */
+  /* ---------- plain-English tier explainers, with example catches ----------
+     Rendered as a tracked change (exact words struck, replacements marked in)
+     whenever the pair really is a replacement; from→to otherwise. Takes RAW
+     strings — escaping happens in here (and inside the diff), never before. */
   function ex(from, to, why){
-    return '<div class="ex"><span class="from">' + from + '</span><span>→</span>' +
-           '<span class="to">' + to + '</span><span class="why">' + why + '</span></div>';
+    var d = SC.diffHTML(from, to);
+    var body = d ? '<span class="df">' + d + '</span>'
+                 : '<span class="from">' + SC.esc(from) + '</span><span>→</span>' +
+                   '<span class="to">' + SC.esc(to) + '</span>';
+    return '<div class="ex">' + body + '<span class="why">' + SC.esc(why) + '</span></div>';
   }
   var EXPLAIN = {
     spellcheck:
@@ -352,7 +375,7 @@
     '<div class="mjob">No party rides for the free tier — Galley runs the mechanical toolkit alone: dictionary, sweeps, and the consistency scans.</div></div></div>' +
     '<div class="mlane">lane: deterministic only · no AI reading</div></div>';
 
-  function renderParty(){
+  function renderParty(quiet){
     var t = SC.TIERS.find(function(x){ return x.id === picked; });
     document.getElementById('partyhead').textContent =
       t.party.length ? 'Who rides for ' + t.name : 'Who rides for ' + t.name + ' — just Galley';
@@ -361,7 +384,7 @@
           .map(function(m){ return SC.memberCard(m, skin); }).join('')
       : LANTERN_CARD;
     document.getElementById('explain').innerHTML = '<div class="card">' + EXPLAIN[t.id] + '</div>';
-    bench.set(t.party);   // the puppets walk on / off for this tier
+    bench.set(t.party, quiet);   // members pasted onto / peeled off the cover
   }
 
   function flip(el){
@@ -393,23 +416,71 @@
     }
   }
 
-  function showQuote(r){
+  /* Scraps follow the picked tier: only riders' finds stay pinned up, and the
+     free tier explains where the finds went. */
+  function updateFirstLook(){
+    var fl = document.getElementById('firstlook');
+    if(fl.classList.contains('hidden')) return;
+    var t = SC.TIERS.find(function(x){ return x.id === picked; });
+    var visible = 0;
+    document.querySelectorAll('#sweep .scrap').forEach(function(s){
+      var riding = t.party.indexOf(s.dataset.key) >= 0;
+      s.classList.toggle('benched', !riding);
+      if(riding) visible++;
+    });
+    var note = document.getElementById('flnote');
+    if(!visible){
+      note.textContent = t.party.length
+        ? 'The riders on this tier came up clean on your first pages.'
+        : 'No party rides for the free tier — pick a tier with riders to see what they already spotted in your first pages.';
+      note.classList.remove('hidden');
+    } else {
+      note.classList.add('hidden');
+    }
+  }
+
+  function showQuote(r, restored){
     stopWaiting();
+    document.getElementById('step-drop').classList.add('hidden');
     skin = r.skin; band = r.band || 1;
     wordLabel = (r.word_count || 0).toLocaleString() + ' words';
-    SC.applyTint(skin.palette);
+    SC.applyTint(skin.palette, !!restored);   // the sweep only on the first reveal
     setPose('presenting');
     var chip = document.getElementById('bookchip');
     chip.style.display = 'flex';
     document.getElementById('booktitle').textContent = skin.book_title;
     document.getElementById('bookmeta').textContent = wordLabel + ' · ' + skin.genre;
+    document.getElementById('covertitle').textContent = skin.book_title;
+    // A restored quote rebuilds the first-look scraps from the saved catches,
+    // so the finds survive a reload just like the rest of the quote.
+    if (restored && r.lanes){
+      lanesSeen = r.lanes;
+      var sweepBox = document.getElementById('sweep');
+      if (!sweepBox.children.length){
+        SC.MEMBERS.forEach(function(m){
+          if (!(m.id in lanesSeen)) return;
+          sweepBox.insertAdjacentHTML('beforeend',
+            scrapCard({key: m.id, catches: lanesSeen[m.id]}));
+          if (lanesSeen[m.id].length) anyScrap = true;
+        });
+      }
+    }
     // Carry the first-pages scraps up into the quote as a lasting "first look".
     var fl = document.getElementById('firstlook');
     if(anyScrap){ fl.appendChild(document.getElementById('sweep')); fl.classList.remove('hidden'); }
     document.getElementById('step-quote').classList.remove('hidden');
-    renderTiers(); renderParty(); renderSummary();
-    SC.galleySay(say, SC.esc(skin.narration) +
-      ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
+    renderTiers(); renderParty(!!restored); renderSummary(); updateFirstLook();
+    if (restored){
+      SC.galleySay(say, '<em>Welcome back.</em> “' + SC.esc(skin.book_title) +
+        '” is still on my desk — pick your depth whenever you’re ready.');
+    } else {
+      SC.galleySay(say, SC.esc(skin.narration) +
+        ' <em>For this book I’d go with Proofread</em> — but the choice is yours, and the lantern pass is free.');
+    }
+    // The dropped book survives a wander to any other page (one tab, one visit)
+    // — catches included, so every page can show what the party found.
+    SC.saveQuote({skin: skin, band: band, word_count: r.word_count || 0,
+                  picked: picked, lanes: lanesSeen});
   }
 
   /* ---------- the sample-sweep: scraps the party pins up as they read ------- */
@@ -431,7 +502,7 @@
              '</b> — ' + emptyLine(lane.key) + '</div>';
     }
     var finds = lane.catches.map(function(c){
-      return ex(SC.esc(c.before), SC.esc(c.after), SC.esc(c.why));
+      return ex(c.before, c.after, c.why);
     }).join('');
     return '<div class="scrap" data-key="' + lane.key + '">' +
       '<div class="scraphead"><span class="portrait">' + SC.artFigure(m.id) + '</span>' +
@@ -463,6 +534,7 @@
             document.getElementById('sweepintro').classList.remove('hidden');
           } else if(ev === 'lane'){
             sweepEl.insertAdjacentHTML('beforeend', scrapCard(data));
+            lanesSeen[data.key] = data.catches || [];
             if(data.catches && data.catches.length) anyScrap = true;
           } else if(ev === 'done'){
             resolve(skinPayload);
@@ -534,12 +606,17 @@
     sendManuscript(e.dataTransfer.files && e.dataTransfer.files[0]);
   });
   document.getElementById('redo').addEventListener('click', function(e){
-    e.preventDefault(); location.reload();
+    e.preventDefault(); SC.clearQuote(); location.reload();
   });
 
+  function persistPick(){
+    var s = SC.loadQuote();
+    if(s){ s.picked = picked; SC.saveQuote(s); }
+  }
   document.getElementById('tiers').addEventListener('click', function(e){
     var el = e.target.closest('.tier'); if(!el) return;
-    picked = el.dataset.tier; renderTiers(); renderParty(); renderSummary();
+    picked = el.dataset.tier; persistPick();
+    renderTiers(); renderParty(); renderSummary(); updateFirstLook();
   });
   function focusTier(id){
     var t = document.querySelector('.tier[data-tier="' + id + '"]');
@@ -548,8 +625,8 @@
   document.getElementById('tiers').addEventListener('keydown', function(e){
     var el = e.target.closest('.tier'); if(!el) return;
     if(e.key === 'Enter' || e.key === ' '){
-      e.preventDefault(); picked = el.dataset.tier;
-      renderTiers(); renderParty(); renderSummary(); focusTier(picked); return;
+      e.preventDefault(); picked = el.dataset.tier; persistPick();
+      renderTiers(); renderParty(); renderSummary(); updateFirstLook(); focusTier(picked); return;
     }
     var dir = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1
             : (e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  ? -1 : 0;
@@ -557,8 +634,8 @@
     e.preventDefault();
     var ids = SC.TIERS.map(function(t){ return t.id; });
     var ni = (ids.indexOf(el.dataset.tier) + dir + ids.length) % ids.length;
-    picked = ids[ni];
-    renderTiers(); renderParty(); renderSummary(); focusTier(picked);
+    picked = ids[ni]; persistPick();
+    renderTiers(); renderParty(); renderSummary(); updateFirstLook(); focusTier(picked);
   });
 
   document.getElementById('go').addEventListener('click', function(){
@@ -575,6 +652,14 @@
       SC.galleySay(say, '<em>Raven away.</em> The moment quests open, you’ll be the first to know.');
     }).catch(function(e){ note.textContent = e.message; });
   });
+
+  // A book dropped earlier this visit is still on the desk — pick up where
+  // we left off instead of asking for it again.
+  var held = SC.loadQuote();
+  if (held){
+    if (held.picked) picked = held.picked;
+    showQuote(held, true);
+  }
 })();
 </script>
 </body>

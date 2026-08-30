@@ -19,29 +19,27 @@
      <img> — no render-code touched. Files live in /assets/art/. */
   var ART_BASE = '/assets/art/';
   var ART = {
-    // Paper-cutout placeholders (hand-coded SVG; recolour with the skin tint).
-    // Swap any value to a commissioned .png/.webp and the loader renders an
-    // <img> instead — no render-code change. Busts are square; poses 2:3;
-    // scenes 2:1; step spots 2:1.
-    // Commissioned cut-paper portraits (busts, square, opaque cream ground).
+    // Commissioned cut-paper art, background removed — every cutout sits
+    // directly on the page's paper (transparent webp). Busts are square;
+    // poses/figures ~2:3; scenes, steps, and the group shot are full-bleed.
     galley: 'galley.webp',
     pip: 'pip.webp', bram: 'bram.webp', maple: 'maple.webp',
     cinder: 'cinder.webp', sage: 'sage.webp', lark: 'lark.webp',
-    // Galley's poses. beckoning/waving reuse the nearest commissioned pose
-    // until their own art lands; lost is still a hand-coded placeholder.
+    // Galley's poses — each now has its own commissioned cutout.
     galleyHero: 'galley-hero.webp', galleyPresenting: 'galley-presenting.webp',
-    galleyReading: 'galley-reading.webp', galleyBeckoning: 'galley-presenting.webp',
-    galleyWaving: 'galley-hero.webp', galleyLost: 'galley-lost.svg',
+    galleyReading: 'galley-reading.webp', galleyBeckoning: 'galley-beckoning.webp',
+    galleyWaving: 'galley-waving.webp', galleyLost: 'galley-lost.webp',
     // Party full-body puppets (the bench).
     figPip: 'fig-pip.webp', figBram: 'fig-bram.webp', figMaple: 'fig-maple.webp',
     figCinder: 'fig-cinder.webp', figSage: 'fig-sage.webp', figLark: 'fig-lark.webp',
-    // Diorama scene + how-it-works spots (spots still placeholders) + odds/ends.
+    // Diorama scenes, how-it-works spots, the whole-party group shot, odds/ends.
     sceneHills: 'scene-hills.webp', sceneCamp: 'scene-camp.webp', sceneGrass: 'scene-grass.webp',
-    stepManuscript: 'step-manuscript.svg', stepReading: 'step-reading.svg', stepTracked: 'step-tracked.svg',
-    raven: 'raven.svg', lantern: 'lantern.svg',
-    crestSpellcheck: 'crest-spellcheck.svg', crestTypohunt: 'crest-typohunt.svg',
-    crestProofread: 'crest-proofread.svg', crestDeep: 'crest-deep.svg',
-    crestCampaign: 'crest-campaign.svg',
+    stepManuscript: 'step-manuscript.webp', stepReading: 'step-reading.webp', stepTracked: 'step-tracked.webp',
+    party: 'party.webp',
+    raven: 'raven.webp', lantern: 'lantern.webp',
+    crestSpellcheck: 'crest-spellcheck.webp', crestTypohunt: 'crest-typohunt.webp',
+    crestProofread: 'crest-proofread.webp', crestDeep: 'crest-deep.webp',
+    crestCampaign: 'crest-campaign.webp',
     ornamentDivider: 'ornament-divider.svg', ornamentCorner: 'ornament-corner.svg',
     dropcap: 'dropcap-frame.svg', favicon: 'favicon.svg', og: 'og.svg'
   };
@@ -163,13 +161,6 @@
       party: ['pip', 'bram', 'maple', 'cinder', 'sage', 'lark'] }
   ];
 
-  var PALETTE_TINTS = {
-    ember: '', rose: 'tint-rose', rain: 'tint-rain', honey: 'tint-honey',
-    void: 'tint-void', neon: 'tint-neon', verdigris: 'tint-verdigris',
-    bone: 'tint-bone', gold: 'tint-gold', slate: 'tint-slate',
-    rust: 'tint-rust', frost: 'tint-frost'
-  };
-
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -202,12 +193,31 @@
     setTimeout(kill, 1400);
   }
 
-  function applyTint(palette) {
-    var cls = PALETTE_TINTS[palette] || '';
-    document.body.className = document.body.className
-      .split(/\s+/).filter(function (c) { return c.indexOf('tint-') !== 0; })
-      .concat(cls ? [cls] : []).join(' ').trim();
-    tintSweep();   // the payoff: a wash of the book's colour sweeps the page
+  /* The site keeps ONE palette — warm cream and terracotta — for every book
+     and every genre (Quinton, 2026-08-28: per-book colour shifts read as
+     weird, not delightful). The reveal flourish survives as a brief wash;
+     the colours never change. */
+  function applyTint(palette, quiet) {
+    if (!quiet) tintSweep();
+  }
+
+  /* ---- the book on Galley's desk -------------------------------------
+     The quote (skin + band + word count) rides sessionStorage, so wandering
+     to the party or pricing page — or back — never loses the dropped book.
+     One tab, one reading session; closing the browser clears the desk. */
+  var QUOTE_KEY = 'sc-quote';
+  function saveQuote(state) {
+    try { sessionStorage.setItem(QUOTE_KEY, JSON.stringify(state)); }
+    catch (e) { /* private mode: the quote simply doesn't persist */ }
+  }
+  function loadQuote() {
+    try {
+      var s = JSON.parse(sessionStorage.getItem(QUOTE_KEY) || 'null');
+      return (s && s.skin) ? s : null;
+    } catch (e) { return null; }
+  }
+  function clearQuote() {
+    try { sessionStorage.removeItem(QUOTE_KEY); } catch (e) { /* ditto */ }
   }
 
   var ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
@@ -217,14 +227,79 @@
     return null;
   }
 
-  /* A real before→after catch, rendered as a torn scrap of LIVE text (never a
-     generated image — the words must stay crisp and searchable). */
+  /* ---- tracked-change renderer ---------------------------------------
+     A word-level diff of before→after, so a scrap reads like a tracked
+     change in Word: untouched words plain, cut words cleanly struck, new
+     words marked in — the author sees exactly what's wrong. Returns null
+     when a pair isn't really a replacement (a "grey / gray" listing, a
+     continuity question) so callers fall back to the from→to layout. */
+  function diffHTML(before, after) {
+    if (!before || !after) return null;
+    if (before.indexOf(' / ') >= 0) return null;
+    var a = String(before).split(/\s+/).filter(Boolean);
+    var b = String(after).split(/\s+/).filter(Boolean);
+    if (!a.length || !b.length || a.length > 60 || b.length > 60) return null;
+    // LCS table over exact tokens — punctuation differences count, on purpose.
+    var i, j, L = [];
+    for (i = 0; i <= a.length; i++) { L.push(new Array(b.length + 1).fill(0)); }
+    for (i = a.length - 1; i >= 0; i--) {
+      for (j = b.length - 1; j >= 0; j--) {
+        L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1
+                                : Math.max(L[i + 1][j], L[i][j + 1]);
+      }
+    }
+    var common = L[0][0];
+    if (common * 2 < Math.min(a.length, b.length)) return null;  // a rewrite, not a fix
+    var ops = [];   // [type, word] — type: '' keep, '-' cut, '+' added
+    i = 0; j = 0;
+    while (i < a.length && j < b.length) {
+      if (a[i] === b[j]) { ops.push(['', a[i]]); i++; j++; }
+      else if (L[i + 1][j] >= L[i][j + 1]) { ops.push(['-', a[i]]); i++; }
+      else { ops.push(['+', b[j]]); j++; }
+    }
+    while (i < a.length) { ops.push(['-', a[i++]]); }
+    while (j < b.length) { ops.push(['+', b[j++]]); }
+    // Merge neighbouring words of one kind so a cut phrase gets ONE clean
+    // strike, not a strike per word.
+    var out = [], run = null;
+    ops.forEach(function (op) {
+      if (run && run[0] === op[0]) { run[1] += ' ' + op[1]; return; }
+      if (run) out.push(run);
+      run = [op[0], op[1]];
+    });
+    if (run) out.push(run);
+    return out.map(function (r) {
+      var text = esc(r[1]);
+      if (r[0] === '-') return '<del class="df-del">' + text + '</del>';
+      if (r[0] === '+') return '<ins class="df-add">' + text + '</ins>';
+      return '<span class="df-keep">' + text + '</span>';
+    }).join(' ');
+  }
+
+  /* The freshest real catch for a member — pinned when a book is on the desk,
+     so the whole site shows what the party actually found in YOUR pages. */
+  function liveCatch(id) {
+    var held = loadQuote();
+    var list = held && held.lanes && held.lanes[id];
+    return (list && list.length) ? list[0] : null;
+  }
+
+  /* A before→after catch, rendered as a torn scrap of LIVE text (never a
+     generated image — the words must stay crisp and searchable). Prefers a
+     real catch from the visitor's own manuscript over the canned example. */
   function correctionScrap(m) {
-    if (!m || !m.example) return '';
-    var e = m.example;
-    return '<div class="correction"><span class="from">' + esc(e.from) + '</span>' +
-      '<span class="arrow">→</span><span class="to">' + esc(e.to) + '</span>' +
-      (e.why ? '<span class="why">' + esc(e.why) + '</span>' : '') + '</div>';
+    if (!m) return '';
+    var live = liveCatch(m.id);
+    var e = live ? { from: live.before, to: live.after, why: live.why }
+                 : m.example;
+    if (!e) return '';
+    var d = diffHTML(e.from, e.to);
+    var body = d ? '<span class="df">' + d + '</span>'
+      : '<span class="from">' + esc(e.from) + '</span>' +
+        '<span class="arrow">→</span><span class="to">' + esc(e.to) + '</span>';
+    return '<div class="correction' + (live ? ' from-book' : '') + '">' + body +
+      (e.why ? '<span class="why">' + esc(e.why) + '</span>' : '') +
+      (live ? '<span class="live-tag">from your pages</span>' : '') + '</div>';
   }
 
   /* The row of tiny member busts riding on a tier plate (who actually rides). */
@@ -277,14 +352,13 @@
      correction scrap + the honest lane. Used on the homepage party act and on
      the quote page's "who rides" list. */
   function memberCard(m, skinAdv) {
+    // Names are permanent: the skin tailors the job line, never the name.
     var s = skinAdv && skinAdv[m.id];
-    var alias = s ? s.alias : m.name;
     var job = s ? s.job : m.plain;
-    var tag = m.role + (alias !== m.name ? ' · always ' + m.name : '');
     return '<div class="member rich">' +
       '<div class="top"><div class="sigil"' + (s && s.look ? ' title="' + esc(s.look) + '"' : '') + '>' +
         artFigure(m.id) + '</div>' +
-      '<div><div class="mname">' + esc(alias) + '<small>' + esc(tag) + '</small></div>' +
+      '<div><div class="mname">' + esc(m.name) + '<small>' + esc(m.role) + '</small></div>' +
       '<div class="mjob">' + esc(job) + '</div></div></div>' +
       correctionScrap(m) +
       '<div class="mlane">lane: ' + m.lane + '</div></div>';
@@ -306,11 +380,12 @@
       matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  /* ---- the party bench: join/leave choreography ----------------------------
-     hostEl is the `.troupe` row (its Galley anchor puppet is left in place).
-     .set(partyIds) diffs against what's shown: departures walk off the left
-     wing, arrivals walk on from the right and drop a greeting scrap. Under
-     reduced motion everything swaps instantly but the greeting still appears. */
+  /* ---- the cover cast: join/leave choreography -----------------------------
+     hostEl is the `.cover-cast` layer (its Galley anchor puppet stays put).
+     .set(partyIds) diffs against what's shown: departures peel off the cover,
+     arrivals are pasted into their spot in the scene and drop a greeting
+     scrap. Under reduced motion everything swaps instantly but the greeting
+     still appears. */
   function makeBench(hostEl) {
     var shown = [];
     function makePuppet(id) {
@@ -323,7 +398,7 @@
         '<div class="fig">' + artFigure(figKey(id)) + '</div>';
       return el;
     }
-    function set(party) {
+    function set(party, quiet) {
       party = party || [];
       var reduce = prefersReduce();
       // departures
@@ -345,18 +420,23 @@
         hostEl.appendChild(el);
         var greet = el.querySelector('.greet');
         var i = joinIndex++;
-        if (reduce) {
-          greet.classList.add('show');
-        } else {
+        if (!reduce) {
           el.classList.add('joining');
           el.style.animationDelay = (i * 90) + 'ms';
-          el.addEventListener('animationend', function () {
+          var landed = function () {
             el.classList.remove('joining');
             el.style.animationDelay = '';
-            greet.classList.add('show');
-          }, { once: true });
+          };
+          el.addEventListener('animationend', landed, { once: true });
+          // Animations stall in hidden tabs; never leave a puppet mid-walk.
+          setTimeout(landed, 800 + i * 90);
         }
-        setTimeout(function () { greet.classList.remove('show'); }, 2800 + i * 90);
+        if (!quiet) {
+          // A roll call: one greeting scrap at a time, so a full company
+          // joining at once never piles its hellos into a heap.
+          setTimeout(function () { greet.classList.add('show'); }, 420 + i * 700);
+          setTimeout(function () { greet.classList.remove('show'); }, 2020 + i * 700);
+        }
       });
       shown = party.slice();
     }
@@ -370,7 +450,8 @@
 
   function headerHTML(page) {
     var onQuote = page === 'quote' || page === 'quote-active';
-    var goLabel = onQuote ? 'Your quote' : 'Bring me your book';
+    // Once a book is on the desk, every page's CTA points at the open quote.
+    var goLabel = (onQuote || loadQuote()) ? 'Your quote' : 'Bring me your book';
     var html = '<header class="top">' +
       '<a class="wordmark" href="/">Spell <span class="amp">&amp;</span> Check</a>' +
       '<nav class="nav" aria-label="Primary">' +
@@ -446,29 +527,34 @@
                 tierPlate: tierPlate, memberChapter: memberChapter,
                 findMember: findMember, figKey: figKey,
                 correctionScrap: correctionScrap, riderBusts: riderBusts,
-                galleyFig: galleyFig, makeBench: makeBench };
+                diffHTML: diffHTML, liveCatch: liveCatch,
+                galleyFig: galleyFig, makeBench: makeBench,
+                saveQuote: saveQuote, loadQuote: loadQuote, clearQuote: clearQuote };
 
   /* ---- motion: scroll reveals + gentle hero parallax --------------------
      Opt-in and progressive: <html> gets .js-motion so the reveal hidden-state
      only exists when JS runs; a no-JS page stays fully visible. All movement is
      transform/opacity, and the CSS honours prefers-reduced-motion. */
-  var revealScheduled = false;
   function vh() { return window.innerHeight || document.documentElement.clientHeight || 0; }
-  function checkReveals() {
-    revealScheduled = false;
-    var line = vh() * 0.9, left = 0;
+  /* One observer reveals blocks however they reach the viewport — scrolling,
+     a window resize, layout settling as images land. A scroll-line check
+     alone stranded already-in-view sections invisible whenever no scroll
+     event ever fired (large windows, resizes, restored positions). */
+  var revealIO = null;
+  function watchReveals() {
+    if (!revealIO && 'IntersectionObserver' in window) {
+      revealIO = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          en.target.classList.add('in');
+          revealIO.unobserve(en.target);
+        });
+      }, { threshold: 0.05 });
+    }
     document.querySelectorAll('[data-reveal]:not(.in)').forEach(function (el) {
-      // top < line catches both entering AND already-scrolled-past elements
-      // (top < 0), so anchor/keyboard jumps never strand a hidden block.
-      if (el.getBoundingClientRect().top < line) el.classList.add('in');
-      else left++;
+      if (revealIO) revealIO.observe(el);
+      else el.classList.add('in');   // no observer support: never hide content
     });
-    if (left === 0) window.removeEventListener('scroll', scheduleReveals);
-  }
-  function scheduleReveals() {
-    if (revealScheduled) return;
-    revealScheduled = true;
-    requestAnimationFrame(checkReveals);
   }
   function tagReveal(el, delay) {
     if (el.hasAttribute('data-reveal')) return;
@@ -492,8 +578,7 @@
       if (el.closest('.members, .tiers, .gallery, .strip')) return;
       tagReveal(el, 0);
     });
-    window.addEventListener('scroll', scheduleReveals, { passive: true });
-    checkReveals();
+    watchReveals();
   }
   function initParallax() {
     if (prefersReduce()) return;
@@ -521,7 +606,9 @@
     requestAnimationFrame(initReveals);
   }
 
-  function boot() { mountChrome(); injectArt(document); initMotion(); }
+  function boot() {
+    mountChrome(); injectArt(document); initMotion();
+  }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
   } else {

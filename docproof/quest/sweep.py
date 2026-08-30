@@ -3,10 +3,12 @@ the first ~800 words — a taste of what each member actually catches, shown as
 before→after scraps while the waiting room plays.
 
 This is a *taste*, not the pipeline: one small model, no LanguageTool rules, no
-judge gates, no whole-book memory. So every lane is told to quote the author's
-own words and to return nothing rather than invent a problem — the copy on the
-page promises "the kind of thing each of us catches," and this has to earn that
-by only ever showing real snags from the real pages.
+whole-book memory. So every lane is told to quote the author's own words and to
+return nothing rather than invent a problem — the copy on the page promises
+"the kind of thing each of us catches," and this has to earn that by only ever
+showing real snags from the real pages. Two audits enforce it: a free verbatim
+gate (every quoted "before" must appear in the sample) and a cheap Luna judge
+per lane that drops wrong or invented fixes before anything is pinned up.
 
 The six calls run in parallel (`iter_sweep` yields each lane the moment it
 lands, so the page can pin scraps up as they arrive). A lane that fails, refuses,
@@ -16,6 +18,7 @@ a flourish over the quote, never a gate in front of it.
 from __future__ import annotations
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Iterator
@@ -92,6 +95,91 @@ class LaneCatches(BaseModel):
     catches: list[LaneCatch]
 
 
+class LaneVerdicts(BaseModel):
+    """The judge's answer: one keep/drop per proposed catch, in order."""
+    keep: list[bool]
+
+
+_QUOTE_TRANS = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"',
+                              " ": " "})
+
+
+def _canon(text: str) -> str:
+    """Casefolded, quote-normalized, whitespace-collapsed — the shape verbatim
+    checks compare in."""
+    return " ".join(text.translate(_QUOTE_TRANS).split()).casefold()
+
+
+def _quoted_verbatim(before: str, sample_canon: str) -> bool:
+    """True when every fragment of `before` really appears in the sample.
+    Fragments split on the two shapes lanes are told to use — "grey / gray"
+    pairs and trimmed quotes with an ellipsis — so an honest catch passes and
+    an invented one does not."""
+    parts = re.split(r"\s*/\s*|…|\.\.\.", before.translate(_QUOTE_TRANS))
+    checked = False
+    for part in parts:
+        canon = " ".join(part.split()).casefold().strip("\"' .,;:!?—–-")
+        if not canon:
+            continue
+        checked = True
+        if canon not in sample_canon:
+            return False
+    return checked
+
+
+def _judge_prompt(name: str, hunts: str) -> str:
+    return f"""You are the sweep judge for Spell & Check, auditing sample \
+catches proposed by {name}, whose lane is {hunts}.
+
+You are given the manuscript excerpt and the proposed catches. For each catch, \
+answer keep=true ONLY if all of these hold:
+- "before" quotes something genuinely wrong (or, for style/continuity lanes, \
+genuinely worth a gentle note) that appears in the excerpt.
+- "after" is a correct fix or a fair, helpful note — not wrong, not a rewrite \
+of something that was already fine.
+- The catch belongs in this member's lane.
+
+Answer keep=false for anything invented, incorrect, already fine as written, \
+or outside the lane. Return exactly one boolean per catch, in order."""
+
+
+def _audit_lane(sample: str, key: str, name: str, hunts: str,
+                catches: list[dict], provider: Provider, *,
+                model: str, usage: Usage) -> list[dict]:
+    """The two-stage audit: a free verbatim gate (an invented "before" never
+    reaches the page), then one cheap judge call over what remains. A judge
+    that fails or answers out of shape keeps the verbatim-checked catches —
+    the audit is a filter, never an outage."""
+    sample_canon = _canon(sample)
+    catches = [c for c in catches
+               if _quoted_verbatim(c.get("before", ""), sample_canon)]
+    if not catches:
+        return []
+    listing = "\n".join(
+        f'{i + 1}. before: {c["before"]}\n   after: {c["after"]}\n'
+        f'   why: {c["why"]}' for i, c in enumerate(catches))
+    try:
+        result = provider.complete_structured(
+            model=model,
+            system=_judge_prompt(name, hunts),
+            user=f"EXCERPT:\n{sample}\n\nPROPOSED CATCHES:\n{listing}",
+            schema=strict_json_schema(LaneVerdicts),
+            schema_name="quest_sweep_judge",
+            max_tokens=MAX_OUTPUT_TOKENS,
+        )
+        usage.add(result.usage, model=model)
+        if result.stop_reason != "ok" or result.parsed is None:
+            raise ValueError(result.error or result.stop_reason)
+        keep = LaneVerdicts.model_validate(result.parsed).keep
+        if len(keep) != len(catches):
+            raise ValueError(f"{len(keep)} verdicts for {len(catches)} catches")
+    except Exception as e:  # noqa: BLE001 - the audit never sinks the sweep
+        log.warning("Sweep judge for %s did not land (%s); keeping "
+                    "verbatim-checked catches.", key, e)
+        return catches
+    return [c for c, k in zip(catches, keep) if k]
+
+
 @dataclass(frozen=True)
 class LaneResult:
     """One member's take on the first pages — up to three scraps, plus what it
@@ -105,6 +193,18 @@ class LaneResult:
 def sweep_sample(text: str) -> str:
     """The first SWEEP_WORDS words — the taste every lane reads."""
     return " ".join(text.split()[:SWEEP_WORDS])
+
+
+# Pip anchors the whole pitch — a first look with fewer than two typo scraps
+# reads as "it found nothing." When a pass comes up short she reads again:
+# wider and slower, up to these sample widths.
+PIP_MIN_CATCHES = 2
+PIP_SAMPLE_WIDTHS = (SWEEP_WORDS, 3 * SWEEP_WORDS, 8 * SWEEP_WORDS)
+PIP_NUDGE = (
+    "Your earlier pass over a shorter stretch found almost nothing. Read "
+    "slowly this time — subtle slips count: doubled words, homophones "
+    "(their/there, to/too), a missing or swapped letter, a stray space. "
+    "Still never invent one; quote only what is truly on the page.")
 
 
 def _system_prompt(name: str, hunts: str, howto: str) -> str:
@@ -128,16 +228,19 @@ nothing is a fine and honest answer — do NOT manufacture a problem to fill spa
 
 
 def run_lane(sample: str, lane: tuple[str, str, str, str], provider: Provider,
-             *, model: str = LUNA_MODEL) -> LaneResult:
+             *, model: str = LUNA_MODEL, nudge: str | None = None) -> LaneResult:
     """One member's cheap read of the sample. Never raises: a failed, refused,
     or malformed call becomes an empty LaneResult with the reason in `error`,
     because a scrap missing is never worth failing the whole sweep."""
     key, name, hunts, howto = lane
     usage = Usage()
+    system = _system_prompt(name, hunts, howto)
+    if nudge:
+        system += f"\n\n{nudge}"
     try:
         result = provider.complete_structured(
             model=model,
-            system=_system_prompt(name, hunts, howto),
+            system=system,
             user=f"FIRST PAGES:\n{sample}",
             schema=strict_json_schema(LaneCatches),
             schema_name="quest_sweep_lane",
@@ -154,8 +257,50 @@ def run_lane(sample: str, lane: tuple[str, str, str, str], provider: Provider,
     except Exception as e:  # noqa: BLE001 - SDK/network variants; sweep is optional
         return LaneResult(key=key, error=f"lane call failed: {e}")
     catches = [c.model_dump() for c in parsed.catches[:MAX_CATCHES]]
+    catches = _audit_lane(sample, key, name, hunts, catches, provider,
+                          model=model, usage=usage)
     return LaneResult(key=key, catches=catches,
                       cost=cost_of_usage(usage, fallback_model=model))
+
+
+def run_pip(text: str, provider: Provider, *,
+            model: str = LUNA_MODEL) -> LaneResult:
+    """Pip's lane with her promise attached: at least PIP_MIN_CATCHES scraps
+    when the pages can honestly supply them. A short first pass triggers
+    another read — wider sample, slower instructions — merging what each pass
+    finds, until she has enough, the widths run out, or the text does."""
+    lane = LANES[0]
+    merged: list[dict] = []
+    seen: set[str] = set()
+    total_cost = 0.0
+    error = None
+    prev_width = None
+    total_words = len(text.split())
+    for attempt, width in enumerate(PIP_SAMPLE_WIDTHS):
+        width = min(width, total_words)
+        # Re-reading the identical sample is worth exactly one nudged retry.
+        if width == prev_width and attempt > 1:
+            break
+        prev_width = width
+        sample = " ".join(text.split()[:width])
+        result = run_lane(sample, lane, provider, model=model,
+                          nudge=PIP_NUDGE if attempt else None)
+        if result.cost:
+            total_cost += result.cost
+        error = result.error
+        for c in result.catches:
+            key = _canon(str(c.get("before") or ""))
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(c)
+        if len(merged) >= PIP_MIN_CATCHES:
+            break
+    if 0 < len(merged) < PIP_MIN_CATCHES:
+        log.info("Pip finished with %d catch(es) after every re-read — the "
+                 "pages simply carry few typos.", len(merged))
+    return LaneResult(key=lane[0], catches=merged[:MAX_CATCHES],
+                      cost=total_cost or None,
+                      error=error if not merged else None)
 
 
 def iter_sweep(text: str, provider: Provider, *,
@@ -169,8 +314,13 @@ def iter_sweep(text: str, provider: Provider, *,
     if not sample.strip():
         return
     with ThreadPoolExecutor(max_workers=len(LANES)) as pool:
-        futures = {pool.submit(run_lane, sample, lane, provider, model=model):
-                   lane[0] for lane in LANES}
+        # Pip rides her own path (the keep-looking retries need the full
+        # text); everyone else reads the standard sample once.
+        futures = {pool.submit(run_pip, text, provider, model=model):
+                   LANES[0][0]}
+        futures.update({
+            pool.submit(run_lane, sample, lane, provider, model=model):
+            lane[0] for lane in LANES[1:]})
         for fut in as_completed(futures):
             yield fut.result()
 
