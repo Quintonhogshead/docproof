@@ -518,7 +518,7 @@ A professional cover file is 20–30 layers, and the count is not more *content*
 | Masks | pervasive | gradient masks blending two plates into one scene; region-scoping a grade | ⚠️ alpha-from-another-slot only |
 | Finishing group **over the type** | 3–4 | grain + vignette + global grade on top of everything — what makes type read as printed into the artwork, not pasted on | ❌ grain sits under text |
 
-The wave closes those four gaps — plus four owner adds (2026-08-30, mid-draft): a **balance & symmetry engine** (§15.10 — "good symmetry / visually pleasing" has been the consistent live failure), **font-library expansion** (§15.11, superseding §14's deferral), **expressive typography** (§15.12 — let the model be inventive with text), and a **masking doctrine** (§15.13 — machinery alone doesn't make the model reach for masks). Design constraints, non-negotiable:
+The wave closes those four gaps — plus five owner adds (2026-08-30): a **balance & symmetry engine** (§15.10 — "good symmetry / visually pleasing" has been the consistent live failure), **font-library expansion** (§15.11, superseding §14's deferral), **expressive typography** (§15.12 — let the model be inventive with text), a **masking doctrine** (§15.13 — machinery alone doesn't make the model reach for masks), and a **frontier composition planner** (§15.16, added mid-build — plan the multi-layer, multi-generation build ahead of any image spend instead of spontaneous one-shot direction). Design constraints, non-negotiable:
 
 1. **Extend, don't rebuild.** `layers` is already an explicit bottom-first z-list that `render_upto()` replays deterministically; every new capability is a new layer kind or a new field, never a new render architecture.
 2. **Byte-identical default path.** A spec that uses none of the new fields renders the exact bytes it rendered before the wave. Proven by a golden-bytes test (§15.10), same discipline as the per-category-passes wave.
@@ -796,9 +796,32 @@ Six PRs, each independently shippable and green (fonts and balance parallelize w
 4. **PR4 — styles + atmosphere + recipes.** §15.4 + §15.5 + §15.6 + archetype retrofits. Tests: shadow/stroke fold equivalence (old fields alone → byte-identical); stacked double shadow; every synth deterministic + palette-coherent; every recipe expands valid and its procedural render passes autopilot + balance; `fx_` collision rejected; scratch-venv package-data.
 5. **PR5 — expressive typography.** §15.12 with its per-move × per-guard fixture matrix.
 6. **PR6 — vocabulary.** §15.14 prompts + the two mask-forward archetypes + worked examples + judge tells. Prompt-shape assertions plus the live acceptance run.
+7. **PR7 — composition planner.** §15.16 (after PR6 — it consumes the full finished vocabulary: recipes, type moves, mask intents, effect stacks). Tests: plan schema round-trip; staged-generation ordering honored with a fake imaging client; conditioning review receives the prior stage's actual bytes; planner failure degrades to the spontaneous path with a ledger note and no lost job; plan.json persisted and replayable; consistency-contract suffix present in every staged prompt.
 
 Acceptance (wave): (a) same brief, `recipe=""` vs `cinematic_duotone` — visibly graded, unified, zero image-spend delta; (b) "make it feel more printed / less digital" resolves to `fx_` edits alone; (c) golden-bytes holds on every pre-wave fixture; (d) a foil title (gradient_overlay + texture_overlay) survives the 100px thumb check; (e) a deliberately 1%-off-center fixture ships exactly on axis with the adjustment logged; (f) a `justify_stack` + `title_window` concept renders legibly at 100px; (g) the judge's balance flag cites the measured score; (h) full suite green.
 
-### 15.16 Out of scope (this wave)
+### 15.16 Composition planner — a frontier model that plans before pixels (OWNER ADD 2026-08-30)
+
+The pipeline's one remaining spontaneous step is the most consequential: §6.1 fires one cheap breadth call and every image prompt it emits is written blind — no prompt knows what the other generations will look like, so nothing guarantees the layers were conceived as ONE composition. Good covers are a combination of multiple layers and multiple image generations; a designer plans that combination before making anything. This section adds that planning mind, on a frontier model, between choosing a concept and spending image dollars.
+
+**Where it sits.** `run_directions` stays exactly as is (cheap, N distinct concepts — breadth is the wrong place for expensive depth). The planner runs per concept, after direction, before painting: `plan_composition(brief, spec, archetype, manuscript_sample) -> CompositionPlan` in `docproof/cover/planner.py`. Default model: a frontier reasoner — module constant `PLANNER_MODEL = "claude-fable-5"` (fallback `claude-opus-5`), called via the `anthropic` SDK directly with vision, the same vendor-SDK-in-its-own-module precedent critique.py set. Cost note: ~$0.10–0.30 per concept including staged reviews — cite current pricing in a comment at implementation time. **Lane doctrine respected:** the shipped pipeline gates the planner behind `COVER_PLANNER` env/setting (off = today's spontaneous path, byte-for-byte); in the $0 lane the Claude session itself plays this role following this same contract, which is what makes recipes learned there portable back into the product.
+
+**What a plan is** (`CompositionPlan`, strict-schema flat like everything else on the wire):
+
+- `light`: one shared lighting contract — key-light direction, quality, time of day — injected verbatim into EVERY art prompt (the single biggest "these layers belong together" lever).
+- `palette_anchors`: the exact hexes each generation must name, drawn from the spec's palette.
+- `depth`: per-slot plane (far/mid/near), a shared `horizon_y`, and where negative space must fall — computed FROM the text zones by code, but restated by the planner in prompt language the image model obeys.
+- `generation_order`: slot ids as sequential stages (a plate that others must match generates first).
+- `conditioning`: per later-stage slot, which earlier slot's *actual render* the planner reviews (vision) before finalizing that slot's prompt and placement fields — anchor, scale, offset, mask — so the focal is prompted and positioned against where the background's negative space and horizon *really* landed, not where the plan hoped.
+- `unify`: the finishing bind — recipe choice and/or a gradient_map/grade the planner wants over the assembled stack.
+- Per-slot rewritten prompts, each ending in the shared consistency suffix (light + palette + era + medium), on top of the §7.2 negative suffix.
+
+**Staged generation.** When a plan declares `generation_order`/`conditioning`, `pipeline.run_job`'s painting phase runs those stages sequentially (bounded: ≤3 stages, ≤1 vision review per stage; everything else in a stage still parallelizes under the existing semaphore). Each review is one structured call: images of prior stages (≤600px, critique.py's discipline) + the plan + the pending slot's draft prompt → final prompt + placement + mask fields for that slot. Ledger rows `{kind: "plan", detail, usd}` per planner/review call.
+
+**Guarantees.** `plan.json` persists in the job dir beside `job.json` (replayable, auditable). Planner or review failure NEVER blocks a cover: log, ledger note, fall back to the spontaneous path for the remaining slots. Revisions may request a replan (`allow_new_art` + explicit "replan" in notes → planner reruns before regeneration); ordinary revisions never re-buy planning. The critique judge receives `plan.light` and `plan.unify` in its summary so it can name plan-vs-render drift as a tell.
+
+**Why this and not a bigger direction call:** breadth and depth want different models and different token budgets; planning all N concepts at frontier depth before a human (or the judge) has culled them wastes most of the spend. Direction proposes; the planner engineers the winner.
+
+### 15.17 Out of scope (this wave)
 
 Nested layer groups (§15.0, constraint 5); `hue`/`color`/`luminosity` blends; PSD import/export; hand-painted dodge/burn (masked grades cover it); per-synth parameter fields; recipe re-expansion on revision; curves as arbitrary control-point LUTs (grade's four scalars first — add curves only if the judge demonstrably runs out of range); vertical gap auto-equalization (warn-only in v1, §15.10); variable-font axes (static TTF weights only); per-glyph manual kerning overrides; text-on-arbitrary-path (circular arc only).
