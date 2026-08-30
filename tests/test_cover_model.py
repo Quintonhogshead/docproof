@@ -934,3 +934,62 @@ def test_pre_wave_spec_json_without_adjust_key_still_validates():
     dumped = spec.model_dump()
     dumped.pop("adjust")
     assert CoverSpec(**dumped).adjust == []
+
+
+# -- §15.10: axis declaration + RenderReport.adjustments ---------------------
+
+def test_cover_spec_axis_defaults_to_none_meaning_pre_wave_behavior():
+    spec = _mini_spec(art=[ArtSlot(id="background")],
+                      layers=[LayerRef(kind="art", ref="background")])
+    assert spec.axis is None and spec.axis_x is None
+    dumped = spec.model_dump()
+    del dumped["axis"], dumped["axis_x"]             # a pre-wave archive
+    revalidated = CoverSpec(**dumped)
+    assert revalidated.axis is None and revalidated.axis_x is None
+
+
+@pytest.mark.parametrize("axis", ["center", "left", "right"])
+def test_cover_spec_accepts_every_documented_axis(axis):
+    spec = _mini_spec(art=[ArtSlot(id="background")],
+                      layers=[LayerRef(kind="art", ref="background")])
+    assert spec.model_copy(update={"axis": axis}).axis == axis
+
+
+def test_cover_spec_rejects_an_unknown_axis_and_an_off_canvas_axis_x():
+    base = _mini_spec(art=[ArtSlot(id="background")],
+                      layers=[LayerRef(kind="art", ref="background")]).model_dump()
+    with pytest.raises(ValidationError):
+        CoverSpec(**{**base, "axis": "middle"})
+    with pytest.raises(ValidationError):
+        CoverSpec(**{**base, "axis": "left", "axis_x": 1.2})
+
+
+def test_cover_spec_axis_x_is_inert_but_validated_without_a_rail_axis():
+    # AdjustLayer's forgiving-flat-params doctrine: a patch edit that
+    # changes `axis` later can never strand the spec in an invalid state.
+    spec = _mini_spec(art=[ArtSlot(id="background")],
+                      layers=[LayerRef(kind="art", ref="background")])
+    assert spec.model_copy(update={"axis_x": 0.3}).axis_x == 0.3
+
+
+def test_build_spec_copies_the_archetype_axis_declaration_verbatim():
+    archetype = ARCHETYPES["big_type"].model_copy(
+        update={"axis": "left", "axis_x": 0.1})
+    spec = build_spec(_direction(archetype="big_type"), _brief(), archetype)
+    assert spec.axis == "left" and spec.axis_x == 0.1
+    # And the shipped (un-retrofitted) archetype stays pre-wave: None.
+    unretrofitted = build_spec(_direction(archetype="big_type"), _brief(),
+                               ARCHETYPES["big_type"])
+    assert unretrofitted.axis is None and unretrofitted.axis_x is None
+
+
+def test_render_report_adjustments_default_when_omitted_and_round_trip():
+    report = RenderReport(contrast={}, scrim_final={}, fitted_sizes={},
+                          warnings=[])
+    assert report.adjustments == []
+    moved = RenderReport(contrast={}, scrim_final={}, fitted_sizes={},
+                         warnings=[],
+                         adjustments=["text 'title': ink center 49.00% → "
+                                      "50.00% of width — snapped onto the "
+                                      "center axis (+4px)."])
+    assert len(moved.adjustments) == 1

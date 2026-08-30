@@ -34,7 +34,7 @@ from pathlib import Path
 from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageEnhance,
                  ImageFilter, ImageOps, ImageStat)
 
-from . import typeset
+from . import balance, typeset
 from .archetypes import zone_px
 # The deep-stack wave (§15.9) moved every shared pixel formula out to
 # effects.py — the blend table, the WCAG luminance band, mask resolution,
@@ -323,6 +323,22 @@ def compose(spec: CoverSpec, job_dir: Path,
     # composites anything for real.
     _apply_art_contrast_floor(positioned_art, art_positions.pre_treatment,
                               layers, art_by_id, spec.palette, canvas, warnings)
+
+    # Balance snap pass (§15.10): the LAST word on horizontal position —
+    # after every positioning guard above (occlusion, notches, contact,
+    # contrast floor), before anything below ever measures or paints, so
+    # scrims and the legibility autopilot both see the final, snapped
+    # positions. Gated on the spec actually DECLARING an axis: None (every
+    # pre-wave spec and every un-retrofitted archetype) means no snap pass
+    # at all — §15.0 constraint 2, byte-identical default path — while the
+    # balance MEASUREMENTS further down still run for every spec (report-
+    # only, no pixels). Mutates `positioned_art`/`text_by_id` in place;
+    # every reader below (render_upto's closure included) sees only the
+    # snapped state.
+    adjustments: list[str] = []
+    if spec.axis is not None:
+        _snap_positions(spec, canvas, positioned_art, layers, art_by_id,
+                        text_by_id, adjustments)
 
     # Adjust-layer masks resolve exactly once, here: every ingredient
     # (positioned art, fitted text ink, the synthesized gradients) is fixed
@@ -627,14 +643,27 @@ def compose(spec: CoverSpec, job_dir: Path,
             f"({dead_band_frac:.0%} of the canvas) has no text, art, or "
             f"ornament ink crossing it.")
 
+    # Balance measurements (§15.10): mirror symmetry, center of mass,
+    # margins, gap rhythm — measured on the FINISHED composite (finishing
+    # included; these judge what ships) and reported into the same
+    # warnings channel the judge already reads as composer_warnings.
+    # Report-only by design (taste calls the judge arbitrates), so they
+    # run for EVERY spec, axis declared or not — a pre-wave spec's pixels
+    # are untouchable, its numbers are not.
+    final_rgb = final_image.convert("RGB")
+    warnings.extend(_balance_measurements(spec, canvas, final_rgb,
+                                          positioned_art, layers, art_by_id,
+                                          finalized))
+
     report = RenderReport(
         contrast=contrast,
         scrim_final={idx: strengths[idx] for idx in range(len(spec.scrims))},
         fitted_sizes=fitted_sizes,
         warnings=warnings,
         occlusion=art_positions.occlusion,
-        dead_band_frac=dead_band_frac)
-    return final_image.convert("RGB"), report
+        dead_band_frac=dead_band_frac,
+        adjustments=adjustments)
+    return final_rgb, report
 
 
 # -- knockout / art_fill text modes (§7.4a) -----------------------------------
@@ -1610,6 +1639,181 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
         target_idx = next(j for j, ref in enumerate(out)
                           if ref.kind == "text" and ref.ref == text_id)
         out[target_idx:target_idx] = art_entries
+    return out
+
+
+# -- balance & symmetry (§15.10) ----------------------------------------------
+
+def _snap_positions(spec: CoverSpec, canvas: tuple[int, int],
+                    positioned_art: dict[str, Image.Image],
+                    layers: list[LayerRef], art_by_id: dict[str, ArtSlot],
+                    text_by_id: dict[str, TextSlot],
+                    adjustments: list[str]) -> None:
+    """The balance engine's snap pass, wired into this module's own state:
+    measure every eligible element's positioned ink, hand the bboxes to
+    balance.plan_snaps (which owns all the geometry and every tolerance),
+    then apply the returned deltas — art by translating its positioned
+    pixels (the exact shift-the-finished-raster move the contact guard
+    established, and for the same reason: it works uniformly regardless of
+    how the pixels were placed), text by translating its ZONE (fit_text
+    depends only on the zone's width/height, so a pure horizontal
+    translation re-fits to the identical size and line breaks — only where
+    the ink lands changes, and the scrims/legibility machinery that derive
+    from the zone follow automatically). Every applied move's line lands
+    in `adjustments`.
+
+    Eligibility is decided HERE, because it is spec-level reasoning
+    balance.py deliberately can't see (it imports model/effects only):
+
+    - Text: every drawn slot participates; exempt only a slot some
+      MaskSpec.from_text clips art INTO — that art's alpha was already
+      multiplied by the glyphs' current position during the mask pass, and
+      moving the glyphs now would strand art-in-the-letterforms where the
+      letters no longer are. (A text slot's own mask_from container clip
+      is fine to move: it re-derives from the container's positioned alpha
+      at draw time, after this pass.)
+    - Art: contain-fit only, per §15.10 — cover-fit is a bleed plate, and
+      corners/scatter placements are symmetric/deliberately-random by
+      construction. Also exempt anything whose pixels are already
+      entangled with another layer's: a slot carrying its own mask (its
+      alpha was shaped against canvas-anchored or other-layer fields), a
+      slot some other mask reads (from_layer/luminance_of stencils were
+      taken at its current position), and either side of a notch_for pair
+      (the hole was cut where the target ink WAS). The snap pass runs
+      last by design — final positions — so entangled pixels must simply
+      not move.
+
+    Mutates `positioned_art` and `text_by_id` in place; runs before
+    render_upto is ever called, so every replay, scrim derivation, and
+    contrast measurement sees only the snapped state."""
+    cw = canvas[0]
+    axis_x = balance.resolve_axis_x(spec.axis, spec.axis_x)
+
+    mask_source_art: set[str] = set()
+    from_text_refs: set[str] = set()
+    for owner in (*spec.art, *spec.adjust):
+        if owner.mask is None:
+            continue
+        if owner.mask.from_layer:
+            mask_source_art.add(owner.mask.from_layer)
+        if owner.mask.luminance_of:
+            mask_source_art.add(owner.mask.luminance_of)
+        if owner.mask.from_text:
+            from_text_refs.add(owner.mask.from_text)
+    notch_bound = {a.id for a in spec.art if a.notch_for}
+    notch_bound |= {a.notch_for for a in spec.art if a.notch_for}
+
+    elements: list[balance.InkElement] = []
+    seen: set[tuple[str, str]] = set()
+    for layer in layers:
+        key = (layer.kind, layer.ref)
+        if key in seen or layer.kind not in ("text", "art"):
+            continue
+        seen.add(key)
+        if layer.kind == "text":
+            slot = text_by_id.get(layer.ref)
+            if slot is None or (slot.optional and not slot.content.strip()):
+                continue
+            # One more redundant (pure, deterministic, cheap) fit search —
+            # the same trade _position_all_art's occlusion guard already
+            # blesses — because the snap needs the fitted INK's bbox, not
+            # the zone's.
+            fit = typeset.fit_text(slot, canvas)
+            bbox = typeset.text_mask(slot, fit, canvas).getbbox()
+            if bbox is None:
+                continue
+            zone_left = round(slot.zone.x * cw)
+            # The legal horizontal travel keeps the translated zone a
+            # valid Zone (x ≥ 0, x + w ≤ 1) — plan_snaps skips any snap
+            # these bounds can't absorb whole, so a snap is always exact
+            # or absent, never partial.
+            dx_max = math.floor(cw * (1.0 - slot.zone.w) + 1e-6) - zone_left
+            elements.append(balance.InkElement(
+                id=layer.ref, kind="text", bbox=bbox, align=slot.align,
+                snappable=layer.ref not in from_text_refs,
+                dx_min=-zone_left, dx_max=dx_max))
+        else:
+            slot = art_by_id[layer.ref]
+            snappable = (slot.fit == "contain" and not slot.corners
+                         and not slot.scatter and slot.mask is None
+                         and layer.ref not in mask_source_art
+                         and layer.ref not in notch_bound)
+            if not snappable:
+                continue
+            img = positioned_art.get(layer.ref)
+            bbox = balance.ink_bbox(img) if img is not None else None
+            if bbox is None:
+                continue
+            elements.append(balance.InkElement(
+                id=layer.ref, kind="art", bbox=bbox,
+                dx_min=-bbox[0], dx_max=cw - bbox[2]))
+
+    deltas, lines = balance.plan_snaps(elements, spec.axis, axis_x, canvas)
+    for (kind, ref), dx in deltas.items():
+        if kind == "art":
+            positioned_art[ref] = balance.translate_x(
+                positioned_art[ref], dx, canvas)
+        else:
+            slot = text_by_id[ref]
+            zone_left = round(slot.zone.x * cw)
+            # (zone_left + dx) / cw re-rounds to exactly zone_left + dx at
+            # zone_px time, so the drawn ink moves by precisely the
+            # planned delta — mutating zone.x by dx/cw instead could land
+            # a pixel off on a half-integer rounding boundary.
+            z = slot.zone
+            text_by_id[ref] = slot.model_copy(update={"zone": Zone(
+                x=(zone_left + dx) / cw, y=z.y, w=z.w, h=z.h)})
+    adjustments.extend(lines)
+
+
+def _balance_measurements(spec: CoverSpec, canvas: tuple[int, int],
+                          final_rgb: Image.Image,
+                          positioned_art: dict[str, Image.Image],
+                          layers: list[LayerRef],
+                          art_by_id: dict[str, ArtSlot],
+                          finalized: dict[str, _ResolvedText]) -> list[str]:
+    """§15.10's report-only tier, gathered once over the finished render:
+    whole-canvas mirror-symmetry/center-of-mass warnings (via
+    balance.measure_composite — a spec with no declared axis measures as
+    the center composition every pre-wave archetype is), the per-element
+    margin audit, and the gap-rhythm near-miss check. Elements are
+    measured at their FINAL positions — finalized text redraws from its
+    (possibly snapped) slot, art reads its (possibly snapped) positioned
+    alpha — and cover-fit art never enters the margin audit at all: a
+    bleed layer touches the trim by design."""
+    out: list[str] = list(balance.measure_composite(
+        final_rgb, spec.axis or "center").warnings)
+
+    elements: list[balance.InkElement] = []
+    text_elements: list[balance.InkElement] = []
+    seen: set[tuple[str, str]] = set()
+    for layer in layers:
+        key = (layer.kind, layer.ref)
+        if key in seen or layer.kind not in ("text", "art"):
+            continue
+        seen.add(key)
+        if layer.kind == "text":
+            resolved = finalized.get(layer.ref)
+            if resolved is None:
+                continue
+            bbox = typeset.text_mask(resolved.slot, resolved.fit,
+                                     canvas).getbbox()
+            if bbox is None:
+                continue
+            element = balance.InkElement(id=layer.ref, kind="text", bbox=bbox)
+            elements.append(element)
+            text_elements.append(element)
+        else:
+            if art_by_id[layer.ref].fit == "cover":
+                continue                  # bleed layer — margin-exempt
+            img = positioned_art.get(layer.ref)
+            bbox = balance.ink_bbox(img) if img is not None else None
+            if bbox is None:
+                continue
+            elements.append(balance.InkElement(id=layer.ref, kind="art",
+                                               bbox=bbox))
+    out.extend(balance.margin_audit(elements, canvas))
+    out.extend(balance.gap_rhythm_warnings(text_elements, canvas))
     return out
 
 

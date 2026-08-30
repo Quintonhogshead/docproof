@@ -329,6 +329,17 @@ class Archetype(BaseModel):
     text: list[ArchetypeText] = Field(min_length=1)
     layers: list[str] = Field(min_length=1)
     genres: list[str] = Field(default_factory=list)
+    # Mirrors docproof.cover.model.CoverSpec.axis/axis_x exactly (§15.10;
+    # build_spec copies both verbatim): which vertical axis this template
+    # composes around, so the balance engine's snap pass knows what a
+    # near-miss is a near-miss OF. None — the default, and every shipped
+    # archetype's current state until a later wave retrofits declarations
+    # — means pre-wave behavior: no snap pass, byte-identical renders
+    # (§15.0 constraint 2). axis_x (fraction of canvas width) positions a
+    # left/right rail; None takes §15.10's conventional 0.08/0.92, and a
+    # center axis never reads it at all.
+    axis: Literal["center", "left", "right"] | None = None
+    axis_x: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Archetype:

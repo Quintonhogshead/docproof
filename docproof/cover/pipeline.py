@@ -725,9 +725,12 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
     repaint_used = False
 
     for round_n in range(1, MAX_CRITIQUE_ROUNDS + 1):
+        # Adjustments ride along with the warnings (§15.10): the judge's
+        # "near-miss alignment survived" tell is only checkable against
+        # what the snap pass actually moved.
         verdict = _run_critique_safely(
             job_id, index, spec, brief, d / renders[-1], critique_client,
-            ledger_rows, report.warnings, round_n)
+            ledger_rows, [*report.warnings, *report.adjustments], round_n)
         if verdict is None or verdict.passes:
             break
         if round_n == MAX_CRITIQUE_ROUNDS:

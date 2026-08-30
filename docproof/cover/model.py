@@ -648,6 +648,26 @@ class CoverSpec(BaseModel):
     scrims: list[ScrimSpec]
     text: list[TextSlot]
     layers: list[LayerRef]                      # explicit z-order, bottom first
+    # Balance & symmetry (§15.10): which vertical axis this composition
+    # declares. "center" snaps near-miss ink centers onto the canvas
+    # midline; "left"/"right" snap leading/trailing ink edges onto the
+    # `axis_x` rail (defaulting to 0.08/0.92 when axis_x is None — see
+    # balance.resolve_axis_x; "center" never reads axis_x at all). None —
+    # the default, and what every archived spec without the key validates
+    # to — means PRE-WAVE behavior: the snap pass never runs, so a spec
+    # that never declared an axis renders the exact bytes it rendered
+    # before this wave existed (§15.0 constraint 2; a "center" default
+    # would silently move any element already within tolerance). The
+    # balance MEASUREMENTS still run for None — they are report-only and
+    # change no pixels — reading it as the center composition every
+    # pre-wave archetype in fact is.
+    axis: Literal["center", "left", "right"] | None = None
+    # The left/right rail as a fraction of canvas width. Validated for
+    # shape whenever set, read only when axis is "left"/"right" — inert
+    # otherwise, deliberately forgiving (AdjustLayer's own flat-params
+    # doctrine: a patch edit that changes `axis` can never strand the
+    # spec in an invalid state).
+    axis_x: float | None = Field(default=None, ge=0.0, le=1.0)
     notes_log: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -853,6 +873,18 @@ class RenderReport(BaseModel):
     # text/art/ornament ink crossing it, as a fraction of canvas height (the
     # dead-band metric, fix 4) — see docproof.cover.compose._dead_band_frac.
     dead_band_frac: float = Field(default=0.0, ge=0.0, le=1.0)
+    # Every move the balance snap pass made (§15.10), one line per snap
+    # with exact before→after numbers ("text 'title': ink center 51.20% →
+    # 50.00% of width — snapped onto the center axis (-19px).") — the
+    # warnings-adjacent info channel that keeps "why did it move" from
+    # ever being a mystery. Kept SEPARATE from `warnings` because a snap
+    # is a success, not a problem — but threaded alongside them into the
+    # judge's composer_warnings channel (see pipeline._critique_and_revise)
+    # so "near-miss alignment survived" is checkable against what actually
+    # moved. Defaulted so every pre-existing caller that builds a
+    # RenderReport by hand (and every archived job.json without the key)
+    # keeps working unchanged.
+    adjustments: list[str] = Field(default_factory=list)
 
 
 # -- the art-direction call's answer -----------------------------------------
@@ -1058,12 +1090,18 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
         else:
             layers.append(LayerRef(kind="text", ref=ref))
 
+    # The axis declaration (§15.10) rides from archetype to spec verbatim —
+    # None stays None (pre-wave behavior, no snap pass) — so revisions can
+    # change it per cover while an archetype that never declared one keeps
+    # rendering byte-identical pixels. Direction never sets it: which axis
+    # a TEMPLATE composes around is structure, not per-concept taste.
     return CoverSpec(
         archetype=archetype.name,
         concept_name=direction.concept_name,
         rationale=direction.rationale,
         palette=direction.palette,
-        art=art, scrims=scrims, text=text, layers=layers)
+        art=art, scrims=scrims, text=text, layers=layers,
+        axis=archetype.axis, axis_x=archetype.axis_x)
 
 
 __all__ = [

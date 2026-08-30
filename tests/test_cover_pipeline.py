@@ -1177,6 +1177,34 @@ def test_run_job_critique_per_concept_isolation(tmp_path, monkeypatch):
     assert bad_row["usd"] == 0.0
 
 
+def test_run_job_critique_receives_adjustments_alongside_warnings(
+        tmp_path, monkeypatch):
+    # §15.10: RenderReport.adjustments (what the balance snap pass moved)
+    # ride into the judge's composer_warnings channel right behind the
+    # warnings themselves — the "near-miss alignment survived" tell is
+    # only checkable against what actually moved.
+    job = pipeline.create_job(tmp_path, _brief(concepts=1))
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("big_type")], model="m", cost=0.01))
+    snap_line = ("text 'title': ink center 49.00% → 50.00% of width — "
+                 "snapped onto the center axis (+4px).")
+    monkeypatch.setattr(pipeline, "compose", lambda spec, job_dir: (
+        FAKE_IMAGE, _report(warnings=["weak hierarchy"],
+                            adjustments=[snap_line])))
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    seen: dict[str, list[str]] = {}
+    def fake_run_critique(png_bytes, thumb_bytes, spec, brief, client, **kw):
+        seen["composer_warnings"] = list(kw.get("composer_warnings", ()))
+        return CritiqueResult(passes=True, tells=[], notes="", cost=0.0007)
+    monkeypatch.setattr(pipeline, "run_critique", fake_run_critique)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert seen["composer_warnings"] == ["weak hierarchy", snap_line]
+
+
 def test_run_revision_human_triggered_does_not_call_run_critique(tmp_path, monkeypatch):
     job = _ready_job_with_concept(tmp_path)
 
