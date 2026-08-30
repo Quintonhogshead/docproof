@@ -825,3 +825,131 @@ The pipeline's one remaining spontaneous step is the most consequential: §6.1 f
 ### 15.17 Out of scope (this wave)
 
 Nested layer groups (§15.0, constraint 5); `hue`/`color`/`luminosity` blends; PSD import/export; hand-painted dodge/burn (masked grades cover it); per-synth parameter fields; recipe re-expansion on revision; curves as arbitrary control-point LUTs (grade's four scalars first — add curves only if the judge demonstrably runs out of range); vertical gap auto-equalization (warn-only in v1, §15.10); variable-font axes (static TTF weights only); per-glyph manual kerning overrides; text-on-arbitrary-path (circular arc only).
+
+### 15.18 Element inspection kit — "pixel-perfect" as a procedure (docproof/cover/inspect.py)
+
+Born from the first real $0-lane cover (Willow On Me, 2026-08-30), where three consecutive
+seatings of a generated figure failed BY EYE and every defect that actually got fixed was
+fixed off a measurement. The doctrine, one line: **no claim about where pixels sit is made
+by eye; every claim is made against a ruled artifact or a numeric probe.**
+
+The concrete per-element pass, run between `compose()` and the next spec patch (the same
+seat at the table RenderReport holds for legibility):
+
+1. **Audit every asset** — `audit_assets(spec, job_dir)`: per asset slot, `ink_bbox`'s
+   raw-vs-hard-alpha bbox and the haze padding each side. A generated cutout's `getbbox()`
+   lies (~180px of near-invisible haze floated the Willow figure); anything seated by a raw
+   bbox floats by its bottom haze. Flagged entries are seated by the `hard` box.
+2. **Isolate anything suspicious** — `isolate(spec, slot_id, job_dir)`: the layer rendered
+   alone through compose's own placement path (never a re-implementation).
+3. **Measure the ground, never guess it** — `ruled_crop` (a crop with a coordinate grid
+   ruled on in source coordinates) to orient; `surface_line` (per-column strongest
+   dark-to-bright edge inside a TIGHT y-band) for the actual surface polyline. A loose
+   band locks onto background structure — constrain it to the expected surface.
+4. **Verify the seat as numbers** — `contact_gaps(surface, contacts)`: per contact point,
+   surface_y − contact_y. Seated means every gap in [−15, +2] (a few px sunk is wanted).
+   Contact shadows go under the CONTACT POINTS — one body-wide bar reads as a chasm.
+5. **Scan plates for banding, confirm before fixing** — `seam_scan` (stripe-swept
+   column-mean step detector) runs on the GENERATED PLATE only: a finished composite's
+   legitimate vertical content (glyph stems, spires, arcs) out-fires subtle banding by an
+   order of magnitude, so composite hits are noise. Every hit is a pointer, convicted only
+   by `column_profile` (a step between flat flanks = seam; a slope = content) and a
+   `ruled_crop`. The fix for a confirmed seam is strip re-synthesis (row-wise lerp between
+   flanks, dodging painted features) — a luminance step survives any blur.
+
+Integration companions (the seat is only half the illusion): re-paste the plate's own
+surface material over the element's lowest pixels (a polygon-masked snow/ground lip) so it
+sinks IN rather than sits ON; add accent bounce light and disturbance (spray) at the
+contact; scale the element to the surface's own depth cues, not to taste.
+
+Like balance.py, everything is a pure value computation over supplied images — no network,
+no state, deterministic. `isolate()` alone touches compose, precisely so isolation can
+never disagree with the real render.
+
+### 15.19 One-shot doctrine — from the first real cover to "upload a manuscript, get 4-6 bangers"
+
+Provenance: the first end-to-end real cover (Willow On Me, 2026-08-30) — one manuscript read,
+three routes (painterly ×9 versions, in-engine stylized ×4, user-generated stylized elements ×16),
+one shipped v16. Nearly every iteration was BUG-driven, and every bug below is now a rule, a probe,
+or a test. The residual per-cover loop is the 2-3 judgment rounds §6.3's critique already supports.
+That is the whole thesis of this section: **one-shotting is not better luck, it is doctrine baked
+into code plus gates that refuse the known failures.** Target user: a non-technical author who
+uploads a manuscript and gets back 4-6 covers that do not read as AI.
+
+**Design doctrine (the taste rules, learned the hard way)**
+
+1. *Dead space is the enemy.* `dead_band_frac > ~0.2` is a FAIL GATE, not a warning. The engine
+   flagged the failure (40% empty sky) before the owner did; the operator overrode it. Never again.
+2. *The hero silhouette carries the story; rendered detail reads as AI.* A crouched near-black
+   shape with a trail entering her back is a sentence; a fully painted figure is "a generation."
+   Figure at 35-50% of cover height. Scale is hierarchy-honest, never perspective-honest.
+3. *Signature marks need story-physics.* A uniform glowing stroke "looks like a line." The
+   teleport-trail only worked as TRAVEL HISTORY: a multi-hop chain between real plate landmarks,
+   landing flash at each vertex, intensity graded oldest-faintest → newest-boldest.
+4. *Every element needs a reason on the page.* Worldbuilding props earn their place by double
+   duty (the airship became the series-line emblem). Decorative occluders with no story job die
+   in review ("why are those flowers there?").
+5. *Type has homes.* Series line = eyebrow above the title, optionally with an ornament. Author
+   line = on a PAINTED stable ground (a band, a cast shadow) — never scrims fighting busy texture
+   (a panel scrim at escalated strength reads as a bezel; `gradient_up` darkens everything ABOVE
+   its zone and can black out the cover). Title may interleave with art via layer order (§15.13).
+6. *Stylized flat/screen-print hides AI tells; painterly exposes them.* Grain reads as intent.
+   Flat style + shared palette hexes is also what makes separately generated elements cohere.
+   The product should DEFAULT to 2-3 stylized looks.
+
+**Element decomposition (the generation architecture)**
+
+Generate MATERIALS and SUBJECTS; paint GEOMETRY deterministically — anything whose endpoints must
+hit measured pixels (trails, frames, stage bands) is Pillow's job, textured by generated plates
+via luminance×mask clipping (cap the mask ~0.5 or bright texture whitens the shape).
+
+- one scene plate (no people, no text; landscape rescue = tone-matched procedural sky extension,
+  feathered seam, patch baked-in moons);
+- one figure cutout (transparent; silhouette-first prompt);
+- one energy/material texture on PLAIN BLACK (for luminance masking);
+- optional props (emblem, occluder) — each with a story job or not at all.
+
+Every prompt carries the SAME style block + palette hexes + lighting contract (§15.16's planner
+already owns this injection). Plates arrive with gifts (painted lanterns → chain vertices; a glow
+→ an origin) and defects (vertical banding a blur cannot remove — a step survives blur;
+re-synthesize the strip as row-wise lerp between flanks). Plan to exploit the gifts: the vision
+review stage places elements against the ACTUAL render.
+
+**Integration checklist (a pasted element is seated, not floated — §15.18's kit, applied)**
+
+seat by hard-alpha bbox (raw bbox haze floats figures) → find the surface with ruled grids and
+surface_line, never by eye → contact-POINT shadows (a body-wide bar reads as a chasm) → re-paste
+the surface material over the lowest pixels → shared-light rim synthesized from the scene's key
+light → disturbance (spray, bounce pool) → verify seat as numbers (contact_gaps in [-15, +2]).
+
+**Pixel traps (each cost a version; all now doctrine)**
+
+- PIL `paste(im, box, mask)` REPLACES pixels — stacking translucent layers requires
+  `alpha_composite` of masked layers, or the underprint silently vanishes.
+- Glow vocabulary INVERTS on light grounds: a pale core ≈ snow = invisible. On light backdrops
+  the mark is saturated body + dark underprint edges, no light core.
+- Silent `str.replace` edits no-op on stale targets; spec/scripted edits must assert their match.
+- `gradient_up` scrim = everything above the zone darkens (see 5).
+- Luminance-masked texture fills whiten their shape unless alpha-capped.
+
+**The one-shot build list (each item PR-sized; §15.16/§6.3/§15.18 are the substrate)**
+
+1. *Manuscript → visual brief*: extend the reality distiller to extract the OWNABLE MARK (the
+   green-arc equivalent), hero pose/silhouette description, three landmarks, setting palette,
+   series name, comp titles.
+2. *4-6 composition templates as archetypes*: hero-silhouette-over-scene (the v16 layer program,
+   parameterized), emblem/crest, inverted-values, split-world, big-type, typographic. Zones,
+   layer order, type homes, and integration steps encoded — concepts differ by template +
+   palette, not by luck.
+3. *Planner upgrade*: element decomposition in the CompositionPlan (plate → cutouts → materials
+   as staged generation), style block + palette anchors in every prompt, review stages that
+   place elements against actual renders and exploit plate gifts.
+4. *integrate.py*: promote the job-script moves into the engine — seat_figure (hard-alpha +
+   surface detection + auto contact shadows from mask lows), rim/silhouette synthesis, and a
+   signature-mark painter (chain/bolt renderer whose color vocabulary flips on light grounds).
+5. *Gates*: dead_band, audit_assets haze, plate seam_scan, mark-visibility (path-vs-background
+   delta), plus new critique tells: floating figure, line-reads-as-line, element-without-reason,
+   painterly-AI-sheen.
+6. *Style lock + economics*: default stylized; ~5 elements × $0.05 × 5 concepts + planner/critique
+   ≈ under $3 per book for 4-6 covers, generated in-product (authors never see a prompt), every
+   cover an archived spec that re-renders byte-identically and revises for $0.
