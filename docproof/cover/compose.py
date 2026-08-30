@@ -463,7 +463,8 @@ def compose(spec: CoverSpec, job_dir: Path,
             # which redraws every finalized slot on every later replay (see
             # the module docstring's note on that trade-off); a warning
             # appended once per replay would duplicate it N times over.
-            text_layer = _render_text_only(slot, fit, color_hex, shadow, canvas)
+            text_layer = _render_text_only(slot, fit, color_hex, shadow, canvas,
+                                           emphasis_color=spec.palette.accent)
             _, coverage = _clip_text_to_container(
                 text_layer, positioned_art.get(slot.mask_from), canvas)
             if coverage < _TEXT_MASK_MIN_COVERAGE:
@@ -706,12 +707,14 @@ def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
     if not slot.mask_from:
         if slot.mode == "fill":
             return typeset.draw_text(base, slot, resolved.fit, resolved.color,
-                                     resolved.shadow, canvas)
+                                     resolved.shadow, canvas,
+                                     emphasis_color=palette.accent)
         return _draw_knockout_or_art_fill(base, slot, resolved.fit,
                                           resolved.color, canvas)
 
     text_layer = _render_text_only(slot, resolved.fit, resolved.color,
-                                   resolved.shadow, canvas)
+                                   resolved.shadow, canvas,
+                                   emphasis_color=palette.accent)
     clipped, _coverage = _clip_text_to_container(
         text_layer, positioned_art.get(slot.mask_from), canvas)
     out = base.copy()
@@ -738,7 +741,8 @@ def _text_layer_with_effects(resolved: _ResolvedText, canvas: tuple[int, int],
     # the bare-fill render must not re-trigger the fold (which would see
     # effects non-empty and try to help).
     bare = slot.model_copy(update={"shadow": None, "stroke": None})
-    fill = _render_text_only(bare, resolved.fit, resolved.color, None, canvas)
+    fill = _render_text_only(bare, resolved.fit, resolved.color, None, canvas,
+                             emphasis_color=palette.accent)
     stack = list(slot.effects)
     if resolved.shadow is not None and slot.shadow is None:
         stack.insert(0, effect_from_shadow(resolved.shadow))
@@ -746,7 +750,8 @@ def _text_layer_with_effects(resolved: _ResolvedText, canvas: tuple[int, int],
 
 
 def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
-                      shadow: Shadow | None, canvas: tuple[int, int]) -> Image.Image:
+                      shadow: Shadow | None, canvas: tuple[int, int],
+                      emphasis_color: str | None = None) -> Image.Image:
     """`slot`'s fully rendered pixels — ink/stroke/shadow for `fill`, the
     panel/window pixels for knockout/art_fill — as a STANDALONE canvas-sized
     RGBA layer, transparent everywhere else. Both typeset.draw_text and
@@ -759,7 +764,8 @@ def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
     beneath them, before that clip ever happens."""
     blank = Image.new("RGBA", canvas, (0, 0, 0, 0))
     if slot.mode == "fill":
-        return typeset.draw_text(blank, slot, fit, color, shadow, canvas)
+        return typeset.draw_text(blank, slot, fit, color, shadow, canvas,
+                                 emphasis_color=emphasis_color)
     return _draw_knockout_or_art_fill(blank, slot, fit, color, canvas)
 
 

@@ -800,3 +800,368 @@ def test_revise_spec_raises_when_the_provider_call_itself_fails():
     with pytest.raises(RevisionError, match="network is down"):
         revise_spec(original, "notes", _ExplodingProvider())
     assert original.version == 1
+
+
+# ===========================================================================
+# Deep-stack wave, PR6 (§15.14): direction vocabulary — recipes, type_move,
+# mask_intent — plus the §6.2 worked examples and the build_spec mappings.
+# ===========================================================================
+
+from docproof.cover.archetypes import (Archetype, ArchetypeArt, ArchetypeText,
+                                       ArchetypeZone)
+from docproof.cover.model import TextSlot
+from docproof.cover.recipes import describe_recipes
+
+# The §15.12 typeset fields land in a parallel PR of this same wave;
+# build_spec's type_move mapping feature-detects them and degrades a
+# requested move to a logged no-op until they exist. The mapping tests
+# below assert the mapped VALUES, so they skip (and self-activate) on the
+# same detection.
+_HAS_TYPE_MOVE_FIELDS = {"fit_mode", "arc", "rotate", "emphasis"} <= set(
+    TextSlot.model_fields)
+_needs_type_move_fields = pytest.mark.skipif(
+    not _HAS_TYPE_MOVE_FIELDS,
+    reason="TextSlot's §15.12 fields (fit_mode/arc/rotate/emphasis) have "
+           "not landed yet — build_spec degrades the move to a logged "
+           "no-op until they do")
+
+
+def _direction_system() -> str:
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_directions_payload(2), usage=USAGE)])
+    run_directions(_brief(), provider, n=2)
+    return provider.calls[0]["system"]
+
+
+# -- §6.1 system prompt: the recipe roster ------------------------------------
+
+def test_run_directions_system_prompt_enumerates_the_recipe_roster():
+    system = _direction_system()
+    # The whole shelf, exactly as describe_recipes() renders it (§15.14:
+    # "enumerate recipes with describe lines").
+    assert describe_recipes() in system
+    for name in ("quiet_literary", "cinematic_duotone", "vintage_matte"):
+        assert name in system
+
+
+def test_run_directions_system_prompt_gives_recipe_guidance():
+    system = _direction_system()
+    assert "Pick the recipe whose look matches this genre's shelf" in system
+    assert "big_type usually wants quiet_literary or nothing" in system
+    # "" defers to the archetype's own default; a named pick wins.
+    assert "lets that default apply" in system
+    assert "a named pick always wins over it" in system
+
+
+# -- §6.1 system prompt: the role-grouped font roster -------------------------
+
+def test_run_directions_system_prompt_font_roster_is_role_grouped():
+    system = _direction_system()
+    # describe_fonts() is role-grouped (§15.11) and the prompt both uses it
+    # verbatim and tells the model to think in roles and pairings.
+    from docproof.cover.fonts import describe_fonts
+    assert describe_fonts() in system
+    assert "grouped by ROLE" in system
+    assert "pairs with" in system
+
+
+# -- §6.1 system prompt: the type_move vocabulary -----------------------------
+
+def test_run_directions_system_prompt_states_the_type_move_vocabulary():
+    system = _direction_system()
+    assert "`type_move`" in system
+    for move in ('"justify_stack"', '"arch"', '"tilt"', '"emphasis"'):
+        assert move in system
+    assert "`emphasis_word`" in system
+
+
+def test_run_directions_system_prompt_states_the_one_move_rule():
+    system = _direction_system()
+    assert "ONE signature typography move" in system
+    assert "one move per concept is a hard rule" in system
+    # And the one still-expressible two-move combination is forbidden too.
+    assert "never as a second move" in system
+
+
+# -- §6.1 system prompt: the four masking moves -------------------------------
+
+def test_run_directions_system_prompt_names_the_four_masking_moves():
+    system = _direction_system()
+    for move in ("PLATE-BLEND", "THING-IN-TEXT", "TEXT-IN-THING",
+                 "REGION-GRADE"):
+        assert move in system
+    # each with a when-it-earns-its-place sentence
+    assert system.count("earns its place") >= 4
+
+
+def test_run_directions_system_prompt_maps_the_mask_intent_vocabulary():
+    system = _direction_system()
+    assert "`mask_intent`" in system
+    for intent in ('"blend_into_background"', '"inside_title"',
+                   '"inside_focal"'):
+        assert intent in system
+
+
+def test_run_directions_system_prompt_requires_transparent_cutouts_for_inside_intents():
+    system = _direction_system()
+    assert "Required with any inside_* intent" in system
+    assert "TRANSPARENT-BACKGROUND cutout" in system
+
+
+def test_run_directions_system_prompt_states_the_direction_time_vocabulary_boundary():
+    # §15.14: the model never sets adjust-layer/effect fields directly at
+    # direction time — recipes, type_move, and mask_intent are its whole
+    # vocabulary there.
+    system = _direction_system()
+    assert ("`recipe`, `type_move`, and `mask_intent`" in system)
+    assert "WHOLE design-machinery vocabulary" in system
+    assert ("never set adjust-layer, mask, or effect fields directly at "
+            "direction time") in system
+
+
+# -- the wire schema accepts the new vocabulary -------------------------------
+
+def test_run_directions_accepts_recipe_type_move_and_mask_intent_on_the_wire():
+    payload = {"concepts": [_direction_payload(
+        recipe="quiet_literary", type_move="arch",
+        art_prompts=[{"slot": "background", "prompt": "A lonely lighthouse.",
+                      "mask_intent": "blend_into_background"}])]}
+    provider = FakeProvider(results=[ProviderResult(parsed=payload, usage=USAGE)])
+    result = run_directions(_brief(), provider, n=1)
+    direction = result.directions[0]
+    assert direction.recipe == "quiet_literary"
+    assert direction.type_move == "arch"
+    assert direction.art_prompts[0].mask_intent == "blend_into_background"
+
+
+# -- build_spec: mask_intent mappings (§15.13 part 2) -------------------------
+
+def _spec_with_intent(archetype_name: str, slot: str, intent: str,
+                      archetype=None):
+    direction = _direction_obj(
+        archetype=archetype_name,
+        art_prompts=[{"slot": slot, "prompt": "A quiet scene, gouache.",
+                      "mask_intent": intent}])
+    return build_spec(direction, _brief(),
+                      archetype if archetype is not None
+                      else ARCHETYPES[archetype_name])
+
+
+def test_build_spec_blend_into_background_becomes_a_linear_gradient_mask():
+    spec = _spec_with_intent("full_bleed_art", "background",
+                             "blend_into_background")
+    background = next(a for a in spec.art if a.id == "background")
+    assert background.mask is not None
+    assert background.mask.gradient is not None
+    assert background.mask.gradient.kind == "linear"
+    assert background.mask.from_layer == "" and background.mask.from_text == ""
+
+
+def test_build_spec_inside_title_becomes_mask_from_text_title():
+    spec = _spec_with_intent("cutout_sandwich", "focal", "inside_title")
+    focal = next(a for a in spec.art if a.id == "focal")
+    assert focal.mask is not None
+    assert focal.mask.from_text == "title"
+
+
+def _focal_pair_archetype(overlay_after_focal: bool = True) -> Archetype:
+    """A synthetic archetype with a `focal` cutout and a generatable
+    `overlay` slot — drawn after focal by default (the inside_focal happy
+    path), or before it to exercise the ordering drop."""
+    order = (["background", "focal", "overlay", "title", "author"]
+             if overlay_after_focal
+             else ["background", "overlay", "focal", "title", "author"])
+    return Archetype(
+        name="synthetic_focal", describe="d", composition_note="c",
+        art=[ArchetypeArt(id="background", generatable=False),
+             ArchetypeArt(id="focal", generatable=True, fit="contain",
+                          transparent=True),
+             ArchetypeArt(id="overlay", generatable=True, fit="contain",
+                          transparent=True)],
+        text=[ArchetypeText(id="title",
+                            zone=ArchetypeZone(x=0.1, y=0.4, w=0.8, h=0.2),
+                            size_min=0.02, size_max=0.1),
+              ArchetypeText(id="author",
+                            zone=ArchetypeZone(x=0.1, y=0.9, w=0.8, h=0.05),
+                            size_min=0.015, size_max=0.03)],
+        layers=order)
+
+
+def test_build_spec_inside_focal_clips_to_the_archetypes_focal_slot():
+    archetype = _focal_pair_archetype()
+    spec = _spec_with_intent("synthetic_focal", "overlay", "inside_focal",
+                             archetype=archetype)
+    overlay = next(a for a in spec.art if a.id == "overlay")
+    assert overlay.mask is not None
+    assert overlay.mask.from_layer == "focal"
+
+
+def test_build_spec_inside_focal_dropped_when_the_archetype_has_no_focal(caplog):
+    # full_bleed_art has no focal slot at all — the intent is dropped with
+    # a log line (the §6.1 surplus-prompt precedent), never fatal.
+    with caplog.at_level("INFO", logger="docproof.cover.model"):
+        spec = _spec_with_intent("full_bleed_art", "background",
+                                 "inside_focal")
+    background = next(a for a in spec.art if a.id == "background")
+    assert background.mask is None
+    assert any("inside_focal" in r.message and "dropped" in r.message
+               for r in caplog.records)
+
+
+def test_build_spec_inside_focal_dropped_when_focal_draws_after_the_slot(caplog):
+    # A mask can only clip to pixels already positioned (CoverSpec's
+    # from_layer ordering rule) — an intent the archetype's own layer
+    # order cannot honor is dropped, not built into an invalid spec.
+    archetype = _focal_pair_archetype(overlay_after_focal=False)
+    with caplog.at_level("INFO", logger="docproof.cover.model"):
+        spec = _spec_with_intent("synthetic_focal", "overlay", "inside_focal",
+                                 archetype=archetype)
+    overlay = next(a for a in spec.art if a.id == "overlay")
+    assert overlay.mask is None
+    assert any("inside_focal" in r.message for r in caplog.records)
+
+
+def test_build_spec_intent_dropped_on_a_slot_the_archetype_already_clips(caplog):
+    # woven_emblem-style precedence in miniature: a slot the archetype
+    # already masks (legacy mask_from sugar here) keeps the template's own
+    # clip; the direction's intent is dropped with a log line.
+    archetype = Archetype(
+        name="synthetic_clipped", describe="d", composition_note="c",
+        art=[ArchetypeArt(id="base", generatable=False),
+             ArchetypeArt(id="over", generatable=True, mask_from="base")],
+        text=[ArchetypeText(id="title",
+                            zone=ArchetypeZone(x=0.1, y=0.4, w=0.8, h=0.2),
+                            size_min=0.02, size_max=0.1)],
+        layers=["base", "over", "title"])
+    with caplog.at_level("INFO", logger="docproof.cover.model"):
+        spec = _spec_with_intent("synthetic_clipped", "over",
+                                 "blend_into_background", archetype=archetype)
+    over = next(a for a in spec.art if a.id == "over")
+    # the legacy sugar folds to from_layer — the template's clip, not the
+    # intent's gradient
+    assert over.mask is not None and over.mask.from_layer == "base"
+    assert over.mask.gradient is None
+    assert any("already clips" in r.message for r in caplog.records)
+
+
+# -- build_spec: type_move mappings (§15.12) ----------------------------------
+
+def _title_of(spec: CoverSpec):
+    return next(t for t in spec.text if t.id == "title")
+
+
+def _spec_with_move(**direction_overrides) -> CoverSpec:
+    return _base_spec("full_bleed_art", **direction_overrides)
+
+
+@_needs_type_move_fields
+def test_build_spec_justify_stack_maps_to_the_title_fit_mode():
+    title = _title_of(_spec_with_move(type_move="justify_stack"))
+    assert title.fit_mode == "justify_stack"
+
+
+@_needs_type_move_fields
+def test_build_spec_arch_maps_to_arc_018():
+    title = _title_of(_spec_with_move(type_move="arch"))
+    assert title.arc == 0.18
+
+
+@_needs_type_move_fields
+def test_build_spec_tilt_maps_to_rotate_minus_6():
+    title = _title_of(_spec_with_move(type_move="tilt"))
+    assert title.rotate == -6.0
+
+
+@_needs_type_move_fields
+def test_build_spec_emphasis_resolves_the_word_case_insensitively():
+    # brief title: "The Lighthouse at Gull Point" — word index 1.
+    title = _title_of(_spec_with_move(type_move="emphasis",
+                                      emphasis_word="lighthouse"))
+    assert title.emphasis == [1]
+    assert title.emphasis_style == "accent_color"
+
+
+@_needs_type_move_fields
+def test_build_spec_emphasis_word_absent_from_title_is_dropped(caplog):
+    with caplog.at_level("INFO", logger="docproof.cover.model"):
+        title = _title_of(_spec_with_move(type_move="emphasis",
+                                          emphasis_word="kraken"))
+    assert title.emphasis == []
+    assert any("kraken" in r.message for r in caplog.records)
+
+
+@_needs_type_move_fields
+def test_build_spec_one_move_rule_ignores_a_stray_emphasis_word(caplog):
+    # The closed Literal already makes two type_move values inexpressible;
+    # the ONE still-expressible two-move request — emphasis_word riding
+    # alongside a different move — applies the named move and drops the
+    # stray word with a log line.
+    with caplog.at_level("INFO", logger="docproof.cover.model"):
+        spec = _spec_with_move(type_move="arch", emphasis_word="lighthouse")
+    title = _title_of(spec)
+    assert title.arc == 0.18
+    assert title.emphasis == []
+    assert any("one" in r.message.lower() and "move" in r.message.lower()
+               for r in caplog.records)
+
+
+@_needs_type_move_fields
+def test_build_spec_type_move_never_touches_non_title_slots():
+    spec = _spec_with_move(type_move="tilt")
+    for slot in spec.text:
+        if slot.id == "title":
+            continue
+        assert slot.rotate == 0.0
+        assert slot.fit_mode == "uniform"
+
+
+def test_build_spec_with_a_type_move_never_crashes_even_without_the_fields():
+    # The degrade path (and, once the §15.12 fields land, the mapped path):
+    # a direction requesting a move must always build a valid spec.
+    spec = _spec_with_move(type_move="justify_stack")
+    assert _title_of(spec) is not None
+
+
+# -- §6.2 revision prompt: the four §15.14 worked examples --------------------
+
+def test_revise_spec_system_prompt_carries_the_four_deep_stack_worked_examples():
+    original = _base_spec()
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
+    revise_spec(original, "notes", provider)
+    system = provider.calls[0]["system"]
+    # warmer and moodier -> adjust temperature + vignette strength
+    assert '"warmer and moodier"' in system
+    assert "`adjust[0].temperature`" in system
+    assert "vignette" in system
+    # type feels pasted on -> whole-list layers replace, fx_ above text
+    assert "the type feels pasted on" in system
+    assert "`fx_`-prefixed" in system
+    assert "path `layers`" in system
+    # stacked poster title -> text[0].fit_mode
+    assert '"make the title a stacked poster title"' in system
+    assert "`text[0].fit_mode`" in system
+    assert '"justify_stack"' in system
+    # put the forest inside the title -> art[k].mask.from_text
+    assert '"put the forest inside the title"' in system
+    assert '{"from_text": "title"}' in system
+    assert "`art[1].mask.from_text`" in system
+    # the original three examples survive verbatim alongside them
+    assert "Move the title zone up" in system
+    assert "Recolor the palette" in system
+    assert "Resize the title's type" in system
+
+
+def test_revise_spec_system_prompt_reaches_the_new_fields_in_the_may_list():
+    # §15.14: "the patch grammar reaches every new field" — the may-list
+    # names the adjust/mask/expressive-type vocabulary so the model knows
+    # it is allowed to touch what the examples demonstrate.
+    original = _base_spec()
+    provider = FakeProvider(
+        results=[ProviderResult(parsed=_edits_payload(), usage=USAGE)])
+    revise_spec(original, "notes", provider)
+    system = provider.calls[0]["system"]
+    assert "adjust layer's grade and strength fields" in system
+    assert "reorder `layers`" in system
+    assert "set or edit a layer's `mask`" in system
+    assert "fit_mode, arc, rotate, emphasis" in system

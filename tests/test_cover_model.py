@@ -354,16 +354,18 @@ def test_direction_rejects_unregistered_author_font():
 
 
 def test_direction_requires_every_field_with_no_default():
-    # `recipe` (§15.6) is the one deliberate exception: "" (no recipe) is a
-    # real, common answer, and defaulting it keeps every archived
-    # direction and every pre-wave caller valid — the wire still REQUIRES
-    # it (strict_json_schema promotes defaulted fields into `required`),
-    # so the model must answer even though Python code may omit it.
+    # `recipe` (§15.6), `type_move` (§15.12), and `emphasis_word` (§15.12)
+    # are the deliberate exceptions: "" (none) is a real, common answer for
+    # each, and defaulting them keeps every archived direction and every
+    # pre-wave caller valid — the wire still REQUIRES them
+    # (strict_json_schema promotes defaulted fields into `required`), so
+    # the model must answer even though Python code may omit them.
+    defaulted = {"recipe": "", "type_move": "", "emphasis_word": ""}
     full = _direction().model_dump()
     for key in full:
         partial = {k: v for k, v in full.items() if k != key}
-        if key == "recipe":
-            assert Direction(**partial).recipe == ""
+        if key in defaulted:
+            assert getattr(Direction(**partial), key) == defaulted[key]
             continue
         with pytest.raises(ValidationError):
             Direction(**partial)
@@ -1073,3 +1075,101 @@ def test_effect_stops_shape_matches_adjustlayers_rule():
     with pytest.raises(ValidationError):
         Effect(kind="gradient_overlay",
                stops=["#111111", "#222222", "#333333", "#444444"])  # 4 stops
+
+
+# -- expressive typography fields (§15.12) ------------------------------------
+# The four type moves live on TextSlot with inert defaults; validators fail
+# at spec time, never draw time. The one-signature-move rule deliberately
+# does NOT live here — it binds DIRECTIONS at build_spec (PR6's vocabulary
+# mapping); a hand-authored spec may combine moves.
+
+from docproof.cover.fonts import FAMILIES as _FAMILIES
+
+
+def _type_slot(**overrides):
+    from docproof.cover.model import TextSlot, Zone
+    data = dict(id="title", content="The Quiet Storm",
+               zone=Zone(x=0.05, y=0.05, w=0.9, h=0.4),
+               font_family="Spectral", size_min=0.03, size_max=0.12)
+    data.update(overrides)
+    return TextSlot(**data)
+
+
+def test_type_move_fields_default_inert():
+    slot = _type_slot()
+    assert slot.fit_mode == "uniform"
+    assert slot.arc == 0.0
+    assert slot.rotate == 0.0
+    assert slot.emphasis == []
+    assert slot.emphasis_style == "accent_color"
+    assert slot.emphasis_font == ""
+
+
+def test_fit_mode_accepts_only_the_two_modes():
+    assert _type_slot(fit_mode="justify_stack").fit_mode == "justify_stack"
+    with pytest.raises(ValidationError):
+        _type_slot(fit_mode="poster")
+
+
+@pytest.mark.parametrize("field,ok,bad", [
+    ("arc", 0.35, 0.36),
+    ("arc", -0.35, -0.36),
+    ("rotate", 15.0, 15.1),
+    ("rotate", -15.0, -15.1),
+])
+def test_arc_and_rotate_ranges_are_validated(field, ok, bad):
+    assert getattr(_type_slot(**{field: ok}), field) == ok
+    with pytest.raises(ValidationError):
+        _type_slot(**{field: bad})
+
+
+def test_emphasis_indices_must_name_real_words():
+    assert _type_slot(emphasis=[0, 2]).emphasis == [0, 2]
+    with pytest.raises(ValidationError, match="out of range"):
+        _type_slot(emphasis=[3])           # content has three words
+    with pytest.raises(ValidationError, match="non-negative"):
+        _type_slot(emphasis=[-1])
+
+
+def test_emphasis_indices_are_unchecked_while_content_is_unfilled():
+    # An archetype's slot ships content="" (filled at build_spec time) —
+    # only the non-negativity rule can apply before the words exist.
+    slot = _type_slot(content="", optional=True, emphasis=[5])
+    assert slot.emphasis == [5]
+
+
+def test_italic_emphasis_requires_the_family_to_ship_a_companion():
+    assert _FAMILIES["Spectral"].italic_file    # fixture premise
+    slot = _type_slot(emphasis=[1], emphasis_style="italic")
+    assert slot.emphasis_style == "italic"
+
+    no_italic = next(name for name in sorted(_FAMILIES)
+                     if not _FAMILIES[name].italic_file)
+    with pytest.raises(ValidationError, match="italic companion"):
+        _type_slot(font_family=no_italic, emphasis=[1],
+                  emphasis_style="italic")
+
+
+def test_swap_face_emphasis_validates_its_font():
+    slot = _type_slot(emphasis=[1], emphasis_style="swap_face",
+                     emphasis_font="Spectral")
+    assert slot.emphasis_font == "Spectral"
+    with pytest.raises(ValidationError, match="needs emphasis_font"):
+        _type_slot(emphasis=[1], emphasis_style="swap_face")
+    with pytest.raises(ValidationError, match="not registered"):
+        _type_slot(emphasis=[1], emphasis_style="swap_face",
+                  emphasis_font="Comic Sans")
+
+
+def test_emphasis_font_outside_swap_face_is_authoring_error():
+    with pytest.raises(ValidationError, match="only applies to 'swap_face'"):
+        _type_slot(emphasis=[1], emphasis_style="larger",
+                  emphasis_font="Spectral")
+
+
+def test_type_move_slot_survives_the_dump_validate_round_trip():
+    from docproof.cover.model import TextSlot
+    slot = _type_slot(fit_mode="justify_stack", arc=0.2, rotate=-6.0,
+                     emphasis=[1], emphasis_style="larger")
+    again = TextSlot.model_validate(slot.model_dump())
+    assert again == slot

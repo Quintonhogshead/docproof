@@ -272,9 +272,20 @@ def register(app: FastAPI) -> None:
 
         providers = _providers()
         image_client = _image_client()
+        # critique_client doubles as the §15.16 replan client: run_revision
+        # only ever uses it when allow_new_art is set AND the notes ask for a
+        # "replan". Best-effort on purpose — a deployment with no Anthropic
+        # key could always revise (the human is the critic here, §6.3), and
+        # threading the replan client must not change that: no key → None →
+        # replan quietly degrades to the spontaneous path in the pipeline.
+        try:
+            replan_client = _critique_client()
+        except HTTPException:
+            replan_client = None
         task = asyncio.create_task(cover_pipeline.run_revision(
             root, job_id, body.concept, body.notes, body.allow_new_art,
-            providers, image_client))
+            providers, image_client,
+            critique_client=replan_client))
         cover_pipeline.register_task(job_id, task)
         return {"job_id": job_id, "concept": body.concept}
 

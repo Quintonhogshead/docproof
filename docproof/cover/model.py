@@ -17,6 +17,7 @@ pipeline.py all import FROM here, never the reverse.
 """
 from __future__ import annotations
 
+import logging
 import re
 from enum import Enum
 from typing import Any, Literal
@@ -28,6 +29,8 @@ from .archetypes import Archetype
 from .fonts import FAMILIES
 from .recipes import RECIPES
 from .textures import TEXTURES
+
+log = logging.getLogger("docproof.cover.model")
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
@@ -396,6 +399,34 @@ class TextSlot(BaseModel):
     # slot need NOT precede this text slot in `layers` — see CoverSpec's own
     # _text_mask_from_resolves for why draw order doesn't matter here.
     mask_from: str = ""
+    # -- expressive typography (§15.12) — the four type moves. All default
+    # inert (every pre-wave spec renders byte-identical); all revision-
+    # editable. The one-signature-move rule binds DIRECTIONS at build_spec
+    # (PR6's vocabulary mapping), never this model: a hand-authored
+    # archetype or a revision may legitimately combine moves.
+    #
+    # "uniform" is the launch fit search (one size for every line);
+    # "justify_stack" sizes each line INDEPENDENTLY so its tracked width
+    # fills the zone width exactly — the nonfiction/thriller poster stack.
+    fit_mode: Literal["uniform", "justify_stack"] = "uniform"
+    # Circular-baseline bow as a fraction of ZONE height (+ = arch/upward
+    # bow, − = valley); glyphs place along the bowed baseline and rotate to
+    # its local tangent. 0.0 = straight (the byte-identical legacy path).
+    arc: float = Field(default=0.0, ge=-0.35, le=0.35)
+    # Whole-slot tilt in degrees: rendered flat, then the finished text
+    # layer rotates (expand) and re-anchors per align/valign in the zone,
+    # clamped inside the canvas. 0.0 = the legacy path.
+    rotate: float = Field(default=0.0, ge=-15.0, le=15.0)
+    # Word indices (into the POST-CASE, whitespace-split content) styled
+    # differently from the rest of the slot, at word granularity within the
+    # same fitted layout. Which styling: emphasis_style below.
+    emphasis: list[int] = Field(default_factory=list)
+    emphasis_style: Literal["accent_color", "italic", "swap_face",
+                            "larger"] = "accent_color"
+    # swap_face only: the family the emphasized words render in (validated
+    # against fonts.FAMILIES). Must stay "" for every other style — a set
+    # value the renderer would ignore is authoring error, not a no-op.
+    emphasis_font: str = ""
 
     @field_validator("font_family")
     @classmethod
@@ -412,6 +443,50 @@ class TextSlot(BaseModel):
             raise ValueError(
                 f"size_min ({self.size_min}) exceeds size_max "
                 f"({self.size_max})")
+        return self
+
+    @model_validator(mode="after")
+    def _emphasis_wellformed(self) -> TextSlot:
+        """§15.12's emphasis contract, enforced at spec time — never a
+        runtime surprise: indices must name real words of the (case-
+        preserving) whitespace split; `italic` needs the family to actually
+        ship an italic companion; `swap_face` needs a registered
+        emphasis_font, and emphasis_font means nothing under any other
+        style. Content is validated only when present — an archetype's slot
+        is built with content="" and filled at build_spec time, and every
+        CoverSpec re-validation after that sees the real title."""
+        if any(i < 0 for i in self.emphasis):
+            raise ValueError(
+                f"emphasis indices must be non-negative, got {self.emphasis}")
+        if self.emphasis and self.content.strip():
+            # upper/title/as_is all preserve whitespace, so the word count
+            # of the raw content equals the post-case split's.
+            n_words = len(self.content.split())
+            bad = [i for i in self.emphasis if i >= n_words]
+            if bad:
+                raise ValueError(
+                    f"emphasis indices {bad} out of range — content has "
+                    f"{n_words} word(s) (indices are into the post-case "
+                    f"whitespace split)")
+        if self.emphasis and self.emphasis_style == "italic":
+            if not FAMILIES[self.font_family].italic_file:
+                raise ValueError(
+                    f"emphasis_style 'italic' but {self.font_family!r} "
+                    f"ships no italic companion — pick a family with one, "
+                    f"or use emphasis_style 'swap_face'")
+        if self.emphasis_style == "swap_face":
+            if self.emphasis and not self.emphasis_font:
+                raise ValueError(
+                    "emphasis_style 'swap_face' needs emphasis_font")
+        elif self.emphasis_font:
+            raise ValueError(
+                f"emphasis_font ({self.emphasis_font!r}) is set but "
+                f"emphasis_style is {self.emphasis_style!r} — the field "
+                f"only applies to 'swap_face'")
+        if self.emphasis_font and self.emphasis_font not in FAMILIES:
+            raise ValueError(
+                f"emphasis_font {self.emphasis_font!r} is not registered — "
+                f"known families: {', '.join(sorted(FAMILIES))}")
         return self
 
     @model_validator(mode="after")
@@ -1080,6 +1155,20 @@ class ArtPrompt(BaseModel):
     # photorealism doctrine.
     treatment: Literal["none", "duotone", "silhouette", "posterize",
                        "sticker", "photo_soft"] = "none"
+    # Direction-time mask intent (§15.13 part 2) — the closed, safe, tiny
+    # slice of the §15.2 mask machinery the art-direction call may reach
+    # (full MaskSpec freedom stays archetype/revision territory). "" = none.
+    # build_spec maps: "blend_into_background" → a linear gradient mask on
+    # this slot dissolving it into the background plate (the two-plate
+    # collage move); "inside_title" → mask.from_text="title" (art living in
+    # the letterforms); "inside_focal" → mask.from_layer on the archetype's
+    # own `focal` slot (the double-exposure move) — existence- and
+    # ordering-checked there, dropped with a log line when the archetype
+    # can't honor it (the §6.1 surplus-prompt precedent: dropping costs
+    # nothing, failing a whole multi-concept job over it is the wrong
+    # trade). See _intent_mask below.
+    mask_intent: Literal["", "blend_into_background", "inside_title",
+                         "inside_focal"] = ""
 
     @field_validator("slot")
     @classmethod
@@ -1116,6 +1205,20 @@ Direction = create_model(
     # own default `recipe:` apply; a non-"" pick always wins over it.
     # build_spec expands the choice into real fx_-prefixed spec layers.
     recipe=(Literal[*_RECIPE_NAMES], ""),
+    # ONE signature typography move for the title (§15.12), mapped by
+    # build_spec onto the title slot with safe parameters (arch → arc=0.18;
+    # tilt → rotate=-6; emphasis → indices resolved from emphasis_word).
+    # The Literal is single-valued by construction — the one-signature-move
+    # rule is structural on the wire — and _title_type_move below guards
+    # the one combination still expressible (a stray emphasis_word riding
+    # alongside a different move), dropping the stray with a log line. Raw
+    # TextSlot fields stay archetype/revision territory.
+    type_move=(Literal["", "justify_stack", "arch", "tilt", "emphasis"], ""),
+    # emphasis only: the ONE title word to style, matched case-insensitively
+    # against the title's own words at build_spec time; a word the title
+    # doesn't contain is dropped with a log line (the §6.1 surplus-prompt
+    # precedent), never fatal.
+    emphasis_word=(str, ""),
     __validators__={
         "_art_prompts_dict_ok": field_validator(
             "art_prompts", mode="before")(_coerce_art_prompts),
@@ -1217,6 +1320,139 @@ def _expand_recipe(name: str) -> tuple[list[ArtSlot], list[AdjustLayer], list[La
     return art, adjust, refs
 
 
+def _intent_mask(intent: str, slot: Any, archetype: Archetype) -> MaskSpec | None:
+    """One ArtPrompt.mask_intent as a real MaskSpec for `slot` (an
+    ArchetypeArt), or None — either "no intent" or "the archetype can't
+    honor it," and every can't-honor path logs and drops rather than
+    raising (§15.13's own instruction to follow the §6.1 surplus-prompt
+    precedent: a whole multi-concept job must never die over one
+    over-enthusiastic intent).
+
+    - "blend_into_background" → a linear gradient mask, self-contained and
+      unrefusable: the slot stays solid at its base and dissolves upward
+      into the plate behind it (GradientMask's default 90° ramp — the
+      two-plate collage move's conventional direction).
+    - "inside_title" → mask.from_text="title": needs a title text slot
+      (every shipped archetype has one — checked anyway) that is not
+      itself mask_from-clipped to this same slot (CoverSpec's one true
+      from_text cycle, refused there, dropped here).
+    - "inside_focal" → mask.from_layer="focal": needs an art slot with the
+      conventional `focal` id, distinct from this slot, appearing earlier
+      in the archetype's `layers` than this slot (CoverSpec's from_layer
+      ordering rule — a mask can only clip to pixels already positioned).
+
+    A slot that already carries archetype-authored masking (`mask_from`) is
+    never overridden — the template's own design wins (the caller handles
+    the first-class `mask` field the same way before ever calling this)."""
+    if not intent:
+        return None
+    if slot.mask_from:
+        log.info("mask_intent %r on slot %r dropped: the %s archetype "
+                 "already clips that slot (mask_from=%r).",
+                 intent, slot.id, archetype.name, slot.mask_from)
+        return None
+    if intent == "blend_into_background":
+        return MaskSpec(gradient=GradientMask())
+    if intent == "inside_title":
+        title = next((t for t in archetype.text if t.id == "title"), None)
+        if title is None:
+            log.info("mask_intent 'inside_title' on slot %r dropped: the %s "
+                     "archetype declares no title text slot.",
+                     slot.id, archetype.name)
+            return None
+        if title.mask_from == slot.id:
+            log.info("mask_intent 'inside_title' on slot %r dropped: the %s "
+                     "archetype's title is itself clipped to that slot — a "
+                     "cycle.", slot.id, archetype.name)
+            return None
+        return MaskSpec(from_text="title")
+    # "inside_focal" — the closed Literal admits no other value.
+    art_ids = {a.id for a in archetype.art}
+    first_position: dict[str, int] = {}
+    for i, ref in enumerate(archetype.layers):
+        if ref not in first_position:
+            first_position[ref] = i
+    if "focal" not in art_ids or slot.id == "focal":
+        log.info("mask_intent 'inside_focal' on slot %r dropped: the %s "
+                 "archetype has no distinct focal slot to clip into.",
+                 slot.id, archetype.name)
+        return None
+    this_pos = first_position.get(slot.id)
+    focal_pos = first_position.get("focal")
+    if this_pos is None or focal_pos is None or focal_pos >= this_pos:
+        log.info("mask_intent 'inside_focal' on slot %r dropped: the %s "
+                 "archetype draws focal at or after that slot, and a mask "
+                 "can only clip to pixels already positioned.",
+                 slot.id, archetype.name)
+        return None
+    return MaskSpec(from_layer="focal")
+
+
+# Punctuation shed when matching a direction's emphasis_word against the
+# title's own words — the emphasis indices point at the whitespace split
+# (punctuation and all, exactly what TextSlot renders), but "Lighthouse,"
+# should still match a model that wrote "lighthouse".
+_EMPHASIS_TRIM = ".,:;!?\"'()[]{}—–-…"
+
+
+def _title_type_move(direction: Direction, title: str) -> dict[str, Any]:
+    """Direction.type_move (§15.12) as TextSlot field overrides for the
+    TITLE slot — the four safe-parameter mappings, plus the one-signature-
+    move guard build_spec owns: the closed Literal already makes two moves
+    inexpressible on the wire, and the one combination still expressible (a
+    stray emphasis_word riding alongside a non-emphasis move) is dropped
+    with a log line here rather than honored as a second move. Emphasis
+    indices are resolved against the title's whitespace split (the same
+    split TextSlot's own emphasis contract counts — case ops preserve
+    whitespace, so the indices survive any `case`), matching case-
+    insensitively with punctuation shed; a word the title doesn't contain
+    drops the whole move with a log line (§15.12 says so verbatim), never
+    fails the job.
+
+    The overrides are feature-detected against TextSlot.model_fields
+    before being handed back: the §15.12 typeset fields (fit_mode / arc /
+    rotate / emphasis) land in a parallel PR of this same wave, and until
+    they exist a requested move must degrade to a logged no-op — the
+    surplus-prompt posture again — rather than crash every build_spec on a
+    tree where only this module's half has landed."""
+    move = getattr(direction, "type_move", "")
+    word = (getattr(direction, "emphasis_word", "") or "").strip()
+    if move != "emphasis" and word:
+        log.info("Direction %r set emphasis_word=%r with type_move=%r; one "
+                 "signature move per concept — the word is ignored.",
+                 direction.concept_name, word, move or "")
+    overrides: dict[str, Any] = {}
+    if move == "justify_stack":
+        overrides = {"fit_mode": "justify_stack"}
+    elif move == "arch":
+        overrides = {"arc": 0.18}
+    elif move == "tilt":
+        overrides = {"rotate": -6.0}
+    elif move == "emphasis":
+        if not word:
+            log.info("Direction %r asked for the emphasis move but set no "
+                     "emphasis_word; dropped.", direction.concept_name)
+            return {}
+        wanted = word.strip(_EMPHASIS_TRIM).casefold()
+        indices = [i for i, w in enumerate(title.split())
+                   if w.strip(_EMPHASIS_TRIM).casefold() == wanted]
+        if not indices:
+            log.info("Direction %r set emphasis_word=%r, which is not a "
+                     "word of the title %r; dropped.",
+                     direction.concept_name, word, title)
+            return {}
+        overrides = {"emphasis": indices, "emphasis_style": "accent_color"}
+    if not overrides:
+        return {}
+    missing = sorted(set(overrides) - set(TextSlot.model_fields))
+    if missing:
+        log.info("type_move %r dropped: TextSlot does not carry %s yet "
+                 "(the §15.12 typeset fields land in a parallel PR).",
+                 move, ", ".join(missing))
+        return {}
+    return overrides
+
+
 def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> CoverSpec:
     """Merge one art-direction concept into its chosen archetype's template.
 
@@ -1247,11 +1483,28 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
     # revision territory") — those always come straight from the archetype.
     prompt_treatments = {p.slot: p.treatment for p in direction.art_prompts
                         if p.treatment != "none"}
+    # Direction-time mask intents (§15.13 part 2): one word per art prompt,
+    # expanded into a real MaskSpec by _intent_mask — or dropped with a log
+    # line when the archetype can't honor it. An archetype-authored mask
+    # (the new first-class ArchetypeArt.mask, the §15.13 part 3 templates'
+    # own vocabulary) always wins over an intent: the template's designed
+    # clip is structure, and the intent is per-concept taste that only
+    # applies where the template left the slot unmasked.
+    intents = {p.slot: p.mask_intent for p in direction.art_prompts
+               if getattr(p, "mask_intent", "")}
 
     art: list[ArtSlot] = []
     for slot in archetype.art:
         if slot.id == "texture" and not include_texture:
             continue
+        if slot.mask is not None:
+            if intents.get(slot.id):
+                log.info("mask_intent %r on slot %r dropped: the %s "
+                         "archetype authors that slot's mask itself.",
+                         intents[slot.id], slot.id, archetype.name)
+            mask = MaskSpec.model_validate(slot.mask.model_dump())
+        else:
+            mask = _intent_mask(intents.get(slot.id, ""), slot, archetype)
         art.append(ArtSlot(
             id=slot.id,
             prompt=(prompts.get(slot.id, "")
@@ -1265,6 +1518,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             offset=slot.offset,
             treatment=prompt_treatments.get(slot.id, slot.treatment),
             mask_from=slot.mask_from,
+            mask=mask,
             corners=slot.corners,
             corners_flip_vertical=slot.corners_flip_vertical,
             scatter=slot.scatter,
@@ -1277,6 +1531,12 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
              for s in archetype.scrims]
+
+    # The direction's ONE signature type move (§15.12), as title-slot field
+    # overrides — {} when no move was asked for, the move couldn't be
+    # honored (a logged drop, see _title_type_move), or the §15.12 TextSlot
+    # fields haven't landed yet.
+    title_move = _title_type_move(direction, brief.title)
 
     text: list[TextSlot] = []
     for slot in archetype.text:
@@ -1298,7 +1558,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             effects=[Effect(**e.model_dump()) for e in slot.effects],
             optional=slot.optional,
             mode=slot.mode,
-            mask_from=slot.mask_from))
+            mask_from=slot.mask_from,
+            **(title_move if slot.id == "title" else {})))
 
     art_ids = {a.id for a in archetype.art}
     layers: list[LayerRef] = []

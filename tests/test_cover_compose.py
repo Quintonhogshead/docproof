@@ -1292,3 +1292,160 @@ def test_frame_notch_composes_end_to_end_around_an_overlapping_emblem(tmp_path):
     # And far from the emblem, in a corner well outside any notch pad, the
     # frame reads identically whether notched or not.
     assert notched.getpixel((2, 2)) == plain.getpixel((2, 2))
+
+
+# -- expressive typography through the full renderer (§15.12) -----------------
+# The moves change glyph ink; every ink-based guard must consume the MOVED
+# ink. typeset's own tests pin mask==ink per move; these prove the wiring:
+# the occlusion measurement, the balance snap, the autopilot, and the 100px
+# thumbnail all behave against moved type, move by move.
+
+_MOVE_FIXTURES = {
+    "justify_stack": dict(fit_mode="justify_stack"),
+    "arc": dict(arc=0.25),
+    "rotate": dict(rotate=12.0),
+    "emphasis": dict(emphasis=[1], emphasis_style="larger"),
+}
+
+
+def _move_spec(move_fields, title_zone=None, axis=None, extra_art=(),
+               layers_tail=(), content="The Quiet Storm"):
+    zone = Zone(**(title_zone or dict(x=0.05, y=0.35, w=0.9, h=0.3)))
+    slot_fields = dict(id="title", content=content, zone=zone,
+                       font_family="Spectral", size_min=0.02, size_max=0.3,
+                       max_lines=3)
+    slot_fields.update(move_fields)
+    return CoverSpec(
+        archetype="big_type", concept_name="Move Probe",
+        rationale="per-move guard matrix", palette=_TEST_PALETTE,
+        axis=axis,
+        art=[ArtSlot(id="background"), *extra_art],
+        scrims=[],
+        text=[TextSlot(**slot_fields)],
+        layers=[LayerRef(kind="art", ref="background"),
+                LayerRef(kind="text", ref="title"), *layers_tail])
+
+
+@pytest.mark.parametrize("move", sorted(_MOVE_FIXTURES))
+def test_each_move_renders_and_the_autopilot_measures_its_ink(move, tmp_path):
+    spec = _move_spec(_MOVE_FIXTURES[move])
+    image, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert image.size == CANVAS
+    assert "title" in report.contrast          # the autopilot ran on the slot
+    assert report.contrast["title"] > 0
+    assert "title" in report.fitted_sizes
+
+
+@pytest.mark.parametrize("move", sorted(_MOVE_FIXTURES))
+def test_each_move_survives_the_100px_thumbnail_with_visible_ink(move, tmp_path):
+    spec = _move_spec(_MOVE_FIXTURES[move])
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    thumb = image.copy()
+    thumb.thumbnail((THUMB_SMALL, THUMB_SMALL * 2))
+    scale = thumb.width / image.width
+    zone = spec.text[0].zone
+    crop = thumb.crop((int(zone.x * CANVAS[0] * scale),
+                       int(zone.y * CANVAS[1] * scale),
+                       int((zone.x + zone.w) * CANVAS[0] * scale),
+                       int((zone.y + zone.h) * CANVAS[1] * scale)))
+    colors = crop.getcolors(maxcolors=100000)
+    dominant = max(colors, key=lambda pair: pair[0])
+    ink_pixels = sum(count for count, color in colors if color != dominant[1])
+    assert ink_pixels > 40, f"{move}: thumbnail title zone reads empty"
+
+
+@pytest.mark.parametrize("move", sorted(_MOVE_FIXTURES))
+def test_balance_snap_centers_each_moves_ink_on_the_axis(move, tmp_path):
+    # The title zone sits ~1% off the center axis: within the snap band.
+    # plan_snaps measures the fitted MASK's bbox — under every move that
+    # mask is the moved ink (typeset pins mask==ink) — so the snap must
+    # fire and the recorded adjustment must name the title.
+    spec = _move_spec(_MOVE_FIXTURES[move],
+                      title_zone=dict(x=0.06, y=0.35, w=0.9, h=0.3),
+                      axis="center")
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert any("title" in line for line in report.adjustments), (
+        f"{move}: no snap adjustment recorded — the balance pass did not "
+        f"see the moved ink where it lies")
+
+
+def test_occlusion_guard_measures_rotated_and_arced_ink_not_flat_ink(tmp_path):
+    # A wide, thin art bar crosses the TOP of the title zone. Flat text
+    # keeps its ink on the row grid; an 0.3 arch pushes the middle of the
+    # line up into the bar. The measured contact fraction must move with
+    # the ink — proof the guard consumed the arced mask, not the flat one.
+    _flat_png(tmp_path / "bar.png", (360, 24), (10, 200, 30))
+    bar = ArtSlot(id="focal", fit="contain", asset="bar.png",
+                  scale=0.4, offset=[0.0, -0.16])
+    def occlusion_for(move_fields):
+        spec = _move_spec(move_fields, extra_art=(bar,),
+                          layers_tail=(LayerRef(kind="art", ref="focal"),),
+                          content="WAVES BREAK ON THE POINT")
+        _, report = compose(spec, tmp_path, canvas=CANVAS)
+        return report.occlusion.get("title<-focal")
+
+    flat = occlusion_for({})
+    arched = occlusion_for(dict(arc=0.3))
+    rotated = occlusion_for(dict(rotate=15.0))
+    assert flat is not None and arched is not None and rotated is not None
+    # The bar overlaps the three ink layouts differently; if the guard
+    # measured pre-move ink these would all be equal.
+    assert arched != flat
+    assert rotated != flat
+
+
+def test_emphasis_accent_reaches_the_composed_cover(tmp_path):
+    # The palette accent is a saturated gold; the base ink resolves to a
+    # palette/fallback color. The emphasized word's pixels must land in
+    # the final RGB composite — compose passes palette.accent all the way
+    # into draw_text (the autopilot never chooses the accent itself).
+    spec = _move_spec(dict(emphasis=[1], emphasis_style="accent_color"),
+                      content="Quiet STORM")
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    accent = ImageColor.getrgb(_TEST_PALETTE.accent)
+    px = image.load()
+    hits = sum(1 for y in range(0, CANVAS[1], 2)
+               for x in range(0, CANVAS[0], 2)
+               if px[x, y] == accent)
+    assert hits > 20, "no accent-colored emphasis ink on the final cover"
+
+
+def test_knockout_mode_composes_with_a_justify_stack_fit(tmp_path):
+    # The §7.4a panel modes consume the glyph mask; a stacked fit changes
+    # the mask's geometry and everything must still hold together.
+    spec = _move_spec(dict(fit_mode="justify_stack"))
+    spec = spec.model_copy(update={"text": [
+        spec.text[0].model_copy(update={"mode": "knockout"})]})
+    with_title, _ = compose(spec, tmp_path, canvas=CANVAS)
+    no_title = spec.model_copy(update={"text": [
+        spec.text[0].model_copy(update={"content": "", "optional": True})]})
+    without, _ = compose(no_title, tmp_path, canvas=CANVAS)
+    assert with_title.tobytes() != without.tobytes()
+
+
+# -- the 2026-08-30 no-cropped-glyphs addendum, end to end --------------------
+
+def test_thriller_repro_title_stays_inside_its_zone_and_off_the_trim(tmp_path):
+    # The live defect: thriller_bigtype_silhouette + this exact brief used
+    # to render "THE LIGHTHOUSE" across both trims (margin audit: "ink
+    # 0.0% from the left trim edge"). The fit escalation must keep every
+    # glyph inside the title zone — at the ebook canvas and the test one —
+    # and the finished cover must carry no title trim warning.
+    spec = _spec("thriller_bigtype_silhouette")   # _brief() IS the repro brief
+    title = next(t for t in spec.text if t.id == "title")
+    for canvas in (CANVAS, (EBOOK_W, EBOOK_H)):
+        fit = typeset.fit_text(title, canvas)
+        bbox = typeset.text_mask(title, fit, canvas).getbbox()
+        assert bbox is not None
+        zone_left = round(title.zone.x * canvas[0])
+        zone_top = round(title.zone.y * canvas[1])
+        zone_right = zone_left + round(title.zone.w * canvas[0])
+        zone_bottom = zone_top + round(title.zone.h * canvas[1])
+        pad = max(4, round(fit.size_px * 0.25))
+        assert bbox[0] >= zone_left - pad and bbox[2] <= zone_right + pad
+        assert bbox[1] >= zone_top - pad and bbox[3] <= zone_bottom + pad
+
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    trim_warnings = [w for w in report.warnings
+                     if "'title'" in w and "trim edge" in w]
+    assert not trim_warnings, trim_warnings
