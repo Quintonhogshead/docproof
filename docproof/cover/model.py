@@ -69,6 +69,37 @@ def _validate_hex(value: str) -> str:
 # one.
 ART_SLOT_IDS: tuple[str, ...] = ("background", "focal", "focal2", "foreground", "texture")
 
+# Every blend mode a pixel-owning or adjust layer may name (deep-stack wave,
+# §15.1) — the wire source of truth effects.BLEND_TABLE keys itself against
+# (a unit test holds the two in lockstep, the ART_TREATMENTS/compose
+# contract's shape). "normal" is plain alpha-over; multiply/overlay/
+# soft_light are the pre-wave trio; screen/add/lighten/darken are one-line
+# ImageChops calls and color_dodge runs per band through ImageMath.
+# hue/color/luminosity are DEFERRED (§15.1): per-pixel HSL math is where
+# pure Pillow gets ugly, and nothing in the finishing-recipe roster needs
+# them — widen this tuple (and both Literals spelling it) only when a real
+# cover demonstrably does.
+BLEND_MODES: tuple[str, ...] = ("normal", "multiply", "overlay", "soft_light",
+                                "screen", "add", "lighten", "darken",
+                                "color_dodge")
+
+
+def _validate_role_or_hex(value: str) -> str:
+    """A color reference that may be either a PaletteRole name (so the value
+    tracks palette revisions for free) or a literal #rrggbb hex (for the one
+    stop a ramp needs outside the five roles) — the deep-stack wave's
+    gradient_map/color_wash vocabulary (§15.3). Anything else fails at spec
+    time with both legal shapes named."""
+    if value in {role.value for role in PaletteRole}:
+        return value
+    if _HEX_RE.match(value):
+        return value
+    raise ValueError(
+        f"{value!r} is neither a palette role "
+        f"({', '.join(role.value for role in PaletteRole)}) nor a #rrggbb "
+        f"hex color")
+
+
 # The slot treatments every ArtSlot/ArtPrompt may request (§7.4a): pure,
 # deterministic Pillow ops compose.py applies after fit/placement and before
 # compositing. "none" is the default on every launch archetype and every
@@ -261,6 +292,94 @@ class TextSlot(BaseModel):
         return self
 
 
+class GradientMask(BaseModel):
+    """A synthesized soft mask (deep-stack wave, §15.2): `linear` ramps
+    along `angle` (degrees, y-down image coordinates — the default 90 is
+    "top-transparent → bottom-opaque", 0 ramps left→right); `radial` ramps
+    with distance from `center` (canvas fractions), transparent core to
+    opaque rim. `start`/`end` remap where along the ramp alpha begins
+    rising and where it reaches 1.0, so a mask can hold a plate fully solid
+    for most of its extent and fade only one edge — the two-plates-into-one-
+    scene collage move this model exists for. Rendered by
+    effects.gradient_mask at quarter scale + Lanczos (smooth by definition,
+    the _GRAIN_SCALE discipline)."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["linear", "radial"] = "linear"
+    angle: float = 90.0                # linear only
+    # A pair as a list, never a tuple — same wire rule as ArtSlot.anchor
+    # (OpenAI's strict structured-output mode rejects tuple-derived
+    # prefixItems schemas), and the same [-2, 2] latitude: a radial mask
+    # centered off-canvas is a legitimate design (a glow falling in from
+    # beyond the trim).
+    center: list[float] = Field(default_factory=lambda: [0.5, 0.5])
+    start: float = Field(default=0.0, ge=0.0, le=1.0)
+    end: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("center")
+    @classmethod
+    def _pair(cls, value: list[float]) -> list[float]:
+        if len(value) != 2:
+            raise ValueError("center must be exactly [x, y]")
+        if not all(-2.0 <= v <= 2.0 for v in value):
+            raise ValueError("center values must stay within [-2, 2]")
+        return value
+
+    @model_validator(mode="after")
+    def _ramp_direction(self) -> GradientMask:
+        if self.start >= self.end:
+            raise ValueError(
+                f"gradient mask start ({self.start}) must be strictly less "
+                f"than end ({self.end}) — a zero-width or reversed ramp is "
+                f"a constant, not a gradient (use invert for the reversed "
+                f"reading)")
+        return self
+
+
+class MaskSpec(BaseModel):
+    """A first-class mask (deep-stack wave, §15.2), attachable to any
+    pixel-owning layer (ArtSlot.mask) or adjust layer (AdjustLayer.mask).
+    Every set source resolves to one canvas-sized alpha field and they
+    multiply together; `invert` applies last — so "the top third, but only
+    inside the focal's silhouette" is two fields, no new grammar.
+
+    - `from_layer`: an art slot id — that slot's POSITIONED alpha, hard-
+      thresholded exactly like the legacy ArtSlot.mask_from stencil (which
+      folds into this field at validation, byte-identically).
+    - `gradient`: a synthesized soft ramp (GradientMask above).
+    - `luminance_of`: an art slot id — its positioned luminance as alpha
+      (bright areas keep, dark areas mask: light-driven region scoping).
+    - `from_text` (§15.13 part 1): a TEXT slot id — the fitted glyph
+      coverage, clipping an art layer INTO the letterforms (photo-in-the-
+      title as a first-class art move; the mirror of TextSlot.mask_from).
+
+    Resolution rules live on CoverSpec (existence, the from_layer ordering
+    rule, the from_text↔mask_from cycle check) — a MaskSpec alone can only
+    police its own shape, and at least one source must be set: an empty
+    mask is always authoring error, never a deliberate no-op."""
+    model_config = ConfigDict(extra="forbid")
+
+    from_layer: str = ""
+    gradient: GradientMask | None = None
+    luminance_of: str = ""
+    from_text: str = ""
+    invert: bool = False
+
+    @field_validator("from_layer", "luminance_of")
+    @classmethod
+    def _valid_slot_ref(cls, value: str) -> str:
+        return _validate_slot_id(value) if value else value
+
+    @model_validator(mode="after")
+    def _some_source(self) -> MaskSpec:
+        if not (self.from_layer or self.gradient is not None
+                or self.luminance_of or self.from_text):
+            raise ValueError(
+                "mask sets no source — set at least one of from_layer, "
+                "gradient, luminance_of, or from_text (or drop the mask)")
+        return self
+
+
 class ArtSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -286,7 +405,10 @@ class ArtSlot(BaseModel):
             raise ValueError("anchor/offset values must stay within [-2, 2]")
         return value
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
-    blend: Literal["normal", "multiply", "overlay", "soft_light"] = "normal"
+    # The full BLEND_MODES table (deep-stack wave, §15.1) — hue/color/
+    # luminosity deferred, see that constant's comment.
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
     asset: str = ""                            # relative path under the job dir once generated
     # Names a compose.PROCEDURAL_SYNTHESIZERS entry to draw when this slot
     # has no `asset` on disk (v2 BODY wave). "" = no opinion — a slot with
@@ -308,6 +430,16 @@ class ArtSlot(BaseModel):
     treatment: Literal["none", "duotone", "silhouette", "posterize",
                        "sticker", "photo_soft"] = "none"
     mask_from: str = ""                        # another art slot's id, or "" = off
+    # First-class mask (deep-stack wave, §15.2). `mask_from` above STAYS as
+    # sugar for the common single-stencil case: when `mask` is unset,
+    # _fold_mask_from below materializes it as mask.from_layer at
+    # validation (byte-identical pixels — effects.resolve_mask keeps the
+    # exact hard-threshold stencil semantics for from_layer), so compose
+    # has exactly one mask code path. Setting both to different things is a
+    # validation error; only the exact folded equivalent may coexist, which
+    # is what keeps an already-validated spec revalidating cleanly on every
+    # round-trip (revisions re-validate the whole document).
+    mask: MaskSpec | None = None
     corners: bool = False                      # mirror into all four corners (transparent slots)
     # v2.2 wave, deliverable 1 (gravity-safe corners): by default, corners
     # placement keeps all four copies upright (only h-mirrored on the right
@@ -364,6 +496,31 @@ class ArtSlot(BaseModel):
                 f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
         return value
 
+    @model_validator(mode="after")
+    def _fold_mask_from(self) -> ArtSlot:
+        """§15.2's back-compat fold: legacy `mask_from` becomes
+        `mask.from_layer` at validation when `mask` is unset, so every
+        downstream reader (compose, the CoverSpec mask validators) sees ONE
+        field. `mask_from` itself is left exactly as authored — archived
+        specs and existing callers keep reading it — and because the fold
+        is idempotent (a re-validation sees mask == the folded equivalent
+        and changes nothing), a spec survives any number of dump/validate
+        round-trips. Both set to DIFFERENT things is refused: two masks
+        with an undocumented winner is exactly the silent ambiguity
+        extra="forbid" exists to kill."""
+        if not self.mask_from:
+            return self
+        folded = MaskSpec(from_layer=self.mask_from)
+        if self.mask is None:
+            self.mask = folded
+        elif self.mask != folded:
+            raise ValueError(
+                f"art slot {self.id!r} sets both mask_from="
+                f"{self.mask_from!r} and a mask that is not its exact "
+                f"fold — set mask.from_layer (mask wins the vocabulary) "
+                f"and drop mask_from")
+        return self
+
 
 class ScrimSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -379,11 +536,97 @@ class ScrimSpec(BaseModel):
     color_role: PaletteRole = PaletteRole.scrim
 
 
+class AdjustLayer(BaseModel):
+    """A layer that owns no pixels (deep-stack wave, §15.3): when the layer
+    walk reaches it, compose computes `op` over the CURRENT composite and
+    blends the result back through `mask` × `opacity` — result =
+    composite × (1 − m·opacity) + op(composite) × (m·opacity). These are
+    the 6-10 adjustment layers of a real cover PSD — what unifies an
+    assembled collage into one image — and `color_wash` is the one op that
+    instead composites a solid fill AS a layer through the full §15.1
+    blend table (dodge/burn painting, when masked).
+
+    Per-op parameters are FLAT fields (the strict-schema wire rule: no
+    dicts, no tuples — OpenAI's structured-output mode rejects both open
+    keys and tuple prefixItems). Fields the chosen `op` never reads are
+    validated but inert — deliberately forgiving, so a patch edit that
+    changes `op` can never strand the spec in an invalid state."""
+    model_config = ConfigDict(extra="forbid")
+
+    # Shares the art-slot id namespace (a LayerRef kind="adjust" must be
+    # unambiguous about what it names) — CoverSpec._adjust_ids_resolve
+    # refuses a collision with any ArtSlot.id, or a duplicate.
+    id: str
+    op: Literal["grade", "gradient_map", "color_wash", "vignette", "bloom",
+                "blur"]
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    # §15.1's full table; read by color_wash ONLY (every other op mixes by
+    # the equation above, which has no blend in it).
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    mask: MaskSpec | None = None
+    # -- flat per-op params ---------------------------------------------------
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
+    contrast: float = Field(default=0.0, ge=-1.0, le=1.0)     # grade
+    saturation: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
+    temperature: float = Field(default=0.0, ge=-1.0, le=1.0)  # grade: warm↔cool
+                                       # (±effects.TEMPERATURE_MAX_SHIFT/255 at |1|)
+    stops: list[str] = Field(default_factory=list)   # gradient_map: 2-3 role-or-hex
+    color: str = ""                    # color_wash/vignette ink: role or hex;
+                                       # "" = the scrim role
+    strength: float = Field(default=0.5, ge=0.0, le=1.0)      # vignette/bloom
+    # Gaussian radius as a fraction of canvas height (bloom/blur). The 0.25
+    # cap is an implementer's-choice bound: a quarter-canvas-height blur
+    # already erases all structure, so anything past it is a typo'd value,
+    # not a bigger look.
+    radius: float = Field(default=0.02, ge=0.0, le=0.25)
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)    # bloom: relative
+                                       # luminance above which pixels glow
+
+    @field_validator("id")
+    @classmethod
+    def _valid_id(cls, value: str) -> str:
+        return _validate_slot_id(value)
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        """Shape-checked regardless of `op` (the forgiving-but-validated
+        rule): every entry must be a role or hex, and the count must be 0
+        (unused) or 2-3 (a ramp) — a single stop is a constant pretending
+        to be a gradient, never meaningful under any op."""
+        if len(value) not in (0, 2, 3):
+            raise ValueError(
+                f"stops must have 2 or 3 entries (or be empty when unused), "
+                f"got {len(value)}")
+        return [_validate_role_or_hex(stop) for stop in value]
+
+    @field_validator("color")
+    @classmethod
+    def _valid_color(cls, value: str) -> str:
+        return _validate_role_or_hex(value) if value else value
+
+    @model_validator(mode="after")
+    def _op_requirements(self) -> AdjustLayer:
+        """The one place an op's REQUIRED input is enforced: gradient_map
+        without stops has no ramp to map through, so it fails at spec time
+        rather than rendering something invented. Every other op's params
+        have workable defaults, so this stays a single check."""
+        if self.op == "gradient_map" and not self.stops:
+            raise ValueError(
+                f"adjust layer {self.id!r} is a gradient_map with no stops "
+                f"— give it 2 or 3 (role names or #rrggbb hexes, dark to "
+                f"light)")
+        return self
+
+
 class LayerRef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["art", "scrim", "text"]
-    ref: str                                    # ArtSlot.id / scrim index / TextSlot.id
+    # "adjust" (deep-stack wave, §15.3) walks like any other layer; its ref
+    # names a CoverSpec.adjust entry's id.
+    kind: Literal["art", "scrim", "text", "adjust"]
+    ref: str                                    # ArtSlot.id / scrim index / TextSlot.id / AdjustLayer.id
 
 
 class CoverSpec(BaseModel):
@@ -398,6 +641,10 @@ class CoverSpec(BaseModel):
     rationale: str                              # one sentence, shown on the card
     palette: Palette
     art: list[ArtSlot]
+    # Adjust layers (deep-stack wave, §15.3) — defaulted empty so every
+    # pre-wave spec (and every archived job.json without the key) validates
+    # and renders byte-identically.
+    adjust: list[AdjustLayer] = Field(default_factory=list)
     scrims: list[ScrimSpec]
     text: list[TextSlot]
     layers: list[LayerRef]                      # explicit z-order, bottom first
@@ -413,6 +660,7 @@ class CoverSpec(BaseModel):
         not as compose()'s bare KeyError three steps later."""
         art_ids = {a.id for a in self.art}
         text_ids = {t.id for t in self.text}
+        adjust_ids = {a.id for a in self.adjust}
         for ref in self.layers:
             if ref.kind == "art" and ref.ref not in art_ids:
                 raise ValueError(
@@ -424,6 +672,11 @@ class CoverSpec(BaseModel):
                     f"layers references text slot {ref.ref!r}, which is not "
                     f"in this spec's text list "
                     f"({', '.join(sorted(text_ids)) or 'empty'})")
+            if ref.kind == "adjust" and ref.ref not in adjust_ids:
+                raise ValueError(
+                    f"layers references adjust layer {ref.ref!r}, which is "
+                    f"not in this spec's adjust list "
+                    f"({', '.join(sorted(adjust_ids)) or 'empty'})")
             if ref.kind == "scrim":
                 if not ref.ref.isdigit() or int(ref.ref) >= len(self.scrims):
                     raise ValueError(
@@ -432,36 +685,105 @@ class CoverSpec(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _mask_from_precedes(self) -> CoverSpec:
-        """§7.4a: "the referenced slot must exist and precede it in `layers`;
-        a dangling reference fails spec validation." Checked here — at the
-        whole-spec level, not on ArtSlot alone — because "precedes" only
-        means anything relative to `layers`, which ArtSlot itself can't see.
-        A revision (§6.2) hands the model the WHOLE spec and validates the
-        result with this same model, so a revision that breaks this
-        invariant is caught exactly the same way a fresh build_spec would
-        be."""
+    def _adjust_ids_resolve(self) -> CoverSpec:
+        """Adjust layers share the art-slot id namespace (§15.3) so a
+        LayerRef is never ambiguous about what it names and a patch edit
+        addressing "fx_vign" finds exactly one thing. Duplicates within the
+        adjust list are refused for the same reason — compose keys adjust
+        layers by id, and a silent last-one-wins would be exactly the kind
+        of three-steps-later surprise this module's validators exist to
+        kill."""
         art_ids = {a.id for a in self.art}
-        first_art_position: dict[str, int] = {}
+        seen: set[str] = set()
+        for layer in self.adjust:
+            if layer.id in art_ids:
+                raise ValueError(
+                    f"adjust layer {layer.id!r} collides with an art slot "
+                    f"of the same id — the two kinds share one namespace")
+            if layer.id in seen:
+                raise ValueError(
+                    f"two adjust layers share the id {layer.id!r}")
+            seen.add(layer.id)
+        return self
+
+    @model_validator(mode="after")
+    def _masks_resolve(self) -> CoverSpec:
+        """Every MaskSpec's references, resolved at the whole-spec level —
+        the deep-stack successor to the launch-era _mask_from_precedes
+        (whose ordering rule and error wording survive verbatim inside it:
+        ArtSlot._fold_mask_from means a legacy `mask_from` arrives here AS
+        `mask.from_layer`, so this one validator covers both spellings).
+        Checked here, not on MaskSpec, because existence and "precedes"
+        only mean anything relative to the whole art/text/layers picture,
+        which MaskSpec can't see. Per §15.2:
+
+        - `from_layer` must name a real art slot AND appear earlier in
+          `layers` than the masked entity itself (its pixels must already
+          be positioned when the mask is taken) — for art slots this is
+          exactly §7.4a's rule; an adjust layer inherits it unchanged.
+        - `luminance_of`/`from_text` need existence only: compose positions
+          every art slot's pixels and resolves every text slot's ink
+          before any mask is applied (_text_mask_from_resolves' reasoning),
+          so draw order genuinely does not matter for them.
+        - `from_text` on an ART slot additionally refuses the one true
+          cycle (§15.13): the named text slot must not itself be
+          mask_from-clipped to this same art slot — art-in-the-glyphs of a
+          title that is itself clipped to that art is two mirrors facing
+          each other, and whichever won would surprise somebody."""
+        art_ids = {a.id for a in self.art}
+        text_ids = {t.id for t in self.text}
+        text_by_id = {t.id: t for t in self.text}
+        first_position: dict[str, int] = {}
         for i, ref in enumerate(self.layers):
-            if ref.kind == "art" and ref.ref not in first_art_position:
-                first_art_position[ref.ref] = i
+            if ref.kind in ("art", "adjust") and ref.ref not in first_position:
+                first_position[ref.ref] = i
+
+        def check(owner_kind: str, owner_id: str, mask: MaskSpec) -> None:
+            if mask.from_layer:
+                if mask.from_layer not in art_ids:
+                    raise ValueError(
+                        f"{owner_kind} {owner_id!r} has mask_from/"
+                        f"mask.from_layer={mask.from_layer!r}, which is not "
+                        f"an art slot in this spec (art slots: "
+                        f"{', '.join(sorted(art_ids)) or 'empty'})")
+                this_pos = first_position.get(owner_id)
+                ref_pos = first_position.get(mask.from_layer)
+                if this_pos is None or ref_pos is None or ref_pos >= this_pos:
+                    raise ValueError(
+                        f"{owner_kind} {owner_id!r}'s mask_from/"
+                        f"mask.from_layer={mask.from_layer!r} must appear "
+                        f"earlier in `layers` than {owner_id!r} itself, so "
+                        f"its pixels are already positioned by the time "
+                        f"{owner_id!r} is drawn")
+            if mask.luminance_of and mask.luminance_of not in art_ids:
+                raise ValueError(
+                    f"{owner_kind} {owner_id!r} has mask.luminance_of="
+                    f"{mask.luminance_of!r}, which is not an art slot in "
+                    f"this spec (art slots: "
+                    f"{', '.join(sorted(art_ids)) or 'empty'})")
+            if mask.from_text and mask.from_text not in text_ids:
+                raise ValueError(
+                    f"{owner_kind} {owner_id!r} has mask.from_text="
+                    f"{mask.from_text!r}, which is not a text slot in this "
+                    f"spec (text slots: "
+                    f"{', '.join(sorted(text_ids)) or 'empty'})")
+
         for slot in self.art:
-            if not slot.mask_from:
+            if slot.mask is None:
                 continue
-            if slot.mask_from not in art_ids:
-                raise ValueError(
-                    f"art slot {slot.id!r} has mask_from={slot.mask_from!r}, "
-                    f"which is not an art slot in this spec (art slots: "
-                    f"{', '.join(sorted(art_ids))})")
-            this_pos = first_art_position.get(slot.id)
-            ref_pos = first_art_position.get(slot.mask_from)
-            if this_pos is None or ref_pos is None or ref_pos >= this_pos:
-                raise ValueError(
-                    f"art slot {slot.id!r}'s mask_from={slot.mask_from!r} "
-                    f"must appear earlier in `layers` than {slot.id!r} "
-                    f"itself, so its pixels are already positioned by the "
-                    f"time {slot.id!r} is drawn")
+            check("art slot", slot.id, slot.mask)
+            if slot.mask.from_text:
+                container = text_by_id[slot.mask.from_text]
+                if container.mask_from == slot.id:
+                    raise ValueError(
+                        f"art slot {slot.id!r} is clipped to text slot "
+                        f"{slot.mask.from_text!r}'s glyphs "
+                        f"(mask.from_text) while that text slot is itself "
+                        f"mask_from-clipped to {slot.id!r} — pick one "
+                        f"direction for the clip")
+        for layer in self.adjust:
+            if layer.mask is not None:
+                check("adjust layer", layer.id, layer.mask)
         return self
 
     @model_validator(mode="after")
@@ -745,8 +1067,9 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
 
 
 __all__ = [
-    "ART_SLOT_IDS", "ART_TREATMENTS", "PROCEDURAL_KINDS",
+    "ART_SLOT_IDS", "ART_TREATMENTS", "BLEND_MODES", "PROCEDURAL_KINDS",
     "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke",
+    "GradientMask", "MaskSpec", "AdjustLayer",
     "TextSlot", "ArtSlot", "ScrimSpec", "LayerRef", "CoverSpec",
     "RenderReport", "Direction", "Directions", "ConceptState", "JobState",
     "build_spec",

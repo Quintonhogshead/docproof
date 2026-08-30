@@ -28,7 +28,7 @@ import colorsys
 import logging
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageEnhance,
@@ -36,6 +36,17 @@ from PIL import (Image, ImageChops, ImageColor, ImageDraw, ImageEnhance,
 
 from . import typeset
 from .archetypes import zone_px
+# The deep-stack wave (§15.9) moved every shared pixel formula out to
+# effects.py — the blend table, the WCAG luminance band, mask resolution,
+# and the adjust ops — so art layers, adjust layers, and (later) clipped
+# overlays share one implementation. The underscore aliases keep this
+# module's long-standing internal names (and their many call sites)
+# unchanged; the math behind them moved verbatim, which is what the
+# golden-bytes back-compat test verifies.
+from .effects import (apply_adjust, apply_mask, resolve_mask,
+                      composite_layer as _composite_layer,
+                      luminance_band as _luminance_band,
+                      srgb_to_linear as _srgb_to_linear)
 from .imaging import has_real_alpha
 from .model import (ArtSlot, CoverSpec, LayerRef, Palette, RenderReport,
                     ScrimSpec, Shadow, TextSlot, Zone)
@@ -186,6 +197,25 @@ _TEXT_ART_CONTACT_NUDGES: tuple[float, ...] = (0.06, -0.06, 0.12, -0.12)
 # hug the target closely, not give it a whole scrim's worth of clearance.
 _NOTCH_PAD_FRACTION = 0.015
 
+# -- deep-stack wave tuning (§15.7) -------------------------------------------
+#
+# The finishing-attenuation ladder: after the full stack renders, any text
+# slot whose contrast the finishing group (adjust layers / fx_-prefixed art
+# above it) pulled below threshold gets remedied in a fixed order — one
+# more scrim-escalation pass, the two-ink flip, then halving fx_ layers'
+# opacity top-down until the slot passes or every finishing layer sits at
+# or under the floor.
+
+# The reserved prefix finishing-recipe layers will carry (§15.6 — recipes
+# land in a later PR, but the ladder keys on the prefix NOW so hand-
+# authored fx_ layers already participate, and so the prefix's meaning is
+# fixed before anything ships that relies on it).
+_FX_PREFIX = "fx_"
+# "…until the slot passes or all at ≤0.05" (§15.7, verbatim). Halving from
+# 1.0 reaches this floor in five steps (…0.0625 → 0.03125), so per-layer
+# work is strictly bounded.
+_FX_ATTENUATION_FLOOR = 0.05
+
 
 class ComposeError(Exception):
     """A spec that cannot be rendered as given — currently only an art asset
@@ -242,8 +272,16 @@ def compose(spec: CoverSpec, job_dir: Path,
     job_dir = Path(job_dir)
     text_by_id = {t.id: t for t in spec.text}
     art_by_id = {a.id: a for a in spec.art}
+    adjust_by_id = {a.id: a for a in spec.adjust}
     strengths = {i: s.strength for i, s in enumerate(spec.scrims)}
     finalized: dict[str, _ResolvedText] = {}
+    # §15.7's finishing-attenuation ladder halves fx_-prefixed layers'
+    # opacity WITHOUT ever mutating the spec it was handed (compose is a
+    # pure function of spec + job_dir; the caller may reuse the spec):
+    # every compositing read below goes through this override map instead.
+    # Empty on every render that never triggers the ladder — the default
+    # path reads each layer's own opacity exactly as before.
+    fx_opacity: dict[str, float] = {}
 
     contrast: dict[str, float] = {}
     fitted_sizes: dict[str, float] = {}
@@ -266,9 +304,10 @@ def compose(spec: CoverSpec, job_dir: Path,
     # scatter request that silently no-ops on opaque art), duplicated
     # warnings at worst — see _position_all_art's own docstring.
     text_avoid_rects = _text_zone_rects(spec.text, canvas)
+    text_ink_for_masks = _text_ink_for_masks(spec, text_by_id, canvas)
     art_positions = _position_all_art(
         spec.art, layers, job_dir, canvas, spec.palette, spec.version,
-        text_avoid_rects, text_by_id)
+        text_avoid_rects, text_by_id, text_ink_for_masks)
     positioned_art = art_positions.positioned
     layers = art_positions.layers   # possibly degraded by the title
                                     # occlusion guard (fix 2) — every reader
@@ -285,23 +324,40 @@ def compose(spec: CoverSpec, job_dir: Path,
     _apply_art_contrast_floor(positioned_art, art_positions.pre_treatment,
                               layers, art_by_id, spec.palette, canvas, warnings)
 
+    # Adjust-layer masks resolve exactly once, here: every ingredient
+    # (positioned art, fitted text ink, the synthesized gradients) is fixed
+    # before the first replay, so recomputing them inside render_upto would
+    # be identical work N times over — the same reasoning that hoisted
+    # _position_all_art itself out of the replay loop.
+    adjust_masks = {
+        a.id: resolve_mask(a.mask, canvas, positioned_art, text_ink_for_masks)
+        for a in spec.adjust if a.mask is not None}
+
     def render_upto(stop: int) -> Image.Image:
         """Everything in `layers[:stop]`, freshly composited: art at its
         always-deterministic pixels (looked up from `positioned_art`, not
         recomputed), scrims at their CURRENT (possibly escalated) strength,
-        and any text slot already resolved drawn exactly as it was the
-        first time. Never includes the text slot AT `stop` — the caller
-        measures this result to decide how to draw it."""
+        adjust layers computed over the composite as it stands (§15.3), and
+        any text slot already resolved drawn exactly as it was the first
+        time. Never includes the text slot AT `stop` — the caller measures
+        this result to decide how to draw it. Art and adjust opacities read
+        through `fx_opacity` so a §15.7 attenuation replays consistently."""
         img = Image.new("RGBA", canvas, (0, 0, 0, 0))
         for layer in layers[:stop]:
             if layer.kind == "art":
                 slot = art_by_id[layer.ref]
                 img = _composite_layer(img, positioned_art[layer.ref],
-                                       slot.opacity, slot.blend)
+                                       fx_opacity.get(layer.ref, slot.opacity),
+                                       slot.blend)
             elif layer.kind == "scrim":
                 idx = int(layer.ref)
                 img = _apply_scrim(img, spec.scrims[idx], strengths[idx],
                                    text_by_id, spec.palette, canvas)
+            elif layer.kind == "adjust":
+                adj = adjust_by_id[layer.ref]
+                img = apply_adjust(
+                    img, adj, spec.palette, canvas, adjust_masks.get(layer.ref),
+                    opacity=fx_opacity.get(layer.ref, adj.opacity))
             else:  # "text"
                 resolved = finalized.get(layer.ref)
                 if resolved is not None:
@@ -400,38 +456,164 @@ def compose(spec: CoverSpec, job_dir: Path,
 
     final_image = render_upto(len(layers))
 
-    # Safety net: the autopilot measured each slot against what was BENEATH
-    # it at draw time; a later non-text layer (a focal cutout, say) can
-    # still bury text it never saw. Re-measure against the finished stack of
-    # art + scrims WITHOUT the text layers — measuring the text's own pixels
-    # would bias the zone toward the ink color and cry wolf on every clean
-    # cover — and say so out loud when a slot lost meaningful contrast.
-    ground = Image.new("RGBA", canvas, (0, 0, 0, 0))
-    for layer in layers:
-        if layer.kind == "art":
-            slot = art_by_id[layer.ref]
-            ground = _composite_layer(ground, positioned_art[layer.ref],
-                                      slot.opacity, slot.blend)
-        elif layer.kind == "scrim":
-            idx = int(layer.ref)
-            ground = _apply_scrim(ground, spec.scrims[idx], strengths[idx],
-                                  text_by_id, spec.palette, canvas)
+    def render_ground() -> Image.Image:
+        """The finished stack WITHOUT the text layers — art, scrims, and
+        adjust layers at their CURRENT strengths/opacities. Every final-
+        composite contrast measurement below reads this rather than
+        `final_image`, because measuring a zone that contains the text's
+        own pixels would bias it toward the ink color and cry wolf on
+        every clean cover (the long-standing safety-net reasoning). The
+        one approximation that buys: an adjust op here transforms a
+        text-free composite, while the shipped render's op also saw the
+        glyphs — for judging INK-vs-GROUND legibility, the text-free
+        reading is the honest one."""
+        img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+        for layer in layers:
+            if layer.kind == "art":
+                slot = art_by_id[layer.ref]
+                img = _composite_layer(img, positioned_art[layer.ref],
+                                       fx_opacity.get(layer.ref, slot.opacity),
+                                       slot.blend)
+            elif layer.kind == "scrim":
+                idx = int(layer.ref)
+                img = _apply_scrim(img, spec.scrims[idx], strengths[idx],
+                                   text_by_id, spec.palette, canvas)
+            elif layer.kind == "adjust":
+                adj = adjust_by_id[layer.ref]
+                img = apply_adjust(
+                    img, adj, spec.palette, canvas, adjust_masks.get(layer.ref),
+                    opacity=fx_opacity.get(layer.ref, adj.opacity))
+        return img
+
+    # Final-composite legibility re-check (§15.7). The autopilot approved
+    # each slot against what was beneath it AT DRAW TIME; a finishing stack
+    # above the text (adjust layers, fx_-prefixed art) can afterwards
+    # change the contrast it approved. Re-measure every slot against the
+    # finished ground; a slot that now fails — and has finishing machinery
+    # above it to blame — climbs a fixed, bounded remedy ladder: (a) one
+    # more scrim-escalation replay pass, (b) the existing two-ink flip,
+    # (c) finishing attenuation, halving fx_ layers' opacity top-down. A
+    # slot with NOTHING new above it keeps the launch-era behavior to the
+    # byte: warn when a later layer buried it, change nothing — §15.0's
+    # byte-identical-default-path constraint is non-negotiable, and
+    # remedying pre-wave specs would change pre-wave pixels.
+    ground = render_ground()
+    ladder_changed = False
+    text_positions: dict[str, int] = {}
+    for i, layer in enumerate(layers):
+        if layer.kind == "text" and layer.ref not in text_positions:
+            text_positions[layer.ref] = i
     for ref, resolved in finalized.items():
         zl, zt, zw, zh = zone_px(resolved.slot.zone, canvas)
+        rect = (zl, zt, zl + zw, zt + zh)
         container_mask = (positioned_art[resolved.slot.mask_from].getchannel("A")
                           if resolved.slot.mask_from
                           and resolved.slot.mask_from in positioned_art
                           else None)
         ink_bbox = typeset.text_mask(resolved.slot, resolved.fit, canvas).getbbox()
-        final_ratio = _worst_region_contrast(
-            ground, (zl, zt, zl + zw, zt + zh), ImageColor.getrgb(resolved.color),
-            ink_bbox, container_mask)
+
+        def remeasure(img: Image.Image, color: str) -> float:
+            return _worst_region_contrast(img, rect, ImageColor.getrgb(color),
+                                          ink_bbox, container_mask)
+
+        final_ratio = remeasure(ground, resolved.color)
         threshold = _CONTRAST_THRESHOLDS[resolved.slot.id]
-        if final_ratio < threshold and final_ratio < contrast[ref] - 0.5:
+        finishing_above = list(dict.fromkeys(
+            layer.ref for layer in layers[text_positions.get(ref, len(layers)) + 1:]
+            if layer.kind == "adjust"
+            or (layer.kind == "art" and layer.ref.startswith(_FX_PREFIX))))
+        if not finishing_above:
+            if final_ratio < threshold and final_ratio < contrast[ref] - 0.5:
+                warnings.append(
+                    f"{ref}: a layer drawn later covers this text — contrast on "
+                    f"the finished cover is {final_ratio:.2f} (threshold "
+                    f"{threshold}, was {contrast[ref]:.2f} at draw time).")
+            continue
+        if final_ratio >= threshold:
+            continue
+
+        # (a) One more scrim-escalation replay pass: the exact
+        # escalate-until-pass-or-cap loop the draw-time autopilot ran,
+        # judged against the FINAL ground this time. Whatever headroom the
+        # slot's protecting scrims still have is the cheapest remedy — it
+        # brightens/darkens under the finishing rather than dismantling it.
+        protecting = [idx for idx, s in enumerate(spec.scrims) if s.protects == ref]
+        while (final_ratio < threshold
+               and any(strengths[idx] < _SCRIM_CAP for idx in protecting)):
+            for idx in protecting:
+                strengths[idx] = min(_SCRIM_CAP, round(strengths[idx] + _SCRIM_STEP, 10))
+            ground = render_ground()
+            final_ratio = remeasure(ground, resolved.color)
+            ladder_changed = True
+
+        # (b) The existing two-ink flip, judged on the final ground — with
+        # the CURRENT color kept in the running (unlike the draw-time flip,
+        # which had already exhausted its scrims and had nothing to lose):
+        # flipping to a fallback that measures WORSE than what the slot
+        # already wears would be a regression, not a remedy.
+        if final_ratio < threshold:
+            options = [(resolved.color, final_ratio)] + [
+                (c, remeasure(ground, c)) for c in _TEXT_COLOR_FALLBACKS]
+            best_color, best_ratio = max(options, key=lambda pair: pair[1])
+            if best_color != resolved.color:
+                pre_flip = final_ratio
+                resolved = replace(resolved, color=best_color)
+                finalized[ref] = resolved
+                ladder_changed = True
+                outcome = ("now passes" if best_ratio >= threshold
+                           else "still falls short")
+                warnings.append(
+                    f"{ref}: the finishing stack pulled contrast down to "
+                    f"{pre_flip:.2f} against threshold {threshold}; flipped "
+                    f"text color to {best_color}, which {outcome} "
+                    f"({best_ratio:.2f}).")
+            final_ratio = best_ratio
+
+        # (c) Finishing attenuation: halve the opacity of fx_-prefixed
+        # layers above this slot, topmost first, re-rendering and
+        # re-measuring after every halving, until the slot passes or every
+        # finishing layer sits at or under the floor. Geometric halving
+        # from 1.0 reaches the floor in five steps, so the whole sweep is
+        # strictly bounded. Every halving is announced with the exact layer
+        # id and its new opacity — the judge reads these (§6.3's
+        # composer_warnings channel), so they are measurements, not prose.
+        if final_ratio < threshold:
+            fx_above = [r for r in finishing_above if r.startswith(_FX_PREFIX)]
+
+            def current_opacity(layer_ref: str) -> float:
+                if layer_ref in fx_opacity:
+                    return fx_opacity[layer_ref]
+                owner = art_by_id.get(layer_ref) or adjust_by_id.get(layer_ref)
+                return owner.opacity if owner is not None else 0.0
+
+            while (final_ratio < threshold
+                   and any(current_opacity(r) > _FX_ATTENUATION_FLOOR
+                           for r in fx_above)):
+                for layer_ref in reversed(fx_above):   # top-down
+                    cur = current_opacity(layer_ref)
+                    if cur <= _FX_ATTENUATION_FLOOR:
+                        continue
+                    fx_opacity[layer_ref] = round(cur / 2.0, 6)
+                    ladder_changed = True
+                    warnings.append(
+                        f"{layer_ref} halved to {fx_opacity[layer_ref]:g} "
+                        f"to keep {ref} legible.")
+                    ground = render_ground()
+                    final_ratio = remeasure(ground, resolved.color)
+                    if final_ratio >= threshold:
+                        break
+
+        if final_ratio < threshold:
             warnings.append(
-                f"{ref}: a layer drawn later covers this text — contrast on "
-                f"the finished cover is {final_ratio:.2f} (threshold "
-                f"{threshold}, was {contrast[ref]:.2f} at draw time).")
+                f"{ref}: still {final_ratio:.2f} against threshold "
+                f"{threshold} on the finished cover after scrim escalation, "
+                f"an ink flip, and finishing attenuation.")
+        # The draw-time number is stale once the ladder has run — the
+        # report carries what the finished cover actually measures.
+        contrast[ref] = round(final_ratio, 4)
+
+    if ladder_changed:
+        final_image = render_upto(len(layers))
 
     # Dead-band metric (fix 4): one full-canvas read of the FINISHED
     # composite — text, art, and scrims all baked in — for the tallest
@@ -892,24 +1074,12 @@ def _place_scatter(source: Image.Image, canvas: tuple[int, int], count: int,
     return out, placed
 
 
-def _apply_mask_from(img: Image.Image, ref_img: Image.Image | None) -> Image.Image:
-    """§7.4a's double exposure: keep `img`'s own pixels only where `ref_img`
-    (another art slot's already-positioned, canvas-space image) is opaque —
-    art poured inside another slot's silhouette. A hard 50% threshold turns
-    the reference's alpha into a binary stencil first (a soft/graduated
-    reference edge should not leave `img` partially see-through in a way
-    neither slot's own alpha describes); ImageChops.multiply against that
-    0/255 stencil then either passes `img`'s own alpha through unchanged
-    (stencil=255) or zeroes it (stencil=0), so `img`'s own soft edges (its
-    OWN anti-aliasing, its OWN treatment) still survive wherever the
-    reference allows it through. `ref_img=None` (a dangling reference) can't
-    happen for a spec that passed CoverSpec validation — defensive, not a
-    real path."""
-    if ref_img is None:
-        return img
-    r, g, b, a = img.split()
-    ref_stencil = ref_img.split()[3].point(lambda v: 255 if v > 127 else 0)
-    return Image.merge("RGBA", (r, g, b, ImageChops.multiply(a, ref_stencil)))
+# §7.4a's double exposure (the old _apply_mask_from) is now one source of
+# effects.resolve_mask (§15.2): ArtSlot.mask_from folds into
+# mask.from_layer at validation, and resolve_mask keeps the exact
+# hard-50%-threshold stencil semantics that fold's byte-compat rides on.
+# _apply_masks below is where every art-layer mask — legacy or first-class
+# — is actually applied.
 
 
 def _occlusion_fraction(ink_mask: Image.Image, art_alpha: Image.Image) -> float:
@@ -1074,10 +1244,78 @@ def _snap_to_line_gap(source: Image.Image, canvas: tuple[int, int],
     return best_img, best_ratio, warning
 
 
+def _text_ink_for_masks(spec: CoverSpec, text_by_id: dict[str, TextSlot],
+                        canvas: tuple[int, int]) -> dict[str, Image.Image]:
+    """Fitted glyph coverage ('L', canvas-sized, via typeset.text_mask) for
+    every text slot some MaskSpec in this spec clips to (mask.from_text,
+    §15.13) — computed once, up front, because text ink depends on nothing
+    the art walk produces (fit_text is a pure function of slot + canvas;
+    the occlusion guard already leans on exactly that ordering). The fit
+    runs again inside compose()'s own text loop later — deterministic, so
+    the glyph alpha a mask clips to is pixel-identical to the glyphs
+    eventually drawn — and any fit *warning* is deliberately left to that
+    later loop, so it lands in the report exactly once. `text_by_id` must
+    be the frame-clamped dict compose built, for the same identical-fit
+    reason."""
+    needed: set[str] = set()
+    for slot in spec.art:
+        if slot.mask is not None and slot.mask.from_text:
+            needed.add(slot.mask.from_text)
+    for layer in spec.adjust:
+        if layer.mask is not None and layer.mask.from_text:
+            needed.add(layer.mask.from_text)
+    ink: dict[str, Image.Image] = {}
+    for text_id in sorted(needed):
+        slot = text_by_id.get(text_id)
+        if slot is None:   # dangling ref can't survive validation — defensive
+            continue
+        fit = typeset.fit_text(slot, canvas)
+        ink[text_id] = typeset.text_mask(slot, fit, canvas)
+    return ink
+
+
+def _apply_art_masks(positioned: dict[str, Image.Image], layers: list[LayerRef],
+                     art_by_id: dict[str, ArtSlot], canvas: tuple[int, int],
+                     text_ink: dict[str, Image.Image],
+                     warnings: list[str]) -> None:
+    """Second positioning pass (§15.2): every art slot's MaskSpec — the
+    legacy mask_from fold included — resolved against the already-
+    positioned pixels and multiplied into that slot's alpha, in place.
+
+    Runs in z-order so a chained from_layer reference (A masked by B, B
+    masked by C) always reads the referenced slot's FINAL, already-masked
+    pixels — the _masks_resolve ordering rule guarantees a from_layer
+    reference precedes its user, so walking `layers` forward preserves the
+    exact semantics the old single-pass mask_from application had. The
+    order-free sources are unaffected by z: gradient/from_text depend on no
+    art at all, and luminance_of (existence-only by design) reads whatever
+    the referenced slot's pixels are at this moment — for a LATER slot
+    that is its pre-mask placement, deterministic either way."""
+    masked: set[str] = set()
+    for layer in layers:
+        if layer.kind != "art" or layer.ref in masked or layer.ref not in positioned:
+            continue
+        masked.add(layer.ref)
+        slot = art_by_id[layer.ref]
+        if slot.mask is None:
+            continue
+        if slot.mask.from_text:
+            ink = text_ink.get(slot.mask.from_text)
+            if ink is None or ImageStat.Stat(ink).sum[0] <= 0:
+                warnings.append(
+                    f"{slot.id}: mask.from_text={slot.mask.from_text!r} "
+                    f"resolved to a text slot with no ink (empty optional "
+                    f"slot?) — the art is fully masked out.")
+        mask_img = resolve_mask(slot.mask, canvas, positioned, text_ink)
+        if mask_img is not None:
+            positioned[layer.ref] = apply_mask(positioned[layer.ref], mask_img)
+
+
 def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                       job_dir: Path, canvas: tuple[int, int], palette: Palette,
                       version: int, text_avoid_rects: list[tuple[int, int, int, int]],
-                      text_by_id: dict[str, TextSlot]) -> _ArtPositions:
+                      text_by_id: dict[str, TextSlot],
+                      text_ink: dict[str, Image.Image]) -> _ArtPositions:
     """Every art slot's final, canvas-space RGBA image, positioned and
     effects-rack-treated exactly once, keyed by slot id. Computed as a
     single pass over `layers` (not `art_slots` directly) so a `mask_from`
@@ -1195,10 +1433,15 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
         if treatment_warning:
             warnings.append(treatment_warning)
 
-        if slot.mask_from:
-            img = _apply_mask_from(img, positioned.get(slot.mask_from))
-
         positioned[slot.id] = img
+
+    # Masks apply as a second pass over the whole z-order (not inline above)
+    # because §15.2's order-free sources — luminance_of, from_text — may
+    # legally reference slots this loop has not reached yet; see
+    # _apply_art_masks' own docstring for why the from_layer chain still
+    # behaves exactly as the old inline single-pass application did.
+    _apply_art_masks(positioned, layers_out, art_by_id, canvas, text_ink,
+                     warnings)
 
     _apply_frame_notches(positioned, art_by_id, canvas, warnings)
     layers_out = _apply_text_contact_guard(
@@ -2229,33 +2472,9 @@ def _fit_contain(img: Image.Image, canvas: tuple[int, int],
     return out
 
 
-_BLEND_CHOPS = {"multiply": ImageChops.multiply, "overlay": ImageChops.overlay,
-                "soft_light": ImageChops.soft_light}
-
-
-def _composite_layer(base: Image.Image, source: Image.Image, opacity: float,
-                     blend: str) -> Image.Image:
-    """Alpha-composite `source` (RGBA, canvas-sized) onto `base`. `normal`
-    is a plain "over"; the other three blend modes run on RGB via
-    ImageChops against the CURRENT backdrop (so multiply/overlay/soft_light
-    really do react to what's beneath them), then that blended result is
-    composited back using `source`'s own alpha × `opacity` as the mix
-    factor — otherwise a 6% "overlay" texture would fully replace the pixels
-    under it instead of barely tinting them."""
-    if opacity <= 0:
-        return base
-    r, g, b, src_a = source.split()
-    if blend == "normal":
-        blended_rgb = Image.merge("RGB", (r, g, b))
-    else:
-        chop = _BLEND_CHOPS[blend]
-        blended_rgb = chop(base.convert("RGB"), Image.merge("RGB", (r, g, b)))
-    if opacity < 1.0:
-        src_a = src_a.point(lambda v: round(v * opacity))
-    layer = Image.merge("RGBA", (*blended_rgb.split(), src_a))
-    out = base.copy()
-    out.alpha_composite(layer)
-    return out
+# _composite_layer lives in effects.composite_layer now (§15.1: one blend
+# implementation for art layers, adjust layers, and clipped overlays) —
+# imported under its old name at the top of this module.
 
 
 # -- scrims -------------------------------------------------------------------
@@ -2493,29 +2712,9 @@ def _paint_vignette_scrim(overlay: Image.Image, rgb: tuple[int, int, int],
 
 # -- legibility autopilot: measurement ---------------------------------------
 
-# WCAG relative-luminance sRGB->linear lookup, precomputed once as an 8-bit
-# LUT so Pillow's Image.point() applies it band-wise in C rather than this
-# module looping over every pixel in Python.
-def _srgb_to_linear(c: float) -> float:
-    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-
-
-_SRGB_LUT = [round(_srgb_to_linear(i / 255) * 255) for i in range(256)]
-
-
-def _luminance_band(rgb_img: Image.Image) -> Image.Image:
-    """An 'L' image whose value at each pixel is that pixel's WCAG relative
-    luminance (0-255 scale). Built from three point()-applied LUTs and two
-    weighted Image.blend() calls — both pure-C Pillow operations — so this
-    costs the same whether the crop is 100 or 100,000 pixels."""
-    r, g, b = rgb_img.split()[:3]
-    r_lin, g_lin, b_lin = r.point(_SRGB_LUT), g.point(_SRGB_LUT), b.point(_SRGB_LUT)
-    # Image.blend(a, b, alpha) = a*(1-alpha) + b*alpha. Chaining two blends
-    # with alphas derived from the WCAG weights (0.2126/0.7152/0.0722)
-    # reaches the weighted sum without a three-way blend Pillow doesn't have
-    # — see the derivation in the PR description / commit message.
-    mixed = Image.blend(r_lin, g_lin, 0.7152 / (0.2126 + 0.7152))
-    return Image.blend(mixed, b_lin, 0.0722)
+# _srgb_to_linear and _luminance_band live in effects.py now (bloom's
+# threshold and the autopilot must measure brightness with the SAME WCAG
+# curve — §15.3), imported under their old names at the top of this module.
 
 
 def _zone_stats(img: Image.Image, rect: tuple[int, int, int, int],

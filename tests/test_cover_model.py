@@ -656,3 +656,281 @@ def test_coverspec_notch_for_off_by_default_needs_no_validation():
                      palette=_palette(), art=art, scrims=[], text=[],
                      layers=[LayerRef(kind="art", ref="frame")])
     assert spec.art[0].notch_for == ""
+
+
+# ===========================================================================
+# Deep-stack wave PR1 (§15.1-§15.3, §15.13): blend Literal widening, masks,
+# adjust layers — the validator half; pixel behavior lives in
+# tests/test_cover_effects.py
+# ===========================================================================
+
+from docproof.cover.model import (AdjustLayer, BLEND_MODES,  # noqa: E402
+                                  GradientMask, MaskSpec)
+
+
+def _mini_spec(art=(), adjust=(), text=(), layers=(), scrims=()) -> CoverSpec:
+    return CoverSpec(archetype="x", concept_name="x", rationale="x",
+                     palette=_palette(), art=list(art), adjust=list(adjust),
+                     scrims=list(scrims), text=list(text), layers=list(layers))
+
+
+# -- §15.1: the widened blend Literal ---------------------------------------
+
+@pytest.mark.parametrize("mode", BLEND_MODES)
+def test_art_slot_accepts_every_documented_blend_mode(mode):
+    assert ArtSlot(id="fog", blend=mode).blend == mode
+
+
+@pytest.mark.parametrize("mode", ["hue", "color", "luminosity", "dodge"])
+def test_art_slot_rejects_deferred_and_unknown_blend_modes(mode):
+    # hue/color/luminosity are explicitly DEFERRED (§15.1) — the Literal
+    # must not quietly accept them ahead of an implementation.
+    with pytest.raises(ValidationError):
+        ArtSlot(id="fog", blend=mode)
+
+
+def test_adjust_layer_blend_literal_matches_art_slots():
+    for mode in BLEND_MODES:
+        assert AdjustLayer(id="fx_wash", op="color_wash", blend=mode).blend == mode
+
+
+# -- §15.2: GradientMask / MaskSpec shapes -----------------------------------
+
+def test_gradient_mask_defaults_are_the_documented_ramp():
+    g = GradientMask()
+    assert (g.kind, g.angle, g.center, g.start, g.end) == ("linear", 90.0, [0.5, 0.5], 0.0, 1.0)
+
+
+def test_gradient_mask_rejects_reversed_or_flat_ramp():
+    with pytest.raises(ValidationError, match="strictly less"):
+        GradientMask(start=0.7, end=0.3)
+    with pytest.raises(ValidationError, match="strictly less"):
+        GradientMask(start=0.5, end=0.5)
+
+
+def test_gradient_mask_center_must_be_a_pair():
+    with pytest.raises(ValidationError, match="exactly"):
+        GradientMask(center=[0.5])
+    with pytest.raises(ValidationError, match="within"):
+        GradientMask(center=[9.0, 0.5])
+
+
+def test_mask_spec_requires_at_least_one_source():
+    with pytest.raises(ValidationError, match="no source"):
+        MaskSpec()
+    with pytest.raises(ValidationError, match="no source"):
+        MaskSpec(invert=True)
+
+
+def test_mask_spec_source_ids_must_be_valid_slugs():
+    with pytest.raises(ValidationError, match="not a valid art slot id"):
+        MaskSpec(from_layer="Not A Slug")
+    with pytest.raises(ValidationError, match="not a valid art slot id"):
+        MaskSpec(luminance_of="UPPER")
+
+
+# -- §15.2: the mask_from -> mask.from_layer fold ----------------------------
+
+def test_legacy_mask_from_folds_into_mask_from_layer_at_validation():
+    slot = ArtSlot(id="focal", mask_from="background")
+    assert slot.mask_from == "background"          # authored field untouched
+    assert slot.mask == MaskSpec(from_layer="background")
+
+
+def test_fold_survives_dump_validate_round_trips():
+    slot = ArtSlot(id="focal", mask_from="background")
+    again = ArtSlot(**slot.model_dump())
+    assert again == slot
+    assert ArtSlot(**again.model_dump()) == slot   # idempotent, not just once
+
+
+def test_setting_mask_from_and_a_conflicting_mask_is_refused():
+    with pytest.raises(ValidationError, match="both"):
+        ArtSlot(id="focal", mask_from="background",
+                mask=MaskSpec(from_layer="other"))
+    with pytest.raises(ValidationError, match="both"):
+        ArtSlot(id="focal", mask_from="background",
+                mask=MaskSpec(from_layer="background", invert=True))
+
+
+def test_the_exact_folded_equivalent_may_coexist_with_mask_from():
+    # What every dump/validate round-trip of a folded slot produces — must
+    # revalidate cleanly forever.
+    slot = ArtSlot(id="focal", mask_from="background",
+                   mask=MaskSpec(from_layer="background"))
+    assert slot.mask.from_layer == "background"
+
+
+# -- §15.2/§15.13: CoverSpec-level mask resolution ---------------------------
+
+def test_maskspec_from_layer_unknown_slot_fails():
+    art = [ArtSlot(id="focal", mask=MaskSpec(from_layer="nonexistent"))]
+    with pytest.raises(ValidationError, match="mask_from"):
+        _mini_spec(art=art, layers=[LayerRef(kind="art", ref="focal")])
+
+
+def test_maskspec_from_layer_referencing_a_later_slot_fails():
+    art = [ArtSlot(id="background", fit="cover",
+                   mask=MaskSpec(from_layer="focal")),
+          ArtSlot(id="focal", transparent=True)]
+    with pytest.raises(ValidationError, match="must appear earlier"):
+        _mini_spec(art=art, layers=[LayerRef(kind="art", ref="background"),
+                                    LayerRef(kind="art", ref="focal")])
+
+
+def test_maskspec_luminance_of_may_reference_a_later_slot():
+    # Existence-only by design (§15.2): positioned pixels are computed up
+    # front, so draw order does not matter for luminance_of.
+    art = [ArtSlot(id="background", fit="cover",
+                   mask=MaskSpec(luminance_of="focal")),
+          ArtSlot(id="focal", transparent=True)]
+    spec = _mini_spec(art=art, layers=[LayerRef(kind="art", ref="background"),
+                                       LayerRef(kind="art", ref="focal")])
+    assert spec.art[0].mask.luminance_of == "focal"
+
+
+def test_maskspec_luminance_of_unknown_slot_fails():
+    art = [ArtSlot(id="background", mask=MaskSpec(luminance_of="ghost"))]
+    with pytest.raises(ValidationError, match="luminance_of"):
+        _mini_spec(art=art, layers=[LayerRef(kind="art", ref="background")])
+
+
+def test_maskspec_from_text_unknown_text_slot_fails():
+    art = [ArtSlot(id="plate", mask=MaskSpec(from_text="title"))]
+    with pytest.raises(ValidationError, match="from_text"):
+        _mini_spec(art=art, layers=[LayerRef(kind="art", ref="plate")])
+
+
+def test_maskspec_from_text_resolves_against_a_real_text_slot():
+    art = [ArtSlot(id="plate", mask=MaskSpec(from_text="title"))]
+    spec = _mini_spec(art=art, text=[_text_slot(content="Ash")],
+                      layers=[LayerRef(kind="art", ref="plate")])
+    assert spec.art[0].mask.from_text == "title"
+
+
+def test_maskspec_from_text_cycle_with_text_mask_from_is_refused():
+    # §15.13's cycle check: art clipped INTO the title's glyphs while the
+    # title is itself clipped INTO that art.
+    art = [ArtSlot(id="beam", transparent=True,
+                   mask=MaskSpec(from_text="title"))]
+    text = [_text_slot(content="Ash", mask_from="beam")]
+    with pytest.raises(ValidationError, match="from_text"):
+        _mini_spec(art=art, text=text,
+                   layers=[LayerRef(kind="art", ref="beam"),
+                          LayerRef(kind="text", ref="title")])
+
+
+def test_adjust_mask_from_layer_must_precede_the_adjust_layer():
+    art = [ArtSlot(id="focal", transparent=True)]
+    adjust = [AdjustLayer(id="fx_grade", op="grade", brightness=0.2,
+                          mask=MaskSpec(from_layer="focal"))]
+    with pytest.raises(ValidationError, match="must appear earlier"):
+        _mini_spec(art=art, adjust=adjust,
+                   layers=[LayerRef(kind="adjust", ref="fx_grade"),
+                          LayerRef(kind="art", ref="focal")])
+    spec = _mini_spec(art=art, adjust=adjust,
+                      layers=[LayerRef(kind="art", ref="focal"),
+                             LayerRef(kind="adjust", ref="fx_grade")])
+    assert spec.adjust[0].mask.from_layer == "focal"
+
+
+# -- §15.3: AdjustLayer shape ------------------------------------------------
+
+def test_adjust_layer_minimal_and_defaults():
+    layer = AdjustLayer(id="fx_lift", op="grade")
+    assert (layer.opacity, layer.blend, layer.mask) == (1.0, "normal", None)
+    assert (layer.strength, layer.radius, layer.threshold) == (0.5, 0.02, 0.75)
+
+
+def test_adjust_layer_rejects_unknown_op_and_extra_keys():
+    with pytest.raises(ValidationError):
+        AdjustLayer(id="fx_x", op="curves")
+    with pytest.raises(ValidationError):
+        AdjustLayer(id="fx_x", op="grade", params={"brightness": 1})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("brightness", 1.5), ("contrast", -1.5), ("saturation", 2.0),
+    ("temperature", -1.01), ("strength", 1.2), ("radius", 0.3),
+    ("threshold", 1.5), ("opacity", -0.1),
+])
+def test_adjust_layer_param_ranges_enforced(field, value):
+    with pytest.raises(ValidationError):
+        AdjustLayer(id="fx_x", op="grade", **{field: value})
+
+
+def test_adjust_layer_id_must_be_a_slug():
+    with pytest.raises(ValidationError, match="not a valid art slot id"):
+        AdjustLayer(id="Fx Wash", op="grade")
+
+
+def test_adjust_stops_accept_roles_and_hexes_and_reject_junk():
+    layer = AdjustLayer(id="fx_map", op="gradient_map",
+                        stops=["background", "#ff8800", "text"])
+    assert layer.stops == ["background", "#ff8800", "text"]
+    with pytest.raises(ValidationError, match="neither a palette role"):
+        AdjustLayer(id="fx_map", op="gradient_map", stops=["blurple", "#ffffff"])
+
+
+@pytest.mark.parametrize("stops", [["#ffffff"], ["#ffffff"] * 4])
+def test_adjust_stops_must_be_two_or_three(stops):
+    with pytest.raises(ValidationError, match="2 or 3"):
+        AdjustLayer(id="fx_map", op="gradient_map", stops=stops)
+
+
+def test_gradient_map_without_stops_fails_loudly():
+    with pytest.raises(ValidationError, match="no stops"):
+        AdjustLayer(id="fx_map", op="gradient_map")
+
+
+def test_stops_on_a_non_gradient_map_op_are_validated_but_inert():
+    # The forgiving-fields rule (§15.3): a patch edit flipping `op` away
+    # from gradient_map must not strand the spec — the ramp stays, unread.
+    layer = AdjustLayer(id="fx_lift", op="grade", stops=["background", "text"])
+    assert layer.stops == ["background", "text"]
+
+
+def test_adjust_color_accepts_role_hex_or_empty():
+    assert AdjustLayer(id="fx_w", op="color_wash", color="accent").color == "accent"
+    assert AdjustLayer(id="fx_w", op="color_wash", color="#123456").color == "#123456"
+    assert AdjustLayer(id="fx_w", op="color_wash").color == ""
+    with pytest.raises(ValidationError, match="neither a palette role"):
+        AdjustLayer(id="fx_w", op="color_wash", color="reddish")
+
+
+# -- §15.3: CoverSpec.adjust + LayerRef kind="adjust" ------------------------
+
+def test_layers_resolve_accepts_a_known_adjust_ref():
+    adjust = [AdjustLayer(id="fx_vign", op="vignette")]
+    spec = _mini_spec(adjust=adjust,
+                      layers=[LayerRef(kind="adjust", ref="fx_vign")])
+    assert spec.layers[0].kind == "adjust"
+
+
+def test_layers_resolve_rejects_an_unknown_adjust_ref():
+    with pytest.raises(ValidationError, match="adjust"):
+        _mini_spec(layers=[LayerRef(kind="adjust", ref="fx_ghost")])
+
+
+def test_adjust_ids_may_not_collide_with_art_slots():
+    art = [ArtSlot(id="grain")]
+    adjust = [AdjustLayer(id="grain", op="grade")]
+    with pytest.raises(ValidationError, match="namespace"):
+        _mini_spec(art=art, adjust=adjust,
+                   layers=[LayerRef(kind="art", ref="grain")])
+
+
+def test_duplicate_adjust_ids_are_refused():
+    adjust = [AdjustLayer(id="fx_a", op="grade"),
+             AdjustLayer(id="fx_a", op="vignette")]
+    with pytest.raises(ValidationError, match="share the id"):
+        _mini_spec(adjust=adjust, layers=[LayerRef(kind="adjust", ref="fx_a")])
+
+
+def test_pre_wave_spec_json_without_adjust_key_still_validates():
+    # Archived job.json documents predate the field entirely.
+    spec = _mini_spec(art=[ArtSlot(id="background")],
+                      layers=[LayerRef(kind="art", ref="background")])
+    dumped = spec.model_dump()
+    dumped.pop("adjust")
+    assert CoverSpec(**dumped).adjust == []

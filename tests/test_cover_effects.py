@@ -1171,3 +1171,544 @@ def test_text_mask_from_contrast_samples_only_inside_the_container(tmp_path):
 
     assert report.contrast["title"] >= 4.5
     assert not any("title" in w and "contrast" in w for w in report.warnings)
+
+
+# ===========================================================================
+# Deep-stack wave PR1 (§15.1-§15.3, §15.7, §15.13): the effects.py engine —
+# blend table, first-class masks, adjust layers, and the final-composite
+# legibility re-check ladder. Validator-level coverage for the same wave
+# lives in tests/test_cover_model.py; this section is the pixel half.
+# ===========================================================================
+
+from PIL import ImageStat  # noqa: E402
+
+from docproof.cover.effects import (BLEND_TABLE,  # noqa: E402
+                                    TEMPERATURE_MAX_SHIFT, apply_adjust,
+                                    apply_mask, blend_rgb, gradient_mask,
+                                    resolve_mask)
+from docproof.cover.model import (AdjustLayer, BLEND_MODES,  # noqa: E402
+                                  GradientMask, MaskSpec)
+
+_MASK_CANVAS = (40, 64)
+
+
+def _gray_rgb(vals, size=(2, 2)) -> Image.Image:
+    band = Image.new("L", size)
+    band.putdata(list(vals))
+    return Image.merge("RGB", (band, band, band))
+
+
+def _synthetic_composite(size=(60, 80)) -> Image.Image:
+    """A fixed, drawn (never random) RGBA test composite with real variety:
+    a vertical gray ramp, a bright disc, and a dark block — enough tonal
+    range that every adjust op visibly does something, and deterministic
+    down to the byte so "apply twice, compare bytes" is meaningful."""
+    w, h = size
+    img = Image.new("RGBA", size)
+    px = img.load()
+    for y in range(h):
+        v = round(255 * y / (h - 1))
+        for x in range(w):
+            px[x, y] = (v, v, v, 255)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((w * 0.55, h * 0.1, w * 0.9, h * 0.35), fill=(250, 240, 220, 255))
+    draw.rectangle((w * 0.1, h * 0.7, w * 0.4, h * 0.9), fill=(12, 10, 16, 255))
+    return img
+
+
+# -- §15.1: the blend table vs hand-computed fixtures ------------------------
+
+def test_blend_table_stays_in_lockstep_with_the_model_literal():
+    # model.BLEND_MODES is the wire's source of truth; the table implements
+    # everything but "normal" (plain alpha-over, no formula).
+    assert set(BLEND_TABLE) == set(BLEND_MODES) - {"normal"}
+
+
+@pytest.mark.parametrize("mode,base,source,expected", [
+    # screen = 255 - (255-a)(255-b)//255
+    ("screen", [0, 255, 100, 128], [0, 255, 200, 128], [0, 255, 222, 192]),
+    # add saturates at 255
+    ("add", [0, 255, 100, 200], [0, 255, 200, 100], [0, 255, 255, 255]),
+    ("lighten", [0, 255, 100, 128], [10, 200, 200, 40], [10, 255, 200, 128]),
+    ("darken", [0, 255, 100, 128], [10, 200, 200, 40], [0, 200, 100, 40]),
+    # color_dodge = min(255, a*256 // (256-b))
+    ("color_dodge", [100, 0, 255, 30], [200, 128, 255, 10], [255, 0, 255, 31]),
+])
+def test_blend_modes_match_hand_computed_two_by_two_fixtures(mode, base, source, expected):
+    out = blend_rgb(_gray_rgb(base), _gray_rgb(source), mode)
+    for band in out.split():
+        assert list(band.getdata()) == expected
+
+
+def test_color_dodge_with_a_black_source_is_the_identity():
+    # a * 256 // (256 - 0) == a exactly — the mode's own sanity anchor.
+    base = _gray_rgb([0, 51, 128, 255])
+    out = blend_rgb(base, _gray_rgb([0, 0, 0, 0]), "color_dodge")
+    assert out.tobytes() == base.tobytes()
+
+
+def test_new_blend_modes_render_through_compose_deterministically(tmp_path):
+    _flat_opaque_png(tmp_path / "glow.png", (60, 60), (240, 180, 60))
+    art = [_art(id="background", fit="cover", transparent=False, procedural="gradient"),
+          _art(id="glow", fit="contain", transparent=False, asset="glow.png",
+               blend="color_dodge", opacity=0.8)]
+    spec = _spec(art=art, text=[_text()],
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="art", ref="glow"),
+                        LayerRef(kind="text", ref="title")])
+    image_a, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image_b, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image_a.tobytes() == image_b.tobytes()
+
+
+# -- §15.2: gradient mask synthesis ------------------------------------------
+
+def test_linear_gradient_mask_ramps_top_transparent_to_bottom_opaque():
+    mask = gradient_mask(GradientMask(), _MASK_CANVAS)   # angle=90 default
+    w, h = _MASK_CANVAS
+    assert mask.size == _MASK_CANVAS
+    top, mid, bottom = (mask.getpixel((w // 2, y)) for y in (0, h // 2, h - 1))
+    assert top < 8                      # Lanczos upsample may leave a hair above 0
+    assert bottom > 247
+    assert top < mid < bottom
+
+
+def test_linear_gradient_mask_start_end_remap_the_ramp():
+    mask = gradient_mask(GradientMask(start=0.5, end=1.0), _MASK_CANVAS)
+    w, h = _MASK_CANVAS
+    # Alpha must not begin rising until halfway down.
+    assert mask.getpixel((w // 2, round(h * 0.2))) < 8
+    assert mask.getpixel((w // 2, round(h * 0.45))) < 16
+    assert mask.getpixel((w // 2, h - 1)) > 247
+
+
+def test_radial_gradient_mask_is_transparent_at_center_opaque_at_corners():
+    mask = gradient_mask(GradientMask(kind="radial"), _MASK_CANVAS)
+    w, h = _MASK_CANVAS
+    # Quarter-scale synthesis quantizes the exact center by a few 8-bit
+    # steps (the sampled pixel sits between grid points) — "transparent
+    # core" means near-zero, not literally zero.
+    assert mask.getpixel((w // 2, h // 2)) < 24
+    assert mask.getpixel((0, 0)) > 230
+    assert mask.getpixel((w - 1, h - 1)) > 230
+
+
+# -- §15.2: mask resolution (combination, invert, sources) -------------------
+
+def _half_opaque_layer(canvas=_MASK_CANVAS, rgb=(255, 255, 255)) -> Image.Image:
+    """Canvas-sized RGBA: fully opaque `rgb` on the left half, fully
+    transparent on the right — a hard, unambiguous stencil source."""
+    img = Image.new("RGBA", canvas, (0, 0, 0, 0))
+    ImageDraw.Draw(img).rectangle((0, 0, canvas[0] // 2 - 1, canvas[1] - 1),
+                                  fill=(*rgb, 255))
+    return img
+
+
+def test_resolve_from_layer_matches_the_legacy_hard_stencil():
+    ref = _half_opaque_layer()
+    mask = resolve_mask(MaskSpec(from_layer="plate"), _MASK_CANVAS,
+                        {"plate": ref}, {})
+    expected = ref.getchannel("A").point(lambda v: 255 if v > 127 else 0)
+    assert mask.tobytes() == expected.tobytes()
+
+
+def test_resolve_mask_multiplies_its_sources_together():
+    ref = _half_opaque_layer()
+    combined = resolve_mask(
+        MaskSpec(from_layer="plate", gradient=GradientMask()),
+        _MASK_CANVAS, {"plate": ref}, {})
+    w, h = _MASK_CANVAS
+    assert combined.getpixel((w - 4, h - 4)) == 0        # stencil kills right half
+    assert combined.getpixel((w // 4, 0)) < 8            # gradient kills the top
+    assert combined.getpixel((w // 4, h - 1)) > 247      # both allow bottom-left
+
+
+def test_resolve_mask_invert_applies_after_combination():
+    ref = _half_opaque_layer()
+    spec = dict(from_layer="plate", gradient=GradientMask())
+    straight = resolve_mask(MaskSpec(**spec), _MASK_CANVAS, {"plate": ref}, {})
+    inverted = resolve_mask(MaskSpec(**spec, invert=True), _MASK_CANVAS,
+                            {"plate": ref}, {})
+    assert inverted.tobytes() == ImageChops.invert(straight).tobytes()
+
+
+def test_resolve_luminance_of_is_gated_by_the_source_alpha():
+    ref = _half_opaque_layer(rgb=(255, 255, 255))   # white where opaque
+    mask = resolve_mask(MaskSpec(luminance_of="plate"), _MASK_CANVAS,
+                        {"plate": ref}, {})
+    w, h = _MASK_CANVAS
+    assert mask.getpixel((w // 4, h // 2)) == 255   # bright AND opaque
+    assert mask.getpixel((w - 4, h // 2)) == 0      # transparent side masks out
+
+
+def test_apply_mask_multiplies_alpha_and_preserves_color():
+    layer = Image.new("RGBA", _MASK_CANVAS, (200, 40, 40, 255))
+    mask = gradient_mask(GradientMask(), _MASK_CANVAS)
+    out = apply_mask(layer, mask)
+    assert out.getchannel("A").tobytes() == mask.tobytes()
+    assert out.convert("RGB").tobytes() == layer.convert("RGB").tobytes()
+
+
+# -- §15.2: the fold and first-class masks through compose -------------------
+
+def test_legacy_mask_from_and_explicit_maskspec_render_identical_bytes(tmp_path):
+    """The fold's whole contract: an old spec spelled with mask_from and the
+    same spec spelled with mask.from_layer are the SAME cover, byte for
+    byte."""
+    _blob_png(tmp_path / "vessel.png")
+    _flat_opaque_png(tmp_path / "pour.png", (120, 120), (220, 80, 40))
+
+    def build(**mask_fields):
+        art = [_art(id="background", fit="cover", transparent=False,
+                    procedural="gradient"),
+              _art(id="vessel", asset="vessel.png"),
+              _art(id="pour", asset="pour.png", fit="cover", **mask_fields)]
+        return _spec(art=art, text=[_text()],
+                     layers=[LayerRef(kind="art", ref="background"),
+                            LayerRef(kind="art", ref="vessel"),
+                            LayerRef(kind="art", ref="pour"),
+                            LayerRef(kind="text", ref="title")])
+
+    legacy, _ = compose(build(mask_from="vessel"), tmp_path, canvas=CANVAS)
+    firstclass, _ = compose(build(mask=MaskSpec(from_layer="vessel")),
+                            tmp_path, canvas=CANVAS)
+    assert legacy.tobytes() == firstclass.tobytes()
+
+
+def test_spec_using_no_new_fields_matches_spec_with_new_fields_at_defaults(tmp_path):
+    """The permanent, environment-independent golden-bytes proof (§15.0
+    constraint 2): a legacy-shaped spec and the same spec with every new
+    field explicitly at its default render the exact same pixels."""
+    legacy_art = [ArtSlot(id="background", fit="cover", procedural="gradient"),
+                  ArtSlot(id="texture", fit="cover", procedural="grain",
+                          opacity=0.06, blend="overlay")]
+    explicit_art = [ArtSlot(id="background", fit="cover", procedural="gradient",
+                            mask=None, blend="normal"),
+                    ArtSlot(id="texture", fit="cover", procedural="grain",
+                            opacity=0.06, blend="overlay", mask=None)]
+    layers = [LayerRef(kind="art", ref="background"),
+             LayerRef(kind="scrim", ref="0"),
+             LayerRef(kind="text", ref="title"),
+             LayerRef(kind="art", ref="texture")]
+    scrims = [ScrimSpec(kind="panel", protects="title", strength=0.2)]
+    legacy = _spec(art=legacy_art, scrims=scrims, text=[_text()], layers=layers)
+    explicit = _spec(art=explicit_art, scrims=scrims, text=[_text()],
+                     layers=layers, adjust=[])
+    image_a, report_a = compose(legacy, tmp_path, canvas=CANVAS)
+    image_b, report_b = compose(explicit, tmp_path, canvas=CANVAS)
+    assert image_a.tobytes() == image_b.tobytes()
+    assert report_a == report_b
+
+
+def test_gradient_masked_art_blends_two_plates_through_compose(tmp_path):
+    _flat_opaque_png(tmp_path / "sky.png", (100, 160), (200, 60, 30))
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient"),
+          _art(id="sky", asset="sky.png", fit="cover",
+               mask=MaskSpec(gradient=GradientMask(angle=90)))]
+    spec = _spec(art=art, text=[_text()],
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="art", ref="sky"),
+                        LayerRef(kind="text", ref="title")])
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    w, h = CANVAS
+    top = image.getpixel((w // 2, 2))
+    bottom = image.getpixel((w // 2, h - 3))
+    # Top: the mask zeroes the red plate — background gradient shows.
+    # Bottom: the plate is fully opaque — red wins.
+    assert bottom[0] > 180 and bottom[0] - bottom[2] > 100
+    assert top[0] < 90
+
+
+def test_mask_from_text_pours_art_into_the_title_glyphs(tmp_path):
+    """§15.13 part 1: an art layer clipped to a text slot's fitted glyph
+    alpha — the text slot itself stays OUT of `layers` (the art IS the
+    title), which the model allows and the ink cache resolves anyway."""
+    _flat_opaque_png(tmp_path / "forest.png", (120, 190), (30, 190, 60))
+    title = _text(content="ASH", zone=Zone(x=0.05, y=0.3, w=0.9, h=0.4),
+                  size_min=0.1, size_max=0.2)
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient"),
+          _art(id="forest", asset="forest.png", fit="cover",
+               mask=MaskSpec(from_text="title"))]
+    spec = _spec(art=art, text=[title],
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="art", ref="forest")])
+    image_a, _ = compose(spec, tmp_path, canvas=CANVAS)
+    image_b, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image_a.tobytes() == image_b.tobytes()    # from_text is deterministic
+
+    fit = fit_text(title, CANVAS)
+    ink = text_mask(title, fit, CANVAS)
+    ink_px, img_px = ink.load(), image_a.load()
+    inside = outside = None
+    for y in range(0, CANVAS[1], 3):
+        for x in range(0, CANVAS[0], 3):
+            if inside is None and ink_px[x, y] == 255:
+                inside = img_px[x, y]
+            if outside is None and y < 8:
+                outside = img_px[x, y]
+    assert inside is not None
+    # Inside a glyph: the green plate. Far outside the zone: background.
+    assert inside[1] > 150 and inside[1] - inside[0] > 80
+    assert outside[1] < 90
+
+
+def test_art_clipped_to_an_empty_text_slot_warns(tmp_path):
+    _flat_opaque_png(tmp_path / "plate.png", (60, 60), (200, 60, 30))
+    subtitle = _text(id="subtitle", content="", optional=True,
+                     zone=Zone(x=0.1, y=0.5, w=0.8, h=0.2))
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient"),
+          _art(id="plate", asset="plate.png", fit="cover",
+               mask=MaskSpec(from_text="subtitle"))]
+    spec = _spec(art=art, text=[_text(), subtitle],
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="art", ref="plate"),
+                        LayerRef(kind="text", ref="title")])
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert any("fully masked out" in w for w in report.warnings)
+
+
+# -- §15.3: adjust ops, each deterministic on a fixed composite --------------
+
+_ADJUST_CASES = [
+    AdjustLayer(id="fx_lift", op="grade", brightness=0.2, contrast=-0.15,
+                saturation=-0.3, temperature=0.4),
+    AdjustLayer(id="fx_map", op="gradient_map", stops=["#101820", "#c9a227"]),
+    AdjustLayer(id="fx_wash", op="color_wash", color="#3355aa", opacity=0.6,
+                blend="screen"),
+    AdjustLayer(id="fx_vign", op="vignette", strength=0.7),
+    AdjustLayer(id="fx_bloom", op="bloom", threshold=0.5, strength=1.0,
+                radius=0.04),
+    AdjustLayer(id="fx_blur", op="blur", radius=0.04),
+]
+
+
+@pytest.mark.parametrize("adjust", _ADJUST_CASES, ids=lambda a: a.op)
+def test_each_adjust_op_is_deterministic_and_actually_does_something(adjust):
+    base = _synthetic_composite()
+    once = apply_adjust(base, adjust, _palette(), base.size)
+    twice = apply_adjust(base, adjust, _palette(), base.size)
+    assert once.tobytes() == twice.tobytes()
+    assert once.tobytes() != base.tobytes()
+    assert once.getchannel("A").tobytes() == base.getchannel("A").tobytes()
+
+
+def test_grade_with_all_zero_params_is_a_true_no_op():
+    base = _synthetic_composite()
+    out = apply_adjust(base, AdjustLayer(id="fx_nop", op="grade"),
+                       _palette(), base.size)
+    assert out.tobytes() == base.tobytes()
+
+
+def test_grade_temperature_shifts_red_up_and_blue_down():
+    base = Image.new("RGBA", (8, 8), (128, 128, 128, 255))
+    out = apply_adjust(base, AdjustLayer(id="fx_warm", op="grade",
+                                         temperature=0.5),
+                       _palette(), (8, 8))
+    shift = round(0.5 * TEMPERATURE_MAX_SHIFT)
+    assert out.getpixel((4, 4)) == (128 + shift, 128, 128 - shift, 255)
+
+
+def test_gradient_map_output_contains_only_ramp_colors():
+    base = _synthetic_composite()
+    for stops in (["#101820", "#c9a227"], ["#101820", "#8a3b2c", "#f5f1e8"]):
+        out = apply_adjust(base, AdjustLayer(id="fx_map", op="gradient_map",
+                                             stops=stops),
+                           _palette(), base.size)
+        strip = Image.new("L", (256, 1))
+        strip.putdata(list(range(256)))
+        if len(stops) == 2:
+            ramp = ImageOps.colorize(strip, black=stops[0], white=stops[1])
+        else:
+            ramp = ImageOps.colorize(strip, black=stops[0], white=stops[2],
+                                     mid=stops[1])
+        allowed = set(ramp.getdata())
+        assert set(out.convert("RGB").getdata()) <= allowed
+
+
+def test_color_wash_composites_through_the_blend_table():
+    base = _synthetic_composite()
+    white_screen = apply_adjust(
+        base, AdjustLayer(id="fx_w", op="color_wash", color="#ffffff",
+                          blend="screen"), _palette(), base.size)
+    # screen(x, 255) == 255 for every pixel — the wash saturates the canvas.
+    assert set(white_screen.convert("RGB").getdata()) == {(255, 255, 255)}
+    black_multiply = apply_adjust(
+        base, AdjustLayer(id="fx_b", op="color_wash", color="#000000",
+                          blend="multiply"), _palette(), base.size)
+    assert set(black_multiply.convert("RGB").getdata()) == {(0, 0, 0)}
+
+
+def test_vignette_leaves_the_center_nearly_untouched_and_shades_corners():
+    base = Image.new("RGBA", (64, 96), (180, 180, 180, 255))
+    out = apply_adjust(base, AdjustLayer(id="fx_v", op="vignette",
+                                         strength=0.8, color="#000000"),
+                       _palette(), (64, 96))
+    # The quarter-scale ramp costs the exact center a few 8-bit steps
+    # (same as the scrim vignette painter) — the design contract is
+    # "center essentially untouched, corners strongly shaded."
+    center = out.getpixel((32, 48))
+    corner = out.getpixel((1, 1))
+    assert center[0] >= 170
+    assert corner[0] < 100
+    assert center[0] - corner[0] > 60
+    assert center[3] == 255
+
+
+def test_bloom_is_a_no_op_when_nothing_clears_the_threshold():
+    base = Image.new("RGBA", (32, 48), (40, 40, 40, 255))
+    out = apply_adjust(base, AdjustLayer(id="fx_bloom", op="bloom",
+                                         threshold=0.75, strength=1.0,
+                                         radius=0.05),
+                       _palette(), (32, 48))
+    assert out.tobytes() == base.tobytes()
+
+
+def test_bloom_grows_a_glow_around_bright_pixels():
+    base = Image.new("RGBA", (40, 60), (20, 20, 20, 255))
+    ImageDraw.Draw(base).ellipse((14, 20, 26, 32), fill=(255, 255, 255, 255))
+    out = apply_adjust(base, AdjustLayer(id="fx_bloom", op="bloom",
+                                         threshold=0.5, strength=1.0,
+                                         radius=0.05),
+                       _palette(), (40, 60))
+    # A dark pixel just outside the disc brightens; a far corner does not.
+    assert out.getpixel((11, 26))[0] > base.getpixel((11, 26))[0]
+    assert out.getpixel((2, 55)) == (20, 20, 20, 255)
+
+
+def test_blur_through_a_mask_only_touches_the_masked_side():
+    base = _synthetic_composite((64, 64))
+    mask = Image.new("L", (64, 64), 0)
+    ImageDraw.Draw(mask).rectangle((32, 0, 63, 63), fill=255)
+    out = apply_adjust(base, AdjustLayer(id="fx_dof", op="blur", radius=0.06),
+                       _palette(), (64, 64), mask_img=mask)
+    assert (out.crop((0, 0, 32, 64)).tobytes()
+            == base.crop((0, 0, 32, 64)).tobytes())
+    assert (out.crop((32, 0, 64, 64)).tobytes()
+            != base.crop((32, 0, 64, 64)).tobytes())
+
+
+def test_adjust_mask_zero_region_is_byte_identical_to_base():
+    base = _synthetic_composite()
+    mask = Image.new("L", base.size, 0)     # fully masked out
+    out = apply_adjust(base, AdjustLayer(id="fx_lift", op="grade",
+                                         brightness=0.8),
+                       _palette(), base.size, mask_img=mask)
+    assert out.tobytes() == base.tobytes()
+
+
+def test_adjust_layer_walks_in_z_order_through_compose(tmp_path):
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient")]
+    adjust = [AdjustLayer(id="fx_wash", op="color_wash", color="#ffffff",
+                          opacity=1.0)]
+    spec = _spec(art=art, adjust=adjust, text=[_text()],
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="adjust", ref="fx_wash"),
+                        LayerRef(kind="text", ref="title")])
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    # The wash sits above the background: every non-text pixel is white.
+    assert image.getpixel((4, 4)) == (255, 255, 255)
+    assert image.getpixel((CANVAS[0] - 5, CANVAS[1] - 5)) == (255, 255, 255)
+
+
+def test_masked_adjust_through_compose_only_grades_the_masked_region(tmp_path):
+    # A mid-tone background, because grade's brightness is multiplicative
+    # (ImageEnhance): lifting a pure-black bottom row would prove nothing.
+    palette = _palette(background="#405060")
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient")]
+    layers = [LayerRef(kind="art", ref="background"),
+             LayerRef(kind="text", ref="title")]
+    plain = _spec(art=art, text=[_text()], layers=layers, palette=palette)
+    graded = _spec(art=art, text=[_text()], palette=palette,
+                   adjust=[AdjustLayer(
+                       id="fx_bright", op="grade", brightness=0.6,
+                       mask=MaskSpec(gradient=GradientMask(start=0.5, end=0.75)))],
+                   layers=layers + [LayerRef(kind="adjust", ref="fx_bright")])
+    image_plain, _ = compose(plain, tmp_path, canvas=CANVAS)
+    image_graded, _ = compose(graded, tmp_path, canvas=CANVAS)
+    w, h = CANVAS
+    # Above the ramp's start the mask is 0 — untouched; near the bottom the
+    # mask is 1.0 — visibly brightened.
+    assert (image_plain.crop((0, 0, w, round(h * 0.3))).tobytes()
+            == image_graded.crop((0, 0, w, round(h * 0.3))).tobytes())
+    y_probe = h - 4
+    assert (sum(image_graded.getpixel((w // 2, y_probe)))
+            > sum(image_plain.getpixel((w // 2, y_probe))) + 30)
+
+
+# -- §15.7: the final-composite legibility re-check ladder -------------------
+
+def _ladder_spec(wash_hex: str, scrims=()) -> CoverSpec:
+    """Dark procedural ground, light-ink title, and ONE fx_ color_wash
+    finishing layer above the text whose gray level decides the ladder's
+    fate — gray enough to fail the ink on the finished cover, while the
+    draw-time autopilot (which never sees the wash) approves everything."""
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient")]
+    adjust = [AdjustLayer(id="fx_wash", op="color_wash", color=wash_hex,
+                          opacity=1.0)]
+    layers = [LayerRef(kind="art", ref="background")]
+    layers += [LayerRef(kind="scrim", ref=str(i)) for i in range(len(scrims))]
+    layers += [LayerRef(kind="text", ref="title"),
+              LayerRef(kind="adjust", ref="fx_wash")]
+    return _spec(art=art, adjust=adjust, scrims=list(scrims), text=[_text()],
+                 layers=layers)
+
+
+def test_recheck_ladder_escalates_scrims_then_attenuates_to_a_pass(tmp_path):
+    # #717171 fails the light ink (≈4.3 < 4.5) but keeps it the best option
+    # (no flip); the wash buries the scrim, so escalation alone can't fix it
+    # — one halving of fx_wash then lets the dark ground back through.
+    spec = _ladder_spec("#717171",
+                        scrims=[ScrimSpec(kind="panel", protects="title",
+                                          strength=0.15)])
+    image_a, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert report.scrim_final[0] == pytest.approx(0.85)   # (a) ran to the cap
+    halvings = [w for w in report.warnings if "halved" in w]
+    assert halvings == ["fx_wash halved to 0.5 to keep title legible."]
+    assert report.contrast["title"] >= 4.5
+    assert not any("flipped text color" in w for w in report.warnings)
+    image_b, _ = compose(spec, tmp_path, canvas=CANVAS)
+    assert image_a.tobytes() == image_b.tobytes()         # fully deterministic
+
+
+def test_recheck_ladder_flips_ink_then_exhausts_attenuation_at_the_floor(tmp_path):
+    # #787878 fails BOTH inks with the dark fallback measuring best → the
+    # flip fires; halving the wash then darkens the ground under a dark
+    # ink, so nothing ever passes and every fx_ layer walks down to ≤0.05.
+    spec = _ladder_spec("#787878")
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert any("flipped text color to #111111" in w for w in report.warnings)
+    halvings = [w for w in report.warnings if "halved" in w]
+    assert len(halvings) == 5                       # 1.0 → 0.03125 (≤ 0.05)
+    assert "0.03125" in halvings[-1]
+    assert any("still" in w and "finishing attenuation" in w
+               for w in report.warnings)
+    assert report.contrast["title"] < 4.5
+
+
+def test_recheck_leaves_slots_without_finishing_above_on_the_legacy_path(tmp_path):
+    # No adjust/fx_ machinery above the title: a later layer that steals
+    # its contrast must produce exactly the launch-era warning — never the
+    # ladder (§15.0's byte-identical-default-path constraint). The burying
+    # layer is a light SCRIM (explicit zone over the title, drawn after
+    # it): late art would be rescued by the v2.2 text-contact guard before
+    # the safety net ever saw it, which is the guard doing its job.
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient")]
+    scrims = [ScrimSpec(kind="panel", strength=0.9,
+                        zone=Zone(x=0.05, y=0.05, w=0.9, h=0.35))]
+    spec = _spec(art=art, scrims=scrims,
+                 text=[_text()],
+                 palette=_palette(scrim="#f5f1e8"),
+                 layers=[LayerRef(kind="art", ref="background"),
+                        LayerRef(kind="text", ref="title"),
+                        LayerRef(kind="scrim", ref="0")])
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert any("a layer drawn later covers this text" in w
+               for w in report.warnings)
+    assert not any("halved" in w for w in report.warnings)
