@@ -619,3 +619,94 @@ def test_woven_emblem_scrims_default_to_the_local_panel_kind_at_zero_strength():
         assert scrim.kind == "panel"
         assert scrim.strength == 0.0
     assert {s.protects for s in archetype.scrims} == {"title", "author"}
+
+
+# ===========================================================================
+# Deep-stack wave, PR4: recipe defaults, effect stacks, the fx_ reservation
+# ===========================================================================
+
+def test_the_three_pr4_retrofits_and_only_those_three():
+    """§15.9's retrofit, pinned: big_type wears quiet_literary,
+    full_bleed_art the cinematic grade, thriller a designed title stack —
+    and EVERY other shipped archetype stays recipe-less and effect-less,
+    which is what keeps the wave's golden-bytes guarantee scoped to
+    exactly three default renders."""
+    assert ARCHETYPES["big_type"].recipe == "quiet_literary"
+    assert ARCHETYPES["full_bleed_art"].recipe == "cinematic_duotone"
+    assert ARCHETYPES["thriller_bigtype_silhouette"].recipe == ""
+    retrofits = {"big_type", "full_bleed_art", "thriller_bigtype_silhouette"}
+    for name, archetype in ARCHETYPES.items():
+        if name in retrofits:
+            continue
+        assert archetype.recipe == "", name
+        assert all(not t.effects for t in archetype.text), name
+        assert all(not a.effects for a in archetype.art), name
+
+
+def test_thriller_title_carries_the_stacked_double_shadow():
+    title = next(t for t in ARCHETYPES["thriller_bigtype_silhouette"].text
+                 if t.id == "title")
+    assert [e.kind for e in title.effects] == ["drop_shadow", "drop_shadow"]
+    wide, tight = title.effects
+    # Stack order is paint order: the wide ambient wash first (deepest),
+    # the tight contact edge over it.
+    assert wide.blur > tight.blur
+    assert wide.dy > tight.dy
+    assert tight.alpha > wide.alpha
+
+
+def test_retrofitted_thriller_spec_folds_the_stack_through_build_spec():
+    direction = Direction(
+        concept_name="Test", rationale="test",
+        archetype="thriller_bigtype_silhouette",
+        palette=Palette(background="#101820", primary="#c9382c",
+                        accent="#c9a227", text="#f5f1e8", scrim="#000000"),
+        title_font="Spectral", author_font="Spectral", art_prompts=[],
+        texture=True)
+    spec = build_spec(direction, Brief(title="Ash", author="V.", genre="literary"),
+                      ARCHETYPES["thriller_bigtype_silhouette"])
+    title = next(t for t in spec.text if t.id == "title")
+    assert [e.kind for e in title.effects] == ["drop_shadow", "drop_shadow"]
+
+
+def test_fx_prefix_is_reserved_against_hand_authored_slots():
+    # §15.6: recipe-expanded layers own the prefix; an archetype slot may
+    # never wear it, so an expansion can never collide by construction.
+    with pytest.raises(ValidationError, match="reserved"):
+        ArchetypeArt(id="fx_glow", generatable=False)
+
+
+def test_fx_prefix_rejection_reaches_a_yaml_load(tmp_path):
+    (tmp_path / "sneaky.yaml").write_text(
+        "name: sneaky\ndescribe: test\ncomposition_note: test\n"
+        "art:\n  - id: fx_wash\n    generatable: false\n"
+        "text:\n  - id: title\n    zone: {x: 0.1, y: 0.1, w: 0.8, h: 0.2}\n"
+        "    size_min: 0.04\n    size_max: 0.08\n"
+        "layers: [fx_wash, title]\n", encoding="utf-8")
+    with pytest.raises(ArchetypeError, match="reserved"):
+        load_archetypes(tmp_path)
+
+
+@pytest.mark.parametrize("name", ["big_type", "full_bleed_art",
+                                  "thriller_bigtype_silhouette"])
+def test_retrofitted_default_render_passes_autopilot_and_balance(name):
+    # Each PR4 retrofit's DEFAULT path (silent direction), rendered
+    # procedurally: every slot's final contrast clears its threshold and
+    # neither the draw-time autopilot nor the §15.7 re-check gave up. The
+    # balance measurements ran report-only (no axis declared → no snaps).
+    from pathlib import Path
+    from docproof.cover.compose import _CONTRAST_THRESHOLDS
+    direction = Direction(
+        concept_name="Test", rationale="test", archetype=name,
+        palette=Palette(background="#101820", primary="#c9382c",
+                        accent="#c9a227", text="#f5f1e8", scrim="#000000"),
+        title_font="Spectral", author_font="Spectral", art_prompts=[],
+        texture=True)
+    spec = build_spec(direction, Brief(title="The Lighthouse at Gull Point",
+                                       subtitle="A Novel", author="J. R. Vance",
+                                       genre="literary"), ARCHETYPES[name])
+    _, report = compose(spec, Path("/nonexistent"), canvas=(400, 640))
+    for slot_id, ratio in report.contrast.items():
+        assert ratio >= _CONTRAST_THRESHOLDS[slot_id], (name, slot_id, ratio)
+    assert not any("still" in w and "threshold" in w for w in report.warnings)
+    assert report.adjustments == []

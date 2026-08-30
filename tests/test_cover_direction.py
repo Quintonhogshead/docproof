@@ -759,7 +759,9 @@ def test_revise_spec_clears_asset_for_a_slot_the_input_never_had():
     # choke (or, worse, leak a stray asset path) if it happens anyway --
     # there's no prior value to compare against, so it reads as changed.
     original = _base_spec(archetype_name="full_bleed_art")
-    assert {a.id for a in original.art} == {"background", "texture"}
+    # fx_grain rides in from the archetype's default cinematic_duotone
+    # recipe (PR4 retrofit) — one more real art slot like any other here.
+    assert {a.id for a in original.art} == {"background", "texture", "fx_grain"}
     n = len(original.art)
     provider = FakeProvider(results=[ProviderResult(parsed=_edits_payload(
         {"path": f"art[{n}]",

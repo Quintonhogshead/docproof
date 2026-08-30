@@ -1,6 +1,13 @@
 name: full_bleed_art
 describe: >-
   Full-bleed illustrated scene; title banded across the lower third on a scrim.
+# Deep-stack wave (§15.6): a full-bleed generated scene is the one archetype
+# whose whole surface is uncontrolled art — the cinematic grade (partial
+# background-to-primary map, a little crush, bloom, grain) is what unifies
+# an arbitrary plate with the palette and makes it read lit instead of flat,
+# the movie-poster convention this template's research anchors on. A
+# direction's own non-empty recipe pick still wins.
+recipe: cinematic_duotone
 composition_note: >-
   Keep the lower third of the image simple, dark, and uncluttered — open sky,
   ground, or shadow — so large text can sit there. No text anywhere.

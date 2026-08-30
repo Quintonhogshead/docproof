@@ -256,13 +256,16 @@ def test_artprompt_slot_rejects_invalid_slug():
 
 # -- v2 BODY wave: procedural synthesizer selection --------------------------
 
-def test_procedural_kinds_is_the_documented_twelve():
+def test_procedural_kinds_is_the_documented_twenty():
     # v2.2 wave, deliverable 7: the original seven plus the frame family's
-    # five new siblings.
+    # five siblings — and the deep-stack wave's (§15.5) eight-entry light &
+    # atmosphere bank.
     assert set(PROCEDURAL_KINDS) == {
         "gradient", "grain", "paper", "halftone", "canvas", "speckle",
         "rule_frame", "frame_hairline", "frame_thickthin", "frame_corners",
-        "frame_deco", "frame_octagon"}
+        "frame_deco", "frame_octagon",
+        "radial_glow", "light_leak", "fog_gradient", "rays", "bokeh",
+        "dust", "scratches", "stars"}
 
 
 @pytest.mark.parametrize("name", PROCEDURAL_KINDS)
@@ -351,9 +354,17 @@ def test_direction_rejects_unregistered_author_font():
 
 
 def test_direction_requires_every_field_with_no_default():
+    # `recipe` (§15.6) is the one deliberate exception: "" (no recipe) is a
+    # real, common answer, and defaulting it keeps every archived
+    # direction and every pre-wave caller valid — the wire still REQUIRES
+    # it (strict_json_schema promotes defaulted fields into `required`),
+    # so the model must answer even though Python code may omit it.
     full = _direction().model_dump()
     for key in full:
         partial = {k: v for k, v in full.items() if k != key}
+        if key == "recipe":
+            assert Direction(**partial).recipe == ""
+            continue
         with pytest.raises(ValidationError):
             Direction(**partial)
 
@@ -432,22 +443,31 @@ def test_build_spec_full_bleed_art_merges_everything():
     assert by_id["author"].font_family == "Spectral"             # author_font
 
     art_by_id = {a.id: a for a in spec.art}
-    assert set(art_by_id) == {"background", "texture"}
+    # PR4 retrofit (§15.6): full_bleed_art wears cinematic_duotone by
+    # default now, so the silent direction above also gets the recipe's one
+    # art layer (fx_grain) and its three adjust layers, above everything.
+    assert set(art_by_id) == {"background", "texture", "fx_grain"}
     assert art_by_id["background"].prompt == \
         "A lonely lighthouse at dusk, oil painting."
     assert art_by_id["texture"].prompt == ""       # not generatable -> procedural
+    assert {a.id for a in spec.adjust} == {"fx_map", "fx_contrast", "fx_bloom"}
 
     assert [(l.kind, l.ref) for l in spec.layers] == [
         ("art", "background"), ("art", "texture"),
         ("scrim", "0"), ("scrim", "1"),
-        ("text", "title"), ("text", "subtitle"), ("text", "author")]
+        ("text", "title"), ("text", "subtitle"), ("text", "author"),
+        ("adjust", "fx_map"), ("adjust", "fx_contrast"),
+        ("adjust", "fx_bloom"), ("art", "fx_grain")]
 
 
 def test_build_spec_skips_texture_when_direction_declines_it():
     archetype = ARCHETYPES["full_bleed_art"]
     direction = _direction(archetype="full_bleed_art", texture=False)
     spec = build_spec(direction, _brief(), archetype)
-    assert {a.id for a in spec.art} == {"background"}
+    # fx_grain rides in from the default cinematic_duotone recipe (PR4
+    # retrofit), not from the declined texture slot — the literal "texture"
+    # id is what the decline skips, exactly as before.
+    assert {a.id for a in spec.art} == {"background", "fx_grain"}
     assert ("art", "texture") not in [(l.kind, l.ref) for l in spec.layers]
 
 
@@ -488,8 +508,9 @@ def test_build_spec_big_type_title_matches_the_launch_spec():
     # texture declined — but rule_frame (v2.1 BODY-fix wave) is unconditional,
     # the same way background always is; only the literal "texture" id is
     # ever skipped for a declined direction (see build_spec's own `ref ==
-    # "texture"` check).
-    assert {a.id for a in spec.art} == {"background", "rule_frame"}
+    # "texture"` check). fx_grain is the default quiet_literary recipe's
+    # one art layer (PR4 retrofit).
+    assert {a.id for a in spec.art} == {"background", "rule_frame", "fx_grain"}
 
 
 def test_build_spec_degrades_gracefully_for_a_series_slot_brief_has_no_field_for():
@@ -993,3 +1014,62 @@ def test_render_report_adjustments_default_when_omitted_and_round_trip():
                                       "50.00% of width — snapped onto the "
                                       "center axis (+4px)."])
     assert len(moved.adjustments) == 1
+
+
+# ===========================================================================
+# Deep-stack wave, §15.4: the Effect model
+# ===========================================================================
+
+from docproof.cover.model import Effect  # noqa: E402
+
+
+def test_effects_default_empty_on_both_slot_kinds():
+    # The pre-wave spec shape: no stack anywhere, the fold never fires,
+    # compose stays on the byte-identical legacy path.
+    assert ArtSlot(id="focal").effects == []
+    spec = build_spec(_direction(archetype="full_bleed_art"), _brief(),
+                      ARCHETYPES["full_bleed_art"])
+    assert all(t.effects == [] for t in spec.text)
+
+
+@pytest.mark.parametrize("kind", ["drop_shadow", "inner_shadow", "outer_glow",
+                                  "inner_glow", "bevel", "stroke"])
+def test_effect_accepts_every_parameterless_kind_bare(kind):
+    assert Effect(kind=kind).kind == kind
+
+
+def test_effect_rejects_an_undocumented_kind():
+    with pytest.raises(ValidationError):
+        Effect(kind="lens_flare")
+
+
+def test_effect_gradient_overlay_requires_stops():
+    with pytest.raises(ValidationError, match="stops"):
+        Effect(kind="gradient_overlay")
+    ok = Effect(kind="gradient_overlay", stops=["background", "#f9e79b"])
+    assert ok.stops == ["background", "#f9e79b"]
+
+
+def test_effect_texture_overlay_requires_a_shelf_plate():
+    with pytest.raises(ValidationError, match="texture_file"):
+        Effect(kind="texture_overlay")
+    with pytest.raises(ValidationError, match="not on the shelf"):
+        Effect(kind="texture_overlay", texture_file="velvet_9000")
+    assert Effect(kind="texture_overlay",
+                  texture_file="canvas_weave").texture_file == "canvas_weave"
+
+
+def test_effect_color_is_role_or_hex_or_empty():
+    assert Effect(kind="drop_shadow", color="").color == ""
+    assert Effect(kind="drop_shadow", color="accent").color == "accent"
+    assert Effect(kind="drop_shadow", color="#123abc").color == "#123abc"
+    with pytest.raises(ValidationError):
+        Effect(kind="drop_shadow", color="reddish")
+
+
+def test_effect_stops_shape_matches_adjustlayers_rule():
+    with pytest.raises(ValidationError):
+        Effect(kind="gradient_overlay", stops=["#111111"])       # 1 stop
+    with pytest.raises(ValidationError):
+        Effect(kind="gradient_overlay",
+               stops=["#111111", "#222222", "#333333", "#444444"])  # 4 stops

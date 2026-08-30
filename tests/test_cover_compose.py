@@ -455,27 +455,32 @@ def test_procedural_synthesizer_registry_matches_the_model_layers_kinds():
     assert set(PROCEDURAL_SYNTHESIZERS) == set(PROCEDURAL_KINDS)
 
 
+# §15.5 widened the shared synthesizer contract to receive the whole
+# ArtSlot (anchor/scale for the atmosphere bank; the pre-wave twelve read
+# only slot.id and render byte-identical pixels) — these tests hand a bare
+# ArtSlot where they used to hand its id string.
+
 @pytest.mark.parametrize("name", list(PROCEDURAL_SYNTHESIZERS))
 def test_every_synthesizer_is_deterministic(name):
     synth = PROCEDURAL_SYNTHESIZERS[name]
-    img1 = synth(CANVAS, _TEST_PALETTE, "some_slot", 7)
-    img2 = synth(CANVAS, _TEST_PALETTE, "some_slot", 7)
+    img1 = synth(CANVAS, _TEST_PALETTE, ArtSlot(id="some_slot"), 7)
+    img2 = synth(CANVAS, _TEST_PALETTE, ArtSlot(id="some_slot"), 7)
     assert img1.tobytes() == img2.tobytes()
 
 
 @pytest.mark.parametrize("name", list(PROCEDURAL_SYNTHESIZERS))
 def test_every_synthesizer_returns_a_canvas_sized_rgba_image(name):
-    img = PROCEDURAL_SYNTHESIZERS[name](CANVAS, _TEST_PALETTE, "slot", 1)
+    img = PROCEDURAL_SYNTHESIZERS[name](CANVAS, _TEST_PALETTE, ArtSlot(id="slot"), 1)
     assert img.size == CANVAS
     assert img.mode == "RGBA"
 
 
 def test_every_synthesizer_produces_visually_distinct_output():
-    # Every pair of the seven shelf entries, run against the identical
-    # (canvas, palette, slot id, version), must NOT produce identical
-    # bytes — proving each is really its own pattern, not a copy in
-    # disguise.
-    outputs = {name: synth(CANVAS, _TEST_PALETTE, "vine_left", 3).tobytes()
+    # Every pair of shelf entries, run against the identical (canvas,
+    # palette, slot, version), must NOT produce identical bytes — proving
+    # each is really its own pattern, not a copy in disguise.
+    slot = ArtSlot(id="vine_left")
+    outputs = {name: synth(CANVAS, _TEST_PALETTE, slot, 3).tobytes()
               for name, synth in PROCEDURAL_SYNTHESIZERS.items()}
     names = list(outputs)
     for i, a in enumerate(names):
@@ -484,14 +489,14 @@ def test_every_synthesizer_produces_visually_distinct_output():
 
 
 def test_synthesizer_output_varies_by_slot_id_and_version_where_seeded():
-    # paper and speckle are explicitly seeded from (version, slot_id, name)
+    # paper and speckle are explicitly seeded from (version, slot id, name)
     # — two different slots (or two different versions of the same slot)
     # must not stamp identical noise.
     for name in ("paper", "speckle"):
         synth = PROCEDURAL_SYNTHESIZERS[name]
-        base = synth(CANVAS, _TEST_PALETTE, "slot_a", 1).tobytes()
-        other_slot = synth(CANVAS, _TEST_PALETTE, "slot_b", 1).tobytes()
-        other_version = synth(CANVAS, _TEST_PALETTE, "slot_a", 2).tobytes()
+        base = synth(CANVAS, _TEST_PALETTE, ArtSlot(id="slot_a"), 1).tobytes()
+        other_slot = synth(CANVAS, _TEST_PALETTE, ArtSlot(id="slot_b"), 1).tobytes()
+        other_version = synth(CANVAS, _TEST_PALETTE, ArtSlot(id="slot_a"), 2).tobytes()
         assert base != other_slot
         assert base != other_version
 
@@ -502,7 +507,8 @@ def test_legacy_texture_id_falls_back_to_grain_unchanged(tmp_path):
     # synthesizer directly by name.
     spec = _spec("full_bleed_art", art_prompts={}, texture=True)
     image, _ = compose(spec, tmp_path, canvas=CANVAS)
-    direct = PROCEDURAL_SYNTHESIZERS["grain"](CANVAS, spec.palette, "texture", spec.version)
+    direct = PROCEDURAL_SYNTHESIZERS["grain"](CANVAS, spec.palette,
+                                              ArtSlot(id="texture"), spec.version)
     # The texture layer is composited at low opacity/overlay over the
     # gradient background — recomposing just the grain slot in isolation
     # and comparing its own bytes (not the whole cover) isolates the claim.
@@ -516,7 +522,9 @@ def test_legacy_background_id_falls_back_to_gradient_unchanged():
     from docproof.cover.compose import _procedural_art
     spec = _spec("big_type", texture=False)
     art_by_id = {a.id: a for a in spec.art}
-    direct = PROCEDURAL_SYNTHESIZERS["gradient"](CANVAS, spec.palette, "background", spec.version)
+    direct = PROCEDURAL_SYNTHESIZERS["gradient"](CANVAS, spec.palette,
+                                                 ArtSlot(id="background"),
+                                                 spec.version)
     via_dispatch = _procedural_art(art_by_id["background"], CANVAS, spec.palette, spec.version)
     assert via_dispatch.tobytes() == direct.tobytes()
 

@@ -1,0 +1,17 @@
+# §15.6's roster line: "cool grade, color_dodge radial_glow, bloom —
+# scifi/urban." Grounded in docs/cover_template_research.md #4/#5 (scifi:
+# darkness lit by one saturated light source; the geometric-minimal school's
+# single glowing object) and #18 (bold graphic YA's electric accents on
+# night grounds). color_dodge is §15.1's "light pops" blend by name — the
+# glow reads as emitted light, not a pasted disc — and the vignette closes
+# the frame back down around it.
+name: midnight_neon
+describe: >-
+  Night city grade: cooled and crushed, one accent glow burning through
+  color_dodge, blooming highlights, edges falling to black. Scifi, urban.
+finish:
+  - adjust: {id: fx_cool,  op: grade, temperature: -0.35, contrast: 0.08}
+  - art:    {id: fx_glow,  procedural: radial_glow, anchor: [0.5, 0.30], opacity: 0.50, blend: color_dodge}
+  - adjust: {id: fx_bloom, op: bloom, strength: 0.50, radius: 0.035, threshold: 0.60}
+  - adjust: {id: fx_vign,  op: vignette, strength: 0.30}
+  - art:    {id: fx_grain, procedural: grain, opacity: 0.04, blend: overlay}

@@ -1712,3 +1712,381 @@ def test_recheck_leaves_slots_without_finishing_above_on_the_legacy_path(tmp_pat
     assert any("a layer drawn later covers this text" in w
                for w in report.warnings)
     assert not any("halved" in w for w in report.warnings)
+
+
+# ===========================================================================
+# Deep-stack wave, §15.4: layer-style effect stacks
+# ===========================================================================
+
+from docproof.cover.compose import _thumbnail  # noqa: E402
+from docproof.cover.effects import apply_effect_stack  # noqa: E402
+from docproof.cover.model import (Effect, Shadow, Stroke,  # noqa: E402
+                                  effect_from_shadow, effect_from_stroke)
+
+
+def _flat_light_spec(title: TextSlot, extra_art=(), palette=None) -> CoverSpec:
+    """A pale procedural ground with dark ink and no scrims — contrast
+    passes on the first measurement and the backdrop stddev stays tiny, so
+    the autopilot neither escalates nor invents a shadow: whatever the
+    stack under test paints is the ONLY styling in the render."""
+    art = [_art(id="background", fit="cover", transparent=False,
+                procedural="gradient"), *extra_art]
+    layers = [LayerRef(kind="art", ref=a.id) for a in art]
+    layers.append(LayerRef(kind="text", ref="title"))
+    return _spec(art=art, text=[title], layers=layers,
+                 palette=palette or _palette(background="#d8d8d8",
+                                             text="#111111"))
+
+
+def test_legacy_shadow_stroke_spec_without_effects_key_is_byte_identical(tmp_path):
+    """The §15.4 back-compat proof, PR1's golden shape: a spec whose JSON
+    predates `effects` entirely (shadow/stroke fields only) and today's
+    default construction render the same pixels and equal reports — the
+    empty-stack path IS the launch path, to the byte."""
+    title = _text(shadow=Shadow(dx=0.01, dy=0.01, blur=0.004, alpha=0.8),
+                  stroke=Stroke(width=0.003, color="#222222"))
+    modern = _flat_light_spec(title)
+    dump = modern.model_dump()
+    for slot in dump["text"]:
+        del slot["effects"]                     # a pre-wave archive
+    for slot in dump["art"]:
+        del slot["effects"]
+    legacy = CoverSpec.model_validate(dump)
+    assert all(t.effects == [] for t in legacy.text)
+    img_modern, report_modern = compose(modern, tmp_path, canvas=CANVAS)
+    img_legacy, report_legacy = compose(legacy, tmp_path, canvas=CANVAS)
+    assert img_modern.tobytes() == img_legacy.tobytes()
+    assert report_modern == report_legacy
+
+
+def test_fold_puts_shadow_at_the_front_and_stroke_at_the_back():
+    shadow = Shadow(dx=0.01, dy=0.02, blur=0.003, color="#112233", alpha=0.7)
+    stroke = Stroke(width=0.005, color="#445566")
+    slot = _text(shadow=shadow, stroke=stroke,
+                 effects=[Effect(kind="bevel", width=0.002)])
+    assert [e.kind for e in slot.effects] == ["drop_shadow", "bevel", "stroke"]
+    folded_shadow, _, folded_stroke = slot.effects
+    assert folded_shadow == effect_from_shadow(shadow)
+    assert (folded_shadow.dx, folded_shadow.dy, folded_shadow.blur,
+            folded_shadow.color, folded_shadow.alpha) == \
+        (0.01, 0.02, 0.003, "#112233", 0.7)
+    assert folded_stroke == effect_from_stroke(stroke)
+    assert folded_stroke.alpha == 1.0           # legacy strokes are opaque
+    # The legacy fields stay exactly as authored (the autopilot keeps
+    # reading/writing TextSlot.shadow).
+    assert slot.shadow == shadow
+    assert slot.stroke == stroke
+
+
+def test_fold_is_idempotent_across_dump_validate_round_trips():
+    slot = _text(shadow=Shadow(), stroke=Stroke(width=0.004),
+                 effects=[Effect(kind="inner_glow")])
+    once = [e.kind for e in slot.effects]
+    again = TextSlot.model_validate(slot.model_dump())
+    assert [e.kind for e in again.effects] == once
+    thrice = TextSlot.model_validate(again.model_dump())
+    assert [e.kind for e in thrice.effects] == once
+
+
+def test_fold_ignores_a_zero_width_stroke_and_an_empty_stack():
+    # width=0 is "off" in the legacy vocabulary — nothing to fold; and an
+    # empty stack folds nothing at all (that is the byte-identical legacy
+    # path's spec shape).
+    slot = _text(stroke=Stroke(width=0.0),
+                 effects=[Effect(kind="drop_shadow")])
+    assert [e.kind for e in slot.effects] == ["drop_shadow"]
+    untouched = _text(shadow=Shadow(), stroke=Stroke(width=0.004))
+    assert untouched.effects == []
+
+
+def test_stacked_double_shadow_renders_both_lobes(tmp_path):
+    """§15.4's whole reason to exist: the SAME kind twice in one stack,
+    both painted. Two hard (blur=0) drop shadows in two identifying colors
+    thrown to opposite sides — the render must carry red ink left of the
+    glyphs AND blue ink right of them, which no single-shadow model can
+    produce."""
+    title = _text(content="ASH", size_min=0.08, size_max=0.08,
+                  effects=[
+                      Effect(kind="drop_shadow", dx=-0.04, dy=0.0, blur=0.0,
+                             color="#ff0000", alpha=1.0),
+                      Effect(kind="drop_shadow", dx=0.04, dy=0.0, blur=0.0,
+                             color="#0000ff", alpha=1.0)])
+    spec = _flat_light_spec(title)
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    reds = blues = 0
+    for r, g, b in image.getdata():
+        if r > 180 and g < 90 and b < 90:
+            reds += 1
+        if b > 180 and g < 90 and r < 90:
+            blues += 1
+    assert reds > 50, "left (red) shadow lobe missing"
+    assert blues > 50, "right (blue) shadow lobe missing"
+
+
+def test_slot_shadow_folds_into_a_designed_stack_render(tmp_path):
+    # A slot that declares BOTH a legacy shadow and a designed stack draws
+    # the shadow exactly once, through the engine — red offset ink appears,
+    # and adding the same shadow explicitly at the front changes nothing.
+    shadow = Shadow(dx=0.03, dy=0.0, blur=0.0, color="#ff0000", alpha=1.0)
+    folded = _flat_light_spec(_text(content="ASH", size_min=0.08,
+                                    size_max=0.08, shadow=shadow,
+                                    effects=[Effect(kind="bevel")]))
+    explicit = _flat_light_spec(_text(content="ASH", size_min=0.08,
+                                      size_max=0.08, shadow=shadow,
+                                      effects=[effect_from_shadow(shadow),
+                                               Effect(kind="bevel")]))
+    img_folded, _ = compose(folded, tmp_path, canvas=CANVAS)
+    img_explicit, _ = compose(explicit, tmp_path, canvas=CANVAS)
+    assert img_folded.tobytes() == img_explicit.tobytes()
+    assert any(r > 180 and g < 90 and b < 90
+               for r, g, b in img_folded.getdata())
+
+
+def test_outer_glow_on_an_art_slot_is_the_rim_light(tmp_path):
+    """§15.5 names this outright: rim_light is NOT a synth — it is
+    outer_glow on the focal slot's own effects. The glow must land OUTSIDE
+    the cutout's silhouette (blurred alpha minus original) in the glow
+    ink, and the cutout's own interior pixels must stay its own color."""
+    _blob_png(tmp_path / "blob.png", fg=(60, 60, 60, 255))
+    focal = _art(id="focal", asset="blob.png", scale=0.5,
+                 effects=[Effect(kind="outer_glow", blur=0.02,
+                                 color="#00ff00", alpha=1.0)])
+    spec = _spec(
+        art=[_art(id="background", fit="cover", transparent=False,
+                  procedural="gradient"), focal],
+        text=[_text()],
+        layers=[LayerRef(kind="art", ref="background"),
+               LayerRef(kind="art", ref="focal"),
+               LayerRef(kind="text", ref="title")],
+        palette=_palette(background="#101820", text="#f5f1e8"))
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    from docproof.cover.compose import _fit_contain
+    source = Image.open(tmp_path / "blob.png").convert("RGBA")
+    positioned = _fit_contain(source, CANVAS, focal.anchor, focal.scale,
+                              focal.offset)
+    alpha = positioned.getchannel("A").load()
+    px = image.load()
+    glow_outside = interior_green = 0
+    for y in range(0, CANVAS[1], 2):
+        for x in range(0, CANVAS[0], 2):
+            r, g, b = px[x, y]
+            greenish = g > 120 and g > r + 40 and g > b + 40
+            if alpha[x, y] == 0 and greenish:
+                glow_outside += 1
+            if alpha[x, y] == 255 and greenish:
+                interior_green += 1
+    assert glow_outside > 20, "no rim light outside the silhouette"
+    assert interior_green == 0, "glow leaked inside the cutout"
+
+
+def test_drop_shadow_on_an_art_slot_paints_under_the_layer(tmp_path):
+    _blob_png(tmp_path / "blob.png", fg=(200, 50, 50, 255))
+    focal = _art(id="focal", asset="blob.png", scale=0.4,
+                 effects=[Effect(kind="drop_shadow", dx=0.06, dy=0.0,
+                                 blur=0.0, color="#000000", alpha=1.0)])
+    spec = _flat_light_spec(_text(), extra_art=[focal])
+    spec = _spec(art=spec.art, text=spec.text, layers=spec.layers,
+                 palette=_palette(background="#d8d8d8", text="#111111"))
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    from docproof.cover.compose import _fit_contain
+    source = Image.open(tmp_path / "blob.png").convert("RGBA")
+    positioned = _fit_contain(source, CANVAS, focal.anchor, focal.scale,
+                              focal.offset)
+    alpha = positioned.getchannel("A")
+    left, top, right, bottom = alpha.getbbox()
+    dx_px = round(0.06 * CANVAS[1])
+    mid_y = (top + bottom) // 2
+    # Just right of the blob's own edge, inside the shadow's offset copy:
+    # near-black. The blob's own center: still its red fill.
+    probe_x = min(CANVAS[0] - 1, right + dx_px // 2)
+    r, g, b = image.getpixel((probe_x, mid_y))
+    assert r < 60 and g < 60 and b < 60, "offset shadow not painted"
+    cr, cg, cb = image.getpixel(((left + right) // 2, mid_y))
+    assert cr > 150 and cg < 90, "the layer's own fill was disturbed"
+
+
+def test_foil_title_keeps_legible_ink_in_the_100px_thumb(tmp_path):
+    """The wave's acceptance item (d): gradient_overlay with metallic
+    stops + texture_overlay on the title — the foil — must survive the
+    Amazon-search-result thumbnail. Nonzero luminance contrast inside the
+    title zone at 100px, not aesthetics."""
+    title = _text(content="GILDED", size_min=0.09, size_max=0.09,
+                  effects=[
+                      Effect(kind="gradient_overlay", angle=90.0,
+                             stops=["#7a5c1e", "#f9e79b", "#7a5c1e"]),
+                      Effect(kind="texture_overlay",
+                             texture_file="canvas_weave",
+                             blend="multiply", opacity=0.5)])
+    spec = _flat_light_spec(title, palette=_palette(background="#14100a",
+                                                    text="#f5f1e8"))
+    image, _ = compose(spec, tmp_path, canvas=CANVAS)
+    thumb = _thumbnail(image, 100)
+    zone = title.zone
+    crop = thumb.convert("L").crop((
+        round(zone.x * thumb.width), round(zone.y * thumb.height),
+        round((zone.x + zone.w) * thumb.width),
+        round((zone.y + zone.h) * thumb.height)))
+    lo, hi = crop.getextrema()
+    assert hi - lo > 40, f"foil title flattened at thumb size ({lo}..{hi})"
+
+
+def test_gradient_overlay_inks_only_within_the_glyph_alpha():
+    # Unit-level: the stack path never spills the ramp outside the shape.
+    layer = Image.new("RGBA", (60, 60), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).rectangle((20, 20, 39, 39), fill=(200, 200, 200, 255))
+    out = apply_effect_stack(
+        layer, [Effect(kind="gradient_overlay", stops=["#ff0000", "#0000ff"])],
+        _palette(), (60, 60))
+    assert out.getpixel((5, 5))[3] == 0             # outside: still empty
+    top = out.getpixel((30, 21))
+    bottom = out.getpixel((30, 38))
+    assert top[0] > 150 and bottom[2] > 150         # ramp runs dark-to-light
+
+
+def test_effect_stack_on_an_empty_layer_is_a_no_op():
+    blank = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    out = apply_effect_stack(
+        blank, [Effect(kind="outer_glow"), Effect(kind="stroke")],
+        _palette(), (40, 40))
+    assert out.tobytes() == blank.tobytes()
+
+
+def test_under_and_over_tables_cover_every_effect_kind_exactly_once():
+    # The BLEND_TABLE/BLEND_MODES lockstep pattern, §15.4 edition: the
+    # engine's paint-order split and the model's kind Literal can never
+    # drift apart.
+    from typing import get_args
+    from docproof.cover.effects import _OVER_EFFECT_OPS, _UNDER_EFFECT_OPS
+    kinds = set(get_args(Effect.model_fields["kind"].annotation))
+    assert set(_UNDER_EFFECT_OPS) | set(_OVER_EFFECT_OPS) == kinds
+    assert not set(_UNDER_EFFECT_OPS) & set(_OVER_EFFECT_OPS)
+
+
+def test_contact_guard_leaves_fx_layers_above_the_text(tmp_path):
+    """The §15.6 integration rule the live wiring tripped over: a
+    finishing layer covering the title's ink 100% is BY DESIGN ("appended
+    above the whole stack, text included"), so the v2.2 text-contact guard
+    must not reorder it below the text or warn — legibility under
+    finishing belongs to the §15.7 re-check."""
+    fx = ArtSlot(id="fx_wash", fit="cover", procedural="grain",
+                 opacity=0.05, blend="overlay")
+    spec = _spec(
+        art=[_art(id="background", fit="cover", transparent=False,
+                  procedural="gradient"), fx],
+        text=[_text()],
+        layers=[LayerRef(kind="art", ref="background"),
+               LayerRef(kind="text", ref="title"),
+               LayerRef(kind="art", ref="fx_wash")],
+        palette=_palette(background="#d8d8d8", text="#111111"))
+    _, report = compose(spec, tmp_path, canvas=CANVAS)
+    assert not any("fx_wash" in w and "on top of it" in w
+                   for w in report.warnings)
+    assert "title<-fx_wash" not in report.occlusion
+
+
+# ===========================================================================
+# Deep-stack wave, §15.5: the light & atmosphere procedural bank
+# ===========================================================================
+
+from docproof.cover.compose import PROCEDURAL_SYNTHESIZERS  # noqa: E402
+
+_ATMO_SYNTHS = ("radial_glow", "light_leak", "fog_gradient", "rays",
+                "bokeh", "dust", "scratches", "stars")
+
+# §15.5's ink rule, as data: which palette role each synth's color derives
+# from — glow/leak/rays/bokeh/stars from accent, fog from background,
+# dust/scratches near the text color.
+_ATMO_ROLE = {"radial_glow": "accent", "light_leak": "accent",
+              "rays": "accent", "bokeh": "accent", "stars": "accent",
+              "fog_gradient": "background", "dust": "text",
+              "scratches": "text"}
+
+
+@pytest.mark.parametrize("name", _ATMO_SYNTHS)
+def test_atmosphere_synth_is_deterministic_and_canvas_sized(name):
+    synth = PROCEDURAL_SYNTHESIZERS[name]
+    slot = ArtSlot(id="mood", procedural=name)
+    a = synth(CANVAS, _palette(), slot, 3)
+    b = synth(CANVAS, _palette(), slot, 3)
+    assert a.tobytes() == b.tobytes()
+    assert a.size == CANVAS and a.mode == "RGBA"
+
+
+@pytest.mark.parametrize("name", _ATMO_SYNTHS)
+def test_atmosphere_synth_ink_tracks_exactly_its_documented_role(name):
+    """Palette-coherence (§15.5): re-inking the synth's documented role
+    changes the pixels; re-inking `primary` — which NO atmosphere synth
+    reads — changes nothing. Together: the ink comes from the palette, and
+    from the documented role alone."""
+    synth = PROCEDURAL_SYNTHESIZERS[name]
+    slot = ArtSlot(id="mood", procedural=name)
+    base = synth(CANVAS, _palette(), slot, 1).tobytes()
+    swapped = synth(CANVAS, _palette(**{_ATMO_ROLE[name]: "#3355aa"}),
+                    slot, 1).tobytes()
+    unrelated = synth(CANVAS, _palette(primary="#3355aa"), slot, 1).tobytes()
+    assert base != swapped
+    assert base == unrelated
+
+
+def test_radial_glow_centers_on_the_anchor_and_scales_its_extent():
+    synth = PROCEDURAL_SYNTHESIZERS["radial_glow"]
+    anchored = synth(CANVAS, _palette(),
+                     ArtSlot(id="mood", anchor=[0.25, 0.25]), 1)
+    alpha = anchored.getchannel("A")
+    w, h = CANVAS
+    assert alpha.getpixel((round(0.25 * w), round(0.25 * h))) > \
+        alpha.getpixel((round(0.85 * w), round(0.85 * h))) + 100
+    small = synth(CANVAS, _palette(), ArtSlot(id="mood", scale=0.4), 1)
+    big = synth(CANVAS, _palette(), ArtSlot(id="mood", scale=1.4), 1)
+    assert small.tobytes() != big.tobytes()
+    # A wider glow carries strictly more total light.
+    assert ImageStat.Stat(big.getchannel("A")).sum[0] > \
+        ImageStat.Stat(small.getchannel("A")).sum[0]
+
+
+def test_fog_gradient_band_follows_the_anchor_y():
+    synth = PROCEDURAL_SYNTHESIZERS["fog_gradient"]
+    w, h = CANVAS
+    high = synth(CANVAS, _palette(), ArtSlot(id="mood", anchor=[0.5, 0.2]), 1)
+    low = synth(CANVAS, _palette(), ArtSlot(id="mood", anchor=[0.5, 0.8]), 1)
+    assert high.getchannel("A").getpixel((w // 2, round(0.2 * h))) > 100
+    assert high.getchannel("A").getpixel((w // 2, round(0.8 * h))) < 20
+    assert low.getchannel("A").getpixel((w // 2, round(0.8 * h))) > 100
+
+
+def test_seeded_atmosphere_synths_vary_by_slot_and_version():
+    # The _synth_seed discipline (§15.5): same spelling as speckle's own
+    # test, for the four seeded newcomers.
+    for name in ("light_leak", "bokeh", "dust", "scratches", "stars"):
+        synth = PROCEDURAL_SYNTHESIZERS[name]
+        base = synth(CANVAS, _palette(), ArtSlot(id="slot_a"), 1).tobytes()
+        assert base != synth(CANVAS, _palette(), ArtSlot(id="slot_b"), 1).tobytes()
+        assert base != synth(CANVAS, _palette(), ArtSlot(id="slot_a"), 2).tobytes()
+
+
+def test_autopilot_auto_shadow_composes_with_a_designed_stack(tmp_path):
+    """§15.4's last clause: the busy-backdrop auto-Shadow keeps writing
+    TextSlot.shadow, and the fold makes that COMPOSABLE with a designed
+    stack — a slot that brought its own bevel gets the autopilot's default
+    shadow prepended, byte-identically to declaring that same Shadow()
+    explicitly (test_busy_backdrop_auto_adds_the_default_shadow's own
+    equality, re-proven on the engine path)."""
+    busy = Image.new("RGB", CANVAS, (0, 0, 0))
+    px = busy.load()
+    for y in range(0, CANVAS[1], 4):
+        for x in range(0, CANVAS[0], 4):
+            px[x, y] = (255, 255, 255)   # sparse dots: stddev high, mean dark
+    busy.convert("RGBA").save(tmp_path / "busy.png")
+
+    def make(shadow):
+        title = _text(shadow=shadow, effects=[Effect(kind="bevel")])
+        art = [_art(id="background", fit="cover", transparent=False,
+                    asset="busy.png")]
+        return _spec(art=art, text=[title],
+                     layers=[LayerRef(kind="art", ref="background"),
+                            LayerRef(kind="text", ref="title")])
+
+    auto, report = compose(make(None), tmp_path, canvas=CANVAS)
+    explicit, _ = compose(make(Shadow()), tmp_path, canvas=CANVAS)
+    assert auto.tobytes() == explicit.tobytes()
+    assert report.warnings == []

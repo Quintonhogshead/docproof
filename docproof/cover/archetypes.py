@@ -31,6 +31,7 @@ import yaml
 from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
                       field_validator, model_validator)
 
+from .recipes import RECIPES
 from .textures import TEXTURES
 
 # docproof/cover/archetypes.py -> docproof/cover -> docproof -> package root,
@@ -76,6 +77,33 @@ def _hex(value: str) -> str:
     if not _HEX_RE.match(value):
         raise ValueError(f"{value!r} is not a #rrggbb hex color")
     return value
+
+
+# The five PaletteRole names, mirrored from docproof.cover.model rather than
+# imported for the same reason this whole module mirrors Zone/Shadow/Stroke
+# (see the module docstring) — what ArchetypeEffect's role-or-hex color
+# references validate against.
+_ROLE_NAMES: frozenset[str] = frozenset(
+    {"background", "primary", "accent", "text", "scrim"})
+
+
+def _role_or_hex(value: str) -> str:
+    """Mirrors docproof.cover.model._validate_role_or_hex exactly: a color
+    reference is either one of the five palette role names or a literal
+    #rrggbb hex, and anything else fails at load with both legal shapes
+    named."""
+    if value in _ROLE_NAMES or _HEX_RE.match(value):
+        return value
+    raise ValueError(
+        f"{value!r} is neither a palette role "
+        f"({', '.join(sorted(_ROLE_NAMES))}) nor a #rrggbb hex color")
+
+
+# Mirrors docproof.cover.model.FX_PREFIX (§15.6): reserved for
+# recipe-expanded layers, so a hand-authored archetype slot may never wear
+# it — ArchetypeArt._valid_id refuses it at load, which is what keeps a
+# recipe's expansion collision-free by construction.
+_FX_PREFIX = "fx_"
 
 
 def _scatter_range(value: int) -> int:
@@ -153,6 +181,66 @@ class ArchetypeStroke(BaseModel):
         return self
 
 
+class ArchetypeEffect(BaseModel):
+    """Mirrors docproof.cover.model.Effect's fields, defaults, and
+    validation exactly (§15.4) — one entry in a designed layer-style stack
+    an archetype bakes in (the thriller title's stacked double shadow);
+    build_spec passes each straight into a real Effect. Same forgiving-
+    fields rule: params the chosen `kind` never reads are validated but
+    inert."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["drop_shadow", "inner_shadow", "outer_glow", "inner_glow",
+                  "bevel", "gradient_overlay", "texture_overlay", "stroke"]
+    dx: float = 0.0
+    dy: float = 0.004
+    blur: float = Field(default=0.006, ge=0.0)
+    color: str = ""
+    alpha: float = Field(default=0.55, ge=0.0, le=1.0)
+    width: float = Field(default=0.004, ge=0.0)
+    stops: list[str] = Field(default_factory=list)
+    angle: float = 90.0
+    texture_file: str = ""
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("color")
+    @classmethod
+    def _valid_color(cls, value: str) -> str:
+        return _role_or_hex(value) if value else value
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        if len(value) not in (0, 2, 3):
+            raise ValueError(
+                f"stops must have 2 or 3 entries (or be empty when unused), "
+                f"got {len(value)}")
+        return [_role_or_hex(stop) for stop in value]
+
+    @field_validator("texture_file")
+    @classmethod
+    def _known_texture(cls, value: str) -> str:
+        if value and value not in TEXTURES:
+            raise ValueError(
+                f"texture_file {value!r} is not on the shelf — known "
+                f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
+        return value
+
+    @model_validator(mode="after")
+    def _kind_requirements(self) -> ArchetypeEffect:
+        if self.kind == "gradient_overlay" and not self.stops:
+            raise ValueError(
+                "a gradient_overlay effect needs 2 or 3 stops (role names "
+                "or #rrggbb hexes, dark to light)")
+        if self.kind == "texture_overlay" and not self.texture_file:
+            raise ValueError(
+                "a texture_overlay effect needs a texture_file from the "
+                f"shelf ({', '.join(sorted(TEXTURES)) or 'none stocked'})")
+        return self
+
+
 class ArchetypeArt(BaseModel):
     """One art slot an archetype declares. `generatable` says whether the
     art-direction call is asked to write an image prompt for this slot at
@@ -213,12 +301,23 @@ class ArchetypeArt(BaseModel):
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
                         "canvas", "speckle", "rule_frame", "frame_hairline",
                         "frame_thickthin", "frame_corners", "frame_deco",
-                        "frame_octagon"] = ""
+                        "frame_octagon", "radial_glow", "light_leak",
+                        "fog_gradient", "rays", "bokeh", "dust", "scratches",
+                        "stars"] = ""
+    # Mirrors docproof.cover.model.ArtSlot.effects exactly (§15.4): a
+    # designed layer-style stack this archetype bakes onto the slot.
+    effects: list[ArchetypeEffect] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
     def _valid_id(cls, value: str) -> str:
-        return _validate_slot_id(value)
+        _validate_slot_id(value)
+        if value.startswith(_FX_PREFIX):
+            raise ValueError(
+                f"{value!r}: the {_FX_PREFIX!r} prefix is reserved for "
+                f"recipe-expanded finishing layers (§15.6) — a hand-authored "
+                f"archetype slot may not use it")
+        return value
 
     @field_validator("scatter")
     @classmethod
@@ -286,6 +385,13 @@ class ArchetypeText(BaseModel):
     optional: bool = False
     shadow: ArchetypeShadow | None = None
     stroke: ArchetypeStroke | None = None
+    # Mirrors docproof.cover.model.TextSlot.effects exactly (§15.4): a
+    # designed layer-style stack for this slot (the thriller retrofit's
+    # stacked double title shadow). The runtime fold — legacy shadow to the
+    # stack's front, stroke to its back when this list is non-empty —
+    # happens in TextSlot's own validator once build_spec converts these,
+    # never here.
+    effects: list[ArchetypeEffect] = Field(default_factory=list)
     # "fill" is the launch default everywhere; knockout/art_fill (§7.4a) are
     # archetype/revision territory — no Direction field sets this, so the
     # only way a concept ever gets one is an archetype that presets it.
@@ -340,6 +446,27 @@ class Archetype(BaseModel):
     # center axis never reads it at all.
     axis: Literal["center", "left", "right"] | None = None
     axis_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    # The finishing recipe this template wears BY DEFAULT (§15.6) — applied
+    # by build_spec whenever the direction stays silent (recipe=""); a
+    # direction's own non-"" pick always wins. "" (the default, and every
+    # un-retrofitted archetype's permanent state) means no default
+    # finishing at all: the no-recipe path renders byte-identical to
+    # pre-wave pixels, which is §15.0 constraint 2 for this field.
+    recipe: str = ""
+
+    @field_validator("recipe")
+    @classmethod
+    def _known_recipe(cls, value: str) -> str:
+        """The archetype-side twin of Direction.recipe's closed Literal —
+        checked against the same recipes.RECIPES shelf at load time, so a
+        typo'd default fails the build loudly (this module's whole "core
+        inventory" philosophy) instead of expanding to nothing the first
+        time a brief picks the template."""
+        if value and value not in RECIPES:
+            raise ValueError(
+                f"recipe {value!r} is not on the shelf — known recipes: "
+                f"{', '.join(sorted(RECIPES)) or 'none'}")
+        return value
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Archetype:
@@ -563,7 +690,7 @@ def describe_archetypes(genre: str | None = None) -> str:
 
 
 __all__ = ["ARCHETYPES", "ARCHETYPES_DIR", "SUBJECT_KEYS", "Archetype",
-          "ArchetypeArt", "ArchetypeError", "ArchetypeScrim",
-          "ArchetypeShadow", "ArchetypeStroke", "ArchetypeText",
-          "ArchetypeZone", "describe_archetypes", "load_archetypes",
-          "zone_px"]
+          "ArchetypeArt", "ArchetypeEffect", "ArchetypeError",
+          "ArchetypeScrim", "ArchetypeShadow", "ArchetypeStroke",
+          "ArchetypeText", "ArchetypeZone", "describe_archetypes",
+          "load_archetypes", "zone_px"]

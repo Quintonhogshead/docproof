@@ -115,6 +115,7 @@ config = ["*.yaml"]
 # Cover Studio's archetype templates (docproof/cover/archetypes.py).
 "config.cover" = ["*.yaml"]
 "config.cover.archetypes" = ["*.yaml"]
+"config.cover.recipes" = ["*.yaml"]
 # Cover Studio's stocked texture shelf (docproof/cover/textures.py, v2.2 wave).
 "config.cover.textures" = ["*.png", "*.jpg"]
 # Cover Studio's expansion font shelf: TTFs + per-family license texts +

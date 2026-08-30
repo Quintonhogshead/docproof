@@ -26,6 +26,7 @@ from pydantic import (BaseModel, ConfigDict, Field, create_model,
 
 from .archetypes import Archetype
 from .fonts import FAMILIES
+from .recipes import RECIPES
 from .textures import TEXTURES
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -125,7 +126,13 @@ PROCEDURAL_KINDS: tuple[str, ...] = (
     # v2.2 wave, deliverable 7: the frame family — rule_frame's siblings, all
     # parameterized off the same inset constants (see compose._frame_inner_rect).
     "frame_hairline", "frame_thickthin", "frame_corners", "frame_deco",
-    "frame_octagon")
+    "frame_octagon",
+    # Deep-stack wave, §15.5: the light & atmosphere bank — ordinary art
+    # slots (usually screen/overlay/soft_light at low opacity), zero
+    # per-synth params by design: anchor = center/origin/band-y, scale =
+    # extent, opacity/blend as ever, inks derived from the palette only.
+    "radial_glow", "light_leak", "fog_gradient", "rays", "bokeh", "dust",
+    "scratches", "stars")
 
 
 def _validate_scatter(value: int) -> int:
@@ -241,6 +248,116 @@ class Stroke(BaseModel):
         return _validate_hex(value)
 
 
+class Effect(BaseModel):
+    """One entry in a layer-style stack (deep-stack wave, §15.4): the
+    ordered, repeatable generalization of "one Shadow + one Stroke, text
+    only" to both TextSlot and ArtSlot. The SAME kind may repeat — a tight
+    dark drop shadow under a wide soft one is the pro type move this model
+    exists for.
+
+    Paint-order semantics are FIXED, not per-effect: the engine
+    (effects.apply_effect_stack) splits a stack into *under* effects
+    (drop_shadow, outer_glow — painted beneath the layer's own pixels, in
+    stack order) and *over* effects (inner_shadow, inner_glow, bevel,
+    gradient_overlay, texture_overlay, stroke — applied against the layer's
+    own alpha, after the fill, in stack order; stroke is the one over
+    effect whose ring extends past that alpha, exactly like the legacy
+    Pillow stroke it folds from).
+
+    Params are FLAT fields, the AdjustLayer forgiving-fields rule verbatim
+    (strict-schema wire: no dicts, no tuples; fields the chosen `kind`
+    never reads are validated but inert, so a patch edit changing `kind`
+    can never strand the spec). `color=""` means the kind-appropriate
+    default, resolved at render time in effects.py — shadows #000000,
+    glows the accent role — so the spec stays palette-tracking unless a
+    hand says otherwise."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["drop_shadow", "inner_shadow", "outer_glow", "inner_glow",
+                  "bevel", "gradient_overlay", "texture_overlay", "stroke"]
+    # -- flat params, same forgiving-fields rule as AdjustLayer ---------------
+    dx: float = 0.0                    # shadows: fraction of canvas HEIGHT
+    dy: float = 0.004
+    blur: float = Field(default=0.006, ge=0.0)       # shadows/glows
+    color: str = ""                    # role or hex; "" = kind-appropriate
+                                       # default (shadows #000000, glows the
+                                       # accent role — see effects.py)
+    alpha: float = Field(default=0.55, ge=0.0, le=1.0)
+    width: float = Field(default=0.004, ge=0.0)      # stroke/bevel depth,
+                                       # fraction of canvas height
+    stops: list[str] = Field(default_factory=list)   # gradient_overlay:
+                                       # 2-3 role-or-hex stops
+    angle: float = 90.0                # gradient_overlay ramp direction
+    texture_file: str = ""             # texture_overlay: a TEXTURES shelf
+                                       # name (validated below)
+    # §15.1's full table; read by the two overlays only.
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    opacity: float = Field(default=1.0, ge=0.0, le=1.0)   # overlays only
+
+    @field_validator("color")
+    @classmethod
+    def _valid_color(cls, value: str) -> str:
+        return _validate_role_or_hex(value) if value else value
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        """AdjustLayer._valid_stops' exact shape rule, for the exact same
+        reason: 0 entries when unused, 2-3 when a ramp, each a role or
+        hex — a single stop is a constant pretending to be a gradient."""
+        if len(value) not in (0, 2, 3):
+            raise ValueError(
+                f"stops must have 2 or 3 entries (or be empty when unused), "
+                f"got {len(value)}")
+        return [_validate_role_or_hex(stop) for stop in value]
+
+    @field_validator("texture_file")
+    @classmethod
+    def _known_texture(cls, value: str) -> str:
+        """Mirrors ArtSlot._known_texture exactly — an unknown plate name
+        fails loudly at spec time, never as a silently textureless title
+        three steps later in the effects engine."""
+        if value and value not in TEXTURES:
+            raise ValueError(
+                f"texture_file {value!r} is not on the shelf — known "
+                f"textures: {', '.join(sorted(TEXTURES)) or 'none'}")
+        return value
+
+    @model_validator(mode="after")
+    def _kind_requirements(self) -> Effect:
+        """AdjustLayer._op_requirements' pattern: the two kinds with a
+        REQUIRED input fail at spec time rather than rendering something
+        invented — a gradient_overlay with no stops has no ramp, a
+        texture_overlay with no plate has no texture. Every other kind's
+        params have workable defaults."""
+        if self.kind == "gradient_overlay" and not self.stops:
+            raise ValueError(
+                "a gradient_overlay effect needs 2 or 3 stops (role names "
+                "or #rrggbb hexes, dark to light)")
+        if self.kind == "texture_overlay" and not self.texture_file:
+            raise ValueError(
+                "a texture_overlay effect needs a texture_file from the "
+                f"shelf ({', '.join(sorted(TEXTURES)) or 'none stocked'})")
+        return self
+
+
+def effect_from_shadow(shadow: Shadow) -> Effect:
+    """The legacy Shadow spelled as a stack entry — §15.4's fold, in one
+    place, so TextSlot's validator and compose's autopilot auto-Shadow
+    prepend can never disagree about what a folded shadow looks like."""
+    return Effect(kind="drop_shadow", dx=shadow.dx, dy=shadow.dy,
+                  blur=shadow.blur, color=shadow.color, alpha=shadow.alpha)
+
+
+def effect_from_stroke(stroke: Stroke) -> Effect:
+    """The legacy Stroke as a stack entry. alpha=1.0 explicitly: the Pillow
+    stroke this folds from is fully opaque, while Effect's own alpha
+    default (0.55) is tuned for shadows."""
+    return Effect(kind="stroke", width=stroke.width, color=stroke.color,
+                  alpha=1.0)
+
+
 class TextSlot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -258,6 +375,12 @@ class TextSlot(BaseModel):
     color_role: PaletteRole = PaletteRole.text
     shadow: Shadow | None = None
     stroke: Stroke | None = None
+    # The ordered layer-style stack (§15.4). Empty — every pre-wave spec —
+    # means compose reads the legacy shadow/stroke fields EXACTLY as it
+    # always has (byte-identical path); non-empty means _fold_shadow_stroke
+    # below has already folded those two fields into this stack, and the
+    # effects engine is the single code path that draws it.
+    effects: list[Effect] = Field(default_factory=list)
     optional: bool = False                     # subtitle/series render only if content
     # "fill" (default) is typeset.draw_text's normal ink-colored glyphs.
     # "knockout"/"art_fill" (§7.4a) are archetype/revision territory, never
@@ -289,6 +412,33 @@ class TextSlot(BaseModel):
             raise ValueError(
                 f"size_min ({self.size_min}) exceeds size_max "
                 f"({self.size_max})")
+        return self
+
+    @model_validator(mode="after")
+    def _fold_shadow_stroke(self) -> TextSlot:
+        """§15.4's back-compat fold, ArtSlot._fold_mask_from's exact shape:
+        when `effects` is non-empty, the legacy shadow folds onto the FRONT
+        of the stack (painted first — deepest under-effect) and the legacy
+        stroke onto the BACK (painted last — outermost over-effect), so
+        compose has exactly one code path through the effects engine. Both
+        legacy fields are left exactly as authored (archived specs and the
+        autopilot, which keeps writing TextSlot.shadow, read them
+        unchanged), and the fold is idempotent — a re-validation sees the
+        folded entry already in place and changes nothing, which is what
+        keeps a spec revalidating cleanly on every dump/validate round
+        trip. An EMPTY stack folds nothing at all: that is the pre-wave
+        spec shape, and compose's legacy path must keep reading the two
+        fields directly, byte-identically."""
+        if not self.effects:
+            return self
+        if self.shadow is not None:
+            folded = effect_from_shadow(self.shadow)
+            if self.effects[0] != folded:
+                self.effects.insert(0, folded)
+        if self.stroke is not None and self.stroke.width > 0:
+            folded = effect_from_stroke(self.stroke)
+            if self.effects[-1] != folded:
+                self.effects.append(folded)
         return self
 
 
@@ -422,7 +572,9 @@ class ArtSlot(BaseModel):
     procedural: Literal["", "gradient", "grain", "paper", "halftone",
                         "canvas", "speckle", "rule_frame", "frame_hairline",
                         "frame_thickthin", "frame_corners", "frame_deco",
-                        "frame_octagon"] = ""
+                        "frame_octagon", "radial_glow", "light_leak",
+                        "fog_gradient", "rays", "bokeh", "dust", "scratches",
+                        "stars"] = ""
 
     # -- effects rack (§7.4a) — archetype/revision territory; a fresh
     # art-direction call only ever sets `treatment` (via ArtPrompt, folded in
@@ -471,6 +623,12 @@ class ArtSlot(BaseModel):
     # breaking around an emblem that overlaps it. "" = off. See
     # compose._apply_frame_notches.
     notch_for: str = ""
+    # The ordered layer-style stack (§15.4), same model and same fixed
+    # paint-order semantics as TextSlot.effects — a rim-lit cutout is
+    # outer_glow HERE, on the focal slot itself (§15.5: one mechanism, not
+    # a synth). Applied by compose after fit/placement/treatment/masks and
+    # before compositing, so an effect always sees the slot's final shape.
+    effects: list[Effect] = Field(default_factory=list)
 
     @field_validator("id")
     @classmethod
@@ -896,6 +1054,12 @@ class RenderReport(BaseModel):
 # hoped for.
 _FONT_FAMILY_NAMES: tuple[str, ...] = tuple(FAMILIES)
 
+# The recipe shelf's names, fixed at import time, with "" (no recipe) always
+# first — the same closed-Literal-via-create_model trick as the font roster
+# above (§15.6): a finishing stack that does not exist cannot be picked on
+# the wire, schema-enforced rather than merely hoped for.
+_RECIPE_NAMES: tuple[str, ...] = ("", *sorted(RECIPES))
+
 
 class ArtPrompt(BaseModel):
     """One generatable art slot's image prompt, as a typed pair rather than a
@@ -947,6 +1111,11 @@ Direction = create_model(
     author_font=(Literal[*_FONT_FAMILY_NAMES], ...),
     art_prompts=(list[ArtPrompt], ...),         # one entry per generatable slot
     texture=(bool, ...),
+    # The finishing stack this concept wants (§15.6), by name from the
+    # closed shelf — "" (the default) stays silent, letting the archetype's
+    # own default `recipe:` apply; a non-"" pick always wins over it.
+    # build_spec expands the choice into real fx_-prefixed spec layers.
+    recipe=(Literal[*_RECIPE_NAMES], ""),
     __validators__={
         "_art_prompts_dict_ok": field_validator(
             "art_prompts", mode="before")(_coerce_art_prompts),
@@ -996,6 +1165,57 @@ class JobState(BaseModel):
 
 
 # -- the merge: archetype + direction + brief -> spec ------------------------
+
+# Reserved for recipe-expanded layers (§15.6) — hand-authored archetype
+# slots may never carry it (archetypes.py refuses at load), purely so
+# humans and the judge can see at a glance which layers are finishing, and
+# so compose's §15.7 attenuation ladder (keyed on this exact prefix) only
+# ever dims layers a recipe put there.
+FX_PREFIX = "fx_"
+
+
+def _expand_recipe(name: str) -> tuple[list[ArtSlot], list[AdjustLayer], list[LayerRef]]:
+    """One recipe's finish entries as real spec layers (§15.6: expansion,
+    not indirection — the spec stays fully self-contained, the archival
+    guarantee never depends on the recipe file existing later, and a §6.2
+    patch edit reaches every expanded layer as an ordinary one-field edit).
+    Each entry is instantiated through the real ArtSlot/AdjustLayer models
+    — THIS is the deep validation recipes.py's shallow loader deliberately
+    leaves to build_spec — and every id must wear the reserved FX_PREFIX.
+    Returns (art slots, adjust layers, layer refs in stack order); all
+    empty for "" or a name that has somehow left the shelf (the closed
+    Literal makes the latter unreachable from the wire — defensive, the
+    compose dangling-reference posture)."""
+    recipe = RECIPES.get(name) if name else None
+    if not recipe:
+        return [], [], []
+    art: list[ArtSlot] = []
+    adjust: list[AdjustLayer] = []
+    refs: list[LayerRef] = []
+    for i, entry in enumerate(recipe["finish"]):
+        kind, fields = next(iter(entry.items()))
+        try:
+            if kind == "art":
+                slot = ArtSlot(**fields)
+                art.append(slot)
+                refs.append(LayerRef(kind="art", ref=slot.id))
+                layer_id = slot.id
+            else:   # "adjust" — the shallow loader admits no third kind
+                layer = AdjustLayer(**fields)
+                adjust.append(layer)
+                refs.append(LayerRef(kind="adjust", ref=layer.id))
+                layer_id = layer.id
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"recipe {name!r} finish[{i}] does not validate as "
+                f"a{'n art slot' if kind == 'art' else 'n adjust layer'}: "
+                f"{e}") from e
+        if not layer_id.startswith(FX_PREFIX):
+            raise ValueError(
+                f"recipe {name!r} finish[{i}] id {layer_id!r} must carry "
+                f"the reserved {FX_PREFIX!r} prefix")
+    return art, adjust, refs
+
 
 def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> CoverSpec:
     """Merge one art-direction concept into its chosen archetype's template.
@@ -1052,7 +1272,8 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             texture_file=slot.texture_file,
             texture_fit=slot.texture_fit,
             notch_for=slot.notch_for,
-            procedural=slot.procedural))
+            procedural=slot.procedural,
+            effects=[Effect(**e.model_dump()) for e in slot.effects]))
 
     scrims = [ScrimSpec(kind=s.kind, protects=s.protects, strength=s.strength)
              for s in archetype.scrims]
@@ -1074,6 +1295,7 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             size_max=slot.size_max,
             shadow=Shadow(**slot.shadow.model_dump()) if slot.shadow else None,
             stroke=Stroke(**slot.stroke.model_dump()) if slot.stroke else None,
+            effects=[Effect(**e.model_dump()) for e in slot.effects],
             optional=slot.optional,
             mode=slot.mode,
             mask_from=slot.mask_from))
@@ -1090,6 +1312,19 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
         else:
             layers.append(LayerRef(kind="text", ref=ref))
 
+    # The finishing recipe (§15.6): the direction's pick wins; "" — the
+    # wire's "stayed silent" — falls back to the archetype's own default,
+    # so a template can bake its shelf convention in (big_type wants
+    # quiet_literary) while any concept may still choose differently. The
+    # expansion lands ABOVE the whole stack, text included: real ArtSlot/
+    # AdjustLayer entries appended to art/adjust and their LayerRefs at the
+    # top of the z-order, so the spec archives self-contained and §6.2
+    # patch edits reach every fx_ layer as an ordinary field.
+    recipe_art, recipe_adjust, recipe_refs = _expand_recipe(
+        direction.recipe or archetype.recipe)
+    art.extend(recipe_art)
+    layers.extend(recipe_refs)
+
     # The axis declaration (§15.10) rides from archetype to spec verbatim —
     # None stays None (pre-wave behavior, no snap pass) — so revisions can
     # change it per cover while an archetype that never declared one keeps
@@ -1100,15 +1335,16 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
         concept_name=direction.concept_name,
         rationale=direction.rationale,
         palette=direction.palette,
-        art=art, scrims=scrims, text=text, layers=layers,
+        art=art, adjust=recipe_adjust, scrims=scrims, text=text, layers=layers,
         axis=archetype.axis, axis_x=archetype.axis_x)
 
 
 __all__ = [
-    "ART_SLOT_IDS", "ART_TREATMENTS", "BLEND_MODES", "PROCEDURAL_KINDS",
-    "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke",
+    "ART_SLOT_IDS", "ART_TREATMENTS", "BLEND_MODES", "FX_PREFIX",
+    "PROCEDURAL_KINDS",
+    "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke", "Effect",
     "GradientMask", "MaskSpec", "AdjustLayer",
     "TextSlot", "ArtSlot", "ScrimSpec", "LayerRef", "CoverSpec",
     "RenderReport", "Direction", "Directions", "ConceptState", "JobState",
-    "build_spec",
+    "build_spec", "effect_from_shadow", "effect_from_stroke",
 ]

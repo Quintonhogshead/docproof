@@ -1,0 +1,16 @@
+# §15.6's roster line: "whisper grain, −saturation, gentle vignette — the
+# tasteful default." Grounded in docs/cover_template_research.md #13
+# (literary minimal: flat fields, restraint as the signal — the finishing
+# must be felt, never seen) and the amateur-tells list's warning against
+# filter soup: every value here sits just above the threshold of
+# perception, which is the point.
+name: quiet_literary
+describe: >-
+  Barely-there print finish: a touch less color, faint paper warmth, a
+  gentle corner shade, whisper grain. The tasteful default for flat,
+  type-led covers.
+finish:
+  - adjust: {id: fx_hush,  op: grade, saturation: -0.08}
+  - adjust: {id: fx_warm,  op: grade, temperature: 0.08}
+  - adjust: {id: fx_vign,  op: vignette, strength: 0.16}
+  - art:    {id: fx_grain, procedural: grain, opacity: 0.035, blend: overlay}

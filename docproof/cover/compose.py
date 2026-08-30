@@ -43,13 +43,14 @@ from .archetypes import zone_px
 # module's long-standing internal names (and their many call sites)
 # unchanged; the math behind them moved verbatim, which is what the
 # golden-bytes back-compat test verifies.
-from .effects import (apply_adjust, apply_mask, resolve_mask,
+from .effects import (apply_adjust, apply_effect_stack, apply_mask,
+                      resolve_mask,
                       composite_layer as _composite_layer,
                       luminance_band as _luminance_band,
                       srgb_to_linear as _srgb_to_linear)
 from .imaging import has_real_alpha
 from .model import (ArtSlot, CoverSpec, LayerRef, Palette, RenderReport,
-                    ScrimSpec, Shadow, TextSlot, Zone)
+                    ScrimSpec, Shadow, TextSlot, Zone, effect_from_shadow)
 from .textures import TEXTURES
 
 log = logging.getLogger("docproof.cover.compose")
@@ -377,7 +378,8 @@ def compose(spec: CoverSpec, job_dir: Path,
             else:  # "text"
                 resolved = finalized.get(layer.ref)
                 if resolved is not None:
-                    img = _draw_resolved_text(img, resolved, canvas, positioned_art)
+                    img = _draw_resolved_text(img, resolved, canvas,
+                                              positioned_art, spec.palette)
         return img
 
     for i, layer in enumerate(layers):
@@ -670,7 +672,8 @@ def compose(spec: CoverSpec, job_dir: Path,
 
 def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
                         canvas: tuple[int, int],
-                        positioned_art: dict[str, Image.Image]) -> Image.Image:
+                        positioned_art: dict[str, Image.Image],
+                        palette: Palette) -> Image.Image:
     """Dispatch one already-resolved text slot to whichever renderer its
     `mode` needs: typeset.draw_text for the normal ink-colored `fill`, or
     _draw_knockout_or_art_fill for the two panel/window modes. Both branches
@@ -679,12 +682,27 @@ def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
     for), so this is the one place that color's meaning finally forks: ink,
     or panel/outline.
 
+    A slot carrying an effect stack (§15.4 — non-empty `effects`, into
+    which the model validator already folded any legacy shadow/stroke)
+    takes the ONE engine path instead: _text_layer_with_effects builds the
+    styled layer standalone, and the legacy branches below never see it.
+    An EMPTY stack is the pre-wave spec shape, and everything below this
+    guard is that byte-identical legacy path, untouched.
+
     When `resolved.slot.mask_from` names a container ("thing inside of
     thing" — a title inside a lighthouse beam), the fully rendered text
-    layer (whichever mode built it) is clipped to that container's already-
+    layer (whichever path built it) is clipped to that container's already-
     positioned alpha before it ever reaches `base` — see
     _render_text_only/_clip_text_to_container."""
     slot = resolved.slot
+    if slot.effects:
+        text_layer = _text_layer_with_effects(resolved, canvas, palette)
+        if slot.mask_from:
+            text_layer, _coverage = _clip_text_to_container(
+                text_layer, positioned_art.get(slot.mask_from), canvas)
+        out = base.copy()
+        out.alpha_composite(text_layer)
+        return out
     if not slot.mask_from:
         if slot.mode == "fill":
             return typeset.draw_text(base, slot, resolved.fit, resolved.color,
@@ -699,6 +717,32 @@ def _draw_resolved_text(base: Image.Image, resolved: _ResolvedText,
     out = base.copy()
     out.alpha_composite(clipped)
     return out
+
+
+def _text_layer_with_effects(resolved: _ResolvedText, canvas: tuple[int, int],
+                             palette: Palette) -> Image.Image:
+    """One text slot's pixels through the effects engine (§15.4's single
+    code path): the bare fill — glyphs at the autopilot's color, WITHOUT
+    the legacy shadow or stroke, both of which now live in the stack via
+    the model's fold — run through apply_effect_stack.
+
+    The one draw-time composition left to do here is the autopilot's own
+    auto-Shadow: it keeps writing to `resolved.shadow` (never `effects` —
+    §15.4 says so outright), so when it invented one (`slot.shadow` is
+    None but the resolved shadow is not), that shadow joins the FRONT of
+    the stack exactly as the fold would have put it. A shadow the slot
+    declared itself is already folded in — prepending it again would
+    double it."""
+    slot = resolved.slot
+    # model_copy, not re-validation: stripping stroke/shadow off a copy for
+    # the bare-fill render must not re-trigger the fold (which would see
+    # effects non-empty and try to help).
+    bare = slot.model_copy(update={"shadow": None, "stroke": None})
+    fill = _render_text_only(bare, resolved.fit, resolved.color, None, canvas)
+    stack = list(slot.effects)
+    if resolved.shadow is not None and slot.shadow is None:
+        stack.insert(0, effect_from_shadow(resolved.shadow))
+    return apply_effect_stack(fill, stack, palette, canvas)
 
 
 def _render_text_only(slot: TextSlot, fit: typeset.FitResult, color: str,
@@ -1473,6 +1517,18 @@ def _position_all_art(art_slots: list[ArtSlot], layers: list[LayerRef],
                      warnings)
 
     _apply_frame_notches(positioned, art_by_id, canvas, warnings)
+
+    # Effect stacks on ART slots (§15.4) run here — after fit/placement/
+    # treatment, after masks and notches (so a drop shadow or glow always
+    # wraps the slot's FINAL silhouette, not a shape a mask was about to
+    # carve away), and before compositing/the contact guard (which then
+    # nudges the finished pixels, shadow and all, as one thing — and
+    # rightly counts a soft shadow burying a title as contact).
+    for slot in art_slots:
+        if slot.effects and slot.id in positioned:
+            positioned[slot.id] = apply_effect_stack(
+                positioned[slot.id], slot.effects, palette, canvas)
+
     layers_out = _apply_text_contact_guard(
         positioned, layers_out, art_by_id, text_by_id, canvas, warnings,
         occlusion, sandwich_pairs)
@@ -1590,6 +1646,17 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
         if layer.kind != "art":
             continue
         art_id = layer.ref
+        if art_id.startswith(_FX_PREFIX):
+            # Finishing layers (§15.6) sit above the text BY DESIGN —
+            # "appended above the whole stack, text included" — so a
+            # full-canvas grain plate covering the title's ink is never
+            # the accidental collision this guard exists to undo, and
+            # nudging or reordering it would quietly dismantle the recipe.
+            # Whether the text stays LEGIBLE beneath finishing is the
+            # §15.7 final-composite re-check's job: it measures the
+            # finished ground and attenuates fx_ opacity, ladder-style,
+            # instead of touching z-order.
+            continue
         slot = art_by_id.get(art_id)
         img = positioned.get(art_id)
         if slot is None or img is None:
@@ -1837,7 +1904,7 @@ def _procedural_art(slot: ArtSlot, canvas: tuple[int, int], palette: Palette,
     synth = PROCEDURAL_SYNTHESIZERS.get(name)
     if synth is None:
         return None   # unreachable given the Literal; never crash on the unknown
-    return synth(canvas, palette, slot.id, version)
+    return synth(canvas, palette, slot, version)
 
 
 def _gradient_layer(canvas: tuple[int, int], base_hex: str) -> Image.Image:
@@ -1878,7 +1945,7 @@ def _grain_layer(canvas: tuple[int, int]) -> Image.Image:
 #
 # Reference DNA item 7: "quiet paper grain unifying everything" — and item 8's
 # "thin rule frames... read as craft." Every synthesizer here is a pure
-# function of (canvas, palette, slot id, spec version) -> a canvas-sized RGBA
+# function of (canvas, palette, ART SLOT, spec version) -> a canvas-sized RGBA
 # image, drawn in ONE palette color at a baked-in low alpha (so it looks
 # right blended `normal` at slot.opacity=1.0; an archetype may still dial it
 # further via opacity/blend) — never a hardcoded hex, so a direction that
@@ -1894,6 +1961,14 @@ def _grain_layer(canvas: tuple[int, int]) -> Image.Image:
 # below are thin registry wrappers around the two ORIGINAL, unchanged
 # synthesizers above, so the "texture"/"background" legacy-id fallback in
 # _procedural_art reaches the exact same bytes it always has.
+#
+# The whole ArtSlot rides in (deep-stack wave, §15.5's "extends the existing
+# _synth_* signature to receive the ArtSlot") so the light & atmosphere bank
+# further down can read anchor (= center / rays origin / fog band-y) and
+# scale (= extent) — and ONLY those existing fields: the zero-param
+# philosophy that keeps the procedural Literal a closed, judge-explainable
+# menu. Every pre-§15.5 synthesizer ignores everything but slot.id (the two
+# seeded ones) and stays byte-identical.
 
 def _synth_seed(version: int, slot_id: str, name: str) -> int:
     """Mirrors _scatter_seed's reasoning exactly (fixed integer arithmetic
@@ -1905,12 +1980,12 @@ def _synth_seed(version: int, slot_id: str, name: str) -> int:
            + sum(ord(c) for c in name) * 7)
 
 
-def _synth_gradient(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_gradient(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                     version: int) -> Image.Image:
     return _gradient_layer(canvas, palette.background)
 
 
-def _synth_grain(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_grain(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                  version: int) -> Image.Image:
     return _grain_layer(canvas)
 
@@ -1920,7 +1995,7 @@ _PAPER_FIBER_BLUR_FRACTION = 0.003      # of canvas height
 _PAPER_ALPHA = 90                       # of 255 - subtle fiber+laid-line tint
 
 
-def _synth_paper(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_paper(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                  version: int) -> Image.Image:
     """Laid paper: soft mottled fiber noise plus regularly spaced horizontal
     "laid lines" — the faint ribbing real laid paper shows held to light —
@@ -1930,7 +2005,7 @@ def _synth_paper(canvas: tuple[int, int], palette: Palette, slot_id: str,
     per-pixel noise); the laid lines are exact, fixed-period horizontal
     rules, so the whole field tiles cleanly at that period."""
     cw, ch = canvas
-    seed = _synth_seed(version, slot_id, "paper")
+    seed = _synth_seed(version, slot.id, "paper")
     sw = max(1, round(cw * _GRAIN_SCALE))
     sh = max(1, round(ch * _GRAIN_SCALE))
     raw = random.Random(seed).randbytes(sw * sh)
@@ -1955,7 +2030,7 @@ _HALFTONE_MIN_RADIUS_FACTOR = 0.25    # of the biggest dot, toward the edges
 _HALFTONE_MAX_RADIUS_FACTOR = 0.42    # of the pitch, at the slot's center
 
 
-def _synth_halftone(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_halftone(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                     version: int) -> Image.Image:
     """A classic print dot screen: a square grid of solid circles, radially
     graded so full-size dots cluster toward the slot's own center and taper
@@ -1990,7 +2065,7 @@ _WEAVE_ALPHA = 34
 _WEAVE_LINE_VALUE = 110
 
 
-def _synth_canvas(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_canvas(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                   version: int) -> Image.Image:
     """A plain-weave canvas/linen texture: two perpendicular sets of evenly
     spaced fine rules — a cheap, fully deterministic crosshatch read at low
@@ -2017,14 +2092,14 @@ _SPECKLE_MAX_RADIUS_FRACTION = 0.0045
 _SPECKLE_ALPHA = 210
 
 
-def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_speckle(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                    version: int) -> Image.Image:
     """Sparse scattered dots at varied sizes — the "Atomic Habits" cover
     signature: a field of small solid circles at random positions and radii,
     seeded purely from (version, slot_id) so the same slot always speckles
     identically."""
     cw, ch = canvas
-    rng = random.Random(_synth_seed(version, slot_id, "speckle"))
+    rng = random.Random(_synth_seed(version, slot.id, "speckle"))
     count = max(1, round((cw * ch) / 1_000_000 * _SPECKLE_DENSITY_PER_MEGAPIXEL))
     min_r = _SPECKLE_MIN_RADIUS_FRACTION * ch
     max_r = _SPECKLE_MAX_RADIUS_FRACTION * ch
@@ -2055,7 +2130,7 @@ _RULE_FRAME_WIDTH_FRACTION = 0.0022    # of canvas height, each rule's stroke
 _RULE_FRAME_ALPHA = 235
 
 
-def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot_id: str,
+def _synth_rule_frame(canvas: tuple[int, int], palette: Palette, slot: ArtSlot,
                       version: int) -> Image.Image:
     """A thin, engraved double-rule frame inset from the edge — reference
     DNA item 8's "thin rule frames inset from the edge... read as craft,"
@@ -2114,7 +2189,7 @@ _FRAME_OCTAGON_CUT_FRACTION = 0.09        # of the inset rect's shorter
 
 
 def _synth_frame_hairline(canvas: tuple[int, int], palette: Palette,
-                          slot_id: str, version: int) -> Image.Image:
+                          slot: ArtSlot, version: int) -> Image.Image:
     """A single fine rule at rule_frame's own outer inset — the plainest
     member of the family, for a cover that wants "framed" without
     "engraved.\""""
@@ -2132,7 +2207,7 @@ def _synth_frame_hairline(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_thickthin(canvas: tuple[int, int], palette: Palette,
-                           slot_id: str, version: int) -> Image.Image:
+                           slot: ArtSlot, version: int) -> Image.Image:
     """Classic engraving: a heavy outer rule paired with a fine inner one,
     same inset/gap as rule_frame — asymmetric weight instead of
     rule_frame's own matched double rule."""
@@ -2156,7 +2231,7 @@ def _synth_frame_thickthin(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_corners(canvas: tuple[int, int], palette: Palette,
-                         slot_id: str, version: int) -> Image.Image:
+                         slot: ArtSlot, version: int) -> Image.Image:
     """Corner brackets only, open sides — an "L" at each of the inset
     rect's four corners, arms running along both edges that meet there.
     No rule ever crosses the middle of any side, which is the whole point
@@ -2184,7 +2259,7 @@ def _synth_frame_corners(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_deco(canvas: tuple[int, int], palette: Palette,
-                      slot_id: str, version: int) -> Image.Image:
+                      slot: ArtSlot, version: int) -> Image.Image:
     """"Stepped double rule with corner squares" — the Fatal Crossing
     register (docs/cover_template_research.md): rule_frame's own double
     rule, plus a small filled square centered on each of the OUTER rule's
@@ -2215,7 +2290,7 @@ def _synth_frame_deco(canvas: tuple[int, int], palette: Palette,
 
 
 def _synth_frame_octagon(canvas: tuple[int, int], palette: Palette,
-                         slot_id: str, version: int) -> Image.Image:
+                         slot: ArtSlot, version: int) -> Image.Image:
     """Corners cut at 45 degrees — the Theo of Golden register (docs/
     cover_template_research.md): the SAME outer/inner double-rule
     rectangles rule_frame draws, each redrawn as an octagon (a rectangle
@@ -2310,6 +2385,310 @@ def _frame_clamp_text(text_by_id: dict[str, TextSlot], spec: CoverSpec,
     return out
 
 
+# -- the light & atmosphere bank (deep-stack wave, §15.5) ----------------------
+#
+# Eight more shelf entries — ordinary art slots (usually screen/overlay/
+# soft_light at low opacity), no new layer kind — that read ONLY existing
+# slot fields: `anchor` is the glow's center / the rays' origin / the fog
+# band's y / which edge a leak enters from; `scale` is extent; opacity and
+# blend composite like any other layer. Inks are palette-derived by fixed
+# rule (§15.5 verbatim): glow/leak/rays/bokeh/stars draw the accent warmed
+# toward white, fog the background lightened, dust/scratches near the text
+# color at baked-in low alpha. The smooth fields (glow, leak, fog, rays)
+# synthesize at _GRAIN_SCALE and upsample — gradient_mask's own discipline;
+# the crisp ones (bokeh's discs, dust, scratches, stars) draw full-res
+# vector calls, the speckle cost class. Seeded ones go through _synth_seed,
+# exactly like speckle.
+
+_ATMO_WHITE_BLEND = 0.60         # accent -> white, the "warmed toward white" mix
+_ATMO_WARM_SHIFT = 12            # +R/-B nudge on top of it (8-bit steps)
+_ATMO_STAR_WHITE_BLEND = 0.85    # stars sit nearly at white — hot points, not paint
+_FOG_WHITE_BLEND = 0.40          # background -> white, the "lightened" mix
+
+_RADIAL_GLOW_MAX_ALPHA = 200
+_RADIAL_GLOW_RADIUS_FRACTION = 0.55   # of canvas height, at scale=1.0
+
+_LIGHT_LEAK_MAX_ALPHA = 170
+_LIGHT_LEAK_ANGLE_DEG = 32.0     # the band's fixed tilt (y-down coordinates)
+_LIGHT_LEAK_WIDTH_FRACTION = 0.16     # of canvas height, at scale=1.0
+
+_FOG_MAX_ALPHA = 150
+_FOG_BAND_HEIGHT_FRACTION = 0.22      # gaussian half-height, of canvas height
+
+_RAYS_COUNT = 7
+_RAYS_MAX_ALPHA = 150
+_RAYS_SHARPNESS = 3                   # cos^n lobe exponent
+_RAYS_EXTENT_FRACTION = 0.95          # of canvas height, at scale=1.0
+
+_BOKEH_BASE_COUNT = 14
+_BOKEH_MIN_RADIUS_FRACTION = 0.020    # of canvas height
+_BOKEH_MAX_RADIUS_FRACTION = 0.060
+_BOKEH_MIN_ALPHA, _BOKEH_MAX_ALPHA = 30, 70
+_BOKEH_SOFTEN_FRACTION = 0.006        # of canvas height, the soft-focus blur
+
+_DUST_DENSITY_PER_MEGAPIXEL = 220
+_DUST_MAX_RADIUS_FRACTION = 0.0022    # of canvas height
+_DUST_ALPHA = 55
+
+_SCRATCH_BASE_COUNT = 26
+_SCRATCH_MIN_LEN_FRACTION = 0.05      # of canvas height
+_SCRATCH_MAX_LEN_FRACTION = 0.30
+_SCRATCH_MAX_DRIFT = 0.06             # horizontal drift per unit length
+_SCRATCH_ALPHA = 60
+
+_STAR_DENSITY_PER_MEGAPIXEL = 380
+_STAR_BRIGHT_FRACTION = 0.08          # share drawn as a 3px disc
+_STAR_FLARE_FRACTION = 0.03           # share that also gets a cross flare
+_STAR_FLARE_ARM_FRACTION = 0.004      # of canvas height, each flare arm
+
+
+def _warmed_toward_white(hex_color: str, blend: float) -> tuple[int, int, int]:
+    """`hex_color` mixed `blend` of the way to white, then nudged warm
+    (+R/−B by _ATMO_WARM_SHIFT) — §15.5's "accent warmed toward white" as
+    one documented formula, shared by every light-colored synth so the
+    bank's lights always agree about what warm means."""
+    r, g, b = ImageColor.getrgb(hex_color)
+    r = round(r + (255 - r) * blend)
+    g = round(g + (255 - g) * blend)
+    b = round(b + (255 - b) * blend)
+    return (min(255, r + _ATMO_WARM_SHIFT), g, max(0, b - _ATMO_WARM_SHIFT))
+
+
+def _anchor_px(slot: ArtSlot, size: tuple[int, int]) -> tuple[float, float]:
+    """slot.anchor as pixels at `size` — the one place the bank reads it,
+    so every synth agrees an anchor is canvas fractions (the [-2, 2]
+    latitude deliberately included: a glow centered beyond the trim is a
+    legitimate design, exactly GradientMask.center's reasoning)."""
+    return slot.anchor[0] * size[0], slot.anchor[1] * size[1]
+
+
+def _quarter_field_to_layer(small: Image.Image, canvas: tuple[int, int],
+                            rgb: tuple[int, int, int]) -> Image.Image:
+    """A quarter-scale 'L' alpha field, Lanczos-upsampled and inked as a
+    solid-color RGBA layer — the shared tail of every smooth synth here."""
+    alpha = small.resize(canvas, Image.Resampling.LANCZOS)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(alpha)
+    return out
+
+
+def _synth_radial_glow(canvas: tuple[int, int], palette: Palette,
+                       slot: ArtSlot, version: int) -> Image.Image:
+    """A soft light source: alpha peaks at the anchor and falls off
+    quadratically to nothing at `scale` × _RADIAL_GLOW_RADIUS_FRACTION of
+    the canvas height — pure geometry, no seed needed. Screened (the usual
+    blend) this is lamplight behind the title; through color_dodge it is
+    midnight_neon's burn."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    radius = max(1.0, _RADIAL_GLOW_RADIUS_FRACTION * slot.scale * sh)
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            t = 1.0 - min(1.0, math.hypot(x - cx, y - cy) / radius)
+            px[x, y] = round(_RADIAL_GLOW_MAX_ALPHA * t * t)
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_light_leak(canvas: tuple[int, int], palette: Palette,
+                      slot: ArtSlot, version: int) -> Image.Image:
+    """A film leak: two parallel soft bands (one bright, one fainter
+    trailing it) crossing the canvas at a fixed tilt THROUGH the anchor —
+    where the leak enters is the anchor's whole meaning here. Band width
+    scales with `scale`; the trailing band's offset is seeded, the
+    organic-accident wobble a leak needs to not read as a ruled stripe."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    rng = random.Random(_synth_seed(version, slot.id, "light_leak"))
+    width = max(1.0, _LIGHT_LEAK_WIDTH_FRACTION * slot.scale * sh)
+    trail_offset = width * rng.uniform(1.4, 2.2)
+    trail_strength = rng.uniform(0.35, 0.55)
+    # Signed distance from the line through (cx, cy) at the fixed tilt:
+    # d = (x-cx)·n_x + (y-cy)·n_y with n the unit normal.
+    nx = -math.sin(math.radians(_LIGHT_LEAK_ANGLE_DEG))
+    ny = math.cos(math.radians(_LIGHT_LEAK_ANGLE_DEG))
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            d = (x - cx) * nx + (y - cy) * ny
+            v = math.exp(-(d / width) ** 2)
+            v += trail_strength * math.exp(-((d - trail_offset) / width) ** 2)
+            px[x, y] = round(_LIGHT_LEAK_MAX_ALPHA * min(1.0, v))
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_fog_gradient(canvas: tuple[int, int], palette: Palette,
+                        slot: ArtSlot, version: int) -> Image.Image:
+    """A horizontal fog bank: a gaussian band centered on the anchor's y
+    (its x is ignored — fog has no left or right), half-height `scale` ×
+    _FOG_BAND_HEIGHT_FRACTION, inked as the background lightened toward
+    white. Alpha depends on y alone, so it builds as a one-pixel column and
+    stretches — _gradient_layer's own O(height) trick — with no seed: fog
+    is fog."""
+    cw, ch = canvas
+    _, band_y = _anchor_px(slot, canvas)
+    half = max(1.0, _FOG_BAND_HEIGHT_FRACTION * slot.scale * ch)
+    col = Image.new("L", (1, max(1, ch)), 0)
+    px = col.load()
+    for y in range(ch):
+        px[0, y] = round(_FOG_MAX_ALPHA * math.exp(-((y - band_y) / half) ** 2))
+    alpha = col.resize(canvas, Image.Resampling.NEAREST)
+    # Plain lighten, no warm nudge: fog is lightened BACKGROUND, not light
+    # (§15.5's ink rule draws that exact line), so the shared warmed-
+    # toward-white helper deliberately isn't used here.
+    r, g, b = ImageColor.getrgb(palette.background)
+    rgb = (round(r + (255 - r) * _FOG_WHITE_BLEND),
+           round(g + (255 - g) * _FOG_WHITE_BLEND),
+           round(b + (255 - b) * _FOG_WHITE_BLEND))
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(alpha)
+    return out
+
+
+def _synth_rays(canvas: tuple[int, int], palette: Palette,
+                slot: ArtSlot, version: int) -> Image.Image:
+    """Light shafts: _RAYS_COUNT cos^n lobes fanning from the anchor,
+    fading with distance to `scale` × _RAYS_EXTENT_FRACTION of the canvas
+    height. The fan's rotation is seeded — which way the shafts lean is
+    the one degree of freedom that keeps two ray slots from ever
+    registering as the same stamp."""
+    cw, ch = canvas
+    sw, sh = max(1, round(cw * _GRAIN_SCALE)), max(1, round(ch * _GRAIN_SCALE))
+    cx, cy = _anchor_px(slot, (sw, sh))
+    rng = random.Random(_synth_seed(version, slot.id, "rays"))
+    phase = rng.uniform(0.0, math.tau)
+    extent = max(1.0, _RAYS_EXTENT_FRACTION * slot.scale * sh)
+    small = Image.new("L", (sw, sh), 0)
+    px = small.load()
+    for y in range(sh):
+        for x in range(sw):
+            dist = math.hypot(x - cx, y - cy)
+            fall = max(0.0, 1.0 - dist / extent)
+            if fall <= 0.0:
+                continue
+            theta = math.atan2(y - cy, x - cx)
+            lobe = 0.5 + 0.5 * math.cos(_RAYS_COUNT * theta + phase)
+            px[x, y] = round(_RAYS_MAX_ALPHA * (lobe ** _RAYS_SHARPNESS) * fall)
+    return _quarter_field_to_layer(small, canvas,
+                                   _warmed_toward_white(palette.accent,
+                                                        _ATMO_WHITE_BLEND))
+
+
+def _synth_bokeh(canvas: tuple[int, int], palette: Palette,
+                 slot: ArtSlot, version: int) -> Image.Image:
+    """Out-of-focus lights: seeded discs at varied radius and per-disc
+    alpha, softened by one small blur so they read as camera bokeh rather
+    than confetti. `scale` sets how many. Draw calls at full resolution
+    (the speckle cost class), blur at a fixed small radius — crisp enough
+    to keep their circular identity, soft enough to sit behind focus."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "bokeh"))
+    count = max(3, round(_BOKEH_BASE_COUNT * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw), rng.uniform(0, ch)
+        r = rng.uniform(_BOKEH_MIN_RADIUS_FRACTION,
+                        _BOKEH_MAX_RADIUS_FRACTION) * ch
+        value = rng.randint(_BOKEH_MIN_ALPHA, _BOKEH_MAX_ALPHA)
+        draw.ellipse((x - r, y - r, x + r, y + r), fill=value)
+    mask = mask.filter(ImageFilter.GaussianBlur(_BOKEH_SOFTEN_FRACTION * ch))
+    rgb = _warmed_toward_white(palette.accent, _ATMO_WHITE_BLEND)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask)
+    return out
+
+
+def _synth_dust(canvas: tuple[int, int], palette: Palette,
+                slot: ArtSlot, version: int) -> Image.Image:
+    """Drifting motes: seeded near-text-color specks at
+    _DUST_ALPHA — speckle's exact mechanism an order of magnitude smaller
+    and fainter, which is the whole difference between a design element
+    and an atmosphere. `scale` sets density."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "dust"))
+    count = max(1, round((cw * ch) / 1_000_000
+                         * _DUST_DENSITY_PER_MEGAPIXEL * slot.scale))
+    max_r = _DUST_MAX_RADIUS_FRACTION * ch
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw), rng.uniform(0, ch)
+        r = rng.uniform(max_r * 0.3, max_r)
+        draw.ellipse((x - r, y - r, x + r, y + r),
+                     fill=rng.randint(120, 255))
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _DUST_ALPHA / 255)))
+    return out
+
+
+def _synth_scratches(canvas: tuple[int, int], palette: Palette,
+                     slot: ArtSlot, version: int) -> Image.Image:
+    """Film scratches: seeded hairline near-vertical strokes with a slight
+    drift, near-text color at low alpha, drawn crisp at full resolution
+    (§15.5 names this synth full-res by design — a blurred scratch is just
+    a smudge). `scale` sets how many."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "scratches"))
+    count = max(1, round(_SCRATCH_BASE_COUNT * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    for _ in range(count):
+        x0 = rng.uniform(0, cw)
+        y0 = rng.uniform(-0.1 * ch, 0.9 * ch)
+        length = rng.uniform(_SCRATCH_MIN_LEN_FRACTION,
+                             _SCRATCH_MAX_LEN_FRACTION) * ch
+        drift = rng.uniform(-_SCRATCH_MAX_DRIFT, _SCRATCH_MAX_DRIFT) * length
+        draw.line([(x0, y0), (x0 + drift, y0 + length)],
+                  fill=rng.randint(120, 255), width=1)
+    rgb = ImageColor.getrgb(palette.text)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask.point(lambda v: round(v * _SCRATCH_ALPHA / 255)))
+    return out
+
+
+def _synth_stars(canvas: tuple[int, int], palette: Palette,
+                 slot: ArtSlot, version: int) -> Image.Image:
+    """A night sky: seeded pinpoints at full resolution (§15.5's other
+    named crisp synth — a star is one or two pixels or it is nothing),
+    mostly single pixels at varied brightness, a bright few as small
+    discs, a rare few flared with a four-arm cross. Ink is the accent
+    blended nearly to white — hot points of light that still carry the
+    palette. `scale` sets density."""
+    cw, ch = canvas
+    rng = random.Random(_synth_seed(version, slot.id, "stars"))
+    count = max(1, round((cw * ch) / 1_000_000
+                         * _STAR_DENSITY_PER_MEGAPIXEL * slot.scale))
+    mask = Image.new("L", canvas, 0)
+    draw = ImageDraw.Draw(mask)
+    arm = max(1.0, _STAR_FLARE_ARM_FRACTION * ch)
+    for _ in range(count):
+        x, y = rng.uniform(0, cw - 1), rng.uniform(0, ch - 1)
+        value = rng.randint(120, 255)
+        roll = rng.random()
+        if roll < _STAR_FLARE_FRACTION:
+            draw.line([(x - arm, y), (x + arm, y)], fill=value, width=1)
+            draw.line([(x, y - arm), (x, y + arm)], fill=value, width=1)
+            draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=255)
+        elif roll < _STAR_FLARE_FRACTION + _STAR_BRIGHT_FRACTION:
+            draw.ellipse((x - 1, y - 1, x + 1, y + 1), fill=value)
+        else:
+            draw.point((x, y), fill=value)
+    rgb = _warmed_toward_white(palette.accent, _ATMO_STAR_WHITE_BLEND)
+    out = Image.new("RGBA", canvas, (*rgb, 0))
+    out.putalpha(mask)
+    return out
+
+
 PROCEDURAL_SYNTHESIZERS = {
     "gradient": _synth_gradient,
     "grain": _synth_grain,
@@ -2323,6 +2702,14 @@ PROCEDURAL_SYNTHESIZERS = {
     "frame_corners": _synth_frame_corners,
     "frame_deco": _synth_frame_deco,
     "frame_octagon": _synth_frame_octagon,
+    "radial_glow": _synth_radial_glow,
+    "light_leak": _synth_light_leak,
+    "fog_gradient": _synth_fog_gradient,
+    "rays": _synth_rays,
+    "bokeh": _synth_bokeh,
+    "dust": _synth_dust,
+    "scratches": _synth_scratches,
+    "stars": _synth_stars,
 }
 
 
