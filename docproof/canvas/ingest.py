@@ -134,6 +134,10 @@ def ingest(job_dir: Path, *, concept: int = 0,
 
     return CanvasDoc(
         job_id=str(raw.get("job_id") or job_dir.name),
+        # Which cover of this job this session is. Carried on the document
+        # itself so a session can say what it is without its filename having
+        # to be parsed — and so the editor can put it on screen.
+        concept=concept,
         canvas=Size(w=canvas[0], h=canvas[1]),
         layers=layers,
         # The cover job's own spend stays on the cover job (job.json's

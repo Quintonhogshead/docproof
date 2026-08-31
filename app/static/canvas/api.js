@@ -23,13 +23,41 @@ export class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+/* Which CONCEPT of the cover job this page is editing.
+
+   A cover job holds several concepts and each one is a different cover with
+   its own editing session on the server (app/routes/canvas.py:_session_path),
+   so every /api/canvas call has to say which one it means or the second
+   concept you open hands you the first one's document. It is one value for
+   the life of the page, so it is appended here — in the one door every
+   request already goes through — rather than threaded through a dozen call
+   sites that would each be a place to forget it.
+
+   Null means "say nothing", which is what a client with no concept in its
+   URL has always done and what the server still answers for. */
+let concept = null;
+
+export function setConcept(value) {
+  concept = (value === null || value === undefined || value === '')
+    ? null : Number(value);
+}
+
+export function getConcept() { return concept; }
+
+function withConcept(path) {
+  if (concept === null || Number.isNaN(concept)) return path;
+  if (!path.startsWith('/api/canvas/')) return path;
+  if (/[?&]concept=/.test(path)) return path;      // an explicit one wins
+  return path + (path.includes('?') ? '&' : '?') + `concept=${concept}`;
+}
+
 async function raw(path, opts = {}) {
   const headers = Object.assign({}, opts.headers);
   const key = getKey();
   if (key) headers['X-Cover-Key'] = key;
   let resp;
   try {
-    resp = await fetch(path, {
+    resp = await fetch(withConcept(path), {
       method: opts.method || 'GET', body: opts.body, headers, cache: 'no-store',
     });
   } catch (e) {

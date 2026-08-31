@@ -234,14 +234,79 @@ def test_canvas_endpoints_are_behind_the_cover_key(client, jobs_root, monkeypatc
 
 # -- open -----------------------------------------------------------------------
 
-def test_open_returns_an_existing_session_and_ignores_concept(client, jobs_root):
+def test_open_returns_the_existing_session_for_that_concept(client, jobs_root):
+    """A session on disk wins over re-ingesting — for the concept it belongs
+    to. The legacy `canvas.json` records no concept, so it is claimed by the
+    one an unqualified open would have picked (concept 0 here)."""
     _job_dir(jobs_root)
-    resp = client.post("/api/canvas/open",
-                       json={"job_id": JOB_ID, "concept": 3}, headers=HEADERS)
+    for body in ({"job_id": JOB_ID}, {"job_id": JOB_ID, "concept": 0}):
+        resp = client.post("/api/canvas/open", json=body, headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        doc = resp.json()["doc"]
+        assert doc["job_id"] == JOB_ID
+        assert [l["id"] for l in doc["layers"]] == [ART_ID, TEXT_ID]
+
+
+# -- one session per CONCEPT, not per job -------------------------------------
+#
+# A cover job holds several concepts and each is a different cover. The
+# session used to be keyed by the job alone, so the second concept you opened
+# handed you the first one's document and `concept` was explicitly ignored.
+
+def test_a_second_concept_opens_its_own_session(client, jobs_root):
+    job_id = _cover_job(jobs_root, statuses=("ready", "ready"))
+    first = client.post("/api/canvas/open",
+                        json={"job_id": job_id, "concept": 0}, headers=HEADERS)
+    second = client.post("/api/canvas/open",
+                         json={"job_id": job_id, "concept": 1}, headers=HEADERS)
+    assert first.status_code == 200 and second.status_code == 200, second.text
+    assert first.json()["doc"]["source_spec"]["concept_name"] == "Concept 0"
+    assert second.json()["doc"]["source_spec"]["concept_name"] == "Concept 1"
+    assert first.json()["doc"]["concept"] == 0
+    assert second.json()["doc"]["concept"] == 1
+    # Two files, side by side: the first concept keeps the original name.
+    assert (jobs_root / job_id / "canvas.json").is_file()
+    assert (jobs_root / job_id / "canvas_c1.json").is_file()
+
+
+def test_edits_to_one_concept_do_not_touch_another(client, jobs_root):
+    job_id = _cover_job(jobs_root, statuses=("ready", "ready"))
+    for concept in (0, 1):
+        client.post("/api/canvas/open",
+                    json={"job_id": job_id, "concept": concept},
+                    headers=HEADERS)
+    target = client.get(f"/api/canvas/{job_id}?concept=1",
+                        headers=HEADERS).json()["doc"]["layers"][0]["id"]
+
+    moved = client.post(f"/api/canvas/{job_id}/ops?concept=1", headers=HEADERS,
+                        json={"ops": [{"op": "nudge", "layer_id": target,
+                                       "dy": 0.1}]})
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["doc"]["history"]
+
+    untouched = client.get(f"/api/canvas/{job_id}?concept=0", headers=HEADERS)
+    assert untouched.json()["doc"]["history"] == []
+    assert untouched.json()["doc"]["source_spec"]["concept_name"] == "Concept 0"
+
+
+def test_a_concept_with_no_session_yet_is_404_not_the_other_ones(client,
+                                                                 jobs_root):
+    job_id = _cover_job(jobs_root, statuses=("ready", "ready"))
+    client.post("/api/canvas/open", json={"job_id": job_id, "concept": 0},
+                headers=HEADERS)
+    missing = client.get(f"/api/canvas/{job_id}?concept=1", headers=HEADERS)
+    assert missing.status_code == 404
+    assert "concept 1" in missing.json()["detail"]
+
+
+def test_a_client_that_names_no_concept_still_gets_the_legacy_session(
+        client, jobs_root):
+    """Every canvas.json written before this change, and every request from a
+    build that does not know about concepts, keeps working unchanged."""
+    _job_dir(jobs_root)
+    resp = client.get(f"/api/canvas/{JOB_ID}", headers=HEADERS)
     assert resp.status_code == 200
-    doc = resp.json()["doc"]
-    assert doc["job_id"] == JOB_ID
-    assert [l["id"] for l in doc["layers"]] == [ART_ID, TEXT_ID]
+    assert [l["id"] for l in resp.json()["doc"]["layers"]] == [ART_ID, TEXT_ID]
 
 
 def test_open_on_a_job_that_is_not_there_is_404(client, jobs_root):

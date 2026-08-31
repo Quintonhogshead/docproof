@@ -242,7 +242,13 @@ export function buildShelf(ctx) {
     if (!wrap) closeMenu();
 
     cost.textContent = `$${(ctx.store.doc.cost_usd || 0).toFixed(2)} this cover`;
-    jobline.textContent = ctx.store.doc.job_id || '';
+    // The job AND which of its covers this is: a job holds several
+    // concepts, each with its own session, and "which one am I editing"
+    // should never be a question you answer by reading the address bar.
+    const doc = ctx.store.doc;
+    const concept = typeof doc.concept === 'number' ? doc.concept : null;
+    jobline.textContent = (doc.job_id || '')
+      + (concept === null ? '' : ` · concept ${concept + 1}`);
     const st = ctx.store.status();
     save.className = 'save' + (st === 'stuck' ? ' is-stuck' : (st === 'saved' ? '' : ' is-dirty'));
     save.textContent = { saved: 'saved', saving: 'saving…', dirty: 'unsaved…', stuck: 'unsaved edits' }[st];

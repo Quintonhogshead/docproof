@@ -509,8 +509,12 @@ def parse_layer(data: dict[str, Any]) -> Any:
 
 
 class CanvasDoc(BaseModel):
-    """One editing session, persisted as `canvas.json` inside the cover job
-    directory it was ingested from.
+    """One editing session, persisted inside the cover job directory it was
+    ingested from — `canvas.json` for the job's first concept, and
+    `canvas_c<n>.json` for the others (app/routes/canvas.py:_session_path).
+    One file per CONCEPT, not per job: a job's four concepts are four
+    different covers, and a single session per job meant the second one you
+    opened silently handed you the first one's document.
 
     `layers` is bottom-to-top, the order compose() walks a CoverSpec's own
     layer list, so "first in the list" means the same thing in both
@@ -526,6 +530,13 @@ class CanvasDoc(BaseModel):
 
     version: int = Field(default=DOC_VERSION, ge=1)
     job_id: str = Field(min_length=1)
+    # WHICH cover of that job. A cover job holds several concepts (§8 of the
+    # designer spec) and each is a different cover, so each gets its own
+    # editing session — a job with four concepts has up to four documents,
+    # and this is the one thing that tells them apart. Defaults to 0 so
+    # every document written before sessions were per-concept still loads,
+    # and reads as the concept an unqualified open would have picked.
+    concept: int = Field(default=0, ge=0)
     canvas: Size
     # None for a front-cover document (every document starts as one), a
     # Wrap once docproof.canvas.wrap.to_wrap has turned it into a full

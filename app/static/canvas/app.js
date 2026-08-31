@@ -5,7 +5,7 @@
    store owns the doc, the engine owns the pixels, the panels own the chrome,
    and this file is the only place that knows they exist. */
 
-import { api, postJSON, postStream, fileObjectURL, toast, getKey, setKey, ApiError } from './api.js';
+import { api, postJSON, postStream, fileObjectURL, toast, getKey, setKey, setConcept, ApiError } from './api.js';
 import { createStore, clone, NUDGE, NUDGE_BIG } from './ops.js';
 import { createEngine } from './engine.js';
 import { el, buildShelf, buildLayerRail, buildPropsRail, newLayerId, currentQuality, guidesEnabled } from './panels.js';
@@ -42,6 +42,15 @@ function jobFromURL() {
   return new URLSearchParams(location.search).get('job') || '';
 }
 
+/* Which cover of that job — the number the studio's "Edit in Cover Canvas"
+   door puts in the URL. Absent is a real answer ("whichever session this job
+   has"), not zero: it is what the canvas picker's own links say, and the
+   server answers it with the job's default concept. */
+function conceptFromURL() {
+  const raw = new URLSearchParams(location.search).get('concept');
+  return raw === null || raw === '' ? null : raw;
+}
+
 async function openDoc(jobId) {
   try {
     const res = await api(`/api/canvas/${encodeURIComponent(jobId)}`);
@@ -49,11 +58,12 @@ async function openDoc(jobId) {
   } catch (err) {
     if (!(err instanceof ApiError) || err.status !== 404) throw err;
   }
-  // No canvas session yet: ingest the finished cover job into one. The
-  // studio's "Edit in Cover Canvas" door names the concept the person was
-  // looking at; without one the server picks the first ready concept.
-  // (An existing session wins over both — the GET above returned it.)
-  const concept = new URLSearchParams(location.search).get('concept');
+  // No session for this concept yet: ingest that concept of the finished
+  // cover job into one. The studio's "Edit in Cover Canvas" door names the
+  // concept the person was looking at; without one the server picks the
+  // first ready concept. (An existing session for THAT concept wins over
+  // both — the GET above returned it.)
+  const concept = conceptFromURL();
   const body = { job_id: jobId };
   if (concept !== null && concept !== '') body.concept = Number(concept);
   return (await postJSON('/api/canvas/open', body)).doc;
@@ -945,8 +955,14 @@ function buildEditor(jobId, doc) {
   }
   const jobId = jobFromURL();
   if (!jobId) { showPicker(); return; }
+  // Every request this page makes carries the concept, or the server cannot
+  // tell which of the job's covers is being edited. The URL's answer opens
+  // the document; the DOCUMENT's own answer is what the rest of the session
+  // uses, because a URL with no concept in it still lands on a real one.
+  setConcept(conceptFromURL());
   try {
     const doc = await openDoc(jobId);
+    setConcept(doc.concept ?? 0);
     await loadFamilies(doc);
     window.coverCanvas = buildEditor(jobId, doc);
   } catch (err) {

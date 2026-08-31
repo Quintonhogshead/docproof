@@ -56,7 +56,15 @@ Concretely:
 
 - **Server**: FastAPI routes in `app/routes/canvas.py`, registered like
   `cover.py`. Jobs live in the same data root as cover jobs; a canvas
-  session is keyed by the cover `job_id` it was opened from.
+  session is keyed by the cover `job_id` **and the concept** it was opened
+  from — `canvas.json` for the job's first concept and `canvas_c<n>.json`
+  for the others. One session per job was a bug (fixed v0.163.0): a job's
+  concepts are different covers, so clicking "Edit in Cover Canvas" on the
+  second one handed back the first one's document and the `concept`
+  parameter was explicitly ignored. Every `/api/canvas` request carries
+  `?concept=N` (appended once, in `api.js`'s single fetch door), the
+  document records its own concept, and the shelf says which cover you are
+  editing.
 - **Front-end**: `app/static/canvas/` — a single-page static app, no
   bundler (house style; `sc-cover.html` precedent). Rendering via Konva
   (vendored single file) for the layer canvas, selection handles, and

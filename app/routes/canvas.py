@@ -41,6 +41,7 @@ import base64
 import binascii
 import io
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -76,7 +77,21 @@ except ImportError:                                        # pragma: no cover
 from . import cover
 
 # The editing document, inside the cover job directory it was ingested from.
+# The FIRST concept's session keeps the original name, and every other
+# concept gets its own file beside it. One session per concept, not per job:
+# a cover job holds several concepts (§8 of the designer spec) and each is a
+# different cover, so opening the second one used to hand back the first
+# one's document — the canvas.json was keyed by the job alone, and `concept`
+# was explicitly ignored the moment one existed.
+#
+# concept 0 stays `canvas.json` rather than becoming `canvas_c0.json` so
+# every session on disk today keeps working with no migration step, and so
+# the common case (one cover, one session) is still the file people expect
+# to find in a job directory.
+log = logging.getLogger("docproof.app.routes.canvas")
+
 CANVAS_FILE = "canvas.json"
+CANVAS_FILE_FOR_CONCEPT = "canvas_c{concept}.json"
 
 # What the export writes. One fixed name, overwritten on every export: the
 # canvas IS the document, so an export is a snapshot of it, not a version —
@@ -147,22 +162,66 @@ def _job_dir(request: Request, job_id: str) -> tuple[Path, str]:
     return cover_pipeline.job_dir(_data_root(request), job_id), job_id
 
 
+def _session_path(job_dir: Path, concept: int | None) -> Path:
+    """Where this job's session for `concept` lives.
+
+    `concept` None means "whichever session this job has" — an old client
+    with no concept in its URL, and every internal caller that only has a
+    job id. It answers the legacy file, which is what such a client has
+    always been talking to.
+
+    The legacy `canvas.json` is claimed by the concept it RECORDS. A session
+    written before documents carried a concept records none, and is claimed
+    by the concept an unqualified open would have picked (_default_concept)
+    — which is what that session almost certainly is, and the only guess
+    available. The alternative, treating every legacy file as concept 0,
+    would quietly fork somebody's afternoon of edits into a second session
+    the moment they reopened the concept they had been editing."""
+    if concept is None:
+        return job_dir / CANVAS_FILE
+    legacy = job_dir / CANVAS_FILE
+    if legacy.is_file() and _legacy_concept(job_dir, legacy) == concept:
+        return legacy
+    if concept == 0 and not legacy.is_file():
+        return legacy
+    return job_dir / CANVAS_FILE_FOR_CONCEPT.format(concept=concept)
+
+
+def _legacy_concept(job_dir: Path, legacy: Path) -> int:
+    """Which concept `canvas.json` belongs to: what it says, or the job's
+    default when it is old enough not to say. Read straight out of the JSON
+    rather than through CanvasDoc — a session too damaged to validate must
+    not change which FILE a request addresses, or a corrupt document would
+    silently become a second one."""
+    try:
+        raw = json.loads(legacy.read_text("utf-8"))
+    except (OSError, ValueError):
+        return 0
+    recorded = raw.get("concept")
+    if isinstance(recorded, int) and recorded >= 0:
+        return recorded
+    return _default_concept(job_dir)
+
+
 def _canvas_path(job_dir: Path) -> Path:
+    """The legacy path, for the callers that only have a job id."""
     return job_dir / CANVAS_FILE
 
 
-def _load(job_dir: Path, job_id: str) -> CanvasDoc:
+def _load(job_dir: Path, job_id: str,
+          concept: int | None = None) -> CanvasDoc:
     """This job's canvas document, or the right refusal.
 
     404 when there is no session yet (the client's cue to POST /open), and
     409 when there is one that cannot be read — a corrupt or future-version
     canvas.json is a real state a person has to be told about, not a 500
     that reads like the server broke."""
-    path = _canvas_path(job_dir)
+    path = _session_path(job_dir, concept)
     if not path.is_file():
+        which = "" if concept is None else f" concept {concept} of"
         raise HTTPException(404, detail=(
-            f"No canvas session for job {job_id!r} yet — open the cover job "
-            f"first."))
+            f"No canvas session for{which} job {job_id!r} yet — open the "
+            f"cover job first."))
     try:
         return load_doc(path)
     except (OSError, ValueError, ValidationError) as e:
@@ -171,11 +230,19 @@ def _load(job_dir: Path, job_id: str) -> CanvasDoc:
             f"{e}")) from e
 
 
-def _save(job_dir: Path, doc: CanvasDoc) -> dict[str, Any]:
+def _save(job_dir: Path, doc: CanvasDoc,
+          concept: int | None = None) -> dict[str, Any]:
     """Persist and shape the standard answer. Every mutating endpoint ends
     with this exact pair, so the client always gets the whole document back
-    and never has to guess what the server thinks the truth is."""
-    save_doc(doc, _canvas_path(job_dir))
+    and never has to guess what the server thinks the truth is.
+
+    A document is saved back to the file it was LOADED from — `concept` is
+    the request's, and the document's own is only the fallback for callers
+    that never had one. Reading with one and writing with another is how a
+    session would end up in two files."""
+    if concept is None:
+        concept = doc.concept
+    save_doc(doc, _session_path(job_dir, concept))
     return {"doc": doc.model_dump(mode="json")}
 
 
@@ -418,7 +485,7 @@ _DETACHED: set[asyncio.Task] = set()
 
 
 async def _plate_answer(job_dir: Path, job_id: str, load, run, *,
-                        stream: bool):
+                        concept: int | None, stream: bool):
     """One plate verb's HTTP answer, in whichever shape was asked for.
 
     `load()` reads the document and `run(doc, on_partial)` is the regen call
@@ -445,7 +512,7 @@ async def _plate_answer(job_dir: Path, job_id: str, load, run, *,
                 cost = await asyncio.to_thread(run, doc, None)
             except (regen.RegenError, ImagingError) as e:
                 raise HTTPException(502, detail=str(e)) from e
-            payload = _save(job_dir, doc)
+            payload = _save(job_dir, doc, concept)
         payload["cost_usd"] = cost
         return payload
 
@@ -468,11 +535,18 @@ async def _plate_answer(job_dir: Path, job_id: str, load, run, *,
                 # Saved inside the lock, and by this task rather than by the
                 # generator: the document must land on disk whether or not
                 # anybody is still listening.
-                payload = _save(job_dir, doc)
+                payload = _save(job_dir, doc, concept)
         except HTTPException as e:
             frames.put_nowait({"event": "error", "detail": str(e.detail)})
         except (regen.RegenError, ImagingError) as e:
             frames.put_nowait({"event": "error", "detail": str(e)})
+        except Exception as e:                              # noqa: BLE001
+            # Nothing may leave this task without putting a frame on the
+            # queue: the generator below is waiting on it, and a task that
+            # dies silently is a client that waits for a plate forever.
+            log.exception("A canvas plate verb failed unexpectedly")
+            frames.put_nowait({"event": "error", "detail": (
+                f"That plate call failed unexpectedly: {e}")})
         else:
             payload["cost_usd"] = cost
             payload["event"] = "done"
@@ -603,22 +677,26 @@ def register(app: FastAPI) -> None:
 
     @app.post("/api/canvas/open")
     async def canvas_open(request: Request, body: OpenBody) -> dict:
-        """Open a cover job on the canvas.
+        """Open one CONCEPT of a cover job on the canvas.
 
-        Existing edits always win: if this job already has a canvas.json it
-        comes back as it is, and `concept` is ignored rather than silently
-        re-ingesting over an afternoon's work. Otherwise the cover job is
-        converted (docproof.canvas.ingest) and saved as the session's first
-        state."""
+        Existing edits always win: if that concept already has a session it
+        comes back as it is, rather than silently re-ingesting over an
+        afternoon's work. Otherwise the cover job's concept is converted
+        (docproof.canvas.ingest) and saved as the session's first state.
+
+        Per concept, not per job (see _session_path): a job's concepts are
+        different covers, and opening the second one used to hand back the
+        first one's document."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, body.job_id)
-        if _canvas_path(job_dir).is_file():
-            return {"doc": _load(job_dir, job_id).model_dump(mode="json")}
+        concept = (body.concept if body.concept is not None
+                   else _default_concept(job_dir))
+        if _session_path(job_dir, concept).is_file():
+            return {"doc": _load(job_dir, job_id,
+                                 concept).model_dump(mode="json")}
         if not (job_dir / cover_pipeline.JOB_MANIFEST).is_file():
             raise HTTPException(404, detail=f"No cover job {job_id!r} here.")
 
-        concept = (body.concept if body.concept is not None
-                   else _default_concept(job_dir))
         try:
             doc = ingest(job_dir, concept=concept)
         except CanvasIngestError as e:
@@ -626,18 +704,20 @@ def register(app: FastAPI) -> None:
             # to edit (no spec, no plate on disk, no such concept). The
             # ingest sentence already names the file, so it passes through.
             raise HTTPException(409, detail=str(e)) from e
-        return _save(job_dir, doc)
+        return _save(job_dir, doc, concept)
 
     @app.get("/api/canvas/{job_id}")
-    async def canvas_get(job_id: str, request: Request) -> dict:
+    async def canvas_get(job_id: str, request: Request,
+                         concept: int | None = None) -> dict:
         """This job's canvas document. 404 when there is no session yet —
         which is the client's cue to POST /api/canvas/open."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        return {"doc": _load(job_dir, job_id).model_dump(mode="json")}
+        return {"doc": _load(job_dir, job_id, concept).model_dump(mode="json")}
 
     @app.put("/api/canvas/{job_id}")
-    async def canvas_put(job_id: str, request: Request, body: DocBody) -> dict:
+    async def canvas_put(job_id: str, request: Request, body: DocBody,
+                         concept: int | None = None) -> dict:
         """Replace the whole document — the client's own save.
 
         Everything goes through CanvasDoc, so a document that would not load
@@ -657,11 +737,11 @@ def register(app: FastAPI) -> None:
                 f"That document belongs to job {doc.job_id!r}, not "
                 f"{job_id!r}."))
         async with _job_lock(job_id):
-            return _save(job_dir, doc)
+            return _save(job_dir, doc, concept)
 
     @app.post("/api/canvas/{job_id}/ops")
-    async def canvas_ops_apply(job_id: str, request: Request, body: OpsBody
-                               ) -> dict:
+    async def canvas_ops_apply(job_id: str, request: Request, body: OpsBody,
+                               concept: int | None = None) -> dict:
         """Apply a batch of ops — the one mutation path the UI, the button
         shelf and the assistant all share (§4).
 
@@ -674,16 +754,16 @@ def register(app: FastAPI) -> None:
         # made while a plate is rendering must not be read from a document
         # the render is about to overwrite, and vice versa (see _job_lock).
         async with _job_lock(job_id):
-            doc = _load(job_dir, job_id)
+            doc = _load(job_dir, job_id, concept)
             try:
                 canvas_ops.apply_many(doc, body.ops)
             except canvas_ops.OpError as e:
                 raise HTTPException(409, detail=str(e)) from e
-            return _save(job_dir, doc)
+            return _save(job_dir, doc, concept)
 
     @app.post("/api/canvas/{job_id}/wrap")
-    async def canvas_wrap(job_id: str, request: Request, body: WrapBody
-                          ) -> dict:
+    async def canvas_wrap(job_id: str, request: Request, body: WrapBody,
+                          concept: int | None = None) -> dict:
         """Turn this front cover into a full paperback wrap (spec §7's v2
         line, designer spec §12).
 
@@ -708,18 +788,18 @@ def register(app: FastAPI) -> None:
                 f"That wrap does not describe a book: "
                 f"{_first_error(e)}")) from e
         async with _job_lock(job_id):
-            doc = _load(job_dir, job_id)
+            doc = _load(job_dir, job_id, concept)
             try:
                 wrapped = to_wrap(doc, spec, job_dir=job_dir)
             except WrapError as e:
                 raise HTTPException(409, detail=str(e)) from e
-            payload = _save(job_dir, wrapped)
+            payload = _save(job_dir, wrapped, concept)
         payload["panels"] = panels(spec)
         return payload
 
     @app.post("/api/canvas/{job_id}/reroll")
-    async def canvas_reroll(job_id: str, request: Request, body: RerollBody
-                            ) -> dict:
+    async def canvas_reroll(job_id: str, request: Request, body: RerollBody,
+                            concept: int | None = None) -> dict:
         """Roll an art layer again (§5). `prompt` present is
         tweak-then-roll; absent is the one-click re-roll.
 
@@ -739,16 +819,16 @@ def register(app: FastAPI) -> None:
         # blocking SDK call and this is an async handler — the same reason
         # cover_pipeline._generate_art_slot wraps generate().
         return await _plate_answer(
-            job_dir, job_id, lambda: _load(job_dir, job_id),
+            job_dir, job_id, lambda: _load(job_dir, job_id, concept),
             lambda doc, on_partial: regen.reroll(
                 job_dir, doc, body.layer_id, client=client,
                 prompt=body.prompt, quality=body.quality,
                 on_partial=on_partial),
-            stream=body.stream)
+            concept=concept, stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/inpaint")
-    async def canvas_inpaint(job_id: str, request: Request, body: InpaintBody
-                             ) -> dict:
+    async def canvas_inpaint(job_id: str, request: Request, body: InpaintBody,
+                             concept: int | None = None) -> dict:
         """Repair one drawn region of an art layer's plate (§5).
 
         `mask_b64` is the client's rasterized region in imaging.edit's own
@@ -759,16 +839,17 @@ def register(app: FastAPI) -> None:
         mask_png = _decode_b64(body.mask_b64, "mask")
         client = None if regen.fake_active() else cover._image_client()
         return await _plate_answer(
-            job_dir, job_id, lambda: _load(job_dir, job_id),
+            job_dir, job_id, lambda: _load(job_dir, job_id, concept),
             lambda doc, on_partial: regen.inpaint(
                 job_dir, doc, body.layer_id, client=client,
                 instruction=body.instruction, mask_png=mask_png,
                 quality=body.quality, on_partial=on_partial),
-            stream=body.stream)
+            concept=concept, stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/finalize")
-    async def canvas_finalize(job_id: str, request: Request, body: FinalizeBody
-                              ) -> dict:
+    async def canvas_finalize(job_id: str, request: Request,
+                              body: FinalizeBody,
+                              concept: int | None = None) -> dict:
         """Re-render a kept plate at full quality (§5's quality ladder).
 
         The other end of the draft lane: roll cheap while composing, then
@@ -783,15 +864,15 @@ def register(app: FastAPI) -> None:
         job_dir, job_id = _job_dir(request, job_id)
         client = None if regen.fake_active() else cover._image_client()
         return await _plate_answer(
-            job_dir, job_id, lambda: _load(job_dir, job_id),
+            job_dir, job_id, lambda: _load(job_dir, job_id, concept),
             lambda doc, on_partial: regen.finalize(
                 job_dir, doc, body.layer_id, client=client,
                 prompt=body.prompt, on_partial=on_partial),
-            stream=body.stream)
+            concept=concept, stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/ground")
-    async def canvas_ground(job_id: str, request: Request, body: GroundBody
-                            ) -> dict:
+    async def canvas_ground(job_id: str, request: Request, body: GroundBody,
+                            concept: int | None = None) -> dict:
         """Ground the figure on an art layer (§5's shelf, designer spec
         §15.23's cardinal rule).
 
@@ -805,15 +886,16 @@ def register(app: FastAPI) -> None:
         job_dir, job_id = _job_dir(request, job_id)
         client = None if regen.fake_active() else cover._image_client()
         return await _plate_answer(
-            job_dir, job_id, lambda: _load(job_dir, job_id),
+            job_dir, job_id, lambda: _load(job_dir, job_id, concept),
             lambda doc, on_partial: regen.ground_figure(
                 job_dir, doc, body.layer_id, client=client,
                 instruction=body.instruction, on_partial=on_partial),
-            stream=body.stream)
+            concept=concept, stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/rebalance")
     async def canvas_rebalance(job_id: str, request: Request,
-                               body: RebalanceBody) -> dict:
+                               body: RebalanceBody,
+                               concept: int | None = None) -> dict:
         """Measure an art layer's plate and nudge its levels (§5's shelf).
 
         The one AI verb that spends nothing: docproof.cover.balance measures
@@ -831,18 +913,18 @@ def register(app: FastAPI) -> None:
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
         async with _job_lock(job_id):
-            doc = _load(job_dir, job_id)
+            doc = _load(job_dir, job_id, concept)
             try:
                 measured = regen.rebalance(job_dir, doc, body.layer_id)
             except (regen.RegenError, canvas_ops.OpError) as e:
                 raise HTTPException(409, detail=str(e)) from e
-            payload = _save(job_dir, doc)
+            payload = _save(job_dir, doc, concept)
         payload["measured"] = measured
         return payload
 
     @app.post("/api/canvas/{job_id}/chat")
-    async def canvas_chat(job_id: str, request: Request, body: ChatBody
-                          ) -> dict:
+    async def canvas_chat(job_id: str, request: Request, body: ChatBody,
+                          concept: int | None = None) -> dict:
         """One turn of the AI box (§6): Plan critiques, Act edits.
 
         docproof.canvas.assistant is imported HERE, per request, not at
@@ -875,7 +957,7 @@ def register(app: FastAPI) -> None:
         # price of one document: a type edit made mid-turn waits, it is
         # never lost.
         async with _job_lock(job_id):
-            doc = _load(job_dir, job_id)
+            doc = _load(job_dir, job_id, concept)
             try:
                 result = await assistant.chat(
                     job_dir, doc, body.messages, body.mode,
@@ -883,7 +965,7 @@ def register(app: FastAPI) -> None:
                     image_client=lambda: cover._image_client())
             except unavailable as e:
                 raise HTTPException(501, detail=str(e) or _NO_ASSISTANT) from e
-            payload = _save(job_dir, result.doc)
+            payload = _save(job_dir, result.doc, concept)
         payload["reply"] = result.reply
         payload["ops_applied"] = result.ops_applied
         payload["cost_usd"] = result.cost_usd
@@ -917,8 +999,8 @@ def register(app: FastAPI) -> None:
                             headers={"Cache-Control": "no-cache"})
 
     @app.post("/api/canvas/{job_id}/export")
-    async def canvas_export(job_id: str, request: Request, body: ExportBody
-                            ) -> dict:
+    async def canvas_export(job_id: str, request: Request, body: ExportBody,
+                            concept: int | None = None) -> dict:
         """Keep the client's full-resolution composite with the job (§7).
 
         The browser has already downloaded its own copy by the time this is
@@ -939,7 +1021,7 @@ def register(app: FastAPI) -> None:
         png_bytes = _decode_b64(body.png_b64, "export")
         name = EXPORT_NAME if body.format == "png" else EXPORT_PDF_NAME
         if body.format == "pdf":
-            w_in, h_in = page_inches(_load(job_dir, job_id))
+            w_in, h_in = page_inches(_load(job_dir, job_id, concept))
             payload = pdf_bytes(png_bytes, w_in, h_in)
         else:
             payload = png_bytes
@@ -949,8 +1031,8 @@ def register(app: FastAPI) -> None:
         return {"name": name}
 
     @app.get("/api/canvas/{job_id}/render")
-    async def canvas_render(job_id: str, request: Request, w: int = 0
-                            ) -> Response:
+    async def canvas_render(job_id: str, request: Request, w: int = 0,
+                            concept: int | None = None) -> Response:
         """The document as the SERVER sees it: docproof.canvas.render's
         parity composite, as PNG.
 
@@ -964,7 +1046,7 @@ def register(app: FastAPI) -> None:
         canvas route."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
+        doc = _load(job_dir, job_id, concept)
         from docproof.canvas import render as canvas_render_mod
         try:
             image = await asyncio.to_thread(
