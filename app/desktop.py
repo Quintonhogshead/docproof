@@ -136,16 +136,12 @@ def main(argv=None) -> int:
     paths = Paths(root).ensure()
 
     # The Covers pages (Cover Studio + Cover Canvas) ride this window too —
-    # one app, one press. Same two defaults app/canvas_desktop.py sets, for
-    # the same reasons: the key gate needs A key on a loopback socket with
-    # one owner (LOCAL_KEY, typed into the unlock box once per session), and
-    # the job store must not default cwd-relative — a Finder-launched .app
-    # starts life at "/", an unwritable store that reads as forever empty.
-    if not os.environ.get("COVER_KEY"):
-        from .canvas_desktop import LOCAL_KEY
-        os.environ["COVER_KEY"] = LOCAL_KEY
-    if not os.environ.get("COVER_DATA_PATH"):
-        os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
+    # one app, one press — so this window assumes exactly the environment the
+    # Cover Canvas shell does, from the one function that owns those defaults
+    # (app/canvas_desktop.py:cover_env_defaults, whose docstring says why each
+    # one exists). Every one is set only where the environment is silent.
+    from .canvas_desktop import cover_env_defaults
+    cover_env_defaults(root)
 
     existing = running_instance(root)
     if existing:

@@ -10,10 +10,14 @@ survives a test suite that never builds the app the way the shell does.
 """
 from __future__ import annotations
 
+import inspect
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
-from app.canvas_desktop import LOCAL_KEY, build_shell_app
+from app import desktop
+from app.canvas_desktop import LOCAL_KEY, build_shell_app, cover_env_defaults
 
 
 @pytest.fixture
@@ -57,3 +61,40 @@ def test_the_main_app_carries_cover_studio_too(tmp_path, monkeypatch):
     monkeypatch.delenv("COVER_KEY")
     with TestClient(create_app(tmp_path / "home2", start_runner=False)) as c:
         assert c.get("/api/cover/jobs").status_code == 503
+
+
+# -- the environment both Mac shells assume -----------------------------------
+
+def test_the_shell_defaults_cover_studio_onto_the_subscription(tmp_path,
+                                                               monkeypatch):
+    # On the owner's own machine the Claude login is the whole point: a
+    # silent fall back to an API key is the "credit balance is too low"
+    # failure this lane exists to prevent.
+    for name in ("COVER_KEY", "COVER_DATA_PATH", "COVER_ANTHROPIC_LANE"):
+        monkeypatch.delenv(name, raising=False)
+    cover_env_defaults(tmp_path)
+    assert os.environ["COVER_ANTHROPIC_LANE"] == "subscription"
+    assert os.environ["COVER_KEY"] == LOCAL_KEY
+    assert os.environ["COVER_DATA_PATH"] == str(tmp_path / "cover_jobs")
+
+
+def test_the_shell_never_overrides_an_environment_that_named_one(tmp_path,
+                                                                 monkeypatch):
+    # Defaults, not pins: a deployment (or an owner who wants to spend
+    # credits today) keeps what it set.
+    monkeypatch.setenv("COVER_ANTHROPIC_LANE", "api")
+    monkeypatch.setenv("COVER_KEY", "a-real-key")
+    monkeypatch.setenv("COVER_DATA_PATH", str(tmp_path / "elsewhere"))
+    cover_env_defaults(tmp_path)
+    assert os.environ["COVER_ANTHROPIC_LANE"] == "api"
+    assert os.environ["COVER_KEY"] == "a-real-key"
+    assert os.environ["COVER_DATA_PATH"] == str(tmp_path / "elsewhere")
+
+
+def test_the_docproof_window_assumes_the_same_environment():
+    # One app, one press: the DocProof window sets these from the SAME
+    # function rather than from a copy of it, which is the only thing that
+    # keeps the two shells from drifting on what a local cover run does.
+    # Read off main()'s source because main() opens a native window -- there
+    # is nothing here to call.
+    assert "cover_env_defaults(root)" in inspect.getsource(desktop.main)

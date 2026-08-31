@@ -373,9 +373,15 @@ def new_job_id() -> str:
 
 def create_job(root: str | Path, brief: Brief, *,
                manuscript_path: str | Path | None = None,
-               manuscript_name: str = "") -> JobState:
+               manuscript_name: str = "",
+               anthropic_lane: str = "") -> JobState:
     """Create a new job on disk: the brief, plus a manuscript sample when one
     was uploaded.
+
+    `anthropic_lane` is the lane the caller RESOLVED for this job's Anthropic
+    model calls ("subscription" or "api" — see JobState's own field), stored
+    so a later revision reuses the purse the job was started on instead of
+    quietly switching to the other one. Empty means the caller had no opinion.
 
     `manuscript_path` is a local file the caller has already validated for
     suffix/size (the route's upload handling, `_read_upload`-style) — this
@@ -406,7 +412,8 @@ def create_job(root: str | Path, brief: Brief, *,
         (d / MANUSCRIPT_SAMPLE_NAME).write_text(sample, encoding="utf-8")
 
     job = JobState(job_id=job_id, brief=brief, manuscript_name=manuscript_name,
-                  word_count=word_count, status="directing",
+                  word_count=word_count, anthropic_lane=anthropic_lane,
+                  status="directing",
                   created=datetime.now(timezone.utc).isoformat())
     _write_state(root, job)
     return job

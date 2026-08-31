@@ -278,6 +278,16 @@
         </div>
         <div class="ferror" id="ms-error" role="alert"></div>
       </div>
+      <div class="field">
+        <label class="flabel" for="f-lane">Claude billing
+          <span class="fhint-inline">— which purse art direction &amp; critique spend from (image generation is always API credits)</span></label>
+        <select id="f-lane">
+          <option value="">Machine default</option>
+          <option value="subscription">Max subscription — $0 API</option>
+          <option value="api">API credits</option>
+          <option value="auto">Auto — subscription when signed in</option>
+        </select>
+      </div>
       <div class="stack-m">
         <button class="btn" type="submit" id="brief-submit">Send the brief</button>
         <div class="ferror" id="brief-error" role="alert"></div>
@@ -641,6 +651,10 @@
   }
   function wireBriefForm() {
     var form = document.getElementById('brief-form');
+    try {
+      var savedLane = localStorage.getItem('sc-cover-lane');
+      if (savedLane) document.getElementById('f-lane').value = savedLane;
+    } catch (err) { /* private mode */ }
     var genreSel = document.getElementById('f-genre');
     var otherWrap = document.getElementById('genre-other-wrap');
     var otherInput = document.getElementById('f-genre-other');
@@ -657,6 +671,13 @@
       var brief = collectBrief();
       var fd = new FormData();
       fd.append('brief', JSON.stringify(brief));
+      /* The purse this job's Claude calls spend from. "" = machine default
+         (the server resolves the env / auto ladder); remembered per browser
+         because switching purses is a session-level decision, not a per-
+         brief one. */
+      var lane = document.getElementById('f-lane').value;
+      if (lane) fd.append('anthropic_lane', lane);
+      try { localStorage.setItem('sc-cover-lane', lane); } catch (err) { /* private mode */ }
       if (state.manuscriptFile) fd.append('manuscript', state.manuscriptFile, state.manuscriptFile.name);
       var btn = document.getElementById('brief-submit');
       btn.disabled = true;
@@ -866,7 +887,10 @@
     var a = (job.brief && job.brief.author) || '';
     document.getElementById('sheet-title').textContent = t;
     document.getElementById('sheet-byline').textContent = a ? 'by ' + a : '';
-    document.getElementById('sheet-total').textContent = '$' + Number(job.total_usd || 0).toFixed(2) + ' so far';
+    var purse = job.anthropic_lane === 'subscription' ? ' · Claude on Max'
+      : job.anthropic_lane === 'api' ? ' · Claude on API credits' : '';
+    document.getElementById('sheet-total').textContent =
+      '$' + Number(job.total_usd || 0).toFixed(2) + ' so far' + purse;
     var wc = document.getElementById('sheet-words');
     if (job.manuscript_name) {
       wc.textContent = 'Grounded in “' + job.manuscript_name + '” · ' +

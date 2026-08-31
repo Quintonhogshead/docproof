@@ -20,15 +20,23 @@ from __future__ import annotations
 
 import json
 import time
+import types
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import quest_site
+from app.routes import cover as cover_routes
 from docproof.cover import pipeline as cover_pipeline
+from docproof.cover import subscription
 from docproof.cover.archetypes import ARCHETYPES
 from docproof.cover.direction import DirectionResult
 from docproof.cover.model import Brief, ConceptState, Direction, Palette, \
     RenderReport, build_spec
+from docproof.cover.subscription import (SubscriptionAnthropicClient,
+                                         SubscriptionProvider,
+                                         SubscriptionUnavailable)
 
 COVER_KEY = "test-cover-key"
 
@@ -62,12 +70,24 @@ def _brief_json(**overrides) -> str:
     return json.dumps(data)
 
 
-def _app(monkeypatch, tmp_path, *, cover_key: str | None = COVER_KEY):
+def _app(monkeypatch, tmp_path, *, cover_key: str | None = COVER_KEY,
+         lane: str | None = "api"):
+    """A test app with the environment pinned.
+
+    `lane` pins COVER_ANTHROPIC_LANE to "api" by default so every test that
+    is not ABOUT the lane behaves the same on the owner's logged-in Mac and
+    on a CI box with no Claude CLI — "auto" would resolve differently on the
+    two. The lane tests pass their own value (or None, to leave the
+    environment silent)."""
     if cover_key is None:
         monkeypatch.delenv("COVER_KEY", raising=False)
     else:
         monkeypatch.setenv("COVER_KEY", cover_key)
     monkeypatch.setenv("COVER_DATA_PATH", str(tmp_path))
+    if lane is None:
+        monkeypatch.delenv("COVER_ANTHROPIC_LANE", raising=False)
+    else:
+        monkeypatch.setenv("COVER_ANTHROPIC_LANE", lane)
     return quest_site.create_app()
 
 
@@ -78,13 +98,18 @@ def _bypass_provider_and_image_client(monkeypatch) -> None:
     pipeline-level fakes below, which ignore it. One Providers instance
     (BRAIN wave, 2026-08-29) rather than a bare object(), since
     cover_pipeline.run_job/run_revision now expect the real dataclass shape
-    (.direction/.revision/.reality), not any old sentinel."""
+    (.direction/.revision/.reality), not any old sentinel.
+
+    _providers/_critique_client take the resolved Anthropic lane, so the
+    stand-ins swallow whatever they are handed — a route test asserting on
+    the lane monkeypatches them itself (see the lane tests below)."""
     monkeypatch.setattr(
         "app.routes.cover._providers",
-        lambda: cover_pipeline.Providers(
+        lambda *a, **k: cover_pipeline.Providers(
             direction=object(), revision=object(), reality=object()))
     monkeypatch.setattr("app.routes.cover._image_client", lambda: object())
-    monkeypatch.setattr("app.routes.cover._critique_client", lambda: object())
+    monkeypatch.setattr("app.routes.cover._critique_client",
+                        lambda *a, **k: object())
 
 
 def _fake_direction_call(monkeypatch, directions: list[Direction]) -> None:
@@ -522,3 +547,266 @@ def test_job_id_with_a_traversal_shape_is_a_plain_404(monkeypatch, tmp_path):
                               headers={"X-Cover-Key": COVER_KEY})
             assert resp.status_code == 404, reaches_route
             assert "No cover job" in resp.json()["detail"]
+
+
+# -- which purse the Anthropic roles spend from -------------------------------
+#
+# The owner's report: Cover Studio on his own machine died on "Your credit
+# balance is too low" while a Max subscription sat unused. The lane decides
+# which of the two a run spends, per run, and these tests are the matrix --
+# built directly against the route helpers where the decision is the whole
+# assertion, and over HTTP where the point is that a request, a stored job,
+# and the payload agree.
+
+_UNAVAILABLE = ("Cover Studio's Claude subscription lane needs this machine "
+                "signed in to Claude and it is not -- run `claude "
+                "setup-token`.")
+
+
+def _lane_seams(monkeypatch, *, available: bool) -> list[str]:
+    """The seams a lane decision touches, all faked: whether this machine can
+    run a subscription turn, and the API path's config/key/provider
+    construction. Returns the list of model ids the API path was asked to
+    build, which is how "it fell back" is proved rather than assumed."""
+    def preflight() -> None:
+        if not available:
+            raise SubscriptionUnavailable(_UNAVAILABLE)
+
+    built: list[str] = []
+
+    def build_provider(cfg, *, api_key=None, model=None):
+        built.append(model)
+        return object()
+
+    monkeypatch.setattr(subscription, "preflight", preflight)
+    monkeypatch.setattr(cover_routes, "build_provider", build_provider)
+    monkeypatch.setattr(cover_routes, "get_api_key", lambda vendor: "a-key")
+    monkeypatch.setattr(cover_routes, "load_config", lambda path: types.SimpleNamespace(
+        api=types.SimpleNamespace(effort="low", model="claude-fable-5",
+                                  provider="anthropic")))
+    monkeypatch.setattr(cover_routes, "_image_client", lambda: object())
+    return built
+
+
+def _lane_recorder(monkeypatch) -> dict:
+    """_providers/_critique_client, replaced by recorders that keep the lane
+    they were handed -- both are called synchronously inside the request, so
+    a response coming back is proof the lane reached them."""
+    seen: dict = {}
+
+    def providers(lane: str = "api"):
+        seen["providers"] = lane
+        return cover_pipeline.Providers(direction=object(), revision=object(),
+                                        reality=object())
+
+    def critique_client(lane: str = "api"):
+        seen["critique"] = lane
+        return object()
+
+    monkeypatch.setattr(cover_routes, "_providers", providers)
+    monkeypatch.setattr(cover_routes, "_critique_client", critique_client)
+    monkeypatch.setattr(cover_routes, "_image_client", lambda: object())
+    return seen
+
+
+def test_auto_takes_the_subscription_when_the_machine_can_run_one(monkeypatch):
+    _lane_seams(monkeypatch, available=True)
+    monkeypatch.delenv("COVER_ANTHROPIC_LANE", raising=False)
+    lane = cover_routes._resolve_lane(cover_routes._requested_lane())
+    providers = cover_routes._providers(lane)
+    assert lane == "subscription"
+    assert isinstance(providers.direction, SubscriptionProvider)
+    assert isinstance(providers.revision, SubscriptionProvider)
+    assert isinstance(providers.reality, SubscriptionProvider)
+    assert isinstance(cover_routes._critique_client(lane),
+                      SubscriptionAnthropicClient)
+
+
+def test_auto_falls_back_to_the_api_key_when_it_cannot(monkeypatch):
+    built = _lane_seams(monkeypatch, available=False)
+    monkeypatch.delenv("COVER_ANTHROPIC_LANE", raising=False)
+    lane = cover_routes._resolve_lane(cover_routes._requested_lane())
+    providers = cover_routes._providers(lane)
+    assert lane == "api"
+    assert not isinstance(providers.direction, SubscriptionProvider)
+    assert built == ["claude-fable-5", "claude-sonnet-5", "claude-sonnet-5"]
+
+
+def test_the_api_lane_never_reaches_for_the_subscription(monkeypatch):
+    # Today's behaviour, untouched -- on a machine that COULD run a
+    # subscription turn.
+    built = _lane_seams(monkeypatch, available=True)
+    monkeypatch.setenv("COVER_ANTHROPIC_LANE", "api")
+    lane = cover_routes._resolve_lane(cover_routes._requested_lane())
+    assert lane == "api"
+    assert not isinstance(cover_routes._providers(lane).direction,
+                          SubscriptionProvider)
+    assert built == ["claude-fable-5", "claude-sonnet-5", "claude-sonnet-5"]
+
+
+def test_a_pinned_subscription_lane_502s_rather_than_billing_the_api(
+        monkeypatch):
+    # The owner's whole complaint: a silent fall back onto an empty credit
+    # balance is the failure, so a pin has no fallback -- just the sentence.
+    _lane_seams(monkeypatch, available=False)
+    monkeypatch.setenv("COVER_ANTHROPIC_LANE", "subscription")
+    with pytest.raises(HTTPException) as excinfo:
+        cover_routes._resolve_lane(cover_routes._requested_lane())
+    assert excinfo.value.status_code == 502
+    assert "setup-token" in excinfo.value.detail
+
+
+def test_a_role_on_another_vendor_ignores_the_lane(monkeypatch):
+    # A model id the catalog serves from OpenAI has no subscription behind
+    # it, so the lane must not reach for one.
+    built = _lane_seams(monkeypatch, available=True)
+    provider = cover_routes._build_role_provider(
+        "gpt-5.6-luna", role="direction", lane="subscription")
+    assert not isinstance(provider, SubscriptionProvider)
+    assert built == ["gpt-5.6-luna"]
+
+
+def test_a_junk_lane_is_refused_with_the_sentence():
+    with pytest.raises(HTTPException) as excinfo:
+        cover_routes._checked_lane("free")
+    assert excinfo.value.status_code == 422
+    assert "subscription" in excinfo.value.detail and "api" in excinfo.value.detail
+
+
+def test_the_request_body_outranks_the_environment(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path, lane="api")
+    _lane_seams(monkeypatch, available=True)
+    seen = _lane_recorder(monkeypatch)
+    headers = {"X-Cover-Key": COVER_KEY}
+    with TestClient(app) as client:
+        resp = client.post("/api/cover/jobs",
+                           data={"brief": _brief_json(),
+                                 "anthropic_lane": "subscription"},
+                           headers=headers)
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        assert seen == {"providers": "subscription", "critique": "subscription"}
+        state = client.get(f"/api/cover/jobs/{job_id}", headers=headers).json()
+    assert state["anthropic_lane"] == "subscription"
+
+
+def test_the_environment_answers_when_the_body_says_nothing(monkeypatch,
+                                                            tmp_path):
+    app = _app(monkeypatch, tmp_path, lane="api")
+    _lane_seams(monkeypatch, available=True)
+    seen = _lane_recorder(monkeypatch)
+    headers = {"X-Cover-Key": COVER_KEY}
+    with TestClient(app) as client:
+        resp = client.post("/api/cover/jobs", data={"brief": _brief_json()},
+                           headers=headers)
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        state = client.get(f"/api/cover/jobs/{job_id}", headers=headers).json()
+    assert seen["providers"] == "api"
+    assert state["anthropic_lane"] == "api"
+
+
+def test_a_junk_lane_on_create_is_a_422_and_no_job(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    _lane_recorder(monkeypatch)
+    headers = {"X-Cover-Key": COVER_KEY}
+    with TestClient(app) as client:
+        resp = client.post("/api/cover/jobs",
+                           data={"brief": _brief_json(),
+                                 "anthropic_lane": "whatever"},
+                           headers=headers)
+        assert resp.status_code == 422
+        assert "anthropic_lane must be" in resp.json()["detail"]
+        assert client.get("/api/cover/jobs", headers=headers).json() == {"jobs": []}
+
+
+def test_a_revision_reuses_the_lane_its_job_was_started_on(monkeypatch,
+                                                           tmp_path):
+    # The environment says "api"; the job was created on the subscription.
+    # A revision must not quietly switch purses mid-book.
+    app = _app(monkeypatch, tmp_path, lane="api")
+    _lane_seams(monkeypatch, available=True)
+    seen = _lane_recorder(monkeypatch)
+    monkeypatch.setattr(cover_pipeline, "run_revision",
+                        lambda *a, **k: _noop_revision())
+    headers = {"X-Cover-Key": COVER_KEY}
+
+    job = cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
+        anthropic_lane="subscription")
+    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    job.concepts = [ConceptState(spec=spec, status="ready",
+                                 renders=["renders/v1_c0.png"])]
+    job.status = "ready"
+    cover_pipeline._write_state(tmp_path, job)
+
+    with TestClient(app) as client:
+        resp = client.post(f"/api/cover/jobs/{job.job_id}/revise",
+                           json={"concept": 0, "notes": "warmer",
+                                 "allow_new_art": False},
+                           headers=headers)
+        assert resp.status_code == 202
+    assert seen["providers"] == "subscription"
+
+
+def test_a_revision_body_can_override_the_stored_lane(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path, lane="subscription")
+    _lane_seams(monkeypatch, available=True)
+    seen = _lane_recorder(monkeypatch)
+    monkeypatch.setattr(cover_pipeline, "run_revision",
+                        lambda *a, **k: _noop_revision())
+    headers = {"X-Cover-Key": COVER_KEY}
+
+    job = cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
+        anthropic_lane="subscription")
+    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    job.concepts = [ConceptState(spec=spec, status="ready",
+                                 renders=["renders/v1_c0.png"])]
+    job.status = "ready"
+    cover_pipeline._write_state(tmp_path, job)
+
+    with TestClient(app) as client:
+        resp = client.post(f"/api/cover/jobs/{job.job_id}/revise",
+                           json={"concept": 0, "notes": "warmer",
+                                 "allow_new_art": False,
+                                 "anthropic_lane": "api"},
+                           headers=headers)
+        assert resp.status_code == 202
+    assert seen["providers"] == "api"
+
+
+def test_the_job_list_names_each_job_s_lane(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    headers = {"X-Cover-Key": COVER_KEY}
+    cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
+        anthropic_lane="subscription")
+    with TestClient(app) as client:
+        listed = client.get("/api/cover/jobs", headers=headers).json()["jobs"]
+    assert [j["anthropic_lane"] for j in listed] == ["subscription"]
+
+
+def test_a_job_from_before_the_lane_existed_still_loads(monkeypatch, tmp_path):
+    # job.json files predate this field; they read as "no opinion", not as a
+    # validation error.
+    app = _app(monkeypatch, tmp_path)
+    headers = {"X-Cover-Key": COVER_KEY}
+    job = cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
+    raw = json.loads((cover_pipeline.job_dir(tmp_path, job.job_id)
+                      / cover_pipeline.JOB_MANIFEST).read_text())
+    raw.pop("anthropic_lane")
+    (cover_pipeline.job_dir(tmp_path, job.job_id)
+     / cover_pipeline.JOB_MANIFEST).write_text(json.dumps(raw))
+    with TestClient(app) as client:
+        state = client.get(f"/api/cover/jobs/{job.job_id}",
+                           headers=headers).json()
+    assert state["anthropic_lane"] == ""
+
+
+async def _noop_revision() -> None:
+    """A run_revision stand-in: the lane assertion happens before the
+    background task matters, and a real revision would need the whole render
+    chain."""
+    return None

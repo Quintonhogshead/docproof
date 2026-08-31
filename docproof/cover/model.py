@@ -1260,6 +1260,14 @@ class JobState(BaseModel):
     brief: Brief
     manuscript_name: str = ""                   # set only when a manuscript was uploaded
     word_count: int = 0
+    # Which purse this job's Anthropic model calls run on: "subscription"
+    # (the owner's Claude login, $0 in API dollars) or "api" (metered
+    # credits) — the RESOLVED lane, not the request, so the app can show a
+    # person which one a run is spending and a revision reuses the lane its
+    # job was started on rather than silently switching purses mid-book.
+    # Empty on any job created before the lane was a choice, which reads as
+    # "whatever the deployment does today".
+    anthropic_lane: str = ""
     status: Literal["directing", "working", "ready", "error"]
     error: str | None = None
     concepts: list[ConceptState] = Field(default_factory=list)
