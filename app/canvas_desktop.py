@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 
@@ -51,6 +52,46 @@ MIN_WINDOW = (1100, 720)
 # only ever guards a loopback socket on the owner's own machine, and a fresh
 # secret every launch would be a password prompt with no password manager.
 LOCAL_KEY = "canvas"
+
+# What Cover Studio's Claude calls spend on a machine that has a Claude
+# login: the subscription, not metered API credits. Pinned rather than left
+# on "auto" because a silent fall back to a key — mid-job, onto a balance
+# that may be empty — is the exact failure the subscription lane was built to
+# stop, and on the owner's own Mac the login IS the point. A deployment with
+# no CLI login never runs this code.
+LOCAL_ANTHROPIC_LANE = "subscription"
+
+
+def cover_env_defaults(root: Path) -> None:
+    """The Cover Studio environment both Mac shells assume, set only where
+    the environment is silent.
+
+    Shared by app/desktop.py and this window so the two cannot drift on what
+    a local cover run does. Every one of these is a DEFAULT, never an
+    override: an explicit COVER_KEY, COVER_DATA_PATH or COVER_ANTHROPIC_LANE
+    (and, for the lane, a per-run choice in the app) still wins.
+
+    - COVER_KEY: the key gate is inert without one, and this socket is
+      loopback with one owner (see LOCAL_KEY).
+    - COVER_DATA_PATH: cover_pipeline's own fallback is cwd-relative, and a
+      Finder-launched .app starts life at "/" — an unwritable store that
+      reads as "no finished covers yet" forever.
+    - COVER_ANTHROPIC_LANE: this machine's Claude login is why the owner
+      bought a subscription (see LOCAL_ANTHROPIC_LANE)."""
+    if not os.environ.get("COVER_DATA_PATH"):
+        os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
+    if not os.environ.get("COVER_KEY"):
+        os.environ["COVER_KEY"] = LOCAL_KEY
+    if not os.environ.get("COVER_ANTHROPIC_LANE"):
+        os.environ["COVER_ANTHROPIC_LANE"] = LOCAL_ANTHROPIC_LANE
+    # A Finder-launched .app inherits launchd's minimal PATH, which has no
+    # /opt/homebrew/bin — so the subscription lane and the canvas assistant
+    # would report "could not find the Claude Code CLI" in the packaged app
+    # while working fine from a terminal. Appended, never prepended: a PATH
+    # the user shaped still wins.
+    if shutil.which("claude") is None:
+        os.environ["PATH"] = (os.environ.get("PATH", "") +
+                              ":/opt/homebrew/bin:/usr/local/bin")
 
 
 def build_shell_app(root: Path):
@@ -90,17 +131,11 @@ def main(argv=None) -> int:
     if args.jobs:
         # Read back out of the environment by cover_pipeline.default_root()
         # inside build_shell_app — one answer for the job store, however it
-        # was chosen.
+        # was chosen. Set before the defaults below so a --jobs on the command
+        # line is the environment they see.
         os.environ["COVER_DATA_PATH"] = str(Path(args.jobs).expanduser())
-    elif not os.environ.get("COVER_DATA_PATH"):
-        # cover_pipeline's own fallback is cwd-relative "cover_jobs", and a
-        # Finder-launched .app starts life with cwd "/" — an unwritable store
-        # that reads as "no finished covers yet" forever. Anchor the default
-        # in the app home, where every launch resolves to the same folder.
-        os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
-    key = os.environ.get("COVER_KEY")
-    if not key:
-        os.environ["COVER_KEY"] = key = LOCAL_KEY
+    cover_env_defaults(root)
+    key = os.environ["COVER_KEY"]
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}"
 

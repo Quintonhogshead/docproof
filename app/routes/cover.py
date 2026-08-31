@@ -13,11 +13,21 @@ The job store and the actual work (the direction call, painting, composing,
 revising) live in docproof.cover.pipeline — this module's job is HTTP shape
 only: validate the request, build a Provider and an image client, hand both
 to a pipeline function as a background task, and shape the response.
+
+One decision does live here, because only the HTTP layer can make it per
+run: WHICH PURSE the Claude calls spend from. Every Anthropic-model role can
+run on the owner's Claude subscription (docproof.cover.subscription) instead
+of on metered API credits, and the lane is chosen by the request, defaulted
+by COVER_ANTHROPIC_LANE, resolved once per job, stored on the job, and
+returned in its payload — see _requested_lane/_resolve_lane below. Image
+generation is untouched: gpt-image has no subscription lane and stays
+metered.
 """
 from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import re
 import tempfile
@@ -30,12 +40,15 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from docproof.config import load_config
 from docproof.cover import pipeline as cover_pipeline
+from docproof.cover import subscription
 from docproof.cover.model import Brief
 from docproof.ingest import IngestError
 from docproof.providers import build_provider, lookup
 from docproof.providers.base import ProviderError
 
 from ..settings import CONFIG_PATH, get_api_key
+
+log = logging.getLogger("docproof.app.cover")
 
 # Guarded because direction.py/reality.py are sibling modules built alongside
 # this one (see docproof.cover.pipeline's module docstring for the same
@@ -124,7 +137,98 @@ def _data_root(request: Request) -> Path:
     return Path(root) if root else cover_pipeline.default_root()
 
 
-def _build_role_provider(model: str, *, role: str):
+# -- which purse the Anthropic roles spend from -------------------------------
+#
+# The owner ran Cover Studio on his own machine and art direction died on
+# "Your credit balance is too low" while a Max subscription sat unused. Every
+# Anthropic-model role can now run on that subscription instead
+# (docproof.cover.subscription), and which purse a run spends from is a
+# per-run choice: the request names it, the environment names the default,
+# and the resolved answer is stored on the job so a revision cannot silently
+# switch purses mid-book. Image generation is untouched — gpt-image has no
+# subscription lane and stays metered.
+
+LANE_ENV = "COVER_ANTHROPIC_LANE"
+
+# What a caller may ASK for. "auto" prefers the subscription and falls back to
+# the API key; "subscription" is a pin with no fallback (a machine that cannot
+# run one is a problem to fix, not to bill around); "api" is the behavior
+# every deployment had before this existed.
+LANES = ("auto", "subscription", "api")
+
+_LANE_SENTENCE = (
+    "anthropic_lane must be \"subscription\" (your Claude subscription), "
+    "\"api\" (metered API credits), or \"auto\" (the subscription when this "
+    "machine is signed in, otherwise the API key)")
+
+
+def _checked_lane(value: str | None) -> str:
+    """One requested lane, validated like any other body field: junk is a 422
+    with the sentence, never a silent fallback to some other purse. Empty (or
+    absent) means "the caller has no opinion", which the resolution order
+    below answers from the job or the environment."""
+    lane = (value or "").strip().lower()
+    if not lane:
+        return ""
+    if lane not in LANES:
+        raise HTTPException(422, detail=f"{lane!r} is not a lane — "
+                                        f"{_LANE_SENTENCE}.")
+    return lane
+
+
+def _requested_lane(explicit: str = "", stored: str = "") -> str:
+    """The lane this call is asking for: the request body first, then the
+    lane the job was created on, then the environment, then "auto".
+
+    The stored lane outranks the environment on purpose. A job started on the
+    subscription and revised after a restart must not quietly begin spending
+    API credits — that switch is exactly the surprise this whole lane exists
+    to prevent, and a person who wants it says so in the body.
+
+    A junk value in the environment is refused the same way a junk value in
+    the body is, rather than quietly ignored: a deployment that misspelled
+    its lane should hear about it, not spend from whichever purse the typo
+    happened to fall through to."""
+    return (explicit or stored
+            or _checked_lane(os.environ.get(LANE_ENV)) or "auto")
+
+
+def _resolve_lane(requested: str) -> str:
+    """The requested lane resolved against this machine: "subscription" or
+    "api", logged once for the job rather than once per model call.
+
+    "api" is today's behavior, untouched. "subscription" is a pin: a machine
+    that cannot run a subscription turn gets a readable 502 naming the fix,
+    never a silent fall back onto a credit balance the owner did not choose
+    to spend. "auto" tries the subscription and falls back to the API key,
+    which is what a Fly or quest deployment (no CLI, no login) always
+    does."""
+    if requested == "api":
+        log.info("Cover Studio: Anthropic roles on the API-key lane.")
+        return "api"
+    try:
+        subscription.preflight()
+    except subscription.SubscriptionUnavailable as e:
+        if requested == "subscription":
+            raise HTTPException(502, detail=str(e)) from e
+        log.info("Cover Studio: Anthropic roles on the API-key lane — the "
+                 "Claude subscription lane is not available here (%s)", e)
+        return "api"
+    log.info("Cover Studio: Anthropic roles on the Claude subscription lane "
+             "(no API dollars).")
+    return "subscription"
+
+
+def _is_anthropic(model: str) -> bool:
+    """Whether this role's model is served by Anthropic at all. A role
+    resolved to another vendor (an OpenAI or Gemini id in the catalog, or a
+    model the catalog has never heard of) is untouched by the lane — there is
+    no subscription behind those."""
+    info = lookup(model)
+    return info is not None and info.provider == "anthropic"
+
+
+def _build_role_provider(model: str, *, role: str, lane: str = "api"):
     """One model role's Provider, built fresh per call — mirrors the site's
     old single-model _provider() (Quest's own quest.py:_provider() still
     works this way for its one cheap model), but resolves the vendor from
@@ -132,7 +236,16 @@ def _build_role_provider(model: str, *, role: str):
     function's docstring) rather than mutating cfg.api.model, so all three
     Cover Studio roles can share one loaded config without stepping on each
     other. `role` is a human word ("direction", "revision", "reality") used
-    only in the 503 sentence below."""
+    only in the 503 sentence below.
+
+    On the subscription lane an Anthropic role gets a SubscriptionProvider
+    instead — the same Provider protocol, answered by the Claude CLI on the
+    owner's login. A non-Anthropic role ignores the lane entirely."""
+    if lane == "subscription" and _is_anthropic(model):
+        try:
+            return subscription.SubscriptionProvider()
+        except subscription.SubscriptionUnavailable as e:
+            raise HTTPException(502, detail=str(e)) from e
     cfg = load_config(CONFIG_PATH)
     cfg.api.effort = "low"
     try:
@@ -143,26 +256,44 @@ def _build_role_provider(model: str, *, role: str):
             f"The {role} model is not available: {e}")) from e
 
 
-def _providers() -> cover_pipeline.Providers:
+def _providers(lane: str = "api") -> cover_pipeline.Providers:
     """One Provider per model role (BRAIN wave, 2026-08-29): the frontier
     model for art direction, the workhorse model for revision, the
     workhorse model for manuscript distillation — see
     docproof.cover.pipeline.Providers' own docstring for why three, not
-    one. Built fresh per request, same as the single provider it replaces."""
+    one. Built fresh per request, same as the single provider it replaces.
+
+    `lane` is the resolved purse (see _resolve_lane); it defaults to the
+    API-key path so any caller that never learned about lanes behaves
+    exactly as it did before."""
     return cover_pipeline.Providers(
-        direction=_build_role_provider(DIRECTION_MODEL, role="direction"),
-        revision=_build_role_provider(REVISION_MODEL, role="revision"),
-        reality=_build_role_provider(REALITY_MODEL, role="reality"))
+        direction=_build_role_provider(DIRECTION_MODEL, role="direction",
+                                       lane=lane),
+        revision=_build_role_provider(REVISION_MODEL, role="revision",
+                                      lane=lane),
+        reality=_build_role_provider(REALITY_MODEL, role="reality",
+                                     lane=lane))
 
 
-def _critique_client() -> anthropic.Anthropic:
+def _critique_client(lane: str = "api"):
     """The raw anthropic client for the vision critique call (§6.3) —
     critique.py talks to the anthropic SDK directly rather than through the
     Provider protocol (see that module's own docstring for why), so it needs
     its own client rather than reusing one of the three Providers above.
     Keyed the same way the image client is (§7.2's precedent):
     app.settings.get_api_key, a missing key surfaced as the same
-    human-sentence 503 pattern."""
+    human-sentence 503 pattern.
+
+    On the subscription lane this is a SubscriptionAnthropicClient instead —
+    the same `messages.stream(...)` surface critique.py and planner.py use,
+    images included, answered on the owner's Claude login and needing no key
+    at all. Both this client's models (CRITIQUE_MODEL, PLANNER_MODEL) are
+    Anthropic by construction, so there is no vendor gate to apply here."""
+    if lane == "subscription":
+        try:
+            return subscription.SubscriptionAnthropicClient()
+        except subscription.SubscriptionUnavailable as e:
+            raise HTTPException(502, detail=str(e)) from e
     key = get_api_key("anthropic")
     if not key:
         raise HTTPException(503, detail=(
@@ -191,17 +322,29 @@ class ReviseBody(BaseModel):
     concept: int
     notes: str = ""
     allow_new_art: bool = False
+    # Optional per-revision override of the purse (see _requested_lane).
+    # Omitted — the normal case — the job's own stored lane answers, so a
+    # client never has to restate it. Validated in the endpoint rather than
+    # here so a junk lane reads as the same sentence on both endpoints.
+    anthropic_lane: str = ""
 
 
 def register(app: FastAPI) -> None:
 
     @app.post("/api/cover/jobs", status_code=202)
     async def cover_create_job(request: Request, brief: str = Form(...),
-                               manuscript: UploadFile | None = File(None)
+                               manuscript: UploadFile | None = File(None),
+                               anthropic_lane: str = Form("")
                                ) -> dict:
         """Create a job: a Brief (JSON, in the `brief` form field) plus an
         optional manuscript for grounding. Spawns run_job in the background
-        and returns immediately (§9)."""
+        and returns immediately (§9).
+
+        `anthropic_lane` picks the purse this job's Claude calls spend from —
+        "subscription", "api", or "auto" — and is the top of the resolution
+        order (body, then COVER_ANTHROPIC_LANE, then "auto"). The resolved
+        answer is stored on the job, so every revision of it reuses the same
+        purse and the app can show which one a run is on."""
         _gate(request)
         try:
             brief_obj = Brief.model_validate_json(brief)
@@ -211,10 +354,14 @@ def register(app: FastAPI) -> None:
 
         # Built before anything touches disk: a missing model/key is a 503
         # regardless of whether this particular job would ever need images,
-        # the same all-or-nothing stance quest.py's _provider() takes.
-        providers = _providers()
+        # the same all-or-nothing stance quest.py's _provider() takes. The
+        # lane is resolved first, once, for the same reason — a pinned
+        # subscription this machine cannot run is a 502 before a job exists,
+        # not a half-directed job on disk.
+        lane = _resolve_lane(_requested_lane(_checked_lane(anthropic_lane)))
+        providers = _providers(lane)
         image_client = _image_client()
-        critique_client = _critique_client()
+        critique_client = _critique_client(lane)
         root = _data_root(request)
 
         manuscript_name = ""
@@ -227,7 +374,7 @@ def register(app: FastAPI) -> None:
             try:
                 job = cover_pipeline.create_job(
                     root, brief_obj, manuscript_path=manuscript_path,
-                    manuscript_name=manuscript_name)
+                    manuscript_name=manuscript_name, anthropic_lane=lane)
             except IngestError as e:
                 raise HTTPException(400, detail=str(e)) from e
 
@@ -241,7 +388,10 @@ def register(app: FastAPI) -> None:
     async def cover_get_job(job_id: str, request: Request) -> JSONResponse:
         """Poll target (§9): the whole JobState plus total_usd. Checks for a
         job orphaned by a restart before answering, so a stuck poll turns
-        into a plain, actionable error instead of hanging forever."""
+        into a plain, actionable error instead of hanging forever.
+
+        The JobState dump carries `anthropic_lane`, so a client can show
+        which purse this run's Claude calls are spending from."""
         _gate(request)
         job_id = _checked_job_id(job_id)
         root = _data_root(request)
@@ -258,7 +408,12 @@ def register(app: FastAPI) -> None:
                            ) -> dict:
         """Revise one concept: notes, and whether to allow new art. 409
         unless that concept is ready/error — a concept mid-paint has nothing
-        stable to revise yet (§9)."""
+        stable to revise yet (§9).
+
+        The purse is the job's own stored lane unless this body names one
+        (which applies to this revision only — the job's lane is set when the
+        job is created, and a one-off override is not a decision about the
+        book)."""
         _gate(request)
         job_id = _checked_job_id(job_id)
         root = _data_root(request)
@@ -273,7 +428,9 @@ def register(app: FastAPI) -> None:
                 "This concept is still being worked on — wait for it to "
                 "finish before revising it."))
 
-        providers = _providers()
+        lane = _resolve_lane(_requested_lane(
+            _checked_lane(body.anthropic_lane), job.anthropic_lane))
+        providers = _providers(lane)
         image_client = _image_client()
         # critique_client doubles as the §15.16 replan client: run_revision
         # only ever uses it when allow_new_art is set AND the notes ask for a
@@ -282,7 +439,7 @@ def register(app: FastAPI) -> None:
         # threading the replan client must not change that: no key → None →
         # replan quietly degrades to the spontaneous path in the pipeline.
         try:
-            replan_client = _critique_client()
+            replan_client = _critique_client(lane)
         except HTTPException:
             replan_client = None
         task = asyncio.create_task(cover_pipeline.run_revision(
@@ -336,5 +493,6 @@ def register(app: FastAPI) -> None:
         jobs = cover_pipeline.list_jobs(root, limit=20)
         return {"jobs": [{"job_id": j.job_id, "title": j.brief.title,
                           "status": j.status, "created": j.created,
+                          "anthropic_lane": j.anthropic_lane,
                           "total_usd": cover_pipeline.total_usd(j)}
                          for j in jobs]}
