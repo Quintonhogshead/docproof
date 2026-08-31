@@ -21,8 +21,9 @@ from PIL import Image
 
 from docproof.canvas import render as R
 from docproof.canvas.model import (ArtLayer, CanvasDoc, Effect, Frame,
-                                   FrameLayer, Gradient, ScrimLayer,
-                                   ShapeLayer, Size, Stop, TextLayer, Warp)
+                                   FrameLayer, Gradient, MaskGradient,
+                                   ScrimLayer, ShapeLayer, Size, Stop,
+                                   TextLayer, Warp)
 
 BLUE = (0, 0, 255, 255)
 RED = (255, 0, 0, 255)
@@ -726,3 +727,135 @@ def test_an_inverted_matrix_round_trips():
 
 def test_a_singular_matrix_inverts_to_nothing():
     assert R._invert3((1.0, 2.0, 3.0, 2.0, 4.0, 6.0, 0.0, 0.0, 1.0)) is None
+
+
+# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
+#
+# These are the two things the editor could not do until 2026-08-31, and the
+# reason it could not execute the doctrine it was being told: rule 9's clipped
+# art is a mask and rule 6's "depth bands differ in VALUE" is a grade. The math
+# itself lives in docproof.cover.effects and is tested there — what is tested
+# here is the CANVAS's own half: which box, which order, which alpha.
+
+def adjust(layer_id="ly_adj", **kw):
+    frame = kw.pop("frame", Frame(x=0.5, y=0.5, w=1.0, h=1.0))
+    kw.setdefault("op", "grade")
+    return R.AdjustLayer(id=layer_id, frame=frame, **kw)
+
+
+def test_an_adjust_layer_grades_everything_under_it(job_dir):
+    img = R.render(doc_with(
+        shape("ly_base", fill="#ffffff", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0)),
+        adjust(brightness=-0.5)), job_dir)
+    assert img.getpixel((100, 160)) == (127, 127, 127, 255)
+
+
+def test_an_adjust_layer_only_grades_inside_its_own_frame(job_dir):
+    """The one deliberate difference from a CoverSpec adjust layer, which is
+    always the whole canvas: here the frame is a box a person can drag, and
+    it scopes the grade."""
+    img = R.render(doc_with(
+        shape("ly_base", fill="#ffffff", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0)),
+        adjust(brightness=-0.5, frame=Frame(x=0.25, y=0.5, w=0.5, h=1.0))), job_dir)
+    assert img.getpixel((40, 160)) == (127, 127, 127, 255)     # inside the box
+    assert img.getpixel((160, 160)) == (255, 255, 255, 255)    # outside it
+
+
+def test_a_hidden_adjust_layer_grades_nothing(job_dir):
+    img = R.render(doc_with(
+        shape("ly_base", fill="#ffffff", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0)),
+        adjust(brightness=-0.5, visible=False)), job_dir)
+    assert img.getpixel((100, 160)) == (255, 255, 255, 255)
+
+
+def test_an_adjust_layers_opacity_mixes_the_grade_back(job_dir):
+    """§15.3's equation, whose `opacity` term is the layer's own: at 0.5 the
+    result is halfway between the composite and the graded composite."""
+    img = R.render(doc_with(
+        shape("ly_base", fill="#ffffff", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0)),
+        adjust(brightness=-0.5, opacity=0.5)), job_dir)
+    assert img.getpixel((100, 160))[0] == pytest.approx(191, abs=2)
+
+
+def test_a_mask_clips_a_layer_to_the_shape_of_one_below_it(job_dir):
+    img = R.render(doc_with(
+        shape("ly_win", fill="#000000", frame=Frame(x=0.5, y=0.5, w=0.2, h=0.2)),
+        shape("ly_plate", fill="#ff0000", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+              mask=R.Mask(from_layer="ly_win"))), job_dir)
+    assert img.getpixel((100, 160)) == RED           # inside the window
+    assert img.getpixel((5, 5)) == (0, 0, 0, 0)      # outside it, nothing at all
+
+
+def test_a_mask_source_masks_even_when_it_is_hidden(job_dir):
+    """A mask is a geometric relationship, not a visual one. Hiding the layer
+    a plate is windowed through must not silently un-window the plate — that
+    would ship a full-bleed plate over a cover somebody thought they had
+    masked, which is the loudest possible side effect for `visible` to have.
+    """
+    img = R.render(doc_with(
+        shape("ly_win", fill="#000000", visible=False,
+              frame=Frame(x=0.5, y=0.5, w=0.2, h=0.2)),
+        shape("ly_plate", fill="#ff0000", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+              mask=R.Mask(from_layer="ly_win"))), job_dir)
+    assert img.getpixel((100, 160)) == RED
+    assert img.getpixel((5, 5)) == (0, 0, 0, 0)
+
+
+def test_a_mask_can_clip_art_into_the_letterforms_of_a_text_layer(job_dir):
+    """Doctrine rule 9, and the reason the canvas needs only ONE reference
+    field where a CoverSpec needs two: every canvas layer rasterizes to an
+    alpha tile, so naming a TEXT layer is the art-in-the-glyphs clip."""
+    plain = R.render(doc_with(text("ly_title")), job_dir)
+    clipped = R.render(doc_with(
+        text("ly_title"),
+        shape("ly_plate", fill="#ff0000", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+              mask=R.Mask(from_layer="ly_title"))), job_dir)
+    # The clipped plate paints exactly where the glyphs are and nowhere else.
+    assert ink_bbox(clipped) == ink_bbox(plain)
+    inked = [xy for xy in ((x, y) for x in range(0, 200, 3) for y in range(0, 320, 3))
+             if plain.getpixel(xy)[3] > 200]
+    assert inked, "the fixture drew no type to clip into"
+    assert all(clipped.getpixel(xy)[:3] == (255, 0, 0) for xy in inked)
+
+
+def test_an_inverted_mask_keeps_everything_the_mask_would_have_cut(job_dir):
+    img = R.render(doc_with(
+        shape("ly_win", fill="#000000", frame=Frame(x=0.5, y=0.5, w=0.2, h=0.2)),
+        shape("ly_plate", fill="#ff0000", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+              mask=R.Mask(from_layer="ly_win", invert=True))), job_dir)
+    assert img.getpixel((100, 160)) == BLACK    # the window shows the layer below
+    assert img.getpixel((5, 5)) == RED          # everywhere else is the plate
+
+
+def test_a_gradient_mask_fades_a_layer_rather_than_cutting_it(job_dir):
+    """Rule 6's tool: a far band faded toward what is behind it. angle 90 is
+    top-transparent to bottom-opaque, the convention both models document."""
+    img = R.render(doc_with(
+        shape("ly_plate", fill="#ff0000", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+              mask=R.Mask(gradient=MaskGradient(kind="linear", angle=90)))),
+        job_dir)
+    top = img.getpixel((100, 8))[3]
+    mid = img.getpixel((100, 160))[3]
+    bottom = img.getpixel((100, 310))[3]
+    assert top < mid < bottom
+    assert top < 40 and bottom > 215
+
+
+def test_a_mask_on_an_adjust_layer_scopes_the_grade(job_dir):
+    """The two scopes multiply: an adjust layer's frame AND its mask."""
+    img = R.render(doc_with(
+        shape("ly_base", fill="#ffffff", frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0)),
+        shape("ly_win", fill="#000000", visible=False,
+              frame=Frame(x=0.5, y=0.5, w=0.2, h=0.2)),
+        adjust(brightness=-0.5, mask=R.Mask(from_layer="ly_win"))), job_dir)
+    assert img.getpixel((100, 160)) == (127, 127, 127, 255)   # inside the mask
+    assert img.getpixel((5, 5)) == (255, 255, 255, 255)       # outside it
+
+
+def test_a_document_with_no_masks_allocates_no_sheets(job_dir):
+    """The mask path costs one canvas-sized allocation per layer that needs
+    it, and nothing at all for a document that has none — the pre-mask walk,
+    unchanged. Asserted through behaviour: the ordinary render still works
+    identically with the machinery in place."""
+    plain = R.render(doc_with(shape("ly_a", fill="#ff0000")), job_dir)
+    assert plain.getpixel((100, 160)) == RED

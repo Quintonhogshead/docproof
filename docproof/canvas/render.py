@@ -26,6 +26,12 @@ engine.js's buildLayer node tree exactly:
       -> flips    (the inner `flip` group's -1 scales, about the box centre)
       -> rotation (the outer group's rotation, about the box centre)
       -> composited at the frame centre
+      -> mask     (the alpha filter beside levels on the same cached group)
+
+An ADJUST layer (§15.3) owns no pixels and skips that pipeline entirely: it
+grades what is already on the canvas, scoped by its own frame box and mask,
+and hands back the new composite (buildAdjust in engine.js does the same
+thing with a raster of what is drawn so far).
 
 A tile is carried as an image PLUS its origin in box-local pixels (_Tile), so
 content that overhangs its own box — a bowed arc, a blurred shadow, a stroke
@@ -58,6 +64,21 @@ DIVERGENCES from engine.js, all deliberate:
   mesh converges to. Its edges are also hard where the mesh's are antialiased.
 - Levels rounding. Konva's two filters round through a Uint8ClampedArray twice
   and so does the LUT here, but the intermediate rounding can differ by 1/255.
+- Masks and grades mid-drag. Both ride a cached Konva node, and a cached node
+  cannot follow a drag — so the editor drops them while a hand is on a control
+  and takes them back on release. A masked layer shows unmasked mid-drag (the
+  honest preview: the mask is canvas-space and does not travel with the layer,
+  so what moves under it is exactly what the person is aiming), and an adjust
+  layer shows a translucent stand-in over its own box rather than a raster
+  that would slide its own contents around. Nothing here has an interaction
+  state, so nothing here has the divergence — a headless render is always the
+  settled picture.
+- Grade arithmetic. `grade`'s contrast step is Pillow's ImageEnhance.Contrast,
+  which pivots about the image's OWN mean; engine.js pivots about mid-grey,
+  which is that mean for the graded composites this runs on but not for an
+  extreme one. Saturation and brightness are the same equations in both.
+  Values agree closely, never bit-for-bit — the divergence is widest on a
+  composite that is almost entirely dark or almost entirely light.
 """
 from __future__ import annotations
 
@@ -69,9 +90,14 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
-from docproof.canvas.model import (ArtLayer, CanvasDoc, FrameLayer, ScrimLayer,
-                                   ShapeLayer, TextLayer)
+from docproof.canvas.model import (AdjustLayer, ArtLayer, CanvasDoc, FrameLayer,
+                                   Mask, ScrimLayer, ShapeLayer, TextLayer)
+from docproof.cover import effects as cover_effects
 from docproof.cover.fonts import FAMILIES, font_path
+from docproof.cover.model import AdjustLayer as CoverAdjust
+from docproof.cover.model import GradientMask as CoverGradientMask
+from docproof.cover.model import MaskSpec as CoverMaskSpec
+from docproof.cover.model import Palette as CoverPalette
 
 
 class RenderError(RuntimeError):
@@ -993,6 +1019,137 @@ def _pinned_art(layer: ArtLayer, canvas_w: int, canvas_h: int,
     return warped
 
 
+# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
+#
+# Both go through docproof.cover.effects rather than being reimplemented here,
+# which is a deliberate exception to this module's usual "mirror engine.js"
+# habit. A mask's threshold and a grade's curve are not geometry — they are the
+# same pixel math the composer runs when it builds a finished cover, and a
+# canvas whose grade disagreed with the studio's would make every plate look
+# one way in the editor and another in the delivered file. The geometry around
+# them (which box, which order, which alpha) is this module's own and is
+# mirrored in engine.js the usual way.
+#
+# The one adaptation is naming: effects.resolve_mask addresses its sources by
+# ART SLOT id, and a canvas layer id is not required to be a legal slot id
+# (`ly_ab12` happens to be, a layer somebody renamed may not). So references
+# are rewritten to synthetic slot ids at the boundary and the real images are
+# handed over under those names — full reuse, no id-shape coupling.
+
+# An adjust layer's rotation and flips are inert: the graded region is the
+# axis-aligned frame box. Documented as a constant so engine.js's mirror of
+# this decision has something to point at, and so the "validated but inert"
+# rule that governs every other cross-op field is stated once for geometry too.
+ADJUST_BOX_IS_AXIS_ALIGNED = True
+
+
+def _synthetic_mask(mask: Mask, drawn: dict[str, Image.Image]
+                    ) -> tuple[CoverMaskSpec, dict[str, Image.Image]]:
+    """One canvas Mask as the cover MaskSpec effects.resolve_mask takes, plus
+    the slot-id-keyed pixel map to resolve it against.
+
+    Names are rewritten (`ly_ab12` -> `s0`) rather than passed through: the
+    cover model validates slot ids against its own slug rule, and a canvas
+    layer id is only conventionally shaped. The rewrite is local to this call
+    and nothing downstream ever sees either name."""
+    names: dict[str, str] = {}
+    pixels: dict[str, Image.Image] = {}
+
+    def slot_for(ref: str) -> str:
+        if ref not in names:
+            names[ref] = f"s{len(names)}"
+            pixels[names[ref]] = drawn[ref]
+        return names[ref]
+
+    gradient = None
+    if mask.gradient is not None:
+        gradient = CoverGradientMask(**mask.gradient.model_dump())
+    return (CoverMaskSpec(
+        from_layer=slot_for(mask.from_layer) if mask.from_layer else "",
+        luminance_of=(slot_for(mask.luminance_of)
+                      if mask.luminance_of else ""),
+        gradient=gradient, invert=mask.invert), pixels)
+
+
+def _mask_alpha(layer: Any, canvas: tuple[int, int],
+                drawn: dict[str, Image.Image]) -> Image.Image | None:
+    """A layer's resolved mask as one canvas-sized 'L' field, or None.
+
+    A missing source is impossible for a document that validated (the
+    model's earlier-layer rule), so a KeyError here would mean the caller
+    skipped a layer it should have drawn — which is exactly why hidden
+    layers are still rasterized when something masks through them."""
+    mask = getattr(layer, "mask", None)
+    if mask is None:
+        return None
+    spec, pixels = _synthetic_mask(mask, drawn)
+    return cover_effects.resolve_mask(spec, canvas, pixels, {})
+
+
+def _box_alpha(canvas: tuple[int, int], centre_x: float, centre_y: float,
+               box_w: float, box_h: float) -> Image.Image | None:
+    """An adjust layer's frame as an alpha rectangle, or None when the box
+    covers the whole canvas.
+
+    None rather than a field of 255 on purpose: a full-canvas adjust layer
+    is the common case (it is what ingest writes for every §15.3 layer it
+    translates), and handing effects.apply_adjust no mask at all takes its
+    Image.blend path instead of building and compositing through a
+    255-everywhere image."""
+    width, height = canvas
+    left, top = centre_x - box_w / 2.0, centre_y - box_h / 2.0
+    right, bottom = left + box_w, top + box_h
+    if left <= 0 and top <= 0 and right >= width and bottom >= height:
+        return None
+    box = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(box).rectangle(
+        [round(left), round(top), round(right) - 1, round(bottom) - 1],
+        fill=255)
+    return box
+
+
+def _apply_adjust(out: Image.Image, layer: AdjustLayer,
+                  canvas: tuple[int, int], centre_x: float, centre_y: float,
+                  box_w: float, box_h: float,
+                  drawn: dict[str, Image.Image]) -> Image.Image:
+    """One adjust layer over everything composited so far (§15.3's equation,
+    run by effects.apply_adjust).
+
+    Scoped by TWO alpha fields multiplied together — the layer's own mask,
+    and its frame box — so a grade dragged over the left half of a cover and
+    a grade clipped into a silhouette are the same mechanism. The op itself
+    always computes over the FULL canvas image, never a crop, because every
+    op's geometry is canvas-relative (a vignette's falloff, a blur's radius
+    as a fraction of canvas height): cropping first would silently change
+    what those numbers mean, and a designer who drags a vignette layer
+    smaller expects a smaller window onto the same vignette, not a tighter
+    one."""
+    scope = _mask_alpha(layer, canvas, drawn)
+    box = _box_alpha(canvas, centre_x, centre_y, box_w, box_h)
+    if box is not None:
+        scope = box if scope is None else ImageChops.multiply(scope, box)
+    adjust = CoverAdjust(
+        # The cover model validates this id as an art-slot slug and nothing
+        # downstream of apply_adjust reads it; a canvas layer id is not
+        # required to be one, so it is not offered. Same boundary rewrite
+        # _synthetic_mask makes, for the same reason.
+        id="a", op=layer.op, blend=layer.blend,
+        brightness=layer.brightness, contrast=layer.contrast,
+        saturation=layer.saturation, temperature=layer.temperature,
+        stops=list(layer.stops), color=layer.color, strength=layer.strength,
+        radius=layer.radius, threshold=layer.threshold)
+    # A canvas document has no palette — ingest resolved every role to its
+    # hex at the boundary — so this stands in only to satisfy the signature.
+    # effects._resolve_color passes a literal hex straight through and never
+    # reads it; the one field it could fall back to is `scrim`, and
+    # AdjustLayer.color defaults to a real hex rather than "" so that path
+    # is unreachable from here.
+    palette = CoverPalette(background="#000000", primary="#000000",
+                           accent="#000000", text="#000000", scrim="#000000")
+    return cover_effects.apply_adjust(out, adjust, palette, canvas, scope,
+                                      opacity=layer.opacity)
+
+
 # -- placement ----------------------------------------------------------------
 
 def _flip(layer: Any, tile: _Tile, box_w: float, box_h: float) -> _Tile:
@@ -1084,13 +1241,54 @@ def render(doc: CanvasDoc, job_dir: Path, *,
     canvas_h = max(1, round(doc.canvas.h * canvas_w / doc.canvas.w))
     out = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     job_dir = Path(job_dir)
+    canvas = (canvas_w, canvas_h)
+
+    # Which layers something else masks through. A mask source is rasterized
+    # even when it is HIDDEN, and this set is how that is known before the
+    # walk reaches it: a mask is a geometric relationship, not a visual one,
+    # so hiding the title must not silently un-window the plate clipped into
+    # it — the plate would go full-bleed over a cover somebody thought they
+    # had masked, which is the loudest possible way for `visible` to have a
+    # side effect nobody asked for. Its pixels are cached, never composited.
+    referenced: set[str] = set()
+    for layer in doc.layers:
+        mask = getattr(layer, "mask", None)
+        if mask is not None:
+            referenced.update(r for r in (mask.from_layer, mask.luminance_of)
+                              if r)
+    # layer id -> its finished, canvas-placed RGBA. Only layers something
+    # masks through are kept: on a cover with no masks this stays empty and
+    # the walk below is the pre-mask walk, allocation for allocation.
+    drawn: dict[str, Image.Image] = {}
 
     for layer in doc.layers:
-        if not layer.visible:
+        needed = layer.id in referenced
+        if not layer.visible and not needed:
             continue
         frame = layer.frame
         box_w = max(MIN_BOX_FRACTION, frame.w) * canvas_w
         box_h = max(MIN_BOX_FRACTION, frame.h) * canvas_h
+
+        if isinstance(layer, AdjustLayer):
+            # Owns no pixels, so there is no tile to place, nothing to cache
+            # for a mask to point at, and no effects stack to run: it grades
+            # what is already on the canvas and hands back the new composite.
+            if layer.visible:
+                out = _apply_adjust(out, layer, canvas,
+                                    frame.x * canvas_w, frame.y * canvas_h,
+                                    box_w, box_h, drawn)
+            continue
+
+        # A layer that is masked, or that something else masks through, is
+        # drawn onto its own canvas-sized sheet first; everything else keeps
+        # compositing straight onto `out` exactly as it always did. The sheet
+        # is what a mask multiplies into and what `drawn` caches, and it costs
+        # one RGBA allocation — paid only by the layers that need it, so a
+        # document with no masks renders through the original path untouched.
+        own_mask = getattr(layer, "mask", None) is not None
+        sheet = (Image.new("RGBA", canvas, (0, 0, 0, 0))
+                 if own_mask or needed else None)
+        target = out if sheet is None else sheet
 
         if frame.corners and layer.kind in PIN_KINDS:
             # A pinned plate carries no shadow: Konva sets the shadow on the
@@ -1100,15 +1298,31 @@ def render(doc: CanvasDoc, job_dir: Path, *,
             # filter on the cached group, not a shape property.
             pinned = _pinned_art(layer, canvas_w, canvas_h, job_dir)
             pinned = _levels(layer, pinned)
-            _composite(out, _scale_alpha(pinned, layer.opacity), 0, 0)
-            continue
+            _composite(target, _scale_alpha(pinned, layer.opacity), 0, 0)
+        else:
+            tile = _content(layer, box_w, box_h, canvas_w, canvas_h, job_dir)
+            tile = _effects(layer, tile, canvas_w)
+            tile.img = _scale_alpha(_levels(layer, tile.img), layer.opacity)
+            tile = _flip(layer, tile, box_w, box_h)
+            _place(target, tile, box_w, box_h,
+                   frame.x * canvas_w, frame.y * canvas_h, frame.rotation)
 
-        tile = _content(layer, box_w, box_h, canvas_w, canvas_h, job_dir)
-        tile = _effects(layer, tile, canvas_w)
-        tile.img = _scale_alpha(_levels(layer, tile.img), layer.opacity)
-        tile = _flip(layer, tile, box_w, box_h)
-        _place(out, tile, box_w, box_h,
-               frame.x * canvas_w, frame.y * canvas_h, frame.rotation)
+        if sheet is None:
+            continue
+        if own_mask:
+            sheet = cover_effects.apply_mask(
+                sheet, _mask_alpha(layer, canvas, drawn))
+        if needed:
+            # Cached AFTER its own mask, so a layer masking through another
+            # sees it as it actually appears rather than as it was before it
+            # was windowed. It is also cached after opacity, which is the one
+            # place that matters: resolve_mask thresholds a stencil at 50%, so
+            # masking through a layer set below half opacity yields nothing.
+            # That is the honest reading of "show through this layer" and it
+            # is what the browser does too, but it is worth knowing.
+            drawn[layer.id] = sheet
+        if layer.visible:
+            out = Image.alpha_composite(out, sheet)
     return out
 
 

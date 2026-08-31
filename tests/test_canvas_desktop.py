@@ -17,7 +17,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import desktop
-from app.canvas_desktop import LOCAL_KEY, build_shell_app, cover_env_defaults
+from app.canvas_desktop import (LOCAL_KEY, LOCAL_PLANNER, build_shell_app,
+                               cover_env_defaults)
 
 
 @pytest.fixture
@@ -70,12 +71,26 @@ def test_the_shell_defaults_cover_studio_onto_the_subscription(tmp_path,
     # On the owner's own machine the Claude login is the whole point: a
     # silent fall back to an API key is the "credit balance is too low"
     # failure this lane exists to prevent.
-    for name in ("COVER_KEY", "COVER_DATA_PATH", "COVER_ANTHROPIC_LANE"):
+    for name in ("COVER_KEY", "COVER_DATA_PATH", "COVER_ANTHROPIC_LANE",
+                 "COVER_PLANNER"):
         monkeypatch.delenv(name, raising=False)
     cover_env_defaults(tmp_path)
     assert os.environ["COVER_ANTHROPIC_LANE"] == "subscription"
     assert os.environ["COVER_KEY"] == LOCAL_KEY
     assert os.environ["COVER_DATA_PATH"] == str(tmp_path / "cover_jobs")
+
+
+def test_the_shell_plans_the_composition_before_it_buys_pixels(tmp_path,
+                                                              monkeypatch):
+    # §15.16's gate defaults OFF in the library so the pre-planner path stays
+    # reachable byte-for-byte; that is a ship contract, not the product. Both
+    # Mac shells pay the ~$0.10-0.30 a concept, because plates prompted blind
+    # to each other cost more than that in re-rolls.
+    monkeypatch.delenv("COVER_PLANNER", raising=False)
+    cover_env_defaults(tmp_path)
+    assert os.environ["COVER_PLANNER"] == LOCAL_PLANNER
+    from docproof.cover import pipeline
+    assert pipeline._planner_enabled()
 
 
 def test_the_shell_never_overrides_an_environment_that_named_one(tmp_path,
@@ -85,7 +100,9 @@ def test_the_shell_never_overrides_an_environment_that_named_one(tmp_path,
     monkeypatch.setenv("COVER_ANTHROPIC_LANE", "api")
     monkeypatch.setenv("COVER_KEY", "a-real-key")
     monkeypatch.setenv("COVER_DATA_PATH", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("COVER_PLANNER", "0")
     cover_env_defaults(tmp_path)
+    assert os.environ["COVER_PLANNER"] == "0"
     assert os.environ["COVER_ANTHROPIC_LANE"] == "api"
     assert os.environ["COVER_KEY"] == "a-real-key"
     assert os.environ["COVER_DATA_PATH"] == str(tmp_path / "elsewhere")

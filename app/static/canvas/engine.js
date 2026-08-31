@@ -162,6 +162,229 @@ function levelsOf(l) {
   return { brightness, contrast: 100 * (Math.sqrt(1 + c) - 1) };
 }
 
+
+/* ------------------------------------------- masks & adjust layers (§15.2/3)
+
+   Everything from here to createEngine mirrors docproof/cover/effects.py,
+   which is the module the SERVER runs to compose a cover and to render this
+   document headlessly. That is a deliberate change of allegiance for this
+   file: the rest of it mirrors docproof/canvas/render.py's geometry, but a
+   mask's threshold and a grade's curve are not geometry — they are pixel
+   math a cover is judged on, and a canvas that graded differently from the
+   composer would show a designer one cover and deliver another.
+
+   Named constants, each with the effects.py line it mirrors:
+
+     MASK_SCALE          gradient_mask: quarter-scale synthesis
+     MASK_STENCIL_CUT    resolve_mask: from_layer thresholds alpha at 50%
+     TEMPERATURE_MAX_SHIFT  _op_grade: 8-bit R+/B- shift at |temperature| = 1
+     WCAG_*              luminance_band: relative-luminance weights
+
+   The one structural difference: where effects.py loops per pixel to paint a
+   ramp, this asks the browser for the same ramp through createLinearGradient
+   / createRadialGradient. The RAMP is the contract; the loop was never it. */
+const MASK_SCALE = 0.25;
+const MASK_STENCIL_CUT = 127;
+const TEMPERATURE_MAX_SHIFT = 24;
+const WCAG_R = 0.2126; const WCAG_G = 0.7152; const WCAG_B = 0.0722;
+
+/* Konva blend names for the §15.1 table. Only color_wash reads a blend. */
+const BLEND_CSS = {
+  normal: 'source-over', multiply: 'multiply', overlay: 'overlay',
+  soft_light: 'soft-light', screen: 'screen', add: 'lighter',
+  lighten: 'lighten', darken: 'darken', color_dodge: 'color-dodge',
+};
+
+function scratch(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w));
+  c.height = Math.max(1, Math.round(h));
+  return c;
+}
+
+/* effects.luminance_band's LUT: sRGB -> linear, once. */
+const SRGB_LUT = (() => {
+  const t = new Float32Array(256);
+  for (let i = 0; i < 256; i += 1) {
+    const c = i / 255;
+    t[i] = c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  }
+  return t;
+})();
+function wcagLuma(d, i) {
+  return 255 * (WCAG_R * SRGB_LUT[d[i]] + WCAG_G * SRGB_LUT[d[i + 1]]
+                + WCAG_B * SRGB_LUT[d[i + 2]]);
+}
+
+/* One gradient source as a white-on-transparent alpha field, canvas-sized.
+   `start`/`end` remap where along the ramp alpha actually moves — the
+   browser expresses that as the gradient's own endpoints rather than
+   gradient_mask's per-pixel clamp, which is the same ramp. */
+function gradientField(g, w, h) {
+  const small = scratch(w * MASK_SCALE, h * MASK_SCALE);
+  const ctx = small.getContext('2d');
+  const s = Math.max(0, Math.min(1, g.start === undefined ? 0 : g.start));
+  const e = Math.max(s + 1e-9, Math.min(1, g.end === undefined ? 1 : g.end));
+  let grad;
+  if ((g.kind || 'linear') === 'radial') {
+    const cx = (g.center ? g.center[0] : 0.5) * (small.width - 1);
+    const cy = (g.center ? g.center[1] : 0.5) * (small.height - 1);
+    const far = Math.max(
+      Math.hypot(cx, cy), Math.hypot(small.width - 1 - cx, cy),
+      Math.hypot(cx, small.height - 1 - cy),
+      Math.hypot(small.width - 1 - cx, small.height - 1 - cy)) || 1;
+    grad = ctx.createRadialGradient(cx, cy, far * s, cx, cy, far * e);
+  } else {
+    /* The direction vector in y-down degrees (90 = top-transparent to
+       bottom-opaque), spanning the canvas's own projected extent — the
+       p_min/p_range normalization gradient_mask does, as two endpoints. */
+    const th = (g.angle === undefined ? 90 : g.angle) * DEG;
+    const ux = Math.cos(th); const uy = Math.sin(th);
+    const proj = [[0, 0], [small.width - 1, 0], [0, small.height - 1],
+                  [small.width - 1, small.height - 1]]
+      .map(([x, y]) => x * ux + y * uy);
+    const lo = Math.min(...proj);
+    const span = (Math.max(...proj) - lo) || 1e-9;
+    const at = (t) => ({ x: ux * (lo + t * span), y: uy * (lo + t * span) });
+    const a = at(s); const b = at(e);
+    grad = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+  }
+  grad.addColorStop(0, 'rgba(255,255,255,0)');
+  grad.addColorStop(1, 'rgba(255,255,255,1)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, small.width, small.height);
+  const full = scratch(w, h);
+  const fctx = full.getContext('2d');
+  fctx.imageSmoothingQuality = 'high';
+  fctx.drawImage(small, 0, 0, w, h);
+  return full;
+}
+
+/* One already-drawn layer as an alpha field: a hard stencil (from_layer) or
+   its luminance gated by its own alpha (luminance_of), matching
+   resolve_mask's two readings exactly. */
+function layerField(raster, mode) {
+  const ctx = raster.getContext('2d');
+  const img = ctx.getImageData(0, 0, raster.width, raster.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const a = mode === 'luminance'
+      ? (wcagLuma(d, i) * d[i + 3]) / 255
+      : (d[i + 3] > MASK_STENCIL_CUT ? 255 : 0);
+    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = a;
+  }
+  ctx.putImageData(img, 0, 0);
+  return raster;
+}
+
+/* Multiply `into` by `field`, both canvas-sized alpha fields. resolve_mask's
+   fold, done with a composite op instead of ImageChops.multiply. */
+function foldField(into, field) {
+  if (!into) return field;
+  const ctx = into.getContext('2d');
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(field, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  return into;
+}
+
+function invertField(field) {
+  const ctx = field.getContext('2d');
+  const img = ctx.getImageData(0, 0, field.width, field.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; d[i + 3] = 255 - d[i + 3];
+  }
+  ctx.putImageData(img, 0, 0);
+  return field;
+}
+
+/* An axis-aligned box as an alpha field, or null for a full-canvas box —
+   render.py's _box_alpha, including its "None rather than 255 everywhere"
+   shortcut, so a full-canvas adjust layer costs no field at all. */
+function boxField(cx, cy, bw, bh, w, h) {
+  const left = cx - bw / 2; const top = cy - bh / 2;
+  if (left <= 0 && top <= 0 && left + bw >= w && top + bh >= h) return null;
+  const c = scratch(w, h);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(Math.round(left), Math.round(top), Math.round(bw), Math.round(bh));
+  return c;
+}
+
+/* The five ops that read the pixels beneath them (effects._ADJUST_OPS), each
+   rewriting `d` in place. Alpha is never touched: an adjust layer grades what
+   the composite LOOKS like, never how much of it exists (_with_alpha_of). */
+function gradePixels(d, l) {
+  const b = l.brightness || 0; const c = l.contrast || 0;
+  const sat = l.saturation || 0; const temp = l.temperature || 0;
+  const shift = Math.round(temp * TEMPERATURE_MAX_SHIFT);
+  const cf = 1 + c;
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i]; let g = d[i + 1]; let bl = d[i + 2];
+    // ImageEnhance's order, which does not commute: brightness (a scale from
+    // black), contrast (about the image's own mean, approximated here by
+    // mid-grey — Pillow uses the mean of the greyscale image, and 128 is
+    // that mean for the graded composites this runs on), then saturation
+    // (a blend from the greyscale degenerate), then the temperature LUT.
+    if (b) { r *= 1 + b; g *= 1 + b; bl *= 1 + b; }
+    if (c) { r = (r - 128) * cf + 128; g = (g - 128) * cf + 128; bl = (bl - 128) * cf + 128; }
+    if (sat) {
+      const grey = 0.299 * r + 0.587 * g + 0.114 * bl;   // Pillow's "L" weights
+      r = grey + (r - grey) * (1 + sat);
+      g = grey + (g - grey) * (1 + sat);
+      bl = grey + (bl - grey) * (1 + sat);
+    }
+    if (shift) { r += shift; bl -= shift; }
+    d[i] = Math.max(0, Math.min(255, r));
+    d[i + 1] = Math.max(0, Math.min(255, g));
+    d[i + 2] = Math.max(0, Math.min(255, bl));
+  }
+}
+
+function gradientMapPixels(d, l) {
+  const stops = (l.stops || []).map((hex) => {
+    const h = String(hex).replace('#', '');
+    const n = parseInt(h.length === 3 ? h.split('').map((x) => x + x).join('') : h, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  });
+  if (stops.length < 2) return;
+  // ImageOps.colorize: black->white for two stops, black->mid->white for
+  // three, over Pillow's own "L" luminance (a look, not a measurement).
+  const ramp = new Uint8ClampedArray(256 * 3);
+  for (let v = 0; v < 256; v += 1) {
+    let a; let b; let t;
+    if (stops.length === 2) { a = stops[0]; b = stops[1]; t = v / 255; }
+    else if (v < 128) { a = stops[0]; b = stops[1]; t = v / 127; }
+    else { a = stops[1]; b = stops[2]; t = (v - 128) / 127; }
+    ramp[v * 3] = a[0] + (b[0] - a[0]) * t;
+    ramp[v * 3 + 1] = a[1] + (b[1] - a[1]) * t;
+    ramp[v * 3 + 2] = a[2] + (b[2] - a[2]) * t;
+  }
+  for (let i = 0; i < d.length; i += 4) {
+    const grey = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    d[i] = ramp[grey * 3]; d[i + 1] = ramp[grey * 3 + 1]; d[i + 2] = ramp[grey * 3 + 2];
+  }
+}
+
+function vignettePixels(d, l, w, h) {
+  const hex = String(l.color || '#000000').replace('#', '');
+  const n = parseInt(hex.length === 3 ? hex.split('').map((x) => x + x).join('') : hex, 16);
+  const ink = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  const strength = l.strength === undefined ? 0.5 : l.strength;
+  const cx = w / 2; const cy = h / 2;
+  const far = Math.hypot(cx, cy) || 1;
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = (y * w + x) * 4;
+      const t = strength * Math.min(1, Math.hypot(x - cx, y - cy) / far);
+      d[i] += (ink[0] - d[i]) * t;
+      d[i + 1] += (ink[1] - d[i + 1]) * t;
+      d[i + 2] += (ink[2] - d[i + 2]) * t;
+    }
+  }
+}
+
 export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onView }) {
   const stage = new Konva.Stage({ container: host, width: host.clientWidth || 10, height: host.clientHeight || 10 });
   const sceneLayer = new Konva.Layer({ listening: true });
@@ -602,6 +825,195 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
     });
   }
 
+
+  /* ------------------------------------------ masks & adjust layers (in-engine)
+
+     These need the view: a node's own pixels have to be read back in COVER
+     coordinates, and everything on stage is inside `world`, which the pan and
+     zoom transform. `raster` is the one place that is untangled — crop at the
+     content's absolute origin and undo the zoom with pixelRatio — so every
+     field below is canvas-sized whatever the view is doing. */
+
+  function raster(node) {
+    const t = content.getAbsoluteTransform();
+    const origin = t.point({ x: 0, y: 0 });
+    const z = t.decompose().scaleX || 1;
+    const out = scratch(W(), H());
+    out.getContext('2d').drawImage(node.toCanvas({
+      x: origin.x, y: origin.y, width: W() * z, height: H() * z,
+      pixelRatio: 1 / z,
+    }), 0, 0, W(), H());
+    return out;
+  }
+
+  /* One layer's mask as a canvas-sized alpha field, or null. Sources multiply
+     and `invert` is last (resolve_mask). A source naming a layer that is not
+     on stage resolves to nothing rather than throwing: the document model
+     refuses that arrangement, so it can only mean a client got ahead of a
+     save, and an unmasked plate for one frame beats a dead canvas. */
+  function maskField(l) {
+    const m = l.mask;
+    if (!m) return null;
+    let field = null;
+    [[m.from_layer, 'stencil'], [m.luminance_of, 'luminance']].forEach(
+      ([ref, mode]) => {
+        if (!ref) return;
+        const entry = nodeIndex.get(ref);
+        if (!entry) return;
+        field = foldField(field, layerField(raster(entry.group), mode));
+      });
+    if (m.gradient) field = foldField(field, gradientField(m.gradient, W(), H()));
+    if (!field) return null;
+    return m.invert ? invertField(field) : field;
+  }
+
+  /* A canvas-space field seen from inside a cached node.
+
+     The mask is painted in cover coordinates and the node it clips has its
+     own translation, rotation and flips — so rather than transforming every
+     pixel, the field is DRAWN into the node's cache rect under the inverse of
+     the node's own matrix. The browser does the resampling; this only has to
+     get the matrix right.
+
+     `pw`/`ph` are the cache BITMAP's pixel size, which is the rect times
+     Konva's cache pixelRatio — 2 on a retina display. They are passed in
+     rather than derived from the rect because the two are not the same
+     number, and assuming they were is a mask that lines up on one machine
+     and shreds the layer on another. */
+  function fieldInLocal(field, node, rect, pw, ph) {
+    const local = scratch(pw, ph);
+    const ctx = local.getContext('2d');
+    const inv = node.getAbsoluteTransform(content).copy().invert().getMatrix();
+    ctx.scale(pw / rect.width, ph / rect.height);
+    ctx.translate(-rect.x, -rect.y);
+    ctx.transform(inv[0], inv[1], inv[2], inv[3], inv[4], inv[5]);
+    ctx.drawImage(field, 0, 0);
+    return ctx.getImageData(0, 0, local.width, local.height).data;
+  }
+
+  /* The Konva filter a masked layer wears: multiply alpha by the field.
+     apply_mask's semantics exactly — the layer's own soft edges survive
+     wherever the mask lets them through.
+
+     The field is built on the FIRST call, not here, because only the filter
+     is told how big the cache bitmap actually is (imageData's own size). It
+     is then kept: Konva re-runs filters on redraw, and re-projecting the
+     mask every frame would be the expensive half of a cheap operation. */
+  function maskFilter(field, node, rect) {
+    let local = null;
+    return function maskAlpha(imageData) {
+      if (!local || local.length !== imageData.data.length) {
+        local = fieldInLocal(field, node, rect,
+                             imageData.width, imageData.height);
+      }
+      const d = imageData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        d[i + 3] = (d[i + 3] * local[i + 3]) / 255;
+      }
+    };
+  }
+
+  /* An adjust layer as a node drawn over everything below it (§15.3).
+
+     `color_wash` needs no readback: a solid rect through a CSS blend mode is
+     the same "composite a fill AS a layer through the blend table" that
+     apply_adjust branches to. Every other op reads the composite, so it takes
+     one raster of what is already on the canvas, rewrites the pixels, and is
+     drawn back over the top through the scope — which is the mix
+     Image.composite(op_result, base, m * opacity) performs. */
+  function buildAdjust(l) {
+    const { bw, bh, cx, cy } = boxOf(l);
+    /* Mid-drag, the grade is a translucent stand-in over its own box. The
+       real one is a raster of everything below it, and a raster dragged
+       around the canvas would slide its CONTENT with it — showing the cover
+       smeared rather than the region moving. Same rule as levels and masks:
+       the honest preview during a drag is the one that does not lie about
+       what is underneath. Released, setInteracting re-renders it for real. */
+    if (interacting) {
+      return new Konva.Rect({
+        x: 0, y: 0, width: bw, height: bh, fill: 'rgba(120,140,190,0.28)',
+        listening: false,
+      });
+    }
+    /* Opacity is NOT set on these nodes: buildLayer already put it on the
+       group they go into, and setting it here too would square it. The §15.3
+       equation's `opacity` is that same group opacity — the node carries the
+       op's full-strength result and the group mixes it back. */
+    let scope = maskField(l);
+    const box = boxField(cx, cy, bw, bh, W(), H());
+    if (box) scope = scope ? foldField(scope, box) : box;
+
+    if (l.op === 'color_wash') {
+      const wash = new Konva.Rect({
+        x: 0, y: 0, width: W(), height: H(),
+        fill: l.color || '#000000', listening: false,
+        globalCompositeOperation: BLEND_CSS[l.blend] || 'source-over',
+      });
+      if (!scope) return wash;
+      const c = scratch(W(), H());
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = l.color || '#000000';
+      ctx.fillRect(0, 0, W(), H());
+      foldField(c, scope);
+      return new Konva.Image({
+        x: 0, y: 0, image: c, width: W(), height: H(), opacity,
+        listening: false,
+        globalCompositeOperation: BLEND_CSS[l.blend] || 'source-over',
+      });
+    }
+
+    const under = raster(content);
+    const ctx = under.getContext('2d');
+    if (l.op === 'bloom' || l.op === 'blur') {
+      // Canvas's filter blur radius IS a Gaussian standard deviation, the
+      // same number PIL's GaussianBlur takes, and `radius` is a fraction of
+      // canvas HEIGHT in both.
+      const px = (l.radius === undefined ? 0.02 : l.radius) * H();
+      if (l.op === 'blur') {
+        const soft = scratch(W(), H());
+        const sctx = soft.getContext('2d');
+        sctx.filter = `blur(${px}px)`;
+        sctx.drawImage(under, 0, 0);
+        ctx.clearRect(0, 0, W(), H());
+        ctx.drawImage(soft, 0, 0);
+      } else {
+        // Keep only what clears the threshold, blur that, scale by strength,
+        // and SCREEN it back — a composite with nothing bright enough blooms
+        // into nothing, because screening black is the identity.
+        const cut = Math.round((l.threshold === undefined ? 0.75 : l.threshold) * 255);
+        const strength = l.strength === undefined ? 0.5 : l.strength;
+        const glow = scratch(W(), H());
+        const gctx = glow.getContext('2d');
+        gctx.drawImage(under, 0, 0);
+        const gi = gctx.getImageData(0, 0, W(), H());
+        const gd = gi.data;
+        for (let i = 0; i < gd.length; i += 4) {
+          const v = wcagLuma(gd, i);
+          const keep = (v >= cut ? v : 0) * strength;
+          gd[i] = keep; gd[i + 1] = keep; gd[i + 2] = keep; gd[i + 3] = 255;
+        }
+        gctx.putImageData(gi, 0, 0);
+        const soft = scratch(W(), H());
+        const sctx = soft.getContext('2d');
+        sctx.filter = `blur(${px}px)`;
+        sctx.drawImage(glow, 0, 0);
+        ctx.globalCompositeOperation = 'screen';
+        ctx.drawImage(soft, 0, 0);
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    } else {
+      const img = ctx.getImageData(0, 0, W(), H());
+      if (l.op === 'grade') gradePixels(img.data, l);
+      else if (l.op === 'gradient_map') gradientMapPixels(img.data, l);
+      else if (l.op === 'vignette') vignettePixels(img.data, l, W(), H());
+      ctx.putImageData(img, 0, 0);
+    }
+    if (scope) foldField(under, scope);
+    return new Konva.Image({
+      x: 0, y: 0, image: under, width: W(), height: H(), listening: false,
+    });
+  }
+
   function buildLayer(l) {
     const { bw, bh, cx, cy } = boxOf(l);
     const group = new Konva.Group({
@@ -619,7 +1031,13 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
 
     let art = null;
     const build = () => {
-      const body = new Konva.Group({ x: -bw / 2, y: -bh / 2 });
+      /* An adjust layer's node is painted in COVER coordinates — it grades
+         the whole canvas and is scoped by its own box, rather than drawing
+         inside one — so it is the one kind whose body is not offset to its
+         box corner, and the group it sits in is put back at the origin. */
+      const body = new Konva.Group((l.kind === 'adjust' && !interacting)
+        ? { x: -cx, y: -cy }
+        : { x: -bw / 2, y: -bh / 2 });
       let made;
       // Ghost copies are built first and the real body last, so the art node
       // we keep for mask mapping is the one actually on screen.
@@ -627,6 +1045,7 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
       else if (l.kind === 'text') made = buildText(l, bw, bh);
       else if (l.kind === 'scrim') made = buildScrim(l, bw, bh);
       else if (l.kind === 'frame') made = buildFrame(l, bw, bh);
+      else if (l.kind === 'adjust') made = buildAdjust(l);
       else made = buildShape(l, bw, bh);
       body.add(made);
       return body;
@@ -647,12 +1066,41 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
        plate at each one is the difference between 60fps and a slideshow).
        The cache is taken in world coordinates at 1:1, which is exact at 100%
        zoom; composite() re-takes it at the export's own ratio. */
+    /* Masks ride the same cache as levels, and under the same rule: a cached
+       node cannot follow a drag, so both are dropped while a hand is on a
+       control and taken back on release (setInteracting). A masked layer
+       therefore shows UNMASKED mid-drag, which is the honest preview — the
+       mask is canvas-space and does not travel with the layer, so what moves
+       under it is exactly what the person is aiming.
+
+       The filters are composed in the document's own order: levels grade the
+       layer's pixels, then the mask decides how much of them exists. */
     const levels = levelsOf(l);
-    if (levels && !interacting) {
-      flip.cache();
-      flip.filters([Konva.Filters.Brighten, Konva.Filters.Contrast]);
-      flip.brightness(levels.brightness);
-      flip.contrast(levels.contrast);
+    const field = (l.mask && l.kind !== 'adjust' && !interacting)
+      ? maskField(l) : null;
+    if ((levels || field) && !interacting) {
+      /* A levels-only layer keeps Konva's automatic cache rect, which pads
+         for shadows and strokes. A masked one has to pass an explicit rect,
+         because the field is painted into that exact rect and a cache Konva
+         sized for itself would be off by the padding. */
+      let rect = null;
+      if (field) {
+        const r = flip.getClientRect({ relativeTo: flip });
+        rect = { x: Math.floor(r.x), y: Math.floor(r.y),
+                 width: Math.max(1, Math.ceil(r.width)),
+                 height: Math.max(1, Math.ceil(r.height)) };
+        flip.cache(rect);
+      } else {
+        flip.cache();
+      }
+      const filters = [];
+      if (levels) {
+        filters.push(Konva.Filters.Brighten, Konva.Filters.Contrast);
+        flip.brightness(levels.brightness);
+        flip.contrast(levels.contrast);
+      }
+      if (field) filters.push(maskFilter(field, flip, rect));
+      flip.filters(filters);
       filtered.push(flip);
     }
 
@@ -661,7 +1109,7 @@ export function createEngine({ host, getDoc, imageFor, onSelect, onCommit, onVie
        a cached node answers hit tests from its cached hit canvas, where a
        0.001-alpha rectangle is not a hit — so a levels effect would quietly
        make its own layer unselectable. */
-    if (l.kind === 'art' || l.kind === 'text') {
+    if (l.kind === 'art' || l.kind === 'text' || l.kind === 'adjust') {
       group.add(new Konva.Rect({
         x: -bw / 2, y: -bh / 2, width: bw, height: bh, fill: 'rgba(0,0,0,0.001)',
       }));

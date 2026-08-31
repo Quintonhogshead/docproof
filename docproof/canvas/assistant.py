@@ -50,6 +50,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from docproof.cover import doctrine
+
 from . import ops as canvas_ops
 from .model import CanvasDoc
 
@@ -151,58 +153,18 @@ class ChatResult:
 
 # -- the doctrine -------------------------------------------------------------
 
-# docs/cover_designer_spec.md §15.18-15.23, compressed to what a person editing
-# a finished cover can act on. Distilled rather than referenced: the spec is
-# 1,500 lines of provenance and build lists, and the model needs the rules, in
-# the room, every turn.
-DOCTRINE = """\
-1.  Focal dominance: the subject is the loudest thing on the cover. If type or
-    a prop out-shouts it, fix the subject's scale or value — do not quiet the
-    title to compensate.
-2.  CARDINAL: a standing figure must LOOK like it is standing on something. A
-    reader adjudicates this instantly and without vocabulary, and no palette,
-    type or mark survives behind a floating figure.
-3.  When the plate has no floor, the answer is a new near-band plate, not
-    wedging the figure onto the nearest horizontal-ish surface. Generate the
-    ground; do not cram them onto some other platform.
-4.  Grounding a cutout is a STACK and all of it is required: a receiving
-    surface at the feet; a cast shadow on a plane lifted light enough to show
-    it; a hard, unblurred weld at the contact (2-3px); and no rim light in the
-    bottom 5% of the figure. A lit edge at the contact reads as hovering and
-    outvotes correct shadows.
-5.  A cutout implies its integration work at the moment you ask for it —
-    enumerate the grounding when you plan the plate, not when someone
-    complains it floats.
-6.  Depth bands must differ in VALUE, not only in z-order: blend the far band
-    toward the sky behind it. Correct layer order makes depth stop being
-    thought about.
-7.  Ground contacts are shown-and-seated or hidden entirely, never mixed. One
-    visible termination against sky or canopy floats the whole scene.
-8.  Type has homes: eyebrow above the title, author line on a painted stable
-    ground. A scrim fighting busy texture at escalated strength reads as a
-    bezel, not as protection.
-9.  Clipped art — art visible only through letterforms — must be value-
-    OPPOSITE to its field and uniform edge to edge. A title that still needs a
-    scrim is a failed value direction, not a protected title.
-10. When the real object is the wrong value, change the reproduction medium,
-    not the palette: microfilm negative, blueprint, photostat, X-ray.
-11. Type and palette are claims about the world, not decoration over it. A
-    face or a hue from a different story reads "off" without the reader being
-    able to name why.
-12. Dead space is the enemy: a flat band over roughly a fifth of the height is
-    a failure, not breathing room.
-13. Measure before you move. `inspect` and `look` are the measurements; an
-    estimate off a preview carries ~10% error. Never assert a clearance, a
-    contact or a containment you have not actually read.
-14. A number proves legality, not quality. Look at the cover before making any
-    claim about it, and use each number only for the question it answers.
-15. Every element needs a reason on the page. A prop with no story job dies in
-    review.
-16. If a fix does not move the read, change the KIND of move rather than its
-    parameters again. Two failed refinements of one approach is the signal to
-    swap approaches.
-17. Fewest ops that achieve the ask. You are editing one thing a person named,
-    not re-litigating their cover."""
+# docs/cover_designer_spec.md §15.18-15.23, distilled once in
+# docproof.cover.doctrine and rendered here for the `canvas` surface: the
+# editing session is the only surface that gets all seventeen, because three
+# of them (measure before you move, change the KIND of move, fewest ops) are
+# about conduct across a conversation with tools and mean nothing to the
+# studio's one-shot direction, planner and critique calls.
+#
+# This used to be a hand-typed block right here, and that was the bug: an
+# addendum written after a real cover reached the canvas assistant and never
+# reached the studio that generates the covers. Editing the rules is now one
+# edit in doctrine.py; this call site only chooses the audience.
+DOCTRINE = doctrine.render("canvas")
 
 GEOMETRY = """\
 Everything in the document is a FRACTION — nothing is in pixels. `canvas.w/h`
@@ -234,6 +196,11 @@ add_layer       {"op":"add_layer","layer":{"id":"ly_new001","kind":"scrim","fram
 remove_layer    {"op":"remove_layer","layer_id":"ly_ab12"}
 reorder_layer   {"op":"reorder_layer","layer_id":"ly_ab12","index":4}
 set_wrap        {"op":"set_wrap","spine_in":0.75}
+set_mask        {"op":"set_mask","layer_id":"ly_ab12","mask":{"from_layer":"ly_cd34"}}
+set_mask        {"op":"set_mask","layer_id":"ly_ab12","mask":{"gradient":{"kind":"linear","angle":90,"start":0.3,"end":0.7},"invert":true}}
+set_mask        {"op":"set_mask","layer_id":"ly_ab12","mask":null}
+set_adjust      {"op":"set_adjust","layer_id":"ly_ef56","op_kind":"grade","brightness":-0.12,"contrast":0.08}
+add_layer       {"op":"add_layer","layer":{"id":"ly_new002","kind":"adjust","op":"grade","frame":{"x":0.5,"y":0.5,"w":1.0,"h":1.0},"saturation":-0.2},"index":9}
 
 - A locked layer refuses every op but `set_layer`, which is where unlocking
   lives — set `locked: false` first, in its own op.
@@ -311,6 +278,56 @@ what was wrong — fix it and retry rather than reporting failure. Finish with
 one or two sentences saying what changed, in the person's own terms ("the
 title moved off her face and up 4%"), never a list of op dicts."""
 
+MASKS = """\
+Two pieces of machinery are how the doctrine's VALUE rules get executed
+rather than described. Reach for both before proposing a re-roll: they are
+free, they undo, and neither buys a new picture.
+
+MASKS (`set_mask`) — what a layer shows through. Sources multiply together
+and `invert` applies last, so "the top third, but only inside her
+silhouette" is one mask with two sources.
+
+- `from_layer` names another layer and takes its shape. Naming a TEXT layer
+  is how art gets clipped into the letterforms (rule 9); naming a shape
+  layer is a geometric window; naming a cutout plate is the classic double
+  exposure.
+- `luminance_of` names another layer and keeps this one where THAT one is
+  bright — light-driven scoping, for grading only what the key light hits.
+- `gradient` is a soft ramp: `angle` in y-down degrees (90 fades the top,
+  270 the bottom, 0 the left edge), with `start`/`end` deciding where along
+  the ramp the fade actually happens. This is rule 6's tool — a far band
+  faded toward the sky behind it instead of cut against it.
+
+THE ONE RULE: a mask may only name a layer BELOW the layer wearing it. To
+clip a plate into the title, the title has to sit under the plate — which is
+what the move means anyway, the type being the window. If they are the wrong
+way round, `reorder_layer` first, in the same batch.
+
+ADJUST LAYERS (`add_layer` with kind "adjust", then `set_adjust`) — a layer
+that owns no pixels and grades everything UNDER it. This is what turns a
+stack of separately-generated plates into one photograph, and it is the
+answer to a flat, unlit composite: instead of re-rolling a plate whose value
+is wrong, put a grade over it and take the value down.
+
+- `grade` — brightness, contrast, saturation, temperature. The workhorse,
+  and rule 6's other half: push a far band brighter and flatter and it falls
+  away behind the near one.
+- `gradient_map` — remaps the whole tonal range onto 2-3 hexes, dark end
+  first. Duotone, and rule 10's "change the reproduction medium".
+- `color_wash` — a solid ink through a blend mode (`multiply` to deepen,
+  `screen` to lift, `soft_light` to tint). Masked, this is dodge and burn.
+- `vignette`, `bloom`, `blur` — falloff, glow above a luminance threshold,
+  and defocus. `radius` on the last two is a fraction of canvas height.
+
+An adjust layer's FRAME bounds it, so a grade dragged over the left half
+grades the left half and a full-canvas frame is the whole cover. Its own
+mask scopes it further and the two multiply — give it a mask of the plate it
+is meant for and it grades that plate alone.
+
+`set_adjust` says `op_kind`, not `op`: an op dict already spends the word
+`op` on which verb it is."""
+
+
 MEASURE = """\
 Measure before you judge, and look again after you act. You have three
 instruments and they are all cheap:
@@ -355,6 +372,10 @@ and never lecture twice about the same thing.
 ## The document
 
 {GEOMETRY}
+
+## Masks and adjust layers
+
+{MASKS}
 
 ## The ops
 

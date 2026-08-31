@@ -104,6 +104,28 @@ Concretely:
     parameters.
   - *Bevel/edge effects*: a raster effect on a layer (bevel, inner shadow,
     edge glow) in the client effect stack.
+- **Masks** (`set_mask`, shipped v0.165.0): what a layer shows through — the
+  shape of any layer BELOW it, that layer's luminance, a soft linear or
+  radial ramp, or several of those multiplied, with `invert` applied last.
+  Naming a *text* layer is the clip-art-into-the-letterforms move, which is
+  why the canvas needs one reference field where a CoverSpec needs two
+  (`from_layer` + `from_text`): every canvas layer rasterizes to one alpha
+  tile. The below-only rule is what lets both renderers resolve a mask in
+  the single bottom-to-top pass they already make.
+- **Adjust layers** (`kind: "adjust"`, shipped v0.165.0): a layer that owns
+  no pixels and grades everything under it — grade, gradient map, colour
+  wash through the §15.1 blend table, vignette, bloom, blur. Unlike a
+  CoverSpec's, it has a *frame*, and the frame bounds the adjustment, so a
+  grade can be dragged over the half of the cover that needs it; its mask
+  scopes it further and the two multiply.
+
+  These two are why they were worth building: **doctrine rule 9** (clipped
+  art is value-opposite and uniform edge to edge) is a mask and **rule 6**
+  (depth bands differ in VALUE — blend the far band toward the sky behind
+  it) is a grade. Until v0.165.0 the resident art director knew both rules
+  and held neither tool, so it could only ever describe the fix; and ingest
+  dropped both on the way in, so the studio's own §15.2/§15.3 work never
+  reached the editor at all.
 - **Undo/redo**: every mutation is an **op** on the CanvasDoc (a small
   reversible command). One op log serves undo, the button shelf, and the
   assistant — the AI edits the canvas through exactly the ops a human

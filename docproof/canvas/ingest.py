@@ -17,10 +17,8 @@ size_max.
 
 LOSSES, each deliberate and each logged where it happens:
 
-- **Adjust layers** (§15.3 grades, gradient maps, blooms) are dropped: they
-  own no pixels and the client has no adjustment stack yet.
-- **Blend modes, masks, treatments and the effects rack** on art slots are
-  dropped; a plate arrives as its positioned rectangle.
+- **Blend modes, treatments and the effects rack** on art slots are dropped;
+  a plate arrives as its positioned rectangle wearing its mask.
 - **Procedural art** with no plate on disk has no PNG to carry. The
   conventional FIELD synthesizers become a flat scrim in the palette's
   background so the canvas at least opens on the right ground; grain,
@@ -33,6 +31,15 @@ LOSSES, each deliberate and each logged where it happens:
 `source_spec` on the returned document keeps the whole CoverSpec verbatim,
 so nothing listed above is *lost* — only untranslated, and available to a
 later version of this vocabulary.
+
+TWO LOSSES THAT USED TO BE HERE and are not any more (2026-08-31). Adjust
+layers and masks both used to be dropped, and dropping them was the single
+biggest reason the editor could not execute doctrine it was being told: rule
+6 (depth bands differ in VALUE, blend the far band toward the sky) and rule
+9 (clipped art is value-opposite and uniform edge to edge) are a grade and a
+mask, and an assistant that knows both rules and holds neither tool can only
+describe the fix. A cover arriving on the canvas now brings the §15.2 masks
+and §15.3 grades the studio actually designed, and the editor can add more.
 """
 from __future__ import annotations
 
@@ -47,7 +54,8 @@ from pydantic import ValidationError
 from docproof.cover import typeset
 from docproof.cover.archetypes import ARCHETYPES
 from docproof.cover.compose import EBOOK_H, EBOOK_W, _SCRIM_PAD_FRACTION
-from docproof.cover.model import ArtSlot, CoverSpec, ScrimSpec, TextSlot
+from docproof.cover.model import AdjustLayer as CoverAdjust
+from docproof.cover.model import ArtSlot, CoverSpec, PaletteRole, ScrimSpec, TextSlot
 # The ONE prompt-assembly path, imported rather than re-implemented (the
 # precedent pipeline.py itself sets by importing model._expand_recipe): a
 # job dir never persists the assembled prompt, only the spec's raw
@@ -57,8 +65,9 @@ from docproof.cover.model import ArtSlot, CoverSpec, ScrimSpec, TextSlot
 # for something subtly different from what is on screen.
 from docproof.cover.pipeline import JOB_MANIFEST, _assemble_prompt
 
-from .model import (ArtLayer, CanvasDoc, Frame, Gradient, ScrimLayer, Size,
-                    Stop, TextLayer, Warp, new_layer_id)
+from .model import (AdjustLayer, ArtLayer, CanvasDoc, Frame, Gradient, Mask,
+                    MaskGradient, ScrimLayer, Size, Stop, TextLayer, Warp,
+                    new_layer_id)
 
 log = logging.getLogger("docproof.canvas.ingest")
 
@@ -116,21 +125,42 @@ def ingest(job_dir: Path, *, concept: int = 0,
     # so the canvas layer list reads in the same order as the cover it came
     # from. A ref appearing twice (legal in a spec, composited twice by the
     # composer) becomes two layers here, for the same reason.
+    # spec slot id -> the canvas layer id it most recently became. Filled as
+    # the walk goes, and read by _mask: a mask names a SLOT and a canvas mask
+    # names a LAYER, and the map between them only exists during this walk.
+    slot_layers: dict[str, str] = {}
+    adjust_by_id = {a.id: a for a in spec.adjust}
+
     for ref in spec.layers:
+        slot_id = ref.ref
         if ref.kind == "art":
-            layer = _art_layer(art_by_id[ref.ref], spec, job_dir, canvas)
+            slot = art_by_id[slot_id]
+            layer = _art_layer(slot, spec, job_dir, canvas)
+            if layer is not None:
+                layer.mask = _mask(slot.mask, slot_layers,
+                                   f"art slot {slot_id!r}")
         elif ref.kind == "scrim":
-            layer = _scrim_layer(spec.scrims[int(ref.ref)], int(ref.ref), spec,
+            layer = _scrim_layer(spec.scrims[int(slot_id)], int(slot_id), spec,
                                  text_by_id, report)
         elif ref.kind == "text":
-            layer = _text_layer(text_by_id[ref.ref], spec, canvas)
-        else:   # "adjust" — owns no pixels, and the client has no adjustment
-                # stack; the spec survives in source_spec for when it does.
-            log.info("canvas ingest: adjust layer %r dropped — the editor "
-                     "vocabulary has no adjustment layers yet.", ref.ref)
-            layer = None
+            layer = _text_layer(text_by_id[slot_id], spec, canvas)
+        else:
+            # §15.3, no longer dropped. A missing entry means a layer ref
+            # naming an adjust id the spec does not define — the composer
+            # would draw nothing for it either, so neither does this.
+            adjust = adjust_by_id.get(slot_id)
+            layer = (_adjust_layer(adjust, spec, slot_layers)
+                     if adjust is not None else None)
+            if adjust is None:
+                log.info("canvas ingest: layer ref names adjust %r, which the "
+                         "spec does not define; dropped.", slot_id)
         if layer is not None:
             layers.append(layer)
+            # An id-keyed slot composited twice leaves the LAST one here, so
+            # a mask below the second copy points at the second copy. Scrims
+            # are indexed rather than named and nothing masks through one, so
+            # they are recorded the same way for consistency and never read.
+            slot_layers[slot_id] = layer.id
 
     return CanvasDoc(
         job_id=str(raw.get("job_id") or job_dir.name),
@@ -144,6 +174,99 @@ def ingest(job_dir: Path, *, concept: int = 0,
         # ledger); a canvas session counts what the canvas spends.
         cost_usd=0.0,
         source_spec=spec.model_dump(mode="json"))
+
+
+# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
+
+def _mask(source: Any, slot_layers: dict[str, str],
+          owner: str) -> Mask | None:
+    """One CoverSpec MaskSpec as a canvas Mask, or None when nothing of it
+    survives translation.
+
+    Slot ids become canvas layer ids through `slot_layers`, which the walk
+    fills in as it goes. Two things make that lookup safe rather than
+    hopeful: the cover model already refuses a mask that names a slot
+    composited LATER than the layer wearing it, and the walk here IS
+    compose's draw order — so a reference that resolves at all resolves to a
+    layer already in the list, which is exactly the canvas model's own
+    earlier-layer rule.
+
+    A slot composited twice becomes two canvas layers, and `slot_layers`
+    holds the most recent — the one immediately below, which is the copy the
+    composer's own mask would have been reading.
+
+    A reference that does NOT resolve is dropped with a log line rather than
+    raising: it can only happen for a slot this module already declined to
+    carry (a procedural slot with no plate), and losing the mask is a
+    smaller wrong than refusing to open the cover at all. It is logged
+    because an unmasked plate is a visible difference, not a silent one."""
+    if source is None:
+        return None
+    kwargs: dict[str, Any] = {"invert": source.invert}
+    # from_text and from_layer both become from_layer: every canvas layer
+    # rasterizes to one alpha field, so naming a text layer IS the
+    # art-in-the-letterforms clip (see docproof.canvas.model.Mask). A spec
+    # that somehow set both keeps the glyph clip, which is the more specific
+    # of the two intents.
+    for spec_field, ref in (("from_layer", source.from_layer),
+                            ("from_layer", source.from_text),
+                            ("luminance_of", source.luminance_of)):
+        if not ref:
+            continue
+        layer_id = slot_layers.get(ref)
+        if layer_id is None:
+            log.info("canvas ingest: %s masks through %r, which has no layer "
+                     "on the canvas; that source dropped.", owner, ref)
+            continue
+        kwargs.setdefault(spec_field, layer_id)
+    if source.gradient is not None:
+        kwargs["gradient"] = MaskGradient(
+            **source.gradient.model_dump(mode="json"))
+    if not any(kwargs.get(f) for f in ("from_layer", "luminance_of",
+                                       "gradient")):
+        return None
+    return Mask(**kwargs)
+
+
+def _adjust_layer(adjust: CoverAdjust, spec: CoverSpec,
+                  slot_layers: dict[str, str]) -> AdjustLayer:
+    """One §15.3 adjust layer as a canvas layer.
+
+    Full-canvas frame, which is what a CoverSpec adjust layer always is —
+    the canvas gives it a frame so it can be dragged smaller later, and this
+    is the box that reproduces the composed cover exactly.
+
+    Palette roles are resolved to hexes HERE, once, because a canvas
+    document has no palette: `color` may name a role in a spec, and a
+    document that kept the role would be pointing at a table that does not
+    travel with it. Same for the gradient map's stops."""
+    return AdjustLayer(
+        id=new_layer_id(),
+        name=f"{adjust.op.replace('_', ' ')} ({adjust.id})",
+        opacity=adjust.opacity,
+        frame=Frame(x=0.5, y=0.5, w=1.0, h=1.0),
+        mask=_mask(adjust.mask, slot_layers, f"adjust layer {adjust.id!r}"),
+        op=adjust.op,
+        blend=adjust.blend,
+        brightness=adjust.brightness, contrast=adjust.contrast,
+        saturation=adjust.saturation, temperature=adjust.temperature,
+        stops=[_hex(v, spec, PaletteRole.primary) for v in adjust.stops],
+        color=_hex(adjust.color, spec, PaletteRole.scrim),
+        strength=adjust.strength, radius=adjust.radius,
+        threshold=adjust.threshold)
+
+
+def _hex(value: str, spec: CoverSpec, default: PaletteRole) -> str:
+    """A spec color reference as a literal hex — "" takes `default`, a role
+    name reads the palette, a hex passes through. Mirrors
+    docproof.cover.effects._resolve_color, which is what the composer runs
+    on the same field; restated rather than imported because that function
+    is private to the effects module and this is a one-way boundary
+    conversion, not shared pixel math."""
+    if not value:
+        return spec.palette.get(default)
+    roles = {role.value for role in PaletteRole}
+    return spec.palette.get(value) if value in roles else value
 
 
 # -- reading the job ----------------------------------------------------------

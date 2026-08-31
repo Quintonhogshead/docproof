@@ -762,6 +762,118 @@ export function buildPropsRail(ctx) {
     ]);
   }
 
+  /* Adjust layers (§15.3). The controls shown depend on the op, because a
+     bloom has no saturation and a grade has no threshold — and a panel that
+     offered every dial for every op would teach that they all do something.
+     The model itself is forgiving about inert fields, so switching op never
+     strands a layer; only the panel narrows. */
+  const ADJUST_OPS = [
+    ['grade', 'Grade'], ['gradient_map', 'Gradient map'],
+    ['color_wash', 'Colour wash'], ['vignette', 'Vignette'],
+    ['bloom', 'Bloom'], ['blur', 'Blur'],
+  ];
+  const ADJUST_BLENDS = [
+    ['normal', 'Normal'], ['multiply', 'Multiply'], ['overlay', 'Overlay'],
+    ['soft_light', 'Soft light'], ['screen', 'Screen'], ['add', 'Add'],
+    ['lighten', 'Lighten'], ['darken', 'Darken'], ['color_dodge', 'Dodge'],
+  ];
+  const ADJUST_DIALS = {
+    grade: ['brightness', 'contrast', 'saturation', 'temperature'],
+    gradient_map: [], color_wash: [], vignette: ['strength'],
+    bloom: ['strength', 'radius', 'threshold'], blur: ['radius'],
+  };
+  const DIAL_RANGE = {
+    brightness: [-1, 1], contrast: [-1, 1], saturation: [-1, 1],
+    temperature: [-1, 1], strength: [0, 1], radius: [0, 0.25],
+    threshold: [0, 1],
+  };
+  const DIAL_LABEL = {
+    brightness: 'Brightness', contrast: 'Contrast', saturation: 'Saturation',
+    temperature: 'Warmth', strength: 'Strength', radius: 'Radius',
+    threshold: 'Threshold',
+  };
+
+  function adjustGroup(l) {
+    // `op_kind`, not `op`: an op dict already spends `op` on its own name.
+    const setAdjust = (patch) => ctx.store.apply(
+      Object.assign({ op: 'set_adjust', layer_id: l.id }, patch));
+    const rows = [
+      row('Adjustment', select(l.op || 'grade', ADJUST_OPS,
+        (v) => setAdjust({ op_kind: v }))),
+    ];
+    if (l.op === 'color_wash') {
+      rows.push(row('Blend', select(l.blend || 'normal', ADJUST_BLENDS,
+        (v) => setAdjust({ blend: v }))));
+    }
+    if (l.op === 'color_wash' || l.op === 'vignette') {
+      rows.push(row('Ink', scrub(
+        el('input', { type: 'color', value: l.color || '#000000' }), l.id, {
+          preview: (v) => { ctx.store.layer(l.id).color = v; },
+          commit: (v) => setAdjust({ color: v }),
+        })));
+    }
+    if (l.op === 'gradient_map') {
+      // Two or three stops, dark end first. Each is its own colour well so a
+      // duotone is edited where it is read, rather than as a list of hexes.
+      const stops = (l.stops || []).slice();
+      stops.forEach((hex, i) => rows.push(row(i === 0 ? 'Dark' : (i === stops.length - 1 ? 'Light' : 'Mid'),
+        scrub(el('input', { type: 'color', value: hex }), l.id, {
+          preview: (v) => { ctx.store.layer(l.id).stops[i] = v; },
+          commit: (v) => {
+            const next = (ctx.store.layer(l.id).stops || []).slice();
+            next[i] = v;
+            setAdjust({ stops: next });
+          },
+        }))));
+    }
+    (ADJUST_DIALS[l.op] || []).forEach((name) => {
+      const [min, max] = DIAL_RANGE[name];
+      rows.push(row(DIAL_LABEL[name], slider(l.id, {
+        value: l[name] === undefined ? 0 : l[name], min, max, step: 0.01,
+        preview: (v) => { ctx.store.layer(l.id)[name] = Number(v); },
+        commit: (v) => setAdjust({ [name]: Number(v) }),
+      })));
+    });
+    return group('Adjustment', rows);
+  }
+
+  /* A mask is READ here and cleared here, never authored here: naming which
+     layer to show through is a pick-a-layer gesture the canvas does not have
+     yet, and the art director sets one in a sentence. Showing what a layer is
+     masked by — and offering the one-click undo — is what a person needs from
+     a panel that cannot yet build one. */
+  function maskGroup(l) {
+    if (!l.mask) return null;
+    const m = l.mask;
+    const named = (id) => {
+      // `doc` is a property on the store, not a call (see renderLayerList).
+      const other = ((ctx.store.doc || {}).layers || []).find((x) => x.id === id);
+      return other ? (other.name || other.id) : id;
+    };
+    const parts = [];
+    if (m.from_layer) parts.push(`shape of ${named(m.from_layer)}`);
+    if (m.luminance_of) parts.push(`light of ${named(m.luminance_of)}`);
+    if (m.gradient) {
+      parts.push(m.gradient.kind === 'radial'
+        ? 'radial fade'
+        : `fade at ${Math.round(m.gradient.angle === undefined ? 90 : m.gradient.angle)}\u00b0`);
+    }
+    if (m.invert) parts.push('inverted');
+    return group('Mask', [
+      el('div', { class: 'prow' }, [
+        el('span', { class: 'plabel', text: 'Through' }),
+        el('div', { class: 'pfield' }, [
+          el('span', { class: 'unit', text: parts.join(' \u00b7 ') || 'nothing' }),
+          el('button', {
+            class: 'btn small danger', type: 'button', text: 'Remove',
+            onclick: () => ctx.store.apply(
+              { op: 'set_mask', layer_id: l.id, mask: null }),
+          }),
+        ]),
+      ]),
+    ]);
+  }
+
   const EFFECT_LABEL = { bevel: 'Bevel', levels: 'Levels' };
   function effectSummary(e) {
     if (e.type === 'bevel') return `depth ${e.params?.depth ?? 0}`;
@@ -801,9 +913,11 @@ export function buildPropsRail(ctx) {
       return;
     }
     const kindGroup = {
-      text: textGroup, art: artGroup, scrim: scrimGroup, frame: frameStyleGroup, shape: shapeGroup,
+      text: textGroup, art: artGroup, scrim: scrimGroup, frame: frameStyleGroup,
+      shape: shapeGroup, adjust: adjustGroup,
     }[l.kind];
-    [spineNote(l), kindGroup && kindGroup(l), frameGroup(l), effectsGroup(l), commonGroup(l)]
+    [spineNote(l), kindGroup && kindGroup(l), frameGroup(l), maskGroup(l),
+     effectsGroup(l), commonGroup(l)]
       .filter(Boolean).forEach((g) => body.appendChild(g));
   }
 

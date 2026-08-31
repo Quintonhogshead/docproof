@@ -70,6 +70,13 @@ _ART_FIELDS = ("source", "fit")
 _SCRIM_FIELDS = ("color", "gradient")
 _FRAME_STYLE_FIELDS = ("preset", "stroke", "stroke_w", "inset", "fill")
 _SHAPE_FIELDS = ("shape", "fill", "stroke", "stroke_w", "radius")
+# An adjust layer's own parameters (§15.3). `op` is in the list because
+# changing which adjustment a layer IS must not cost the layer its id and its
+# place in the stack — the model's fields are deliberately forgiving about
+# params the new op does not read, exactly so this op can be one edit.
+_ADJUST_FIELDS = ("op_kind", "blend", "brightness", "contrast", "saturation",
+                  "temperature", "stops", "color", "strength", "radius",
+                  "threshold")
 
 # The print wrap's three adjustable numbers, and the two that are not.
 # `trim_w_in`/`trim_h_in` are listed in the op's vocabulary ONLY so that
@@ -88,6 +95,8 @@ _OP_FIELDS: dict[str, tuple[str, ...]] = {
     "set_scrim": _SCRIM_FIELDS,
     "set_frame_style": _FRAME_STYLE_FIELDS,
     "set_shape": _SHAPE_FIELDS,
+    "set_adjust": _ADJUST_FIELDS,
+    "set_mask": ("mask",),
     "set_effects": ("effects",),
     "add_layer": ("layer", "index"),
     "remove_layer": (),
@@ -109,13 +118,13 @@ _NO_TARGET = frozenset({"add_layer", "set_wrap"})
 _LOCK_EXEMPT = frozenset({"set_layer"})
 
 
-def apply(doc: CanvasDoc, op: dict[str, Any]) -> None:
-    """Validate one op, apply it to `doc` in place, and record it.
+def _apply_one(doc: CanvasDoc, op: dict[str, Any]) -> None:
+    """One op, applied and recorded, with NO document-level check.
 
-    The op dict is appended to `doc.history` only after the mutation
-    succeeded, and as a deep copy — history is an audit trail, and a caller
-    that reuses and re-edits its op dict must not be able to rewrite what
-    the document says already happened."""
+    The half `apply` and `apply_many` share. Split out so the batch path can
+    run its cross-layer check once at the end instead of after every op —
+    see apply_many for why an intermediate state is allowed to be invalid.
+    """
     if not isinstance(op, dict):
         raise OpError(
             f"an op must be a dict like {{'op': 'nudge', ...}}, got "
@@ -128,6 +137,24 @@ def apply(doc: CanvasDoc, op: dict[str, Any]) -> None:
     _check_fields(name, op)
     _HANDLERS[name](doc, op)
     doc.history.append(copy.deepcopy(op))
+
+
+def apply(doc: CanvasDoc, op: dict[str, Any]) -> None:
+    """Validate one op, apply it to `doc` in place, and record it.
+
+    The op dict is appended to `doc.history` only after the mutation
+    succeeded, and as a deep copy — history is an audit trail, and a caller
+    that reuses and re-edits its op dict must not be able to rewrite what
+    the document says already happened.
+
+    A single op is its own atomic boundary, so the cross-layer check runs
+    here. It runs AFTER the history append for a reason: the op did happen,
+    and a document that fails the check is one this function must not leave
+    behind — so the check raises and the caller (whose doc is a draft, or
+    who reloads from disk) never commits it, while an in-memory doc that
+    somebody kept still carries an honest log of what was attempted."""
+    _apply_one(doc, op)
+    _check_document(doc, str(op.get("op")))
 
 
 def apply_many(doc: CanvasDoc, ops: list[dict[str, Any]]) -> None:
@@ -150,11 +177,17 @@ def apply_many(doc: CanvasDoc, ops: list[dict[str, Any]]) -> None:
     draft = doc.model_copy(deep=True)
     for i, op in enumerate(ops):
         try:
-            apply(draft, op)
+            _apply_one(draft, op)
         except OpError as e:
             raise OpError(
                 f"op {i + 1} of {len(ops)} was refused, so none of the batch "
                 f"was applied: {e}") from e
+    # Checked ONCE, at the batch boundary, not after every op. A batch is
+    # atomic, so the batch is the only state anyone ever sees — and checking
+    # each step would forbid legitimate two-op edits that pass THROUGH an
+    # invalid arrangement, "clip the plate into the title, and move the title
+    # under it" being the obvious one.
+    _check_document(draft, f"this batch of {len(ops)}")
     doc.layers = draft.layers
     doc.history = draft.history
     doc.wrap = draft.wrap
@@ -162,6 +195,30 @@ def apply_many(doc: CanvasDoc, ops: list[dict[str, Any]]) -> None:
 
 
 # -- shared plumbing ----------------------------------------------------------
+
+def _check_document(doc: CanvasDoc, what: str) -> None:
+    """Re-validate the whole document after a mutation.
+
+    Every other check in this file is layer-local — `_replace` rebuilds the
+    one layer it touched through `parse_layer`, which catches a bad color or
+    a missing field but cannot see the layer LIST. Some rules only exist
+    across layers: unique ids, and (the reason this function was written)
+    a mask may only name a layer below the one wearing it. Four ops can
+    break that rule without touching a mask at all — reorder_layer,
+    remove_layer, add_layer and set_mask — so the check belongs here, at the
+    end of a mutation, rather than being restated in each of them.
+
+    The cost is one pydantic re-parse of a document that holds a few dozen
+    layers, on an edit a human just made. The alternative is a document
+    that saves and then refuses to load, which is the failure this whole
+    file is arranged to prevent."""
+    try:
+        CanvasDoc.model_validate(doc.model_dump())
+    except ValidationError as e:
+        raise OpError(
+            f"{what} would leave the document invalid: "
+            f"{_first_error(e)}") from e
+
 
 def _check_fields(name: str, op: dict[str, Any]) -> None:
     """Refuse a field this op does not define. Cheap, and it turns a
@@ -401,6 +458,43 @@ def _op_set_shape(doc: CanvasDoc, op: dict[str, Any]) -> None:
     _typed(doc, op, "set_shape", "shape", _SHAPE_FIELDS, noun="a shape")
 
 
+def _op_set_adjust(doc: CanvasDoc, op: dict[str, Any]) -> None:
+    """An adjust layer's own parameters (§15.3).
+
+    The one op in this file whose wire name for a field differs from the
+    model's: the model calls the adjustment `op`, and `op` is already this
+    vocabulary's word for "which verb is this" — an op dict cannot carry two
+    meanings of the same key. So the wire says `op_kind` and it is
+    translated here, once, rather than renaming the model field and making
+    a canvas document disagree with the CoverSpec it was ingested from."""
+    layer, index = _target(doc, op, "set_adjust")
+    _kind(layer, "set_adjust", "adjust", "an adjust layer")
+    changes = _changes(op, _ADJUST_FIELDS, "set_adjust")
+    if "op_kind" in changes:
+        changes["op"] = changes.pop("op_kind")
+    data = layer.model_dump()
+    data.update(changes)
+    _replace(doc, index, data, "set_adjust", layer.id)
+
+
+def _op_set_mask(doc: CanvasDoc, op: dict[str, Any]) -> None:
+    """What a layer shows through, on ANY layer kind (§15.2).
+
+    Not a `_typed` verb, because a mask is the one parameter every kind
+    has — clipping a plate into the title and fading a scrim's edge are the
+    same op. `mask: null` clears it, which is why the field is required
+    rather than optional: an absent `mask` key would be indistinguishable
+    from asking for nothing, and silently doing nothing is how a windowed
+    plate ships full-bleed."""
+    layer, index = _target(doc, op, "set_mask")
+    if "mask" not in op:
+        raise OpError(
+            "set_mask needs a `mask` object (or mask: null to remove one)")
+    data = layer.model_dump()
+    data["mask"] = op["mask"]
+    _replace(doc, index, data, "set_mask", layer.id)
+
+
 def _op_set_effects(doc: CanvasDoc, op: dict[str, Any]) -> None:
     """Replaces the whole stack rather than appending to it: effect order is
     paint order, so "add a shadow" and "reorder the stack" are the same
@@ -592,6 +686,8 @@ _HANDLERS: dict[str, Callable[[CanvasDoc, dict[str, Any]], None]] = {
     "set_scrim": _op_set_scrim,
     "set_frame_style": _op_set_frame_style,
     "set_shape": _op_set_shape,
+    "set_adjust": _op_set_adjust,
+    "set_mask": _op_set_mask,
     "set_effects": _op_set_effects,
     "add_layer": _op_add_layer,
     "remove_layer": _op_remove_layer,

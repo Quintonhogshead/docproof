@@ -46,6 +46,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..models import Usage
 from ..providers import Provider, cost_of_usage, strict_json_schema
+from . import doctrine
 from .archetypes import ARCHETYPES, SUBJECT_KEYS, describe_archetypes
 from .fonts import describe_fonts
 from .model import ArtSlot, Brief, CoverSpec, Direction, Directions
@@ -373,7 +374,16 @@ time: the recipe expands into real graded layers for you, and everything \
 finer is archetype and revision territory.
 
 If the brief's `pitch` is present, ground the imagery in it. Never spoil an \
-ending on the cover, regardless of how much the pitch reveals.{_sample_rule(has_sample)}"""
+ending on the cover, regardless of how much the pitch reveals.\
+{_sample_rule(has_sample)}
+
+THE HOUSE DOCTRINE. Every rule below was learned by shipping a cover that \
+broke it, and they bind a concept at the moment you write it — a concept \
+that asks for a standing cutout without saying what it stands on has already \
+failed, and no amount of downstream work recovers it. Numbering is the \
+house's own and is stable across the studio, so gaps are expected.
+
+{doctrine.render("direction")}"""
 
 
 def _direction_user_prompt(brief: Brief, manuscript_sample: str) -> str:

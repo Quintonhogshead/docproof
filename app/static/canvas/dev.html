@@ -130,6 +130,30 @@ const frontDoc = () => ({
       stroke: '#e6d0a4', stroke_w: 0.0022, inset: 0.012, fill: null,
       frame: { x: 0.5, y: 0.5, w: 0.92, h: 0.95, rotation: 0, flip_h: false, flip_v: false },
     }),
+    /* §15.2/§15.3, the two things the editor could not do until 2026-08-31.
+       A second copy of the plate, clipped into the TITLE's letterforms
+       (doctrine rule 9 — the type is the window), and a finishing grade over
+       the whole cover scoped by a gradient so it deepens the sky and leaves
+       the foot of the cover alone (rule 6). Both are here so the harness
+       exercises them: a mask and a grade are exactly the kind of thing that
+       looks right in one renderer and wrong in the other. */
+    layer({
+      id: 'l_clip', kind: 'art', name: 'Plate — clipped into the title',
+      source: 'plate_field_v1.png', prompt: 'A ridge at dusk, flat colour block.',
+      transparent: false, fit: 'cover',
+      frame: { x: 0.5, y: 0.15, w: 0.86, h: 0.2, rotation: 0, flip_h: false, flip_v: false },
+      mask: { from_layer: 'l_title', luminance_of: '', gradient: null, invert: false },
+    }),
+    layer({
+      id: 'l_grade', kind: 'adjust', name: 'Grade — sky deepened',
+      op: 'grade', blend: 'normal',
+      brightness: -0.18, contrast: 0.14, saturation: -0.1, temperature: -0.25,
+      stops: [], color: '#000000', strength: 0.5, radius: 0.02, threshold: 0.75,
+      frame: { x: 0.5, y: 0.5, w: 1, h: 1, rotation: 0, flip_h: false, flip_v: false },
+      mask: { from_layer: '', luminance_of: '',
+              gradient: { kind: 'linear', angle: 270, center: [0.5, 0.5], start: 0.15, end: 0.75 },
+              invert: false },
+    }),
   ],
 });
 

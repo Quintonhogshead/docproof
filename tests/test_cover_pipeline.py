@@ -358,6 +358,42 @@ def test_run_job_direction_error_ends_the_job_in_error(tmp_path, monkeypatch):
     assert result.concepts == []
 
 
+def test_run_job_builds_one_concept_at_a_time(tmp_path, monkeypatch):
+    """Concepts are designed serially, not five-at-once (owner, 2026-08-31).
+
+    The observable promise is that concept N's work never overlaps concept
+    N-1's: a designer finishes one cover before starting the next, and the
+    first finished cover reaches the screen while the rest are still to
+    come. Asserted at the compose boundary, which every concept passes
+    through exactly once."""
+    job = pipeline.create_job(tmp_path, _brief(concepts=3))
+    directions = [
+        _direction("full_bleed_art", concept_name=f"C{i}",
+                  art_prompts={"background": f"PROMPT {i}, oil painting."})
+        for i in range(3)]
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=directions, model="m", cost=0.01))
+
+    in_flight = 0
+    overlapped = False
+
+    async def watched_paint(root, job_id, index, *args, **kwargs):
+        nonlocal in_flight, overlapped
+        in_flight += 1
+        if in_flight > 1:
+            overlapped = True
+        # A real await, so a gather would actually interleave here and be
+        # caught; a coroutine that never yields would pass either way.
+        await asyncio.sleep(0)
+        in_flight -= 1
+
+    monkeypatch.setattr(pipeline, "_paint_and_compose", watched_paint)
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    assert not overlapped, "two concepts were being made at the same time"
+
+
 def test_run_job_per_concept_isolation_and_incremental_persistence(
         tmp_path, monkeypatch):
     """One concept's ImagingError must not kill its sibling (§8), and the
