@@ -1483,3 +1483,80 @@ to give)**
 rebuilt byte-identically from a seeded script plus the four plates, verified at each
 delivery. §15.19's promise — "every cover an archived spec that re-renders byte-identically
 and revises for $0" — is the reason a five-round conversation cost plate generation once.
+
+### 15.23 Standing figures need a ground — generate one (the Desaturated II addendum)
+
+Provenance: the two *Desaturated* covers (2026-08-31). Every gate in §15.19–15.22 printed OK on a
+delivered cover whose figure was standing on nothing, and the owner named it in four words on
+first sight. It is the loudest defect on the list and it had no rule, so it gets one.
+
+**THE CARDINAL RULE. If a figure is standing, they MUST look like they are standing on
+SOMETHING.** Not "should", not "prefer". This outranks every other note in this section, and it is
+the one thing a reader adjudicates instantly and without vocabulary. A figure that floats has no
+redeeming composition: the palette, the type and the mark are all wasted behind it.
+
+**And the fix is usually a new plate, not better shadow work.** This is the half that was missed.
+The scene plate here was an elevated view looking DOWN across rooftops — a good plate, exactly as
+briefed — and it contains **no floor plane anywhere in the frame**. There was nothing to seat her
+on. The instinct at that point is to hunt the plate for the nearest horizontal-ish surface and
+wedge the figure onto it; that is the ham-fisted move and it never survives review. §15.20's
+third-variable rule applies and names the answer: when two constraints cannot be reconciled by
+moving the element, reach for a variable neither of them names. Here that variable is **a ground**,
+and a ground is one more generation.
+
+  *When a character is floating, you do not cram them onto some other platform. You generate them
+  their own space.*
+
+The near band cost one image (~$0.05): a roof deck at standing eye height, running away to a low
+parapet, no sky and no city in the frame. It becomes its own depth band (§15.20 rule 4), the
+plate's own parapet becomes the boundary with the far band — a real object edge instead of a
+straight cut — and the figure then has something to be seated on with all of §15.22 item 4's
+machinery.
+
+**Plan-time consequence.** §15.22's *unplanned integration* gate already fails a plan that requests
+a cutout without naming its grounding work. Extend it: a plan that requests a **standing** cutout
+must also name **the surface it stands on and which plate that surface comes from**. "The
+background plate" is only an acceptable answer if the background brief actually asks for a floor
+at the figure's feet, in the figure's perspective. If it does not, the plan is short one plate and
+is a fail before anything is generated.
+
+**Gate.** *No ground under a standing figure* — refuse to deliver when the plate the figure is
+seated on has no surface at the contact. Checked as a stack, all of it required (this is §15.22's
+floating-figure gate, restated with its missing first term):
+
+0. **a receiving surface exists in the scene at the figure's feet, in the figure's perspective;**
+1. a cast shadow exists on it, thrown by a real affine from the key's elevation;
+2. the plane is light enough for that shadow to register — lift it BEFORE darkening it;
+3. the contact carries a hard, unblurred weld;
+4. no rim-light contribution survives in the bottom 5% of the seated alpha.
+
+Term 0 is new and it is the one that cannot be fixed downstream. Measure the result rather than
+looking: sample mean plane luminance in rings out from the contact and require a monotonic
+gradient into it (this cover: 83.6 unshadowed → 81.5 → 67.5 at the contact).
+
+**Pixel traps (new this cover)**
+
+- `fit: "cover"` fills the whole canvas — a *band* cannot be made with `scale` and `offset`. The
+  deck did exactly that on the first attempt and swallowed the city, the moon and the flier. Build
+  the band as a full-canvas RGBA whose alpha is cut at the band's top row.
+- A cast-shadow affine has a sign, and both signs render. With the key low and BEHIND the subject
+  the shadow comes toward the camera: `out_y = cy + m·(cy − in_y)`. The other sign throws it up
+  behind her onto nothing, which looks like no shadow at all rather than like a bug.
+- `treatment: "silhouette"` fills with **`palette.primary`**. If primary is the title's ink, the
+  figure renders in the title's colour and craters its contrast — measured here at 3.61 on a
+  cover whose title had read 5.73 at draw time.
+- A whole-word occlusion budget cannot see a destroyed letter. One glyph of eleven is ~9% of the
+  ink, so "title occlusion ≤ 8%" passed on a cover reading `DESATU_ATED`. The rule was always
+  "occluders clip STROKES, never letterforms": measure per letter, and note that the type's own
+  drop shadows bleed across every inter-letter gap, so strip effects before segmenting or the
+  per-glyph gate silently degrades into the whole-word one.
+- A limb probe needs a width **floor** as well as a ceiling, and must scan the figure's own bbox
+  rather than the canvas: without the floor it tracks a gap in the ponytail, without the ceiling it
+  runs past the hand into the two legs (also two separated runs) and returns a torso-width band.
+  Three versions of this probe shipped a visibly wrong bracelet before it was constrained.
+- `inspect.isolate()` returns a **flattened composite** — every pixel alpha 255 — so it cannot be
+  used to read a layer's shape. `placed_ink_mask` is the tool, but re-ink the slot white first when
+  the cutout is near-black on a near-black plate (its own docstring names that failure mode).
+- Generated cutouts arrive with 140–240px of sub-40 alpha haze, and `contain`-fit scales the whole
+  source frame — so that padding silently shrinks every object. Crop to the hard-alpha box during
+  conditioning, not at seat time.
