@@ -1061,6 +1061,11 @@
     wireDetail();
 
     if (!getKey()) { showView('unlock'); return; }
+    /* A ?job= in the URL wins over the stored one: it is how the canvas
+       editor's "Open in Studio" door lands on the exact cover being edited
+       (the shell window has no back button — links are the only way home). */
+    var urlJob = new URLSearchParams(location.search).get('job');
+    if (urlJob) { openJob(urlJob); return; }
     var jobId = getStoredJob();
     if (jobId) { openJob(jobId); }
     else { showView('brief'); refreshRecentJobs(); }
