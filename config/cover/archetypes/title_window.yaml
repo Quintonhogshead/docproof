@@ -16,17 +16,32 @@
 # unifies field + windowed art with a whisper of grain and vignette.
 # Templates are how conventions propagate — the judge sees this pass,
 # revisions imitate it (§15.13's own reasoning).
+#
+# §15.21's value contract is why `describe` names it out loud: with
+# mode: art_fill there is no ink inside the glyphs, so the legibility
+# autopilot tests palette.primary (the ring) against the title zone and,
+# finding a light field under light art, escalates the strength-0 scrim
+# into a panel over the very design it is protecting. Measured on Drop
+# Table: dark field + pale art ended at 3.33 vs the 4.5 threshold with
+# scrim 0.85; the same art on a cream field scored 7.22 with scrims at
+# 0.0. The direction call picks the palette, so the direction call is
+# where the contract has to be stated.
 name: title_window
 genres: [literary, memoir_biography, nonfiction]
 describe: >-
   A huge windowed title over a flat color field: the generated art is
   visible only through the title's own letterforms, each glyph edged with
-  a thin ring — type as both the hero and the picture frame.
+  a thin ring — type as both the hero and the picture frame. Pick the
+  palette and the art together and OPPOSITE in value — a light field
+  needs dark art behind the letters, a dark field needs light art — or
+  the title's legibility gate scrims over the design (§15.21).
 composition_note: >-
-  An edge-to-edge scene or texture with strong color and interest spread
-  evenly across the whole frame — it will be seen only through large
-  letterforms, so no single small subject, no empty regions, no fine
-  detail that needs to be read. No text anywhere.
+  An edge-to-edge texture rather than a composition: strong color and
+  interest spread evenly across the whole frame, at ONE consistent
+  overall value throughout — uniformly dark or uniformly light, never a
+  mix of bright and dark regions. It will be seen only through large
+  letterforms, so no single subject, no margin or border, no empty
+  region, no fine detail that needs to be read. No text anywhere.
 axis: center
 recipe: quiet_literary
 art:
