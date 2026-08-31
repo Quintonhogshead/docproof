@@ -166,6 +166,18 @@ A chat panel with a **Plan / Act** toggle, in the first build.
   cover it's editing).
 - **Act mode**: full tool set; "move the title down and left, off her
   face" just happens, each tool call appearing in the undo log.
+- **`look` is live (v0.161.0)**: it re-renders the working document
+  server-side (`docproof/canvas/render.py`) rather than handing back the
+  snapshot the browser attached to the message. The snapshot was taken
+  before the turn ran, so a director that edited and then looked was shown
+  the cover as it was BEFORE its own edit — it could iterate, but only
+  blind. `look(grid=true)` adds a measuring grid in the document's own
+  units (tenths, thirds, centre, and a wrap's fold lines), so a judgement
+  becomes a number an op can take. The system prompt's **Measuring**
+  section is the discipline that goes with it: measure with `inspect` and
+  the grid, use the free `rebalance` before spending on a re-roll, change
+  one thing, look at what you did, and never roll twice without looking in
+  between.
 - **Plan mode**: read-only tools only (`inspect`, `look`); it critiques,
   proposes, and drafts a numbered plan. One click ("do it") flips the plan
   to Act and executes it.

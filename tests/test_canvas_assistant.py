@@ -13,11 +13,14 @@ tests.
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
+import io
 import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from docproof.canvas import assistant
 from docproof.canvas.assistant import (AssistantUnavailable, ChatResult,
@@ -210,7 +213,6 @@ def test_the_recorded_ops_are_copies_the_caller_cannot_rewrite():
 # -- look ---------------------------------------------------------------------
 
 def test_look_returns_the_snapshot_as_a_base64_png_image_block():
-    import base64
     result = _run(_session(snapshot_png=PNG).look({}))
     block, = result["content"]
     assert block["type"] == "image"
@@ -222,6 +224,116 @@ def test_look_without_a_snapshot_says_so_instead_of_pretending():
     result = _run(_session().look({}))
     assert result["content"][0]["type"] == "text"
     assert "No snapshot" in _body(result)
+
+
+# -- look re-renders the live document ----------------------------------------
+#
+# The snapshot rides in on the person's message, which means it was taken
+# BEFORE the turn ran. A model that edited and then "looked" used to be handed
+# the cover as it was before its own edit — so it could iterate, but only
+# blind, and it would report on a change it had never seen.
+
+def _real_job(tmp_path) -> Path:
+    """A job directory the renderer can actually draw: the plate the doc's
+    art layer names, on disk."""
+    job = tmp_path / "job"
+    (job / "assets").mkdir(parents=True)
+    Image.new("RGB", (160, 256), (30, 50, 80)).save(job / "assets/c0_background.png")
+    return job
+
+
+def _looked_image(result: dict) -> bytes:
+    block = [b for b in result["content"] if b["type"] == "image"][0]
+    return base64.b64decode(block["data"])
+
+
+def test_look_after_an_edit_shows_the_edit_not_the_stale_snapshot(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act",
+                       snapshot_png=PNG)
+    _run(session.apply_ops({"ops": [{"op": "nudge", "layer_id": TEXT_ID,
+                                     "dy": -0.1}]}))
+    result = _run(session.look({}))
+    data = _looked_image(result)
+    assert data != PNG                       # not the snapshot
+    assert Image.open(io.BytesIO(data)).size[0] == assistant.LOOK_WIDTH
+    # And it says so, so the model cannot mistake which picture this is.
+    assert "after this turn's edits" in _body(result)
+
+
+def test_look_before_any_edit_is_still_the_browsers_own_snapshot(tmp_path):
+    # While it is true, the browser's render IS the truer picture: it is what
+    # the person is looking at, shaped by their own font stack.
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act",
+                       snapshot_png=PNG)
+    block, = _run(session.look({}))["content"]
+    assert base64.b64decode(block["data"]) == PNG
+
+
+def test_a_document_that_arrives_with_history_is_not_treated_as_edited(tmp_path):
+    doc = _doc()
+    doc.history.append({"op": "nudge", "layer_id": TEXT_ID, "dy": 0.01})
+    session = _Session(job_dir=_real_job(tmp_path), doc=doc, mode="act",
+                       snapshot_png=PNG)
+    assert session._edited() is False
+    block, = _run(session.look({}))["content"]
+    assert base64.b64decode(block["data"]) == PNG
+
+
+def test_look_renders_even_with_no_snapshot_rather_than_going_blind(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    result = _run(session.look({}))
+    assert Image.open(io.BytesIO(_looked_image(result))).size[0] == \
+        assistant.LOOK_WIDTH
+
+
+def test_a_failed_render_falls_back_to_the_snapshot_and_says_it_is_stale(
+        tmp_path):
+    # No plate on disk: the render cannot happen. A paid edit must not cost
+    # the model its eyes as well.
+    session = _Session(job_dir=tmp_path / "nothing-here", doc=_doc(),
+                       mode="act", snapshot_png=PNG)
+    _run(session.apply_ops({"ops": [{"op": "nudge", "layer_id": TEXT_ID,
+                                     "dy": -0.1}]}))
+    result = _run(session.look({}))
+    assert _looked_image(result) == PNG
+    assert "before this turn's edits" in _body(result)
+
+
+# -- the measuring grid --------------------------------------------------------
+
+def test_the_grid_is_drawn_on_request_even_with_nothing_edited(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act",
+                       snapshot_png=PNG)
+    plain = _looked_image(_run(session.look({})))
+    gridded = _looked_image(_run(session.look({"grid": True})))
+    assert plain == PNG                      # the snapshot, unasked-for grid
+    assert gridded != PNG
+    assert Image.open(io.BytesIO(gridded)).size[0] == assistant.LOOK_WIDTH
+
+
+def test_the_grid_changes_the_pixels_and_says_what_its_labels_mean(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    bare = Image.open(io.BytesIO(_looked_image(_run(session.look({})))))
+    ruled = Image.open(io.BytesIO(
+        _looked_image(_run(session.look({"grid": True})))))
+    assert bare.size == ruled.size
+    assert bare.tobytes() != ruled.tobytes()
+    # The labels are the document's own units, and the answer says so — a
+    # grid the model has to convert is a grid it can convert wrongly.
+    assert "fractions ops take" in _body(_run(session.look({"grid": True})))
+
+
+def test_the_grid_tool_is_offered_in_both_modes(tmp_path):
+    for mode in ("plan", "act"):
+        spec, = [s for s in _session(mode).specs() if s.name == "look"]
+        assert "grid" in spec.schema["properties"]
+        assert "grid=true" in spec.description
+
+
+def test_the_system_prompt_tells_it_to_measure_before_it_spends():
+    assert "## Measuring" in assistant.SYSTEM_PROMPT
+    for phrase in ("grid=true", "rebalance", "look"):
+        assert phrase in assistant.MEASURE
 
 
 # -- the declared image type is the real one ----------------------------------
