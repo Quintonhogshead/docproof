@@ -1231,3 +1231,255 @@ compositing, not after).
 - Masked slots inherit their archetype's mask, never a direction's `mask_intent` — an
   intent named on a slot the template already masks is dropped with a log line, so a
   concept that needs a different clip needs a different archetype.
+
+### 15.22 Second-pass doctrine — the seven things that stood between a plate set and a cover (the Willow On Me II addendum)
+
+Provenance: the second Willow On Me cover (2026-08-31) — the same book §15.19 came from,
+but run the way the product is supposed to run: the author generated four plates from
+prompts the engine wrote, and everything after that was ours. Twenty-eight renders, five
+delivered versions, and every one of the author's notes traced back to a step the engine
+does not yet own. This section is that list. It is written for the `manuscript in → 4-6
+covers out` target: each item is a thing the model has to KNOW, and most of them are a
+thing the model has to MEASURE rather than choose.
+
+**The governing lesson, in the author's words: "a decision is made, and then everything
+must flow downward from that. It is not so. The scene is malleable until it's sent."**
+And its operative half: **if something isn't working, change it up. See what does.**
+
+This is a general rule about how to iterate, not a note about any one element. The failure
+mode it names is refining a failing approach instead of replacing it — and it happened in
+four different places on this cover:
+
+- *The airship.* The plate crop was treated as terrain, so the ship got squeezed into
+  whatever void was left; when it was too small to carry the author line, the fix reached
+  for was a smaller author line. The actual fix was a different location and twice the
+  size — which resolved the dead band, the legibility, and the cover's missing second beat
+  at once.
+- *The mark.* Three rounds went into tuning a grammar the author had already rejected —
+  thinner strokes, softer flashes, better spacing — when what was needed was a different
+  grammar (three narrative anchors), not a better-tuned version of the wrong one.
+- *The figure.* The second plate was better rendered, so it looked like an upgrade; the
+  author swapped back to the first for its story of movement. Better execution of the
+  wrong choice is not progress.
+- *Diegetic type.* Nudging a pasted-on caption's position and opacity never made it belong.
+  Deriving its geometry from the host did.
+
+**Operationally: when a fix does not move the read, change the KIND of thing you are doing
+before you change its parameters again.** Two failed refinements of the same approach is
+the signal to swap approaches. For the planner this means the search space is the plate
+transform, the figure's scale and position, every element's zone, and the archetype itself
+— not the element being complained about. Encode elements as constraints ("the author line
+reads at 180px", "no dead band over 0.28") and let it move whatever satisfies them; a
+planner that can only adjust the thing under discussion will converge on a worse cover than
+one that can re-frame.
+
+---
+
+**1. Plates do not arrive in the aspect you asked for. Landscape rescue is a first-class
+step, not a repair.**
+
+The prompt said 2:3 portrait; the background came back 1402×1122 landscape. This is not
+the author's error and it will recur — treat portrait as something the engine *builds*.
+The op has four parameters and one rule:
+
+- `zoom` — scale past canvas width so the city fills more vertical space (1.72 here);
+- `cut_bias` — **which side the overflow comes off, chosen by which landmarks must
+  survive.** 79% came off the left specifically to keep the airship and the cliff edge,
+  the two details that prove the island floats. Never centre-crop; ask the brief which
+  three landmarks are load-bearing and protect them.
+- row-wise sky extension — per-column extrapolation of the plate's own top band toward a
+  ceiling colour, eased;
+- seam crossfade — a real blend over ~90 rows between the extrapolation and the plate.
+
+Two defects cost a version each and both are now rules. **Smooth the seam row horizontally
+(σ≈60) before extrapolating from it**, or you extrapolate its grain into vertical banding —
+and per §15.19, a step survives a blur, so this is unfixable downstream. And a "feather"
+that is not an actual crossfade leaves a bright hairline at the seam; write the blend,
+don't gesture at it.
+
+**2. Every anchor is measured. Estimating off a downscaled preview has ~10% error, which
+is fatal at flash scale.**
+
+I placed the bell-tower vertex by eye and missed by 86px, so the arrival flash floated in
+the sky beside the tower instead of landing on its cross. §15.18's inspection kit exists;
+this cover is the argument that it is not optional. Before choosing any vertex, seat, or
+type zone, render a **ruled-grid crop at known scale** over the region and read the number,
+or detect the feature programmatically. "Display coordinate × scale factor" is not a
+measurement.
+
+**3. Occlusion-aware placement — the figure eats the scene.**
+
+At 42% of cover height the figure covered x∈[150,1114] of a 1600px canvas: most of the
+"city" the mark was supposed to travel through was behind her. Two iterations were spent
+routing a mark through pixels she covers. The engine needs a **free-interval map** —
+per row, the column spans not covered by the seated figure's alpha — and every vertex that
+must be *seen* has to sit in one. Vertices that are deliberately hidden (a terminus behind
+the subject) are fine and often correct, but they must be chosen as hidden, not discovered
+to be.
+
+**4. Grounding a cutout is a PLANNED step, and it is the whole stack — shadow and rim
+together. Think before prompting.**
+
+The model should have known, at the moment it wrote the figure prompt, that a transparent
+cutout dropped onto a rooftop needs to be grounded, and should have said so out loud:
+*she'll need a drop shadow under her.* The prompt correctly asked for "no ground, no
+shadow, no scene" — a cutout must arrive clean — but the plan that prompt belongs to must
+already carry the grounding work as required, with its own gate, so it is executed before
+the author ever sees the render. Instead the whole stack was built reactively, after the
+author said she looked like she was floating. **Every plate the brief requests implies
+integration work; enumerate that work when you write the prompt, not when someone
+complains.**
+
+Both halves of the stack were load-bearing and neither is optional:
+
+  a. **The shadow work is essential and comes first in the plan.** A projected cast shadow
+     from a real affine derived from the light's elevation, with a severe vertical squash
+     (m ≈ 0.15) — a mild squash puts the shadow up on the buildings instead of the ground;
+     the first attempt landed at y=1451 on a plane that starts at 2150. Plus a tight
+     ambient-occlusion pool (radius ≈ 40, not 58) and a penumbra **raked away from the
+     key**, never symmetric about the contact. And **lift the receiving surface first** —
+     a cast shadow on near-black tiles is invisible, so rake the horizon key across the
+     plane before darkening any of it.
+  b. **The contact itself is a hard, unblurred weld** along the silhouette's bottom edge —
+     2–3px, blur ≤ 2. Every softer version reads as a cushion the figure is resting ON.
+     This is §15.19's "contact-POINT shadows, never a body-wide bar" one level finer: not
+     just small, but *hard*.
+  c. **And the rim light must die before it reaches the ground.** This was the piece that
+     had been missing while three rounds of shadow work went in, and it is worth calling
+     out precisely because it is the one nobody looks for: the synthesized key rim was
+     running all the way around the silhouette, *including under the boot sole and the
+     fingertips*. A lit edge where a thing touches the ground is the visual signature of
+     hovering, and it will outvote correct shadows. Kill the rim in the bottom ~4.5% of
+     the figure and darken those rows into their own shadow.
+  d. **Do not "reseat"** (paste the surface back over the figure's lowest rows) once a hard
+     weld exists — it re-lit a bright tile edge under the sole and un-did (b).
+
+The debugging order to remember: if the shadows are right and the figure still floats,
+check the rim at the contact. If the rim is right and it still floats, check that the
+surface is light enough for a shadow to exist on.
+
+**5. The signature mark's anchor count is a NARRATIVE number, not a density knob.**
+
+Three grammars were tried and the author rejected two of them:
+
+| version | grammar | verdict |
+|---|---|---|
+| one continuous stroke | "reads as a line" (§15.19 rule 3, confirmed) | rejected |
+| dashed connectors + graded flashes at 5–6 vertices | reads as hops, but "doesn't need balls in the middle" | rejected |
+| **three anchors, bold continuous strokes, flashes only at anchors** | accepted | **ship** |
+
+The rule that generalizes: **origin, one discrete bounce, terminus — and every anchor must
+be a nameable object in the scene** ("the minaret's spire", "the bell tower's cross"), not
+a point in the air. The origin is a *story* choice, not a compositional one: "from the sky"
+and "from a moored airship out in the Depths" were both rejected in favour of "from the
+city", because that is where the character came from. The brief must extract the mark's
+origin along with the mark.
+
+Two mechanics fall out of the three-anchor form. **Anchors at similar heights make the
+outbound and return legs retrace one corridor** and merge into a single fat blob — separate
+the terminus vertically (here, down onto the pack). And on a light ground the **flash needs
+the same inversion as the stroke** — §15.19's glow-inversion trap applies to the burst, not
+only the line, or it reads as sun glare. Light-ground recipe: dilate+blur the mask into a
+dark underprint (×0.78), then an opaque saturated body that *includes the flash term*; no
+bright core, no additive spill.
+
+**6. Diegetic type is a measurement problem, and it decomposes cleanly.**
+
+"It shouldn't feel pasted on" and then "the ship must act as a FRAME — neat and centred
+INSIDE the hull; if you need to bend the text, bend the text" are the two halves of one
+build. Nothing here is a taste call:
+
+  a. **Take the geometry from the host.** Erode the host's alpha until its fixtures
+     (rigging, fins, gondola) fall away, then read the surviving body **column by column**:
+     centre line and half-height. Bend the baseline along the centre line; taper the
+     letters by the half-height.
+  b. **The window must be SYMMETRIC.** A blunt nose and a tapering tail make the naive
+     "where is it fat enough" window lopsided, and a lopsided window reads *crooked*, not
+     curved — the name sat level on the left and dove into the taper on the right. Take the
+     widest symmetric window about the fattest column.
+  c. **Damp the conformance.** Centre-line deviation ×0.78, taper clamped to [0.80, 1.18].
+     Following the hull exactly caricatures it.
+  d. **Modulate the ink by the host's high-frequency DETAIL — `lum − blur(lum)` — not by
+     its absolute luminance.** Modulating by darkness is the obvious move and it produced
+     near-illegible ghost lettering, because most of that hull is dark. Detail is what
+     makes the ribs and panel seams cut through the strokes while the letters stay bright.
+     Add the broad shading at low weight (0.74 + 0.30·shade) and a seeded wear field.
+  e. **Clip the ink to the host's hard alpha** so it cannot spill past a taper.
+  f. **Fit both axes**: the string's width to the window's width AND the em box to its
+     height, shrinking the face until both hold.
+
+The payoff is not only that it looks painted. A diegetic author line sized to a real object
+is *large* — this one is ~56% of the hull — which is what finally made it legible at
+thumbnail after the small pasted version failed that test.
+
+**7. Call the engine's metrics. Never re-implement them.**
+
+A hand-rolled cell-variance dead-band proxy reported 0.44 and 0.63 (FAIL) on covers whose
+actual `compose._dead_band_frac` — the tallest run of near-flat **rows** — was 0.105 (PASS).
+Two numbers, one of which is the shipping gate. A reviewing agent that invents a metric
+will re-litigate decisions the composer already settled. Related: WCAG contrast read off
+the *flattened* composite is pessimistic, because the cream type is inside its own
+measurement zone; measure the backdrop pre-type or accept the number as a floor.
+
+---
+
+**Plate briefing, revised (supersedes the ad-hoc prompts §15.19 implies)**
+
+What worked verbatim and should be locked into the prompt library: the **material plate**
+("full-frame abstract texture, pure black ground, uniform density edge to edge, no margin,
+no border, no empty region, no single focal point, no subject") produced a perfect
+luminance-mask material on the first generation. The shared **style block + palette hexes +
+lighting contract** made four independently generated plates cohere. Ask the image model for
+**materials and subjects only** — the geometry stays Pillow's, per §15.19.
+
+Two additions. **Ask for 2–3 figure poses, and select on narrative, not render quality** —
+the author supplied a second, better-crafted figure mid-session and then chose the first
+one back because it "has a better story of movement" (streaming hair and a reversed dagger
+imply a before and an after; a static crouch does not). And **audit every plate on arrival**:
+aspect vs requested, alpha haze fraction, hard-vs-raw bbox delta, and — for a material —
+whether it is actually uniform. Both figure plates and the airship carried a glow baked into
+RGB behind clean alpha; the airship needed hard-keying at a threshold or its bbox haze
+floats the object.
+
+**Gates this adds** (beyond §15.19–15.21)
+
+- *floating figure*, checked as a stack, all four required: a cast shadow exists on the
+  receiving plane; the plane is light enough for it to register; the contact carries a hard
+  weld; and no rim-light contribution survives in the bottom 5% of the seated figure's
+  alpha. Any one missing is a fail — they do not substitute for each other.
+- *unplanned integration*: a plan that requests a transparent cutout without also naming its
+  grounding work is a fail at PLAN time, before a single plate is generated.
+- *mark reads as a line*: a signature mark with fewer than two segments, or with vertices
+  that are not on detected scene features, is a fail.
+- *type reads as pasted*: diegetic lettering whose ink does not vary with the host's local
+  detail is a fail; so is lettering whose window is asymmetric about the host's widest point.
+- *invented metrics*: a review that reports a gate number not produced by `compose` is void.
+
+**Build list (each item PR-sized, and each one is a note the author should never have had
+to give)**
+
+1. `plate.py` — landscape rescue as a parameterized op: zoom, landmark-preserving crop bias,
+   smoothed-row sky extension, real seam crossfade.
+2. `inspect.py` — ruled-grid probe and `free_intervals(figure_alpha, pos)`; make anchor
+   selection consume them.
+3. `integrate.py::seat_figure` — rim-kill at contact, hard weld, raked penumbra, tight AO,
+   projected cast shadow from light elevation, surface lift before darkening.
+4. `integrate.py::mark_painter` — three-anchor default, anchors snapped to detected features,
+   luminance-aware inversion applied to strokes *and* flashes.
+5. `integrate.py::diegetic_type` — host-body measurement, symmetric window, damped bend and
+   taper, detail-modulated ink, both-axis fit. The brief must name the diegetic surface the
+   manuscript supplies (this book hands you an airship hull).
+6. Brief extraction — add: the mark's story ORIGIN, the pose's implied motion, the three
+   load-bearing landmarks, and a diegetic surface for the author line.
+7. Planner — constraints over positions: let it re-frame the plate, re-scale any element,
+   and switch archetype to satisfy a gate, per the governing lesson above. Track how many
+   times a given approach has been refined without moving the read; at two, force a
+   different KIND of move rather than another parameter pass.
+8. Plan-time integration manifest — every requested plate carries the list of integration
+   steps it will need (a cutout implies grounding; a material implies a mask target; a
+   scene implies a landmark budget), so the work is scheduled with the prompt.
+
+**Determinism held, and it is what made twenty-eight versions affordable.** Every render
+rebuilt byte-identically from a seeded script plus the four plates, verified at each
+delivery. §15.19's promise — "every cover an archived spec that re-renders byte-identically
+and revises for $0" — is the reason a five-round conversation cost plate generation once.
