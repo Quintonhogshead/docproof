@@ -35,6 +35,7 @@ overrides that default per test to exercise the critique wiring itself.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from pathlib import Path
 
@@ -395,6 +396,182 @@ def test_run_job_per_concept_isolation_and_incremental_persistence(
     assert result.concepts[1].status == "error"
     assert "refused" in result.concepts[1].error
     assert any(row["kind"] == "image" for row in result.ledger)   # concept 0's image billed
+
+
+# -- the per-job image tier (draft vs full) ------------------------------------
+#
+# The failure mode these tests exist for is a HALF-threaded tier: art rolled
+# at 1K but billed at 2K, or the reverse. So every test below asserts on BOTH
+# halves at once -- the resolution the real pipeline handed imaging.generate,
+# AND the dollars its ledger row actually charged -- rather than trusting that
+# one implies the other.
+
+def _tier_run(tmp_path, monkeypatch, *, image_quality: str,
+              archetype: str = "full_bleed_art") -> tuple[list[str], object]:
+    """Run one whole job at `image_quality` through the real pipeline path,
+    with only the network seams faked. Returns (the resolutions generate()
+    was asked for, the finished job)."""
+    job = pipeline.create_job(tmp_path, _brief(concepts=1),
+                              image_quality=image_quality)
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction(archetype)], model="m", cost=0.0))
+
+    resolutions: list[str] = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        resolutions.append(resolution)
+        return b"fake-png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+    return resolutions, pipeline.load_job(tmp_path, job.job_id)
+
+
+def _image_rows(job) -> list[dict]:
+    return [r for r in job.ledger if r["kind"] == "image" and r["usd"] > 0]
+
+
+def test_a_draft_job_rolls_at_1k_and_is_billed_at_1k(tmp_path, monkeypatch):
+    resolutions, result = _tier_run(tmp_path, monkeypatch, image_quality="draft")
+
+    assert result.status == "ready"
+    assert pipeline.DRAFT_RESOLUTION == "1K"
+    assert resolutions == ["1K"]
+    rows = _image_rows(result)
+    assert len(rows) == 1
+    assert rows[0]["usd"] == pytest.approx(pipeline.IMAGE_COST["1K"])
+    # ...and the tier is named in the row, so a ledger read months later
+    # explains its own price.
+    assert "(1K)" in rows[0]["detail"]
+
+
+def test_a_full_job_is_identical_to_the_default_path(tmp_path, monkeypatch):
+    # "full" is a spelling of today's behaviour, not a new one: same tier,
+    # same price, same ledger detail as a job that says nothing at all.
+    said_full, full_job = _tier_run(tmp_path / "a", monkeypatch,
+                                    image_quality="full")
+    said_nothing, unset_job = _tier_run(tmp_path / "b", monkeypatch,
+                                        image_quality="")
+
+    assert said_full == said_nothing == [pipeline.IMAGE_RESOLUTION] == ["2K"]
+    full_row, unset_row = _image_rows(full_job)[0], _image_rows(unset_job)[0]
+    assert full_row["usd"] == unset_row["usd"] == pytest.approx(
+        pipeline.IMAGE_COST["2K"])
+    assert full_row["detail"] == unset_row["detail"]
+    assert "(2K)" in full_row["detail"]
+
+
+def test_the_tier_resolver_answers_full_for_anything_it_does_not_know(tmp_path):
+    # Old job.json files carry no image_quality at all, and a hand-edited one
+    # could carry anything. Both read as the full tier -- quoting the higher
+    # price for what was probably a 2K render is the safe way to be wrong.
+    job = pipeline.create_job(tmp_path, _brief())
+    assert job.image_quality == ""
+    assert pipeline._image_tier(job) == pipeline.IMAGE_RESOLUTION
+    assert pipeline._image_tier(
+        job.model_copy(update={"image_quality": "cinematic"})) == "2K"
+    assert pipeline._image_tier(
+        job.model_copy(update={"image_quality": "draft"})) == "1K"
+    assert pipeline._image_tier(None) == pipeline.IMAGE_RESOLUTION
+
+
+def test_a_job_json_without_the_tier_field_still_loads(tmp_path):
+    # The owner has draft jobs in flight; jobs written before this field
+    # existed must load unchanged, not raise.
+    job = pipeline.create_job(tmp_path, _brief())
+    manifest = pipeline.job_dir(tmp_path, job.job_id) / pipeline.JOB_MANIFEST
+    raw = json.loads(manifest.read_text(encoding="utf-8"))
+    raw.pop("image_quality")
+    manifest.write_text(json.dumps(raw), encoding="utf-8")
+
+    loaded = pipeline.load_job(tmp_path, job.job_id)
+    assert loaded is not None
+    assert loaded.image_quality == ""
+    assert pipeline._image_tier(loaded) == pipeline.IMAGE_RESOLUTION
+
+
+def test_a_draft_job_repaints_at_the_draft_tier_too(tmp_path, monkeypatch):
+    # The judge's art-defect repaint (BRAIN v2.1) is one of this job's
+    # generations like any other: a draft job must not quietly buy a
+    # full-price re-roll on the way to "ready".
+    job = pipeline.create_job(tmp_path, _brief(concepts=1),
+                              image_quality="draft")
+    monkeypatch.setattr(pipeline, "run_directions", lambda *a, **k: DirectionResult(
+        directions=[_direction("full_bleed_art")], model="m", cost=0.0))
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+
+    resolutions: list[str] = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        resolutions.append(resolution)
+        return b"png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+
+    verdicts = [
+        CritiqueResult(passes=False, tells=["a surreal blob"],
+                       notes="Tighten the tracking.", cost=0.0,
+                       art_defects=["background"]),
+        CritiqueResult(passes=True, tells=[], notes="", cost=0.0),
+    ]
+    monkeypatch.setattr(pipeline, "run_critique", lambda *a, **k: verdicts.pop(0))
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        new_text = [t.model_copy(update={"size_max": t.size_max + 0.01})
+                   if t.id == "title" else t for t in spec.text]
+        return RevisionResult(spec=spec.model_copy(update={
+            "version": spec.version + 1, "text": new_text,
+            "notes_log": [*spec.notes_log, notes]}), cost=0.0)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    asyncio.run(pipeline.run_job(tmp_path, job.job_id, PROVIDERS, IMAGE_CLIENT,
+                                 CRITIQUE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.concepts[0].status == "ready"
+    assert resolutions == ["1K", "1K"]           # first paint + the repaint
+    rows = _image_rows(result)
+    assert len(rows) == 2
+    assert all(r["usd"] == pytest.approx(pipeline.IMAGE_COST["1K"]) for r in rows)
+
+
+def test_a_revision_reuses_the_tier_its_job_was_created_with(tmp_path,
+                                                              monkeypatch):
+    # The tier is the job's, settled at creation: a regeneration bought
+    # weeks later still rolls -- and bills -- at the rung the job started on.
+    job = _ready_job_with_concept(tmp_path, asset="assets/c0_background.png")
+    job.image_quality = "draft"
+    pipeline._write_state(tmp_path, job)
+
+    def fake_revise_spec(spec, notes, provider, **kw):
+        new_art = [a.model_copy(update={"asset": "", "prompt": "A new scene, gouache."})
+                  if a.id == "background" else a for a in spec.art]
+        return RevisionResult(spec=spec.model_copy(update={
+            "version": spec.version + 1, "art": new_art,
+            "notes_log": [*spec.notes_log, notes]}), cost=0.0)
+    monkeypatch.setattr(pipeline, "revise_spec", fake_revise_spec)
+
+    resolutions: list[str] = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        resolutions.append(resolution)
+        return b"new-png-bytes"
+    monkeypatch.setattr(pipeline, "generate", fake_generate)
+    monkeypatch.setattr(pipeline, "has_real_alpha", lambda png: True)
+    monkeypatch.setattr(pipeline, "compose", _fake_compose)
+    monkeypatch.setattr(pipeline, "save_renders", _fake_save_renders)
+
+    asyncio.run(pipeline.run_revision(tmp_path, job.job_id, 0, "different imagery",
+                                      True, PROVIDERS, IMAGE_CLIENT))
+
+    result = pipeline.load_job(tmp_path, job.job_id)
+    assert result.concepts[0].status == "ready"
+    assert resolutions == ["1K"]
+    rows = _image_rows(result)
+    assert len(rows) == 1
+    assert rows[0]["usd"] == pytest.approx(pipeline.IMAGE_COST["1K"])
 
 
 # -- reality-sheet distillation wiring (BRAIN wave) ----------------------------

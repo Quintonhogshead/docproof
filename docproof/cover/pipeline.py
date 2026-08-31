@@ -165,9 +165,42 @@ class Providers:
 # not memory-bound, so 2 in flight is about latency, not the 512MB box (§7.4).
 IMAGE_CONCURRENCY = 2
 
-# The resolution every generation asks for. Not yet a per-job knob (§7.2's
-# default); a module constant so it is one place to change.
+# The resolution a generation asks for when its job has no opinion (§7.2's
+# default) — the "full" rung, ~5 cents an image.
 IMAGE_RESOLUTION = "2K"
+
+# The cheap rung a "draft" job rolls at: the same composition, the same
+# prompts, ~3 cents an image instead of ~5. The owner composes draft-first
+# and sharpens only the keepers afterwards in Cover Canvas (whose own
+# regen.DRAFT_TIER is this same tier, deliberately kept in step — the canvas
+# imports IMAGE_RESOLUTION from here but keeps its own draft constant, since
+# the canvas is the layer that depends on the studio, never the reverse).
+DRAFT_RESOLUTION = "1K"
+
+# What a job's `image_quality` may say, and which resolution tier each answer
+# buys. The route validates a request against these same keys before a job
+# is ever written, so a stored value outside this table means an old or
+# hand-edited job.json, not a live request.
+IMAGE_QUALITIES: dict[str, str] = {"draft": DRAFT_RESOLUTION,
+                                   "full": IMAGE_RESOLUTION}
+
+
+def _image_tier(job: JobState | None) -> str:
+    """THE resolver for which resolution tier a job's art rolls at — and,
+    the half that is easy to forget, which IMAGE_COST entry its image ledger
+    rows are priced from. Every generation call and every image-cost line in
+    this module reads the tier from here (threaded down as `tier`), because
+    a job that renders cheap while billing full — or renders full while
+    billing cheap — leaves a ledger nobody can trust, which is a worse
+    outcome than either price on its own.
+
+    An absent, empty, or unrecognized `image_quality` answers the full tier.
+    Every job.json written before this field existed loads with "" and must
+    keep behaving exactly as it did; and if a stored value ever does fall
+    outside the table, quoting the FULL price for what may well have been a
+    full render is the safe direction to be wrong in."""
+    quality = (job.image_quality if job is not None else "") or ""
+    return IMAGE_QUALITIES.get(quality, IMAGE_RESOLUTION)
 
 # Every asyncio primitive below is created lazily and keyed by the RUNNING
 # event loop (plus job_id where relevant): an asyncio.Lock binds to the loop
@@ -374,7 +407,8 @@ def new_job_id() -> str:
 def create_job(root: str | Path, brief: Brief, *,
                manuscript_path: str | Path | None = None,
                manuscript_name: str = "",
-               anthropic_lane: str = "") -> JobState:
+               anthropic_lane: str = "",
+               image_quality: str = "") -> JobState:
     """Create a new job on disk: the brief, plus a manuscript sample when one
     was uploaded.
 
@@ -382,6 +416,12 @@ def create_job(root: str | Path, brief: Brief, *,
     model calls ("subscription" or "api" — see JobState's own field), stored
     so a later revision reuses the purse the job was started on instead of
     quietly switching to the other one. Empty means the caller had no opinion.
+
+    `image_quality` is "draft" or "full" (see IMAGE_QUALITIES and
+    _image_tier), fixed here for the job's whole life: every generation it
+    ever makes — the first paint, a repaint on the judge's flag, a human
+    revision's regeneration — rolls and prices at that one tier. Empty means
+    the caller had no opinion, which reads as "full".
 
     `manuscript_path` is a local file the caller has already validated for
     suffix/size (the route's upload handling, `_read_upload`-style) — this
@@ -413,7 +453,7 @@ def create_job(root: str | Path, brief: Brief, *,
 
     job = JobState(job_id=job_id, brief=brief, manuscript_name=manuscript_name,
                   word_count=word_count, anthropic_lane=anthropic_lane,
-                  status="directing",
+                  image_quality=image_quality, status="directing",
                   created=datetime.now(timezone.utc).isoformat())
     _write_state(root, job)
     return job
@@ -434,22 +474,28 @@ def _assemble_prompt(slot: ArtSlot, archetype: Archetype) -> str:
 
 async def _generate_art_slot(image_client: Any, sem: asyncio.Semaphore,
                              d: Path, index: int, art_slot: ArtSlot,
-                             archetype: Archetype) -> list[dict]:
+                             archetype: Archetype, *, tier: str) -> list[dict]:
     """Generate one art slot's image, save it under the job's assets/, and
     point the slot's `asset` at it. Returns the ledger rows this generation
     produced (the image cost, plus an opaque-fallback note when a
-    transparent request came back without real alpha — §7.2/§5.2.3)."""
+    transparent request came back without real alpha — §7.2/§5.2.3).
+
+    `tier` is the job's resolution tier (_image_tier), and it is required
+    rather than defaulted precisely because this function is the single
+    place where the roll and its price are both decided: the SAME `tier`
+    reaches imaging.generate and indexes IMAGE_COST two lines later, so the
+    two can never drift apart into a cheap render billed at full price."""
     prompt = _assemble_prompt(art_slot, archetype)
     async with sem:
         png_bytes = await asyncio.to_thread(
             generate, image_client, prompt, transparent=art_slot.transparent,
-            resolution=IMAGE_RESOLUTION)
+            resolution=tier)
     rel = f"{ASSETS_DIR}/c{index}_{art_slot.id}.png"
     (d / rel).write_bytes(png_bytes)
     art_slot.asset = rel
     rows = [{"kind": "image", "concept": index,
-            "detail": f"concept {index} {art_slot.id} ({IMAGE_RESOLUTION})",
-            "usd": IMAGE_COST[IMAGE_RESOLUTION]}]
+            "detail": f"concept {index} {art_slot.id} ({tier})",
+            "usd": IMAGE_COST[tier]}]
     if art_slot.transparent and not await asyncio.to_thread(has_real_alpha, png_bytes):
         # The model ignored the transparency request (§7.2 — the feature is
         # in preview). `art_slot.transparent` is deliberately left True, not
@@ -895,7 +941,7 @@ def _review_stage_slots(plan: CompositionPlan, stage_slots: list[ArtSlot],
 async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
                             image_client: Any, critique_client: Any,
                             sem: asyncio.Semaphore, d: Path, index: int,
-                            archetype: Archetype) -> list[dict]:
+                            archetype: Archetype, *, tier: str) -> list[dict]:
     """The painting phase under a plan (§15.16): stages run SEQUENTIALLY in
     _plan_stages order; within one stage the existing bounded gather (and
     the per-job semaphore underneath it) applies unchanged. From the second
@@ -903,7 +949,11 @@ async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
     prior stages' actual renders before it generates — prompt and placement
     applied to the slot first, then _generate_art_slot runs exactly as it
     would spontaneously. Returns the same ledger-row shape the spontaneous
-    gather produces, plus the review rows."""
+    gather produces, plus the review rows.
+
+    `tier` is the job's resolution tier, passed straight through: a planned
+    job is still one job, so its staged paints roll and price at the same
+    rung its spontaneous ones would."""
     rows: list[dict] = []
     gen_slots = [s for s in spec.art if s.prompt and not s.asset]
     for stage_n, stage_slots in enumerate(_plan_stages(plan, gen_slots)):
@@ -912,7 +962,8 @@ async def _generate_planned(plan: CompositionPlan, spec: CoverSpec,
             _review_stage_slots(plan, stage_slots, painted, d, index,
                                 critique_client, rows)
         for slot_rows in await asyncio.gather(*(
-                _generate_art_slot(image_client, sem, d, index, s, archetype)
+                _generate_art_slot(image_client, sem, d, index, s, archetype,
+                                   tier=tier)
                 for s in stage_slots)):
             rows.extend(slot_rows)
     return rows
@@ -992,7 +1043,7 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
                                brief: Brief, d: Path, providers: Providers,
                                critique_client: Any, image_client: Any,
                                sem: asyncio.Semaphore, report: RenderReport,
-                               renders: list[str], *,
+                               renders: list[str], *, tier: str,
                                plan_lines: Sequence[str] = ()
                                ) -> tuple[CoverSpec, RenderReport, list[str], list[dict]]:
     """§6.3, ITERATED (BRAIN wave, 2026-08-29): the owner's beta verdict was
@@ -1036,8 +1087,11 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
     generation defect a design-only revision can never fix — may repaint,
     at most 2 slots and at most once per concept for the whole job
     (`repaint_used` below), through the same _generate_art_slot path a
-    fresh concept's own art uses; `image_client`/`sem` exist on this
-    function's signature for exactly that one path.
+    fresh concept's own art uses; `image_client`/`sem`/`tier` exist on this
+    function's signature for exactly that one path — a repaint is one of
+    this job's generations like any other, so it rolls and prices at the
+    job's own tier rather than quietly buying a full-price re-roll on a
+    draft job.
 
     Returns (spec, report, renders, ledger_rows) — all three of the first
     unchanged from what was passed in unless at least one round actually
@@ -1134,7 +1188,7 @@ async def _critique_and_revise(job_id: str, index: int, spec: CoverSpec,
                     slot_map[sid].asset = ""
                 for slot_rows in await asyncio.gather(*(
                         _generate_art_slot(image_client, sem, d, index,
-                                           slot_map[sid], archetype)
+                                           slot_map[sid], archetype, tier=tier)
                         for sid in flagged)):
                     ledger_rows.extend(slot_rows)
                 for sid in flagged:
@@ -1198,6 +1252,10 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
     if job is None or index >= len(job.concepts):
         return
     brief = job.brief
+    # Read off the job once, here, and threaded down through every path that
+    # can generate: one resolution for the whole concept, from its first
+    # paint to any repaint the judge triggers.
+    tier = _image_tier(job)
     concept = job.concepts[index]
     try:
         concept.status = "painting"
@@ -1228,7 +1286,7 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         if plan is not None:
             ledger_rows.extend(await _generate_planned(
                 plan, spec, image_client, critique_client, sem, d, index,
-                archetype))
+                archetype, tier=tier))
         else:
             # All of one concept's generations in flight together — the
             # per-job semaphore (not this gather) is what bounds actual
@@ -1237,7 +1295,8 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
             # 2+ generatable slots).
             gen_slots = [s for s in spec.art if s.prompt and not s.asset]
             for rows in await asyncio.gather(*(
-                    _generate_art_slot(image_client, sem, d, index, s, archetype)
+                    _generate_art_slot(image_client, sem, d, index, s,
+                                       archetype, tier=tier)
                     for s in gen_slots)):
                 ledger_rows.extend(rows)
 
@@ -1247,7 +1306,7 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
         report, renders = await _render(spec, d, index)
         spec, report, renders, critique_rows = await _critique_and_revise(
             job_id, index, spec, brief, d, providers, critique_client,
-            image_client, sem, report, renders,
+            image_client, sem, report, renders, tier=tier,
             plan_lines=plan.judge_lines() if plan is not None else ())
 
         concept.spec = spec
@@ -1403,10 +1462,16 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
     (diff_spec_fields — see _critique_and_revise's own docstring): a human
     revision's notes_log entry is the human's own words, which say what was
     ASKED for, not necessarily what actually changed, so a "[changed] ..."
-    entry naming the real field-level diff rides along right after it."""
+    entry naming the real field-level diff rides along right after it.
+
+    Any art this revision regenerates rolls at the JOB's stored resolution
+    tier (_image_tier), never at a fresh choice: the tier is settled when
+    the job is created and the route offers no way to change it, so a draft
+    job's revisions stay draft-priced and the ledger stays one currency."""
     job = load_job(root, job_id)
     if job is None or concept_index >= len(job.concepts):
         return
+    tier = _image_tier(job)
     concept = job.concepts[concept_index]
     prior_assets = {slot.id: slot.asset for slot in concept.spec.art}
 
@@ -1492,11 +1557,11 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
                 # is `cleared` by construction here.
                 image_rows.extend(await _generate_planned(
                     plan, spec, image_client, critique_client, sem, d,
-                    concept_index, archetype))
+                    concept_index, archetype, tier=tier))
             else:
                 for rows in await asyncio.gather(*(
                         _generate_art_slot(image_client, sem, d, concept_index,
-                                           s, archetype)
+                                           s, archetype, tier=tier)
                         for s in cleared)):
                     image_rows.extend(rows)
             concept.status = "composing"
@@ -1522,7 +1587,8 @@ async def run_revision(root: str | Path, job_id: str, concept_index: int,
 
 
 __all__ = [
-    "ASSETS_DIR", "IMAGE_CONCURRENCY", "IMAGE_RESOLUTION", "JOB_MANIFEST",
+    "ASSETS_DIR", "DRAFT_RESOLUTION", "IMAGE_CONCURRENCY", "IMAGE_QUALITIES",
+    "IMAGE_RESOLUTION", "JOB_MANIFEST",
     "MANUSCRIPT_SAMPLE_NAME", "MAX_CRITIQUE_ROUNDS", "REALITY_SHEET_NAME",
     "RENDERS_DIR", "Providers",
     "check_interrupted", "create_job", "default_root", "diff_spec_fields",

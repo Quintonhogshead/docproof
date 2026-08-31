@@ -32,6 +32,7 @@ from docproof.cover import pipeline as cover_pipeline
 from docproof.cover import subscription
 from docproof.cover.archetypes import ARCHETYPES
 from docproof.cover.direction import DirectionResult
+from docproof.cover.imaging import IMAGE_COST
 from docproof.cover.model import Brief, ConceptState, Direction, Palette, \
     RenderReport, build_spec
 from docproof.cover.subscription import (SubscriptionAnthropicClient,
@@ -810,3 +811,160 @@ async def _noop_revision() -> None:
     background task matters, and a real revision would need the whole render
     chain."""
     return None
+
+
+# -- how sharp this job's art is rolled ----------------------------------------
+#
+# The studio's half of the quality ladder Cover Canvas already had: a "draft"
+# job rolls (and bills) every image at 1K so concepts can be shopped cheaply,
+# and the keeper is sharpened afterwards in the canvas. Shaped after the lane
+# tests above -- body plumbing, payload surfacing, junk refused, and the
+# stored value outliving the request that set it -- with one difference the
+# tests below pin down deliberately: unlike the lane, this is create-only.
+
+def _tier_over_http(monkeypatch, tmp_path, form: dict) -> tuple[list[str], dict]:
+    """POST a brief that actually needs a generated image, let the background
+    job run to terminal, and return (the resolutions generate() was asked
+    for, the job payload). Everything past the HTTP layer is the real
+    pipeline, which is the only way to prove the request's tier reached both
+    the roll and the price."""
+    app = _app(monkeypatch, tmp_path)
+    _bypass_provider_and_image_client(monkeypatch)
+    _fake_direction_call(monkeypatch, [_direction("full_bleed_art")])
+    _fake_render_chain(monkeypatch)
+
+    resolutions: list[str] = []
+    def fake_generate(client, prompt, *, transparent=False, resolution="2K"):
+        resolutions.append(resolution)
+        return b"fake-png-bytes"
+    monkeypatch.setattr(cover_pipeline, "generate", fake_generate)
+
+    headers = {"X-Cover-Key": COVER_KEY}
+    with TestClient(app) as client:
+        resp = client.post("/api/cover/jobs",
+                           data={"brief": _brief_json(), **form},
+                           headers=headers)
+        assert resp.status_code == 202
+        return resolutions, _poll_until_terminal(client, headers,
+                                                 resp.json()["job_id"])
+
+
+def test_the_brief_can_ask_for_draft_art(monkeypatch, tmp_path):
+    resolutions, state = _tier_over_http(monkeypatch, tmp_path,
+                                         {"image_quality": "draft"})
+    assert state["image_quality"] == "draft"
+    assert resolutions == ["1K"]                            # rolled cheap...
+    rows = [r for r in state["ledger"] if r["kind"] == "image" and r["usd"] > 0]
+    assert len(rows) == 1
+    assert rows[0]["usd"] == pytest.approx(IMAGE_COST["1K"])  # ...and billed cheap
+    assert state["total_usd"] == pytest.approx(IMAGE_COST["1K"] + 0.02)
+
+
+def test_a_brief_that_says_nothing_gets_the_full_tier(monkeypatch, tmp_path):
+    # Today's behaviour, untouched: no field, no opinion, 2K at 2K's price.
+    resolutions, state = _tier_over_http(monkeypatch, tmp_path, {})
+    assert state["image_quality"] == ""
+    assert resolutions == ["2K"]
+    rows = [r for r in state["ledger"] if r["kind"] == "image" and r["usd"] > 0]
+    assert rows[0]["usd"] == pytest.approx(IMAGE_COST["2K"])
+
+
+def test_asking_for_full_explicitly_is_the_same_as_saying_nothing(monkeypatch,
+                                                                   tmp_path):
+    resolutions, state = _tier_over_http(monkeypatch, tmp_path,
+                                         {"image_quality": "full"})
+    assert state["image_quality"] == "full"
+    assert resolutions == ["2K"]
+    rows = [r for r in state["ledger"] if r["kind"] == "image" and r["usd"] > 0]
+    assert rows[0]["usd"] == pytest.approx(IMAGE_COST["2K"])
+
+
+def test_a_junk_image_quality_is_refused_with_the_sentence():
+    with pytest.raises(HTTPException) as excinfo:
+        cover_routes._checked_image_quality("cinematic")
+    assert excinfo.value.status_code == 422
+    assert "draft" in excinfo.value.detail and "full" in excinfo.value.detail
+
+
+def test_a_junk_image_quality_on_create_is_a_422_and_no_job(monkeypatch,
+                                                             tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    _bypass_provider_and_image_client(monkeypatch)
+    headers = {"X-Cover-Key": COVER_KEY}
+    with TestClient(app) as client:
+        resp = client.post("/api/cover/jobs",
+                           data={"brief": _brief_json(),
+                                 "image_quality": "cheap"},
+                           headers=headers)
+        assert resp.status_code == 422
+        assert "image_quality must be" in resp.json()["detail"]
+        assert client.get("/api/cover/jobs", headers=headers).json() == {"jobs": []}
+
+
+def test_a_revision_cannot_change_the_tier(monkeypatch, tmp_path):
+    # The tier is the JOB's, fixed at creation: a revision that could switch
+    # horses mid-job would leave one ledger quoting two prices for rows that
+    # look identical. ReviseBody forbids extras, so asking is a 422 -- not a
+    # silent no-op -- and the stored tier is what the revision actually runs
+    # on.
+    app = _app(monkeypatch, tmp_path)
+    _bypass_provider_and_image_client(monkeypatch)
+    monkeypatch.setattr(cover_pipeline, "run_revision",
+                        lambda *a, **k: _noop_revision())
+    headers = {"X-Cover-Key": COVER_KEY}
+
+    job = cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
+        image_quality="draft")
+    spec = build_spec(_direction("big_type"), job.brief, ARCHETYPES["big_type"])
+    job.concepts = [ConceptState(spec=spec, status="ready",
+                                 renders=["renders/v1_c0.png"])]
+    job.status = "ready"
+    cover_pipeline._write_state(tmp_path, job)
+
+    with TestClient(app) as client:
+        refused = client.post(f"/api/cover/jobs/{job.job_id}/revise",
+                              json={"concept": 0, "notes": "warmer",
+                                    "image_quality": "full"},
+                              headers=headers)
+        assert refused.status_code == 422
+        ok = client.post(f"/api/cover/jobs/{job.job_id}/revise",
+                         json={"concept": 0, "notes": "warmer"},
+                         headers=headers)
+        assert ok.status_code == 202
+        state = client.get(f"/api/cover/jobs/{job.job_id}",
+                           headers=headers).json()
+    assert state["image_quality"] == "draft"
+    assert cover_pipeline._image_tier(
+        cover_pipeline.load_job(tmp_path, job.job_id)) == "1K"
+
+
+def test_the_job_list_names_each_job_s_image_quality(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    headers = {"X-Cover-Key": COVER_KEY}
+    cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1),
+        image_quality="draft")
+    with TestClient(app) as client:
+        listed = client.get("/api/cover/jobs", headers=headers).json()["jobs"]
+    assert [j["image_quality"] for j in listed] == ["draft"]
+
+
+def test_a_job_from_before_the_tier_existed_still_loads(monkeypatch, tmp_path):
+    # The owner has draft jobs in flight; job.json files written before this
+    # field existed read as "no opinion", not as a validation error.
+    app = _app(monkeypatch, tmp_path)
+    headers = {"X-Cover-Key": COVER_KEY}
+    job = cover_pipeline.create_job(
+        tmp_path, Brief(title="T", author="A", genre="literary", concepts=1))
+    manifest = (cover_pipeline.job_dir(tmp_path, job.job_id)
+                / cover_pipeline.JOB_MANIFEST)
+    raw = json.loads(manifest.read_text())
+    raw.pop("image_quality")
+    manifest.write_text(json.dumps(raw))
+    with TestClient(app) as client:
+        state = client.get(f"/api/cover/jobs/{job.job_id}",
+                           headers=headers).json()
+        listed = client.get("/api/cover/jobs", headers=headers).json()["jobs"]
+    assert state["image_quality"] == ""
+    assert [j["image_quality"] for j in listed] == [""]

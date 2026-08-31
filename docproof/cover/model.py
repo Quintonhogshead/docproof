@@ -1268,6 +1268,16 @@ class JobState(BaseModel):
     # Empty on any job created before the lane was a choice, which reads as
     # "whatever the deployment does today".
     anthropic_lane: str = ""
+    # Which rung of the image-quality ladder every generation this job makes
+    # rolls at, and is priced at: "draft" (1K, ~3 cents — shop concepts
+    # cheaply and sharpen the keeper later in Cover Canvas) or "full" (2K,
+    # ~5 cents). Fixed when the job is created and never revisable, so one
+    # job's ledger is quoted in one currency; see
+    # docproof.cover.pipeline._image_tier, the single resolver every
+    # generation and every image ledger row reads it through. Empty on any
+    # job created before the tier was a choice, which reads as "full" —
+    # exactly what those jobs actually rolled at.
+    image_quality: str = ""
     status: Literal["directing", "working", "ready", "error"]
     error: str | None = None
     concepts: list[ConceptState] = Field(default_factory=list)

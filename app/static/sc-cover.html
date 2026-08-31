@@ -288,6 +288,14 @@
           <option value="auto">Auto — subscription when signed in</option>
         </select>
       </div>
+      <div class="field">
+        <label class="flabel" for="f-imgq">Image quality
+          <span class="fhint-inline">— how sharp (and how expensive) every generated image on this job is</span></label>
+        <select id="f-imgq">
+          <option value="">Full — 2K, ~$0.05/image</option>
+          <option value="draft">Draft — 1K, ~$0.03/image; sharpen keepers later in Cover Canvas</option>
+        </select>
+      </div>
       <div class="stack-m">
         <button class="btn" type="submit" id="brief-submit">Send the brief</button>
         <div class="ferror" id="brief-error" role="alert"></div>
@@ -654,6 +662,8 @@
     try {
       var savedLane = localStorage.getItem('sc-cover-lane');
       if (savedLane) document.getElementById('f-lane').value = savedLane;
+      var savedImgq = localStorage.getItem('sc-cover-imgq');
+      if (savedImgq) document.getElementById('f-imgq').value = savedImgq;
     } catch (err) { /* private mode */ }
     var genreSel = document.getElementById('f-genre');
     var otherWrap = document.getElementById('genre-other-wrap');
@@ -678,6 +688,16 @@
       var lane = document.getElementById('f-lane').value;
       if (lane) fd.append('anthropic_lane', lane);
       try { localStorage.setItem('sc-cover-lane', lane); } catch (err) { /* private mode */ }
+      /* How sharp this job's art is rolled, and billed. "" = full quality
+         (the server's own default), so it is left off the request entirely;
+         "draft" buys 1K images at ~3 cents apiece and the keeper gets
+         sharpened afterwards in Cover Canvas. Remembered per browser like
+         the purse is: a person shopping concepts stays in draft for a whole
+         sitting, not one brief. The job's tier is fixed at creation — there
+         is no revise-time equivalent of this field on purpose. */
+      var imgq = document.getElementById('f-imgq').value;
+      if (imgq) fd.append('image_quality', imgq);
+      try { localStorage.setItem('sc-cover-imgq', imgq); } catch (err) { /* private mode */ }
       if (state.manuscriptFile) fd.append('manuscript', state.manuscriptFile, state.manuscriptFile.name);
       var btn = document.getElementById('brief-submit');
       btn.disabled = true;
@@ -889,8 +909,13 @@
     document.getElementById('sheet-byline').textContent = a ? 'by ' + a : '';
     var purse = job.anthropic_lane === 'subscription' ? ' · Claude on Max'
       : job.anthropic_lane === 'api' ? ' · Claude on API credits' : '';
+    /* Rides the same line as the purse because it answers the same
+       question the total raises: a draft sheet is cheap AND softer than
+       the finished thing, and someone judging these thumbnails should know
+       that before blaming the art. */
+    var draft = job.image_quality === 'draft' ? ' · draft art' : '';
     document.getElementById('sheet-total').textContent =
-      '$' + Number(job.total_usd || 0).toFixed(2) + ' so far' + purse;
+      '$' + Number(job.total_usd || 0).toFixed(2) + ' so far' + purse + draft;
     var wc = document.getElementById('sheet-words');
     if (job.manuscript_name) {
       wc.textContent = 'Grounded in “' + job.manuscript_name + '” · ' +
