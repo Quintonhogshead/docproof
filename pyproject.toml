@@ -68,6 +68,14 @@ languagetool = [
     # (see fly.toml), so an unbounded pin risks another silent semantics shift.
     "language_tool_python>=3.4,<4",
 ]
+canvas = [
+    # Cover Canvas's in-app AI art director (docproof/canvas/assistant.py)
+    # drives the local Claude Code login through the agent SDK, so a Max
+    # subscription — not an API key — pays for assistant turns. The editor
+    # itself works without this extra; only the AI box needs it (the chat
+    # route answers 501 with instructions when it is missing).
+    "claude-agent-sdk>=0.2",
+]
 build = [
     "pyinstaller>=6.0",
 ]
@@ -80,6 +88,7 @@ dev = [
 docproof = "docproof.__main__:main"
 docproof-app = "app.run:main"
 docproof-desktop = "app.desktop:main"
+docproof-canvas = "app.canvas_desktop:main"
 docproof-watch = "app.watch.cli:main"
 docproof-admin = "app.admin:main"
 docproof-serve = "app.serve:main"
@@ -99,7 +108,7 @@ version = {attr = "docproof.__version__"}
 include = ["docproof*", "app*", "config*", "galley*"]
 
 [tool.setuptools.package-data]
-app = ["static/*", "static/art/*"]
+app = ["static/*", "static/art/*", "static/canvas/*", "static/canvas/vendor/*"]
 # The auditor's system prompt, read at run time by galley/audit.py.
 "galley.prompts" = ["*.md"]
 config = ["*.yaml"]
