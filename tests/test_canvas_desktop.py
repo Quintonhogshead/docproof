@@ -91,6 +91,31 @@ def test_the_shell_never_overrides_an_environment_that_named_one(tmp_path,
     assert os.environ["COVER_DATA_PATH"] == str(tmp_path / "elsewhere")
 
 
+def test_the_token_file_fills_the_env_for_windowed_launches(tmp_path,
+                                                            monkeypatch):
+    # A Finder-launched .app inherits no shell export, and a headless claude
+    # spawn does not see the interactive login — the claude_token file in
+    # the app home is the one path a windowed launch has to the
+    # subscription.
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    (tmp_path / "claude_token").write_text("  sk-ant-oat-test-123  \n")
+    cover_env_defaults(tmp_path)
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-ant-oat-test-123"
+
+
+def test_no_token_file_leaves_the_env_silent(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    cover_env_defaults(tmp_path)
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ
+
+
+def test_an_exported_token_beats_the_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "from-the-shell")
+    (tmp_path / "claude_token").write_text("from-the-file")
+    cover_env_defaults(tmp_path)
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "from-the-shell"
+
+
 def test_the_docproof_window_assumes_the_same_environment():
     # One app, one press: the DocProof window sets these from the SAME
     # function rather than from a copy of it, which is the only thing that

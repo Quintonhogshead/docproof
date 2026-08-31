@@ -61,6 +61,11 @@ LOCAL_KEY = "canvas"
 # no CLI login never runs this code.
 LOCAL_ANTHROPIC_LANE = "subscription"
 
+# Where the Claude subscription token lives for windows with no shell to
+# export it: one line inside the app home. Written by the owner, once, with
+# what `claude setup-token` prints.
+TOKEN_FILE = "claude_token"
+
 
 def cover_env_defaults(root: Path) -> None:
     """The Cover Studio environment both Mac shells assume, set only where
@@ -77,13 +82,26 @@ def cover_env_defaults(root: Path) -> None:
       Finder-launched .app starts life at "/" — an unwritable store that
       reads as "no finished covers yet" forever.
     - COVER_ANTHROPIC_LANE: this machine's Claude login is why the owner
-      bought a subscription (see LOCAL_ANTHROPIC_LANE)."""
+      bought a subscription (see LOCAL_ANTHROPIC_LANE).
+    - CLAUDE_CODE_OAUTH_TOKEN, from `claude_token` in the app home: a
+      HEADLESS claude spawn does not see the interactive login, so the
+      subscription lane and the canvas assistant need the long-lived token
+      `claude setup-token` mints — and a Finder-launched .app cannot inherit
+      a shell export, so a file is the only place the token can live that
+      every launch can see. One line, owner-written, chmod'able to 0600."""
     if not os.environ.get("COVER_DATA_PATH"):
         os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
     if not os.environ.get("COVER_KEY"):
         os.environ["COVER_KEY"] = LOCAL_KEY
     if not os.environ.get("COVER_ANTHROPIC_LANE"):
         os.environ["COVER_ANTHROPIC_LANE"] = LOCAL_ANTHROPIC_LANE
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        try:
+            token = (root / TOKEN_FILE).read_text("utf-8").strip()
+        except OSError:
+            token = ""
+        if token:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
     # A Finder-launched .app inherits launchd's minimal PATH, which has no
     # /opt/homebrew/bin — so the subscription lane and the canvas assistant
     # would report "could not find the Claude Code CLI" in the packaged app
