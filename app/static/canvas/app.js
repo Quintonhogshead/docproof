@@ -72,16 +72,26 @@ async function showPicker(message) {
 
   const unlock = () => {
     const field = el('input', { type: 'password', autocomplete: 'off', 'aria-label': 'Cover key' });
+    // A key that came back 401 goes straight back to the box: a person
+    // re-typing a password must never be a dead end. And when the URL still
+    // names the cover they were headed for, a good key resumes THAT — the
+    // picker was only ever the detour.
+    const submit = () => {
+      const typed = field.value.trim();
+      if (!typed) { field.focus(); return; }
+      setKey(typed);
+      if (jobFromURL()) { location.reload(); return; }
+      loadList();
+    };
     listBox.textContent = '';
     listBox.append(
       el('div', { class: 'field' }, [el('label', { text: 'Cover key' }), field]),
       el('button', {
-        class: 'btn primary', type: 'button', text: 'Unlock',
-        onclick: () => { setKey(field.value.trim()); loadList(); },
+        class: 'btn primary', type: 'button', text: 'Unlock', onclick: submit,
       }),
     );
     field.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { setKey(field.value.trim()); loadList(); }
+      if (e.key === 'Enter') submit();
     });
     field.focus();
   };
@@ -794,6 +804,15 @@ function buildEditor(jobId, doc) {
 
 /* ------------------------------------------------------------------ main */
 (async function main() {
+  // The Mac shell hands its own key over in the URL FRAGMENT — the one part
+  // of a URL that never reaches the server or its logs — so a person at
+  // their own machine is never asked to copy a password out of a terminal.
+  // Consumed once and scrubbed from the address bar.
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ''));
+  if (hash.get('key')) {
+    setKey(hash.get('key'));
+    history.replaceState(null, '', location.pathname + location.search);
+  }
   const jobId = jobFromURL();
   if (!jobId) { showPicker(); return; }
   try {
