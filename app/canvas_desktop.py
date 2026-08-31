@@ -23,6 +23,16 @@ Three deliberate differences from the DocProof window:
   its own URL, so the shell can start on a specific cover instead of the
   picker.
 
+- **It keeps itself current.** Unlike the DocProof window, which updates only
+  when somebody presses a button, this one checks `origin/main` on every
+  launch and rebuilds itself in the background when it is behind
+  (app/autoupdate.py). The build is STAGED, never installed under a running
+  window: it is swapped in at the start of the next launch, which is why
+  `autoupdate.install_staged` is the first thing main() does — before the
+  server, before the window, before a single file is read out of the bundle.
+  The canvas moves several times a day; an editor that is quietly a week old
+  is worse than one that spends a minute of idle CPU keeping up.
+
 Closing the window ends the process; the canvas document is saved after
 every op batch, so there is nothing in memory to lose.
 """
@@ -37,6 +47,7 @@ from urllib.parse import quote
 
 from docproof.cover import pipeline as cover_pipeline
 
+from . import autoupdate
 from .desktop import free_port, serve, wait_until_serving
 from .main import create_app
 from .settings import default_root
@@ -143,9 +154,15 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(levelname)-7s %(name)s: %(message)s")
 
+    root = Path(args.home).expanduser() if args.home else default_root()
+    # Before ANYTHING else is loaded out of this bundle: a build staged by a
+    # previous session is installed here and handed over to, which normally
+    # does not return (see autoupdate.install_staged). Nothing has been read
+    # from the bundle yet, which is the only moment replacing it is safe.
+    autoupdate.install_staged(root, autoupdate.CANVAS)
+
     import webview                            # deferred: heavy, and optional
 
-    root = Path(args.home).expanduser() if args.home else default_root()
     if args.jobs:
         # Read back out of the environment by cover_pipeline.default_root()
         # inside build_shell_app — one answer for the job store, however it
@@ -167,6 +184,10 @@ def main(argv=None) -> int:
         log.info("Cover Canvas is running at %s (cover jobs in %s)",
                  url, app.state.cover_data_root)
         log.info("Cover key for this window: %s", key)
+        # Behind origin/main? Build it now, stage it, install it next launch.
+        # Started only once the window is about to open, so a checkout that
+        # is slow to answer cannot delay the app appearing.
+        autoupdate.start(root, autoupdate.CANVAS)
         target = f"{url}/canvas"
         if args.job:
             target += f"?job={quote(args.job)}"

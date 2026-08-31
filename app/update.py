@@ -132,20 +132,25 @@ def perform_update(runner, *, run=subprocess.run, spawn=subprocess.Popen,
             "message": f"DocProof {version} is installed — reopening now."}
 
 
-def _swap(bundle: Path, fresh: Path, *, run) -> None:
+def _swap(bundle: Path, fresh: Path, *, run, name: str = "DocProof") -> None:
     """Put `fresh` where `bundle` is, keeping the old one recoverable.
 
     The old bundle goes to the Trash rather than nowhere: if the new build
     turns out broken, the previous one is a drag away, not gone. And if the
     copy fails, the old one goes straight back — "nothing was changed" is a
-    promise the rollback keeps."""
+    promise the rollback keeps.
+
+    `name` is the app being replaced, for the two sentences that name it:
+    this is shared with the Cover Canvas shell (app/autoupdate.py), and a
+    failure that told somebody to go and find DocProof in the Trash when it
+    was Cover Canvas that broke would send them to the wrong icon."""
     stamp = datetime.now(timezone.utc).strftime("%H%M%S")
     trashed = (Path.home() / ".Trash" /
                f"{bundle.stem} (replaced {stamp}).app")
     try:
         os.replace(bundle, trashed)
     except OSError as e:
-        raise UpdateError(f"Could not move the old DocProof aside: {e}")
+        raise UpdateError(f"Could not move the old {name} aside: {e}")
     try:
         # Not os.replace: the staged copy may be on another volume, and cp -R
         # preserves the bundle's structure and permissions exactly.
@@ -162,11 +167,11 @@ def _swap(bundle: Path, fresh: Path, *, run) -> None:
             os.replace(trashed, bundle)      # put the old one back; still works
         except OSError as undo:
             raise UpdateError(
-                f"Could not install the new DocProof ({e}), and putting the "
+                f"Could not install the new {name} ({e}), and putting the "
                 f"old one back failed too ({undo}). The old app is in the "
                 f"Trash as “{trashed.name}” — drag it back to "
                 f"{bundle.parent}.")
-        raise UpdateError(f"Could not install the new DocProof ({e}). "
+        raise UpdateError(f"Could not install the new {name} ({e}). "
                           f"Nothing was changed.")
 
 

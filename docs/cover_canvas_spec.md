@@ -64,6 +64,19 @@ Concretely:
 - **Mac shell**: pywebview wrapper reusing the `app/desktop.py` /
   `docproof_desktop.py` pattern — local uvicorn + a native window. Same UI
   hosts on Fly later; only the shell changes.
+- **The shell keeps itself current (v0.162.0)**: `app/autoupdate.py`. Every
+  launch checks `origin/main`; when the app is behind it, the suite runs and
+  a new bundle is built in the background, in a detached git worktree under
+  the app home — the owner's checkout is only ever fetched, never pulled,
+  reset or built in, so an agent working in it is undisturbed and the app
+  follows what was actually merged. The build is STAGED and swapped in at
+  the start of the next launch, before anything is read out of the bundle:
+  replacing a running app's bundle pulls its own config, fonts and static
+  tree out from under it, and no update gets to close a window somebody is
+  working in. Nothing that fails its tests is ever staged, the old bundle
+  goes to the Trash rather than nowhere, and `DOCPROOF_NO_AUTO_UPDATE=1`
+  turns the whole thing off. (The web build has never needed this: merging
+  to main redeploys Fly on its own.)
 - **Layout**: canvas center; layer list left; properties panel right
   (contextual: type controls for a text layer, prompt + regen verbs for an
   art layer); the **button shelf** across the top; the **AI box** docked
