@@ -77,6 +77,15 @@ LOCAL_ANTHROPIC_LANE = "subscription"
 # what `claude setup-token` prints.
 TOKEN_FILE = "claude_token"
 
+# The §15.16 composition planner, on by default in both Mac shells. The gate
+# in docproof/cover/pipeline.py defaults OFF so that the pre-planner path
+# stays reachable byte-for-byte, but that is a ship-safety contract, not the
+# product: a cover whose plates were each prompted blind to the others has no
+# shared lighting contract, and the canvas then spends re-roll dollars fixing
+# what planning would have prevented. Cheap next to the art it plans (~$0.10-
+# 0.30 a concept), so this window pays it. COVER_PLANNER=0 still wins.
+LOCAL_PLANNER = "1"
+
 
 def cover_env_defaults(root: Path) -> None:
     """The Cover Studio environment both Mac shells assume, set only where
@@ -94,6 +103,8 @@ def cover_env_defaults(root: Path) -> None:
       reads as "no finished covers yet" forever.
     - COVER_ANTHROPIC_LANE: this machine's Claude login is why the owner
       bought a subscription (see LOCAL_ANTHROPIC_LANE).
+    - COVER_PLANNER: plan the composition before buying pixels (see
+      LOCAL_PLANNER).
     - CLAUDE_CODE_OAUTH_TOKEN, from `claude_token` in the app home: a
       HEADLESS claude spawn does not see the interactive login, so the
       subscription lane and the canvas assistant need the long-lived token
@@ -106,6 +117,8 @@ def cover_env_defaults(root: Path) -> None:
         os.environ["COVER_KEY"] = LOCAL_KEY
     if not os.environ.get("COVER_ANTHROPIC_LANE"):
         os.environ["COVER_ANTHROPIC_LANE"] = LOCAL_ANTHROPIC_LANE
+    if not os.environ.get("COVER_PLANNER"):
+        os.environ["COVER_PLANNER"] = LOCAL_PLANNER
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         try:
             token = (root / TOKEN_FILE).read_text("utf-8").strip()

@@ -12,8 +12,10 @@ tasks (the routes create them with `asyncio.create_task` and register them
 with `register_task` for stale-job detection — see `check_interrupted`). Both
 take `root`/`job_id` rather than an in-memory JobState because a background
 task outlives the request that started it: re-reading from disk at each step
-is what makes concurrent painting/composing across concepts, and a concurrent
-revision on another concept of the same job, safe (see `_commit_concept`).
+is what keeps job.json the truth after every step, and what makes a
+concurrent revision on another concept of the same job safe (see
+`_commit_concept`). Concepts themselves are painted and composed one at a
+time — see run_job's own comment on the serial loop.
 
 This module is library-layer, not app-layer: it never reads COVER_KEY or an
 API key, and `default_root()` is the one place it reads an environment
@@ -1246,8 +1248,11 @@ async def _paint_and_compose(root: str | Path, job_id: str, index: int,
     """One concept's whole life after directing: painting -> composing ->
     critique (§6.3) -> ready, or error. A failure here (an ImagingError, or
     anything else) is caught and recorded on THIS concept alone — siblings
-    are unaffected, because each concept is an independent task under the
-    same gather (§8)."""
+    are unaffected, because this catches everything and returns normally, so
+    run_job's serial loop simply moves on to the next concept (§8). That was
+    true when concepts ran under one gather and is true now that they run one
+    at a time; the isolation lives in this try/except, never in the call
+    shape above it."""
     job = load_job(root, job_id)
     if job is None or index >= len(job.concepts):
         return
@@ -1325,8 +1330,8 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
                   image_client: Any, critique_client: Any) -> None:
     """The whole job flow (§8): distill a reality sheet from the manuscript
     sample when there is one, one direction call, a CoverSpec built per
-    concept, then every concept painted and composed independently and in
-    parallel. Meant to run as a detached background task — register it with
+    concept, then every concept painted and composed independently and ONE
+    AT A TIME (see the loop's own comment for why serial). Meant to run as a detached background task — register it with
     register_task right after creating it, so an interrupted run is
     detectable rather than a poll that hangs forever."""
     job = load_job(root, job_id)
@@ -1422,11 +1427,35 @@ async def run_job(root: str | Path, job_id: str, providers: Providers,
                 "usd": 0.0})
     _write_state(root, job)
 
+    # ONE CONCEPT AT A TIME (owner, 2026-08-31: "the designer should make each
+    # one independently, one at a time, so it isn't trying to make 5 covers at
+    # the same time — these take a while to make well"). This used to be an
+    # asyncio.gather over every concept, and the covers were worse for it in
+    # two ways that only show up at N>1:
+    #
+    #  - The planner, the stage reviews and the judge are reasoning calls with
+    #    real latency. Five concepts in flight meant five plans, five staged
+    #    builds and five critique loops interleaving through one per-job image
+    #    semaphore, so every concept's stage review waited behind other
+    #    concepts' generations — a review that is supposed to look at the plate
+    #    it was just handed, made to wait, and a judge loop that ran out of its
+    #    round cap on wall-clock pressure rather than on the cover being right.
+    #  - A designer does not paint five covers simultaneously. Serial is also
+    #    what makes the job legible while it runs: concept 0 goes ready, then
+    #    concept 1, so the first finished cover is on screen (and revisable)
+    #    while the rest are still being made, instead of five bars crawling
+    #    together and everything landing at once.
+    #
+    # Concurrency INSIDE a concept is untouched — a plan's stage still paints
+    # its slots together under `sem`. The cost is wall-clock: an N-concept job
+    # now takes about N times one concept, which is the trade the owner asked
+    # for. Per-concept isolation is unchanged and does not depend on the
+    # gather: _paint_and_compose catches everything and records the failure on
+    # its own concept, so a concept that dies still leaves its siblings to run.
     sem = _image_semaphore(job_id)
-    await asyncio.gather(*(
-        _paint_and_compose(root, job_id, i, providers, image_client,
-                           critique_client, sem)
-        for i in range(len(job.concepts))))
+    for i in range(len(job.concepts)):
+        await _paint_and_compose(root, job_id, i, providers, image_client,
+                                 critique_client, sem)
 
     job = load_job(root, job_id)
     if job is not None:

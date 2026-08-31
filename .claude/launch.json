@@ -6,6 +6,12 @@
       "runtimeExecutable": "/Users/quintonjohnson/Desktop/Atmosphere/docproof/.venv/bin/python3",
       "runtimeArgs": ["-m", "app.quest_site"],
       "port": 8000
+    },
+    {
+      "name": "canvas-dev",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "app/static/canvas"],
+      "port": 8765
     }
   ]
 }

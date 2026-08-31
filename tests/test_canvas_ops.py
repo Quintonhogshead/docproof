@@ -96,8 +96,9 @@ def _new_shape(**overrides) -> dict:
 def test_the_two_op_tables_describe_the_same_vocabulary():
     assert set(OP_NAMES) == {
         "set_frame", "nudge", "set_text", "set_layer", "set_art", "set_scrim",
-        "set_frame_style", "set_shape", "set_effects", "add_layer",
-        "remove_layer", "reorder_layer", "set_wrap"}
+        "set_frame_style", "set_shape", "set_adjust", "set_mask",
+        "set_effects", "add_layer", "remove_layer", "reorder_layer",
+        "set_wrap"}
 
 
 def test_an_unknown_op_name_lists_what_is_available():
@@ -1119,3 +1120,122 @@ def test_the_ground_takes_a_procedural_fields_scrim_when_there_is_one():
                                             Stop(at=1.0, alpha=1.0)])),
         _doc().layer(TEXT_ID)])
     assert to_wrap(front, _wrap()).layers[0].fill == "#2b1d14"
+
+
+# -- masks and adjust layers (§15.2 / §15.3) ----------------------------------
+
+def _adjust(**overrides) -> dict:
+    data = dict(id=new_layer_id(), kind="adjust", name="grade", op="grade",
+                frame={"x": 0.5, "y": 0.5, "w": 1.0, "h": 1.0})
+    data.update(overrides)
+    return data
+
+
+def test_set_mask_windows_a_layer_through_one_below_it():
+    doc = _doc()
+    below, above = doc.layers[0].id, doc.layers[-1].id
+    apply(doc, {"op": "set_mask", "layer_id": above,
+                "mask": {"from_layer": below}})
+    assert doc.layers[-1].mask.from_layer == below
+
+
+def test_set_mask_with_null_removes_one():
+    doc = _doc()
+    below, above = doc.layers[0].id, doc.layers[-1].id
+    apply(doc, {"op": "set_mask", "layer_id": above,
+                "mask": {"from_layer": below}})
+    apply(doc, {"op": "set_mask", "layer_id": above, "mask": None})
+    assert doc.layers[-1].mask is None
+
+
+def test_set_mask_needs_the_field_so_doing_nothing_is_never_silent():
+    """An absent `mask` key would be indistinguishable from asking for
+    nothing, and silently doing nothing is how a windowed plate ships
+    full-bleed."""
+    doc = _doc()
+    with pytest.raises(OpError, match="needs a `mask`"):
+        apply(doc, {"op": "set_mask", "layer_id": doc.layers[0].id})
+
+
+def test_a_mask_may_not_name_a_layer_above_the_one_wearing_it():
+    """Both renderers draw the document in one bottom-to-top pass, so a
+    mask's source has to be already drawn. The rule is what makes a cycle
+    unrepresentable rather than merely rejected."""
+    doc = _doc()
+    below, above = doc.layers[0].id, doc.layers[-1].id
+    with pytest.raises(OpError, match="not a layer below it"):
+        apply(doc, {"op": "set_mask", "layer_id": below,
+                    "mask": {"from_layer": above}})
+
+
+def test_reordering_a_layer_under_its_own_mask_source_is_refused():
+    """The check has to be at the DOCUMENT level: reorder_layer touches no
+    mask at all and can still strand one."""
+    doc = _doc()
+    below, above = doc.layers[0].id, doc.layers[-1].id
+    apply(doc, {"op": "set_mask", "layer_id": above,
+                "mask": {"from_layer": below}})
+    with pytest.raises(OpError, match="would leave the document invalid"):
+        apply(doc, {"op": "reorder_layer", "layer_id": below, "index": len(doc.layers) - 1})
+
+
+def test_removing_a_mask_source_is_refused_while_something_masks_through_it():
+    doc = _doc()
+    below, above = doc.layers[0].id, doc.layers[-1].id
+    apply(doc, {"op": "set_mask", "layer_id": above,
+                "mask": {"from_layer": below}})
+    with pytest.raises(OpError, match="would leave the document invalid"):
+        apply(doc, {"op": "remove_layer", "layer_id": below})
+
+
+def test_a_batch_may_pass_through_an_arrangement_a_single_op_could_not():
+    """apply_many checks once at the batch boundary, because a batch is
+    atomic and the batch is the only state anyone ever sees. "Clip the plate
+    into the title, and move the title under it" is the edit that needs
+    it — legal at the end, illegal in the middle."""
+    doc = _doc()
+    title, plate = doc.layers[-1].id, doc.layers[0].id
+    apply_many(doc, [
+        {"op": "reorder_layer", "layer_id": title, "index": 0},
+        {"op": "set_mask", "layer_id": plate, "mask": {"from_layer": title}},
+    ])
+    assert doc.layers[0].id == title
+    assert next(l for l in doc.layers if l.id == plate).mask.from_layer == title
+
+
+def test_a_refused_batch_leaves_the_document_exactly_as_it_was():
+    doc = _doc()
+    before = doc.model_dump()
+    with pytest.raises(OpError, match="would leave the document invalid"):
+        apply_many(doc, [{"op": "set_mask", "layer_id": doc.layers[0].id,
+                          "mask": {"from_layer": doc.layers[-1].id}}])
+    assert doc.model_dump() == before
+
+
+def test_set_adjust_edits_a_grade_in_place():
+    doc = _doc()
+    apply(doc, {"op": "add_layer", "layer": _adjust(id="ly_grade000")})
+    apply(doc, {"op": "set_adjust", "layer_id": "ly_grade000",
+                "brightness": -0.2, "contrast": 0.1})
+    layer = next(l for l in doc.layers if l.id == "ly_grade000")
+    assert (layer.brightness, layer.contrast) == (-0.2, 0.1)
+
+
+def test_set_adjust_says_op_kind_because_op_is_already_taken():
+    """The one place a wire name differs from the model's: an op dict cannot
+    carry two meanings of `op`. Changing the adjustment must not cost the
+    layer its id or its place in the stack."""
+    doc = _doc()
+    apply(doc, {"op": "add_layer", "layer": _adjust(id="ly_grade000")})
+    apply(doc, {"op": "set_adjust", "layer_id": "ly_grade000",
+                "op_kind": "vignette", "strength": 0.4})
+    layer = next(l for l in doc.layers if l.id == "ly_grade000")
+    assert (layer.op, layer.strength) == ("vignette", 0.4)
+    assert doc.layers[-1].id == "ly_grade000"
+
+
+def test_set_adjust_refuses_a_layer_that_is_not_an_adjustment():
+    doc = _doc()
+    with pytest.raises(OpError, match="an adjust layer"):
+        apply(doc, {"op": "set_adjust", "layer_id": doc.layers[0].id,
+                    "brightness": 0.1})

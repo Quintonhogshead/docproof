@@ -68,6 +68,7 @@ from pydantic import (BaseModel, ConfigDict, Field, ValidationError,
                       field_validator)
 
 from ..providers import NormalizedUsage, cost_of_usage, lookup, strict_json_schema
+from . import doctrine
 from .archetypes import Archetype
 from .model import Brief, CoverSpec
 from .recipes import describe_recipes
@@ -85,6 +86,14 @@ PLANNER_FALLBACK_MODEL = "claude-opus-5"
 # itself (it steers every image dollar downstream); a stage review is a
 # bounded placement question over one image. Both dials are catalog-gated
 # exactly like critique.py's, just set deeper than its "low".
+# The doctrine block both calls in this file carry (docproof.cover.doctrine's
+# `plan` surface): the arrangement rules — the grounding stack, depth bands by
+# value, ground-contact agreement — because this is the one call that decides
+# how plates will relate to each other before a dollar is spent. Rendered once
+# at import, not per call: it is a constant, and building it inside an f-string
+# in each prompt function is how the two would drift.
+_DOCTRINE = doctrine.render("plan")
+
 PLAN_EFFORT = "high"
 REVIEW_EFFORT = "medium"
 
@@ -312,6 +321,15 @@ generated — the way a designer conceives a multi-layer build before making \
 anything. Every generation prompt you write is executed verbatim; nothing \
 guarantees the layers belong together except your plan.
 
+THE HOUSE DOCTRINE — the constraints your plan must satisfy, each one \
+learned by shipping a cover that broke it. These are not style preferences: \
+a plan that requests a standing cutout without naming the surface it stands \
+on and which plate that surface comes from is a failed plan, however good \
+its prompts are. Numbering is the house's own and is stable across the \
+studio, so gaps are expected.
+
+{_DOCTRINE}
+
 Answer with:
 
 light: one shared lighting contract — key-light direction, quality, time of \
@@ -426,11 +444,19 @@ def _plan_user_text(brief: Brief, spec: CoverSpec, archetype: Archetype,
 
 
 def _review_system_prompt() -> str:
-    return """You are the composition planner reviewing a staged cover \
+    return f"""You are the composition planner reviewing a staged cover \
 build mid-generation. Earlier stages have actually been generated; you are \
 shown their real renders. Finalize the PENDING slot named below against \
 where the earlier layers' light, horizon, and negative space REALLY landed \
 — not where the plan hoped.
+
+THE HOUSE DOCTRINE binds this answer harder than it binds the plan, because \
+this is the last moment anything can be changed before the pixels are \
+bought. You are looking at the real plate: if the doctrine's ground rules \
+cannot be met against what actually rendered, say so in the prompt you \
+write rather than anchoring a figure onto a surface that is not there.
+
+{_DOCTRINE}
 
 Answer with:
 

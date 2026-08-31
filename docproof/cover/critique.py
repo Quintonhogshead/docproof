@@ -69,6 +69,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..providers import NormalizedUsage, cost_of_usage, lookup, strict_json_schema
+from . import doctrine
 from .model import Brief, CoverSpec
 
 log = logging.getLogger("docproof.cover.critique")
@@ -78,6 +79,13 @@ log = logging.getLogger("docproof.cover.critique")
 # REVISION_MODEL is priced for — mirrored as its own constant rather than
 # imported, same convention direction.py itself documents about
 # docproof.quest.skin.LUNA_MODEL. Module constant, overridable per call.
+# The doctrine block this judge carries (docproof.cover.doctrine's `critique`
+# surface): the rules a reviewer can actually NAME in a finished render, plus
+# rule 14, which is the standing warning against inventing a metric. The three
+# editing-session conduct rules are not here — this call has no tools and one
+# question to answer. Rendered once at import; it is a constant.
+_DOCTRINE = doctrine.render("critique")
+
 CRITIQUE_MODEL = "claude-sonnet-5"
 
 # Token cost, and the tells that matter (type crowding, weak hierarchy, a
@@ -176,7 +184,7 @@ def _downscale_to_base64(png_bytes: bytes, *, max_width: int = MAX_WIDTH) -> str
 # -- prompts ----------------------------------------------------------------------
 
 def _system_prompt() -> str:
-    return """You are the art director at a traditional press, doing a final \
+    return f"""You are the art director at a traditional press, doing a final \
 proof review before a cover ships. You will be shown the finished cover render \
 -- usually followed by a second image of that SAME cover at its actual \
 shelf/search-thumbnail size (100px wide) -- plus a short summary of the book. \
@@ -192,6 +200,14 @@ particular: content living inside a container shape (a light beam, a smoke \
 plume, a ribbon, a doorway) that is executed cleanly, with its payload \
 reading clearly inside the shape, is a strength. Do not flag a well-\
 executed container device as a tell.
+
+THE HOUSE DOCTRINE — the rules this press has learned by shipping covers \
+that broke them. A tell that breaks one of these CITES its number, and rule \
+2 outranks everything else on this page: a figure standing on nothing fails \
+the proof no matter how good the rest is. Numbering is the house's own and \
+is stable across the studio, so gaps are expected.
+
+{_DOCTRINE}
 
 Look for concrete, nameable problems — the kind of note an art director \
 actually writes on a proof, not vague taste:

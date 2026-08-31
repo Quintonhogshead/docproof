@@ -20,6 +20,15 @@ swap_size_mb = 512
   PORT = "8000"
   WAITLIST_PATH = "/data/waitlist.jsonl"
   COVER_DATA_PATH = "/data/cover"
+  # The §15.16 composition planner: a frontier reasoner plans ONE composition
+  # per concept — shared lighting contract, depth planes, generation order,
+  # a rewritten prompt per slot — before any image dollar is spent, and
+  # reviews each staged slot against where the prior plate ACTUALLY landed.
+  # Off (the code default in docproof/cover/pipeline.py:_planner_enabled) is
+  # the pre-planner spontaneous path, which prompts every plate blind to the
+  # others; that is a ship gate, not the intended product. ~$0.10-0.30 per
+  # concept on top of art. Set to "0" to fall back.
+  COVER_PLANNER = "1"
 
 # Waitlist signups live here and must survive restarts and scale-to-zero.
 [[mounts]]

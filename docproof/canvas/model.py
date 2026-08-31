@@ -314,6 +314,99 @@ class Gradient(BaseModel):
         return self
 
 
+class MaskGradient(BaseModel):
+    """A synthesized soft ramp, mirroring docproof.cover.model.GradientMask
+    field for field (§15.2) — `linear` ramps along `angle` in y-down degrees
+    (90 = top-transparent to bottom-opaque, 0 = left to right), `radial`
+    ramps outward from `center` in canvas fractions, transparent core to
+    opaque rim, and `start`/`end` remap where along the ramp alpha begins
+    rising and where it reaches 1.
+
+    Mirrored rather than imported for the reason the whole module gives:
+    a canvas document must keep opening when the cover model grows a field.
+    The FIELDS still match exactly, on purpose — docproof.canvas.render
+    hands them straight to docproof.cover.effects.gradient_mask by building
+    the cover model from them, so a ramp in the editor and the same ramp in
+    a composed cover are the same pixels and not two implementations that
+    agree today.
+
+    Note this is a different thing from `Gradient` above, which is a
+    scrim's own two-or-more alpha stops across its box. A scrim IS its
+    ramp; a mask ramp SCOPES some other layer."""
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["linear", "radial"] = "linear"
+    angle: float = 90.0
+    center: list[float] = Field(default_factory=lambda: [0.5, 0.5])
+    start: float = Field(default=0.0, ge=0.0, le=1.0)
+    end: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("center")
+    @classmethod
+    def _pair(cls, value: list[float]) -> list[float]:
+        if len(value) != 2:
+            raise ValueError(
+                f"a mask gradient's center is [x, y], got {len(value)} "
+                f"value(s)")
+        # The cover model's own latitude: a radial mask centered off-canvas
+        # is a legitimate design (a glow falling in from beyond the trim).
+        for v in value:
+            if not -2.0 <= v <= 2.0:
+                raise ValueError(
+                    f"a mask gradient's center must be within [-2, 2] "
+                    f"canvas fractions, got {v}")
+        return list(value)
+
+
+class Mask(BaseModel):
+    """What a layer is visible THROUGH (§15.2, and doctrine rules 6 and 9).
+
+    Every set source resolves to one canvas-sized alpha field and they
+    multiply together; `invert` applies last — so "the top third, but only
+    inside the figure's silhouette" is two fields and no new grammar. The
+    cover model's MaskSpec is the same idea with one field fewer here:
+
+    - `from_layer` names ANY earlier layer and takes its rendered alpha.
+      In a CoverSpec this needed a second field (`from_text`) because art
+      slots and text slots are different kinds of thing; in a canvas
+      document every layer rasterizes to one RGBA tile, so naming a TEXT
+      layer here IS the clip-art-into-the-letterforms move (doctrine rule
+      9), naming a shape layer is a geometric window, and one field covers
+      both.
+    - `luminance_of` names an earlier layer and takes its brightness as
+      alpha, gated by that layer's own alpha — light-driven scoping, so a
+      cutout's empty surround masks to 0 rather than to whatever black its
+      transparent pixels happen to hold.
+    - `gradient` is a synthesized ramp (MaskGradient above), the soft edge
+      that lets a far band blend toward the sky behind it.
+
+    EARLIER, not any: both references must name a layer BELOW this one in
+    the document. That rule is what lets a renderer resolve masks in the
+    one bottom-to-top pass it already makes — the browser's and this
+    package's renderer both — instead of needing a dependency sort, and it
+    is enforced at the document level (CanvasDoc._masks_reference_earlier
+    layers), because a layer alone cannot see the list it is in."""
+    model_config = ConfigDict(extra="forbid")
+
+    from_layer: str = ""
+    luminance_of: str = ""
+    gradient: MaskGradient | None = None
+    invert: bool = False
+
+    @model_validator(mode="after")
+    def _some_source(self) -> Mask:
+        """MaskSpec._some_source, restated: an empty mask is always
+        authoring error and never a deliberate no-op. Clearing a mask is
+        `{"op": "set_mask", "mask": null}`, which is a different request
+        and reads like one."""
+        if not (self.from_layer or self.luminance_of
+                or self.gradient is not None):
+            raise ValueError(
+                "a mask sets no source — give it from_layer, luminance_of "
+                "or gradient, or clear the mask entirely with mask: null")
+        return self
+
+
 class PlateVersion(BaseModel):
     """One superseded plate of an art layer, kept so a re-roll is never
     destructive (§5: "click to swap back"). Prompt travels with the pixels —
@@ -347,6 +440,12 @@ class LayerBase(BaseModel):
     opacity: float = Field(default=1.0, ge=0.0, le=1.0)
     frame: Frame
     effects: list[Effect] = Field(default_factory=list)
+    # What this layer shows through (§15.2). On LayerBase and not on
+    # ArtLayer, because the move that made masks worth having — art clipped
+    # into letterforms — needs the mask on whichever layer is being clipped,
+    # and doctrine rule 9's "value-opposite, uniform edge to edge" applies
+    # to a masked scrim or shape exactly as it does to a masked plate.
+    mask: Mask | None = None
 
 
 class ArtLayer(LayerBase):
@@ -485,12 +584,96 @@ class ShapeLayer(LayerBase):
         return self
 
 
+class AdjustLayer(LayerBase):
+    """A layer that owns no pixels and grades what is UNDER it (§15.3) —
+    the 6-10 adjustment layers of a real cover PSD, the thing that turns an
+    assembled collage into one photograph. This is the answer to the
+    critique's own "a flat, unlit composite: layers stacked with no shared
+    light, grade, or atmosphere tying them into one scene", and to doctrine
+    rule 6: a far band is blended toward the sky behind it by grading it,
+    not by hoping the generation got the value right.
+
+    `op` picks what is computed over the composite, and the result is mixed
+    back through this layer's mask and opacity — the §15.3 equation exactly:
+    result = under x (1 - m*opacity) + op(under) x (m*opacity). `color_wash`
+    is the exception that composites a solid `color` AS a layer through the
+    full blend table, which is how dodge-and-burn painting is expressed.
+
+    Two deliberate differences from docproof.cover.model.AdjustLayer:
+
+    - **Colors are literal hexes, never palette roles.** A canvas document
+      has no palette (the spec it came from does, and that spec is frozen
+      provenance) — so ingest resolves every role to its hex at the
+      boundary, once, and everything downstream reads a color it can see.
+    - **It has a frame, and the frame BOUNDS the adjustment.** A CoverSpec's
+      adjust layer is always the whole canvas. Here it is a layer like any
+      other: it appears in the layer list, it drags, it resizes, and a grade
+      you can drag over the half of the cover that needs it is worth more in
+      an editor than one that always covers everything. Ingest gives every
+      adjust layer it translates a full-canvas frame, which reproduces the
+      §15.3 behavior exactly.
+
+    Per-op parameters are FLAT fields, and a field the chosen `op` never
+    reads is validated but inert — the cover model's forgiving rule, for the
+    same reason: changing `op` must never strand a layer in a state the
+    document refuses to load."""
+    kind: Literal["adjust"] = "adjust"
+
+    op: Literal["grade", "gradient_map", "color_wash", "vignette", "bloom",
+                "blur"]
+    # Read by color_wash ONLY; every other op mixes by the equation above,
+    # which has no blend in it. The names are §15.1's table verbatim.
+    blend: Literal["normal", "multiply", "overlay", "soft_light", "screen",
+                   "add", "lighten", "darken", "color_dodge"] = "normal"
+    # -- flat per-op params ---------------------------------------------------
+    brightness: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
+    contrast: float = Field(default=0.0, ge=-1.0, le=1.0)     # grade
+    saturation: float = Field(default=0.0, ge=-1.0, le=1.0)   # grade
+    temperature: float = Field(default=0.0, ge=-1.0, le=1.0)  # grade: warm/cool
+    stops: list[str] = Field(default_factory=list)      # gradient_map: 2-3 hexes
+    color: str = "#000000"                              # color_wash/vignette ink
+    strength: float = Field(default=0.5, ge=0.0, le=1.0)      # vignette/bloom
+    radius: float = Field(default=0.02, ge=0.0, le=0.25)      # bloom/blur
+    threshold: float = Field(default=0.75, ge=0.0, le=1.0)    # bloom
+
+    @field_validator("color")
+    @classmethod
+    def _ink(cls, value: str) -> str:
+        return _validate_hex(value)
+
+    @field_validator("stops")
+    @classmethod
+    def _valid_stops(cls, value: list[str]) -> list[str]:
+        """Shape-checked regardless of `op` (the forgiving-but-validated
+        rule): 2 or 3 hexes, dark end first, or empty. An empty list on a
+        gradient_map layer is caught below, where the op is known."""
+        if not value:
+            return value
+        if not 2 <= len(value) <= 3:
+            raise ValueError(
+                f"a gradient map takes 2 or 3 stops (dark end first), got "
+                f"{len(value)}")
+        return [_validate_hex(v) for v in value]
+
+    @model_validator(mode="after")
+    def _op_has_what_it_needs(self) -> AdjustLayer:
+        """The one cross-field rule worth failing on: a gradient_map with no
+        stops is not a subtle look, it is a layer that cannot be computed at
+        all. Every other op has a working default for every field it reads,
+        which is why this is the only check here."""
+        if self.op == "gradient_map" and not self.stops:
+            raise ValueError(
+                f"adjust layer {self.id!r} maps a gradient but names no "
+                f"stops — give it 2 or 3 hexes, dark end first")
+        return self
+
+
 # The discriminated union `layers` is a list of. Discriminating on `kind`
 # (rather than letting pydantic try each member in turn) is what makes a
 # malformed layer report "art layer is missing `source`" instead of five
 # stacked union errors nobody can read.
 Layer = Annotated[
-    ArtLayer | TextLayer | ScrimLayer | FrameLayer | ShapeLayer,
+    ArtLayer | TextLayer | ScrimLayer | FrameLayer | ShapeLayer | AdjustLayer,
     Field(discriminator="kind"),
 ]
 
@@ -567,6 +750,45 @@ class CanvasDoc(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _masks_reference_earlier_layers(self) -> CanvasDoc:
+        """A mask may only name a layer BELOW the layer wearing it.
+
+        Two renderers resolve these — docproof.canvas.render and the
+        browser's engine.js — and both draw the document in exactly one
+        bottom-to-top pass. Under that rule a mask's source is always
+        already drawn when the mask is needed, so neither renderer needs a
+        dependency sort, and a cycle is unrepresentable rather than merely
+        rejected. The cost is that "clip the plate into the title" requires
+        the title to sit below the plate in the list, which is what the
+        move means anyway: the type is the window, and the art shows
+        through it.
+
+        A dangling reference is refused here too, and not left to the
+        renderer: a mask that names nothing resolves to no mask at all,
+        which draws the UNMASKED layer — a silent full-bleed plate over a
+        cover somebody thought they had windowed."""
+        seen: set[str] = set()
+        for layer in self.layers:
+            mask = getattr(layer, "mask", None)
+            if mask is not None:
+                for field in ("from_layer", "luminance_of"):
+                    ref = getattr(mask, field)
+                    if not ref:
+                        continue
+                    if ref == layer.id:
+                        raise ValueError(
+                            f"layer {layer.id!r} masks itself through "
+                            f"{field} — a mask names another layer")
+                    if ref not in seen:
+                        raise ValueError(
+                            f"layer {layer.id!r} masks through {field} "
+                            f"{ref!r}, which is not a layer below it — a "
+                            f"mask may only name a layer earlier in the "
+                            f"list (move {ref!r} down, or {layer.id!r} up)")
+            seen.add(layer.id)
+        return self
+
+    @model_validator(mode="after")
     def _canvas_is_the_sheet(self) -> CanvasDoc:
         """On a wrapped document the canvas IS the wrap sheet.
 
@@ -636,7 +858,8 @@ def save_doc(doc: CanvasDoc, path: str | Path) -> None:
 
 __all__ = [
     "DOC_VERSION", "CanvasDoc", "Size", "Wrap", "Frame", "Effect", "Warp", "Stop",
-    "Gradient", "PlateVersion", "LayerBase", "ArtLayer", "TextLayer",
-    "ScrimLayer", "FrameLayer", "ShapeLayer", "Layer", "parse_layer",
+    "Gradient", "MaskGradient", "Mask", "PlateVersion", "LayerBase",
+    "ArtLayer", "TextLayer", "ScrimLayer", "FrameLayer", "ShapeLayer",
+    "AdjustLayer", "Layer", "parse_layer",
     "new_layer_id", "load_doc", "save_doc",
 ]

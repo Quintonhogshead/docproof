@@ -25,6 +25,8 @@ from docproof.canvas.model import load_doc, save_doc
 from docproof.cover import typeset
 from docproof.cover.archetypes import ARCHETYPES
 from docproof.cover.compose import EBOOK_H, EBOOK_W
+from docproof.cover.model import GradientMask as CoverGradientMask
+from docproof.cover.model import MaskSpec as CoverMaskSpec
 from docproof.cover.model import (Brief, ConceptState, CoverSpec, Direction,
                                   JobState, Palette, RenderReport, build_spec)
 
@@ -218,15 +220,37 @@ def test_layers_come_out_in_the_order_compose_draws_them(tmp_path):
         ("text", "author")]
 
 
-def test_adjust_layers_are_dropped_and_the_rest_keeps_its_order(tmp_path):
-    # full_bleed_art finishes with three adjust layers and a procedural
-    # grain plate; neither has anything this vocabulary can carry.
+def test_adjust_layers_arrive_in_place_and_the_rest_keeps_its_order(tmp_path):
+    """full_bleed_art finishes with a §15.3 finishing stack — a gradient
+    map, a grade and a bloom, in that order, on top of the type. They used
+    to be dropped; the editor now carries them as real layers, which is
+    what makes doctrine rule 6 something the canvas can DO and not only
+    describe. The procedural grain plate still has no pixels to carry."""
     doc = ingest(_job_dir(tmp_path, _spec("full_bleed_art")), canvas=CANVAS)
     assert [(l.kind, l.name) for l in doc.layers] == [
         ("art", "background"),
         ("scrim", "scrim 0 (gradient_down)"),
         ("scrim", "scrim 1 (gradient_down)"),
-        ("text", "title"), ("text", "author")]
+        ("text", "title"), ("text", "author"),
+        ("adjust", "gradient map (fx_map)"),
+        ("adjust", "grade (fx_contrast)"),
+        ("adjust", "bloom (fx_bloom)")]
+
+
+def test_an_ingested_adjust_layer_covers_the_whole_canvas_in_literal_hexes(
+        tmp_path):
+    """A CoverSpec adjust layer is always the whole canvas, and its colors
+    may point at palette ROLES. A canvas document carries no palette, so the
+    roles have to be resolved at this boundary or they point at a table that
+    did not travel with the document."""
+    spec = _spec("full_bleed_art")
+    doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
+    gmap = next(l for l in doc.layers if l.name == "gradient map (fx_map)")
+    assert (gmap.frame.x, gmap.frame.y, gmap.frame.w, gmap.frame.h) == (
+        0.5, 0.5, 1.0, 1.0)
+    assert gmap.op == "gradient_map"
+    assert all(stop.startswith("#") for stop in gmap.stops)
+    assert gmap.color.startswith("#")
 
 
 def test_an_empty_text_slot_becomes_no_layer(tmp_path):
@@ -482,3 +506,61 @@ def test_an_escalated_panel_scrim_becomes_a_flat_alpha_rectangle(tmp_path):
     scrim = next(l for l in doc.layers if l.name.startswith("scrim 0"))
     assert [s.alpha for s in scrim.gradient.stops] == [0.4, 0.4]
     assert scrim.color == "#000000"                    # the scrim role
+
+
+# -- masks (§15.2), which used to be dropped ----------------------------------
+
+def test_an_art_slots_mask_arrives_pointing_at_the_canvas_layer(tmp_path):
+    """A CoverSpec mask names a SLOT and a canvas mask names a LAYER, and
+    the map between them exists only during the ingest walk. The reference
+    has to come out the far side pointing at the right layer, or the plate
+    opens unmasked — a full-bleed plate over a cover somebody thought they
+    had windowed."""
+    spec = _spec("cutout_sandwich")
+    focal = next(s for s in spec.art if s.id == "focal")
+    focal.mask = CoverMaskSpec(from_text="title")
+    doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
+    title = next(l for l in doc.layers if l.name == "title")
+    plate = next(l for l in doc.layers if l.name == "focal")
+    assert plate.mask is not None
+    # from_text folds into from_layer: every canvas layer is one alpha tile.
+    assert plate.mask.from_layer == title.id
+    assert doc.layers.index(title) < doc.layers.index(plate)
+
+
+def test_a_gradient_mask_survives_field_for_field(tmp_path):
+    spec = _spec("cutout_sandwich")
+    focal = next(s for s in spec.art if s.id == "focal")
+    focal.mask = CoverMaskSpec(
+        gradient=CoverGradientMask(kind="linear", angle=270, start=0.2, end=0.8),
+        invert=True)
+    doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
+    plate = next(l for l in doc.layers if l.name == "focal")
+    assert plate.mask.invert is True
+    assert (plate.mask.gradient.kind, plate.mask.gradient.angle) == ("linear", 270)
+    assert (plate.mask.gradient.start, plate.mask.gradient.end) == (0.2, 0.8)
+
+
+def test_a_mask_naming_a_slot_with_no_layer_is_dropped_not_fatal(tmp_path):
+    """It can only happen for a slot this module already declined to carry,
+    and losing the mask is a smaller wrong than refusing to open the cover.
+    """
+    spec = _spec("cutout_sandwich")
+    focal = next(s for s in spec.art if s.id == "focal")
+    focal.mask = CoverMaskSpec(from_text="subtitle")     # empty -> never a layer
+    doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
+    plate = next(l for l in doc.layers if l.name == "focal")
+    assert plate.mask is None
+
+
+def test_an_ingested_document_with_masks_still_validates(tmp_path):
+    """The canvas model's below-only rule is stricter than nothing, and the
+    ingest walk is the one place that could produce a document violating
+    it. CanvasDoc construction is the check; this asserts it is reached."""
+    spec = _spec("cutout_sandwich")
+    focal = next(s for s in spec.art if s.id == "focal")
+    focal.mask = CoverMaskSpec(from_text="title")
+    doc = ingest(_job_dir(tmp_path, spec), canvas=CANVAS)
+    path = tmp_path / "canvas.json"
+    save_doc(doc, path)
+    assert load_doc(path).model_dump() == doc.model_dump()
