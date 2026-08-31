@@ -87,3 +87,17 @@ def no_internet():
 @pytest.fixture
 def cfg():
     return load_config(_CONFIG)
+
+
+@pytest.fixture(autouse=True)
+def _forget_imaging_capabilities():
+    """docproof.cover.imaging remembers, per process, which vendor parameter
+    shape worked and whether streaming is supported — that memo is the point
+    (it stops every image paying a rejected round trip), and it is exactly
+    the kind of process-global state that makes one test's vendor answer
+    change the next test's call count. Cleared around every test so each one
+    probes from scratch."""
+    from docproof.cover import imaging
+    imaging.reset_capability_cache()
+    yield
+    imaging.reset_capability_cache()

@@ -57,6 +57,73 @@ export function postJSON(path, body) {
   });
 }
 
+/* A plate call, answered progressively (app/routes/canvas.py:_plate_answer).
+
+   The server streams NDJSON: `{event:"partial"}` frames as the vendor paints
+   them, then one final line — the same payload the plain JSON endpoint
+   returns, plus `event:"done"`, or `{event:"error"}`. `onPartial(frame)` gets
+   each partial; the finished payload is returned.
+
+   Two things this cannot do the ordinary way. It cannot use EventSource (no
+   way to send a POST body or the key header), hence fetch + a body reader.
+   And it cannot report failure as a status code: by the time the vendor
+   fails, the 200 and its headers are long gone — so an error arrives as the
+   last LINE, and is re-thrown here as the ApiError the callers already know
+   how to show. A response that simply stops (a dropped connection) is its
+   own sentence rather than a silent success. */
+export async function postStream(path, body, onPartial) {
+  const resp = await raw(path, {
+    method: 'POST', body: JSON.stringify({ ...body, stream: true }),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!resp.body || !resp.body.getReader) {
+    // No streaming in this browser: the whole body arrives at once, which is
+    // exactly the old behaviour. Parse the same lines out of it.
+    return finishFrames(splitFrames(await resp.text()).frames, onPartial);
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let last = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const split = splitFrames(buffer);
+    buffer = split.rest;
+    for (const frame of split.frames) {
+      if (frame.event === 'partial') onPartial && onPartial(frame);
+      else last = frame;
+    }
+  }
+  return finishFrames(last ? [last] : [], onPartial);
+}
+
+function splitFrames(text) {
+  const parts = text.split('\n');
+  const rest = parts.pop();            // whatever is left before the next \n
+  const frames = [];
+  for (const line of parts) {
+    if (!line.trim()) continue;
+    try { frames.push(JSON.parse(line)); } catch { /* a half line; skip */ }
+  }
+  return { frames, rest };
+}
+
+function finishFrames(frames, onPartial) {
+  let last = null;
+  for (const frame of frames) {
+    if (frame.event === 'partial') onPartial && onPartial(frame);
+    else last = frame;
+  }
+  if (!last) {
+    throw new ApiError(0, 'The server stopped answering before the plate was '
+      + 'finished — it may still be rendering; reload to see.');
+  }
+  if (last.event === 'error') throw new ApiError(502, last.detail || 'That plate call failed.');
+  return last;
+}
+
 /* An image the browser will draw: fetched as a blob so the key header rides
    along (a bare <img src> can't carry one), then handed over as an object URL.
 

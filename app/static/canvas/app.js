@@ -5,8 +5,8 @@
    store owns the doc, the engine owns the pixels, the panels own the chrome,
    and this file is the only place that knows they exist. */
 
-import { api, postJSON, fileObjectURL, toast, getKey, setKey, ApiError } from './api.js';
-import { createStore, NUDGE, NUDGE_BIG } from './ops.js';
+import { api, postJSON, postStream, fileObjectURL, toast, getKey, setKey, ApiError } from './api.js';
+import { createStore, clone, NUDGE, NUDGE_BIG } from './ops.js';
 import { createEngine } from './engine.js';
 import { el, buildShelf, buildLayerRail, buildPropsRail, newLayerId, currentQuality, guidesEnabled } from './panels.js';
 import { buildAssistant } from './assistant.js';
@@ -148,8 +148,19 @@ function buildEditor(jobId, doc) {
   const images = new Map();
   const urls = new Map();
   const pending = new Set();
+  /* A plate being rendered right now, drawn in place of the plate it is
+     replacing (keyed by the OLD source, which is what the document still
+     points at while the call is in flight). Cleared when the call ends,
+     whichever way it ends. */
+  const previews = new Map();
+  /* One chip per plate call in flight, and which layers those calls are on.
+     Declared beside the image cache because the whole progressive-render
+     path is one idea: what is on screen, and what is on its way. */
+  const chips = el('div', { class: 'plate-chips' });
+  const rolling = new Set();
   function imageFor(name) {
     if (!name) return null;
+    if (previews.has(name)) return previews.get(name);
     if (images.has(name)) return images.get(name);
     if (!pending.has(name)) {
       pending.add(name);
@@ -212,7 +223,7 @@ function buildEditor(jobId, doc) {
     undo: () => { store.undo(); },
     redo: () => { store.redo(); },
     interacting: (on) => engine.setInteracting(on),
-    art: { reroll, finalize },
+    art: { reroll, finalize, rendering: (id) => rolling.has(id) },
     shelf: {},
   };
 
@@ -233,7 +244,7 @@ function buildEditor(jobId, doc) {
   const assistant = buildAssistant(ctx);
   const rightRail = el('div', { class: 'rail right' }, [props.root, assistant.root]);
 
-  root.append(shelf.root, el('div', { class: 'main' }, [layerRail.root, stagewrap, rightRail]));
+  root.append(shelf.root, el('div', { class: 'main' }, [layerRail.root, stagewrap, rightRail]), chips);
 
   function refresh() {
     engine.render();
@@ -301,16 +312,31 @@ function buildEditor(jobId, doc) {
       store.apply({ op: 'add_layer', layer, index: store.indexOf(t.id) });
       engine.select(layer.id);
     },
+    /* A toggle, not a one-way door. §15.22: a cutout needs a planned PAIR —
+       a wide ambient that seats it in the field, and a tight contact shadow
+       that says where it touches — and the point of a planned pair is being
+       able to see the layer with and without it. Pressing it again takes the
+       shadows back off.
+
+       The button owns this layer's drop shadows outright: turning it on has
+       always replaced whatever drop shadows were there, so turning it off
+       clears them. Anything hand-tuned that must survive lives in the
+       effects list on the properties rail, where it can be edited rather
+       than toggled. */
     shadowStack() {
       const l = ctx.selectedLayer();
       if (!l) return;
-      // §15.22: a cutout needs a planned pair — a wide ambient that seats it in
-      // the field, and a tight contact shadow that says where it touches.
-      const effects = (l.effects || []).filter((e) => e.type !== 'drop_shadow').concat([
-        { type: 'drop_shadow', params: { dx: 0, dy: 0.014, blur: 0.032, color: '#000000', alpha: 0.34 } },
-        { type: 'drop_shadow', params: { dx: 0.0015, dy: 0.0026, blur: 0.004, color: '#000000', alpha: 0.62 } },
-      ]);
+      const on = (l.effects || []).some((e) => e.type === 'drop_shadow');
+      const effects = (l.effects || []).filter((e) => e.type !== 'drop_shadow');
+      if (!on) {
+        effects.push(
+          { type: 'drop_shadow', params: { dx: 0, dy: 0.014, blur: 0.032, color: '#000000', alpha: 0.34 } },
+          { type: 'drop_shadow', params: { dx: 0.0015, dy: 0.0026, blur: 0.004, color: '#000000', alpha: 0.62 } },
+        );
+      }
       store.apply({ op: 'set_effects', layer_id: l.id, effects });
+      toast(on ? 'Shadow stack off.'
+        : 'Shadow stack on — a wide ambient and a tight contact shadow.', 'ok');
     },
     repair() {
       const l = ctx.selectedLayer();
@@ -322,13 +348,23 @@ function buildEditor(jobId, doc) {
     },
 
     /* §15.23's cardinal rule as one click: the server draws the band mask
-       itself, so unlike a repair there is nothing for the user to draw. */
+       itself, so unlike a repair there is nothing for the user to draw.
+
+       It is easy to read this button as a shadow control sitting next to the
+       shadow one. It is not: it REPAINTS the bottom of the plate as real
+       ground (with a contact shadow in it), which is a paid image call and a
+       new picture down there. Every string it shows says so — the button's
+       own title, the progress chip, and the toast — because the difference
+       between "free effect" and "money and new pixels" is the one thing a
+       person has to know before pressing it. */
     async ground() {
       const l = ctx.selectedLayer();
       if (!l || l.kind !== 'art') return;
       try {
-        const res = await plateCall('ground', { layer_id: l.id }, 'Grounding the figure…');
-        toast(`Ground generated${money(res.cost_usd)}.`, 'ok');
+        const res = await plateCall('ground', { layer_id: l.id },
+          'Repainting the bottom of the plate as ground…');
+        toast(`New ground painted into the plate${money(res.cost_usd)} — `
+          + `⌘Z puts the old plate back.`, 'ok', 9000);
       } catch (e) {
         toast(e.message, 'err');
       }
@@ -341,7 +377,8 @@ function buildEditor(jobId, doc) {
       const l = ctx.selectedLayer();
       if (!l || l.kind !== 'art') return;
       try {
-        const res = await plateCall('rebalance', { layer_id: l.id }, 'Measuring the plate…');
+        const res = await plateCall('rebalance', { layer_id: l.id },
+          'Measuring the plate…', { stream: false });
         const line = res.measured || 'Levels rebalanced.';
         assistant.note(line);
         toast(line, 'ok', 11000);
@@ -678,21 +715,102 @@ function buildEditor(jobId, doc) {
      and is already in the shelf; this is the price of the click just made. */
   const money = (c) => (typeof c === 'number' ? ` — $${c.toFixed(2)}` : '');
 
-  /* Every whole-document plate verb, which is all of them: the server answers
-     with the finished doc (it has already written the plate and the history),
-     and replaceDoc records that as ONE undo entry — so ⌘Z steps back across a
-     roll exactly the way it steps back across an assistant turn. Throws on
-     failure so each caller words its own error. */
-  async function plateCall(path, body, busyText) {
-    const busy = el('div', { class: 'busy', text: busyText });
-    document.body.appendChild(busy);
+  /* ------------------------------------------------------- plate progress */
+  /* One chip per plate call in flight. Not a modal: a render is tens of
+     seconds and there is no reason a person cannot keep moving type, panning
+     or picking layers while the picture paints. The chip is the honest
+     replacement — it says what is rendering, on which layer, and how far
+     along the vendor's own partial frames have got. */
+  function plateChip(text, layerName) {
+    const label = el('span', { class: 'pc-text', text });
+    const bar = el('span', { class: 'pc-bar' });
+    const chip = el('div', { class: 'plate-chip' }, [
+      el('span', { class: 'pc-name', text: layerName || 'plate' }), label, bar,
+    ]);
+    chips.appendChild(chip);
+    return {
+      tick(index) {
+        label.textContent = `${text} (${index} of 3)`;
+        bar.style.setProperty('--pc-fill', `${Math.min(100, index * 33)}%`);
+      },
+      remove() { chip.remove(); },
+    };
+  }
+
+  /* The plate the server just made, folded into the document WE have.
+
+     Not store.replaceDoc(res.doc): the server's copy was loaded before this
+     call started, so anything edited while the plate rendered is missing
+     from it — and now that the canvas stays live during a render, that is a
+     real edit somebody just made, not a theoretical one. The same doctrine
+     the ops flush already follows ("take the money back and keep our copy").
+     What a plate verb actually changes is this layer's plate and the two
+     ledgers, so that is exactly what is taken. It still goes through
+     replaceDoc, so ⌘Z steps back across a roll as one entry. */
+  function mergePlate(res, layerId) {
+    if (!res || !res.doc) return;
+    const theirs = (res.doc.layers || []).find((l) => l.id === layerId);
+    const next = clone(store.doc);
+    const mine = (next.layers || []).find((l) => l.id === layerId);
+    if (theirs && mine) {
+      mine.source = theirs.source;
+      mine.plate_history = theirs.plate_history;
+      mine.prompt = theirs.prompt;
+      mine.effects = theirs.effects;          // rebalance writes one of these
+    }
+    next.cost_usd = res.doc.cost_usd;
+    next.history = res.doc.history;
+    store.replaceDoc(next);
+  }
+
+  /* Every money-spending plate verb, which is all of them. Streams: the
+     vendor's partial frames land on the canvas in place of the plate they
+     are replacing, so the picture resolves in front of you instead of
+     appearing at the end of a blank wait. Throws on failure so each caller
+     words its own error. */
+  async function plateCall(path, body, busyText, { stream = true } = {}) {
+    const layerId = body.layer_id;
+    if (rolling.has(layerId)) {
+      throw new ApiError(409, 'That layer is already rendering — one at a time.');
+    }
+    const layer = layerId ? store.layer(layerId) : null;
+    const anchor = layer ? layer.source : null;
+    const chip = plateChip(busyText, layer && layer.name);
+    if (layerId) rolling.add(layerId);
+    refresh();          // the plate's own buttons go out while it renders
     try {
-      const res = await postJSON(`/api/canvas/${encodeURIComponent(jobId)}/${path}`, body);
-      if (res.doc) store.replaceDoc(res.doc);
+      const url = `/api/canvas/${encodeURIComponent(jobId)}/${path}`;
+      // `stream: false` is for the verb that has nothing to stream:
+      // rebalance is Pillow arithmetic on a plate already on disk, back
+      // before a progress bar could draw itself.
+      const res = stream
+        ? await postStream(url, body, (frame) => {
+          chip.tick(frame.index);
+          showPreview(anchor, layerId, frame);
+        })
+        : await postJSON(url, body);
+      mergePlate(res, layerId);
       return res;
     } finally {
-      busy.remove();
+      if (anchor) { previews.delete(anchor); }
+      if (layerId) rolling.delete(layerId);
+      chip.remove();
+      refresh();
     }
+  }
+
+  /* A partial frame, decoded and dropped into the preview channel. Best
+     effort throughout: a frame that will not decode is simply not shown,
+     and the render it belongs to is unaffected. */
+  function showPreview(anchor, layerId, frame) {
+    if (!anchor || !frame || !frame.image_b64) return;
+    const img = new Image();
+    img.onload = () => {
+      if (!rolling.has(layerId)) return;    // that call already finished
+      previews.set(anchor, img);
+      engine.render();
+    };
+    img.src = `data:${frame.mime || 'image/png'};base64,${frame.image_b64}`;
   }
 
   async function reroll(layerId, prompt, quality) {

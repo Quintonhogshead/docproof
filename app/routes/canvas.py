@@ -45,7 +45,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import (FileResponse, RedirectResponse, Response,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -347,35 +348,153 @@ class OpsBody(BaseModel):
 Quality = Literal["draft", "final", "session"]
 
 
-class RerollBody(BaseModel):
+class PlateBody(BaseModel):
+    """What every money-spending plate verb takes, whatever else it takes.
+
+    `stream` asks for the progressive answer (see _plate_answer): the same
+    work, reported as it happens instead of only when it is done. It is a
+    request for a different RESPONSE SHAPE, not for different work, so a
+    client that does not want it — the assistant, a script, an old build —
+    simply leaves it off and gets exactly the JSON it always got."""
     model_config = ConfigDict(extra="forbid")
 
     layer_id: str
+    stream: bool = False
+
+
+class RerollBody(PlateBody):
     prompt: str | None = None
     quality: Quality = "session"
 
 
-class InpaintBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    layer_id: str
+class InpaintBody(PlateBody):
     instruction: str
     mask_b64: str
     quality: Quality = "session"
 
 
-class FinalizeBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    layer_id: str
+class FinalizeBody(PlateBody):
     prompt: str | None = None
 
 
-class GroundBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    layer_id: str
+class GroundBody(PlateBody):
     instruction: str | None = None
+
+
+# One writer per job. Every mutating endpoint here reads canvas.json,
+# changes the document in memory and writes it back, which is safe exactly
+# as long as two of them are never in flight on the same job at once. They
+# used to be prevented by the CLIENT — the browser threw a modal overlay up
+# for the whole of a plate render — and the moment that overlay came down
+# (so a person can keep working while a plate paints) the server had to own
+# the rule instead. A lock per job, not one global lock: two people editing
+# two covers have nothing to say to each other.
+#
+# Held across the vendor call, not just the write, because the document a
+# verb mutates was loaded before that call: releasing early would let a
+# second request load the same document, and the later save would silently
+# drop the earlier one's plate. That makes plate calls on ONE job serial,
+# which is the honest cost of a single canvas.json.
+_JOB_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _job_lock(job_id: str) -> asyncio.Lock:
+    """This job's writer lock, minted on first use. Never evicted: a lock is
+    a few dozen bytes, a canvas session is one person for an afternoon, and
+    an eviction pass is a second thing that could get the bookkeeping wrong."""
+    lock = _JOB_LOCKS.get(job_id)
+    if lock is None:
+        lock = _JOB_LOCKS[job_id] = asyncio.Lock()
+    return lock
+
+
+# Streaming plate calls that outlive the browser that asked for them. A
+# render is PAID FOR the moment the vendor answers, so a person who closes
+# the tab (or a network that blinks) must not lose the plate: the work task
+# is never cancelled when the response generator goes away, only unwatched,
+# and it still writes the plate and saves the document. The set is a strong
+# reference so a detached task cannot be garbage-collected mid-flight.
+_DETACHED: set[asyncio.Task] = set()
+
+
+async def _plate_answer(job_dir: Path, job_id: str, load, run, *,
+                        stream: bool):
+    """One plate verb's HTTP answer, in whichever shape was asked for.
+
+    `load()` reads the document and `run(doc, on_partial)` is the regen call
+    itself, already bound to everything else. The load happens HERE, under
+    this job's writer lock (see _job_lock), because a document read before
+    the lock is a document another request may already have moved on from.
+    The call is blocking (a vendor round trip) so it runs in a thread either
+    way, exactly as every plate endpoint has always run it.
+
+    Not streaming — the answer this module has always given: await the
+    verb, save, return the whole document plus what the call cost, and let
+    a refusal be an HTTPException.
+
+    Streaming — NDJSON, one JSON object per line: `{"event": "partial"}`
+    frames as the vendor paints them, then either the same finished payload
+    as above with `"event": "done"`, or `{"event": "error"}`. Errors cannot
+    be status codes here (the 200 and its headers are long gone by the time
+    a vendor fails), which is the one real cost of the progressive shape
+    and why the client has to read the last line rather than the status."""
+    if not stream:
+        async with _job_lock(job_id):
+            doc = load()
+            try:
+                cost = await asyncio.to_thread(run, doc, None)
+            except (regen.RegenError, ImagingError) as e:
+                raise HTTPException(502, detail=str(e)) from e
+            payload = _save(job_dir, doc)
+        payload["cost_usd"] = cost
+        return payload
+
+    loop = asyncio.get_running_loop()
+    frames: asyncio.Queue = asyncio.Queue()
+
+    def on_partial(image_bytes: bytes, index: int) -> None:
+        # Called from the worker thread — every touch of the loop's own
+        # objects has to be handed back to the loop.
+        media = _IMAGE_TYPES.get(regen.plate_suffix(image_bytes), "image/png")
+        loop.call_soon_threadsafe(frames.put_nowait, {
+            "event": "partial", "index": index, "mime": media,
+            "image_b64": base64.b64encode(image_bytes).decode("ascii")})
+
+    async def work() -> None:
+        try:
+            async with _job_lock(job_id):
+                doc = load()
+                cost = await asyncio.to_thread(run, doc, on_partial)
+                # Saved inside the lock, and by this task rather than by the
+                # generator: the document must land on disk whether or not
+                # anybody is still listening.
+                payload = _save(job_dir, doc)
+        except HTTPException as e:
+            frames.put_nowait({"event": "error", "detail": str(e.detail)})
+        except (regen.RegenError, ImagingError) as e:
+            frames.put_nowait({"event": "error", "detail": str(e)})
+        else:
+            payload["cost_usd"] = cost
+            payload["event"] = "done"
+            frames.put_nowait(payload)
+
+    task = asyncio.create_task(work())
+    _DETACHED.add(task)
+    task.add_done_callback(_DETACHED.discard)
+
+    async def lines():
+        while True:
+            frame = await frames.get()
+            yield json.dumps(frame) + "\n"
+            if frame["event"] in ("done", "error"):
+                return
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             # Nothing between here and the browser may sit
+                             # on these lines: a buffered progressive
+                             # response is just a slow non-progressive one.
+                             headers={"Cache-Control": "no-store",
+                                      "X-Accel-Buffering": "no"})
 
 
 class RebalanceBody(BaseModel):
@@ -537,7 +656,8 @@ def register(app: FastAPI) -> None:
             raise HTTPException(409, detail=(
                 f"That document belongs to job {doc.job_id!r}, not "
                 f"{job_id!r}."))
-        return _save(job_dir, doc)
+        async with _job_lock(job_id):
+            return _save(job_dir, doc)
 
     @app.post("/api/canvas/{job_id}/ops")
     async def canvas_ops_apply(job_id: str, request: Request, body: OpsBody
@@ -550,12 +670,16 @@ def register(app: FastAPI) -> None:
         409 names which op it was."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
-        try:
-            canvas_ops.apply_many(doc, body.ops)
-        except canvas_ops.OpError as e:
-            raise HTTPException(409, detail=str(e)) from e
-        return _save(job_dir, doc)
+        # Under the job's writer lock like every other mutation: a type edit
+        # made while a plate is rendering must not be read from a document
+        # the render is about to overwrite, and vice versa (see _job_lock).
+        async with _job_lock(job_id):
+            doc = _load(job_dir, job_id)
+            try:
+                canvas_ops.apply_many(doc, body.ops)
+            except canvas_ops.OpError as e:
+                raise HTTPException(409, detail=str(e)) from e
+            return _save(job_dir, doc)
 
     @app.post("/api/canvas/{job_id}/wrap")
     async def canvas_wrap(job_id: str, request: Request, body: WrapBody
@@ -577,18 +701,19 @@ def register(app: FastAPI) -> None:
         geometry the conversion used."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         try:
             spec = Wrap(**body.model_dump())
         except ValidationError as e:
             raise HTTPException(422, detail=(
                 f"That wrap does not describe a book: "
                 f"{_first_error(e)}")) from e
-        try:
-            wrapped = to_wrap(doc, spec, job_dir=job_dir)
-        except WrapError as e:
-            raise HTTPException(409, detail=str(e)) from e
-        payload = _save(job_dir, wrapped)
+        async with _job_lock(job_id):
+            doc = _load(job_dir, job_id)
+            try:
+                wrapped = to_wrap(doc, spec, job_dir=job_dir)
+            except WrapError as e:
+                raise HTTPException(409, detail=str(e)) from e
+            payload = _save(job_dir, wrapped)
         payload["panels"] = panels(spec)
         return payload
 
@@ -607,22 +732,19 @@ def register(app: FastAPI) -> None:
         session total (§8)."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         # In the $0 stand-in lane no vendor client exists to build — and
         # building one is exactly what fails on a machine with no image key.
         client = None if regen.fake_active() else cover._image_client()
-        try:
-            # to_thread because the OpenAI call is a blocking SDK call and
-            # this is an async handler — the same reason
-            # cover_pipeline._generate_art_slot wraps generate().
-            cost = await asyncio.to_thread(
-                regen.reroll, job_dir, doc, body.layer_id, client=client,
-                prompt=body.prompt, quality=body.quality)
-        except (regen.RegenError, ImagingError) as e:
-            raise HTTPException(502, detail=str(e)) from e
-        payload = _save(job_dir, doc)
-        payload["cost_usd"] = cost
-        return payload
+        # to_thread (inside _plate_answer) because the OpenAI call is a
+        # blocking SDK call and this is an async handler — the same reason
+        # cover_pipeline._generate_art_slot wraps generate().
+        return await _plate_answer(
+            job_dir, job_id, lambda: _load(job_dir, job_id),
+            lambda doc, on_partial: regen.reroll(
+                job_dir, doc, body.layer_id, client=client,
+                prompt=body.prompt, quality=body.quality,
+                on_partial=on_partial),
+            stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/inpaint")
     async def canvas_inpaint(job_id: str, request: Request, body: InpaintBody
@@ -634,19 +756,15 @@ def register(app: FastAPI) -> None:
         untouched. `quality` is the same ladder rung reroll takes."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         mask_png = _decode_b64(body.mask_b64, "mask")
         client = None if regen.fake_active() else cover._image_client()
-        try:
-            cost = await asyncio.to_thread(
-                regen.inpaint, job_dir, doc, body.layer_id, client=client,
+        return await _plate_answer(
+            job_dir, job_id, lambda: _load(job_dir, job_id),
+            lambda doc, on_partial: regen.inpaint(
+                job_dir, doc, body.layer_id, client=client,
                 instruction=body.instruction, mask_png=mask_png,
-                quality=body.quality)
-        except (regen.RegenError, ImagingError) as e:
-            raise HTTPException(502, detail=str(e)) from e
-        payload = _save(job_dir, doc)
-        payload["cost_usd"] = cost
-        return payload
+                quality=body.quality, on_partial=on_partial),
+            stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/finalize")
     async def canvas_finalize(job_id: str, request: Request, body: FinalizeBody
@@ -663,17 +781,13 @@ def register(app: FastAPI) -> None:
         Same gate, same $0-lane client rule and same 502 as reroll."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         client = None if regen.fake_active() else cover._image_client()
-        try:
-            cost = await asyncio.to_thread(
-                regen.finalize, job_dir, doc, body.layer_id, client=client,
-                prompt=body.prompt)
-        except (regen.RegenError, ImagingError) as e:
-            raise HTTPException(502, detail=str(e)) from e
-        payload = _save(job_dir, doc)
-        payload["cost_usd"] = cost
-        return payload
+        return await _plate_answer(
+            job_dir, job_id, lambda: _load(job_dir, job_id),
+            lambda doc, on_partial: regen.finalize(
+                job_dir, doc, body.layer_id, client=client,
+                prompt=body.prompt, on_partial=on_partial),
+            stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/ground")
     async def canvas_ground(job_id: str, request: Request, body: GroundBody
@@ -689,17 +803,13 @@ def register(app: FastAPI) -> None:
         Same gate, same $0-lane client rule and same 502 as reroll."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         client = None if regen.fake_active() else cover._image_client()
-        try:
-            cost = await asyncio.to_thread(
-                regen.ground_figure, job_dir, doc, body.layer_id,
-                client=client, instruction=body.instruction)
-        except (regen.RegenError, ImagingError) as e:
-            raise HTTPException(502, detail=str(e)) from e
-        payload = _save(job_dir, doc)
-        payload["cost_usd"] = cost
-        return payload
+        return await _plate_answer(
+            job_dir, job_id, lambda: _load(job_dir, job_id),
+            lambda doc, on_partial: regen.ground_figure(
+                job_dir, doc, body.layer_id, client=client,
+                instruction=body.instruction, on_partial=on_partial),
+            stream=body.stream)
 
     @app.post("/api/canvas/{job_id}/rebalance")
     async def canvas_rebalance(job_id: str, request: Request,
@@ -720,12 +830,13 @@ def register(app: FastAPI) -> None:
         not a network call."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
-        try:
-            measured = regen.rebalance(job_dir, doc, body.layer_id)
-        except (regen.RegenError, canvas_ops.OpError) as e:
-            raise HTTPException(409, detail=str(e)) from e
-        payload = _save(job_dir, doc)
+        async with _job_lock(job_id):
+            doc = _load(job_dir, job_id)
+            try:
+                measured = regen.rebalance(job_dir, doc, body.layer_id)
+            except (regen.RegenError, canvas_ops.OpError) as e:
+                raise HTTPException(409, detail=str(e)) from e
+            payload = _save(job_dir, doc)
         payload["measured"] = measured
         return payload
 
@@ -748,7 +859,6 @@ def register(app: FastAPI) -> None:
         mode)."""
         cover._gate(request)
         job_dir, job_id = _job_dir(request, job_id)
-        doc = _load(job_dir, job_id)
         try:
             from docproof.canvas import assistant
         except ImportError as e:
@@ -759,14 +869,21 @@ def register(app: FastAPI) -> None:
         unavailable = getattr(assistant, "AssistantUnavailable", ())
         snapshot = (_decode_b64(body.snapshot_b64, "snapshot")
                     if body.snapshot_b64 else None)
-        try:
-            result = await assistant.chat(
-                job_dir, doc, body.messages, body.mode,
-                snapshot_png=snapshot, model=body.model,
-                image_client=lambda: cover._image_client())
-        except unavailable as e:
-            raise HTTPException(501, detail=str(e) or _NO_ASSISTANT) from e
-        payload = _save(job_dir, result.doc)
+        # A turn can roll plates and apply ops, so it is a writer like any
+        # other and holds the job's lock from its own load to its own save
+        # (see _job_lock). It is the longest writer there is, which is the
+        # price of one document: a type edit made mid-turn waits, it is
+        # never lost.
+        async with _job_lock(job_id):
+            doc = _load(job_dir, job_id)
+            try:
+                result = await assistant.chat(
+                    job_dir, doc, body.messages, body.mode,
+                    snapshot_png=snapshot, model=body.model,
+                    image_client=lambda: cover._image_client())
+            except unavailable as e:
+                raise HTTPException(501, detail=str(e) or _NO_ASSISTANT) from e
+            payload = _save(job_dir, result.doc)
         payload["reply"] = result.reply
         payload["ops_applied"] = result.ops_applied
         payload["cost_usd"] = result.cost_usd

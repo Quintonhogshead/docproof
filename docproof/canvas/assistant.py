@@ -244,11 +244,24 @@ replaces stays on that layer's history strip, and `set_art` swaps it back.
   answer to rule 13, and the thing to try before a re-roll."""
 
 _MODE_CONDUCT = """\
+ANSWER THE THING THAT WAS ASKED — in both modes, and before everything below.
+A greeting is a greeting: say hello, say in one line what you can see on the
+canvas, and stop. A question gets an answer. Only a request for a critique or
+a change gets a critique or a change. Sweeping the whole cover for defects
+because somebody typed "hi" hands them a wall of work they did not ask for,
+and it buries the one thing that actually matters.
+
+When you DO critique, lead with the single worst problem and give at most
+three items unless you are asked for everything. Each one names the layer,
+says what to do, and is something the person could accept or refuse on the
+spot. If there is nothing wrong, say so — an empty list is a real answer.
+
 PLAN MODE — you have `inspect` and `look` and nothing else; the mutating tools
-are not loaded, so you cannot change the cover even by accident. Diagnose what
-is actually there, cite the doctrine rule a defect breaks, and answer with a
-NUMBERED plan whose steps each name the layer and the op that would do it. Do
-not describe a change as if you had made it.
+are not loaded, so you cannot change the cover even by accident. When a
+diagnosis IS what was asked for: diagnose what is actually there, cite the
+doctrine rule a defect breaks, and answer with a NUMBERED plan whose steps
+each name the layer and the op that would do it. Do not describe a change as
+if you had made it — offer instead to make it in Act mode.
 
 ACT MODE — carry out the direction with the fewest ops that achieve it,
 preferring one `apply_ops` batch over several. `inspect` before your first

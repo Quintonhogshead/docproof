@@ -110,6 +110,20 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 FAKE_ENV = "DOCPROOF_CANVAS_FAKE_IMAGING"
 RESOLUTION_ENV = "DOCPROOF_CANVAS_IMAGE_RESOLUTION"
 
+# What encoding each rung asks the vendor for. A finished plate comes back
+# lossless because it is the deliverable; a DRAFT comes back as webp,
+# because the vendor answers with the image inline in its response and a 2K
+# PNG is tens of megabytes of base64 to push down the wire before anybody
+# can look at it. The pixels are the same picture either way — the draft
+# lane is where somebody is deciding whether they like the composition, not
+# where they are inspecting an edge — and it is seconds a click.
+#
+# Transparent plates stay PNG at every rung regardless (see _plate_format):
+# a cutout's alpha is exactly the thing lossy compression is worst at, and
+# imaging.has_real_alpha's border test reads that alpha.
+DRAFT_FORMAT = "webp"
+FINAL_FORMAT = "png"
+
 
 def fake_active() -> bool:
     """Whether the $0 stand-in lane is on. Callers that build a vendor
@@ -168,6 +182,15 @@ def _tier(quality: str) -> str:
         f"{', '.join(QUALITY_LEVELS)}.")
 
 
+def _plate_format(tier: str, transparent: bool) -> str:
+    """The vendor encoding one call should ask for: fast for a draft,
+    lossless for anything that might be kept, always lossless for a cutout
+    (see DRAFT_FORMAT)."""
+    if transparent:
+        return FINAL_FORMAT
+    return DRAFT_FORMAT if tier == DRAFT_TIER else FINAL_FORMAT
+
+
 def _fake_plate(job_dir: Path, layer: Any, label: str,
                 mask_png: bytes | None = None) -> bytes:
     """A locally painted stand-in for a vendor call: the current plate,
@@ -200,7 +223,8 @@ def _fake_plate(job_dir: Path, layer: Any, label: str,
 
 
 def reroll(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
-           prompt: str | None = None, quality: str = "session") -> float:
+           prompt: str | None = None, quality: str = "session",
+           on_partial=None) -> float:
     """Roll this art layer again and return what the call cost.
 
     The one-click verb of §5: same prompt, fresh call, new plate in the
@@ -214,6 +238,12 @@ def reroll(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
     for the machine's own tier. See _tier. A draft roll is a real plate in
     every other respect: it lands in the layer, keeps its predecessor, and
     can be finalized later without being re-prompted.
+
+    `on_partial(image_bytes, index)`, when given, receives the vendor's
+    progressive frames as they arrive — the caller's chance to put a coarse
+    plate on screen seconds into a render instead of at the end of it. It
+    is a preview hook and nothing more: no frame it sees is ever written to
+    disk, and a vendor that will not stream simply never calls it.
 
     Raises RegenError if the layer is not art, is locked, has no prompt to
     roll, or `quality` is not a rung; imaging.ImagingError if the generation
@@ -232,9 +262,10 @@ def reroll(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
         png_bytes = _fake_plate(job_dir, layer,
                                 f"FAKE ROLL {1 + len(layer.plate_history)}")
     else:
-        png_bytes = imaging.generate(client, text,
-                                     transparent=layer.transparent,
-                                     resolution=tier)
+        png_bytes = imaging.generate(
+            client, text, transparent=layer.transparent, resolution=tier,
+            output_format=_plate_format(tier, layer.transparent),
+            on_partial=on_partial)
     rel = _write_plate(job_dir, layer, png_bytes)
     log.info("canvas reroll: layer %s -> %s (%s%s)", layer_id, rel,
              "tweaked prompt" if prompt is not None else "same prompt",
@@ -247,7 +278,7 @@ def reroll(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
 
 def inpaint(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
             instruction: str, mask_png: bytes,
-            quality: str = "session") -> float:
+            quality: str = "session", on_partial=None) -> float:
     """Regenerate one masked region of this art layer's plate, and return
     what the call cost.
 
@@ -289,8 +320,10 @@ def inpaint(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
                                 mask_png=mask_png)
     else:
         image_png = _read_plate(job_dir, layer)
-        png_bytes = imaging.edit(client, image_png, mask_png, instruction,
-                                 resolution=tier)
+        png_bytes = imaging.edit(
+            client, image_png, mask_png, instruction, resolution=tier,
+            output_format=_plate_format(tier, layer.transparent),
+            transparent=layer.transparent, on_partial=on_partial)
     rel = _write_plate(job_dir, layer, png_bytes)
     log.info("canvas inpaint: layer %s -> %s (%r%s)", layer_id, rel,
              instruction, ", fake" if fake else "")
@@ -338,7 +371,7 @@ def _finalize_prompt(layer_prompt: str, extra: str | None) -> str:
 
 
 def finalize(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
-             prompt: str | None = None) -> float:
+             prompt: str | None = None, on_partial=None) -> float:
     """Re-render this art layer's CURRENT plate at full quality, and return
     what the call cost.
 
@@ -377,7 +410,10 @@ def finalize(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
         png_bytes = _fake_plate(job_dir, layer, "FAKE FINAL")
     else:
         image_png = _read_plate(job_dir, layer)
-        png_bytes = imaging.refine(client, image_png, text, resolution=tier)
+        png_bytes = imaging.refine(
+            client, image_png, text, resolution=tier,
+            output_format=_plate_format(tier, layer.transparent),
+            transparent=layer.transparent, on_partial=on_partial)
     rel = _write_plate(job_dir, layer, png_bytes)
     log.info("canvas finalize: layer %s -> %s (%s%s)", layer_id, rel, tier,
              ", fake" if fake else "")
@@ -449,7 +485,7 @@ def _plate_size(png_bytes: bytes, layer: Any) -> tuple[int, int]:
 
 
 def ground_figure(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
-                  instruction: str | None = None) -> float:
+                  instruction: str | None = None, on_partial=None) -> float:
     """Give the figure on this plate something to stand on, and return what
     the call cost.
 
@@ -488,8 +524,14 @@ def ground_figure(job_dir: Path, doc: CanvasDoc, layer_id: str, *, client,
         png_bytes = _fake_plate(job_dir, layer, "FAKE GROUND",
                                 mask_png=mask_png)
     else:
-        png_bytes = imaging.edit(client, image_png, mask_png, text,
-                                 resolution=tier)
+        png_bytes = imaging.edit(
+            client, image_png, mask_png, text, resolution=tier,
+            output_format=_plate_format(tier, layer.transparent),
+            # A cutout that is grounded must stay a cutout. Without this the
+            # model reads the empty background as canvas to fill and hands
+            # back a full frame — the ground band arrives with a whole scene
+            # behind it, and the layer under it disappears.
+            transparent=layer.transparent, on_partial=on_partial)
     rel = _write_plate(job_dir, layer, png_bytes)
     log.info("canvas ground_figure: layer %s -> %s (band %.0f%%%s)", layer_id,
              rel, GROUND_BAND_FRACTION * 100, ", fake" if fake else "")
@@ -748,28 +790,49 @@ def _read_plate(job_dir: Path, layer: Any) -> bytes:
             f"from the job directory ({e}).") from e
 
 
+def plate_suffix(image_bytes: bytes) -> str:
+    """The file extension for what these bytes ACTUALLY are.
+
+    A plate is not always a PNG any more — a draft roll asks the vendor for
+    webp because it is a fraction of the bytes to ship (see DRAFT_FORMAT) —
+    and a .png file holding webp would be a file that lies to everything
+    downstream: the canvas serves plates by suffix (app/routes/canvas.py's
+    media-type allowlist), and a browser handed image/png that is not PNG
+    simply shows nothing. Anything unrecognized is named .png, which is what
+    every plate was before this and what the fake lane still paints."""
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return ".png"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return ".webp"
+    return ".png"
+
+
 def _write_plate(job_dir: Path, layer: Any, png_bytes: bytes) -> str:
     """Save a fresh plate beside the pipeline's own, push the one it
     replaces onto the layer's history, and point the layer at the new file.
 
-    The name is `assets/canvas_<layer id>_<n>.png` — the "canvas_" prefix so
-    a job directory says at a glance which plates the one-shot pipeline
-    painted (`c<n>_<slot>.png`) and which ones the editor did, and `n` from
-    the history depth so the numbers read as a version count. `n` is then
-    walked past anything already on disk: a document rolled back through its
-    plate history has a history shorter than its file count, and quietly
+    The name is `assets/canvas_<layer id>_<n>.<ext>` — the "canvas_" prefix
+    so a job directory says at a glance which plates the one-shot pipeline
+    painted (`c<n>_<slot>.png`) and which ones the editor did, `n` from the
+    history depth so the numbers read as a version count, and the extension
+    from the bytes themselves (see plate_suffix). `n` is then walked past
+    anything already on disk: a document rolled back through its plate
+    history has a history shorter than its file count, and quietly
     overwriting a plate somebody can still click back to would break the one
-    promise this module makes."""
+    promise this module makes. The walk ignores the extension, so a webp
+    draft can never take the number a png plate already holds."""
     if not _SAFE_ID.match(layer.id):
         raise RegenError(
             f"layer id {layer.id!r} cannot name a file — layer ids are short "
             f"words like 'ly_a91f' (letters, digits, '_' and '-' only).")
     assets = Path(job_dir) / ASSETS_DIR
     assets.mkdir(parents=True, exist_ok=True)
+    suffix = plate_suffix(png_bytes)
     n = 1 + len(layer.plate_history)
-    while (assets / f"canvas_{layer.id}_{n}.png").exists():
+    while any((assets / f"canvas_{layer.id}_{n}{ext}").exists()
+              for ext in (".png", ".webp")):
         n += 1
-    rel = f"{ASSETS_DIR}/canvas_{layer.id}_{n}.png"
+    rel = f"{ASSETS_DIR}/canvas_{layer.id}_{n}{suffix}"
     (Path(job_dir) / rel).write_bytes(png_bytes)
     # Pushed only now that the replacement is real bytes on disk: a failed
     # vendor call must leave the layer exactly as it was, not carrying a
@@ -791,9 +854,10 @@ def _charge(doc: CanvasDoc, tier: str, fake: bool) -> float:
     return cost
 
 
-__all__ = ["DRAFT_TIER", "FAKE_ENV", "FINALIZE_INSTRUCTION",
+__all__ = ["DRAFT_FORMAT", "DRAFT_TIER", "FAKE_ENV", "FINAL_FORMAT",
+           "FINALIZE_INSTRUCTION",
            "GROUND_BAND_FRACTION", "GROUND_INSTRUCTION", "LEVELS_CLAMP",
            "LEVELS_EFFECT", "QUALITY_LEVELS", "RESOLUTION_ENV",
            "PlateBalance", "RegenError", "fake_active", "finalize",
            "ground_figure", "inpaint", "measure_plate", "plan_correction",
-           "plan_levels", "rebalance", "reroll"]
+           "plan_levels", "plate_suffix", "rebalance", "reroll"]
