@@ -338,6 +338,7 @@
           <button class="btn ghost" type="button" id="dl-jpg">Download JPG</button>
           <button class="btn ghost" type="button" id="dl-png">Download PNG</button>
           <button class="btn ghost" type="button" id="dl-spec">Download spec JSON</button>
+          <button class="btn" type="button" id="open-canvas">Edit in Cover Canvas</button>
         </div>
         <div class="field" style="margin-bottom:0">
           <label class="flabel" for="detail-notes">Notes for a revision</label>
@@ -1009,6 +1010,14 @@
       var base = shownBase(c);
       downloadFile(state.jobId, base + '.png', safeName(c.spec.concept_name, state.detailIndex) + '.png')
         .catch(function (err) { document.getElementById('detail-error').textContent = err.message; });
+    });
+    /* The one-shot's second act: this exact concept, opened as editable
+       layers. Same origin, and the canvas reads the same sc-cover-key slot,
+       so the unlock carries over. */
+    document.getElementById('open-canvas').addEventListener('click', function () {
+      if (state.jobId == null || state.detailIndex == null) return;
+      location.href = '/canvas?job=' + encodeURIComponent(state.jobId) +
+        '&concept=' + encodeURIComponent(state.detailIndex);
     });
     document.getElementById('dl-spec').addEventListener('click', function () {
       var c = currentConcept(); if (!c) return;

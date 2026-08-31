@@ -37,10 +37,7 @@ from urllib.parse import quote
 from docproof.cover import pipeline as cover_pipeline
 
 from .desktop import free_port, serve, wait_until_serving
-from starlette.routing import Mount
-
 from .main import create_app
-from .routes import cover as cover_routes
 from .settings import default_root
 
 log = logging.getLogger("docproof.app.canvas_desktop")
@@ -57,25 +54,17 @@ LOCAL_KEY = "canvas"
 
 
 def build_shell_app(root: Path):
-    """The shell's FastAPI app: the main app plus Cover Studio's own routes.
+    """The shell's FastAPI app.
 
-    The main app registers canvas but deliberately not Cover Studio's routes
-    (those are the quest site's). The shell wants both: the picker lists jobs
-    via /api/cover/jobs, and a person at this window should be able to roll a
-    brand-new cover without opening the quest site.
-
-    The re-sort at the end is load-bearing: create_app's LAST act is mounting
-    the static tree at "/", a catch-all that answers before anything
-    registered after it — so routes added here would silently 404 out of the
-    frozen app while every earlier route worked. Starlette's sort is stable,
-    so pushing root mounts to the end changes nothing else about the order."""
+    Cover Studio's routes now ride routes.register with everything else (one
+    product, one registration — and registered BEFORE create_app's root
+    static mount, which is the catch-all that once 404ed routes added after
+    it out of the frozen bundle; tests/test_canvas_desktop.py still stands
+    guard over that ordering). All that is left to do here is pin the job
+    store, the way app/quest_site.py pins it: the routes read app.state
+    rather than the environment per request, so a --jobs given on the
+    command line cannot drift from the store the window is showing."""
     app = create_app(root, start_runner=False)
-    cover_routes.register(app)
-    app.router.routes.sort(
-        key=lambda r: isinstance(r, Mount) and r.path in ("", "/"))
-    # Pinned once here, the way app/quest_site.py pins it: the routes read
-    # app.state rather than the environment per request, so a --jobs given on
-    # the command line cannot drift from the store the window is showing.
     app.state.cover_data_root = cover_pipeline.default_root()
     return app
 

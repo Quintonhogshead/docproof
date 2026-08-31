@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import html
 import logging
+import os
 import socket
 import threading
 import time
@@ -133,6 +134,18 @@ def main(argv=None) -> int:
 
     root = Path(args.home).expanduser() if args.home else default_root()
     paths = Paths(root).ensure()
+
+    # The Covers pages (Cover Studio + Cover Canvas) ride this window too —
+    # one app, one press. Same two defaults app/canvas_desktop.py sets, for
+    # the same reasons: the key gate needs A key on a loopback socket with
+    # one owner (LOCAL_KEY, typed into the unlock box once per session), and
+    # the job store must not default cwd-relative — a Finder-launched .app
+    # starts life at "/", an unwritable store that reads as forever empty.
+    if not os.environ.get("COVER_KEY"):
+        from .canvas_desktop import LOCAL_KEY
+        os.environ["COVER_KEY"] = LOCAL_KEY
+    if not os.environ.get("COVER_DATA_PATH"):
+        os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
 
     existing = running_instance(root)
     if existing:
