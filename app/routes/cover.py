@@ -14,14 +14,23 @@ revising) live in docproof.cover.pipeline — this module's job is HTTP shape
 only: validate the request, build a Provider and an image client, hand both
 to a pipeline function as a background task, and shape the response.
 
-One decision does live here, because only the HTTP layer can make it per
-run: WHICH PURSE the Claude calls spend from. Every Anthropic-model role can
-run on the owner's Claude subscription (docproof.cover.subscription) instead
-of on metered API credits, and the lane is chosen by the request, defaulted
-by COVER_ANTHROPIC_LANE, resolved once per job, stored on the job, and
-returned in its payload — see _requested_lane/_resolve_lane below. Image
-generation is untouched: gpt-image has no subscription lane and stays
-metered.
+Two decisions do live here, because only the HTTP layer can make them per
+run, and both are settled at creation, stored on the job, and returned in
+its payload.
+
+WHICH PURSE the Claude calls spend from. Every Anthropic-model role can run
+on the owner's Claude subscription (docproof.cover.subscription) instead of
+on metered API credits, and the lane is chosen by the request, defaulted by
+COVER_ANTHROPIC_LANE, resolved once per job — see _requested_lane/
+_resolve_lane below.
+
+HOW SHARP the art is rolled. gpt-image has no subscription lane and stays
+metered whatever the purse says, so the way to spend less on it is to buy
+less: a "draft" job rolls (and bills) every image at 1K instead of 2K, which
+is what the owner wants while shopping concepts, sharpening only the keeper
+afterwards in Cover Canvas — see _checked_image_quality below. Unlike the
+lane, this is create-only: a revision inherits the job's tier and cannot
+change it.
 """
 from __future__ import annotations
 
@@ -219,6 +228,44 @@ def _resolve_lane(requested: str) -> str:
     return "subscription"
 
 
+# -- how sharp this job's art is rolled ---------------------------------------
+#
+# gpt-image-2 sells the same composition at several resolutions, and the
+# owner's actual working habit is to shop concepts cheap and sharpen only the
+# keeper afterwards (Cover Canvas's Finalize button is the other half of that
+# ladder). So a job may be a DRAFT job — every image it ever generates rolled
+# at 1K and billed at 1K — or a full job, which is what every job was before
+# this existed. The choice is made once, at creation, and stored on the job:
+# see docproof.cover.pipeline._image_tier, the one resolver the pipeline
+# reads it through.
+
+_IMAGE_QUALITY_SENTENCE = (
+    "image_quality must be \"full\" (2K art, about 5 cents an image) or "
+    "\"draft\" (1K art, about 3 cents an image — sharpen the keepers "
+    "afterwards in Cover Canvas)")
+
+
+def _checked_image_quality(value: str | None) -> str:
+    """One requested image tier, validated like any other body field: junk is
+    a 422 with the sentence, never a silent fallback to whichever tier the
+    typo happened to fall through to — the whole point of the knob is knowing
+    what a run costs. Empty (or absent) means "no opinion", which the
+    pipeline reads as the full tier, exactly as every job did before this
+    field existed.
+
+    There is no environment default to consult, unlike the Anthropic lane: a
+    lane is a property of the MACHINE (is it signed in?), while the tier is a
+    property of what this particular cover is FOR, which only the person
+    filling in the brief knows."""
+    quality = (value or "").strip().lower()
+    if not quality:
+        return ""
+    if quality not in cover_pipeline.IMAGE_QUALITIES:
+        raise HTTPException(422, detail=f"{quality!r} is not an image "
+                                        f"quality — {_IMAGE_QUALITY_SENTENCE}.")
+    return quality
+
+
 def _is_anthropic(model: str) -> bool:
     """Whether this role's model is served by Anthropic at all. A role
     resolved to another vendor (an OpenAI or Gemini id in the catalog, or a
@@ -328,13 +375,21 @@ class ReviseBody(BaseModel):
     # here so a junk lane reads as the same sentence on both endpoints.
     anthropic_lane: str = ""
 
+    # There is deliberately NO image_quality here. The tier belongs to the
+    # JOB and is fixed when the job is created: a revision that could switch
+    # horses mid-job would leave one job's ledger quoting two prices for
+    # rows that look identical, and no reader could tell which image cost
+    # what. `extra="forbid"` above means a client that sends one anyway gets
+    # a 422 saying so rather than having it silently ignored.
+
 
 def register(app: FastAPI) -> None:
 
     @app.post("/api/cover/jobs", status_code=202)
     async def cover_create_job(request: Request, brief: str = Form(...),
                                manuscript: UploadFile | None = File(None),
-                               anthropic_lane: str = Form("")
+                               anthropic_lane: str = Form(""),
+                               image_quality: str = Form("")
                                ) -> dict:
         """Create a job: a Brief (JSON, in the `brief` form field) plus an
         optional manuscript for grounding. Spawns run_job in the background
@@ -344,7 +399,14 @@ def register(app: FastAPI) -> None:
         "subscription", "api", or "auto" — and is the top of the resolution
         order (body, then COVER_ANTHROPIC_LANE, then "auto"). The resolved
         answer is stored on the job, so every revision of it reuses the same
-        purse and the app can show which one a run is on."""
+        purse and the app can show which one a run is on.
+
+        `image_quality` picks how sharp — and how expensive — this job's art
+        is rolled: "draft" (1K, ~3 cents an image) or "full" (2K, ~5 cents,
+        the default and what every job did before this existed). It is
+        stored on the job and fixed there: this is the only endpoint that
+        accepts it, because the tier has to hold still for a job's ledger to
+        mean anything."""
         _gate(request)
         try:
             brief_obj = Brief.model_validate_json(brief)
@@ -359,6 +421,10 @@ def register(app: FastAPI) -> None:
         # subscription this machine cannot run is a 502 before a job exists,
         # not a half-directed job on disk.
         lane = _resolve_lane(_requested_lane(_checked_lane(anthropic_lane)))
+        # Validated up here with the lane, before a job directory exists, so
+        # a typo'd tier is a 422 and nothing on disk — never a job that
+        # already spent a direction call before anyone noticed.
+        quality = _checked_image_quality(image_quality)
         providers = _providers(lane)
         image_client = _image_client()
         critique_client = _critique_client(lane)
@@ -374,7 +440,8 @@ def register(app: FastAPI) -> None:
             try:
                 job = cover_pipeline.create_job(
                     root, brief_obj, manuscript_path=manuscript_path,
-                    manuscript_name=manuscript_name, anthropic_lane=lane)
+                    manuscript_name=manuscript_name, anthropic_lane=lane,
+                    image_quality=quality)
             except IngestError as e:
                 raise HTTPException(400, detail=str(e)) from e
 
@@ -390,8 +457,9 @@ def register(app: FastAPI) -> None:
         job orphaned by a restart before answering, so a stuck poll turns
         into a plain, actionable error instead of hanging forever.
 
-        The JobState dump carries `anthropic_lane`, so a client can show
-        which purse this run's Claude calls are spending from."""
+        The JobState dump carries `anthropic_lane` and `image_quality`, so a
+        client can show which purse this run's Claude calls are spending from
+        and whether its art was rolled at draft quality."""
         _gate(request)
         job_id = _checked_job_id(job_id)
         root = _data_root(request)
@@ -494,5 +562,6 @@ def register(app: FastAPI) -> None:
         return {"jobs": [{"job_id": j.job_id, "title": j.brief.title,
                           "status": j.status, "created": j.created,
                           "anthropic_lane": j.anthropic_lane,
+                          "image_quality": j.image_quality,
                           "total_usd": cover_pipeline.total_usd(j)}
                          for j in jobs]}
