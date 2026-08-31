@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from . import (admin, canvas, compare, files, jobs, models, presets, promo,
-               prompts, quest, sapling, settings, styles, version, watch)
+from . import (admin, canvas, compare, cover, files, jobs, models, presets,
+               promo, prompts, quest, sapling, settings, styles, version,
+               watch)
 
 
 def register(app: FastAPI) -> None:
@@ -28,6 +29,11 @@ def register(app: FastAPI) -> None:
     sapling.register(app)
     settings.register(app)
     canvas.register(app)
+    # Cover Studio rides every build the canvas does: the two are one product
+    # (a canvas session is a cover job's second act), and the COVER_KEY gate
+    # keeps both inert (503) on a deployment that never enables them. The
+    # quest site registers cover on its own app and is unaffected.
+    cover.register(app)
 
 
 def register_admin(app: FastAPI) -> None:

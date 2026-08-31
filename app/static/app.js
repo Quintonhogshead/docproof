@@ -105,7 +105,9 @@ let ME = null;
 // ── navigation ────────────────────────────────────────────────────────────
 
 document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => show(tab.dataset.screen));
+  // A tab without a data-screen is a plain link out of the panel (Covers) —
+  // let the browser navigate instead of switching to a screen that isn't one.
+  tab.addEventListener('click', () => { if (tab.dataset.screen) show(tab.dataset.screen); });
 });
 
 // The working-now banner jumps to the DocWatch tab, where the full run detail

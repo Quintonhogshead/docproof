@@ -115,10 +115,13 @@ def _checked_job_id(job_id: str) -> str:
 
 
 def _data_root(request: Request) -> Path:
-    """The job store's root, resolved once at app creation (quest_site.py
-    reads COVER_DATA_PATH) and stashed on app.state — the same place this
-    site already keeps its rate limiter and waitlist."""
-    return request.app.state.cover_data_root
+    """The job store's root: `app.state.cover_data_root` where the app pinned
+    one (quest_site.py, the Mac shells), else the pipeline's own default.
+    The fallback exists because these routes now ride every build via
+    routes.register — the main app pins no cover state, and a KeyError off
+    app.state would turn the gate's honest 503/401 story into a raw 500."""
+    root = getattr(request.app.state, "cover_data_root", None)
+    return Path(root) if root else cover_pipeline.default_root()
 
 
 def _build_role_provider(model: str, *, role: str):

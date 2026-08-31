@@ -49,8 +49,14 @@ async function openDoc(jobId) {
   } catch (err) {
     if (!(err instanceof ApiError) || err.status !== 404) throw err;
   }
-  // No canvas session yet: ingest the finished cover job into one.
-  return (await postJSON('/api/canvas/open', { job_id: jobId })).doc;
+  // No canvas session yet: ingest the finished cover job into one. The
+  // studio's "Edit in Cover Canvas" door names the concept the person was
+  // looking at; without one the server picks the first ready concept.
+  // (An existing session wins over both — the GET above returned it.)
+  const concept = new URLSearchParams(location.search).get('concept');
+  const body = { job_id: jobId };
+  if (concept !== null && concept !== '') body.concept = Number(concept);
+  return (await postJSON('/api/canvas/open', body)).doc;
 }
 
 /* Only a finished cover job has plates to edit. cover_list_jobs reports the
@@ -67,6 +73,12 @@ async function showPicker(message) {
     el('h1', { html: 'Cover Canvas' }),
     el('p', { class: 'lede', text: 'Open a finished cover as editable layers.' }),
     err, listBox,
+    // The studio is the same server one page over; a picker with no covers
+    // in it must be a door, not a dead end.
+    el('p', { class: 'stack-s' }, [el('button', {
+      class: 'btn', type: 'button', text: 'New cover — open Cover Studio',
+      onclick: () => { location.href = '/sc-cover.html'; },
+    })]),
   ]);
   root.appendChild(el('div', { class: 'picker' }, sheet));
 

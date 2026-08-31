@@ -294,13 +294,21 @@ def _spa_url(app: FastAPI, query: str) -> str:
     proxied at /canvas — hence a redirect. The mount point differs by build
     (app/main.py mounts the static tree at "/", app/quest_site.py at
     "/assets"), so it is discovered rather than assumed; a build with no
-    static mount at all gets the app/main.py answer."""
+    static mount at all gets the app/main.py answer.
+
+    When more than one mount carries the SPA (app/main.py now aliases the
+    same tree at /assets so the Spell & Check pages work verbatim), the
+    SHORTEST prefix wins — /canvas/... over /assets/canvas/... — purely for
+    the address bar; every candidate serves identical files."""
+    candidates = []
     for route in app.routes:
         if isinstance(route, Mount) and isinstance(route.app, StaticFiles):
             for directory in route.app.all_directories:
                 if (Path(directory) / "canvas" / "index.html").is_file():
-                    prefix = route.path.rstrip("/")
-                    return f"{prefix}/canvas/index.html{query}"
+                    candidates.append(route.path.rstrip("/"))
+    if candidates:
+        prefix = min(candidates, key=len)
+        return f"{prefix}/canvas/index.html{query}"
     return f"/canvas/index.html{query}"
 
 

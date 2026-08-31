@@ -248,6 +248,13 @@ def create_app(root: Path | None = None, *, start_runner: bool = True,
         routes.register_admin(app)
     static = resource_root() / "app" / "static"
     if static.is_dir():
+        # The Spell & Check pages (sc-cover.html and friends) reference their
+        # shared assets at /assets/… because that is where quest_site mounts
+        # this same tree. Cover Studio now rides every build, so the same
+        # alias exists here — the pages work verbatim on both apps instead of
+        # forking over a path prefix.
+        app.mount("/assets", FreshStaticFiles(directory=static),
+                  name="sc-assets")
         app.mount("/", FreshStaticFiles(directory=static, html=True), name="static")
     return app
 
