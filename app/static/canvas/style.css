@@ -90,6 +90,13 @@ button{font:inherit;color:inherit}
   padding:8px 12px;background:var(--panel);
   border-bottom:1px solid var(--line);
 }
+.shelf a.brand{color:var(--ink);text-decoration:none}
+.shelf a.brand:hover{color:var(--accent)}
+.shelf .navlink{
+  font:500 .8rem var(--ui);color:var(--faded);text-decoration:none;
+  padding:5px 8px;white-space:nowrap;
+}
+.shelf .navlink:hover{color:var(--accent)}
 .shelf .brand{
   font-family:var(--disp);font-size:1.12rem;line-height:1;letter-spacing:.01em;
   margin-right:6px;white-space:nowrap;

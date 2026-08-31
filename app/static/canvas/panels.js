@@ -155,7 +155,17 @@ export function buildShelf(ctx) {
   document.addEventListener('click', closeMenu);
 
   bar.append(
-    el('div', { class: 'brand', html: 'Cover Canvas' }),
+    // The brand is the way home: this window has no back button, so moving
+    // between the picker, the studio and the editor is done by links or not
+    // at all. The Studio link carries the job, landing on this very cover's
+    // contact sheet (sc-cover.html reads ?job=).
+    el('a', { class: 'brand', href: '/canvas', html: 'Cover Canvas',
+              title: 'All covers' }),
+    el('a', {
+      class: 'navlink', title: 'This cover in Cover Studio — concepts, re-rolls, the brief',
+      href: `/sc-cover.html?job=${encodeURIComponent(ctx.store.doc.job_id || '')}`,
+      text: 'Studio',
+    }),
     el('div', { class: 'sep' }),
     undoBtn, redoBtn,
     el('div', { class: 'sep' }),
