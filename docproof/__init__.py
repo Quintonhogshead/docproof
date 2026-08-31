@@ -9,4 +9,4 @@ Nothing is imported here on purpose: setuptools reads `__version__` out of this
 file before the dependencies exist.
 """
 
-__version__ = "0.164.0"
+__version__ = "0.165.0"

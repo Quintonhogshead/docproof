@@ -238,8 +238,15 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);flex:0 0 
 .assistant{
   flex:0 0 auto;display:flex;flex-direction:column;min-height:0;
   border-top:1px solid var(--line);background:var(--panel-2);
-  height:44%;
+  height:44%;position:relative;
 }
+/* A three-item plan does not fit in 44% of a rail, and which half of this
+   rail matters depends on what you are doing — so the split is draggable and
+   remembered (app.js `splitter`). */
+.assistant .grip{
+  position:absolute;top:-3px;left:0;right:0;height:7px;cursor:row-resize;z-index:3;
+}
+.assistant .grip:hover,.assistant.is-sizing .grip{background:var(--accent-wash)}
 .assistant .rail-head{padding-bottom:8px}
 .modepick{display:flex;gap:0;margin-left:auto;flex:0 0 auto}
 .modelpick{flex:0 1 auto;width:auto;min-width:0;max-width:92px;margin-left:8px;font-size:.72rem;background:var(--sunk);color:var(--dim);border:1px solid var(--line);border-radius:3px;padding:2px 4px}
@@ -247,13 +254,48 @@ input[type=checkbox]{width:15px;height:15px;accent-color:var(--accent);flex:0 0 
 .modepick .btn.on{background:var(--accent-deep);color:#fdf3e4}
 .chatlog{flex:1 1 auto;overflow:auto;padding:0 12px 8px;min-height:0;display:flex;
   flex-direction:column;gap:8px}
-.msg{font-size:.82rem;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+.msg{font-size:.82rem;line-height:1.5;overflow-wrap:anywhere}
+/* Literal bodies keep the author's own line breaks; a rendered one is blocks
+   and must NOT be pre-wrap, or every markdown newline doubles the gap. */
+.msg .body{white-space:pre-wrap}
+.msg .body.md{white-space:normal}
 .msg .who{
   font:.62rem var(--ui);letter-spacing:.16em;text-transform:uppercase;color:var(--dim);
   display:block;margin-bottom:2px;
 }
 .msg.user .body{background:var(--raise);padding:7px 9px;clip-path:var(--edge-tab)}
 .msg.assistant .who{color:var(--accent)}
+
+/* the director's markdown */
+.md > *{margin:0}
+.md > * + *{margin-top:.55em}
+.md h4,.md h5,.md h6{
+  font:.74rem var(--ui);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-soft);font-weight:700;
+}
+.md > h4:not(:first-child),.md > h5:not(:first-child),.md > h6:not(:first-child){margin-top:.9em}
+.md strong{color:var(--ink);font-weight:700}
+.md em{font-style:italic;color:var(--ink-soft)}
+.md a{color:var(--accent);text-decoration:underline}
+.md ul,.md ol{padding-left:1.35em}
+.md li + li{margin-top:.3em}
+.md li > ul,.md li > ol{margin-top:.3em}
+.md li::marker{color:var(--faded)}
+.md ol{list-style:decimal}
+.md code{
+  font:.9em var(--mono);background:var(--sunk);color:var(--gold);
+  padding:.05em .35em;border-radius:2px;
+}
+.md pre{
+  background:var(--sunk);border-left:2px solid var(--line-strong);
+  padding:6px 8px;overflow-x:auto;
+}
+.md pre code{background:none;padding:0;color:var(--ink-soft);white-space:pre}
+.md blockquote{
+  border-left:2px solid var(--line-strong);padding-left:8px;color:var(--ink-soft);
+  font-style:italic;
+}
+.md hr{border:none;border-top:1px solid var(--line);margin:.8em 0}
 .msg.err .body{color:var(--bad)}
 /* a measurement the server reported, not a turn the model took */
 .msg.note .body{

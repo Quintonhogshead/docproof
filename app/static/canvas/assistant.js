@@ -9,6 +9,7 @@
 
 import { el } from './panels.js';
 import { postJSON } from './api.js';
+import { renderMarkdown } from './md.js';
 
 const MODE_STORAGE = 'sc-canvas-mode';
 const MODEL_STORAGE = 'sc-canvas-model';
@@ -59,7 +60,53 @@ export function buildAssistant(ctx) {
 
   const head = el('div', { class: 'rail-head' }, [el('span', { text: 'Art director' }), modelPick, modes]);
   const form = el('div', { class: 'chatform' }, [input, sendBtn]);
-  const root = el('div', { class: 'assistant' }, [head, log, form]);
+  const grip = el('div', {
+    class: 'grip', role: 'separator', 'aria-orientation': 'horizontal',
+    'aria-label': 'Resize the art director panel', tabindex: 0,
+  });
+  const root = el('div', { class: 'assistant' }, [grip, head, log, form]);
+
+  /* The split between the properties panel above and this one. Stored as a
+     percentage so it survives a resized window, and clamped so neither half
+     can be dragged away entirely. */
+  const SPLIT_STORAGE = 'sc-canvas-split';
+  const MIN_PCT = 18, MAX_PCT = 82;
+  const setSplit = (pct, save) => {
+    const v = Math.max(MIN_PCT, Math.min(MAX_PCT, pct));
+    root.style.height = v + '%';
+    if (save) { try { localStorage.setItem(SPLIT_STORAGE, String(Math.round(v))); } catch { /* private mode */ } }
+  };
+  try {
+    const saved = Number(localStorage.getItem(SPLIT_STORAGE));
+    if (saved) setSplit(saved, false);
+  } catch { /* private mode */ }
+
+  grip.addEventListener('pointerdown', (e) => {
+    const rail = root.parentElement;
+    if (!rail) return;
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    root.classList.add('is-sizing');
+    const move = (ev) => {
+      const box = rail.getBoundingClientRect();
+      if (box.height) setSplit(((box.bottom - ev.clientY) / box.height) * 100, false);
+    };
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      root.classList.remove('is-sizing');
+      setSplit(parseFloat(root.style.height) || 44, true);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+  });
+  grip.addEventListener('keydown', (e) => {
+    const step = e.key === 'ArrowUp' ? 4 : e.key === 'ArrowDown' ? -4 : 0;
+    if (!step) return;
+    e.preventDefault();
+    e.stopPropagation();                       // the canvas owns arrows otherwise
+    setSplit((parseFloat(root.style.height) || 44) + step, true);
+  });
 
   function setMode(next) {
     mode = next;
@@ -72,8 +119,14 @@ export function buildAssistant(ctx) {
   }
   setMode(mode);
 
+  /* What the model wrote is Markdown and renders as Markdown (md.js builds
+     text nodes, never innerHTML). What a PERSON typed, and what the server
+     said in its own voice, stay literal: their asterisks are asterisks. */
   function bubble(who, text, cls = '') {
-    const body = el('div', { class: 'body', text });
+    const markdown = who === 'assistant' && !cls;
+    const body = markdown
+      ? renderMarkdown(text, el('div', { class: 'body md' }))
+      : el('div', { class: 'body', text });
     const node = el('div', { class: 'msg ' + who + (cls ? ' ' + cls : '') },
       [el('span', { class: 'who', text: who === 'user' ? 'You' : 'Director' }), body]);
     log.appendChild(node);

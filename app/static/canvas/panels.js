@@ -11,6 +11,8 @@
 import { clone, NUDGE } from './ops.js';
 import { panels as wrapPanels } from './wrap.js';
 
+const ENUMERATED = new Set(['draggable', 'contenteditable', 'spellcheck', 'translate']);
+
 export function el(tag, attrs = {}, kids = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -20,6 +22,11 @@ export function el(tag, attrs = {}, kids = []) {
     else if (k === 'html') n.innerHTML = v;
     else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
     else if (k === 'value') n.value = v;
+    /* `draggable` and friends are ENUMERATED, not boolean: the empty string
+       an attribute like `hidden` wants is not a value they accept, and
+       draggable="" reads as "not draggable" — which is how the layer rail
+       silently lost drag-to-restack. */
+    else if (ENUMERATED.has(k)) n.setAttribute(k, v === true ? 'true' : v);
     else n.setAttribute(k, v === true ? '' : v);
   }
   (Array.isArray(kids) ? kids : [kids]).forEach((c) => {
