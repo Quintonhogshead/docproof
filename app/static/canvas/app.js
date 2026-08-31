@@ -241,7 +241,12 @@ function buildEditor(jobId, doc) {
     host: stagehost,
     getDoc: () => store.doc,
     imageFor,
-    onSelect: () => { document.activeElement?.blur?.(); refresh(); },
+    /* Panels only. Selecting must NOT re-render the scene: the press that
+       selects a layer is usually the first half of a drag, and render()
+       destroys and rebuilds every Konva node — including the one the drag was
+       just armed on, which silently ends the drag before it moves a pixel.
+       The engine keeps the transformer in sync on its own. */
+    onSelect: () => { document.activeElement?.blur?.(); refreshPanels(); },
     onCommit: (ops) => store.apply(ops),
     onView: (s) => { zval.textContent = `${Math.round(s * 100)}%`; },
   });
@@ -256,11 +261,15 @@ function buildEditor(jobId, doc) {
 
   root.append(shelf.root, el('div', { class: 'main' }, [layerRail.root, stagewrap, rightRail]), chips);
 
-  function refresh() {
-    engine.render();
+  function refreshPanels() {
     layerRail.update();
     props.update();
     shelf.update();
+  }
+
+  function refresh() {
+    engine.render();
+    refreshPanels();
   }
 
   /* ------------------------------------------------------- shelf actions */
