@@ -86,7 +86,8 @@ def main(argv=None) -> int:
                                    "against (default: DOCPROOF_HOME, else "
                                    "~/Library/Application Support/DocProof)")
     ap.add_argument("--jobs", help="where cover jobs live (default: "
-                                   "COVER_DATA_PATH, else ./cover_jobs)")
+                                   "COVER_DATA_PATH, else cover_jobs/ inside "
+                                   "the app home)")
     ap.add_argument("--job", help="open this cover job id straight away")
     ap.add_argument("--port", type=int, default=0, help="0 picks a free port")
     args = ap.parse_args(argv)
@@ -96,15 +97,21 @@ def main(argv=None) -> int:
 
     import webview                            # deferred: heavy, and optional
 
+    root = Path(args.home).expanduser() if args.home else default_root()
     if args.jobs:
         # Read back out of the environment by cover_pipeline.default_root()
-        # below — one answer for the job store, however it was chosen.
+        # inside build_shell_app — one answer for the job store, however it
+        # was chosen.
         os.environ["COVER_DATA_PATH"] = str(Path(args.jobs).expanduser())
+    elif not os.environ.get("COVER_DATA_PATH"):
+        # cover_pipeline's own fallback is cwd-relative "cover_jobs", and a
+        # Finder-launched .app starts life with cwd "/" — an unwritable store
+        # that reads as "no finished covers yet" forever. Anchor the default
+        # in the app home, where every launch resolves to the same folder.
+        os.environ["COVER_DATA_PATH"] = str(root / "cover_jobs")
     key = os.environ.get("COVER_KEY")
     if not key:
         os.environ["COVER_KEY"] = key = LOCAL_KEY
-
-    root = Path(args.home).expanduser() if args.home else default_root()
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}"
 
