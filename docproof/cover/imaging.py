@@ -1,5 +1,6 @@
 """gpt-image-2 wrapper: art layers only — backgrounds and focal elements with
-no text in them, decoded to raw PNG bytes. Everything about WHAT to ask for
+no text in them, decoded to raw image bytes (PNG unless a caller asks for
+another `output_format`). Everything about WHAT to ask for
 (prompt assembly: a Direction's art_prompt plus an archetype's
 composition_note plus NEGATIVE_SUFFIX) lives in docproof.cover.pipeline, not
 here; this module owns exactly one thing — the vendor call itself — so it
@@ -13,7 +14,11 @@ best guess here, not a confirmed contract. generate() tries that shape first
 and falls back to gpt-image-1's long-stable size/quality shape on a TypeError
 (an older SDK build that has never heard of the new keywords) or a 400 (the
 server rejects the shape outright), so a parameter-name guess can never dead-
-end a cover job — see _request_params's docstring for the loud caveat. edit()
+end a cover job — see _request_params's docstring for the loud caveat. Which
+shape actually worked is then REMEMBERED for the life of the process
+(_SHAPE_CACHE), because probing before every image is a rejected round trip
+per image, forever, on exactly the deployment where the guess was wrong.
+edit()
 does the same two-shape dance for client.images.edit (mask-based inpainting
 of one region of an existing plate) — see _edit_request_params's docstring;
 its parameter names are an even blinder guess, since there was no reachable
@@ -23,6 +28,12 @@ re-rendered at a higher tier with the draft anchoring it — and inherits
 every one of those caveats unchanged.
 Verify the primary shapes against the live gpt-image-2 reference at
 integration time and simplify this once they are confirmed.
+
+All three verbs take an optional `on_partial`: with one, the call is made
+with `stream=True` and the vendor's progressive frames are handed over as
+they arrive (a plate visible in seconds rather than at the end), and a
+vendor that will not take those keywords quietly drops back to one finished
+image and is never asked again (_STREAM_CACHE).
 """
 from __future__ import annotations
 
@@ -81,14 +92,69 @@ class ImagingError(RuntimeError):
 
 def make_client(api_key: str) -> openai.OpenAI:
     """One OpenAI client for image calls. max_retries=0: generate() owns its
-    own one-retry policy (see _call_with_retry), so a transient failure is
+    own one-retry policy (see _with_retry), so a transient failure is
     retried exactly once — not multiplied by the SDK's own default retry
     loop running underneath it as well."""
     return openai.OpenAI(api_key=api_key, max_retries=0)
 
 
+# gpt-image-1's `quality` rung for each of the three tiers, used ONLY by the
+# fallback parameter shape. The fallback used to be a flat quality="high"
+# whatever tier was asked for, which quietly made the entire draft ladder a
+# no-op wherever the fallback is the shape that runs: a "1K draft" came back
+# at the slowest, dearest rung and was still billed three cents
+# (docs/cover_canvas_spec.md §5, §8). The tier is a ladder in BOTH shapes
+# now, so a draft is genuinely a draft either way.
+_FALLBACK_QUALITY: dict[str, str] = {"1K": "low", "2K": "medium", "4K": "high"}
+
+# gpt-image-1's portrait size — the closest thing its size vocabulary has to
+# the 2:3 archetype. The fallback shape cannot express a tier as pixels, so
+# the tier lands as `quality` (above) and every fallback render is this size.
+_FALLBACK_SIZE = "1024x1536"
+
+# Which of the two parameter shapes this PROCESS has seen work, per verb
+# ("generate", "edit", "refine"). Without it, a deployment where the guessed
+# gpt-image-2 names are wrong pays a rejected round trip to the vendor before
+# every single image, forever. The first success writes the answer down and
+# later calls start there; the other shape is still tried if the remembered
+# one stops working, so this can cost one extra request in a transition but
+# can never dead-end a job.
+_SHAPE_CACHE: dict[str, bool] = {}
+
+# The same memo for streaming: a deployment whose SDK or server does not know
+# `stream`/`partial_images` says so once, and no later call asks again.
+_STREAM_CACHE: dict[str, bool] = {}
+
+# How many progressive frames to ask for when a caller passes `on_partial`.
+# Three is the API's ceiling and the whole point of the feature: something on
+# screen within seconds instead of a blank wait for the finished render.
+PARTIAL_IMAGES = 3
+
+
+def reset_capability_cache() -> None:
+    """Forget which parameter shape and whether streaming were observed to
+    work. For tests, and for any process that wants the next call to probe
+    the vendor again from scratch."""
+    _SHAPE_CACHE.clear()
+    _STREAM_CACHE.clear()
+
+
+def _shape_order(verb: str) -> tuple[bool, ...]:
+    """The `fallback` flags to try for `verb`, best guess first. Unknown
+    verb: documented shape first, exactly as this module always did."""
+    remembered = _SHAPE_CACHE.get(verb)
+    if remembered is None:
+        return (False, True)
+    return (remembered, not remembered)
+
+
+def _shape_name(fallback: bool) -> str:
+    return "gpt-image-1-style fallback" if fallback else "documented gpt-image-2"
+
+
 def _request_params(prompt: str, *, transparent: bool, resolution: str,
-                    fallback: bool) -> dict[str, Any]:
+                    fallback: bool, output_format: str = "png"
+                    ) -> dict[str, Any]:
     """Keyword arguments for one client.images.generate(**params) call.
 
     fallback=False — the "documented" gpt-image-2 shape this spec describes:
@@ -100,16 +166,28 @@ def _request_params(prompt: str, *, transparent: bool, resolution: str,
 
     fallback=True — gpt-image-1's long-stable, SDK-typed shape (`size`,
     `quality`); 1024x1536 is the closest portrait size to the archetype
-    canvas's 2:3, close enough that the pipeline never dead-ends even if
+    2:3, and the tier lands as the `quality` rung _FALLBACK_QUALITY maps it
+    to, so a draft stays a draft in this shape too.
+
+    `output_format` is the vendor's encoding of the returned image, not
+    this module's: "png" is lossless and the default everything used to
+    get; "webp" is a fraction of the bytes over the wire, which is real
+    wall-clock on a big plate. The CALLER decides, because only the caller
+    knows whether these pixels are a throwaway draft or the deliverable.
+
+    Everything else about the request (the prompt text itself) is the
+    caller's; this function only knows the dialect. Both shapes are tried
+    by generate() because there is no way to be sure from here which one
+    this account will accept, and the whole point of the fallback is that
     gpt-image-2's real parameter names turn out to be something else
     entirely."""
     params: dict[str, Any] = {
         "model": "gpt-image-2", "prompt": prompt, "n": 1,
-        "output_format": "png",
+        "output_format": output_format,
     }
     if fallback:
-        params["size"] = "1024x1536"
-        params["quality"] = "high"
+        params["size"] = _FALLBACK_SIZE
+        params["quality"] = _FALLBACK_QUALITY[resolution]
     else:
         params["resolution"] = resolution           # "1K" | "2K" | "4K"
         params["aspect_ratio"] = "2:3"
@@ -118,34 +196,138 @@ def _request_params(prompt: str, *, transparent: bool, resolution: str,
     return params
 
 
-def _call_once(client, params: dict[str, Any]) -> bytes:
-    resp = client.images.generate(**params)
+def _decode_response(resp, noun: str) -> bytes:
+    """The one image out of a non-streaming images.* response."""
     data = getattr(resp, "data", None) or []
     b64 = getattr(data[0], "b64_json", None) if data else None
     if not b64:
-        raise ImagingError("gpt-image-2 returned a response with no image data.")
+        raise ImagingError(
+            f"gpt-image-2 {noun} returned a response with no image data.")
     return base64.b64decode(b64)
 
 
-def _call_with_retry(client, params: dict[str, Any]) -> bytes:
+def _consume_stream(events, on_partial, noun: str) -> bytes:
+    """Drain a streaming image response: hand every partial frame to
+    `on_partial` and return the finished image's bytes.
+
+    Written against the event SHAPE rather than exact event names. Each
+    event carries a b64_json payload and says in its `type` whether it is a
+    partial or the finished frame ("image_generation.partial_image" /
+    ".completed", "image_edit.partial_image" / ".completed"); anything whose
+    type does not say "partial" is taken as the final frame, so a rename or
+    a third verb's naming degrades to "the last frame wins" rather than to
+    an error.
+
+    A callback that raises is logged and swallowed: a partial is a preview,
+    and losing a render that has already been PAID for because the preview
+    hook threw would be the expensive failure."""
+    final: bytes | None = None
+    index = 0
+    for event in events:
+        b64 = getattr(event, "b64_json", None)
+        if not b64:
+            continue
+        data = base64.b64decode(b64)
+        if "partial" in str(getattr(event, "type", "") or ""):
+            index += 1
+            try:
+                on_partial(data, index)
+            except Exception as e:                            # noqa: BLE001
+                log.warning("imaging: a partial-image callback raised (%s); "
+                            "the render itself is unaffected.", e)
+        else:
+            final = data
+    if final is None:
+        raise ImagingError(
+            f"gpt-image-2 {noun} streamed no finished image, only partial "
+            f"frames.")
+    return final
+
+
+def _rewind(params: dict[str, Any]) -> None:
+    """Put any upload streams in `params` back to position 0 so the same
+    dict can be sent again. images.generate carries none; images.edit
+    carries an image and (sometimes) a mask, both already read once by the
+    attempt that failed."""
+    for stream in (params.get("image"), params.get("mask")):
+        if stream is not None:
+            stream.seek(0)
+
+
+def _invoke(client_call, verb: str, noun: str, params: dict[str, Any],
+            on_partial) -> bytes:
+    """One real vendor call. Streams partial frames when the caller asked
+    for them and this process still believes the vendor takes `stream` —
+    and when it turns out not to, drops streaming for the rest of the
+    process and immediately retries the same request without it, rather
+    than letting a streaming rejection be mistaken for the parameter shape
+    being wrong."""
+    if on_partial is not None and _STREAM_CACHE.get(verb, True):
+        streamed = dict(params, stream=True, partial_images=PARTIAL_IMAGES)
+        try:
+            return _consume_stream(client_call(**streamed), on_partial, noun)
+        except (TypeError, openai.BadRequestError) as e:
+            _STREAM_CACHE[verb] = False
+            log.warning(
+                "imaging.%s: streaming partial images was rejected (%s); "
+                "falling back to a single finished image, and not asking "
+                "again this process.", verb, e)
+            _rewind(params)
+    return _decode_response(client_call(**params), noun)
+
+
+def _with_retry(client_call, verb: str, noun: str, params: dict[str, Any],
+                on_partial) -> bytes:
     """One real attempt, with a single retry for a transient failure only —
     see _TRANSIENT_ERRORS. A TypeError or BadRequestError propagates
-    immediately, unretried, so generate() can try the other parameter shape
+    immediately, unretried, so the caller can try the other parameter shape
     instead of burning a retry on a request that will never succeed
     unchanged."""
     try:
-        return _call_once(client, params)
+        return _invoke(client_call, verb, noun, params, on_partial)
     except _TRANSIENT_ERRORS as e:
-        log.warning("imaging.generate: transient failure (%s); retrying once.", e)
+        log.warning("imaging.%s: transient failure (%s); retrying once.",
+                    verb, e)
+        _rewind(params)
         try:
-            return _call_once(client, params)
+            return _invoke(client_call, verb, noun, params, on_partial)
         except _TRANSIENT_ERRORS as e2:
             raise ImagingError(
-                f"Image generation failed after a retry: {e2}") from e2
+                f"Image {noun} failed after a retry: {e2}") from e2
+
+
+def _run_shapes(client_call, verb: str, noun: str, build, *, on_partial,
+                detail: str) -> bytes:
+    """Both parameter shapes, best-known first (see _SHAPE_CACHE), with the
+    winner remembered. `build(fallback)` returns a fresh params dict for
+    that shape — fresh because edit()'s streams cannot be reused across
+    attempts. `detail` only names the request in the log line."""
+    last: Exception | None = None
+    for use_fallback in _shape_order(verb):
+        params = build(use_fallback)
+        try:
+            image_bytes = _with_retry(client_call, verb, noun, params,
+                                      on_partial)
+        except (TypeError, openai.BadRequestError) as e:
+            last = e
+            log.warning(
+                "imaging.%s: the %s parameter shape (%s) was rejected (%s); "
+                "trying the other shape.", verb, _shape_name(use_fallback),
+                detail, e)
+            continue
+        _SHAPE_CACHE[verb] = use_fallback
+        log.info("imaging.%s: used the %s shape (%s).", verb,
+                 _shape_name(use_fallback), detail)
+        return image_bytes
+    raise ImagingError(
+        f"Image {noun} failed: gpt-image-2 rejected both the documented "
+        f"parameter shape and the gpt-image-1-style fallback ({last}).")
 
 
 def _edit_request_params(image_png: bytes, mask_png: bytes, prompt: str, *,
-                         resolution: str, fallback: bool) -> dict[str, Any]:
+                         resolution: str, fallback: bool,
+                         output_format: str = "png",
+                         transparent: bool = False) -> dict[str, Any]:
     """Keyword arguments for one client.images.edit(**params) call.
 
     image and mask travel as file-like objects (io.BytesIO), not raw bytes:
@@ -157,7 +339,7 @@ def _edit_request_params(image_png: bytes, mask_png: bytes, prompt: str, *,
     position 0 from an earlier attempt.
 
     fallback=False — the "documented" gpt-image-2 shape: model, prompt,
-    n=1, output_format="png", plus a resolution tier. LOUD NOTE FOR THE
+    n=1, an output format, plus a resolution tier. LOUD NOTE FOR THE
     INTEGRATOR: unlike generate()'s shape (checked against what little of
     the gpt-image-2 docs were reachable), the field names for images.edit
     on gpt-image-2 are a best guess written with no live API access at all
@@ -166,9 +348,10 @@ def _edit_request_params(image_png: bytes, mask_png: bytes, prompt: str, *,
     (docs/cover_designer_spec.md §7.2).
 
     fallback=True — gpt-image-1's long-stable, SDK-typed shape (`size`,
-    `quality`); 1024x1536 mirrors generate()'s own fallback size. `model`
-    stays "gpt-image-2" here too, exactly as generate()'s fallback does —
-    the model name isn't part of what's being guessed at; only the
+    `quality`); 1024x1536 mirrors generate()'s own fallback size and the
+    tier lands as a quality rung, exactly as it does there. `model` stays
+    "gpt-image-2" here too, exactly as generate()'s fallback does — the
+    model name isn't part of what's being guessed at; only the
     resolution/size keyword shape is."""
     image = io.BytesIO(image_png)
     image.name = "image.png"
@@ -176,60 +359,25 @@ def _edit_request_params(image_png: bytes, mask_png: bytes, prompt: str, *,
     mask.name = "mask.png"
     params: dict[str, Any] = {
         "model": "gpt-image-2", "image": image, "mask": mask,
-        "prompt": prompt, "n": 1, "output_format": "png",
+        "prompt": prompt, "n": 1, "output_format": output_format,
     }
+    # A cutout plate stays a cutout. Without this the model treats an edit
+    # of a transparent PNG as licence to paint the empty background in, and
+    # a focal layer comes back as a full frame that buries everything under
+    # it (the exact failure the ground-the-figure button hit).
+    if transparent:
+        params["background"] = "transparent"
     if fallback:
-        params["size"] = "1024x1536"
-        params["quality"] = "high"
+        params["size"] = _FALLBACK_SIZE
+        params["quality"] = _FALLBACK_QUALITY[resolution]
     else:
         params["resolution"] = resolution            # "1K" | "2K" | "4K"
     return params
 
 
-def _edit_once(client, params: dict[str, Any]) -> bytes:
-    resp = client.images.edit(**params)
-    data = getattr(resp, "data", None) or []
-    b64 = getattr(data[0], "b64_json", None) if data else None
-    if not b64:
-        raise ImagingError(
-            "gpt-image-2 image edit returned a response with no image data.")
-    return base64.b64decode(b64)
-
-
-def _edit_with_retry(client, params: dict[str, Any], *,
-                     verb: str = "edit") -> bytes:
-    """One real attempt, with a single retry for a transient failure only —
-    see _TRANSIENT_ERRORS. A TypeError or BadRequestError propagates
-    immediately, unretried, so edit() can try the other parameter shape
-    instead of burning a retry on a request that will never succeed
-    unchanged. Kept parallel to, but separate from, generate()'s
-    _call_once/_call_with_retry rather than sharing them, so generate()'s
-    own code paths stay untouched.
-
-    Shared with refine(), whose params carry no `mask` at all — the rewind
-    loop below reads both streams through .get(), so a missing mask is
-    simply nothing to rewind. `verb` only names the caller in the log line;
-    every behavior here is identical for both."""
-    try:
-        return _edit_once(client, params)
-    except _TRANSIENT_ERRORS as e:
-        log.warning("imaging.%s: transient failure (%s); retrying once.",
-                    verb, e)
-        # The image/mask streams were already (possibly) read once by the
-        # failed attempt's multipart upload — rewind them before reusing
-        # the same params dict for the retry.
-        for stream in (params.get("image"), params.get("mask")):
-            if stream is not None:
-                stream.seek(0)
-        try:
-            return _edit_once(client, params)
-        except _TRANSIENT_ERRORS as e2:
-            raise ImagingError(
-                f"Image {verb} failed after a retry: {e2}") from e2
-
-
 def edit(client, image_png: bytes, mask_png: bytes, prompt: str, *,
-         resolution: str = "2K") -> bytes:
+         resolution: str = "2K", output_format: str = "png",
+         transparent: bool = False, on_partial=None) -> bytes:
     """Regenerate ONLY the masked region of an existing plate, guided by
     `prompt` (an instruction like "remove the lamp; extend the wall behind
     it"), leaving the rest of `image_png` untouched. `image_png` is the
@@ -242,40 +390,30 @@ def edit(client, image_png: bytes, mask_png: bytes, prompt: str, *,
     and alpha=255 everywhere else before passing it in here — getting this
     inverted silently regenerates the wrong 99% of the plate.
 
-    Tries the documented gpt-image-2 parameter shape first; on a TypeError
-    (this SDK build rejects an unknown keyword) or an openai.BadRequestError
-    (the server rejects the shape), falls back once to gpt-image-1's shape.
-    Raises ImagingError, with a human sentence, if both shapes fail, or if a
-    transient failure survives its one retry (see _edit_with_retry)."""
-    primary = _edit_request_params(image_png, mask_png, prompt,
-                                   resolution=resolution, fallback=False)
-    try:
-        image_bytes = _edit_with_retry(client, primary)
-    except (TypeError, openai.BadRequestError) as e:
-        log.warning(
-            "imaging.edit: the documented gpt-image-2 edit params "
-            "(resolution=%r) were rejected (%s); falling back to "
-            "gpt-image-1-style size/quality.", resolution, e)
-        fallback = _edit_request_params(image_png, mask_png, prompt,
-                                        resolution=resolution, fallback=True)
-        try:
-            image_bytes = _edit_with_retry(client, fallback)
-        except (TypeError, openai.BadRequestError) as e2:
-            raise ImagingError(
-                "Image edit failed: gpt-image-2 rejected both the "
-                f"documented parameter shape and the gpt-image-1-style "
-                f"fallback ({e2}).") from e2
-        else:
-            log.info("imaging.edit: used the gpt-image-1-style fallback "
-                     "shape (size=%r, quality='high').", fallback["size"])
-    else:
-        log.info("imaging.edit: used the documented gpt-image-2 edit shape "
-                 "(resolution=%r).", resolution)
-    return image_bytes
+    `output_format` is the encoding asked of the vendor (see
+    _request_params); `on_partial(png_bytes, index)` receives progressive
+    frames as they arrive, when the vendor supports streaming.
+    `transparent` says the plate being edited is a CUTOUT and must come
+    back as one — pass the layer's own flag, or the repair fills the empty
+    background in and returns a full frame.
+
+    Tries whichever parameter shape this process last saw work, then the
+    other one, on a TypeError (this SDK build rejects an unknown keyword)
+    or an openai.BadRequestError (the server rejects the shape). Raises
+    ImagingError, with a human sentence, if both shapes fail, or if a
+    transient failure survives its one retry (see _with_retry)."""
+    return _run_shapes(
+        client.images.edit, "edit", "edit",
+        lambda fb: _edit_request_params(image_png, mask_png, prompt,
+                                        resolution=resolution, fallback=fb,
+                                        output_format=output_format,
+                                        transparent=transparent),
+        on_partial=on_partial, detail=f"resolution={resolution!r}")
 
 
 def _refine_request_params(image_png: bytes, prompt: str, *, resolution: str,
-                           fallback: bool) -> dict[str, Any]:
+                           fallback: bool, output_format: str = "png",
+                           transparent: bool = False) -> dict[str, Any]:
     """Keyword arguments for one client.images.edit(**params) call that
     carries an IMAGE BUT NO MASK.
 
@@ -288,7 +426,7 @@ def _refine_request_params(image_png: bytes, prompt: str, *, resolution: str,
     every call.
 
     fallback=False — the "documented" gpt-image-2 shape: model, prompt,
-    n=1, output_format="png", plus a resolution tier. LOUD NOTE FOR THE
+    n=1, an output format, plus a resolution tier. LOUD NOTE FOR THE
     INTEGRATOR: exactly as loud as _edit_request_params's own note, and for
     the same reason — the field names for images.edit on gpt-image-2 are a
     best guess written with no live API access at all, and this function
@@ -298,30 +436,36 @@ def _refine_request_params(image_png: bytes, prompt: str, *, resolution: str,
 
     fallback=True — gpt-image-1's long-stable, SDK-typed shape (`size`,
     `quality`); 1024x1536 mirrors edit()'s and generate()'s own fallback
-    size. NOTE that the fallback shape cannot express a tier at all, so a
-    "4K" refine that falls back is a 1024x1536 render — still a faithful
-    re-render of the same composition, just not the resolution that was
-    asked for. That is the honest failure mode of a guessed parameter name;
-    the caller is charged for the tier it asked for because that is what it
-    requested, and the log line below says which shape actually ran."""
+    size. NOTE that the fallback shape cannot express a tier as PIXELS, so
+    a "4K" refine that falls back is a 1024x1536 render at the top quality
+    rung — still a faithful re-render of the same composition, just not the
+    resolution that was asked for. That is the honest failure mode of a
+    guessed parameter name; the caller is charged for the tier it asked for
+    because that is what it requested, and the log line says which shape
+    actually ran."""
     image = io.BytesIO(image_png)
     image.name = "image.png"
     params: dict[str, Any] = {
         "model": "gpt-image-2", "image": image,
-        "prompt": prompt, "n": 1, "output_format": "png",
+        "prompt": prompt, "n": 1, "output_format": output_format,
     }
+    # As in _edit_request_params: a cutout re-rendered without this comes
+    # back with its background painted in.
+    if transparent:
+        params["background"] = "transparent"
     if fallback:
-        params["size"] = "1024x1536"
-        params["quality"] = "high"
+        params["size"] = _FALLBACK_SIZE
+        params["quality"] = _FALLBACK_QUALITY[resolution]
     else:
         params["resolution"] = resolution            # "1K" | "2K" | "4K"
     return params
 
 
 def refine(client, image_png: bytes, prompt: str, *,
-           resolution: str = "4K") -> bytes:
+           resolution: str = "4K", output_format: str = "png",
+           transparent: bool = False, on_partial=None) -> bytes:
     """Re-render a whole plate at `resolution`, with `image_png` anchoring
-    the composition. Returns the new plate as PNG bytes.
+    the composition. Returns the new plate's bytes.
 
     This is the finalize half of the draft→final ladder
     (docs/cover_canvas_spec.md §5, §8): a person rolls plates at the 1K
@@ -348,76 +492,45 @@ def refine(client, image_png: bytes, prompt: str, *,
     should state "same composition, full detail, do not re-compose" rather
     than re-describing the scene from scratch.
 
-    Tries the documented gpt-image-2 parameter shape first; on a TypeError
-    (this SDK build rejects an unknown keyword) or an openai.BadRequestError
-    (the server rejects the shape), falls back once to gpt-image-1's shape.
-    Raises ImagingError, with a human sentence, if both shapes fail, or if a
-    transient failure survives its one retry (see _edit_with_retry)."""
-    primary = _refine_request_params(image_png, prompt, resolution=resolution,
-                                     fallback=False)
-    try:
-        image_bytes = _edit_with_retry(client, primary, verb="refine")
-    except (TypeError, openai.BadRequestError) as e:
-        log.warning(
-            "imaging.refine: the documented gpt-image-2 edit params "
-            "(resolution=%r, no mask) were rejected (%s); falling back to "
-            "gpt-image-1-style size/quality.", resolution, e)
-        fallback = _refine_request_params(image_png, prompt,
-                                          resolution=resolution, fallback=True)
-        try:
-            image_bytes = _edit_with_retry(client, fallback, verb="refine")
-        except (TypeError, openai.BadRequestError) as e2:
-            raise ImagingError(
-                "Image refine failed: gpt-image-2 rejected both the "
-                f"documented parameter shape and the gpt-image-1-style "
-                f"fallback ({e2}).") from e2
-        else:
-            log.info("imaging.refine: used the gpt-image-1-style fallback "
-                     "shape (size=%r, quality='high').", fallback["size"])
-    else:
-        log.info("imaging.refine: used the documented gpt-image-2 edit shape "
-                 "(resolution=%r, no mask).", resolution)
-    return image_bytes
+    Shape fallback, streaming and retries are exactly edit()'s."""
+    return _run_shapes(
+        client.images.edit, "refine", "refine",
+        lambda fb: _refine_request_params(image_png, prompt,
+                                          resolution=resolution, fallback=fb,
+                                          output_format=output_format,
+                                          transparent=transparent),
+        on_partial=on_partial,
+        detail=f"resolution={resolution!r}, no mask")
 
 
 def generate(client, prompt: str, *, transparent: bool = False,
-            resolution: str = "2K") -> bytes:
-    """One art layer as PNG bytes. `prompt` is already fully assembled (art
-    prompt + composition note + NEGATIVE_SUFFIX — docproof.cover.pipeline's
-    job, not this function's). `transparent` requests a cutout background
-    (the cutout_sandwich archetype's `focal` slot); `resolution` is one of
-    IMAGE_COST's keys.
+            resolution: str = "2K", output_format: str = "png",
+            on_partial=None) -> bytes:
+    """One art layer as image bytes. `prompt` is already fully assembled
+    (art prompt + composition note + NEGATIVE_SUFFIX — docproof.cover.
+    pipeline's job, not this function's). `transparent` requests a cutout
+    background (the cutout_sandwich archetype's `focal` slot); `resolution`
+    is one of IMAGE_COST's keys; `output_format` is the vendor encoding
+    ("png" lossless, "webp" far fewer bytes on the wire).
 
-    Tries the documented gpt-image-2 parameter shape first; on a TypeError
-    (this SDK build rejects an unknown keyword) or an openai.BadRequestError
-    (the server rejects the shape), falls back once to gpt-image-1's shape.
-    Raises ImagingError, with a human sentence, if both shapes fail, or if a
-    transient failure survives its one retry (see _call_with_retry)."""
-    primary = _request_params(prompt, transparent=transparent,
-                              resolution=resolution, fallback=False)
-    try:
-        image_bytes = _call_with_retry(client, primary)
-    except (TypeError, openai.BadRequestError) as e:
-        log.warning(
-            "imaging.generate: the documented gpt-image-2 params "
-            "(resolution=%r, aspect_ratio='2:3') were rejected (%s); "
-            "falling back to gpt-image-1-style size/quality.", resolution, e)
-        fallback = _request_params(prompt, transparent=transparent,
-                                   resolution=resolution, fallback=True)
-        try:
-            image_bytes = _call_with_retry(client, fallback)
-        except (TypeError, openai.BadRequestError) as e2:
-            raise ImagingError(
-                "Image generation failed: gpt-image-2 rejected both the "
-                f"documented parameter shape and the gpt-image-1-style "
-                f"fallback ({e2}).") from e2
-        else:
-            log.info("imaging.generate: used the gpt-image-1-style fallback "
-                     "shape (size=%r, quality='high').", fallback["size"])
-    else:
-        log.info("imaging.generate: used the documented gpt-image-2 shape "
-                 "(resolution=%r, aspect_ratio='2:3').", resolution)
-    return image_bytes
+    `on_partial(png_bytes, index)`, when given, is called with each
+    progressive frame the vendor streams — a coarse plate on screen in
+    seconds rather than a blank wait. It is a preview hook: what it raises
+    is logged and ignored, and a vendor that will not stream simply never
+    calls it.
+
+    Tries whichever parameter shape this process last saw work, then the
+    other one, on a TypeError (this SDK build rejects an unknown keyword)
+    or an openai.BadRequestError (the server rejects the shape). Raises
+    ImagingError, with a human sentence, if both shapes fail, or if a
+    transient failure survives its one retry (see _with_retry)."""
+    return _run_shapes(
+        client.images.generate, "generate", "generation",
+        lambda fb: _request_params(prompt, transparent=transparent,
+                                   resolution=resolution, fallback=fb,
+                                   output_format=output_format),
+        on_partial=on_partial,
+        detail=f"resolution={resolution!r}")
 
 
 def has_real_alpha(png_bytes: bytes) -> bool:
@@ -465,5 +578,6 @@ def has_real_alpha(png_bytes: bytes) -> bool:
 # (docproof.cover.pipeline picks an engine per slot), not a rewrite of this
 # one. Not built.
 
-__all__ = ["IMAGE_COST", "NEGATIVE_SUFFIX", "ImagingError", "edit", "generate",
-          "has_real_alpha", "make_client", "refine"]
+__all__ = ["IMAGE_COST", "NEGATIVE_SUFFIX", "PARTIAL_IMAGES", "ImagingError",
+          "edit", "generate", "has_real_alpha", "make_client", "refine",
+          "reset_capability_cache"]

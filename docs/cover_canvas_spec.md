@@ -103,15 +103,50 @@ Concretely:
   fallback, same retry discipline. The mask is the drawn region rasterized
   at plate resolution.
 
+### The wait (shipped v0.160.0)
+A plate is tens of seconds of somebody's afternoon, so the wait is part of
+the design rather than an accident of it:
+- **Progressive frames.** Every money verb can answer as NDJSON — the
+  vendor's own partial images as they are painted, then the finished
+  document (`stream: true` on the request; `_plate_answer` in
+  app/routes/canvas.py). The client draws each partial in place of the plate
+  it is replacing, so the picture resolves on the canvas instead of arriving
+  at the end of a blank overlay.
+- **Nothing is modal.** A render puts up a corner chip naming the layer, not
+  a screen-blocking overlay: type, panning and selection stay live, and only
+  a second call on the SAME plate is refused. The server owns the rule that
+  the overlay used to enforce — one writer per job (`_job_lock`), held
+  across the vendor call, so a type edit made mid-render cannot be clobbered
+  by the plate that lands after it. The client folds the returned plate into
+  the document it has rather than replacing it wholesale, for the same
+  reason.
+- **A draft is actually a draft.** The tier is a ladder in BOTH vendor
+  parameter shapes (`_FALLBACK_QUALITY`); the gpt-image-1 fallback used to
+  send `quality="high"` whatever tier was asked for, which silently made the
+  draft rung the slowest and dearest one while still billing it three cents.
+  Draft rolls also come back as webp (`regen.DRAFT_FORMAT`) — same picture,
+  a fraction of the bytes to ship — while finals and every cutout stay PNG.
+- **The vendor is probed once.** Which parameter shape works, and whether
+  streaming is supported, is remembered per process (`_SHAPE_CACHE`,
+  `_STREAM_CACHE`), so a deployment where the guessed gpt-image-2 names are
+  wrong stops paying a rejected round trip before every single image.
+
 ### The button shelf (day one)
 §15 doctrine as buttons, each implemented as ops + engine calls:
 - **Scrim behind type** — selected text layer gets a scrim layer beneath
   it, sized from the text's bounds, strength slider live.
-- **Ground the figure** (§15.23) — an inpaint recipe: band under the
+- **Generate ground** (§15.23) — an inpaint recipe: band under the
   figure's measured base + a generated ground prompt + contact shadow
-  effect layer.
-- **Cutout shadow stack** (§15.22) — the planned drop-shadow stack added
-  as an effect on the selected cutout layer.
+  effect layer. Named for what it does, because it sits beside a free
+  shadow toggle and is nothing like one: it buys a new image of the bottom
+  of the plate. A cutout layer keeps its transparency through the call
+  (`imaging.edit(transparent=…)`) — without that the model reads the empty
+  background as canvas to fill and hands back a full frame.
+- **Cutout shadow stack** (§15.22) — the planned drop-shadow pair, as a
+  TOGGLE on the selected layer: pressing it again takes the shadows back
+  off, because the point of a planned pair is being able to see the layer
+  with and without it. The button owns that layer's drop shadows; anything
+  hand-tuned lives in the effects list on the properties rail.
 - **Rebalance values** — run `balance` on the current composite; nudge the
   field layer's exposure/contrast so the focal subject stays loudest;
   report what it measured in the AI box.

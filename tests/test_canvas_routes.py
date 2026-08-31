@@ -142,18 +142,30 @@ def _cover_job(jobs_root: Path, *, statuses=("ready",)) -> str:
 # -- the stub image client ------------------------------------------------------
 
 class _StubImages:
-    def __init__(self, png: bytes):
+    """The bits of client.images the plate verbs touch, in both response
+    shapes: one finished image, or — when the caller asked for `stream` —
+    `partials` progressive frames followed by the finished one."""
+
+    def __init__(self, png: bytes, partials: int = 2):
         self.png = png
+        self.partials = partials
         self.generate_calls: list[dict] = []
         self.edit_calls: list[dict] = []
 
-    def _reply(self):
-        return types.SimpleNamespace(data=[types.SimpleNamespace(
-            b64_json=base64.b64encode(self.png).decode("ascii"))])
+    def _reply(self, params: dict | None = None):
+        b64 = base64.b64encode(self.png).decode("ascii")
+        if params and params.get("stream"):
+            events = [types.SimpleNamespace(
+                type="image_generation.partial_image", b64_json=b64)
+                for _ in range(self.partials)]
+            events.append(types.SimpleNamespace(
+                type="image_generation.completed", b64_json=b64))
+            return iter(events)
+        return types.SimpleNamespace(data=[types.SimpleNamespace(b64_json=b64)])
 
     def generate(self, **params):
         self.generate_calls.append(params)
-        return self._reply()
+        return self._reply(params)
 
     def edit(self, **params):
         # The SDK is handed file-like streams; read them here so the test can
@@ -165,7 +177,7 @@ class _StubImages:
                 stream.seek(0)
                 captured[field] = stream.read()
         self.edit_calls.append(captured)
-        return self._reply()
+        return self._reply(params)
 
 
 class _StubClient:
@@ -1137,3 +1149,83 @@ def test_transparency_is_flattened_onto_the_paper():
     pdf = pdf_bytes(_png((60, 90), color=(0, 0, 0, 0)), 2.0, 3.0)
     assert pdf.startswith(b"%PDF")
     assert _media_box(pdf) == (pytest.approx(144.0), pytest.approx(216.0))
+
+
+# -- streaming plate calls (§5's wait) ---------------------------------------
+#
+# The same work, reported as it happens. A plate render is tens of seconds
+# of blank screen otherwise, and the frames the vendor already paints on the
+# way there are free.
+
+def _ndjson(resp):
+    return [json.loads(line) for line in resp.text.splitlines() if line.strip()]
+
+
+def test_a_streamed_reroll_reports_partials_then_the_same_finished_payload(
+        client, jobs_root, monkeypatch):
+    job_dir = _job_dir(jobs_root)
+    stub = _stub_image_client(monkeypatch)
+
+    resp = client.post(f"/api/canvas/{JOB_ID}/reroll", headers=HEADERS,
+                       json={"layer_id": ART_ID, "stream": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/x-ndjson")
+
+    frames = _ndjson(resp)
+    assert [f["event"] for f in frames] == ["partial", "partial", "done"]
+    assert [f["index"] for f in frames[:-1]] == [1, 2]
+    assert all(f["mime"] == "image/png" for f in frames[:-1])
+    assert all(base64.b64decode(f["image_b64"]) for f in frames[:-1])
+
+    done = frames[-1]
+    assert done["doc"]["layers"][0]["source"] == f"assets/canvas_{ART_ID}_1.png"
+    assert done["cost_usd"] == pytest.approx(
+        IMAGE_COST[cover_pipeline.IMAGE_RESOLUTION])
+    # ...and the plate and the document landed exactly as they do without
+    # streaming: the response shape changed, the work did not.
+    assert (job_dir / done["doc"]["layers"][0]["source"]).is_file()
+    assert load_doc(job_dir / "canvas.json").layers[0].source == \
+        done["doc"]["layers"][0]["source"]
+    assert stub.images.generate_calls[0]["stream"] is True
+
+
+def test_a_streamed_refusal_is_an_error_line_not_a_status_code(
+        client, jobs_root, monkeypatch):
+    """The 200 is long gone by the time a vendor fails, so the last line
+    carries the sentence instead."""
+    _job_dir(jobs_root)
+    _stub_image_client(monkeypatch)
+
+    resp = client.post(f"/api/canvas/{JOB_ID}/reroll", headers=HEADERS,
+                       json={"layer_id": TEXT_ID, "stream": True})
+    assert resp.status_code == 200
+    [frame] = _ndjson(resp)
+    assert frame["event"] == "error"
+    assert "art layer" in frame["detail"] or "re-roll" in frame["detail"]
+
+
+def test_not_asking_to_stream_still_answers_with_plain_json(
+        client, jobs_root, monkeypatch):
+    _job_dir(jobs_root)
+    _stub_image_client(monkeypatch)
+    resp = client.post(f"/api/canvas/{JOB_ID}/reroll", headers=HEADERS,
+                       json={"layer_id": ART_ID})
+    assert resp.headers["content-type"].startswith("application/json")
+    assert "event" not in resp.json()
+
+
+def test_every_money_verb_can_stream(client, jobs_root, monkeypatch):
+    _job_dir(jobs_root)
+    _stub_image_client(monkeypatch)
+    mask = base64.b64encode(_png((32, 48), (0, 0, 0, 0))).decode("ascii")
+    for path, body in (
+            ("inpaint", {"layer_id": ART_ID, "instruction": "fix her hand",
+                         "mask_b64": mask}),
+            ("finalize", {"layer_id": ART_ID}),
+            ("ground", {"layer_id": ART_ID})):
+        resp = client.post(f"/api/canvas/{JOB_ID}/{path}", headers=HEADERS,
+                           json={**body, "stream": True})
+        assert resp.status_code == 200, (path, resp.text)
+        frames = _ndjson(resp)
+        assert frames[-1]["event"] == "done", (path, frames[-1])
+        assert [f["event"] for f in frames[:-1]] == ["partial", "partial"]

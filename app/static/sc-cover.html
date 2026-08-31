@@ -329,7 +329,10 @@
       </div>
       <div>
         <div class="sheet-cost" id="sheet-total">—</div>
-        <p class="stack-s"><button class="btn ghost" type="button" id="sheet-newcover">Start a new cover</button></p>
+        <p class="stack-s">
+          <button class="btn ghost" type="button" id="sheet-all">All covers</button>
+          <button class="btn ghost" type="button" id="sheet-newcover">Start a new cover</button>
+        </p>
       </div>
     </div>
     <div class="ferror" id="sheet-error" role="alert"></div>
@@ -948,6 +951,17 @@
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(parseInt(card.dataset.idx, 10)); }
     });
     document.getElementById('sheet-newcover').addEventListener('click', goToBrief);
+    /* The way BACK to the other covers. The studio remembers the job you had
+       open (sessionStorage, so a cover still rendering survives a reload) and
+       boots straight into it — which means every return trip from the canvas
+       landed on the same cover, and the only door out was a button that reads
+       like it throws your work away. Same destination, honestly named, and it
+       puts the list under your eye rather than at the bottom of the page. */
+    document.getElementById('sheet-all').addEventListener('click', function () {
+      goToBrief();
+      var list = document.querySelector('.recent');
+      if (list && list.scrollIntoView) list.scrollIntoView({ block: 'start' });
+    });
   }
 
   /* ------------------------------------------------------------- revise --- */

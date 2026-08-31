@@ -98,8 +98,10 @@ def test_resolution_env_prices_the_tier_it_names(tmp_path, monkeypatch):
     monkeypatch.setenv(regen.RESOLUTION_ENV, "1K")
     seen = {}
 
-    def fake_generate(client, prompt, *, transparent, resolution):
+    def fake_generate(client, prompt, *, transparent, resolution,
+                      output_format="png", on_partial=None):
         seen["resolution"] = resolution
+        seen["output_format"] = output_format
         buf = io.BytesIO()
         Image.new("RGBA", (8, 12), "#000000").save(buf, format="PNG")
         return buf.getvalue()
@@ -107,6 +109,9 @@ def test_resolution_env_prices_the_tier_it_names(tmp_path, monkeypatch):
     monkeypatch.setattr(regen.imaging, "generate", fake_generate)
     cost = regen.reroll(job_dir, doc, ART_ID, client=object())
     assert seen["resolution"] == "1K"
+    # The draft tier ships as webp: a fraction of the bytes for the same
+    # picture, and the draft lane is where the waiting hurts (regen.DRAFT_FORMAT).
+    assert seen["output_format"] == regen.DRAFT_FORMAT
     assert cost == pytest.approx(imaging.IMAGE_COST["1K"])
     assert doc.cost_usd == pytest.approx(imaging.IMAGE_COST["1K"])
 

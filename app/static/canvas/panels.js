@@ -103,7 +103,7 @@ export function buildShelf(ctx) {
   const redoBtn = btn('Redo', { on: () => ctx.redo(), title: 'Redo (⇧⌘Z)' });
   const scrimBtn = btn('Scrim behind type', { on: () => ctx.shelf.scrim() });
   const shadowBtn = btn('Shadow stack', { on: () => ctx.shelf.shadowStack() });
-  const groundBtn = btn('Ground the figure', { on: () => ctx.shelf.ground() });
+  const groundBtn = btn('Generate ground', { on: () => ctx.shelf.ground() });
   const balanceBtn = btn('Rebalance values', { on: () => ctx.shelf.rebalance() });
   const repairBtn = btn('Repair region', { on: () => ctx.shelf.repair() });
   const delBtn = btn('Delete', { cls: 'danger', on: () => ctx.shelf.deleteLayer() });
@@ -190,20 +190,38 @@ export function buildShelf(ctx) {
     // A pinned plate has no un-warped image node to map a drawn rectangle
     // back through, so the region it would send is unknowable (engine.maskFor).
     const pinned = art && ctx.engine.isPinned(l.id);
+    // A plate verb already in flight on this layer. The canvas stays live
+    // during a render (that is the point of the progress chips), so the one
+    // thing that has to stay shut is a SECOND call on the same plate.
+    const busy = !!(l && ctx.art.rendering && ctx.art.rendering(l.id));
     undoBtn.disabled = !ctx.store.canUndo;
     redoBtn.disabled = !ctx.store.canRedo;
     scrimBtn.disabled = !(l && l.kind === 'text');
     shadowBtn.disabled = !l;
+    // A toggle, and it looks like one: pressed when this layer is carrying
+    // the pair, and its title says which way pressing it goes.
+    const shadowed = !!(l && (l.effects || []).some((e) => e.type === 'drop_shadow'));
+    shadowBtn.classList.toggle('on', shadowed);
+    shadowBtn.title = !l ? 'Select a layer first'
+      : (shadowed
+        ? 'Take the drop shadows back off this layer — free, instant'
+        : 'Add the planned pair: a wide ambient shadow and a tight contact '
+          + 'shadow — free, instant');
     delBtn.disabled = !l;
-    groundBtn.disabled = !art;
+    groundBtn.disabled = !art || busy;
+    // Said in full because this button sits beside a free shadow toggle and
+    // is nothing like it: it buys a new image of the bottom of the plate.
     groundBtn.title = art
-      ? 'Generate a floor under the figure and re-seat it (§15.23)'
+      ? 'Repaint the bottom of this plate as real ground — a floor in the '
+        + "scene's own light, with a contact shadow under the figure. A paid "
+        + 'image call that changes the plate itself, not a shadow effect '
+        + '(§15.23). Undoable.'
       : 'Select an art layer first';
-    balanceBtn.disabled = !art;
+    balanceBtn.disabled = !art || busy;
     balanceBtn.title = art
       ? 'Measure this plate and nudge its levels — costs nothing'
       : 'Select an art layer first';
-    repairBtn.disabled = !art || pinned;
+    repairBtn.disabled = !art || pinned || busy;
     repairBtn.title = pinned
       ? 'Turn the perspective pin off to draw a repair region'
       : 'Repair region';
@@ -511,6 +529,9 @@ export function buildPropsRail(ctx) {
 
   /* ----------------------------------------------------------------- art */
   function artGroup(l) {
+    // A plate verb in flight on this layer: its buttons stay out until it
+    // lands (one call per plate — app.js:plateCall refuses a second).
+    const rendering = !!(ctx.art.rendering && ctx.art.rendering(l.id));
     const prompt = el('textarea', { rows: 4, value: l.prompt || '', readonly: true });
     const tweak = el('button', {
       class: 'btn small', type: 'button', text: 'Tweak & roll',
@@ -568,19 +589,22 @@ export function buildPropsRail(ctx) {
           update();
         })),
       el('div', { class: 'pchips' }, [
-        el('button', {
+        el('button', Object.assign({
           class: 'btn small', type: 'button', text: 'Re-roll',
           onclick: act(() => ctx.art.reroll(l.id, null, quality)),
-        }),
+        }, rendering ? { disabled: true } : {})),
         tweak,
       ]),
       el('div', { class: 'pchips' }, [
-        el('button', {
+        el('button', Object.assign({
           class: 'btn small', type: 'button', text: 'Finalize plate',
           title: 'Re-render this exact plate at full quality, composition anchored',
           onclick: act(() => ctx.art.finalize(l.id)),
-        }),
+        }, rendering ? { disabled: true } : {})),
       ]),
+      rendering
+        ? el('div', { class: 'phint', text: 'This plate is rendering — the rest of the cover is still yours to move.' })
+        : null,
       el('div', { class: 'phint', text: 'Roll cheap while the composition moves; finalize the plate you keep.' }),
       row('Fit', select(l.fit || 'cover',
         [['cover', 'Cover'], ['contain', 'Contain'], ['stretch', 'Stretch']],

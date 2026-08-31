@@ -150,9 +150,17 @@ export function applyOp(doc, op) {
       return;
     }
     /* The four typed parameter ops. `set_art`'s `source` is a plate swap: the
-       server only accepts a plate this layer already has, and it deliberately
-       leaves plate_history alone, so hopping along the strip neither reorders
-       nor consumes it. We mirror that here — nothing but `source` moves. */
+       server only accepts a plate this layer already has, so hopping along
+       the strip neither reorders nor consumes it.
+
+       MIRROR OF docproof/canvas/ops.py::_op_set_art, including the one write
+       the swap makes to the shelf. regen only shelves the plate it REPLACES,
+       so the newest plate exists nowhere but `source` — swapping away from it
+       without shelving it first strands the plate the person paid for most
+       recently. The server has always done this; not mirroring it here is
+       what made clicking back along the strip look like it ATE the newest
+       plate: the flush keeps our local copy of the document (see flush), so
+       the server's preserved shelf was never read back. */
     case 'set_art':
     case 'set_scrim':
     case 'set_frame_style':
@@ -160,6 +168,14 @@ export function applyOp(doc, op) {
       if (!layer) return;
       const spec = KIND_OPS[layer.kind];
       if (!spec || spec.op !== op.op) return;
+      if (op.op === 'set_art' && op.source !== undefined
+          && op.source !== layer.source) {
+        const shelf = layer.plate_history || [];
+        if (!shelf.some((h) => h.source === layer.source)) {
+          layer.plate_history = shelf.concat(
+            [{ source: layer.source, prompt: layer.prompt }]);
+        }
+      }
       assign(layer, op, spec.fields);
       return;
     }
@@ -450,21 +466,21 @@ export function createStore({ doc, onChange, onStatus, send, onError }) {
        An empty diff still pushes nothing: a change the op vocabulary cannot
        say would put an Undo on the shelf that does nothing when pressed.
 
-       `noRedo` is the plate verbs' one honest limitation. Undoing a roll is a
-       `set_art` back to the plate the roll replaced, which the server accepts
-       because that plate is on the layer's history shelf — but REDOING it
-       would ask for the newly minted plate, which the swap has since knocked
-       off the shelf (a swap leaves plate_history untouched, by design). So a
-       roll is undoable and not redoable, and saying so here is better than
-       offering a Redo the server would refuse. */
+       A roll is both undoable and redoable. Undoing one is a `set_art` back
+       to the plate the roll replaced, which the server accepts because that
+       plate is on the layer's history shelf; redoing it asks for the newly
+       minted plate, which is still on the shelf because a swap PRESERVES the
+       plate it swaps away from (docproof/canvas/ops.py::_op_set_art, now
+       mirrored in applyOp). This used to push `noRedo` on a set_art entry —
+       correct while the local apply dropped that preservation, and wrong
+       once it stopped. */
     replaceDoc(next) {
       const before = clone(current);
       const forward = diffDocs(before, next);
       const back = diffDocs(next, before);
       current = next;
       if (forward.length) {
-        const noRedo = forward.some((op) => op.op === 'set_art' && op.source !== undefined);
-        undoStack.push({ ops: forward, inverse: back, wholeDoc: true, noRedo });
+        undoStack.push({ ops: forward, inverse: back, wholeDoc: true });
         if (undoStack.length > MAX_UNDO) undoStack.shift();
         redoStack.length = 0;
       }
@@ -478,7 +494,7 @@ export function createStore({ doc, onChange, onStatus, send, onError }) {
       if (!entry) return false;
       for (const op of entry.inverse) applyOp(current, op);
       queue.push(...entry.inverse);
-      if (!entry.noRedo) redoStack.push(entry);
+      redoStack.push(entry);
       schedule();
       onChange && onChange(current);
       return true;
