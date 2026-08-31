@@ -965,6 +965,27 @@ seats one element; this section makes the elements agree with each other. The co
 form: *a cover scene is a claim about one world — one viewpoint, one light, one ground —
 and every element must be provably inside that claim before any element is polished.*
 
+**The framing (owner, 2026-08-31). Read this before the rules; it is what they are all
+instances of.** *A book cover is composed of separate transparent plates that come
+together to tell a story, and the text and the colour are telling that same story.* Two
+consequences, and between them they are this whole section in miniature:
+
+- *Type and palette are claims about the world, not decoration over it.* A typeface and a
+  colour are as load-bearing as a plate — they say what kind of place this is, what year
+  it is, who is talking. A face or a hue that belongs to a different story is as broken as
+  a floating figure; it is simply harder to name, so it survives review and the cover just
+  reads "off". Choose them from the story, and check them against the same one world the
+  plates are claiming.
+- *The loudest defect a reader can hit is an impossible physics interaction.* Anything
+  that makes someone stop and think "…wait, what's that?" is almost always two plates
+  disagreeing about the physical world: something standing on nothing, a shadow with no
+  source, an object clipped by a thing it sits in front of, a near band and a far band at
+  one value. Readers cannot articulate any of it and do not need to — they just quietly
+  distrust the cover and move on. This is why the gates below are numeric and why they run
+  on every delivered version: the defect is invisible to the person who built the scene
+  and instant to everyone else. Every numbered rule that follows is one such interaction,
+  caught once, in production.
+
 **Scene-agreement rules (owner-bound, each learned as a failure)**
 
 1. *Ground-level agreement.* A scene agrees on ground level in exactly one of two modes:
@@ -1024,12 +1045,63 @@ and every element must be provably inside that claim before any element is polis
    its gate. And thumbnails cannot gate contact: a ~40px rail clip is invisible at
    300px; contact regions get zoomed rail/ground crops on every delivered version.
 
+8. *Depth bands must differ in VALUE, not only in order.* (The Tabletop Emperors
+   addendum — the fourth real cover, 2026-08-31: a neon motel sign at dusk, sky / ridge
+   / roofline / sign.) Two silhouettes generated for different depth bands came back at
+   effectively the same ink — ridge `15,11,35`, motel roofline `11,10,26`. Composited in
+   the correct order they read as ONE mass, and the owner reported the far band as
+   covering the near one; the z-order was right and completely invisible. Depth is
+   carried by aerial perspective, so blend the FAR band toward the sky behind it (0.42
+   here) and leave the near band black. Ask for the separation in the prompts as well,
+   but never rely on separately generated silhouettes arriving at usable values relative
+   to each other — measure the mean ink of every adjacent pair and fix it at composite
+   time. Note what this failure looked like from inside: correct layer order let the
+   whole question of depth stop being thought about.
+9. *Applied lettering is a set of OBJECTS, not a typeface.* Extends rule 6. Where
+   diegetic text is physically applied — changeable marquee letters in a rail, pin-on
+   store lettering, stick-on vinyl, pegboard — drawing the string with a tracked font
+   reads as printing no matter how good the font is, because every tell of the real
+   thing is an irregularity BETWEEN letters. Render one tile per glyph: rotation
+   ±1.5–2°, baseline jitter, size variance 97–103% (a real board mixes sets), per-letter
+   ink value, uneven advance, wide word spaces. Then treat the tiles as objects standing
+   off their surface — contact shadow, a lit top bevel, and for a BACKLIT board the
+   decisive cue: a bright fringe just OUTSIDE each glyph where the panel's light wraps
+   the tile edge. That fringe is what says "object in front of a lamp" rather than "ink
+   on a surface". Wear maps stay light — eroding tile alpha toward ~50% shows the lit
+   panel through the letter and the set reads faded and printed, the opposite of worn
+   plastic. General form: an effect written for one material does not survive a change
+   of material; re-derive it from what the new material does to light.
+10. *Fitting type into a measured opening that is not a rectangle.* Corollary to rule 7.
+    Once the opening is measured, the largest inscribed AXIS-ALIGNED rectangle is the
+    wrong box for any non-rectangular container: inside an acute boomerang wedge it
+    shrank a neon script to 68% of what the shape actually holds, and the containment
+    gate passed while the design failed. For any opening that is convex per row — wedges,
+    parallelograms, chevrons, most sign panels — take each mask row as an interval
+    [lo, hi]; for every vertical offset solve the feasible horizontal offsets in closed
+    form against the glyph run's per-row ink extents, and sweep font sizes keeping the
+    largest that has a feasible placement. Exact containment, ~3× the type. Inset the
+    opening by the stroke's own radius first (a neon tube must not touch the chrome).
+
+**A gate proves legality, not quality.** Every defect that survived a version of the
+Tabletop Emperors cover was one no gate covered, and the worst of them shipped inside a
+render whose gates all printed OK — `containment: 0 px outside → OK` sat directly above a
+title set at 68% of the size its panel would hold. Containment, alpha and layer order are
+cheap to compute, which is exactly why they get mistaken for judgments they cannot make.
+The rule that follows, and it generalizes past covers: look at the render before making
+any claim about it, and use the numbers only for the questions they actually answer. Two
+claims in that job were asserted from the code without looking — including "you can see it
+working in the render", about a render showing the opposite.
+
 **Gates this adds** (beyond §15.19's): zero visible ground contacts in mode-two scenes
 (extend contact_gaps: a termination against sky/cloud/canopy = FAIL); ink-outside-surface
 == 0 for every painted-on decal (mask by surface minus off-plane hardware, correct by
 construction); the 100px thumbnail read on every delivered version, not the last one;
 containment_check's min gap ≥ margin for every declared contained-by pair, with
-undeclared opening crossings a FAIL (rule 7).
+undeclared opening crossings a FAIL (rule 7); adjacent depth bands separated by ≥0.10 in
+mean relative luminance across the rows where they meet, unless a merged silhouette is
+declared deliberately (rule 8); and, whenever a layer is scaled past the canvas, an
+enumeration of the named features leaving the frame — the motel's TV aerial was cropped
+away by a scale chosen for the roof band, and only the owner noticed it was gone.
 
 **Pixel traps (new this cover)**
 
@@ -1049,6 +1121,22 @@ undeclared opening crossings a FAIL (rule 7).
   lightening layer.
 - Zooming into a plate by cropping discards the crop's contrast range along with the
   edges; re-enrich after the crop or the cover reads washed out at full bleed.
+- A generated plate ends in a hard straight cut. Wherever the layer in FRONT of it has a
+  gap, that cut shows as sky under the scene and the band reads as floating — run the
+  plate's own ground row down to the canvas edge (replicating one flat row is an
+  extension, not an invention).
+- Patching a hole in a flat silhouette by copying each column's edge pixel smears whatever
+  that edge happens to be — a palm trunk, a rust highlight — into vertical streaks. Fill
+  with the silhouette's median body colour sampled from deep inside it.
+- A large lit panel (a reader board, a lightbox) is bright enough to trip a bulb-halation
+  luminance threshold and will bloom like a bulb. Attenuate that region specifically;
+  lowering the global halation stack costs the real bulbs their glow.
+- Fitting type untracked and then drawing it tracked overruns its container — here by
+  ~90px a side on the reader board. Fit what you actually draw.
+- Pillow 12's `ImageDraw.floodfill` silently fills nothing on an "L" image: it returns
+  normally and the mask comes back empty, so the failure surfaces several steps later as
+  a confusing error on a zero-size array. Use a scanline flood, and assert non-empty at
+  the point of measurement.
 
 ### 15.21 Clipped-art doctrine — the value contract for masked slots (the Drop Table addendum)
 
