@@ -9,10 +9,12 @@ import pytest
 from PIL import Image, ImageDraw
 
 from docproof.cover.archetypes import ARCHETYPES
-from docproof.cover.inspect import (audit_assets, contact_gaps, ink_bbox,
-                                    isolate, ruled_crop, seam_scan,
-                                    surface_line)
-from docproof.cover.model import Brief, Direction, Palette, build_spec
+from docproof.cover.inspect import (audit_assets, contact_gaps,
+                                    containment_check, containment_gaps,
+                                    ink_bbox, isolate, opening_bbox,
+                                    ruled_crop, seam_scan, surface_line)
+from docproof.cover.model import (ArtSlot, Brief, Direction, LayerRef,
+                                  Palette, build_spec)
 
 CANVAS = (400, 640)
 
@@ -157,3 +159,67 @@ def test_audit_assets_clean_asset_unflagged(tmp_path: Path):
     spec.art[0].asset = "assets/clean.png"
     findings = audit_assets(spec, tmp_path)
     assert findings and findings[0]["flag"] is False
+
+
+# ------------------------------------------- opening_bbox / containment_check
+def _ring_asset(w: int = 200, h: int = 320, thick: int = 20) -> Image.Image:
+    """An ornate-frame stand-in: an opaque rail ring with a transparent
+    interior hole (and, like a real frame asset, ink whose bbox says
+    nothing about where the opening is)."""
+    ring = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ring)
+    d.rectangle((0, 0, w - 1, h - 1), outline=(201, 162, 39, 255),
+                width=thick)
+    return ring
+
+
+def test_opening_bbox_measures_hole_not_bbox():
+    """The frame debacle's root: the opening must be flooded, not derived
+    from the container's bbox (which here spans the whole asset)."""
+    report = opening_bbox(_ring_asset())
+    assert report["closed"] is True
+    x0, y0, x1, y1 = report["bbox"]
+    assert 18 <= x0 <= 22 and 18 <= y0 <= 22
+    assert 178 <= x1 <= 182 and 298 <= y1 <= 302
+
+
+def test_opening_bbox_breached_container_is_not_closed():
+    ring = _ring_asset()
+    d = ImageDraw.Draw(ring)
+    d.rectangle((60, 0, 140, 25), fill=(0, 0, 0, 0))   # breach the top rail
+    report = opening_bbox(ring)
+    assert report["closed"] is False
+
+
+def test_containment_gaps_numbers():
+    r = containment_gaps((100, 100, 300, 500), (120, 90, 280, 480))
+    assert r["gaps"] == (20, -10, 20, 20)
+    assert r["min_gap"] == -10
+    assert r["contained"] is False
+
+
+def test_containment_check_catches_rail_clip(tmp_path: Path):
+    """End to end over compose's own placement: an element seated inside
+    the frame passes; slammed into the rail zone, it FAILS — the exact
+    defect that shipped twice on the Badgerbones cover."""
+    spec = _spec()
+    (tmp_path / "assets").mkdir()
+    _ring_asset().save(tmp_path / "assets" / "frame.png")
+    gem = Image.new("RGBA", (40, 40), (200, 30, 30, 255))
+    gem.save(tmp_path / "assets" / "gem.png")
+    spec.art.append(ArtSlot(id="frame", asset="assets/frame.png",
+                            fit="contain", transparent=True,
+                            anchor=[0.5, 0.5], scale=0.8))
+    spec.art.append(ArtSlot(id="gem", asset="assets/gem.png",
+                            fit="contain", transparent=True,
+                            anchor=[0.5, 0.5], scale=0.08))
+    spec.layers = spec.layers + [LayerRef(kind="art", ref="frame"),
+                                 LayerRef(kind="art", ref="gem")]
+    ok = containment_check(spec, tmp_path, container="frame",
+                           contained="gem", canvas=CANVAS)
+    assert ok["closed"] is True
+    assert ok["contained"] is True and ok["min_gap"] >= ok["margin_px"]
+    spec.art[-1].anchor = [0.5, 0.05]
+    bad = containment_check(spec, tmp_path, container="frame",
+                            contained="gem", canvas=CANVAS)
+    assert bad["contained"] is False

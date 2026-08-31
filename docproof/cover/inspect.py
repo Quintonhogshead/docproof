@@ -41,7 +41,9 @@ from PIL import Image, ImageDraw
 from .model import CoverSpec
 
 __all__ = ["ruled_crop", "ink_bbox", "seam_scan", "column_profile",
-           "surface_line", "contact_gaps", "isolate", "audit_assets"]
+           "surface_line", "contact_gaps", "isolate", "audit_assets",
+           "opening_bbox", "containment_gaps", "placed_ink_mask",
+           "containment_check"]
 
 # Below this alpha a pixel is generator haze / anti-aliasing spill, not an
 # element's real ink. 40 (of 255) is the value that separated the Willow
@@ -231,6 +233,170 @@ def isolate(spec: CoverSpec, slot_id: str, job_dir: Path,
         raise ValueError(f"slot {slot_id!r} is not in this spec's layers")
     image, _report = compose(solo, job_dir, canvas=canvas)
     return image
+
+
+def _ink_mask(layer: Image.Image, *, threshold: int = INK_ALPHA_THRESHOLD
+              ) -> Image.Image:
+    """An element's hard ink as an "L" mask (ink=255, open=0). An "L" input
+    is taken as an already-built mask (any value > 127 is ink)."""
+    if layer.mode == "L":
+        return layer.point(lambda v: 255 if v > 127 else 0)
+    rgba = layer if layer.mode == "RGBA" else layer.convert("RGBA")
+    return rgba.getchannel("A").point(
+        lambda v: 255 if v > threshold else 0)
+
+
+def opening_bbox(container: Image.Image, *,
+                 threshold: int = INK_ALPHA_THRESHOLD,
+                 seed: tuple[int, int] | None = None) -> dict:
+    """A container's interior opening, MEASURED — never derived from its
+    bbox. §15.20 rule 7's probe: an ornate frame's crests and scrollwork
+    intrude far past its rail line, so placing an element by arithmetic on
+    the container's bounding box shipped a clipped scoop twice (the
+    Badgerbones frame debacle) before this existed.
+
+    `container` is the container element — an RGBA cutout, or an "L" ink
+    mask (ink=255) such as placed_ink_mask returns. The probe floods
+    outward from `seed` (default: the ink bbox center; if that lands on
+    ink, the nearest open pixel along the axes) through non-ink pixels;
+    the flooded region is the opening.
+
+    Returns {"bbox": box|None, "seed": (x, y)|None, "closed": bool,
+    "area_frac": float}. `bbox` is None when there is no ink or no open
+    interior pixel near the seed. `closed` is False when the flood escapes
+    the container's own ink bbox — the "container" doesn't actually
+    enclose its hole, and a containment verdict built on it is void."""
+    mask = _ink_mask(container, threshold=threshold)
+    ink_box = mask.getbbox()
+    if ink_box is None:
+        return {"bbox": None, "seed": None, "closed": False,
+                "area_frac": 0.0}
+    px = mask.load()
+    w, h = mask.size
+    cx = (ink_box[0] + ink_box[2]) // 2
+    cy = (ink_box[1] + ink_box[3]) // 2
+    if seed is None:
+        seed = (cx, cy)
+        if px[cx, cy]:                       # seed on ink: probe the axes
+            found = None
+            for d in range(1, max(w, h)):
+                for sx, sy in ((cx + d, cy), (cx - d, cy),
+                               (cx, cy + d), (cx, cy - d)):
+                    if (ink_box[0] <= sx < ink_box[2]
+                            and ink_box[1] <= sy < ink_box[3]
+                            and not px[sx, sy]):
+                        found = (sx, sy)
+                        break
+                if found:
+                    break
+            if not found:
+                return {"bbox": None, "seed": None, "closed": False,
+                        "area_frac": 0.0}
+            seed = found
+    if px[seed[0], seed[1]]:
+        return {"bbox": None, "seed": seed, "closed": False,
+                "area_frac": 0.0}
+    flood = mask.copy()
+    ImageDraw.floodfill(flood, seed, 128)
+    hole = flood.point(lambda v: 255 if v == 128 else 0)
+    box = hole.getbbox()
+    # A flood that reaches any image border escaped the container — the
+    # "hole" is connected to the outside and no containment verdict built
+    # on it means anything.
+    closed = (box is not None and box[0] > 0 and box[1] > 0
+              and box[2] < w and box[3] < h)
+    area = (w * h - hole.histogram()[0]) / float(w * h)
+    return {"bbox": box, "seed": seed, "closed": closed,
+            "area_frac": area}
+
+
+def containment_gaps(opening: tuple[int, int, int, int],
+                     ink: tuple[int, int, int, int]) -> dict:
+    """The contained-by seat check as numbers: per-edge gap between a
+    measured opening and a contained element's hard-ink bbox, in the
+    boxes' shared coordinate space. Positive gap = inside by that many
+    pixels; negative = crossing the container by that many. The caller's
+    gate supplies the margin (§15.20: ≥1% of canvas height, undeclared
+    crossings FAIL) — verify with these numbers, not by impression."""
+    gaps = (ink[0] - opening[0], ink[1] - opening[1],
+            opening[2] - ink[2], opening[3] - ink[3])
+    return {"gaps": gaps, "min_gap": min(gaps),
+            "contained": min(gaps) >= 0}
+
+
+def placed_ink_mask(spec: CoverSpec, slot_id: str, job_dir: Path, *,
+                    base_id: str = "background",
+                    canvas: tuple[int, int] = (1600, 2560),
+                    diff_threshold: int = 8) -> Image.Image:
+    """One art slot's UNOCCLUDED placed ink as an "L" mask in cover
+    coordinates, computed through compose's own placement path (the
+    isolate() doctrine — never a re-implementation that could disagree).
+    Renders the base slot alone, then base + target, and takes the pixel
+    difference: whatever the target visibly painted is its placed ink.
+    `diff_threshold` is on the channel-mean difference — a layer that
+    paints near-identically to the base (a black cutout on a black
+    ground) needs a lower threshold or an isolate() look instead."""
+    from PIL import ImageChops
+
+    from .compose import compose  # local import: compose imports are heavy
+
+    ids = {a.id for a in spec.art}
+    for needed in (base_id, slot_id):
+        if needed not in ids:
+            raise ValueError(f"slot {needed!r} is not in this spec's art "
+                             f"list")
+    if base_id == slot_id:
+        raise ValueError("base_id and slot_id must differ")
+
+    def solo(keep: set[str]) -> Image.Image:
+        sub = spec.model_copy(deep=True)
+        sub.layers = [ref for ref in sub.layers
+                      if ref.kind == "art" and ref.ref in keep]
+        sub.adjust = []
+        sub.scrims = []
+        image, _report = compose(sub, job_dir, canvas=canvas)
+        return image
+
+    base = solo({base_id})
+    pair = solo({base_id, slot_id})
+    diff = ImageChops.difference(base.convert("RGB"), pair.convert("RGB"))
+    return diff.convert("L").point(
+        lambda v: 255 if v > diff_threshold else 0)
+
+
+def containment_check(spec: CoverSpec, job_dir: Path, *, container: str,
+                      contained: str, base_id: str = "background",
+                      canvas: tuple[int, int] = (1600, 2560),
+                      margin_frac: float = 0.01,
+                      diff_threshold: int = 8) -> dict:
+    """§15.20 rule 7's gate, end to end: is `contained`'s placed ink fully
+    inside `container`'s measured opening, with margin? Both layers are
+    placed by compose's own path (placed_ink_mask); the opening is flooded
+    from the container's interior (opening_bbox); the verdict is numbers
+    (containment_gaps). `margin_frac` is of canvas height — §15.20 says
+    1%. Returns {"opening", "ink", "gaps", "min_gap", "margin_px",
+    "closed", "contained"}; `contained` is the gate (False = FAIL unless
+    the spec's rationale declares a deliberate breakout), and a not-
+    `closed` container voids the verdict — look with ruled crops."""
+    margin_px = round(margin_frac * canvas[1])
+    frame_mask = placed_ink_mask(spec, container, job_dir, base_id=base_id,
+                                 canvas=canvas,
+                                 diff_threshold=diff_threshold)
+    opening = opening_bbox(frame_mask)
+    ink_box = placed_ink_mask(spec, contained, job_dir, base_id=base_id,
+                              canvas=canvas,
+                              diff_threshold=diff_threshold).getbbox()
+    result: dict = {"opening": opening["bbox"], "ink": ink_box,
+                    "closed": opening["closed"], "margin_px": margin_px,
+                    "gaps": None, "min_gap": None, "contained": False}
+    if opening["bbox"] is None or ink_box is None:
+        return result
+    gaps = containment_gaps(opening["bbox"], ink_box)
+    result["gaps"] = gaps["gaps"]
+    result["min_gap"] = gaps["min_gap"]
+    result["contained"] = (opening["closed"]
+                           and gaps["min_gap"] >= margin_px)
+    return result
 
 
 def audit_assets(spec: CoverSpec, job_dir: Path, *,
