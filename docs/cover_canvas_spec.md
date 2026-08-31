@@ -198,7 +198,11 @@ A chat panel with a **Plan / Act** toggle, in the first build.
   section is the discipline that goes with it: measure with `inspect` and
   the grid, use the free `rebalance` before spending on a re-roll, change
   one thing, look at what you did, and never roll twice without looking in
-  between.
+  between. A look is a JPEG on a size ladder (v0.164.0): a tool result
+  travels back as one line of JSON into the SDK's 1MB buffer, so an
+  oversized frame is not a truncated picture but a decode error that kills
+  the turn — which is what a 900px PNG of a real cover did to every turn
+  that looked.
 - **Plan mode**: read-only tools only (`inspect`, `look`); it critiques,
   proposes, and drafts a numbered plan. One click ("do it") flips the plan
   to Act and executes it.

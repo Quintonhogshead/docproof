@@ -72,6 +72,30 @@ SERVER_NAME = "canvas"
 # now be called after every edit.
 LOOK_WIDTH = 900
 
+# What a look may weigh, and the ladder it climbs down to get there.
+#
+# A tool result travels back through the CLI transport as ONE line of JSON,
+# and the SDK reads those lines into a 1MB buffer — a frame over that size is
+# not truncated, it is a CLIJSONDecodeError that kills the whole turn. A
+# 900px PNG of a real cover is several megabytes of base64 and blew up every
+# turn that looked. So: JPEG, like the browser's own snapshot already learned
+# to be (engine.js snapshotBase64: "a cover photograph is roughly a tenth the
+# size as JPEG"), with a budget checked against the ENCODED bytes rather than
+# assumed from the dimensions — a busy plate and a flat one differ by an
+# order of magnitude at the same size.
+#
+# The budget is the binary size; base64 is a third larger again, and the
+# frame carries the rest of the message around it. 480KB encodes to ~640KB
+# and leaves the megabyte comfortable.
+LOOK_MAX_BYTES = 480_000
+
+# Quality first, then size: a slightly softer picture is a better answer than
+# a smaller one when what is being judged is composition. Every rung is
+# tried in order and the first that fits is sent.
+LOOK_LADDER: tuple[tuple[int, int], ...] = (
+    (LOOK_WIDTH, 80), (LOOK_WIDTH, 65), (700, 65), (560, 60), (420, 55),
+)
+
 # The measuring grid `look(grid=true)` draws over that render: a line every
 # tenth of the canvas, labelled in the document's OWN units (fractions), so
 # a position read off the picture is already the number an op takes. Thirds
@@ -639,15 +663,24 @@ class _Session:
         return len(self.doc.history) > self.history_at_start
 
     def _render_look(self, grid: bool) -> bytes:
-        """The working document drawn from scratch, as PNG bytes.
+        """The working document drawn from scratch, as JPEG bytes that fit.
 
         Server-side (docproof.canvas.render), on the DOCUMENT this turn has
         been editing — which is the whole point: the browser's snapshot was
         taken before the turn started, so a model that edited and then
         "looked" used to be shown the cover as it was BEFORE its own edit,
-        and reported on a change it could not actually see. Flattened onto
-        white because the render carries no paper (render.py's DIVERGENCES)
-        and a cover judged on transparency is a cover judged wrong."""
+        and reported on a change it could not actually see.
+
+        Flattened onto white because the render carries no paper (render.py's
+        DIVERGENCES) and a cover judged on transparency is a cover judged
+        wrong — which also means there is no alpha to keep, so JPEG costs
+        nothing but weight (see LOOK_MAX_BYTES: a PNG here is what killed
+        every turn that looked).
+
+        Rendered ONCE at full width and resized down the ladder from that
+        one render: re-rendering smaller would re-set the type and re-fit the
+        plates, which is a different picture, and the grid would land on
+        different pixels than the ones being measured."""
         from PIL import Image
 
         from . import render as canvas_render
@@ -657,9 +690,23 @@ class _Session:
         flat = Image.alpha_composite(paper, image).convert("RGB")
         if grid:
             flat = _draw_grid(flat, self.doc)
-        buf = io.BytesIO()
-        flat.save(buf, format="PNG")
-        return buf.getvalue()
+
+        smallest = b""
+        for width, quality in LOOK_LADDER:
+            frame = flat
+            if width < flat.width:
+                height = max(1, round(flat.height * width / flat.width))
+                frame = flat.resize((width, height), Image.LANCZOS)
+            buf = io.BytesIO()
+            frame.save(buf, format="JPEG", quality=quality, optimize=True)
+            data = buf.getvalue()
+            smallest = data
+            if len(data) <= LOOK_MAX_BYTES:
+                return data
+        # Every rung was still too heavy. The smallest is what there is; the
+        # caller decides whether to send it, and _looked says so out loud
+        # rather than letting the transport kill the turn.
+        return smallest
 
     async def look(self, args: dict[str, Any]) -> dict[str, Any]:
         """The cover as it stands RIGHT NOW, as an image.
@@ -702,6 +749,14 @@ class _Session:
                      "data": base64.b64encode(self.snapshot_png).decode("ascii"),
                      "mimeType": _image_mime(self.snapshot_png)},
                 ]}
+            if len(png) > LOOK_MAX_BYTES:
+                # Nothing on the ladder fit. Sending it anyway is not an
+                # option: an oversized frame is not a truncated picture, it
+                # is a CLIJSONDecodeError that ends the turn.
+                return _text(
+                    "This cover will not fit into a picture small enough to "
+                    "send. Work from `inspect` and say what you could not "
+                    "check.", is_error=True)
             note = ("The cover as it stands after this turn's edits"
                     if stale else "The cover as it stands")
             if grid:
@@ -713,7 +768,7 @@ class _Session:
                 {"type": "text", "text": f"{note}."},
                 {"type": "image",
                  "data": base64.b64encode(png).decode("ascii"),
-                 "mimeType": "image/png"},
+                 "mimeType": _image_mime(png)},
             ]}
         if not self.snapshot_png:
             # Nothing edited and nothing sent: render anyway rather than
@@ -726,11 +781,16 @@ class _Session:
                     f"No snapshot came with this message and the cover could "
                     f"not be rendered either ({e}) — work from `inspect` and "
                     f"say what you could not check.", is_error=True)
+            if len(png) > LOOK_MAX_BYTES:
+                return _text(
+                    "This cover will not fit into a picture small enough to "
+                    "send. Work from `inspect` and say what you could not "
+                    "check.", is_error=True)
             return {"content": [
                 {"type": "text", "text": "The cover as it stands."},
                 {"type": "image",
                  "data": base64.b64encode(png).decode("ascii"),
-                 "mimeType": "image/png"},
+                 "mimeType": _image_mime(png)},
             ]}
         return {"content": [{
             "type": "image",
