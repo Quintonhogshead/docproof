@@ -965,6 +965,19 @@ def register(app: FastAPI) -> None:
                     image_client=lambda: cover._image_client())
             except unavailable as e:
                 raise HTTPException(501, detail=str(e) or _NO_ASSISTANT) from e
+            except HTTPException:
+                raise
+            except Exception as e:                          # noqa: BLE001
+                # A turn drives a CLI subprocess, an SDK and five tools, and
+                # anything in that stack can fail in a way this module has
+                # never heard of. It used to reach the browser as a bare
+                # "Something went wrong (500)", which tells the person
+                # nothing and tells whoever they report it to less — so the
+                # sentence goes to the AI box, and the traceback to the log.
+                log.exception("A canvas assistant turn failed")
+                raise HTTPException(502, detail=(
+                    f"The art director's turn failed: "
+                    f"{type(e).__name__}: {e}")) from e
             payload = _save(job_dir, result.doc, concept)
         payload["reply"] = result.reply
         payload["ops_applied"] = result.ops_applied

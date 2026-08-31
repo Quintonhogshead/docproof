@@ -323,6 +323,55 @@ def test_the_grid_changes_the_pixels_and_says_what_its_labels_mean(tmp_path):
     assert "fractions ops take" in _body(_run(session.look({"grid": True})))
 
 
+# -- a look has to FIT ---------------------------------------------------------
+#
+# A tool result travels back as one line of JSON and the SDK reads those into
+# a 1MB buffer. An oversized frame is not a truncated picture — it is a
+# CLIJSONDecodeError that kills the whole turn, which is exactly what a 900px
+# PNG of a real cover did to every turn that looked.
+
+def test_a_look_is_a_jpeg_not_a_png(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    data = _looked_image(_run(session.look({})))
+    assert data[:3] == b"\xff\xd8\xff"           # JPEG's own magic
+    assert Image.open(io.BytesIO(data)).format == "JPEG"
+
+
+def test_the_look_declares_the_type_it_actually_sent(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    block = [b for b in _run(session.look({}))["content"]
+             if b["type"] == "image"][0]
+    assert block["mimeType"] == "image/jpeg"
+
+
+def test_a_look_that_cannot_be_made_small_enough_is_refused_not_sent(
+        tmp_path, monkeypatch):
+    """Sending it anyway would end the turn; saying so leaves the model able
+    to work from `inspect`."""
+    monkeypatch.setattr(assistant, "LOOK_MAX_BYTES", 10)
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    result = _run(session.look({}))
+    assert not [b for b in result["content"] if b["type"] == "image"]
+    assert "will not fit" in _body(result)
+    assert result.get("is_error")
+
+
+def test_every_rung_of_the_ladder_gets_smaller_and_none_is_bigger(tmp_path):
+    widths = [w for w, _ in assistant.LOOK_LADDER]
+    assert widths == sorted(widths, reverse=True)
+    assert widths[0] == assistant.LOOK_WIDTH
+    assert all(1 <= q <= 95 for _, q in assistant.LOOK_LADDER)
+
+
+def test_a_real_looking_render_fits_the_transport(tmp_path):
+    session = _Session(job_dir=_real_job(tmp_path), doc=_doc(), mode="act")
+    for grid in (False, True):
+        data = session._render_look(grid)
+        assert len(data) <= assistant.LOOK_MAX_BYTES
+        # ...and with room for base64's third on top, inside the 1MB frame.
+        assert len(data) * 4 / 3 < 1024 * 1024
+
+
 def test_the_grid_tool_is_offered_in_both_modes(tmp_path):
     for mode in ("plan", "act"):
         spec, = [s for s in _session(mode).specs() if s.name == "look"]
