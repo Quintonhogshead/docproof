@@ -1004,10 +1004,32 @@ and every element must be provably inside that claim before any element is polis
    text-behind-corn depth must be baked too: the occlusion autopilot reorders any
    TextSlot whose ink an art layer touches past its limit.
 
+7. *Contained-by: a container's opening is measured, never derived.* (The Badgerbones
+   addendum — the third real cover, 2026-08-30.) An element living inside a container
+   (an ornate picture frame, a window, a porthole) is a fifth physical relationship
+   beyond standing-on / painted-on / attached-to / floating, and it shipped clipped
+   TWICE before anyone measured anything: the cone's scoop hid behind the frame's top
+   rail in two delivered versions, because the element was placed by arithmetic on the
+   container's bounding box — and an ornate container's opening is NOT derivable from
+   its bbox (crests and scrollwork intrude far past the rail line). The opening is
+   found by flooding the container's alpha from the interior (`inspect.opening_bbox`);
+   the gate is `inspect.containment_check`: the contained element's hard-ink bbox
+   (alpha > 40) must sit fully inside the measured opening with ≥1%-of-canvas margin,
+   computed over compose's OWN placement of both layers, never a re-derivation. A
+   deliberate breakout (the object-breaking-the-frame move) stays legal but must be
+   declared in the spec's rationale — a crossing nobody declared is a FAIL, same class
+   as `dead_band > 0.2`. Corollary process rule, learned the hard way: never assert a
+   contact property ("seated", "clear of the rails", "inside") without having run its
+   probe — a claim with no probe behind it is the tell that a relationship is missing
+   its gate. And thumbnails cannot gate contact: a ~40px rail clip is invisible at
+   300px; contact regions get zoomed rail/ground crops on every delivered version.
+
 **Gates this adds** (beyond §15.19's): zero visible ground contacts in mode-two scenes
 (extend contact_gaps: a termination against sky/cloud/canopy = FAIL); ink-outside-surface
 == 0 for every painted-on decal (mask by surface minus off-plane hardware, correct by
-construction); the 100px thumbnail read on every delivered version, not the last one.
+construction); the 100px thumbnail read on every delivered version, not the last one;
+containment_check's min gap ≥ margin for every declared contained-by pair, with
+undeclared opening crossings a FAIL (rule 7).
 
 **Pixel traps (new this cover)**
 
@@ -1020,3 +1042,10 @@ construction); the 100px thumbnail read on every delivered version, not the last
 - Enclosed white pockets never reach a border flood; under native-alpha assets the whole
   flood-fill pipeline is legacy — request `background: transparent` and floor the sub-40
   haze band instead.
+- A screen-blended texture is a void-black tool ONLY: on a warm ground it adds white
+  light and greys the saturation right out (the damask sheen that fixed a black wall
+  visibly deadened an oxblood one). Enrich a warm ground in the plate itself —
+  saturation/contrast plus a soft never-void vignette baked into the crop — not with a
+  lightening layer.
+- Zooming into a plate by cropping discards the crop's contrast range along with the
+  edges; re-enrich after the crop or the cover reads washed out at full bleed.
