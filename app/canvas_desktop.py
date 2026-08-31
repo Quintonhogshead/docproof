@@ -37,6 +37,8 @@ from urllib.parse import quote
 from docproof.cover import pipeline as cover_pipeline
 
 from .desktop import free_port, serve, wait_until_serving
+from starlette.routing import Mount
+
 from .main import create_app
 from .routes import cover as cover_routes
 from .settings import default_root
@@ -52,6 +54,30 @@ MIN_WINDOW = (1100, 720)
 # only ever guards a loopback socket on the owner's own machine, and a fresh
 # secret every launch would be a password prompt with no password manager.
 LOCAL_KEY = "canvas"
+
+
+def build_shell_app(root: Path):
+    """The shell's FastAPI app: the main app plus Cover Studio's own routes.
+
+    The main app registers canvas but deliberately not Cover Studio's routes
+    (those are the quest site's). The shell wants both: the picker lists jobs
+    via /api/cover/jobs, and a person at this window should be able to roll a
+    brand-new cover without opening the quest site.
+
+    The re-sort at the end is load-bearing: create_app's LAST act is mounting
+    the static tree at "/", a catch-all that answers before anything
+    registered after it — so routes added here would silently 404 out of the
+    frozen app while every earlier route worked. Starlette's sort is stable,
+    so pushing root mounts to the end changes nothing else about the order."""
+    app = create_app(root, start_runner=False)
+    cover_routes.register(app)
+    app.router.routes.sort(
+        key=lambda r: isinstance(r, Mount) and r.path in ("", "/"))
+    # Pinned once here, the way app/quest_site.py pins it: the routes read
+    # app.state rather than the environment per request, so a --jobs given on
+    # the command line cannot drift from the store the window is showing.
+    app.state.cover_data_root = cover_pipeline.default_root()
+    return app
 
 
 def main(argv=None) -> int:
@@ -82,16 +108,7 @@ def main(argv=None) -> int:
     port = args.port or free_port()
     url = f"http://127.0.0.1:{port}"
 
-    app = create_app(root, start_runner=False)
-    # The main app registers canvas but deliberately not Cover Studio's own
-    # routes (those are the quest site's). The shell wants both: the picker
-    # lists jobs via /api/cover/jobs, and a person at this window should be
-    # able to roll a brand-new cover without opening the quest site.
-    cover_routes.register(app)
-    # Pinned once here, the way app/quest_site.py pins it: the routes read
-    # app.state rather than the environment per request, so a --jobs given on
-    # the command line cannot drift from the store the window is showing.
-    app.state.cover_data_root = cover_pipeline.default_root()
+    app = build_shell_app(root)
     server = serve(app, port)
 
     try:
@@ -104,6 +121,11 @@ def main(argv=None) -> int:
         target = f"{url}/canvas"
         if args.job:
             target += f"?job={quote(args.job)}"
+        # The key rides the URL FRAGMENT so the page unlocks itself: a person
+        # at their own machine should never be asked to copy a password out
+        # of a terminal they may not even have (the packaged .app has none).
+        # A fragment never appears in a request line or a server log.
+        target += f"#key={quote(key)}"
         webview.create_window(TITLE, target, width=WINDOW[0], height=WINDOW[1],
                               min_size=MIN_WINDOW)
         webview.start()                       # blocks until the window closes
