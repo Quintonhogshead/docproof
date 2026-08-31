@@ -1049,3 +1049,97 @@ undeclared opening crossings a FAIL (rule 7).
   lightening layer.
 - Zooming into a plate by cropping discards the crop's contrast range along with the
   edges; re-enrich after the crop or the cover reads washed out at full bleed.
+
+### 15.21 Clipped-art doctrine — the value contract for masked slots (the Drop Table addendum)
+
+Provenance: Drop Table (2026-08-31) — a `title_window` concept where
+the artwork is visible ONLY through the title's own letterforms. It failed on the first
+render for a reason no amount of art direction would have fixed, and passed on the second
+for a reason that generalizes to every masked slot in the library.
+
+**Read this section the way it was learned, not as a checklist.** §15.19 and §15.20 govern
+scenes; this one governs a narrower thing — art that is CLIPPED before it composites
+(`title_window`'s `window_art`, anything wearing `mask: {from_text: …}`, a `split_plate`
+band). Exactly ONE item below is a contract, because the composer measures it and will
+act on its own if you get it wrong. Everything after it is a default: where a cover has
+a better idea, the cover wins. A doctrine that makes the next twenty covers look like
+this one has failed at its job.
+
+**The contract (measurable, enforced by the composer, not negotiable by taste)**
+
+Clipped art and the field it sits in must be OPPOSITE in value, and the art's own value
+must be uniform edge to edge.
+
+The mechanism is §7.4a plus §15.7. `art_fill` text has no ink of its own — nothing is
+painted inside the glyphs, the clipped art simply shows — so the legibility autopilot has
+no ink color to test and falls back to `palette.primary`, the thin ring at each glyph's
+edge, measured against whatever dominates the title's zone. Get the direction backwards
+and the autopilot does exactly what it was built to do: escalate the scrim that the
+archetype ships at strength 0.0, and paint a panel behind the title. On a `title_window`
+cover that panel IS the design, destroyed to protect itself.
+
+Measured, same brief, same art, only the value direction swapped:
+
+| | field | clipped art | title contrast | scrim_final |
+|---|---|---|---|---|
+| fail | near-black `#15130F` | pale aged paper | 1.00 → ink-flip 3.26 → **3.33** vs 4.5 | **0.85** |
+| pass | cream `#DDD2B8` | microfilm negative | **7.22** | **0.0** |
+
+The autopilot's own escalation ladder is the tell: an `art_fill` archetype that finishes
+with a nonzero `scrim_final` has not been rescued, it has been overruled. Treat that
+number as a build failure and re-direct the value, not the scrim.
+
+**Defaults — starting points, each one overrulable by the cover in front of you**
+
+1. *Prompt for a texture, not a picture.* You cannot predict which fraction of the frame
+   lands inside a glyph, so anything behaving like a composition — a subject, a margin, a
+   bright corner — is wasted where it is clipped away and ruinous where it isn't. The
+   negative constraints carry more weight than the style adjectives: edge to edge, no
+   margin, no border, no empty region, no single focal point, no words. `title_window`'s
+   `composition_note` says this to the image model; say it again in the art prompt.
+2. *When the real object is the wrong value, change the reproduction medium — not the
+   palette.* Drop Table needed a paper document to read DARK. Asking for a dark document
+   fights physics; asking for a **microfilm negative** — pale figures on black film —
+   delivers a dark, uniform, evenly dense frame that is also period-true for a records
+   office. Carbon copy, photostat, blueprint, X-ray, and press negative are the same move
+   at other values. Reach for the medium before you reach for a grade: this is §15.20's
+   rule 5 (coherence is native, not graded) arriving at a different door.
+3. *Iterate on a $0 procedural stand-in before generating anything.* Draw a fake of the
+   clipped art with PIL — density and value are all that matter, so a crude one is
+   enough — and lock archetype, palette, fonts, and zones against it. Both Drop Table
+   failures (the value contract, a 28% dead band) surfaced against the stand-in, for
+   free, before a single generation. The real asset then drops in with no layout work
+   left.
+4. *"Texture on the background" is a slot, not a recipe.* Paper tooth under the
+   letterforms is its own `ArtSlot` inserted directly above `background`
+   (`texture_file: laid_paper`, `texture_fit: tile`, ~0.20, multiply) so it grains the
+   field and leaves the clipped art clean. A finishing recipe's own paper layer
+   (`vintage_matte`'s `fx_paper`) sits above the WHOLE stack, clipped art included, and
+   is doing a different job. Both can be true on one cover.
+5. *Judge grain at 1:1.* A downscaled comparison strip made four different texture plates
+   look identical; native-resolution crops immediately showed `canvas_weave` pushing the
+   ground grey-green — bookcloth, not paper. Never pick a finish from a thumbnail. (The
+   100px thumbnail read from §15.20 is a different test asking a different question; run
+   both.)
+6. *Re-read the RenderReport after every text change, including the trivial ones.* Stock
+   archetype zones assume longer strings. A two-word `justify_stack` title left a 28% dead
+   band at the top; swapping a long subtitle for a short one then unbalanced the gaps
+   (17.0% vs 13.6%) even though nothing else moved. `warnings` and `dead_band_frac` are
+   free design QA and both fixes were a zone nudge.
+
+**Gates this adds** (beyond §15.19's and §15.20's): on any archetype whose title runs
+`mode: art_fill` or `knockout`, `scrim_final` for the title must be 0.0 on the delivered
+version — a nonzero value is a failed value direction, not a protected title; and the
+clipped art's own frame must show no region at the field's value (sample it before
+compositing, not after).
+
+**Traps (new this cover)**
+
+- A generated document will invent its own data. Drop Table's table starts at 100 lbs
+  when the story's whole hinge is that it stops at 110 — legible numerals inside
+  letterforms are *read*, so brief the content, not just the look.
+- The stand-in is not the asset. A procedural stand-in tuned to pass the contrast gate can
+  flatter a generated asset that will not; re-read the report after the real art lands.
+- Masked slots inherit their archetype's mask, never a direction's `mask_intent` — an
+  intent named on a slot the template already masks is dropped with a log line, so a
+  concept that needs a different clip needs a different archetype.
