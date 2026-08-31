@@ -21,8 +21,10 @@ import pytest
 from PIL import Image
 
 from docproof.cover.imaging import (IMAGE_COST, NEGATIVE_SUFFIX, ImagingError,
-                                    _request_params, generate, has_real_alpha,
-                                    make_client)
+                                    _edit_request_params,
+                                    _refine_request_params, _request_params,
+                                    edit, generate, has_real_alpha,
+                                    make_client, refine)
 
 # -- fixtures: fake client, canned PNGs, canned SDK exceptions --------------
 
@@ -50,6 +52,13 @@ class _FakeImages:
         self.calls: list[dict] = []
 
     def generate(self, **params):
+        self.calls.append(params)
+        return self.behavior(params, len(self.calls))
+
+    def edit(self, **params):
+        # Same call-counting/behavior-dispatch shape as generate() above --
+        # edit()'s tests reuse the same _FakeClient/_FakeImages fixtures,
+        # just calling client.images.edit(**params) instead.
         self.calls.append(params)
         return self.behavior(params, len(self.calls))
 
@@ -352,3 +361,513 @@ def test_has_real_alpha_false_for_a_fully_opaque_rgba_image():
 
 def test_has_real_alpha_false_for_an_rgb_image_with_no_alpha_channel():
     assert has_real_alpha(_png_bytes(mode="RGB")) is False
+
+
+# -- edit(): _edit_request_params -- the primary vs. fallback parameter shapes
+
+def test_edit_request_params_primary_shape_is_model_prompt_and_resolution():
+    params = _edit_request_params(b"img", b"mask", "remove the lamp",
+                                  resolution="2K", fallback=False)
+    assert params["model"] == "gpt-image-2"
+    assert params["prompt"] == "remove the lamp"
+    assert params["n"] == 1
+    assert params["output_format"] == "png"
+    assert params["resolution"] == "2K"
+    assert "size" not in params and "quality" not in params
+    assert "aspect_ratio" not in params
+
+
+def test_edit_request_params_fallback_shape_is_size_and_quality():
+    params = _edit_request_params(b"img", b"mask", "remove the lamp",
+                                  resolution="2K", fallback=True)
+    assert params["model"] == "gpt-image-2"    # unchanged from the primary shape
+    assert params["size"] == "1024x1536"
+    assert params["quality"] == "high"
+    assert "resolution" not in params
+
+
+def test_edit_request_params_wraps_image_and_mask_as_named_bytesio_streams():
+    image_bytes = _png_bytes()
+    mask_bytes = _png_bytes(color=(0, 0, 0))
+    params = _edit_request_params(image_bytes, mask_bytes, "prompt",
+                                  resolution="2K", fallback=False)
+    assert isinstance(params["image"], io.BytesIO)
+    assert isinstance(params["mask"], io.BytesIO)
+    assert params["image"].name.endswith(".png")
+    assert params["mask"].name.endswith(".png")
+    assert params["image"].getvalue() == image_bytes
+    assert params["mask"].getvalue() == mask_bytes
+
+
+# -- edit(): the documented shape, used when it's accepted -------------------
+
+def test_edit_uses_the_documented_shape_when_it_is_accepted():
+    payload = _png_bytes()
+    image_bytes = _png_bytes(color=(10, 10, 10))
+    mask_bytes = _png_bytes(mode="RGBA", color=(0, 0, 0, 0))
+
+    def behavior(params, n):
+        assert params["model"] == "gpt-image-2"
+        assert params["prompt"] == "remove the lamp; extend the wall behind it"
+        assert params["resolution"] == "2K"
+        assert isinstance(params["image"], io.BytesIO)
+        assert isinstance(params["mask"], io.BytesIO)
+        assert params["image"].name.endswith(".png")
+        assert params["mask"].name.endswith(".png")
+        assert params["image"].getvalue() == image_bytes
+        assert params["mask"].getvalue() == mask_bytes
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = edit(client, image_bytes, mask_bytes,
+                  "remove the lamp; extend the wall behind it")
+
+    assert result == payload
+    assert len(client.images.calls) == 1
+
+
+def test_edit_plumbs_the_resolution_argument_into_the_documented_shape():
+    payload = _png_bytes()
+    seen = {}
+
+    def behavior(params, n):
+        seen.update(params)
+        return _Response(_b64(payload))
+
+    edit(_FakeClient(behavior), _png_bytes(), _png_bytes(), "prompt",
+        resolution="4K")
+    assert seen["resolution"] == "4K"
+
+
+# -- edit(): parameter-shape fallback ------------------------------------
+
+def test_edit_falls_back_to_size_quality_on_bad_request_error():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if "resolution" in params:
+            raise _bad_request()
+        assert params["size"] == "1024x1536"
+        assert params["quality"] == "high"
+        assert params["model"] == "gpt-image-2"
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = edit(client, _png_bytes(), _png_bytes(),
+                  "remove the lamp; extend the wall behind it")
+
+    assert result == payload
+    assert len(client.images.calls) == 2   # primary attempt, then fallback
+
+
+def test_edit_falls_back_to_size_quality_on_typeerror():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if "resolution" in params:
+            raise TypeError(
+                "edit() got an unexpected keyword argument 'resolution'")
+        assert params["size"] == "1024x1536"
+        assert params["quality"] == "high"
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = edit(client, _png_bytes(), _png_bytes(), "remove the lamp")
+
+    assert result == payload
+    assert len(client.images.calls) == 2
+
+
+def test_edit_raises_imagingerror_when_both_shapes_are_rejected():
+    def behavior(params, n):
+        raise _bad_request(f"Unknown parameter set (call {n}).")
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="rejected both"):
+        edit(client, _png_bytes(), _png_bytes(), "prompt")
+    assert len(client.images.calls) == 2   # both shapes were actually tried
+
+
+# -- edit(): one retry on a transient failure, never more ---------------
+
+def test_edit_retries_once_on_a_transient_failure_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise _rate_limited()
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = edit(client, _png_bytes(), _png_bytes(), "prompt")
+
+    assert result == payload
+    assert len(client.images.calls) == 2
+
+
+def test_edit_retries_once_on_a_5xx_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise _server_error()
+        return _Response(_b64(payload))
+
+    result = edit(_FakeClient(behavior), _png_bytes(), _png_bytes(), "prompt")
+    assert result == payload
+
+
+def test_edit_retries_once_on_a_connection_error_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise openai.APIConnectionError(request=_REQUEST)
+        return _Response(_b64(payload))
+
+    result = edit(_FakeClient(behavior), _png_bytes(), _png_bytes(), "prompt")
+    assert result == payload
+
+
+def test_edit_raises_after_one_retry_on_a_persistent_transient_failure():
+    def behavior(params, n):
+        raise _rate_limited()
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="after a retry"):
+        edit(client, _png_bytes(), _png_bytes(), "prompt")
+    # exactly one retry on the primary shape -- no shape fallback was burned
+    # chasing a problem that was never about the parameter shape.
+    assert len(client.images.calls) == 2
+
+
+def test_edit_rewinds_image_and_mask_streams_before_retrying():
+    payload = _png_bytes()
+    positions = []
+
+    def behavior(params, n):
+        positions.append((params["image"].tell(), params["mask"].tell()))
+        if n == 1:
+            # Simulate the SDK's own multipart upload having read (and thus
+            # advanced) the streams before the transient failure surfaced.
+            params["image"].read()
+            params["mask"].read()
+            raise _rate_limited()
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = edit(client, _png_bytes(), _png_bytes(), "prompt")
+
+    assert result == payload
+    # Both attempts saw their streams positioned at 0 -- the retry rewound them.
+    assert positions == [(0, 0), (0, 0)]
+
+
+# -- edit(): a response with no usable image data ------------------------
+
+def test_edit_raises_when_the_response_carries_no_image_data():
+    def behavior(params, n):
+        return _Response(None)
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="no image data"):
+        edit(client, _png_bytes(), _png_bytes(), "prompt")
+    assert len(client.images.calls) == 1   # not a shape problem -- no fallback
+
+
+def test_edit_raises_when_the_response_has_an_empty_data_list():
+    def behavior(params, n):
+        return _EmptyResponse()
+
+    with pytest.raises(ImagingError, match="no image data"):
+        edit(_FakeClient(behavior), _png_bytes(), _png_bytes(), "prompt")
+
+
+# -- edit(): decoded bytes really are the model's own PNG ----------------
+
+def test_edit_returns_the_exact_decoded_bytes():
+    payload = _transparent_border_png()
+
+    def behavior(params, n):
+        return _Response(_b64(payload))
+
+    result = edit(_FakeClient(behavior), _png_bytes(), _png_bytes(), "prompt")
+    assert result == payload
+    with Image.open(io.BytesIO(result)) as img:
+        assert img.mode == "RGBA"
+
+
+# -- refine(): _refine_request_params -- the primary vs. fallback shapes ------
+#
+# refine() is edit() with the mask left off, and "left off" is the entire
+# feature: images.edit WITH a mask regenerates the masked region, images.edit
+# with NO mask re-renders the whole frame using the supplied image as its
+# composition anchor. That is what the quality ladder needs (a kept 1K draft
+# re-rendered at 4K without gpt-image-2 -- which has no seed -- inventing a
+# different picture), so every test below that could be satisfied by a
+# fully-transparent mask asserts the absence of the key instead.
+
+def test_refine_request_params_primary_shape_is_model_prompt_and_resolution():
+    params = _refine_request_params(b"img", "re-render faithfully",
+                                    resolution="4K", fallback=False)
+    assert params["model"] == "gpt-image-2"
+    assert params["prompt"] == "re-render faithfully"
+    assert params["n"] == 1
+    assert params["output_format"] == "png"
+    assert params["resolution"] == "4K"
+    assert "size" not in params and "quality" not in params
+    assert "aspect_ratio" not in params
+
+
+def test_refine_request_params_never_carry_a_mask():
+    """The whole point, asserted on both shapes: a mask key at all would
+    turn a full re-render into a region edit."""
+    for fallback in (False, True):
+        params = _refine_request_params(b"img", "prompt", resolution="4K",
+                                        fallback=fallback)
+        assert "mask" not in params
+
+
+def test_refine_request_params_fallback_shape_is_size_and_quality():
+    params = _refine_request_params(b"img", "prompt", resolution="4K",
+                                    fallback=True)
+    assert params["model"] == "gpt-image-2"    # unchanged from the primary shape
+    assert params["size"] == "1024x1536"
+    assert params["quality"] == "high"
+    assert "resolution" not in params
+
+
+def test_refine_request_params_wraps_the_image_as_a_named_bytesio_stream():
+    image_bytes = _png_bytes()
+    params = _refine_request_params(image_bytes, "prompt", resolution="4K",
+                                    fallback=False)
+    assert isinstance(params["image"], io.BytesIO)
+    assert params["image"].name.endswith(".png")
+    assert params["image"].getvalue() == image_bytes
+
+
+# -- refine(): the documented shape, used when it's accepted -----------------
+
+def test_refine_uses_the_documented_shape_when_it_is_accepted():
+    payload = _png_bytes()
+    image_bytes = _png_bytes(color=(10, 10, 10))
+
+    def behavior(params, n):
+        assert params["model"] == "gpt-image-2"
+        assert params["prompt"] == "re-render this exactly, at full detail"
+        assert params["resolution"] == "4K"
+        assert "mask" not in params
+        assert isinstance(params["image"], io.BytesIO)
+        assert params["image"].name.endswith(".png")
+        assert params["image"].getvalue() == image_bytes
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = refine(client, image_bytes, "re-render this exactly, at full detail")
+
+    assert result == payload
+    assert len(client.images.calls) == 1
+
+
+def test_refine_defaults_to_the_4k_tier():
+    """The default is the TOP tier, not edit()'s 2K: this call only ever
+    happens on a plate somebody decided to keep."""
+    payload = _png_bytes()
+    seen = {}
+
+    def behavior(params, n):
+        seen.update(params)
+        return _Response(_b64(payload))
+
+    refine(_FakeClient(behavior), _png_bytes(), "prompt")
+    assert seen["resolution"] == "4K"
+
+
+def test_refine_plumbs_the_resolution_argument_into_the_documented_shape():
+    payload = _png_bytes()
+    seen = {}
+
+    def behavior(params, n):
+        seen.update(params)
+        return _Response(_b64(payload))
+
+    refine(_FakeClient(behavior), _png_bytes(), "prompt", resolution="2K")
+    assert seen["resolution"] == "2K"
+
+
+def test_refine_goes_through_images_edit_not_images_generate():
+    """Stated as its own test because it is the one thing a reader would
+    guess wrong: a re-render is an EDIT of the draft, never a fresh
+    generate() -- generate() has no way to be handed the draft at all."""
+    payload = _png_bytes()
+    used: list[str] = []
+
+    class _Watched(_FakeImages):
+        def generate(self, **params):
+            used.append("generate")
+            return super().generate(**params)
+
+        def edit(self, **params):
+            used.append("edit")
+            return super().edit(**params)
+
+    client = _FakeClient(lambda params, n: _Response(_b64(payload)))
+    client.images = _Watched(lambda params, n: _Response(_b64(payload)))
+    refine(client, _png_bytes(), "prompt")
+    assert used == ["edit"]
+
+
+# -- refine(): parameter-shape fallback --------------------------------------
+
+def test_refine_falls_back_to_size_quality_on_bad_request_error():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if "resolution" in params:
+            raise _bad_request()
+        assert params["size"] == "1024x1536"
+        assert params["quality"] == "high"
+        assert params["model"] == "gpt-image-2"
+        assert "mask" not in params
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = refine(client, _png_bytes(), "re-render this exactly")
+
+    assert result == payload
+    assert len(client.images.calls) == 2   # primary attempt, then fallback
+
+
+def test_refine_falls_back_to_size_quality_on_typeerror():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if "resolution" in params:
+            raise TypeError(
+                "edit() got an unexpected keyword argument 'resolution'")
+        assert params["size"] == "1024x1536"
+        assert params["quality"] == "high"
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = refine(client, _png_bytes(), "re-render this exactly")
+
+    assert result == payload
+    assert len(client.images.calls) == 2
+
+
+def test_refine_raises_imagingerror_when_both_shapes_are_rejected():
+    def behavior(params, n):
+        raise _bad_request(f"Unknown parameter set (call {n}).")
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="rejected both"):
+        refine(client, _png_bytes(), "prompt")
+    assert len(client.images.calls) == 2   # both shapes were actually tried
+
+
+# -- refine(): one retry on a transient failure, never more -------------------
+
+def test_refine_retries_once_on_a_transient_failure_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise _rate_limited()
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = refine(client, _png_bytes(), "prompt")
+
+    assert result == payload
+    assert len(client.images.calls) == 2
+
+
+def test_refine_retries_once_on_a_5xx_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise _server_error()
+        return _Response(_b64(payload))
+
+    assert refine(_FakeClient(behavior), _png_bytes(), "prompt") == payload
+
+
+def test_refine_retries_once_on_a_connection_error_then_succeeds():
+    payload = _png_bytes()
+
+    def behavior(params, n):
+        if n == 1:
+            raise openai.APIConnectionError(request=_REQUEST)
+        return _Response(_b64(payload))
+
+    assert refine(_FakeClient(behavior), _png_bytes(), "prompt") == payload
+
+
+def test_refine_raises_after_one_retry_on_a_persistent_transient_failure():
+    def behavior(params, n):
+        raise _rate_limited()
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="after a retry"):
+        refine(client, _png_bytes(), "prompt")
+    # exactly one retry on the primary shape -- no shape fallback was burned
+    # chasing a problem that was never about the parameter shape.
+    assert len(client.images.calls) == 2
+
+
+def test_refine_rewinds_the_image_stream_before_retrying():
+    """The retry rewind loop reads its streams through .get(), so a params
+    dict with no `mask` at all has simply nothing to rewind there -- this is
+    the test that a missing mask cannot make the rewind path blow up."""
+    payload = _png_bytes()
+    positions = []
+
+    def behavior(params, n):
+        positions.append(params["image"].tell())
+        assert "mask" not in params
+        if n == 1:
+            params["image"].read()
+            raise _rate_limited()
+        return _Response(_b64(payload))
+
+    client = _FakeClient(behavior)
+    result = refine(client, _png_bytes(), "prompt")
+
+    assert result == payload
+    assert positions == [0, 0]
+
+
+# -- refine(): a response with no usable image data --------------------------
+
+def test_refine_raises_when_the_response_carries_no_image_data():
+    def behavior(params, n):
+        return _Response(None)
+
+    client = _FakeClient(behavior)
+    with pytest.raises(ImagingError, match="no image data"):
+        refine(client, _png_bytes(), "prompt")
+    assert len(client.images.calls) == 1   # not a shape problem -- no fallback
+
+
+def test_refine_raises_when_the_response_has_an_empty_data_list():
+    def behavior(params, n):
+        return _EmptyResponse()
+
+    with pytest.raises(ImagingError, match="no image data"):
+        refine(_FakeClient(behavior), _png_bytes(), "prompt")
+
+
+# -- refine(): decoded bytes really are the model's own PNG ------------------
+
+def test_refine_returns_the_exact_decoded_bytes():
+    payload = _transparent_border_png()
+
+    def behavior(params, n):
+        return _Response(_b64(payload))
+
+    result = refine(_FakeClient(behavior), _png_bytes(), "prompt")
+    assert result == payload
+    with Image.open(io.BytesIO(result)) as img:
+        assert img.mode == "RGBA"

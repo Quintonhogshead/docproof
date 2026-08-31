@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cover Canvas — Spell &amp; Check</title>
+<meta name="description" content="The cover editor: a finished cover job opened as editable layers.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="/assets/art/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/assets/art/favicon-32.png" sizes="32x32">
+<!-- The cover's own faces, served by the engine so layer.family resolves
+     exactly. The editor chrome deliberately links nothing external: this app
+     has to run in the Mac shell with the wifi off. -->
+<link rel="stylesheet" href="/api/canvas/fonts.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="app"></div>
+<!-- Konva is vendored (no CDN, offline-first) and attaches the global `Konva`;
+     everything of ours is an ES module underneath it. -->
+<script src="vendor/konva.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

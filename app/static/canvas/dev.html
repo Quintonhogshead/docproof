@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cover Canvas — dev harness</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app" class="app"></div>
+<script src="vendor/konva.min.js"></script>
+
+<!-- The whole server, faked in the page.
+     There is no way to run app/routes/canvas.py from here, so this stubs
+     fetch() with two in-memory jobs: a front cover (a painted placeholder
+     plate, two text layers, a scrim and an ornament) and the same cover
+     already converted to a print wrap. Every endpoint the front-end knows is
+     answered. It loads the SAME modules as index.html — the only difference in
+     the whole app is which fetch answers. Inline module scripts run in
+     document order, so this one installs the stub before app.js reads the
+     URL. -->
+<script type="module">
+import { applyOp } from './ops.js';
+
+const JOB = '20260831-devcvs';
+const JOB_WRAP = '20260831-devwrap';
+const CW = 1024, CH = 1536;
+
+/* ---- a plate to look at: dusk sky, hills, a figure on the ridge ----
+   `seed` shifts the palette and `stamp` prints a label, so a re-rolled or
+   finalized plate is visibly a DIFFERENT plate — which is the only way to
+   see whether a history swap actually swapped anything. */
+function paintPlate(seed = 0, stamp = '') {
+  const c = document.createElement('canvas');
+  c.width = CW; c.height = CH;
+  const x = c.getContext('2d');
+  const hue = (h) => `hsl(${(h + seed * 37) % 360} 34% ${18 + (h % 30)}%)`;
+  const sky = x.createLinearGradient(0, 0, 0, CH);
+  sky.addColorStop(0, hue(220)); sky.addColorStop(0.42, hue(285));
+  sky.addColorStop(0.66, hue(24)); sky.addColorStop(1, hue(40));
+  x.fillStyle = sky; x.fillRect(0, 0, CW, CH);
+  x.fillStyle = 'rgba(255,240,214,.92)';
+  x.beginPath(); x.arc(716, 430, 62, 0, 7); x.fill();
+  const hills = [[0.70, '#3b3346'], [0.79, '#2b2637'], [0.90, '#1b1826']];
+  hills.forEach(([at, col], i) => {
+    x.fillStyle = col;
+    x.beginPath(); x.moveTo(0, CH);
+    for (let px = 0; px <= CW; px += 16) {
+      const t = px / CW;
+      const y = CH * at + Math.sin(t * (5 + i * 3) + i * 2 + seed) * (46 - i * 10)
+        + Math.sin(t * 13 + i) * 12;
+      x.lineTo(px, y);
+    }
+    x.lineTo(CW, CH); x.closePath(); x.fill();
+  });
+  // a figure standing on the second ridge
+  x.fillStyle = '#12101a';
+  x.beginPath();
+  x.ellipse(420, 1105, 26, 34, 0, 0, 7); x.fill();
+  x.beginPath();
+  x.moveTo(394, 1140); x.quadraticCurveTo(420, 1128, 446, 1140);
+  x.lineTo(470, 1268); x.lineTo(370, 1268); x.closePath(); x.fill();
+  // a corner grid, so a perspective pin has straight lines to bend
+  x.strokeStyle = 'rgba(255,255,255,.16)'; x.lineWidth = 3;
+  for (let i = 1; i < 6; i += 1) {
+    x.beginPath(); x.moveTo(CW * i / 6, 0); x.lineTo(CW * i / 6, CH); x.stroke();
+    x.beginPath(); x.moveTo(0, CH * i / 6); x.lineTo(CW, CH * i / 6); x.stroke();
+  }
+  if (stamp) {
+    x.fillStyle = '#ffe9c4';
+    x.font = 'bold 64px Georgia, serif';
+    x.textAlign = 'center';
+    x.fillText(stamp, CW / 2, 200);
+  }
+  return c.toDataURL('image/png');
+}
+const PLATE_OLD = (() => {
+  const c = document.createElement('canvas');
+  c.width = CW; c.height = CH;
+  const x = c.getContext('2d');
+  x.fillStyle = '#3a2e2a'; x.fillRect(0, 0, CW, CH);
+  x.fillStyle = '#6b5340'; x.fillRect(0, CH * 0.72, CW, CH * 0.28);
+  return c.toDataURL('image/png');
+})();
+const FILES = { 'plate_field_v2.png': paintPlate(), 'plate_field_v1.png': PLATE_OLD };
+
+const layer = (o) => Object.assign({
+  visible: true, locked: false, opacity: 1, effects: [],
+  frame: { x: 0.5, y: 0.5, w: 1, h: 1, rotation: 0, flip_h: false, flip_v: false },
+}, o);
+
+const frontDoc = () => ({
+  version: 1, job_id: JOB, canvas: { w: CW, h: CH }, history: [], cost_usd: 1.42,
+  wrap: null, source_spec: 'concept_2',
+  layers: [
+    layer({
+      id: 'l_field', kind: 'art', name: 'Field — dusk ridge', source: 'plate_field_v2.png',
+      prompt: 'A lone figure on a ridge at dusk, wide sky, painterly, no text.',
+      transparent: false, fit: 'cover',
+      // Superseded plates only — the plate on the layer is never also on its
+      // own history, which is the server's own rule (regen._write_plate files
+      // a plate there at the moment something replaces it).
+      plate_history: [
+        { source: 'plate_field_v1.png', prompt: 'A ridge at dusk, flat colour block.' },
+      ],
+    }),
+    layer({
+      id: 'l_scrim', kind: 'scrim', name: 'Scrim — sky', color: '#000000',
+      frame: { x: 0.5, y: 0.18, w: 1, h: 0.42, rotation: 0, flip_h: false, flip_v: false },
+      gradient: { angle: 90, stops: [{ at: 0, alpha: 0.62 }, { at: 1, alpha: 0 }] },
+    }),
+    layer({
+      id: 'l_title', kind: 'text', name: 'Title', text: 'THE LONG\nEVENING',
+      family: 'Georgia', style: 'bold', size: 0.082, color: '#f4e7cd',
+      tracking: 0.06, align: 'center', line_height: 1.08,
+      warp: { kind: 'none', amount: 0 },
+      frame: { x: 0.5, y: 0.15, w: 0.86, h: 0.2, rotation: 0, flip_h: false, flip_v: false },
+      effects: [{ type: 'drop_shadow', params: { dx: 0, dy: 0.004, blur: 0.012, color: '#000000', alpha: 0.55 } }],
+    }),
+    layer({
+      id: 'l_author', kind: 'text', name: 'Author', text: 'MIRA HALLOWAY',
+      family: 'Georgia', style: 'regular', size: 0.03, color: '#f0dcb8',
+      tracking: 0.22, align: 'center', line_height: 1.2,
+      warp: { kind: 'none', amount: 0 },
+      frame: { x: 0.5, y: 0.9, w: 0.8, h: 0.06, rotation: 0, flip_h: false, flip_v: false },
+    }),
+    layer({
+      id: 'l_rule', kind: 'frame', name: 'Ornament — inner rule', preset: 'double_rule',
+      stroke: '#e6d0a4', stroke_w: 0.0022, inset: 0.012, fill: null,
+      frame: { x: 0.5, y: 0.5, w: 0.92, h: 0.95, rotation: 0, flip_h: false, flip_v: false },
+    }),
+  ],
+});
+
+/* ---- the wrap, with the real arithmetic ------------------------------
+   Written out here rather than imported from ./wrap.js on purpose: that
+   module is the CLIENT's mirror of docproof/canvas/wrap.py, and a harness
+   that fed it its own answers could never catch it disagreeing. These are
+   the Python's formulas, restated:
+
+     sheet   = (2*trim_w + spine + 2*bleed) x (trim_h + 2*bleed) inches
+     back    [bleed, bleed+trim_w] · spine next · front to sheet_w-bleed
+     trim y  [bleed, bleed+trim_h],  safe inset 0.25in
+     into the front panel: x' = (front_x0 + x*trim_w)/sheet_w
+                           y' = (bleed    + y*trim_h)/sheet_h            */
+const SAFE_IN = 0.25;
+const SPINE_TITLE_FRACTION = 0.45, SPINE_AUTHOR_FRACTION = 0.30;
+const SPINE_TITLE_RUN = 0.55, SPINE_AUTHOR_RUN = 0.28;
+
+const sheetIn = (w) => ({
+  w: 2 * w.trim_w_in + w.spine_in + 2 * w.bleed_in,
+  h: w.trim_h_in + 2 * w.bleed_in,
+});
+function edgesIn(w) {
+  const backX1 = w.bleed_in + w.trim_w_in;
+  const spineX1 = backX1 + w.spine_in;
+  return { back: [w.bleed_in, backX1], spine: [backX1, spineX1],
+    front: [spineX1, spineX1 + w.trim_w_in] };
+}
+function panelsOf(w) {
+  const s = sheetIn(w);
+  const e = edgesIn(w);
+  const out = {
+    sheet: { w_in: s.w, h_in: s.h, w_px: Math.round(s.w * w.dpi),
+      h_px: Math.round(s.h * w.dpi), dpi: w.dpi },
+    bleed: { x: w.bleed_in / s.w, y: w.bleed_in / s.h, inches: w.bleed_in },
+    safe: { x: SAFE_IN / s.w, y: SAFE_IN / s.h, inches: SAFE_IN },
+  };
+  ['back', 'spine', 'front'].forEach((name) => {
+    out[name] = { x0: e[name][0] / s.w, x1: e[name][1] / s.w,
+      y0: w.bleed_in / s.h, y1: (w.bleed_in + w.trim_h_in) / s.h };
+  });
+  return out;
+}
+
+function spineLayer(source, spec, id, name, height, run, y) {
+  const s = sheetIn(spec);
+  const [x0, x1] = edgesIn(spec).spine;
+  const size = height * spec.spine_in / s.h;
+  return layer({
+    id, kind: 'text', name, text: source.text.split(/\s+/).join(' '),
+    family: source.family, style: source.style, size, color: source.color,
+    tracking: source.tracking, line_height: source.line_height, align: 'center',
+    warp: { kind: 'none', amount: 0 },
+    frame: { x: (x0 + x1) / 2 / s.w, y, w: run * s.h / s.w,
+      h: size * source.line_height, rotation: 90, flip_h: false, flip_v: false },
+  });
+}
+
+function toWrap(front, spec) {
+  const s = sheetIn(spec);
+  const e = edgesIn(spec);
+  const mapX = (v) => (e.front[0] + v * spec.trim_w_in) / s.w;
+  const mapY = (v) => (spec.bleed_in + v * spec.trim_h_in) / s.h;
+  const moved = front.layers.map((l) => {
+    const c = JSON.parse(JSON.stringify(l));
+    const f = c.frame;
+    if (Array.isArray(f.corners) && f.corners.length === 4) {
+      f.corners = f.corners.map(([px, py]) => [mapX(px), mapY(py)]);
+    }
+    f.x = mapX(f.x); f.y = mapY(f.y);
+    f.w = f.w * spec.trim_w_in / s.w;
+    f.h = f.h * spec.trim_h_in / s.h;
+    return c;
+  });
+
+  // The real server samples the field plate with Pillow for this; the harness
+  // takes the second ridge's colour, which is what that sampling lands near.
+  const ground = layer({
+    id: 'l_ground', kind: 'shape', name: 'wrap sheet', shape: 'rect',
+    fill: '#2b2637', stroke: null, stroke_w: 0, radius: 0,
+    frame: { x: 0.5, y: 0.5, w: 1, h: 1, rotation: 0, flip_h: false, flip_v: false },
+  });
+
+  const texts = front.layers.filter((l) => l.kind === 'text')
+    .slice().sort((a, b) => b.size - a.size);
+  const [backX0, backX1] = e.back;
+  const inset = Math.min(SAFE_IN, (backX1 - backX0) / 4);
+  const smallest = texts[texts.length - 1];
+  const bodyH = 0.16 / s.h;
+  const back = layer({
+    id: 'l_backcopy', kind: 'text', name: 'back cover copy', text: 'Back cover copy…',
+    family: smallest ? smallest.family : 'Georgia', style: 'regular',
+    size: bodyH, color: smallest ? smallest.color : '#ffffff',
+    tracking: 0, align: 'left', line_height: smallest ? smallest.line_height : 1.1,
+    warp: { kind: 'none', amount: 0 },
+    frame: {
+      x: (backX0 + backX1) / 2 / s.w,
+      y: (spec.bleed_in + inset) / s.h + bodyH * (smallest ? smallest.line_height : 1.1) / 2,
+      w: (backX1 - backX0 - 2 * inset) / s.w,
+      h: bodyH * (smallest ? smallest.line_height : 1.1),
+      rotation: 0, flip_h: false, flip_v: false,
+    },
+  });
+
+  const spine = [];
+  if (texts.length) {
+    spine.push(spineLayer(texts[0], spec, 'l_spinetitle', 'spine title',
+      SPINE_TITLE_FRACTION, SPINE_TITLE_RUN, 0.5));
+  }
+  if (texts.length > 1) {
+    spine.push(spineLayer(texts[texts.length - 1], spec, 'l_spineauthor', 'spine author',
+      SPINE_AUTHOR_FRACTION, SPINE_AUTHOR_RUN, 0.82));
+  }
+
+  return Object.assign({}, front, {
+    canvas: { w: Math.round(s.w * spec.dpi), h: Math.round(s.h * spec.dpi) },
+    wrap: Object.assign({}, spec),
+    layers: [ground, ...moved, back, ...spine],
+    history: front.history.concat([{ op: 'to_wrap', wrap: Object.assign({}, spec) }]),
+  });
+}
+
+/* The second fixture: the same cover, already a wrap, with a fatter spine
+   than the dialog's default so the two are told apart at a glance. */
+const wrappedFixture = Object.assign(
+  toWrap(frontDoc(), { trim_w_in: 6, trim_h_in: 9, spine_in: 0.86, bleed_in: 0.125, dpi: 300 }),
+  { job_id: JOB_WRAP, cost_usd: 2.35 });
+
+const DOCS = { [JOB]: frontDoc(), [JOB_WRAP]: wrappedFixture };
+
+window.__dev = {
+  ops: [], calls: [], DOCS,
+  get doc() { return DOCS[JOB]; },
+  get wrapped() { return DOCS[JOB_WRAP]; },
+};
+
+const json = (body, status = 200) => new Response(JSON.stringify(body), {
+  status, headers: { 'Content-Type': 'application/json' },
+});
+/* The mime rides in the data URL, because not everything the file route
+   serves is a PNG any more — the print export is a PDF. */
+const dataURLtoBlob = (u) => {
+  const [head, payload] = u.split(',');
+  const mime = (head.match(/^data:([^;]+)/) || [null, 'application/octet-stream'])[1];
+  const bin = atob(payload);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+};
+
+/* ---- the plate verbs, faked -------------------------------------------
+   The tier table and the naming both mirror the real server: a draft roll
+   is cents, finalize is always the top rung, and every new plate is
+   `assets/canvas_<layer id>_<n>.png` with the plate it replaces pushed onto
+   plate_history (docproof/canvas/regen.py _write_plate). Getting that shape
+   right here is the point — the swap op's whole contract is "a plate this
+   layer already has", so a harness that minted plates any other way would
+   never exercise it. */
+const TIER_COST = { draft: 0.03, session: 0.12, final: 0.19 };
+
+function mintPlate(layer, seed, stamp) {
+  const n = 1 + layer.plate_history.length;
+  const rel = `assets/canvas_${layer.id}_${n}.png`;
+  FILES[rel] = paintPlate(seed, stamp);
+  layer.plate_history.push({ source: layer.source, prompt: layer.prompt });
+  layer.source = rel;
+  return rel;
+}
+
+/* A copy of the document to hand back, so the client is never editing the
+   same object the "server" holds. */
+const fresh = (doc) => JSON.parse(JSON.stringify(doc));
+
+function charge(doc, quality) {
+  const cost = TIER_COST[quality] || TIER_COST.session;
+  doc.cost_usd = Math.round((doc.cost_usd + cost) * 100) / 100;
+  return cost;
+}
+
+/* Mean and standard deviation of a rough luminance band, off a small
+   downscale of the plate — the same two numbers docproof/cover/balance
+   measures, near enough that the sentence and the correction are real
+   rather than invented. */
+function measurePlate(dataURL) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = 64; c.height = 96;
+      const x = c.getContext('2d');
+      x.drawImage(img, 0, 0, 64, 96);
+      const d = x.getImageData(0, 0, 64, 96).data;
+      const lum = [];
+      for (let i = 0; i < d.length; i += 4) {
+        lum.push((0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255);
+      }
+      const mean = lum.reduce((a, b) => a + b, 0) / lum.length;
+      const spread = Math.sqrt(
+        lum.reduce((a, v) => a + (v - mean) ** 2, 0) / lum.length);
+      resolve({ mean, spread });
+    };
+    img.onerror = () => resolve({ mean: 0.4, spread: 0.2 });
+    img.src = dataURL;
+  });
+}
+
+const realFetch = window.fetch.bind(window);
+window.fetch = async (input, init = {}) => {
+  const url = String(typeof input === 'string' ? input : input.url);
+  const path = url.split('?')[0];
+  const body = init.body ? JSON.parse(init.body) : null;
+  window.__dev.calls.push({ path, method: init.method || 'GET', body });
+  if (!path.startsWith('/api/')) return realFetch(input, init);
+
+  if (path === '/api/canvas/fonts.css') {
+    return new Response("@font-face{font-family:'Georgia';src:local('Georgia')}", {
+      headers: { 'Content-Type': 'text/css' },
+    });
+  }
+  if (path === '/api/cover/jobs') {
+    return json({ jobs: [
+      { job_id: JOB, title: 'The Long Evening', status: 'ready', created: '2026-08-31T10:00:00Z', total_usd: 1.42 },
+      { job_id: JOB_WRAP, title: 'The Long Evening — print wrap', status: 'ready', created: '2026-08-31T11:00:00Z', total_usd: 2.35 },
+    ] });
+  }
+  if (path === '/api/canvas/open') {
+    const opened = DOCS[body && body.job_id];
+    return opened ? json({ doc: fresh(opened) }) : json({ detail: 'no such job' }, 404);
+  }
+
+  // Everything else is /api/canvas/<job>/<verb>, verb optional.
+  const route = path.match(/^\/api\/canvas\/([^/]+)(?:\/(.*))?$/);
+  if (!route) return json({ detail: `dev harness has no ${path}` }, 404);
+  const jobId = decodeURIComponent(route[1]);
+  const verb = route[2] || '';
+  const doc = DOCS[jobId];
+  if (!doc) return json({ detail: `dev harness has no job ${jobId}` }, 404);
+
+  if (verb.startsWith('file/')) {
+    const src = FILES[decodeURIComponent(verb.slice(5))];
+    return src ? new Response(dataURLtoBlob(src)) : json({ detail: 'no such file' }, 404);
+  }
+  if (!verb) return json({ doc: fresh(doc) });
+
+  if (verb === 'ops') {
+    /* Mirror the client's own applier so the "authoritative" copy really
+       moves — plus the refusals the real server makes that the client
+       cannot make for itself: a set_art source must name a plate this layer
+       already has, and set_wrap is refused outright on a front cover.
+       Faking those here is what turns "the edit looked right" into "the edit
+       would have been accepted". */
+    for (const op of body.ops) {
+      if (op.op === 'set_art' && op.source !== undefined) {
+        const l = doc.layers.find((x) => x.id === op.layer_id);
+        const shelf = l ? [l.source, ...l.plate_history.map((h) => h.source)] : [];
+        if (!shelf.includes(op.source)) {
+          return json({ detail: `set_art cannot point layer ${op.layer_id} at `
+            + `${op.source} — this layer has: ${shelf.join(', ')}.` }, 409);
+        }
+      }
+      if (op.op === 'set_wrap') {
+        if (!doc.wrap) {
+          return json({ detail: 'set_wrap adjusts an existing print wrap, and '
+            + 'this canvas is still a front cover.' }, 409);
+        }
+        if (op.trim_w_in !== undefined || op.trim_h_in !== undefined) {
+          return json({ detail: 'set_wrap cannot change the trim size — the '
+            + 'trim is the book’s size, so changing it is a different book.' }, 409);
+        }
+      }
+      applyOp(doc, op);
+    }
+    window.__dev.ops.push(...body.ops);
+    return json({ doc: fresh(doc), cost_usd: doc.cost_usd });
+  }
+  if (verb === 'wrap') {
+    if (doc.wrap) {
+      return json({ detail: `this canvas is already a wrap (${doc.wrap.trim_w_in}x`
+        + `${doc.wrap.trim_h_in}in, ${doc.wrap.spine_in}in spine), and converting `
+        + `it again would remap the whole wrap into its own front panel. To change `
+        + `the spine or the bleed, use the set_wrap op.` }, 409);
+    }
+    const spec = {
+      trim_w_in: body.trim_w_in, trim_h_in: body.trim_h_in, spine_in: body.spine_in,
+      bleed_in: body.bleed_in === undefined ? 0.125 : body.bleed_in,
+      dpi: body.dpi === undefined ? 300 : body.dpi,
+    };
+    DOCS[jobId] = toWrap(doc, spec);
+    window.__dev.lastWrap = spec;
+    return json({ doc: fresh(DOCS[jobId]), panels: panelsOf(spec) });
+  }
+  if (verb === 'reroll') {
+    const l = doc.layers.find((x) => x.id === body.layer_id);
+    if (!l) return json({ detail: 'no such layer' }, 409);
+    window.__dev.lastQuality = body.quality;
+    if (body.prompt) l.prompt = body.prompt;
+    mintPlate(l, 1 + l.plate_history.length, `ROLL ${body.quality || 'session'}`);
+    const cost = charge(doc, body.quality);
+    return json({ doc: fresh(doc), cost_usd: cost });
+  }
+  if (verb === 'inpaint') {
+    window.__dev.lastMask = body.mask_b64;
+    window.__dev.lastQuality = body.quality;
+    const l = doc.layers.find((x) => x.id === body.layer_id);
+    if (!l) return json({ detail: 'no such layer' }, 409);
+    mintPlate(l, 4 + l.plate_history.length, 'REPAIRED');
+    const cost = charge(doc, body.quality);
+    return json({ doc: fresh(doc), cost_usd: cost });
+  }
+  if (verb === 'finalize') {
+    const l = doc.layers.find((x) => x.id === body.layer_id);
+    if (!l) return json({ detail: 'no such layer' }, 409);
+    // Composition-anchored: same seed as the plate it re-renders, so it
+    // comes back recognisably the same picture — just stamped FINAL.
+    mintPlate(l, 1 + l.plate_history.length, 'FINAL');
+    const cost = charge(doc, 'final');
+    return json({ doc: fresh(doc), cost_usd: cost });
+  }
+  if (verb === 'ground') {
+    const l = doc.layers.find((x) => x.id === body.layer_id);
+    if (!l) return json({ detail: 'no such layer' }, 409);
+    window.__dev.lastGroundInstruction = body.instruction;
+    mintPlate(l, 2 + l.plate_history.length, 'GROUNDED');
+    const cost = charge(doc, 'final');
+    return json({ doc: fresh(doc), cost_usd: cost });
+  }
+  if (verb === 'rebalance') {
+    const l = doc.layers.find((x) => x.id === body.layer_id);
+    if (!l || l.kind !== 'art') {
+      return json({ detail: 'rebalance was aimed at something that is not a plate' }, 409);
+    }
+    const { mean, spread } = await measurePlate(FILES[l.source] || '');
+    const clamp = (v) => Math.max(-0.15, Math.min(0.15, v));
+    const brightness = clamp(0.45 - mean);
+    const contrast = clamp(spread <= 0.01 ? 0.15 : (0.22 / spread) - 1);
+    // Through the ops layer, exactly as the server does it, so the effect
+    // lands in history and undoes like any other edit.
+    const effects = (l.effects || []).filter((e) => e.type !== 'levels')
+      .concat([{ type: 'levels', params: { brightness, contrast } }]);
+    applyOp(doc, { op: 'set_effects', layer_id: l.id, effects });
+    const measured = `Measured on this plate alone: mean luminance `
+      + `${(mean * 100).toFixed(0)}%, contrast spread ${(spread * 100).toFixed(0)}%, `
+      + `mirror symmetry 0.81, visual centre of mass at 48% of width — so levels `
+      + `were nudged brightness ${brightness >= 0 ? '+' : ''}${brightness.toFixed(2)}, `
+      + `contrast ${contrast >= 0 ? '+' : ''}${contrast.toFixed(2)} (both clamped to ±0.15).`;
+    window.__dev.lastMeasured = measured;
+    return json({ doc: fresh(doc), measured });
+  }
+  if (verb === 'chat') {
+    window.__dev.lastSnapshot = body.snapshot_b64;
+    const t = doc.layers.find((x) => x.id === 'l_title');
+    if (t) t.frame.y += 0.06;
+    return json({
+      reply: 'Dropped the title 6% — it was sitting on the horizon line.',
+      doc: fresh(doc),
+      ops_applied: [{ op: 'nudge', layer_id: 'l_title', dx: 0, dy: 0.06 }],
+      cost_usd: doc.cost_usd,
+    });
+  }
+  if (verb === 'export') {
+    window.__dev.lastExportBytes = (body.png_b64 || '').length;
+    window.__dev.lastExportFormat = body.format || 'png';
+    if (body.format === 'pdf') {
+      /* The real server wraps these pixels in a page of exactly the sheet's
+         inches (app/routes/canvas.py pdf_bytes). The harness cannot, so it
+         files a stub under the real name — what is under test here is the
+         round trip: POST /export, then GET the name it answered with. */
+      const name = 'renders/canvas_export.pdf';
+      // Plain ASCII: btoa() refuses anything outside Latin-1, and an em dash
+      // or a curly apostrophe here throws where the client reads it as "the
+      // server is gone".
+      FILES[name] = 'data:application/pdf;base64,' + btoa(
+        '%PDF-1.4\n% dev harness stub - the real export is a one-page PDF at '
+        + "the sheet's exact physical size.\n");
+      return json({ name });
+    }
+    return json({ name: 'renders/canvas_export.png' });
+  }
+  return json({ detail: `dev harness has no ${path}` }, 404);
+};
+
+// ?picker=1 skips straight to the job list; ?nokey=1 skips to the unlock form.
+const flags = new URLSearchParams(location.search);
+if (!flags.has('nokey')) {
+  try { sessionStorage.setItem('sc-cover-key', 'dev'); } catch (e) { /* private mode */ }
+} else {
+  try { sessionStorage.removeItem('sc-cover-key'); } catch (e) { /* private mode */ }
+}
+if (!flags.get('job') && !flags.has('picker') && !flags.has('nokey')) {
+  history.replaceState(null, '', `${location.pathname}?job=${JOB}`);
+}
+</script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

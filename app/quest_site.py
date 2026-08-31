@@ -28,7 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from docproof import __version__
 from docproof.cover import pipeline as cover_pipeline
 
-from .routes import cover, quest
+from .routes import canvas, cover, quest
 from .settings import resource_root
 
 log = logging.getLogger("app.quest_site")
@@ -205,6 +205,10 @@ def create_app() -> FastAPI:
 
     quest.register(app)
     cover.register(app)
+    # The editor rides wherever Cover Studio does: a Spell & Check user who
+    # can generate a cover can open it as layers (spec: docs/cover_canvas_
+    # spec.md). Registered here because this app skips routes.register().
+    canvas.register(app)
 
     @app.post("/api/quest/waitlist")
     async def join_waitlist(request: Request,

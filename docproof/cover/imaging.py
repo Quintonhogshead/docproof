@@ -3,8 +3,8 @@ no text in them, decoded to raw PNG bytes. Everything about WHAT to ask for
 (prompt assembly: a Direction's art_prompt plus an archetype's
 composition_note plus NEGATIVE_SUFFIX) lives in docproof.cover.pipeline, not
 here; this module owns exactly one thing — the vendor call itself — so it
-stays engine-shaped rather than OpenAI-shaped (see the stub comments at the
-bottom for the two engines this seam is meant to grow into).
+stays engine-shaped rather than OpenAI-shaped (see the stub comment at the
+bottom for the other engine this seam is meant to grow into).
 
 gpt-image-2 was a beta-stage release with no live API reference reachable
 while this file was written (see docs/cover_designer_spec.md §7.2) — its own
@@ -13,9 +13,16 @@ best guess here, not a confirmed contract. generate() tries that shape first
 and falls back to gpt-image-1's long-stable size/quality shape on a TypeError
 (an older SDK build that has never heard of the new keywords) or a 400 (the
 server rejects the shape outright), so a parameter-name guess can never dead-
-end a cover job — see _request_params's docstring for the loud caveat.
-Verify the primary shape against the live gpt-image-2 reference at
-integration time and simplify this once it is confirmed.
+end a cover job — see _request_params's docstring for the loud caveat. edit()
+does the same two-shape dance for client.images.edit (mask-based inpainting
+of one region of an existing plate) — see _edit_request_params's docstring;
+its parameter names are an even blinder guess, since there was no reachable
+reference for images.edit specifically, only for images.generate. refine()
+is that same images.edit call with the mask left off — the whole plate
+re-rendered at a higher tier with the draft anchoring it — and inherits
+every one of those caveats unchanged.
+Verify the primary shapes against the live gpt-image-2 reference at
+integration time and simplify this once they are confirmed.
 """
 from __future__ import annotations
 
@@ -137,6 +144,242 @@ def _call_with_retry(client, params: dict[str, Any]) -> bytes:
                 f"Image generation failed after a retry: {e2}") from e2
 
 
+def _edit_request_params(image_png: bytes, mask_png: bytes, prompt: str, *,
+                         resolution: str, fallback: bool) -> dict[str, Any]:
+    """Keyword arguments for one client.images.edit(**params) call.
+
+    image and mask travel as file-like objects (io.BytesIO), not raw bytes:
+    the SDK's multipart upload needs a `.name` attribute ending in `.png` on
+    each stream to set that part's MIME type correctly — generate() never
+    has to fuss with this since images.generate takes no file uploads at
+    all. A fresh pair of streams is built on every call (each shape attempt
+    gets its own), so nothing here depends on a stream still being at
+    position 0 from an earlier attempt.
+
+    fallback=False — the "documented" gpt-image-2 shape: model, prompt,
+    n=1, output_format="png", plus a resolution tier. LOUD NOTE FOR THE
+    INTEGRATOR: unlike generate()'s shape (checked against what little of
+    the gpt-image-2 docs were reachable), the field names for images.edit
+    on gpt-image-2 are a best guess written with no live API access at all
+    — there was nothing to check this against. Verify them against the
+    current gpt-image-2 API reference and delete this note once confirmed
+    (docs/cover_designer_spec.md §7.2).
+
+    fallback=True — gpt-image-1's long-stable, SDK-typed shape (`size`,
+    `quality`); 1024x1536 mirrors generate()'s own fallback size. `model`
+    stays "gpt-image-2" here too, exactly as generate()'s fallback does —
+    the model name isn't part of what's being guessed at; only the
+    resolution/size keyword shape is."""
+    image = io.BytesIO(image_png)
+    image.name = "image.png"
+    mask = io.BytesIO(mask_png)
+    mask.name = "mask.png"
+    params: dict[str, Any] = {
+        "model": "gpt-image-2", "image": image, "mask": mask,
+        "prompt": prompt, "n": 1, "output_format": "png",
+    }
+    if fallback:
+        params["size"] = "1024x1536"
+        params["quality"] = "high"
+    else:
+        params["resolution"] = resolution            # "1K" | "2K" | "4K"
+    return params
+
+
+def _edit_once(client, params: dict[str, Any]) -> bytes:
+    resp = client.images.edit(**params)
+    data = getattr(resp, "data", None) or []
+    b64 = getattr(data[0], "b64_json", None) if data else None
+    if not b64:
+        raise ImagingError(
+            "gpt-image-2 image edit returned a response with no image data.")
+    return base64.b64decode(b64)
+
+
+def _edit_with_retry(client, params: dict[str, Any], *,
+                     verb: str = "edit") -> bytes:
+    """One real attempt, with a single retry for a transient failure only —
+    see _TRANSIENT_ERRORS. A TypeError or BadRequestError propagates
+    immediately, unretried, so edit() can try the other parameter shape
+    instead of burning a retry on a request that will never succeed
+    unchanged. Kept parallel to, but separate from, generate()'s
+    _call_once/_call_with_retry rather than sharing them, so generate()'s
+    own code paths stay untouched.
+
+    Shared with refine(), whose params carry no `mask` at all — the rewind
+    loop below reads both streams through .get(), so a missing mask is
+    simply nothing to rewind. `verb` only names the caller in the log line;
+    every behavior here is identical for both."""
+    try:
+        return _edit_once(client, params)
+    except _TRANSIENT_ERRORS as e:
+        log.warning("imaging.%s: transient failure (%s); retrying once.",
+                    verb, e)
+        # The image/mask streams were already (possibly) read once by the
+        # failed attempt's multipart upload — rewind them before reusing
+        # the same params dict for the retry.
+        for stream in (params.get("image"), params.get("mask")):
+            if stream is not None:
+                stream.seek(0)
+        try:
+            return _edit_once(client, params)
+        except _TRANSIENT_ERRORS as e2:
+            raise ImagingError(
+                f"Image {verb} failed after a retry: {e2}") from e2
+
+
+def edit(client, image_png: bytes, mask_png: bytes, prompt: str, *,
+         resolution: str = "2K") -> bytes:
+    """Regenerate ONLY the masked region of an existing plate, guided by
+    `prompt` (an instruction like "remove the lamp; extend the wall behind
+    it"), leaving the rest of `image_png` untouched. `image_png` is the
+    existing plate; `mask_png` is an alpha mask the same size as the image.
+
+    Mask convention (OpenAI's images.edit convention, not this module's
+    invention): TRANSPARENT pixels in the mask mark the region to
+    regenerate; opaque pixels mark the region to preserve untouched. The
+    caller must rasterize whatever region it drew/selected to alpha=0 there
+    and alpha=255 everywhere else before passing it in here — getting this
+    inverted silently regenerates the wrong 99% of the plate.
+
+    Tries the documented gpt-image-2 parameter shape first; on a TypeError
+    (this SDK build rejects an unknown keyword) or an openai.BadRequestError
+    (the server rejects the shape), falls back once to gpt-image-1's shape.
+    Raises ImagingError, with a human sentence, if both shapes fail, or if a
+    transient failure survives its one retry (see _edit_with_retry)."""
+    primary = _edit_request_params(image_png, mask_png, prompt,
+                                   resolution=resolution, fallback=False)
+    try:
+        image_bytes = _edit_with_retry(client, primary)
+    except (TypeError, openai.BadRequestError) as e:
+        log.warning(
+            "imaging.edit: the documented gpt-image-2 edit params "
+            "(resolution=%r) were rejected (%s); falling back to "
+            "gpt-image-1-style size/quality.", resolution, e)
+        fallback = _edit_request_params(image_png, mask_png, prompt,
+                                        resolution=resolution, fallback=True)
+        try:
+            image_bytes = _edit_with_retry(client, fallback)
+        except (TypeError, openai.BadRequestError) as e2:
+            raise ImagingError(
+                "Image edit failed: gpt-image-2 rejected both the "
+                f"documented parameter shape and the gpt-image-1-style "
+                f"fallback ({e2}).") from e2
+        else:
+            log.info("imaging.edit: used the gpt-image-1-style fallback "
+                     "shape (size=%r, quality='high').", fallback["size"])
+    else:
+        log.info("imaging.edit: used the documented gpt-image-2 edit shape "
+                 "(resolution=%r).", resolution)
+    return image_bytes
+
+
+def _refine_request_params(image_png: bytes, prompt: str, *, resolution: str,
+                           fallback: bool) -> dict[str, Any]:
+    """Keyword arguments for one client.images.edit(**params) call that
+    carries an IMAGE BUT NO MASK.
+
+    Same shape as _edit_request_params with the `mask` key simply absent —
+    and absent is the whole point, not an omission: images.edit with a mask
+    regenerates the masked region, images.edit with no mask re-renders the
+    entire frame with the supplied image as its anchor. The image still
+    travels as an io.BytesIO with a `.name` ending in `.png`, for the same
+    multipart-MIME reason edit()'s does, and a fresh stream is built on
+    every call.
+
+    fallback=False — the "documented" gpt-image-2 shape: model, prompt,
+    n=1, output_format="png", plus a resolution tier. LOUD NOTE FOR THE
+    INTEGRATOR: exactly as loud as _edit_request_params's own note, and for
+    the same reason — the field names for images.edit on gpt-image-2 are a
+    best guess written with no live API access at all, and this function
+    guesses the same names one more time. Verify them against the current
+    gpt-image-2 API reference and delete this note once confirmed
+    (docs/cover_designer_spec.md §7.2).
+
+    fallback=True — gpt-image-1's long-stable, SDK-typed shape (`size`,
+    `quality`); 1024x1536 mirrors edit()'s and generate()'s own fallback
+    size. NOTE that the fallback shape cannot express a tier at all, so a
+    "4K" refine that falls back is a 1024x1536 render — still a faithful
+    re-render of the same composition, just not the resolution that was
+    asked for. That is the honest failure mode of a guessed parameter name;
+    the caller is charged for the tier it asked for because that is what it
+    requested, and the log line below says which shape actually ran."""
+    image = io.BytesIO(image_png)
+    image.name = "image.png"
+    params: dict[str, Any] = {
+        "model": "gpt-image-2", "image": image,
+        "prompt": prompt, "n": 1, "output_format": "png",
+    }
+    if fallback:
+        params["size"] = "1024x1536"
+        params["quality"] = "high"
+    else:
+        params["resolution"] = resolution            # "1K" | "2K" | "4K"
+    return params
+
+
+def refine(client, image_png: bytes, prompt: str, *,
+           resolution: str = "4K") -> bytes:
+    """Re-render a whole plate at `resolution`, with `image_png` anchoring
+    the composition. Returns the new plate as PNG bytes.
+
+    This is the finalize half of the draft→final ladder
+    (docs/cover_canvas_spec.md §5, §8): a person rolls plates at the 1K
+    draft tier while composing, and when one is KEPT it is re-rendered at
+    full quality. It cannot be a fresh generate() call — gpt-image-2 has no
+    seed, so re-prompting the same words at a higher tier returns a
+    DIFFERENT picture, and the composition somebody just spent an afternoon
+    arranging the type against would be gone. Feeding the kept draft back
+    through images.edit is what holds it steady.
+
+    **No mask, deliberately.** edit() masks a region to say "change only
+    here"; refine() supplies no mask at all, which is how images.edit is
+    told to re-render the entire frame. Passing a fully-transparent mask
+    instead would be the same request phrased as a coincidence — this
+    function says it outright.
+
+    **Fidelity here is composition-faithful, not pixel-identical.** The
+    model re-paints; it does not upscale. Subjects, placement, palette and
+    light come back recognizably the same, and brush-level detail does not:
+    a hand may hold a different number of fingers, a distant window may
+    move. Anything measured against the draft's exact pixels (a mask drawn
+    on it, an anchor recorded from it) must be re-measured against the
+    returned plate. `prompt` is what steers that re-paint — the caller
+    should state "same composition, full detail, do not re-compose" rather
+    than re-describing the scene from scratch.
+
+    Tries the documented gpt-image-2 parameter shape first; on a TypeError
+    (this SDK build rejects an unknown keyword) or an openai.BadRequestError
+    (the server rejects the shape), falls back once to gpt-image-1's shape.
+    Raises ImagingError, with a human sentence, if both shapes fail, or if a
+    transient failure survives its one retry (see _edit_with_retry)."""
+    primary = _refine_request_params(image_png, prompt, resolution=resolution,
+                                     fallback=False)
+    try:
+        image_bytes = _edit_with_retry(client, primary, verb="refine")
+    except (TypeError, openai.BadRequestError) as e:
+        log.warning(
+            "imaging.refine: the documented gpt-image-2 edit params "
+            "(resolution=%r, no mask) were rejected (%s); falling back to "
+            "gpt-image-1-style size/quality.", resolution, e)
+        fallback = _refine_request_params(image_png, prompt,
+                                          resolution=resolution, fallback=True)
+        try:
+            image_bytes = _edit_with_retry(client, fallback, verb="refine")
+        except (TypeError, openai.BadRequestError) as e2:
+            raise ImagingError(
+                "Image refine failed: gpt-image-2 rejected both the "
+                f"documented parameter shape and the gpt-image-1-style "
+                f"fallback ({e2}).") from e2
+        else:
+            log.info("imaging.refine: used the gpt-image-1-style fallback "
+                     "shape (size=%r, quality='high').", fallback["size"])
+    else:
+        log.info("imaging.refine: used the documented gpt-image-2 edit shape "
+                 "(resolution=%r, no mask).", resolution)
+    return image_bytes
+
+
 def generate(client, prompt: str, *, transparent: bool = False,
             resolution: str = "2K") -> bytes:
     """One art layer as PNG bytes. `prompt` is already fully assembled (art
@@ -221,10 +464,6 @@ def has_real_alpha(png_bytes: bytes) -> bool:
 # be a second generate()-shaped function behind the same seam
 # (docproof.cover.pipeline picks an engine per slot), not a rewrite of this
 # one. Not built.
-#
-# images.edit (mask-based inpainting): touching up one region of an
-# already-generated layer without a full regeneration. A later phase. Also
-# not built.
 
-__all__ = ["IMAGE_COST", "NEGATIVE_SUFFIX", "ImagingError", "generate",
-          "has_real_alpha", "make_client"]
+__all__ = ["IMAGE_COST", "NEGATIVE_SUFFIX", "ImagingError", "edit", "generate",
+          "has_real_alpha", "make_client", "refine"]
