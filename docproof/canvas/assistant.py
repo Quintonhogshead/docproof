@@ -43,6 +43,7 @@ import asyncio
 import base64
 import copy
 import importlib
+import io
 import json
 import os
 from dataclasses import dataclass, field
@@ -64,6 +65,20 @@ MODEL_ENV = "DOCPROOF_CANVAS_ASSISTANT_MODEL"
 MAX_TURNS = 25
 
 SERVER_NAME = "canvas"
+
+# How wide `look` renders the cover for the model's eye. Big enough to judge
+# type weight and a face against a background, small enough that a turn can
+# afford to look several times — which is the whole point of a tool that can
+# now be called after every edit.
+LOOK_WIDTH = 900
+
+# The measuring grid `look(grid=true)` draws over that render: a line every
+# tenth of the canvas, labelled in the document's OWN units (fractions), so
+# a position read off the picture is already the number an op takes. Thirds
+# are drawn heavier because the doctrine talks in thirds, and the centre
+# cross heavier still.
+GRID_STEP = 0.1
+GRID_THIRDS = (1 / 3, 2 / 3)
 
 _INSTALL_HINT = (
     "The canvas assistant needs the Claude Agent SDK, which is not installed "
@@ -272,6 +287,32 @@ what was wrong — fix it and retry rather than reporting failure. Finish with
 one or two sentences saying what changed, in the person's own terms ("the
 title moved off her face and up 4%"), never a list of op dicts."""
 
+MEASURE = """\
+Measure before you judge, and look again after you act. You have three
+instruments and they are all cheap:
+
+- `inspect` — the numbers the document actually holds: every layer's id, kind
+  and frame. Positions come from here, never from memory of an earlier turn.
+- `look(grid=true)` — the cover re-rendered with a labelled grid over it,
+  tenths of the canvas in the same fractions the ops take. This is how a
+  judgement becomes an edit: not "the title is too high" but "the title's
+  centre reads at y≈0.31, the plate's horizon is at 0.46, put it at 0.24".
+  Say the numbers you read; a number you did not read off the grid is a
+  guess, and a guess spent on a plate is money.
+- `rebalance` — measures a plate's exposure, contrast spread, symmetry and
+  centre of mass and reports every number, for nothing. It is the FIRST
+  answer to a flat or muddy plate, not the last: try it before proposing a
+  re-roll that costs money and returns a different picture.
+
+The loop, in Act mode: measure, change ONE thing, `look` at what you did,
+say whether it worked. `look` re-renders the live document, so after an edit
+it shows the edit — a claim about a change you did not look at is a claim you
+have not checked. Two or three passes is a working session; a fourth without
+improvement means the plate is wrong, not the layout, and you should say so
+instead of spending again. Every plate verb costs real money, so state what
+you are about to buy and why before you buy it, and never roll twice in a row
+without looking in between."""
+
 SYSTEM_PROMPT = f"""\
 You are the resident art director for Cover Canvas, a layered editor for book
 covers. Someone is looking at a cover right now and telling you what is wrong
@@ -298,6 +339,10 @@ and never lecture twice about the same thing.
 ## The plate verbs
 
 {VERBS}
+
+## Measuring
+
+{MEASURE}
 
 ## Conduct
 
@@ -351,6 +396,15 @@ class _Session:
     snapshot_png: bytes | None = None
     image_client: Callable[[], Any] | None = None
     ops_applied: list[dict] = field(default_factory=list)
+    # Where doc.history stood when the turn began — the mark `_edited` reads
+    # to know whether the client's snapshot is still the truth. Set in
+    # __post_init__ rather than defaulted to 0, because a document that has
+    # been edited before today arrives with a history already in it.
+    history_at_start: int = -1
+
+    def __post_init__(self) -> None:
+        if self.history_at_start < 0:
+            self.history_at_start = len(self.doc.history)
 
     # -- tools --
 
@@ -575,19 +629,109 @@ class _Session:
         except (KeyError, AttributeError):                  # pragma: no cover
             return "a new plate"
 
-    async def look(self, args: dict[str, Any]) -> dict[str, Any]:
-        """The rendered cover, as the person is seeing it right now.
+    def _edited(self) -> bool:
+        """Whether this turn has changed the document yet.
 
-        The snapshot is ALSO attached to their message, so the usual reason
-        to call this is a second look after an edit — or a turn that arrived
-        without one (the client only sends a snapshot when the canvas has
-        rendered). Whatever the client encoded is declared honestly:
-        `_image_mime` reads the bytes rather than trusting the field name."""
+        Read off `doc.history` rather than tracked by each handler: every op
+        records itself there (ops.apply) and so does every plate verb
+        (regen appends its own entry), so one length comparison cannot fall
+        out of step with a verb somebody adds later."""
+        return len(self.doc.history) > self.history_at_start
+
+    def _render_look(self, grid: bool) -> bytes:
+        """The working document drawn from scratch, as PNG bytes.
+
+        Server-side (docproof.canvas.render), on the DOCUMENT this turn has
+        been editing — which is the whole point: the browser's snapshot was
+        taken before the turn started, so a model that edited and then
+        "looked" used to be shown the cover as it was BEFORE its own edit,
+        and reported on a change it could not actually see. Flattened onto
+        white because the render carries no paper (render.py's DIVERGENCES)
+        and a cover judged on transparency is a cover judged wrong."""
+        from PIL import Image
+
+        from . import render as canvas_render
+
+        image = canvas_render.render(self.doc, self.job_dir, width=LOOK_WIDTH)
+        paper = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        flat = Image.alpha_composite(paper, image).convert("RGB")
+        if grid:
+            flat = _draw_grid(flat, self.doc)
+        buf = io.BytesIO()
+        flat.save(buf, format="PNG")
+        return buf.getvalue()
+
+    async def look(self, args: dict[str, Any]) -> dict[str, Any]:
+        """The cover as it stands RIGHT NOW, as an image.
+
+        Two sources, and which one is used is not a preference:
+
+        - The client's snapshot, when the turn has changed nothing yet and no
+          grid was asked for. It is the browser's own Konva render — the
+          picture the person is actually looking at, fonts shaped by their
+          browser — so it is the truest answer while it is still true.
+        - A fresh server-side render, the moment either of those stops
+          holding. After an edit the snapshot is stale by definition, and a
+          measuring grid has to be drawn over pixels this process made.
+
+        `grid` overlays the measuring grid (see _draw_grid): tenths of the
+        canvas, labelled in the fractions the ops themselves take, so a
+        position read off the picture needs no conversion to become a
+        `set_frame`.
+
+        A render that fails is not fatal to the turn: the snapshot is offered
+        instead where there is one, with a sentence saying the picture is the
+        one from before the edit."""
+        grid = bool(args.get("grid"))
+        stale = self._edited()
+        if stale or grid:
+            try:
+                png = await asyncio.to_thread(self._render_look, grid)
+            except Exception as e:                          # noqa: BLE001
+                if not self.snapshot_png:
+                    return _text(
+                        f"The cover could not be rendered to look at ({e}) — "
+                        f"work from `inspect` and say what you could not "
+                        f"check.", is_error=True)
+                return {"content": [
+                    {"type": "text", "text": (
+                        f"The live render failed ({e}), so this is the "
+                        f"snapshot from before this turn's edits — do not "
+                        f"judge those edits from it.")},
+                    {"type": "image",
+                     "data": base64.b64encode(self.snapshot_png).decode("ascii"),
+                     "mimeType": _image_mime(self.snapshot_png)},
+                ]}
+            note = ("The cover as it stands after this turn's edits"
+                    if stale else "The cover as it stands")
+            if grid:
+                note += (", with the measuring grid over it: every line is a "
+                         "tenth of the canvas and the labels ARE the "
+                         "fractions ops take (x across, y down, both from the "
+                         "top-left corner; a layer's frame.x/y is its CENTRE)")
+            return {"content": [
+                {"type": "text", "text": f"{note}."},
+                {"type": "image",
+                 "data": base64.b64encode(png).decode("ascii"),
+                 "mimeType": "image/png"},
+            ]}
         if not self.snapshot_png:
-            return _text(
-                "No snapshot came with this message, so you cannot see the "
-                "cover this turn — work from `inspect` and say what you "
-                "could not check.")
+            # Nothing edited and nothing sent: render anyway rather than
+            # refuse. The document is on disk; being unable to see a cover
+            # that this process can draw would be a self-inflicted blindness.
+            try:
+                png = await asyncio.to_thread(self._render_look, False)
+            except Exception as e:                          # noqa: BLE001
+                return _text(
+                    f"No snapshot came with this message and the cover could "
+                    f"not be rendered either ({e}) — work from `inspect` and "
+                    f"say what you could not check.", is_error=True)
+            return {"content": [
+                {"type": "text", "text": "The cover as it stands."},
+                {"type": "image",
+                 "data": base64.b64encode(png).decode("ascii"),
+                 "mimeType": "image/png"},
+            ]}
         return {"content": [{
             "type": "image",
             "data": base64.b64encode(self.snapshot_png).decode("ascii"),
@@ -612,10 +756,24 @@ class _Session:
                 self.inspect),
             _ToolSpec(
                 "look",
-                "See the cover as it currently renders, as an image. The "
-                "snapshot is already attached to the user's message; call "
-                "this to look again after an edit.",
-                {"type": "object", "properties": {}},
+                "See the cover as it stands, as an image — RE-RENDERED from "
+                "the live document, so calling it after an edit shows the "
+                "edit. Free, and there is no limit: look after every change "
+                "you make. Pass grid=true to get a measuring grid over it — "
+                "lines every tenth of the canvas, labelled in the same "
+                "fractions the ops take (x across, y down, from the "
+                "top-left; a layer's frame.x/y is its CENTRE) — which is how "
+                "you turn \"the title sits too high\" into a number.",
+                {"type": "object",
+                 "properties": {
+                     "grid": {
+                         "type": "boolean",
+                         "description": (
+                             "Overlay the labelled measuring grid (and, on a "
+                             "print wrap, the fold lines). Use it whenever "
+                             "you are about to state or change a position."),
+                     },
+                 }},
                 self.look),
         ]
         if self.mode != "act":
@@ -728,6 +886,105 @@ _IMAGE_MAGIC: tuple[tuple[bytes, str], ...] = (
     (b"\x89PNG", "image/png"),
     (b"\xff\xd8", "image/jpeg"),
 )
+
+
+def _draw_grid(image: Any, doc: CanvasDoc) -> Any:
+    """The measuring grid, drawn over a rendered cover.
+
+    A vision model can see that a title is too high; it cannot see that the
+    title's centre is at y=0.31 and should be at 0.24. This is the ruler that
+    closes that gap — and it is drawn in the DOCUMENT's units, tenths of the
+    canvas labelled 0.1 to 0.9, so a number read off the picture is already
+    the number `set_frame` takes. No conversion step means no conversion
+    mistake.
+
+    Drawn on a TRANSLUCENT overlay, not straight onto the pixels: the cover
+    still has to be judgeable through it — a ruler that hides the art defeats
+    the purpose of looking. Four weights, faint to strong: tenths, then the
+    thirds (drawn at 0.333/0.667, their own lines, because the doctrine talks
+    in thirds and thirds are not tenths), then the centre cross, then — on a
+    print wrap — the two folds in amber, because on a full sheet x=0.5 is the
+    spine and almost never what anybody means by "the middle".
+
+    Labels sit in the top margin and down the left edge, out of the way of a
+    face, with a dark stroke so they hold on a white sky."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    w, h = base.size
+    try:
+        font = ImageFont.load_default(13)
+    except TypeError:                                       # Pillow < 9.2
+        font = ImageFont.load_default()
+
+    def rule(at: float, vertical: bool, width: int, ink: tuple[int, int, int],
+             alpha: int) -> None:
+        """One line across the whole frame, with a dark companion beside it
+        so it reads on light art as well as dark."""
+        pos = round(at * (w if vertical else h))
+        for offset, colour in ((1, (0, 0, 0, alpha // 2)),
+                               (0, ink + (alpha,))):
+            a, b = ((pos + offset, 0), (pos + offset, h)) if vertical else \
+                   ((0, pos + offset), (w, pos + offset))
+            draw.line([a, b], fill=colour, width=width)
+
+    def label(text: str, xy: tuple[int, int],
+              ink: tuple[int, int, int] = (255, 255, 255)) -> None:
+        draw.text(xy, text, font=font, fill=ink + (255,),
+                  stroke_width=2, stroke_fill=(0, 0, 0, 255))
+
+    white = (255, 255, 255)
+    # Which edge is which, said on the picture as well as in the answer.
+    label("x", (4, 3))
+    label("y", (4, 20))
+    for n in range(1, int(round(1 / GRID_STEP))):
+        at = round(GRID_STEP * n, 2)
+        rule(at, True, 1, white, 105)
+        rule(at, False, 1, white, 105)
+        label(f"{at:g}", (round(at * w) + 4, 3))
+        label(f"{at:g}", (4, round(at * h) + 3))
+
+    # Thirds are not tenths, so they get their own lines AND their own
+    # labels — on the opposite edges, where they cannot be mistaken for the
+    # tenth label they sit next to.
+    for third in GRID_THIRDS:
+        rule(third, True, 2, white, 165)
+        rule(third, False, 2, white, 165)
+        label(f"{third:.3f}", (round(third * w) + 4, h - 20))
+        label(f"{third:.3f}", (w - 44, round(third * h) + 3))
+
+    # The centre, which is what "dead centre" means in every op that takes a
+    # frame — worth its own weight so it is never counted to.
+    rule(0.5, True, 3, white, 225)
+    rule(0.5, False, 3, white, 225)
+
+    wrap = getattr(doc, "wrap", None)
+    if wrap is not None:
+        try:
+            from .wrap import panels as _panels
+            geometry = _panels(wrap)
+        except Exception:                                   # noqa: BLE001
+            geometry = None
+        if geometry:
+            # The two folds ARE the spine's edges, from the same geometry the
+            # browser draws its guides from (docproof.canvas.wrap.panels), so
+            # "move it onto the front panel" is a number and not a guess.
+            amber = (255, 205, 80)
+            for edge in ("x0", "x1"):
+                at = (geometry.get("spine") or {}).get(edge)
+                if at is None:
+                    continue
+                rule(float(at), True, 2, amber, 235)
+                label(f"fold {float(at):.3f}",
+                      (round(float(at) * w) + 4, h - 22), amber)
+            for name in ("back", "spine", "front"):
+                panel = geometry.get(name) or {}
+                if "x0" in panel and "x1" in panel:
+                    mid = (float(panel["x0"]) + float(panel["x1"])) / 2
+                    label(name.upper(), (round(mid * w) - 16, h - 42), amber)
+    return Image.alpha_composite(base, overlay).convert("RGB")
 
 
 def _image_mime(data: bytes) -> str:
@@ -1071,5 +1328,6 @@ async def chat(job_dir: Path, doc: CanvasDoc, messages: list[dict], mode: str,
 
 __all__ = [
     "AssistantUnavailable", "ChatResult", "chat", "resolve_model",
-    "DEFAULT_MODEL", "MODEL_ENV", "MAX_TURNS", "SERVER_NAME", "SYSTEM_PROMPT",
+    "DEFAULT_MODEL", "LOOK_WIDTH", "MEASURE", "MODEL_ENV", "MAX_TURNS",
+    "SERVER_NAME", "SYSTEM_PROMPT",
 ]
