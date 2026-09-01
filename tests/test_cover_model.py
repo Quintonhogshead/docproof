@@ -354,15 +354,16 @@ def test_direction_rejects_unregistered_author_font():
 
 
 def test_direction_requires_every_field_with_no_default():
-    # `recipe` (§15.6), `type_move`/`emphasis_word`/`title_breaks` (§15.12)
-    # and `token_layout` (§19.2) are the deliberate exceptions: "" / [] (none)
+    # `recipe` (§15.6), `type_move`/`emphasis_word`/`title_breaks` (§15.12),
+    # `token_layout` (§19.2) and `text_overrides` (§15.26) are the deliberate
+    # exceptions: "" / [] (none)
     # is a real, common answer for each, and defaulting them keeps every
     # archived direction and every pre-wave caller valid — the wire still
     # REQUIRES them (strict_json_schema promotes defaulted fields into
     # `required`), so the model must answer even though Python code may omit
     # them.
     defaulted = {"recipe": "", "type_move": "", "emphasis_word": "",
-                 "title_breaks": [], "token_layout": ""}
+                 "title_breaks": [], "token_layout": "", "text_overrides": []}
     full = _direction().model_dump()
     for key in full:
         partial = {k: v for k, v in full.items() if k != key}
@@ -1232,3 +1233,63 @@ def test_token_layout_on_an_archetype_without_tokens_is_dropped():
     for slot in spec.art:
         if slot.id in by_id:
             assert slot.anchor == by_id[slot.id].anchor
+
+
+# -- per-book typography: Direction.text_overrides (§15.26) ------------------
+
+def _spec_with_overrides(overrides):
+    from docproof.cover.archetypes import ARCHETYPES
+    arch = ARCHETYPES["romantasy_enclosure"]
+    d = _direction().model_dump()
+    d["archetype"] = "romantasy_enclosure"
+    d["art_prompts"] = [{"slot": s.id, "prompt": "a thing"}
+                        for s in arch.art if s.generatable]
+    d["text_overrides"] = overrides
+    brief = Brief(title="Willow On Me", author="Quinn Hogshead",
+                  genre="fantasy", subtitle="trust me blind", series="book one")
+    return build_spec(Direction(**d), brief, arch)
+
+
+def test_text_override_moves_and_recolors_a_slot():
+    spec = _spec_with_overrides({
+        "author": {"zone": {"x": 0.1, "y": 0.8, "w": 0.8, "h": 0.07},
+                   "align": "left", "color_role": "accent",
+                   "font_family": "Cinzel Decorative"}})
+    author = next(s for s in spec.text if s.id == "author")
+    assert (author.zone.x, author.zone.y) == (0.1, 0.8)
+    assert author.align == "left"
+    assert author.color_role.value == "accent"
+    assert author.font_family == "Cinzel Decorative"
+
+
+def test_text_override_absent_leaves_archetype_zones_untouched():
+    from docproof.cover.archetypes import ARCHETYPES
+    arch = ARCHETYPES["romantasy_enclosure"]
+    spec = _spec_with_overrides({})
+    for slot in spec.text:
+        shipped = next(s for s in arch.text if s.id == slot.id)
+        assert (slot.zone.x, slot.zone.y) == (shipped.zone.x, shipped.zone.y)
+
+
+def test_text_override_drops_unknown_slot_and_bad_font_without_failing():
+    spec = _spec_with_overrides({
+        "title": {"font_family": "Not A Real Face", "tracking": 42.0}})
+    title = next(s for s in spec.text if s.id == "title")
+    assert title.tracking == 42.0            # the usable half still applies
+    assert title.font_family != "Not A Real Face"
+
+
+def test_text_override_drops_inverted_size_band():
+    spec = _spec_with_overrides({"title": {"size_min": 0.9, "size_max": 0.1}})
+    title = next(s for s in spec.text if s.id == "title")
+    assert title.size_min < title.size_max
+
+
+def test_text_overrides_accept_both_list_and_mapping_shapes():
+    """§7.4a keeps the wire shape a list; the mapping stays legal off-wire."""
+    as_list = _spec_with_overrides(
+        [{"slot": "author", "align": "left"}])
+    as_map = _spec_with_overrides({"author": {"align": "left"}})
+    assert (next(s for s in as_list.text if s.id == "author").align
+            == next(s for s in as_map.text if s.id == "author").align
+            == "left")

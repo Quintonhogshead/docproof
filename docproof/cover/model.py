@@ -1325,6 +1325,13 @@ class ArtPrompt(BaseModel):
         return _validate_slot_id(value)
 
 
+def _coerce_text_overrides(value: object) -> object:
+    """Accept the {slot: {...}} mapping shape everywhere except the wire."""
+    if isinstance(value, dict):
+        return [{"slot": k, **(v or {})} for k, v in value.items()]
+    return value
+
+
 def _coerce_art_prompts(value: object) -> object:
     """Accept the {slot: prompt} dict shape everywhere except the wire."""
     if isinstance(value, dict):
@@ -1333,6 +1340,73 @@ def _coerce_art_prompts(value: object) -> object:
 
 
 _TOKEN_LAYOUT_NAMES: tuple[str, ...] = ("",) + tuple(sorted(TOKEN_LAYOUTS))
+
+class TextOverride(BaseModel):
+    """Per-BOOK typography for ONE text slot: where it sits, how it is set,
+    and which palette role colours it.
+
+    The `token_layout` precedent, applied to type. An archetype's text zones
+    are structure and they are shipped tuned — but a catalogue of books built
+    on one template should not put its title, byline, subtitle and tagline in
+    the same four spots on every cover, and a template cannot know that this
+    book's art leaves the upper left busy and the lower right empty. Every
+    field is optional and None means "keep the archetype's value", so a
+    Direction that says nothing renders byte-identical to before.
+
+    A LIST keyed by `slot`, not a {slot: {...}} mapping, because §7.4a bars
+    free-form objects from every wire model — the same shape ArtPrompt uses,
+    and like ArtPrompt the dict form is still accepted everywhere except the
+    wire (see _coerce_text_overrides).
+
+    Anything unusable is DROPPED with a log line rather than failing the job
+    (the §6.1 surplus-prompt posture): an override naming a slot the archetype
+    does not declare, a font outside fonts.FAMILIES, or a size floor above its
+    own ceiling."""
+    model_config = ConfigDict(extra="forbid")
+
+    slot: Literal["title", "subtitle", "author", "series"]
+    zone: Zone | None = None
+    align: Literal["left", "center", "right"] | None = None
+    valign: Literal["top", "middle", "bottom"] | None = None
+    case: Literal["upper", "title", "as_is"] | None = None
+    tracking: float | None = None
+    max_lines: int | None = Field(default=None, ge=1)
+    size_min: float | None = Field(default=None, gt=0.0)
+    size_max: float | None = Field(default=None, gt=0.0)
+    color_role: PaletteRole | None = None
+    font_family: str | None = None          # must exist in fonts.FAMILIES
+
+
+def _override_fields(ov: "TextOverride", slot_id: str, concept: str
+                     ) -> dict[str, Any]:
+    """One TextOverride as TextSlot keyword updates, with every unusable
+    value dropped and logged rather than raised."""
+    out: dict[str, Any] = {}
+    for key in ("align", "valign", "case", "tracking", "max_lines",
+                "color_role"):
+        value = getattr(ov, key, None)
+        if value is not None:
+            out[key] = value
+    if ov.zone is not None:
+        out["zone"] = Zone(x=ov.zone.x, y=ov.zone.y, w=ov.zone.w, h=ov.zone.h)
+    if ov.font_family is not None:
+        if ov.font_family in _FONT_FAMILY_NAMES:
+            out["font_family"] = ov.font_family
+        else:
+            log.info("Direction %r set text_overrides[%r].font_family=%r, "
+                     "which is not in fonts.FAMILIES; dropped.",
+                     concept, slot_id, ov.font_family)
+    lo, hi = ov.size_min, ov.size_max
+    if lo is not None and hi is not None and lo > hi:
+        log.info("Direction %r set text_overrides[%r] size_min=%s above "
+                 "size_max=%s; both dropped.", concept, slot_id, lo, hi)
+    else:
+        if lo is not None:
+            out["size_min"] = lo
+        if hi is not None:
+            out["size_max"] = hi
+    return out
+
 
 Direction = create_model(
     "Direction",
@@ -1386,9 +1460,20 @@ Direction = create_model(
     # A pick naming slots the archetype doesn't declare is dropped with a log
     # line in build_spec, never fatal.
     token_layout=(Literal[*_TOKEN_LAYOUT_NAMES], ""),
+    # Per-book typography, one entry per text slot it wants to move ("title",
+    # "author", "subtitle", "series"): placement, alignment, case, tracking,
+    # size band
+    # and palette colour role, plus a font family for that one slot. {} — the
+    # default — keeps every zone and colour the archetype ships, so existing
+    # Directions and existing archetypes are unchanged. See TextOverride: an
+    # entry naming a slot this archetype does not declare is dropped with a
+    # log line in build_spec, never fatal.
+    text_overrides=(list[TextOverride], Field(default_factory=list)),
     __validators__={
         "_art_prompts_dict_ok": field_validator(
             "art_prompts", mode="before")(_coerce_art_prompts),
+        "_text_overrides_dict_ok": field_validator(
+            "text_overrides", mode="before")(_coerce_text_overrides),
     },
 )
 
@@ -1792,6 +1877,17 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
                      "set of break points for the %d-word title %r; dropped.",
                      direction.concept_name, title_breaks, n_words, brief.title)
 
+    # Per-book typography (TextOverride). Slots this archetype does not
+    # declare are dropped here rather than silently ignored downstream.
+    overrides: dict[str, Any] = {
+        ov.slot: ov for ov in (getattr(direction, "text_overrides", None) or [])}
+    declared = {s.id for s in archetype.text}
+    for slot_id in [k for k in overrides if k not in declared]:
+        log.info("Direction %r set text_overrides[%r], but the %s archetype "
+                 "declares no such text slot; dropped.",
+                 direction.concept_name, slot_id, archetype.name)
+        overrides.pop(slot_id)
+
     text: list[TextSlot] = []
     for slot in archetype.text:
         role = getattr(slot, "font_role", "") or (
@@ -1826,6 +1922,9 @@ def build_spec(direction: Direction, brief: Brief, archetype: Archetype) -> Cove
             rotate=getattr(slot, "rotate", 0.0))
         if slot.id == "title":
             fields.update(title_move)
+        if slot.id in overrides:
+            fields.update(_override_fields(
+                overrides[slot.id], slot.id, direction.concept_name))
         text.append(TextSlot(**fields))
 
     art_ids = {a.id for a in archetype.art}
@@ -1878,7 +1977,7 @@ __all__ = [
     "PROCEDURAL_KINDS",
     "Brief", "PaletteRole", "Palette", "Zone", "Shadow", "Stroke", "Effect",
     "GradientMask", "MaskSpec", "AdjustLayer",
-    "TextSlot", "ArtSlot", "ScrimSpec", "LayerRef", "CoverSpec",
+    "TextSlot", "TextOverride", "ArtSlot", "ScrimSpec", "LayerRef", "CoverSpec",
     "RenderReport", "Direction", "Directions", "ConceptState", "JobState",
     "build_spec", "effect_from_shadow", "effect_from_stroke",
 ]

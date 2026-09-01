@@ -182,8 +182,8 @@ art:
     cut_edge: top
     anchor: [0.50, 0.00]
     offset: [0.00, -0.06]
-    scale: 0.78
-    opacity: 0.62
+    scale: 0.74
+    opacity: 0.58
     prompt_frame: >-
       A wide fan of {subject}, spreading downward and outward like a canopy
       across the top of the frame, thickest at the top and opening into gaps
@@ -237,11 +237,16 @@ art:
     cut_edge: bottom
     anchor: [0.50, 1.00]
     offset: [0.00, 0.045]
-    scale: 0.80
+    scale: 0.90
     prompt_frame: >-
       {subject}. A waist-up view from behind and slightly to one side, framed
-      loose with empty air all around it. Whatever carries the identity — the
-      head, the face — is SMALL, sits high in the upper third of the frame,
+      loose with empty air all around it. THE WHOLE HEAD IS INSIDE THE
+      PICTURE: a clear band of empty background at least a tenth of the frame
+      height sits above the crown of the head, and NOTHING — no hair, no
+      shoulder, no growth — touches or is cropped by the top edge. A head
+      that runs off the top of its own plate prints a straight horizontal cut
+      across the skull wherever the plate lands. Whatever carries the
+      identity — the head, the face — is SMALL, sits in the upper third,
       and is turned away so that it is never fully shown. Below it the broad
       unbroken sweep of the back fills the middle and lower half of the frame,
       brightly lit and completely clear of clutter: ONE large simple lit
@@ -423,7 +428,7 @@ text:
     # the title sits on hair and dark field, ONE value regime, and the bright
     # back stays clear beneath it as the cover's brightest note. Widen this
     # zone and the render will tell you about it in warnings.
-    zone: {x: 0.115, y: 0.468, w: 0.77, h: 0.200}
+    zone: {x: 0.115, y: 0.425, w: 0.77, h: 0.200}
     case: upper
     tracking: 18
     max_lines: 2

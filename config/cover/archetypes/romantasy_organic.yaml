@@ -9,27 +9,32 @@
 # BEHIND AND IN FRONT OF, so the type sits inside the arrangement rather than
 # on top of it.
 #
-# THE SKELETON IS THE TEMPLATE. THE MATERIAL IS THE BOOK'S.
+# THE SKELETON IS THE TEMPLATE. THE SURROUND IS FLOWERS. THE HERO IS THE BOOK'S.
 #
 # What is fixed here is a STRUCTURE — a far tier, a spine up the centre, two
 # upper masses, one hanging focal object, a front tier that crosses the type,
-# falling matter, a ground. Not a garden. The reference shelf reaches that
-# structure with briars and roses, and the first cover built from this file
-# did too, and it came out looking like every other romantasy on the table.
-# The slots below are ROLES with a geometry, a cut edge and a light: what
-# actually fills them is whatever the BOOK is made of.
+# falling matter, a ground — AND the material that fills all of it except the
+# hero: FLOWERS AND THEIR OWN GROWTH. Blooms, buds, bracts, petals, leaves,
+# stems, canes, thorns, seed heads, fallen petals. Nothing else in the surround.
 #
-#   briar canes and roses          antlers, bone shards, dried sinew
-#   wrought iron and rust          coral, kelp, barnacle crust
-#   cabling, wire and circuitry    torn paper, ribbon, burnt vellum
-#   frost, glass shards, quartz    smoke, ash, cinders, moth wings
-#   feathers, wings, talons        rope, net, chain, sailcloth
+# Letting every slot take the book's own material was tried, and it produced a
+# cover with no figure/ground at all: when the manuscript is made of harness
+# leather, the tangle, the front sweep, the clusters and the foot all came back
+# as dark and as detailed and as high-contrast as the hero, nine plates of the
+# same stuff, and the eye had nowhere to rest. THE FLOWERS ARE WHAT MAKE THE
+# HANGING OBJECT READ. They are the quiet, mid-value, organic surround that a
+# hard made thing can sit against. Take them away and the template collapses.
 #
-# Every one of those lands in this composition. A book of iron and bone should
-# come back iron and bone; if it comes back roses, the direction call defaulted
-# to the genre instead of reading the manuscript. The frames below are written
-# to say SHAPE ONLY — mass, span, direction, where the cut is — and to name no
-# material at all, so that whatever noun arrives is not quietly argued with.
+# THE ONE SLOT THAT IS STILL THE BOOK'S IS `hero`, the object alone on the upper
+# centre axis. It comes from the manuscript, it changes from book to book, and
+# it is NEVER a flower: a lantern, a key, a mask, a crown, a blade, a cage, a
+# shell, a heart, a reliquary, an engine, a helm. That single contrast — one
+# made thing hanging inside a great deal of growing matter — is the engine of
+# this template, and it is the only place the book names the noun.
+#
+# Species, colour, season and condition of the flowers are still the book's to
+# choose — hothouse or wild, in full bloom or frost-killed and going over — and
+# that is where a manuscript's own world gets into the surround.
 #
 # This template is written to be ONE-SHOT. Everything that took six revision
 # rounds to get right on the first cover built from it is fixed here and is
@@ -155,17 +160,14 @@ recipe_strength: 0.30          # (g) dark_academia at full strength cooks a
                                 # ten-plate collage sepia; it is wanted here
                                 # only for its vignette, dust and paper tooth
 describe: >-
-  A dark textured ground; one object alone on the upper centre axis — hanging,
-  floating, resting or embedded, whichever is true to what it is — lit from
-  within or picked out by the light; and a tangle of organic or
-  wrought material massed around it — behind a huge stone-white display title,
-  and more of the same material drawn in FRONT of it, casting shadows onto the
-  letterforms. The material is NOT specified by this archetype and must come
-  from the book itself: briar and roses, but equally bone and antler, iron and
-  rust, coral and kelp, wire and circuitry, frost and glass, feathers, rope and
-  chain, torn paper, smoke and ash. Pick what the manuscript is actually made
-  of. Tagline top-left, credit line and author at the foot over a feathered
-  wash.
+  A dark textured ground; one object from the book itself alone on the upper
+  centre axis — hanging, floating, resting or embedded, whichever is true to
+  what it is — lit from within or picked out by the light; and a tangle of
+  FLOWERS and their own growth massed around it — behind a huge stone-white
+  display title, and more of the same flowers drawn in FRONT of it, casting
+  shadows onto the letterforms. The surround is always floral; only the hanging
+  focal object changes from book to book, and it is never itself a flower.
+  Tagline top-left, credit line and author at the foot over a feathered wash.
 composition_note: >-
   Rendered as a rich, tactile, photoreal natural-history plate of the subject
   itself — every material shown with its own true surface, colour and wear, not
