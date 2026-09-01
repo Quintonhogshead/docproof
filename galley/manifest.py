@@ -41,7 +41,15 @@ _MODEL_FIELD = re.compile(r"(^|_)(model)$")
 
 # The deterministic artifact patterns a clean deliverable must not contain —
 # the merge desk's own scan list (doubled comma/space, orphaned punctuation).
-_ARTIFACTS = (",,", '" "', "…\\.", "”.", "”,")
+# Compiled regexes, so the two that end in a period mean a LITERAL period
+# (an ellipsis or a closing quote followed by one) rather than any character;
+# the pattern text is what a failing check names.
+_ARTIFACTS = tuple(re.compile(p) for p in (",,", '" "', r"…\.", r"”\.", "”,"))
+# The zero-cost markers: an envelope whose findings legitimately cost $0 to
+# produce because the paid work is recorded elsewhere — an import of external
+# judgments, or a Galley rebuild of a case file's adjudicated findings (see
+# galley.deliverable.REBUILD_MARKER; its paid spend lives in casefile.json).
+_ZERO_COST_JUDGES = ("external:import-judgments", "galley:rebuild")
 # Double spaces are an artifact only AFTER visible text: leading indentation
 # is spacing normalization deliberately preserves (normalize._SPACE_RUN uses
 # the same lookbehind), so a bare "  " substring test fails hand-centered
@@ -338,11 +346,30 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     _cost = ((early_envelope or {}).get("cost") or {}).get("total_usd")
     run_paid = bool(_cost) and float(_cost) > 0
 
-    # 1. Source + config hashes match the approval (if one is given).
-    if manifest is not None and source is not None:
+    # 1. Source + config hashes match the approval. A comparison that cannot
+    # be made — no approval, no --source, no --config — is recorded as a skip
+    # that names what was not compared, never silently omitted: a certificate
+    # that lists no "source hash" line reads as if the source were checked.
+    if manifest is None:
+        cert.checks.append(Check("source hash", "skip",
+                                 "no approval manifest given — the manuscript "
+                                 "was not compared against an approval"))
+    elif source is None:
+        cert.checks.append(Check("source hash", "skip",
+                                 "no --source given — the manuscript hash was "
+                                 "not compared against the approval"))
+    else:
         cert.checks.append(_check_hash("source hash", sha256_file(source),
                                        manifest.get("source_sha256")))
-    if manifest is not None and cfg is not None:
+    if manifest is None:
+        cert.checks.append(Check("config hash", "skip",
+                                 "no approval manifest given — the config was "
+                                 "not compared against an approval"))
+    elif cfg is None:
+        cert.checks.append(Check("config hash", "skip",
+                                 "no --config given — the effective config "
+                                 "was not compared against the approval"))
+    else:
         hash_check = _check_hash("config hash", config_hash(cfg),
                                  manifest.get("config_sha256"))
         if hash_check.status == "fail" and not run_paid:
@@ -355,7 +382,11 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
 
     # 2. Model routes stay within the approved set (route check only —
     # source/config hashes are checked separately above).
-    if manifest is not None and cfg is not None:
+    if manifest is None or cfg is None:
+        cert.checks.append(Check("approved model routes", "skip",
+                                 "no approval manifest and --config to compare "
+                                 "the active routes against"))
+    else:
         allowed_models = set(manifest.get("allowed_models") or [])
         allowed_providers = set(manifest.get("allowed_providers") or [])
         offenders: list[str] = []
@@ -379,6 +410,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
                                  "no findings.json in the run directory"))
     else:
         cert.checks.extend(_certify_envelope(envelope, run, manifest))
+        cert.checks.append(_certify_reject_all(envelope))
 
     # 4. Deterministic artifact scan over the change log / findings text.
     cert.checks.append(_artifact_scan(run))
@@ -388,7 +420,7 @@ def certify_run(run_dir: str | Path, *, manifest: dict[str, Any] | None = None,
     if envelope is not None:
         cert.checks.append(_certify_no_merged_duplicates(envelope))
         cert.checks.append(_certify_no_insertion_collisions(envelope))
-        cert.checks.append(_certify_two_author_attribution(envelope))
+        cert.checks.append(_certify_two_author_attribution(envelope, run))
 
     # 6. Intent-zone collisions, if the run recorded them.
     cert.checks.append(_certify_intent_zone_collisions(run))
@@ -420,6 +452,14 @@ def _certify_change_verify(run: Path) -> Check:
         return Check("change verifier", "skip",
                      "no change_verify.json — run `galley verify` to re-read "
                      "every applied edit for meaning/grammar/voice damage")
+    # `galley verify` records whether this gate actually ran (`--walk-only`
+    # writes the file with ran: false and no problems, which is NOT a clean
+    # read). Absent `ran` is an older record that always ran both gates.
+    if payload.get("ran") is False:
+        why = payload.get("reason") or "verify ran with --walk-only"
+        return Check("change verifier", "skip",
+                     f"{why}; change verifier did not run — re-run `galley "
+                     f"verify` without --walk-only before delivery")
     problems = payload.get("problems") or []
     if problems:
         from collections import Counter
@@ -443,6 +483,11 @@ def _certify_finished_walk(run: Path) -> Check:
         return Check("finished-text walk", "skip",
                      "no finished_walk.json — run `galley verify` to proofread "
                      "the accepted text for residual errors")
+    if payload.get("ran") is False:
+        why = payload.get("reason") or "verify ran with --changes-only"
+        return Check("finished-text walk", "skip",
+                     f"{why}; finished-text walk did not run — re-run `galley "
+                     f"verify` without --changes-only before delivery")
     residuals = [r for r in (payload.get("residuals") or []) if isinstance(r, dict)]
     highs = [r for r in residuals if r.get("severity") == "high"]
     if highs:
@@ -538,6 +583,25 @@ def _certify_no_merged_duplicates(envelope: dict[str, Any]) -> Check:
                  "no content-duplicate edit applied twice")
 
 
+def _row_applied(row: dict[str, Any]) -> bool:
+    """Whether a findings row reached the deliverable as a tracked change — the
+    rows the artifact and collision scans must read, since what a REJECTED or
+    SKIPPED row would have written never reaches the author. A row that
+    carries the reporter's ``applied`` flag is believed; one without it (a
+    flights envelope, a hand-built row) is judged by its ``status`` —
+    ``rejected_*`` / ``skipped_*`` / ``query`` never applied — and a row with
+    neither is scanned conservatively."""
+    if row.get("force_query") or row.get("queried"):
+        return False
+    status = str(row.get("status") or "")
+    if status.startswith(("rejected_", "skipped_")) or status == "query":
+        return False
+    applied = row.get("applied")
+    if isinstance(applied, bool):
+        return applied
+    return True
+
+
 def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
     """Two edits at the same anchor (same para_id + original window + occurrence)
     with different corrections would compose into an artifact (,, or " "). The
@@ -547,9 +611,11 @@ def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
     for row in envelope.get("findings", []) or []:
         if not isinstance(row, dict):
             continue
-        # Only edits that actually change text and would apply (not queries).
+        # Only edits that actually change text and landed (not queries, not
+        # the rejected side of an arbitration — that loser is the dedup
+        # working, not a collision).
         corr = row.get("corrected_text", "")
-        if row.get("force_query") or not corr:
+        if not _row_applied(row) or not corr:
             continue
         # Key on the real anchor when the run recorded one: two rows may quote
         # the SAME sentence while editing different characters of it (a repair
@@ -578,25 +644,100 @@ def _certify_no_insertion_collisions(envelope: dict[str, Any]) -> Check:
                  "no two edits claim the same anchor")
 
 
-def _certify_two_author_attribution(envelope: dict[str, Any]) -> Check:
-    """When both lanes ran (a copyedit finding beside a mechanical one), the
-    deliverable must carry two authors so the author can tell a proofread change
-    from a copy-edit one. This flags that both lanes are present so attribution
-    can be confirmed; a single-lane run needs no second author."""
+# The tracked-change author stamps a .docx carries: insertions, deletions,
+# and formatting revisions (comments are the query channel, not an edit lane).
+_REVISION_AUTHOR = re.compile(
+    r'<w:(?:ins|del|rPrChange|pPrChange)\b[^>]*?\bw:author="([^"]*)"')
+
+
+def _revision_authors(run: Path) -> set[str] | None:
+    """The distinct tracked-change authors in the manuscript deliverable, or
+    None when there is no deliverable to read. Read straight off the OOXML —
+    the author is a plain attribute, so no lxml round trip is needed."""
+    import zipfile
+    from xml.sax.saxutils import unescape
+    docs = sorted(p for p in run.glob("*.docx")
+                  if not p.name.startswith("~$")
+                  and "change log" not in p.name.lower())
+    if not docs:
+        return None
+    authors: set[str] = set()
+    try:
+        with zipfile.ZipFile(docs[0]) as z:
+            for name in z.namelist():
+                if name.startswith("word/") and name.endswith(".xml"):
+                    xml = z.read(name).decode("utf-8", "replace")
+                    authors.update(unescape(m) for m in
+                                   _REVISION_AUTHOR.findall(xml))
+    except (OSError, zipfile.BadZipFile):
+        return None
+    return authors
+
+
+def _certify_two_author_attribution(envelope: dict[str, Any], run: Path
+                                    ) -> Check:
+    """When both lanes ran (a copyedit finding applied beside a mechanical
+    one), the deliverable must carry two tracked-change authors so the author
+    can filter a proofread change from a copy-edit one (Config.lane_authors,
+    reassembler.py). The findings rows carry the lane; the author name each
+    lane was written under is in the .docx alone, so that is what is read: two
+    applied lanes and fewer than two distinct revision authors is a failure. A
+    single-lane run needs no second author."""
     lanes = set()
     for row in envelope.get("findings", []) or []:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or not _row_applied(row):
             continue
         lane = row.get("lane") or ("copyedit" if row.get("error_type") ==
                                    "copyedit" else "mechanical")
         lanes.add("copyedit" if lane == "copyedit" else "mechanical")
-    if {"copyedit", "mechanical"} <= lanes:
-        return Check("two-author attribution", "pass",
-                     "both lanes present — confirm the deliverable names two "
-                     "authors")
-    return Check("two-author attribution", "skip",
-                 f"single lane ({', '.join(sorted(lanes)) or 'none'}) — one "
-                 f"author")
+    if not {"copyedit", "mechanical"} <= lanes:
+        return Check("two-author attribution", "skip",
+                     f"single lane ({', '.join(sorted(lanes)) or 'none'}) — "
+                     f"one author")
+    authors = _revision_authors(run)
+    if authors is None:
+        return Check("two-author attribution", "skip",
+                     "both lanes applied but no manuscript .docx in the run "
+                     "directory to read the revision authors from")
+    if len(authors) < 2:
+        named = ", ".join(sorted(authors)) or "none"
+        return Check("two-author attribution", "fail",
+                     f"both lanes applied but the deliverable's tracked changes "
+                     f"carry {len(authors)} author ({named}) — the copy-edit "
+                     f"lane is indistinguishable from the proofread "
+                     f"(check Config.lane_authors)")
+    return Check("two-author attribution", "pass",
+                 f"both lanes applied; tracked changes carry "
+                 f"{len(authors)} authors ({', '.join(sorted(authors))})")
+
+
+def _certify_reject_all(envelope: dict[str, Any]) -> Check:
+    """The reject-all round trip: finish() rejects every tracked change it wrote
+    and compares the result to the ingested text (docproof.audit), and records
+    the verdict in the envelope as ``audit: {ran, passed, ...}``. A recorded
+    failure means rejecting the changes does NOT return the author's text —
+    delivery fails. A record that says it did not run (audit: off) skips loudly:
+    the round trip is unproven, not proven."""
+    audit = envelope.get("audit")
+    if not isinstance(audit, dict):
+        return Check("reject-all round trip", "skip",
+                     "findings.json carries no audit record — the reject-all "
+                     "round trip was never recorded for this run")
+    if not audit.get("ran"):
+        return Check("reject-all round trip", "skip",
+                     "the reject-all audit did not run (audit: off?) — that "
+                     "rejecting every change restores the source is unproven")
+    if not audit.get("passed"):
+        mism = audit.get("mismatches") or []
+        missing = audit.get("missing") or []
+        return Check("reject-all round trip", "fail",
+                     f"rejecting every change does not restore the source: "
+                     f"{len(mism)} paragraph(s) differ, {len(missing)} missing"
+                     + (f" (first: {', '.join(map(str, mism[:3]))})" if mism
+                        else ""))
+    return Check("reject-all round trip", "pass",
+                 f"{audit.get('checked', 0)} paragraph(s) checked; rejecting "
+                 f"every change restores the source")
 
 
 def _certify_intent_zone_collisions(run: Path) -> Check:
@@ -646,16 +787,58 @@ def _check_hash(name: str, actual: str, expected: Any) -> Check:
                  f"run {actual[:12]}… != approved {str(expected)[:12]}…")
 
 
+def _rebuild_spend(envelope: dict[str, Any], run: Path
+                   ) -> tuple[float | None, str]:
+    """For a Galley rebuild envelope (galley.deliverable.REBUILD_MARKER), the
+    paid spend the sibling case file recorded — ``budget.spent_usd`` when it
+    is serialized, else the sum of ``budget.charges[].cost_usd`` — and a note
+    saying where it came from. ``(None, why)`` when the case file is not there
+    to reconcile against."""
+    marker = envelope.get("rebuild")
+    name = (marker.get("paid_spend_recorded_in") if isinstance(marker, dict)
+            else None) or "casefile.json"
+    cf = _load_json(run / str(name))
+    if not isinstance(cf, dict):
+        return None, f"no {name} beside findings.json to reconcile spend against"
+    budget = cf.get("budget") or {}
+    if not isinstance(budget, dict):
+        return None, f"{name} carries no budget ledger"
+    if isinstance(budget.get("spent_usd"), (int, float)):
+        return float(budget["spent_usd"]), f"{name} budget.spent_usd"
+    charges = budget.get("charges") or []
+    spent = sum(float(c.get("cost_usd", 0.0) or 0.0)
+                for c in charges if isinstance(c, dict))
+    return spent, f"{name} budget ledger ({len(charges)} charge(s))"
+
+
 def _certify_envelope(envelope: dict[str, Any], run: Path,
                       manifest: dict[str, Any] | None) -> list[Check]:
     checks: list[Check] = []
     cost = (envelope.get("cost") or {}).get("total_usd")
 
-    # Checkpoint completeness — a finished paid run should have left one.
+    # A Galley rebuild (galley.deliverable) legitimately produces its findings
+    # at $0: the paid waves are in the case file beside it, so that ledger —
+    # not the envelope's own $0 — is what checkpoint and budget reconcile to.
+    rebuild = (envelope.get("judge_model") == "galley:rebuild"
+               or isinstance(envelope.get("rebuild"), dict))
+    spend_note = ""
+    if rebuild:
+        # The envelope's own $0 is never the number to reconcile: with no
+        # case file to read, the spend is unknown (None), not zero.
+        cost, spend_note = _rebuild_spend(envelope, run)
+
+    # Checkpoint completeness — a finished paid run should have left one. For
+    # a rebuild the case file IS the checkpoint (it holds every finding and
+    # verdict a resumed run rebuilds from).
     has_ckpt = (run / "findings.checkpoint.json").is_file() \
         or envelope.get("checkpoint") is not None
     paid = bool(cost) and float(cost) > 0
-    if paid:
+    if rebuild:
+        checks.append(Check("checkpoint present",
+                            "pass" if cost is not None else "skip",
+                            f"Galley rebuild: the case file is the checkpoint "
+                            f"({spend_note})"))
+    elif paid:
         checks.append(Check("checkpoint present",
                             "pass" if has_ckpt else "fail",
                             "findings.checkpoint.json / envelope checkpoint "
@@ -666,24 +849,36 @@ def _certify_envelope(envelope: dict[str, Any], run: Path,
                             "no paid spend recorded"))
 
     # Zero-cost anomaly: findings exist and detectors ran, but cost is $0.
+    # Not for an envelope that names itself a $0 rebuild/import (the paid
+    # work is recorded elsewhere).
     n_findings = len(envelope.get("findings") or [])
     if cost is not None and float(cost) == 0.0 and n_findings > 0 \
-            and envelope.get("judge_model") not in ("external:import-judgments",):
+            and not rebuild \
+            and envelope.get("judge_model") not in _ZERO_COST_JUDGES:
         checks.append(Check("zero-cost anomaly", "fail",
                             f"{n_findings} finding(s) but $0.00 recorded — a "
                             f"detector that should bill likely did not run"))
+    elif rebuild:
+        checks.append(Check("zero-cost anomaly", "pass",
+                            f"Galley rebuild of {n_findings} finding(s) at $0; "
+                            + (f"paid spend ${float(cost):.2f} per {spend_note}"
+                               if cost is not None else spend_note)))
     else:
         checks.append(Check("zero-cost anomaly", "pass",
                             f"cost ${float(cost):.2f} for {n_findings} "
                             f"finding(s)" if cost is not None
                             else "no cost field to reconcile"))
 
-    # Budget reconciliation against the approval ceiling.
+    # Budget reconciliation against the approval ceiling — for a rebuild,
+    # against the case file's paid spend, never the envelope's own $0.
     if manifest is not None and cost is not None:
         cap = float(manifest.get("max_spend_usd", 0.0))
         checks.append(Check("budget within approval",
                             "pass" if float(cost) <= cap else "fail",
-                            f"${float(cost):.2f} of ${cap:.2f} approved"))
+                            f"${float(cost):.2f} of ${cap:.2f} approved"
+                            + (f" ({spend_note})" if spend_note else "")))
+    elif manifest is not None and rebuild:
+        checks.append(Check("budget within approval", "skip", spend_note))
     return checks
 
 
@@ -735,8 +930,8 @@ def _artifact_scan(run: Path) -> Check:
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
-            if row.get("force_query") or row.get("queried"):
-                continue                       # a question changes nothing
+            if not _row_applied(row):
+                continue           # a question or a rejected row changes nothing
             corr = row.get("corrected_text")
             if isinstance(corr, str) and corr:
                 texts.append(corr)
@@ -744,7 +939,7 @@ def _artifact_scan(run: Path) -> Check:
         return Check("artifact scan", "skip",
                      "no corrected text in the run directory to scan")
     blob = "\n".join(texts)
-    hits = [pat for pat in _ARTIFACTS if pat in blob]
+    hits = [pat.pattern for pat in _ARTIFACTS if pat.search(blob)]
     if _POST_TEXT_DOUBLE.search(blob):
         hits.append("  ")
     if hits:

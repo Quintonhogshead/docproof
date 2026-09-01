@@ -268,10 +268,11 @@ genre_scans:
 
 # The copy-edit flights lane (docproof/flights.py; `docproof galley flights`).
 # posture is the judge's default stance — the measured 24%<->57% accepted-recall
-# dial. Genre posture presets (config/genres/*.yaml) set it per manuscript;
-# the --posture flag overrides it per run.
+# dial. Lenient is the house default (the lane offers rejectable tracked
+# changes; the author decides). Genre posture presets (config/genres/*.yaml)
+# set it per manuscript; the --posture flag overrides it per run.
 flights:
-  posture: strict            # strict | lenient
+  posture: lenient           # strict | lenient
 
 # The whole-book story sheet: one read that gives the detector passes the
 # narrative facts a per-paragraph check cannot know — who narrates, in what

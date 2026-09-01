@@ -100,24 +100,35 @@ def deliverable_docx(run_dir: str | Path) -> Path | None:
     return docs[0] if docs else None
 
 
-def accepted_text(run_dir: str | Path) -> dict[str, str]:
-    """Every paragraph of the deliverable in its ACCEPT-all view, keyed by
-    para_id — the text the author reads once the tracked changes are accepted.
-    Empty when there is no deliverable or the OOXML tooling is unavailable (the
+def paragraph_views(run_dir: str | Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Every paragraph of the deliverable in BOTH views, keyed by para_id:
+    ``(original, accepted)`` — the REJECT-all view (the text as ingested, the
+    space every finding's anchor offsets index into) and the ACCEPT-all view
+    (the text the author reads once the tracked changes are accepted). Both
+    empty when there is no deliverable or the OOXML tooling is unavailable (the
     caller reports that honestly rather than walking nothing as if it were
     clean)."""
     path = deliverable_docx(run_dir)
     if path is None:
-        return {}
+        return {}, {}
     try:
         from docproof.reassembler import paragraph_view_text
         from docproof.utils.xml_helpers import DocxPackage, walk_package
     except Exception as e:                          # pragma: no cover - lxml etc.
         log.warning("verify: OOXML tooling unavailable (%s); no accepted text", e)
-        return {}
+        return {}, {}
     pkg = DocxPackage(str(path))
-    return {wp.para_id: paragraph_view_text(wp.element, "accept")
-            for wp in walk_package(pkg)}
+    original: dict[str, str] = {}
+    accepted: dict[str, str] = {}
+    for wp in walk_package(pkg):
+        original[wp.para_id] = paragraph_view_text(wp.element, "reject")
+        accepted[wp.para_id] = paragraph_view_text(wp.element, "accept")
+    return original, accepted
+
+
+def accepted_text(run_dir: str | Path) -> dict[str, str]:
+    """The ACCEPT-all view alone — see :func:`paragraph_views`."""
+    return paragraph_views(run_dir)[1]
 
 
 def applied_edits(run_dir: str | Path) -> list[dict[str, Any]]:
@@ -141,9 +152,10 @@ def applied_edits(run_dir: str | Path) -> list[dict[str, Any]]:
         applied = r.get("applied")
         if status not in ("validated", "applied") and applied is not True:
             continue
-        if not r.get("original_text") or not r.get("corrected_text"):
-            continue
-        if r.get("original_text") == r.get("corrected_text"):
+        # A pure deletion (corrected_text "") is an applied edit like any
+        # other and is re-read too; only a row that changes nothing (a format
+        # mark, or no text on either side) has no finished context to judge.
+        if r.get("original_text", "") == r.get("corrected_text", ""):
             continue
         out.append(r)
     return out
@@ -170,6 +182,106 @@ def _sentence_around(text: str, needle: str) -> str:
             hi = m + 1
             break
     return text[lo:hi].strip()
+
+
+def _sentence_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """The ``[lo, hi)`` bounds of the sentence of `text` that spans the offsets
+    ``start..end`` — bounded by ., !, ? or the paragraph edges, the same rule
+    :func:`_sentence_around` applies, but located by OFFSET rather than by
+    searching for a needle (a minimal-diff row whose corrected_text is "," or
+    "" finds the wrong sentence, or none, by text)."""
+    start = max(0, min(start, len(text)))
+    end = max(start, min(end, len(text)))
+    lo = 0
+    for m in range(start - 1, -1, -1):
+        if text[m] in ".!?":
+            lo = m + 1
+            break
+    hi = len(text)
+    for m in range(end, len(text)):
+        if text[m] in ".!?":
+            hi = m + 1
+            break
+    return lo, hi
+
+
+def _anchor_of(edit: dict[str, Any]) -> dict[str, Any] | None:
+    """The row's validator anchor when it carries a usable one, else None."""
+    a = edit.get("anchor")
+    if (isinstance(a, dict) and isinstance(a.get("start"), int)
+            and isinstance(a.get("end"), int) and a["start"] <= a["end"]):
+        return a
+    return None
+
+
+def _accepted_starts(edits: Sequence[dict[str, Any]]) -> list[int | None]:
+    """For each anchored edit, where its inserted text begins in the ACCEPTED
+    paragraph: the anchor's start (an offset into the ORIGINAL text) shifted by
+    the net length change of every anchored edit earlier in the same paragraph.
+    Exact when the applied rows are the paragraph's every tracked change (they
+    are — that is what :func:`applied_edits` selects); `_finished_context`
+    re-checks the inserted text sits there and hunts nearby when it does not.
+    None for an edit with no anchor."""
+    out: list[int | None] = [None] * len(edits)
+    by_para: dict[str, list[int]] = {}
+    for i, e in enumerate(edits):
+        if _anchor_of(e) is not None:
+            by_para.setdefault(str(e.get("para_id", "")), []).append(i)
+    for idxs in by_para.values():
+        idxs.sort(key=lambda i: (edits[i]["anchor"]["start"],
+                                 edits[i]["anchor"]["end"]))
+        shift = 0
+        for i in idxs:
+            a = edits[i]["anchor"]
+            out[i] = a["start"] + shift
+            shift += len(str(a.get("insert_text") or "")) - (a["end"] - a["start"])
+    return out
+
+
+def _nearest(text: str, needle: str, pos: int) -> int | None:
+    """The occurrence of `needle` in `text` closest to `pos`, or None."""
+    best: int | None = None
+    idx = text.find(needle)
+    while idx != -1:
+        if best is None or abs(idx - pos) < abs(best - pos):
+            best = idx
+        idx = text.find(needle, idx + 1)
+    return best
+
+
+def _finished_context(edit: dict[str, Any], acc_start: int | None,
+                      original: dict[str, str], accepted: dict[str, str]
+                      ) -> tuple[str, str]:
+    """The ``(before, after)`` sentence pair for one applied edit: the sentence
+    as it was ingested and the sentence as it now reads. Located by the row's
+    anchor offsets — into the original text for `before`, into the accepted
+    text (via `acc_start`) for `after` — so a minimal-diff row ("," or a pure
+    deletion) lands on ITS sentence, not the first sentence that happens to
+    contain a comma. Falls back to the needle search only for a row with no
+    anchor, and to composing the after-sentence from the before-sentence when
+    the accepted view cannot be read."""
+    pid = str(edit.get("para_id", ""))
+    orig_para = original.get(pid, "")
+    acc_para = accepted.get(pid, "")
+    a = _anchor_of(edit)
+    if a is None or not orig_para:
+        before = edit.get("original_text", "")
+        after = _sentence_around(acc_para, edit.get("corrected_text", ""))
+        return before, after
+    lo, hi = _sentence_bounds(orig_para, a["start"], a["end"])
+    before = orig_para[lo:hi].strip()
+    ins = str(a.get("insert_text") or "")
+    if acc_para and acc_start is not None:
+        s: int | None = acc_start
+        if ins and acc_para[acc_start:acc_start + len(ins)] != ins:
+            # An untracked change shifted the paragraph; the inserted text is
+            # still there, just not where the arithmetic put it.
+            s = _nearest(acc_para, ins, acc_start)
+        if s is not None:
+            alo, ahi = _sentence_bounds(acc_para, s, s + len(ins))
+            return before, acc_para[alo:ahi].strip()
+    composed = (orig_para[lo:a["start"]] + ins + orig_para[a["end"]:hi]).strip()
+    return before, composed
 
 
 def _chunks(items: Sequence[Any], size: int) -> list[list[Any]]:
@@ -236,9 +348,10 @@ def _walk_schema() -> tuple[dict[str, Any], str]:
 
 _CHANGE_SYSTEM = """\
 You are an adversarial change verifier on a finished book proofread. You are
-shown edits that were APPLIED to the manuscript, each with the sentence AS IT
-NOW READS after the change. Your only job is to catch a change that made the
-book WORSE. Judge each edit and report ONLY the ones that are a real problem.
+shown edits that were APPLIED to the manuscript, each with the sentence as it
+was BEFORE the change and the sentence AS IT NOW READS after it. Your only job
+is to catch a change that made the book WORSE. Judge each edit and report ONLY
+the ones that are a real problem.
 
 An edit is a problem when, in its finished context, it:
   - breaks_meaning: changes what the sentence says, drops a negation, or leaves
@@ -283,14 +396,19 @@ labels below), a verbatim minimal `quote` of the problem span, a one-sentence
 list is a valid, good result — return {"findings": []} if the text is clean."""
 
 
-def _change_user(batch: list[dict[str, Any]], accepted: dict[str, str]) -> str:
+def _change_user(batch: list[dict[str, Any]], accepted: dict[str, str],
+                 original: dict[str, str] | None = None,
+                 acc_starts: Sequence[int | None] | None = None) -> str:
     lines = []
     for n, e in enumerate(batch, 1):
-        ctx = _sentence_around(accepted.get(e["para_id"], ""), e["corrected_text"])
+        acc_start = acc_starts[n - 1] if acc_starts is not None else None
+        before, after = _finished_context(e, acc_start, original or {}, accepted)
         lines.append(
             f"{n}. rule: {e.get('error_type', '?')}\n"
-            f"   was: {e['original_text']}\n"
-            f"   now reads: {ctx}")
+            f"   edit: {e.get('original_text', '')!r} -> "
+            f"{e.get('corrected_text', '')!r}\n"
+            f"   before: {before}\n"
+            f"   now reads: {after}")
     return "\n\n".join(lines)
 
 
@@ -309,17 +427,25 @@ def _context_block(context: str) -> str:
 def verify_changes(edits: Sequence[dict[str, Any]], accepted: dict[str, str],
                    provider, model: str, usage: Usage, *,
                    context: str = "", batch_size: int = DEFAULT_CHANGE_BATCH,
-                   max_tokens: int = DEFAULT_MAX_TOKENS) -> list[ChangeProblem]:
+                   max_tokens: int = DEFAULT_MAX_TOKENS,
+                   original: dict[str, str] | None = None) -> list[ChangeProblem]:
     """Re-read every applied edit in its finished context and return the ones
     that are a real problem. One `complete_structured` call per `batch_size`
     edits; a reply that did not come back clean is a loss (no problems), never a
-    parse of a half-answer."""
+    parse of a half-answer. `original` is the reject-all view (see
+    :func:`paragraph_views`); with it, each edit's before/after sentence pair is
+    located by its anchor offsets rather than by searching for its text."""
     schema, schema_name = _change_schema()
     system = _CHANGE_SYSTEM + _context_block(context)
     problems: list[ChangeProblem] = []
-    for batch in _chunks(list(edits), batch_size):
+    edits = list(edits)
+    acc_starts = _accepted_starts(edits)
+    for batch_idx in _chunks(list(range(len(edits))), batch_size):
+        batch = [edits[i] for i in batch_idx]
+        user = _change_user(batch, accepted, original,
+                            [acc_starts[i] for i in batch_idx])
         result = provider.complete_structured(
-            model=model, system=system, user=_change_user(batch, accepted),
+            model=model, system=system, user=user,
             schema=schema, schema_name=schema_name, max_tokens=max_tokens)
         if result.usage is not None:
             usage.add(result.usage, model=model)
@@ -386,28 +512,59 @@ def walk_finished_text(accepted: dict[str, str], provider, model: str,
     return found
 
 
+@dataclass
+class VerifyRunResult:
+    """What :func:`verify_run` did. ``ran_changes`` / ``ran_walk`` say whether
+    each gate actually read anything — False when the caller switched it off
+    AND when there was nothing to read (``reason`` says which); the CLI writes
+    them into change_verify.json / finished_walk.json as ``ran`` so certify can
+    tell a clean read from a gate that never ran. Unpacks as the
+    ``(problems, residuals)`` pair it used to be, for callers that predate it.
+    """
+
+    problems: list[ChangeProblem]
+    residuals: list[ResidualFinding]
+    ran_changes: bool
+    ran_walk: bool
+    reason: str = ""
+
+    def __iter__(self):
+        yield self.problems
+        yield self.residuals
+
+
 def verify_run(run_dir: str | Path, provider, model: str, usage: Usage, *,
                context: str = "", run_changes: bool = True,
                run_walk: bool = True, max_tokens: int = DEFAULT_MAX_TOKENS,
-               ) -> tuple[list[ChangeProblem], list[ResidualFinding]]:
-    """Both gates over a finished run dir. Returns (change problems, residuals).
-    Reads the deliverable's accepted text and findings.json deterministically,
-    then spends one model call per batch/read."""
-    accepted = accepted_text(run_dir)
+               ) -> VerifyRunResult:
+    """Both gates over a finished run dir. Reads the deliverable's two views and
+    findings.json deterministically, then spends one model call per batch/read.
+    With NO accepted text — no deliverable, or the OOXML tooling is missing —
+    neither gate runs: the result says so (``ran_* = False`` plus a reason)
+    rather than walking nothing and reporting it clean."""
+    original, accepted = paragraph_views(run_dir)
     problems: list[ChangeProblem] = []
     residuals: list[ResidualFinding] = []
+    if not accepted:
+        reason = ("no accepted text could be read from the deliverable (no "
+                  "manuscript .docx, or the OOXML tooling is unavailable) — "
+                  "neither gate ran")
+        log.warning("verify_run: %s", reason)
+        return VerifyRunResult(problems, residuals, ran_changes=False,
+                               ran_walk=False, reason=reason)
     if run_changes:
         problems = verify_changes(applied_edits(run_dir), accepted, provider,
                                   model, usage, context=context,
-                                  max_tokens=max_tokens)
+                                  max_tokens=max_tokens, original=original)
     if run_walk:
         residuals = walk_finished_text(accepted, provider, model, usage,
                                        context=context, max_tokens=max_tokens)
-    return problems, residuals
+    return VerifyRunResult(problems, residuals, ran_changes=run_changes,
+                           ran_walk=run_walk)
 
 
 __all__ = [
-    "ChangeProblem", "ResidualFinding", "accepted_text", "applied_edits",
-    "deliverable_docx", "verify_changes", "walk_finished_text", "verify_run",
-    "MAX_PROBLEMS", "MAX_RESIDUALS",
+    "ChangeProblem", "ResidualFinding", "VerifyRunResult", "accepted_text",
+    "applied_edits", "deliverable_docx", "paragraph_views", "verify_changes",
+    "walk_finished_text", "verify_run", "MAX_PROBLEMS", "MAX_RESIDUALS",
 ]

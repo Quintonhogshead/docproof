@@ -10,6 +10,14 @@ it should find, and when you'll stop.
 
 ## Reference rates (update from `galley calibrate` when a calibration exists)
 
+`docproof galley calibrate --from-run RUN SOURCE --config C` folds a finished
+run's real spend into the calibration store ($/kword per adapter+model); a bare
+`review`/`replay` run with no `casefile.json` is projected from its
+`findings.json` cost envelope automatically. Without `--from-run` the verb runs
+the $0 seeded loop (plant → detector floor → score) and records recall only;
+`--model` is not wired into that loop yet. Read the store's rates back into
+this table before pricing a plan.
+
 | Item | Measured | Notes |
 |---|---|---|
 | Luna full ladder, 44k words | ≈ $1, ~10 min | 9 typed passes + LT + gates + smoothing |

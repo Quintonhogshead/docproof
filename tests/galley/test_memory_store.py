@@ -220,3 +220,12 @@ def test_store_never_calls_datetime_now(tmp_path):
     src = inspect.getsource(store_mod)
     assert "datetime.now" not in src
     assert "datetime.utcnow" not in src
+
+
+def test_add_precedent_honours_an_explicit_now(tmp_path):
+    with MemoryStore.open(tmp_path / "mem.db", now="2026-01-01T00:00:00Z") as store:
+        clocked = store.add_precedent("spelling", "teh", "accept")
+        pinned = store.add_precedent("spelling", "hte", "accept",
+                                     now="2020-05-05T05:05:05Z")
+    assert clocked.created_at == "2026-01-01T00:00:00Z"
+    assert pinned.created_at == "2020-05-05T05:05:05Z"

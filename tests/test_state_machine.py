@@ -63,6 +63,46 @@ def test_verify_resume_detects_a_changed_artifact():
     assert missing == ["artifact missing: p.json"]
 
 
+def test_verify_resume_fails_when_no_hash_was_stamped():
+    """A resume that supplies a hash no stage ever stamped has nothing to
+    prove the inputs against — a failure to re-advance, not a vacuous pass."""
+    m = RunStateMachine()
+    m.advance("mechanical_complete")            # advanced without --source
+    out = m.verify_resume(source_sha256="abc")
+    assert out == ["no source hash was stamped at 'mechanical_complete'; "
+                   "re-advance with --source/--config"]
+    both = m.verify_resume(source_sha256="abc", config_sha256="cfg")
+    assert len(both) == 2 and any("no config hash" in x for x in both)
+
+
+def test_verify_resume_fails_when_resume_supplies_no_hash_against_a_stamp():
+    m = RunStateMachine()
+    m.advance("profiled", source_sha256="abc", config_sha256="cfg")
+    out = m.verify_resume(source_sha256="abc")            # no config hash
+    assert len(out) == 1
+    assert "config hash was stamped at 'profiled'" in out[0]
+    assert "resume supplied none" in out[0]
+
+
+def test_verify_resume_compares_every_stamped_record_not_just_the_last():
+    m = RunStateMachine()
+    m.advance("intake", source_sha256="abc", config_sha256="cfg")
+    m.advance("audited")                        # later stage stamped nothing
+    assert m.verify_resume(source_sha256="abc", config_sha256="cfg") == []
+    bad = m.verify_resume(source_sha256="zzz", config_sha256="cfg")
+    assert bad == ["source changed since 'intake': now zzz…, recorded abc…"]
+
+
+def test_verify_resume_reports_each_distinct_stamped_hash_once():
+    m = RunStateMachine()
+    m.advance("intake", source_sha256="abc")
+    m.advance("profiled", source_sha256="abc")
+    m.advance("plan_approved", source_sha256="def")
+    bad = m.verify_resume(source_sha256="zzz")
+    assert [b.split(":")[0] for b in bad] == [
+        "source changed since 'intake'", "source changed since 'plan_approved'"]
+
+
 def test_state_machine_round_trips(tmp_path):
     m = RunStateMachine()
     m.advance("intake", source_sha256="s")
@@ -124,7 +164,10 @@ def test_certify_fails_on_conflicting_edits_at_one_anchor(tmp_path):
     assert coll and coll[0].status == "fail"
 
 
-def test_certify_flags_two_author_when_both_lanes_present(tmp_path):
+def test_certify_two_author_needs_the_deliverable_to_confirm(tmp_path):
+    """Both lanes present but no .docx to read the revision authors from is a
+    loud skip, never a pass — the pass/fail cases live in tests/test_manifest.py
+    where a deliverable with tracked changes is built."""
     env = {"findings": [
         {"finding_id": "f-1", "para_id": "b1", "error_type": "spelling",
          "lane": "mechanical", "corrected_text": "x"},
@@ -133,7 +176,8 @@ def test_certify_flags_two_author_when_both_lanes_present(tmp_path):
     ], "cost": {"total_usd": 0.0}}
     cert = certify_run(_run(tmp_path, env))
     ta = [c for c in cert.checks if c.name == "two-author attribution"]
-    assert ta and ta[0].status == "pass"
+    assert ta and ta[0].status == "skip"
+    assert "no manuscript .docx" in ta[0].detail
 
 
 def test_certify_run_state_requires_audited(tmp_path):

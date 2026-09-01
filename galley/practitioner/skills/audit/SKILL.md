@@ -8,9 +8,12 @@ description: Audit a finished wave for missed errors — density anomalies, samp
 ## Procedure
 
 1. **Density table.** Findings per 1,000 words by chapter
-   (`docproof galley audit RESULTS IN`, or build it from the casefile). A
-   chapter far below its neighbors was probably under-read; a very dense one
-   may have crowded out subtler errors.
+   (`docproof galley audit RESULTS --source IN --config C`, or build it from
+   the casefile). The verb spends ONE model call (a plan line — pass
+   `--approval approval.json` so a model outside the approved set refuses,
+   and `--budget N` as its ceiling); it writes `audit.json` with a `cost`
+   field. A chapter far below its neighbors was probably under-read; a very
+   dense one may have crowded out subtler errors.
 2. **Read real pages** from the quiet chapters — never reason from the
    numbers alone. One hypothesis per suspected miss: chapter, error_class
    (specific — `comma_splice`, not "grammar"), one sentence of evidence, a

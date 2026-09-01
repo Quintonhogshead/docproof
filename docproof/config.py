@@ -1259,10 +1259,13 @@ class FlightsConfig(BaseModel):
 
     ``posture`` is the judge's default stance — the measured 24%↔57%
     accepted-recall dial. "strict" defaults to keeping the original;
-    "lenient" leans toward accepting (same hard vetoes either way). Genre
-    posture presets set this per manuscript (config/genres/*.yaml); the
-    ``docproof galley flights --posture`` flag overrides it per run."""
-    posture: Literal["strict", "lenient"] = "strict"
+    "lenient" leans toward accepting (same hard vetoes either way). The house
+    default is lenient: every copy-edit ships as a rejectable tracked change,
+    so the lane offers and the author decides (the proofread lane, by
+    contrast, judges strict). Genre posture presets set this per manuscript
+    (config/genres/*.yaml); the ``docproof galley flights --posture`` flag
+    overrides it per run."""
+    posture: Literal["strict", "lenient"] = "lenient"
 
 
 class GenreScansConfig(BaseModel):

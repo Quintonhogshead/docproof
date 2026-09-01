@@ -1,6 +1,6 @@
 """The full-ladder adapter — DocProof's whole pipeline as wave one.
 
-Wraps ``prepare -> run_sync -> finish`` in a fresh run directory per call and
+Wraps ``prepare -> run_sync -> finish`` in a wave-keyed run directory and
 converts DocProof's ``Finding`` objects (as written to ``findings.json``, anchors
 resolved) into Galley :class:`GFinding`s with provenance filled. The coverage
 ledger's gaps / unruled / degraded passes surface as ``coverage_notes`` so the
@@ -8,7 +8,10 @@ orchestrator records DocProof's honest holes rather than mistaking silence for a
 clean sweep.
 
 Read-only with respect to the docproof package: it calls the pipeline as a
-library and writes only into a throwaway run directory.
+library and writes only into its own run directory. That directory is stable
+(``<workspace>/wave<N>_ladder/``, the case file's folder in production) and
+holds DocProof's own ``checkpoint.json``, so a wave interrupted mid-ladder
+replays the reads it already paid for on resume instead of buying them twice.
 
 The adapter holds its own ``provider`` because the :class:`DetectorAdapter`
 protocol's ``run`` takes no provider — the orchestrator constructs the adapter
@@ -25,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from docproof.batch import pass_prompts
+from docproof.checkpoint import Checkpoint
 from docproof.config import Config
 from docproof.models import CoverageLedger, Usage
 from docproof.pipeline import finish, prepare, run_sync
@@ -77,20 +82,30 @@ def _coverage_notes(coverage: CoverageLedger) -> list[str]:
     return notes
 
 
+# The ``status`` values a finding may carry into the union. "validated" is an
+# applied tracked change; "query" is an anchored question (the validator's
+# query channel, and the verifier's / meaning gate's force_query downgrades
+# land there too) that rides as a margin comment. Everything else — rejected,
+# skipped, unanchored — is dropped and counted.
+QUERY_STATUSES = frozenset({"query"})
+
+
 def gfindings_from_json(
     findings_json: str | Path, *, wave: int, model: str
 ) -> tuple[list[GFinding], int]:
     """Convert a run's ``findings.json`` into GFindings.
 
-    Only findings the validator both anchored AND kept as a tracked change
-    (``status == "validated"``) carry a usable, applied fix; an anchored
-    "query" or "skipped_low_confidence" finding has an Anchor too (the
-    validator sets one for every channel), but its ``insert_text`` is not a
-    real correction — a query's is always empty — and converting it into a
-    GFinding would hand Galley's downstream case file a fabricated deletion.
-    Unanchored and non-validated findings alike are counted and returned as
-    the second element so the caller can note the loss. Conversion is lossless
-    on span, error type, and the fix text for every finding it does keep.
+    Findings the validator both anchored AND kept as a tracked change
+    (``status == "validated"``) carry a usable, applied fix and convert
+    losslessly on span, error type, and fix text. An anchored "query" row is
+    kept too, as a GFinding with ``confidence="query"`` and an empty
+    ``replace`` — the validator's query anchor has no insert text (a question
+    is not a correction), and ``galley.deliverable`` turns that confidence
+    into a force_query margin comment, so the author still sees the question.
+    A "skipped_low_confidence" or rejected row has an Anchor as well but no
+    real fix, and converting it would hand the case file a fabricated
+    deletion; those, and unanchored rows, are counted and returned as the
+    second element so the caller can note the loss.
     """
 
     payload = json.loads(Path(findings_json).read_text(encoding="utf-8"))
@@ -98,9 +113,11 @@ def gfindings_from_json(
     dropped = 0
     for f in payload.get("findings", []):
         anchor = f.get("anchor")
-        if not anchor or f.get("status") != "validated":
+        status = f.get("status")
+        if not anchor or status not in ("validated", *QUERY_STATUSES):
             dropped += 1
             continue
+        query = status in QUERY_STATUSES
         out.append(
             GFinding(
                 id=str(f.get("finding_id", "")),
@@ -111,9 +128,9 @@ def gfindings_from_json(
                     end=int(anchor.get("end", 0)),
                 ),
                 find=str(anchor.get("delete_text", "")),
-                replace=str(anchor.get("insert_text", "")),
+                replace="" if query else str(anchor.get("insert_text", "")),
                 note=str(f.get("explanation", "")),
-                confidence=str(f.get("confidence", "medium")),
+                confidence="query" if query else str(f.get("confidence", "medium")),
                 provenance=Provenance(
                     detector="docproof_ladder", wave=wave, model=model, cost_usd=0.0
                 ),
@@ -127,8 +144,16 @@ class DocproofLadderAdapter:
     """Runs the full DocProof ladder over the source book and returns GFindings.
 
     Construct with the source document path, a built ``Config``, and a ``provider``
-    (real or fake). Each ``run`` uses a fresh run directory, so agent-varied
-    prompts across waves never invalidate a checkpoint fingerprint.
+    (real or fake). Each ``run`` works in ``<workspace>/wave<N>_ladder/`` — the
+    orchestrator sets ``workspace`` to the case file's directory and ``wave``
+    to the wave it is running — where DocProof's checkpoint is fingerprinted
+    on the document, config, and prompts, so a re-run of the same wave replays
+    its paid reads and a changed prompt set starts clean on its own.
+
+    ``calibration`` (a ``galley.calibration.Calibration``) lets the adapter
+    answer the orchestrator's pre-flight ``estimate_usd`` from the observed
+    ``$/kword`` of earlier ladder runs; without one it has no honest number
+    and says so with ``None``.
     """
 
     source_path: str | Path
@@ -137,14 +162,52 @@ class DocproofLadderAdapter:
     wave: int = 1
     workspace: str | Path | None = None
     error_dir: str | Path = DEFAULT_ERROR_DIR
+    calibration: Any = None
     name: str = "docproof_ladder"
 
-    def _fresh_run_dir(self) -> Path:
+    def _run_dir(self) -> Path:
         if self.workspace is not None:
-            base = Path(self.workspace)
-            base.mkdir(parents=True, exist_ok=True)
-            return Path(tempfile.mkdtemp(prefix=f"wave{self.wave}-", dir=str(base)))
+            run_dir = Path(self.workspace) / f"wave{self.wave}_ladder"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            return run_dir
         return Path(tempfile.mkdtemp(prefix="galley-ladder-"))
+
+    def _checkpoint(self, prepared: Any, run_dir: Path) -> Checkpoint:
+        """The record of what this wave's ladder has already paid for.
+
+        Fingerprinted the way the app's review checkpoint is — document text,
+        full config, the exact prompts — because cached answers are only
+        reusable while all of those are unchanged; ``load()`` wipes a stale
+        one itself.
+        """
+
+        fingerprint = {
+            "kind": "review",
+            "content_hash": prepared.content_hash,
+            "config": self.cfg.model_dump(mode="json"),
+            "prompts": pass_prompts(self.cfg, prepared),
+            "selection": None,
+        }
+        checkpoint = Checkpoint(run_dir / "checkpoint.json",
+                                fingerprint=fingerprint)
+        checkpoint.load()
+        return checkpoint
+
+    def estimate_usd(self, ms: Manuscript, scope: Scope) -> float | None:
+        """A pre-flight price for reading ``scope`` (the whole book, for the
+        ladder), from the calibrated ladder rate; ``None`` when uncalibrated."""
+
+        if self.calibration is None:
+            return None
+        from galley.calibration import est_usd_per_kword
+
+        rate = est_usd_per_kword(self.calibration, self.name,
+                                 self.cfg.api.model, None)
+        if rate is None:
+            return None
+        words = sum(len(ms.paragraphs.get(pid, "").split())
+                    for pid in scope.paragraph_ids(ms))
+        return (words / 1000.0) * rate
 
     def run(
         self,
@@ -153,12 +216,14 @@ class DocproofLadderAdapter:
         budget_usd: float,
         usage: Usage,
     ) -> AdapterResult:
-        run_dir = self._fresh_run_dir()
+        run_dir = self._run_dir()
 
         prepared = prepare(self.cfg, str(self.source_path), self.error_dir)
         coverage = CoverageLedger()
+        checkpoint = self._checkpoint(prepared, run_dir)
         findings, run_usage = run_sync(
-            self.cfg, prepared, self.provider, coverage=coverage
+            self.cfg, prepared, self.provider, coverage=coverage,
+            checkpoint=checkpoint,
         )
         outputs = finish(
             prepared,
@@ -179,9 +244,16 @@ class DocproofLadderAdapter:
 
         notes = _coverage_notes(coverage)
         notes.extend(outputs.warnings)
+        queries = sum(1 for g in gfindings if g.confidence == "query")
+        if queries:
+            notes.append(
+                f"{queries} finding(s) carried as queries (margin comments, "
+                f"not tracked changes)"
+            )
         if dropped:
             notes.append(
-                f"{dropped} finding(s) had no anchor and were dropped from the union"
+                f"{dropped} finding(s) had no anchor or no applied fix and were "
+                f"dropped from the union"
             )
 
         cost = (cost_of_usage(run_usage, fallback_model=self.cfg.api.model) or 0.0)
@@ -193,5 +265,6 @@ class DocproofLadderAdapter:
 __all__ = [
     "DEFAULT_ERROR_DIR",
     "DocproofLadderAdapter",
+    "QUERY_STATUSES",
     "gfindings_from_json",
 ]

@@ -110,23 +110,44 @@ class RunStateMachine(BaseModel):
         """Check that the run can safely resume from its current state. Returns
         a list of human-readable mismatches; an empty list means it is safe to
         continue. Compares the CURRENT source/config hashes (recompute them and
-        pass them in) against what the latest state was stamped with, and — when
-        an ``artifact_hasher(path) -> sha256`` is given — re-hashes every
-        recorded artifact to confirm none changed or vanished."""
+        pass them in) against EVERY recorded state that stamped one — not only
+        the latest, so an early wave's hash still anchors a run whose later
+        stages were advanced without one — and, when an
+        ``artifact_hasher(path) -> sha256`` is given, re-hashes every recorded
+        artifact to confirm none changed or vanished.
+
+        A hash present on one side and absent on the other is a mismatch, not
+        a vacuous pass: a resume that supplies a hash no stage ever stamped has
+        nothing to prove the inputs against (re-advance with --source/--config),
+        and a resume that supplies none against a stamped stage is declining to
+        check. Only when neither side carries a hash is there nothing to say."""
         if not self.history:
             return ["no recorded state to resume from"]
         last = self.history[-1]
         out: list[str] = []
-        if source_sha256 and last.source_sha256 and \
-                source_sha256 != last.source_sha256:
-            out.append(
-                f"source changed since {last.state!r}: now {source_sha256[:12]}"
-                f"…, recorded {last.source_sha256[:12]}…")
-        if config_sha256 and last.config_sha256 and \
-                config_sha256 != last.config_sha256:
-            out.append(
-                f"config changed since {last.state!r}: now {config_sha256[:12]}"
-                f"…, recorded {last.config_sha256[:12]}…")
+        for label, current, attr in (("source", source_sha256, "source_sha256"),
+                                     ("config", config_sha256, "config_sha256")):
+            stamped = [r for r in self.history if getattr(r, attr)]
+            if current and not stamped:
+                out.append(
+                    f"no {label} hash was stamped at {last.state!r}; "
+                    f"re-advance with --source/--config")
+                continue
+            if stamped and not current:
+                out.append(
+                    f"a {label} hash was stamped at {stamped[-1].state!r} but "
+                    f"resume supplied none to compare; recompute it and pass "
+                    f"--source/--config")
+                continue
+            seen: set[str] = set()
+            for r in stamped:
+                recorded = getattr(r, attr)
+                if recorded == current or recorded in seen:
+                    continue
+                seen.add(recorded)
+                out.append(
+                    f"{label} changed since {r.state!r}: now {current[:12]}"
+                    f"…, recorded {recorded[:12]}…")
         if artifact_hasher is not None:
             for art in last.artifacts:
                 try:

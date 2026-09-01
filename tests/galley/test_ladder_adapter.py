@@ -169,8 +169,17 @@ def test_gfindings_from_json_lossless(tmp_path):
                 "error_type": "continuity",
                 "confidence": "medium",
                 "explanation": "possible break",
-                "status": "query",  # anchored, but never applied -> dropped, counted
+                "status": "query",  # anchored question -> kept as a query GFinding
                 "anchor": {"start": 0, "end": 5, "delete_text": "Later", "insert_text": ""},
+            },
+            {
+                "finding_id": "f-0004",
+                "para_id": "body-0012",
+                "error_type": "spelling",
+                "confidence": "low",
+                "explanation": "",
+                "status": "skipped_low_confidence",  # anchored, never applied -> dropped
+                "anchor": {"start": 0, "end": 3, "delete_text": "teh", "insert_text": "teh"},
             },
         ]
     }
@@ -178,14 +187,67 @@ def test_gfindings_from_json_lossless(tmp_path):
     p.write_text(json.dumps(payload), encoding="utf-8")
 
     gfindings, dropped = gfindings_from_json(p, wave=3, model="claude-opus-5")
-    # f-0002 (no anchor) and f-0003 (anchored, but status "query" not
-    # "validated" — never applied as a tracked change) are both dropped.
+    # f-0002 (no anchor) and f-0004 (anchored, but never applied and not a
+    # query) are dropped; f-0003's question survives as a query.
     assert dropped == 2
-    assert len(gfindings) == 1
+    assert [g.id for g in gfindings] == ["f-0001", "f-0003"]
     g = gfindings[0]
-    assert g.id == "f-0001"
     assert g.error_type == "comma_splice"
     assert (g.span.para_id, g.span.start, g.span.end) == ("body-0007", 4, 11)
     assert g.find == "sat down" and g.replace == "sat down;"
     assert g.confidence == "high"
     assert g.provenance.wave == 3 and g.provenance.model == "claude-opus-5"
+
+
+def test_gfindings_from_json_keeps_queries_as_margin_questions(tmp_path):
+    """A validator "query" row (its own channel, or a verifier/meaning-gate
+    force_query downgrade) is a question for the author, not a lost finding:
+    it converts with confidence="query" and no replace text — the shape
+    galley.deliverable turns into a force_query margin comment."""
+    payload = {"findings": [{
+        "finding_id": "f-0009", "para_id": "body-0003",
+        "error_type": "speaker_change", "confidence": "high",
+        "explanation": "who is speaking here?", "status": "query",
+        "anchor": {"start": 2, "end": 9, "delete_text": "he said",
+                   "insert_text": "she said"},  # a withheld correction
+    }]}
+    p = tmp_path / "findings.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    gfindings, dropped = gfindings_from_json(p, wave=1, model="m")
+    assert dropped == 0
+    (g,) = gfindings
+    assert g.confidence == "query"
+    assert g.find == "he said" and g.replace == ""   # never a fabricated edit
+    assert g.note == "who is speaking here?"
+    assert g.span.start == 2 and g.span.end == 9
+
+
+@pytest.mark.skipif(not FIXTURE.exists(), reason="fixture book missing")
+def test_ladder_run_dir_is_wave_keyed_and_checkpointed(tmp_path):
+    """The ladder works in <workspace>/wave<N>_ladder/ and leaves DocProof's
+    checkpoint there, so a resumed wave replays paid reads."""
+    adapter = DocproofLadderAdapter(
+        source_path=FIXTURE, cfg=_lean_cfg(), provider=_CorrectTeh(),
+        wave=2, workspace=tmp_path,
+    )
+    adapter.run(make_manuscript("x"), Scope(), budget_usd=100.0, usage=Usage())
+    run_dir = tmp_path / "wave2_ladder"
+    assert run_dir.is_dir()
+    assert (run_dir / "checkpoint.json").is_file()
+    assert (run_dir / "findings.json").is_file()
+
+
+def test_ladder_estimate_is_none_without_calibration_and_priced_with_one(tmp_path):
+    from galley.calibration import Calibration, CostEntry, _cost_key
+
+    cfg = _lean_cfg()
+    ms = make_manuscript(*["word " * 500] * 4)   # 2,000 words
+    adapter = DocproofLadderAdapter(source_path=FIXTURE, cfg=cfg,
+                                    provider=_CorrectTeh())
+    assert adapter.estimate_usd(ms, Scope()) is None
+    cal = Calibration()
+    key = _cost_key("docproof_ladder", cfg.api.model)
+    cal.cost[key] = CostEntry(adapter="docproof_ladder", model=cfg.api.model,
+                              cost_usd_total=1.0, kwords_total=10.0)
+    adapter.calibration = cal
+    assert adapter.estimate_usd(ms, Scope()) == pytest.approx(0.2)

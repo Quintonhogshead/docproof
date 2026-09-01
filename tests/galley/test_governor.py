@@ -267,3 +267,33 @@ def test_caps_from_json_drops_unknown_keys():
          "max_panel_calls": 1, "surprise": "ignored"}
     )
     assert caps == Caps(5.0, 1.0, 3, 1)
+
+
+# ---- allow_over_cap: money already spent is recorded, and flagged ---------
+
+def test_allow_over_cap_records_the_charge_and_flags_it():
+    gov = _gov(total_usd=1.0, per_wave_usd=1.0)
+    gov.open_wave()
+    gov.charge(0.8, "ok")
+    # A detector billed 0.5 after the fact: past the cap, but the money is gone.
+    entry = gov.charge(0.5, "wave1:ladder", allow_over_cap=True)
+    assert gov.spent_usd == pytest.approx(1.3)       # the ledger is the truth
+    assert gov.overruns == (entry,)
+    assert gov.overrun_usd == pytest.approx(0.3)
+    # Ordinary gated charges are still refused.
+    with pytest.raises(BudgetError):
+        gov.charge(0.1, "gated")
+    # A negative cost is never recorded, allow_over_cap or not.
+    with pytest.raises(BudgetError):
+        gov.charge(-0.1, "refund?", allow_over_cap=True)
+
+
+def test_overruns_are_reconstructed_from_a_loaded_ledger():
+    gov = _gov(total_usd=1.0, per_wave_usd=1.0)
+    gov.open_wave()
+    gov.charge(0.8, "ok")
+    gov.charge(0.5, "over", allow_over_cap=True)
+    ledger = BudgetLedger.from_json(gov.ledger.to_json())
+    rebuilt = Governor.from_ledger(ledger)
+    assert [c.label for c in rebuilt.overruns] == ["over"]
+    assert rebuilt.overrun_usd == pytest.approx(0.3)

@@ -493,7 +493,8 @@ def test_flights_cli_full_pipeline_writes_lane_tagged_findings(tmp_path,
 
     payload = json.loads((tmp_path / "flights_findings.json").read_text())
     assert payload["lane"] == "copyedit"
-    assert payload["posture"] == "strict"
+    # The house default posture: the copy-edit lane offers, the author decides.
+    assert payload["posture"] == "lenient"
     assert payload["checkpoint"] is None
     assert "total_usd" in payload["cost"]
     assert len(payload["findings"]) == 1

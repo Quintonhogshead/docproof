@@ -299,8 +299,11 @@ class MemoryStore:
         reason: str = "",
         book: str = "",
         ruled_by: str = "",
+        now: str | None = None,
     ) -> Precedent:
-        now = self._now()
+        # ``now`` pins ``created_at`` for a caller that dates its own records
+        # (an archive ingest replaying an old job); the store's clock otherwise.
+        now = now if now is not None else self._now()
         with self._conn:
             cur = self._conn.execute(
                 "INSERT INTO precedents "

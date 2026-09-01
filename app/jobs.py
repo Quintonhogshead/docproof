@@ -1997,16 +1997,28 @@ class JobRunner:
         """
         from galley.adapters.docproof_ladder import DocproofLadderAdapter
         from galley.adapters.single_pass import SinglePassAdapter
+        from galley.calibration import read_calibration
 
         provider = self._provider(cfg)
+        # The same observed-cost store the planner prices from, so each
+        # adapter can answer the orchestrator's pre-flight estimate.
+        calibration = read_calibration(self._galley_calibration_path())
         return {
             "docproof_ladder": DocproofLadderAdapter(
-                source_path=job.source_path, cfg=cfg, provider=provider
+                source_path=job.source_path, cfg=cfg, provider=provider,
+                calibration=calibration,
             ),
             "single_pass": SinglePassAdapter(
-                source_path=job.source_path, cfg=cfg, provider=provider
+                source_path=job.source_path, cfg=cfg, provider=provider,
+                calibration=calibration,
             ),
         }
+
+    def _galley_calibration_path(self) -> Path:
+        """Live cost calibration — observed $/kword from prior runs — kept
+        beside the memory db."""
+        return (Path(self.store.paths.galley_memory_db).parent
+                / "galley_calibration.json")
 
     def _galley_screen_provider(self, cfg: Config, cf):
         """A provider for the panel dispute screen, or ``None``.
@@ -2032,38 +2044,27 @@ class JobRunner:
             return None
 
     def _ingest_galley_memory(self, cf) -> None:
-        """Fold this run's adjudication verdicts into the durable memory store
-        as precedents — how each mark was ruled on this book, and why.
+        """Fold this run's case file into the durable memory store as
+        precedents — how each mark was ruled on this book, and why.
 
-        Only findings that were actually adjudicated (carry a Verdict) become
-        precedents; a wave-one finding that held its span uncontested and was
-        never disputed has no ruling to record. Best-effort: memory is a
+        ``ingest_casefile`` records every adjudicated finding by its verdict
+        and every uncontested kept finding (delivered to the author, never
+        disputed) as an ``accept``; arbitration bookkeeping — an overlap loser,
+        a duplicate re-find — is never a precedent. Best-effort: memory is a
         compounding convenience the practitioner leans on for the NEXT book,
         not this job's product, so any failure here is a warning, never a
         reason to fail an otherwise-finished job."""
-        if not cf.verdicts:
+        if not cf.findings:
             return
-        from galley.memory.ingest import ingest_job
+        from galley.memory.ingest import ingest_casefile
         from galley.memory.store import MemoryStore
 
-        finding_by_id = {f.id: f for f in cf.findings}
-        items = []
-        for v in cf.verdicts:
-            f = finding_by_id.get(v.finding_id)
-            items.append({
-                "disposition": v.ruling,
-                "error_type": (f.error_type if f else "") or "unknown",
-                "find_text": f.find if f else "",
-                "reason": v.reason,
-                "ruled_by": v.judge or "galley",
-            })
-        job_json = {"kind": "review", "book": cf.book, "findings": items}
         store = MemoryStore.open(self.store.paths.galley_memory_db, now=_now)
         try:
-            summary = ingest_job(store, job_json, book=cf.book)
+            summary = ingest_casefile(store, cf)
             log.info("Galley memory ingest for %r: %d new, %d duplicate, "
-                     "%d skipped", cf.book, summary.ingested,
-                     summary.duplicates, summary.skipped)
+                     "%d skipped, %d ignored", cf.book, summary.ingested,
+                     summary.duplicates, summary.skipped, summary.ignored)
         finally:
             store.close()
 
@@ -2098,7 +2099,9 @@ class JobRunner:
             read_calibration,
             record_run,
         )
+        from galley.adapters.single_pass import _merge_usage
         from galley.deliverable import build_manuscript_deliverable
+        from galley.governor import Governor
         from galley.letter import render_all
         from galley.orchestrator import run_galley
 
@@ -2126,8 +2129,21 @@ class JobRunner:
                                  error=str(e), stage="")
             return
 
+        # Alarms the loop raises mid-run accumulate here and land in the
+        # job's warnings at the end; only a wave digest carries a spend total,
+        # so an alarm never touches `cost`.
+        alarms: list[str] = []
+
         def notify(kind: str, payload: dict) -> None:
             try:
+                if kind == "alarm":
+                    alarms.append(
+                        f"wave {payload.get('wave', 0)}: "
+                        f"{payload.get('alarm', 'alarm')}: "
+                        f"{payload.get('detail', '')}")
+                    self.store.update(
+                        job_id, galley_wave=int(payload.get("wave", 0)))
+                    return
                 self.store.update(
                     job_id,
                     galley_wave=int(payload.get("wave", 0)),
@@ -2147,8 +2163,7 @@ class JobRunner:
         # Live cost calibration: observed $/kword from prior runs, kept beside
         # the memory db. read_calibration is tolerant — a missing or corrupt
         # store reads back empty and the planner falls back to its default.
-        cal_path = (Path(self.store.paths.galley_memory_db).parent
-                    / "galley_calibration.json")
+        cal_path = self._galley_calibration_path()
         planner = make_planner(ms, min_confidence="medium",
                                calibration=read_calibration(cal_path))
 
@@ -2161,7 +2176,7 @@ class JobRunner:
             self._release_results_dir(job_id)
             raise
 
-        warnings: list[str] = []
+        warnings: list[str] = list(alarms)
         for wave in cf.waves:
             for action in wave.actions:
                 if isinstance(action, dict):
@@ -2171,11 +2186,24 @@ class JobRunner:
         # when a later wave exists to dispute wave one and a provider is
         # available. Verdicts are written back into the case file — this is
         # the slot the letter reads, and until now nothing ever filled it.
+        # The screen's spend is metered on its own, charged to the run's
+        # ledger (the ledger is the truth, past the cap included), then folded
+        # into the brain's usage for the job record.
         screen_provider = self._galley_screen_provider(cfg, cf)
+        screen_usage = Usage()
         adjudication = adjudicate(cf.findings, ms, screen_provider,
-                                  model=cfg.api.model)
+                                  model=cfg.api.model, usage=screen_usage)
         cf.verdicts = adjudication.verdicts
+        screen_cost = cost_of_usage(screen_usage,
+                                    fallback_model=cfg.api.model) or 0.0
+        if screen_cost > 0:
+            Governor.from_ledger(cf.budget).charge(
+                screen_cost, "screen:adjudicate", allow_over_cap=True)
+        _merge_usage(brain_usage, screen_usage)
         cf.save(out / "casefile.json")
+        # Token counts for the brain (audit + screen) ride the record; the
+        # final `cost` below is the whole ledger, adapters included.
+        self._record_usage_inline(job_id, brain_usage, audit_model)
 
         # The reviewed manuscript: adjudicated kept findings, driven through
         # DocProof's own finish() at $0. build_manuscript_deliverable guards
@@ -2189,6 +2217,10 @@ class JobRunner:
             warnings.extend(deliverable.dropped)
         except Exception:                     # noqa: BLE001 - a warning, not a failure
             log.exception("Galley deliverable build failed for job %s", job_id)
+            # Belt and braces: the word-count guard may have fired AFTER
+            # finish() wrote the docx, and a manuscript short a sentence must
+            # not sit in the results folder looking like a deliverable.
+            self._discard_galley_docx(job, out)
             warnings.append(
                 "The reviewed manuscript could not be built from this run's "
                 "findings; the case file and letter are still available.")
@@ -2218,11 +2250,23 @@ class JobRunner:
 
         self.store.update(
             job_id, state="done", results_dir=str(out), error=None, stage="",
-            cost=cf.budget.spent_usd, applied=len(cf.findings),
+            cost=cf.budget.spent_usd, applied=len(adjudication.kept),
             galley_wave=(cf.waves[-1].index if cf.waves else 0),
             galley_waves_total=len(cf.waves),
             budget_usd=budget, warnings=warnings)
         self._finish(job_id)
+
+    @staticmethod
+    def _discard_galley_docx(job: Job, out: Path) -> None:
+        """Remove the reviewed manuscript a failed deliverable build left in
+        ``out`` — the name DocProof's finish() writes for this source."""
+        try:
+            reviewed = out / get_format(job.source_path).reviewed_name(
+                job.source_path)
+            reviewed.unlink(missing_ok=True)
+        except Exception:                     # noqa: BLE001 - cleanup is best-effort
+            log.warning("Could not remove the partial galley manuscript for "
+                        "job %s", job.id, exc_info=True)
 
     # -- promo ----------------------------------------------------------------
 

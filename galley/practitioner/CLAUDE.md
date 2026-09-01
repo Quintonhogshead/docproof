@@ -91,7 +91,7 @@ skill; follow the skill, record what you learned.
 | `docproof galley audit RESULTS IN` | The missed-error audit: density table + sampled pages → hypotheses. | 1 call |
 | `docproof galley verify RESULTS` | The finished-text SENSE gates certify cannot run: the **change verifier** re-reads every APPLIED edit in its accepted context (breaks_meaning/grammar/voice_damage/artifact/wrong_rule → `change_verify.json`), and the **finished-text walk** proofreads the ACCEPTED text for residual errors (`finished_walk.json`). `certify` then reads those artifacts (a recorded problem fails delivery; a missing artifact skips loudly). `--context BRIEF` feeds voice notes; `--changes-only`/`--walk-only` split for $0 subagents. Nonzero exit on any problem. | paid (or $0 subagents) |
 | `docproof galley letter` / `seed` / `score` | Editor's letter render; seeded-copy recall calibration. | $0 |
-| `docproof galley flights` | The copy-edit flight deck: 6 focused lenses → union → posture-judged clusters. `--propose-only` / `--judge-only` split lets session subagents fly the lenses at $0. | paid/judge |
+| `docproof galley flights` | The copy-edit flight deck: 6 focused lenses → union → posture-judged clusters (lenient by default — the lane offers, the author decides). `--models "" --external-proposals P.json` takes session-subagent flights in at $0; `--propose-only` / `--judge-only` split off the judge (default `gpt-5.6-luna`; a Claude judge named here BILLS via the API). `--approval`/`--budget` refuse an unapproved model or an over-cap projection. | paid/judge |
 | `docproof galley export-judgments` / `import-judgments` | The **model-free** external-judge route: export a clusters file as a canonical judgment packet, a session agent (or human) fills each `decision`, import rebuilds the findings with **no model call** (unlike `--judge-only`, which still calls the judge model). Import refuses on bad anchoring, broken atomicity, an unknown channel, or an intent-zone edit. | $0 |
 | `docproof merge` | The merge desk: mechanical + copy-edit lanes → span-claimed, artifact-scanned, two-author deliverable. | $0 |
 | `docproof import-findings` / `replay` | Inject externally produced or archived findings and rebuild a deliverable through `finish()`. | $0 |
@@ -101,7 +101,7 @@ skill; follow the skill, record what you learned.
 | `docproof galley intent-zones` | Resolve an intent-zones file (selectors: para ids/range, terms, regex, quotes) against a manuscript and preview the protected spans + permission classes (locked / punctuation / open). Set `intent_zones_file` in the config and the sweep layer downgrades any forbidden edit to a query BEFORE it can auto-apply. | $0 |
 | `docproof galley triage-nouns` | Group a profile's proper nouns into protect/enforce/reject/suspect (near-matches like Deut/Deute flagged), and write a correction-overlay starter. `genre-pack --corrections` then seeds only the vetted names. | $0 |
 | `docproof galley ledger` | The finding lifecycle ledger: every finding's stable id + state history (detected→merged/queried/rejected/dropped) reconstructed from a run, with a duplicate report. | $0 |
-| `docproof galley state` | The resumable run state machine (intake→profiled→…→certified→delivered). `--advance` stamps source/config hashes; `--verify-resume` proves nothing changed underneath before you continue (exit 6 on drift). | $0 |
+| `docproof galley state` | The resumable run state machine (intake→profiled→…→certified→delivered). `--advance` stamps source/config hashes — pass BOTH `--source` and `--config` at every stage; `--verify-resume` (same two flags) proves nothing changed underneath before you continue (exit 6 on drift, strict about a missing hash). | $0 |
 | `docproof capabilities` | The whole command tree + config sections + genres + stages, as JSON. Your map of the rack — read this, not `--help`. | $0 |
 
 Verbs marked here that are missing in your checkout are still being built; do
@@ -238,10 +238,14 @@ context ~150 times. Keep your window lean:
 1. **Intake.** Fresh per-book workspace. Flush any prior book's scratch state.
    Persistent memory (house rulings, precedents, calibration) carries over.
    Open the run state machine (`galley state <ws> --advance intake --source
-   BOOK`): every later stage advances it, and a resumed session runs
-   `galley state <ws> --verify-resume` to prove the manuscript and config have
-   not changed underneath it before continuing — never trust a session note
-   that a wave is "done."
+   BOOK --config CONFIG`): every later stage advances it the same way — ALWAYS
+   with BOTH `--source` and `--config` (plus the run's `--stage`/`--genre`),
+   so each state is stamped with both hashes — and a resumed session runs
+   `galley state <ws> --verify-resume --source BOOK --config CONFIG` to prove
+   the manuscript and config have not changed underneath it before
+   continuing. `--verify-resume` is strict: a state advanced without a hash
+   cannot be proven safe and fails. Never trust a session note that a wave is
+   "done."
 2. **Profile** (`skills/profile`). $0-first. Produces the profile JSON: genre,
    posture recommendation, proper nouns, author tics with counts and samples,
    intent zones, bespoke-sweep candidates.
@@ -283,7 +287,11 @@ context ~150 times. Keep your window lean:
    rebuild the deliverable at $0 via replay/merge.
 8. **Verify the finished text, certify, then deliver.** Run `docproof galley
    verify RESULTS --context BRIEF` FIRST — it re-reads every applied edit and
-   proofreads the accepted text for sense, the one thing `certify` cannot do.
+   proofreads the accepted text for sense, the one thing `certify` cannot do
+   (`--dry-run` prints the priced call count first; `--approval`/`--budget`
+   gate the spend; it exits nonzero only for a flagged applied edit or a
+   HIGH-severity residual — low/medium residuals print as notes for the next
+   wave, the same line certify draws).
    These are standard delivery stages, not an optional extra: certify's checks
    are integrity (hashes, routes, artifact regexes, reject-all round trip) and a
    corrupted build passes all of them — the Purpura beta's 35 real-word LT

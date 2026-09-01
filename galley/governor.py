@@ -6,7 +6,10 @@ is the one place a wave may spend. Two questions it answers:
 
 * *May I spend this?* — :meth:`Governor.can_spend` is the exact predicate
   :meth:`Governor.charge` enforces, so spend can never exceed either the
-  per-wave cap or the total cap under any sequence of gated charges.
+  per-wave cap or the total cap under any sequence of gated charges. Money
+  already gone is a different question: a charge made with
+  ``allow_over_cap=True`` is always recorded — the ledger is the truth — and
+  the overrun is flagged in :attr:`Governor.overruns` rather than refused.
 * *Should I stop?* — :meth:`Governor.should_stop` fires when the marginal cost
   per validated finding crosses a threshold, or when a hard cap is reached
   (waves exhausted, total budget floor reached).
@@ -118,6 +121,17 @@ class Governor:
         self._panel_calls = sum(
             1 for c in charges if c.label.startswith(PANEL_LABEL_PREFIX)
         )
+        # Replay the charges in order to recover which ones breached a cap, so
+        # a loaded ledger remembers its overruns without a second record.
+        self._overruns: list[Charge] = []
+        total = 0.0
+        per_wave: dict[int, float] = {}
+        for c in charges:
+            total += c.cost_usd
+            per_wave[c.wave] = per_wave.get(c.wave, 0.0) + c.cost_usd
+            if (total > self._caps.total_usd
+                    or per_wave[c.wave] > self._caps.per_wave_usd):
+                self._overruns.append(c)
 
     # ---- spend predicate & choke point ---------------------------------
 
@@ -130,20 +144,33 @@ class Governor:
         within_wave = self._wave_spent + action_cost <= self._caps.per_wave_usd
         return within_total and within_wave
 
-    def charge(self, cost: float, label: str) -> Charge:
+    def charge(
+        self, cost: float, label: str, *, allow_over_cap: bool = False
+    ) -> Charge:
         """Record ``cost`` against the ledger and the current wave.
 
         The single choke point for spend: it re-checks :meth:`can_spend` and
         raises :class:`BudgetError` rather than record an over-cap charge.
         Callers should gate on :meth:`can_spend` first; a charge that trips this
         guard is a bug.
+
+        ``allow_over_cap=True`` is for money that has ALREADY been spent — a
+        detector that billed more than its pre-flight estimate. The charge is
+        recorded regardless (an uncharged dollar is a lie in the ledger) and,
+        if it breached a cap, also appended to :attr:`overruns` so the caller
+        can raise the alarm. A negative cost is refused either way.
         """
         if not self.can_spend(cost):
-            raise BudgetError(
-                f"charge of ${cost:.4f} ({label!r}) would exceed a cap: "
-                f"wave {self._wave_spent:.4f}+{cost:.4f} vs {self._caps.per_wave_usd}, "
-                f"total {self._ledger.spent_usd:.4f}+{cost:.4f} vs {self._caps.total_usd}"
-            )
+            if not allow_over_cap or cost < 0:
+                raise BudgetError(
+                    f"charge of ${cost:.4f} ({label!r}) would exceed a cap: "
+                    f"wave {self._wave_spent:.4f}+{cost:.4f} vs {self._caps.per_wave_usd}, "
+                    f"total {self._ledger.spent_usd:.4f}+{cost:.4f} vs {self._caps.total_usd}"
+                )
+            self._wave_spent += cost
+            entry = self._ledger.charge(label, cost, wave=self._current_wave)
+            self._overruns.append(entry)
+            return entry
         self._wave_spent += cost
         return self._ledger.charge(label, cost, wave=self._current_wave)
 
@@ -236,6 +263,16 @@ class Governor:
     @property
     def wave_spent_usd(self) -> float:
         return self._wave_spent
+
+    @property
+    def overruns(self) -> tuple[Charge, ...]:
+        """Charges that landed past a cap (``allow_over_cap`` charges only)."""
+        return tuple(self._overruns)
+
+    @property
+    def overrun_usd(self) -> float:
+        """How far the ledger sits past the total cap; zero while within it."""
+        return max(0.0, self._ledger.spent_usd - self._caps.total_usd)
 
     @property
     def wave_remaining_usd(self) -> float:
