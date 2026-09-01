@@ -1909,7 +1909,7 @@ and the `treatment` vocabulary. Marked but not carved out, the call obeys a rule
 it is exempt from; carved out but not marked, it cannot tell which archetypes hold the exemption.
 A test asserts the marker and the rule stay in step.
 
-## 20. Archetype Eight — `burning_cartouche`, and the two laws it paid for (2026-09-01)
+## 24. Archetype Twelve — `burning_cartouche`, and the two laws it paid for (2026-09-01)
 
 `config/cover/archetypes/burning_cartouche.yaml` — the maximalist dark-romantasy hardcover
 (Kaylie Smith's PHANTASMA and the shelf around it). A patterned near-black wall; a symmetrical
@@ -1918,7 +1918,15 @@ repeated organic form pinned to the side trims; one pale relic centred on a poli
 token hanging from it on a chain; a foil display title across the lower third; and a band of live
 fire rising over the byline from the bottom trim. Fourteen art slots, twelve of them generated.
 
-**Numbering note:** five sibling sessions drew a template from the same brief on the same day and all five claimed "Archetype Eight" at v0.176.0 (`engraved_specimen`, `sable_regalia`, `gilded_descent`, `gilded_cartouche`, `uplit_vigil`). Whichever merges first owns the number and the version; the rest renumber on rebase. The file name here was changed from `gilded_cartouche` for exactly this reason — two different templates cannot ship under one stem.
+**Numbering note:** five sibling sessions drew a template from the same brief on the same day
+and all five initially claimed "Archetype Eight" at v0.176.0 — `engraved_specimen`,
+`sable_regalia`, `gilded_descent`, `gilded_cartouche` and this one. Per owner ruling this template
+takes **Twelve**, last of the five, with the version and spec section numbered to match
+(v0.180.0, §24) on the assumption the other four land as Eight through Eleven at v0.176.0–v0.179.0
+and §20–§23. If they merge in a different order or a different count, this file's section number
+and `__version__` are the two things to rebase — nothing else in the template depends on either.
+The file name was changed off `gilded_cartouche` for a separate reason: a sibling branch shipped
+that exact stem, and two different templates cannot share one.
 
 It is the first template on the shelf whose design argument is **addition**. Every other one earns
 its cover by subtraction — `romantasy_enclosure`'s whole revision history is objects being removed,
@@ -1934,7 +1942,7 @@ title on it.
 
 Two engine laws came out of building it, both learned the expensive way, both worth stealing.
 
-### 20.1 When a composition depends on a shape, get the shape from the ENGINE
+### 24.1 When a composition depends on a shape, get the shape from the ENGINE
 
 The first draft asked a single cover-fit plate for *"a ring of them massed around all four edges…
 through the centre of the frame a LARGE EMPTY HOLE."* The generator filled the hole. Hardening the
@@ -1955,7 +1963,7 @@ whatever comes back — and because the ramp is still climbing where the byline 
 dimmest exactly where the name needs contrast and full strength at the trim. Byline contrast went
 2.49 → 5.84 on that one mask, with no scrim escalation and no finishing attenuation at all.
 
-### 20.2 The visible-width law, and the aspect trap under it
+### 24.2 The visible-width law, and the aspect trap under it
 
 §15.25 established that a contain-fit slot sizes on the ink's **binding axis**. This template made
 the consequence concrete twice in one build, in opposite directions:
@@ -1965,7 +1973,7 @@ the consequence concrete twice in one build, in opposite directions:
   the title, 88% of the byline covered, and the legibility autopilot halving the entire finishing
   stack five times trying to rescue a title that was simply underwater. The fix is in the prompt,
   not the number: dictate the band's height *as a fraction of its own frame* so the ink is wide by
-  construction, then mask the remainder (§20.1).
+  construction, then mask the remainder (§24.1).
 - **`bower_left` at `scale: 0.96`** assumed a narrow column. A 0.30-aspect plate run to full canvas
   height is **0.46 of the canvas width**, and two of those leave a cover that is 92% border.
 
@@ -1974,7 +1982,7 @@ column is as wide as its own ink aspect makes it; push the surplus out through t
 `offset`, never with `scale`.* Shrinking the plate instead is the tempting move and it is wrong — a
 border that stops short of the top and bottom edges is not a border.
 
-### 20.3 Two smaller rulings
+### 24.3 Two smaller rulings
 
 **The chain's cut is hidden by a plate, not by the trim.** `pendant` hangs on the centre axis and
 is the one slot here whose severed end does not leave the frame: it is drawn *before* `relic`, so
@@ -1995,7 +2003,7 @@ dictated, not measured. The zone's `y` is tuned off a real render rather than gu
 $0.03 repaint of `crest` — **never** a moved zone, or the next book's crest is wrong in the other
 direction.
 
-### 20.4 A wash is a ground only if it is drawn first (the legibility red herring)
+### 24.4 A wash is a ground only if it is drawn first (the legibility red herring)
 
 Owner note on the first build: *the focal image needs to be softer, and the title needs to be bigger
 and easier to read.* The first two were straightforward. The third produced the most expensive
@@ -2049,7 +2057,7 @@ broad diffuse light, gentle falloff, an outline that eases rather than cuts, a w
 contact shadow than the border plates carry. `relic_soften` — a masked `blur` mixed back at 0.45 —
 backs the prompt up in the engine, so the read does not depend on one generation coming back tender.
 
-### 20.5 `strewn` cut — a slot whose every rule was damage control
+### 24.5 `strewn` cut — a slot whose every rule was damage control
 
 Owner note, second revision: *broken shards of pottery and shell should be removed from the
 archetype.* `strewn` — loose detached fragments of the border material, come to rest on the floor

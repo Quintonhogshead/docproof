@@ -1073,7 +1073,7 @@ def test_pale_reliquary_keeps_its_discrete_object_plates_whole():
         assert by_id[sid].cut_edge
 
 
-# -- Archetype Eight (burning_cartouche): the two laws §20 paid for -----------
+# -- Archetype Twelve (burning_cartouche): the two laws §24 paid for -----------
 
 def test_burning_cartouche_places_every_contain_slot_by_its_ink():
     # Same reasoning as pale_reliquary's rule 0 (§15.25): every contain-fit
@@ -1088,7 +1088,7 @@ def test_burning_cartouche_places_every_contain_slot_by_its_ink():
 
 
 def test_burning_cartouche_border_is_two_trim_pinned_columns_not_a_ring():
-    """§20.1. The border was ONE cover-fit plate asked for "a ring with a large
+    """§24.1. The border was ONE cover-fit plate asked for "a ring with a large
     empty hole through the centre"; the generator filled the hole twice, the
     second time while honouring every other clause in the frame, and buried the
     field, the floor, the chain and the title's ground under one reef texture.
@@ -1101,7 +1101,7 @@ def test_burning_cartouche_border_is_two_trim_pinned_columns_not_a_ring():
     left, right = by_id["bower_left"], by_id["bower_right"]
     assert (left.cut_edge, left.anchor[0]) == ("left", 0.0)
     assert (right.cut_edge, right.anchor[0]) == ("right", 1.0)
-    # ...and the surplus width leaves through the trim (§20.2's visible-width
+    # ...and the surplus width leaves through the trim (§24.2's visible-width
     # law): the offset pushes OUT, it does not pull the column inboard.
     assert left.offset[0] < 0 and right.offset[0] > 0
     # Rule 1: the organic half is asymmetric BY KIND as well as by placement.
@@ -1123,7 +1123,7 @@ def test_burning_cartouche_metal_is_symmetric_and_the_organic_is_not():
 def test_burning_cartouche_blaze_is_the_whole_occlusion_budget():
     """Rule 6. Exactly one plate is drawn after the title, it is on `screen`
     (which can only ADD light, so it glows over the byline instead of eating
-    it), and §20.1's gradient mask fades its top out whatever shape the
+    it), and §24.1's gradient mask fades its top out whatever shape the
     generator returns."""
     a = ARCHETYPES["burning_cartouche"]
     after_title = a.layers[a.layers.index("title") + 1:]
@@ -1136,7 +1136,7 @@ def test_burning_cartouche_blaze_is_the_whole_occlusion_budget():
 
 
 def test_burning_cartouche_hides_the_chains_cut_behind_the_relic():
-    """§20.3. `pendant`'s severed end leaves through no trim — the relic's own
+    """§24.3. `pendant`'s severed end leaves through no trim — the relic's own
     body covers it — which only works if the chain is drawn FIRST. This
     ordering looks wrong in the layers list and is right on the page, so it
     gets a guard rather than a comment."""
@@ -1167,7 +1167,7 @@ def test_burning_cartouche_puts_nothing_but_the_relic_on_the_altar():
 
 
 def test_burning_cartouche_grounds_its_type_before_drawing_it():
-    """§20.4. `foot_wash` sat AFTER the title for four tunings. That was
+    """§24.4. `foot_wash` sat AFTER the title for four tunings. That was
     harmless while its ramp started below the type and became the whole problem
     the moment the ramp was moved up to darken the title's ground: a wash over
     the type is a VEIL, and it dims the ink in exact proportion to how much it
