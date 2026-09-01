@@ -688,10 +688,27 @@ class Archetype(BaseModel):
     # printed. Dialling the shelf entry itself is not an option — other
     # templates share it.
     recipe_strength: float = Field(default=1.0, ge=0.0, le=1.0)
+    # How the art-direction call should CAST this template's generatable slots
+    # out of the manuscript in front of it, in the template's own words —
+    # emitted by describe_archetypes() underneath the `describe` line, so the
+    # model reads it at the moment it is choosing nouns.
+    #
+    # Before this field, the only prose a template could send the director was
+    # its one-line `describe`, which says what the cover LOOKS like and nothing
+    # about how to fill it. Any template whose slots are roles rather than
+    # nouns ("the cut", "the place beyond it", "the subject in front") then had
+    # its casting doctrine stranded in YAML comments, where no model call could
+    # ever reach it — so the director filled the roles from the reference cover
+    # it was shown instead of from the book it was given, and every cover built
+    # from that template came out looking like the same book.
+    #
+    # "" (the default, and every template that predates the field) sends
+    # nothing extra and leaves describe_archetypes' output byte-identical.
+    casting: str = ""
     # Whether this template's plates are PHOTOGRAPHIC by construction, and
     # may therefore be prompted photoreal with `treatment: "none"` —
     # the one exemption from direction.py's shelf-wide ban on untreated
-    # photorealism (docs/cover_designer_spec.md §18.4).
+    # photorealism (docs/cover_designer_spec.md §19.4).
     #
     # That ban is not squeamishness: a raw, untreated photoreal plate is the
     # single biggest "AI-generated" tell, and the shelf's mitigation is
@@ -1109,6 +1126,15 @@ def describe_archetypes(genre: str | None = None) -> str:
                 "and leave treatment \"none\"; see the photorealism rule]"
                 if a.photoreal else "")
         lines.append(f"- {a.name} — {' '.join(a.describe.split())}{mark}{slots}")
+        # The casting doctrine (when the template has one) rides directly
+        # under its own entry, indented so it reads as belonging to that
+        # archetype rather than to the enumeration as a whole. Blank lines in
+        # the YAML block become paragraph breaks; every other line is
+        # whitespace-collapsed the same way `describe` is.
+        for para in a.casting.split("\n\n"):
+            para = " ".join(para.split())
+            if para:
+                lines.append(f"    {para}")
     return "\n".join(lines)
 
 

@@ -1313,6 +1313,8 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
     _OCCLUSION_ANCHOR_OFFSETS in turn (clamped to [0, 1] — an anchor is a
     fraction of the canvas, same convention as everywhere else
     _fit_contain reads one) and take the first that clears the threshold.
+    If none of them does, place the slot back at its DECLARED anchor and let
+    the caller do the z-order swap — see the comment on that return.
 
     Returns (the UNTREATED placed image at the winning anchor, its
     whole-word occlusion fraction, its WORST SINGLE GLYPH's occlusion
@@ -1345,24 +1347,28 @@ def _place_contain_clear_of_text(source: Image.Image, canvas: tuple[int, int],
                 _worst_glyph_occlusion(ink_mask, alpha, boxes))
 
     ax, ay = slot.anchor
-    best_img, best_ratio, best_glyph = measure((ax, ay))
-    if _occlusion_severity(best_ratio, best_glyph) <= 1.0:
-        return best_img, best_ratio, best_glyph, False
+    home_img, home_ratio, home_glyph = measure((ax, ay))
+    if _occlusion_severity(home_ratio, home_glyph) <= 1.0:
+        return home_img, home_ratio, home_glyph, False
 
     for dx in _OCCLUSION_ANCHOR_OFFSETS:
         trial_img, trial_ratio, trial_glyph = measure(
             (min(1.0, max(0.0, ax + dx)), ay))
         if _occlusion_severity(trial_ratio, trial_glyph) <= 1.0:
             return trial_img, trial_ratio, trial_glyph, False
-        # Ranked by SEVERITY, not by the whole-word ratio: an offset that
-        # spreads the same total ink loss across many letters instead of
-        # eating one whole is genuinely better, and ranking on the word
-        # alone could not see the difference.
-        if (_occlusion_severity(trial_ratio, trial_glyph)
-                < _occlusion_severity(best_ratio, best_glyph)):
-            best_img, best_ratio, best_glyph = (trial_img, trial_ratio,
-                                                trial_glyph)
-    return best_img, best_ratio, best_glyph, True
+    # Every offset failed, so the caller is about to draw the text ON TOP of
+    # this plate, which clears the occlusion completely and by itself. The
+    # nudge was only ever a way to avoid that swap; once the swap happens it
+    # buys nothing and costs real damage. A displaced plate is off its
+    # archetype's declared anchor, and an anchor is chosen from WHERE THE CUT
+    # IS (romantasy_organic rule 1): moving a plate whose `offset` deliberately
+    # overshoots the trim pulls its flat cut edge back INSIDE the cover and
+    # leaves a bare vertical bar of ground beside it — a live romantasy_organic
+    # render put a 100px strip down the left of the cover and sliced the
+    # front-tier rose off along a dead-straight line. So go home: return the
+    # declared-anchor placement, and report ITS numbers, since that is the
+    # placement actually shipped and the one a reader will be looking at.
+    return home_img, home_ratio, home_glyph, True
 
 
 def _place_contain_at_center(source: Image.Image, canvas: tuple[int, int],
@@ -1758,6 +1764,36 @@ def _apply_frame_notches(positioned: dict[str, Image.Image],
             "RGBA", (r, g, b, ImageChops.multiply(a, mask)))
 
 
+def _bleeding_side_trims(img: Image.Image, canvas: tuple[int, int]
+                         ) -> frozenset[str]:
+    """Which side trims this positioned layer's ink already runs off.
+
+    A canvas-sized positioned layer has ALREADY been clipped: whatever an
+    archetype's `offset` pushed past the trim is simply not in these pixels
+    any more. So a plain horizontal translate of that raster — the contact
+    guard's nudge, below — cannot carry the overshoot along with it. Shifting
+    a plate inboard exposes the flat edge where the clip happened and leaves
+    bare ground beside it, which is the "starts and stops in mid-air" defect
+    romantasy_organic's rule 1 exists to prevent. Two live renders of that
+    archetype put a 96px and then a 192px bar down the left of the cover —
+    0.06 and 0.12 of the width, the first two _TEXT_ART_CONTACT_NUDGES — and
+    sliced the front-tier rose off along a dead-straight vertical line.
+
+    Ink touching column 0 or column cw-1 is the observable that survives the
+    clip, so the guard uses it to refuse any nudge that would give up a bleed
+    it currently has. Moving FURTHER out through the same trim is still fine;
+    only losing an edge is disqualifying."""
+    bbox = img.getchannel("A").point(lambda v: 255 if v > 8 else 0).getbbox()
+    if bbox is None:
+        return frozenset()
+    edges = set()
+    if bbox[0] <= 0:
+        edges.add("left")
+    if bbox[2] >= canvas[0]:
+        edges.add("right")
+    return frozenset(edges)
+
+
 def _apply_text_contact_guard(positioned: dict[str, Image.Image],
                               layers_out: list[LayerRef],
                               art_by_id: dict[str, ArtSlot],
@@ -1857,10 +1893,18 @@ def _apply_text_contact_guard(positioned: dict[str, Image.Image],
             continue
         best_img, best = img, measure_all(img, candidates)
         if max(best.values()) > _TEXT_ART_CONTACT_THRESHOLD:
+            bleeds = _bleeding_side_trims(img, canvas)
             for frac in _TEXT_ART_CONTACT_NUDGES:
                 dx = round(frac * cw)
                 shifted = Image.new("RGBA", canvas, (0, 0, 0, 0))
                 shifted.alpha_composite(img, dest=(dx, 0))
+                # A nudge that gives up a trim this plate was bleeding off
+                # trades an accidental text collision — which the z-order
+                # move below fixes on its own, and completely — for a hard
+                # cut edge and a bar of bare ground inside the cover. That
+                # is the worse defect and it is never worth making.
+                if not bleeds <= _bleeding_side_trims(shifted, canvas):
+                    continue
                 trial = measure_all(shifted, candidates)
                 if max(trial.values()) < max(best.values()):
                     best_img, best = shifted, trial

@@ -217,11 +217,34 @@ class _Session:
         return _text(self.spec.model_dump_json(indent=2))
 
     async def archetype_info(self, args: dict[str, Any]) -> dict[str, Any]:
+        """What the director is told about the template it is filling.
+
+        The slot's `role` and `prompt_frame` are shown, not just its id and
+        flags. A director that sees only "cluster_left: generatable=True" is
+        picking a noun blind, and a blind pick falls back on whatever the
+        GENRE suggests — which is how a novel of iron thorns and bone came
+        back as a rose garden. The frame is the geometry the noun has to sit
+        in ("fine and busy, on thin whipping lengths"; "one very large
+        single, on a short severed stalk"), and the slot id is often a
+        historical name for it rather than a description — `bloom_front` is
+        the big lower-left feature, not a flower. Showing both is what lets
+        the director choose FROM THE BOOK and still land in the composition.
+        """
         a = self.archetype
-        slots = [f"- {s.id}: generatable={s.generatable}, "
-                 f"transparent={getattr(s, 'transparent', False)}"
-                 + (", archetype-authored mask" if s.mask is not None else "")
-                 for s in a.art]
+        slots = []
+        for s in a.art:
+            head = (f"- {s.id}: generatable={s.generatable}, "
+                    f"transparent={getattr(s, 'transparent', False)}"
+                    + (", archetype-authored mask" if s.mask is not None
+                       else ""))
+            if s.role:
+                head += f", role={s.role}"
+            slots.append(head)
+            frame = " ".join(s.prompt_frame.split())
+            if frame:
+                slots.append(f"    fills: {frame}")
+            if s.cut_edge:
+                slots.append(f"    severed end sits on: {s.cut_edge}")
         text = [f"archetype: {a.name}", a.describe.strip(), "",
                 "ART SLOTS", *slots, "", "TEXT SLOTS"]
         text += [f"- {t.id}: zone {t.zone.model_dump()}" for t in a.text]
